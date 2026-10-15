@@ -29,6 +29,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - The reference agent is `agents[0]` when `agents` is set, otherwise the first manifest agent. Griffin scenes index the vehicle (7,000 samples), not the union of vehicle and drone times.
 - `coperceive/dataset.py` and `tests/test_dataset.py` are excluded from pyright. The lint job does not install torch. Dataset tests call `pytest.importorskip("torch")`.
 - Phase 2 Griffin choices stand: schema `1`, null visibility, drone lidar calibs without clouds, `time_us = frame_id * 100000`, east taken from the toolkit pose comment. Source: https://github.com/adarsh-nl/coperceive
+- The Griffin licence acknowledgement uses `datetime.now(timezone.utc)`. `datetime.UTC` is Python 3.11+, and the 3.10 CI job failed while collecting the Griffin tests.
 
 ## Open questions for Adarsh
 
