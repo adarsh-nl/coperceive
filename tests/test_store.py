@@ -8,11 +8,11 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from pkg.diagnostics import alignment, shared_objects
-from pkg.errors import SchemaVersionError
-from pkg.model import SCHEMA_VERSION
-from pkg.query import TimeMode
-from pkg.store import read_points_at, read_scene, write_scene
+from coperceive.diagnostics import alignment, shared_objects
+from coperceive.errors import SchemaVersionError
+from coperceive.model import SCHEMA_VERSION
+from coperceive.query import TimeMode
+from coperceive.store import read_points_at, read_scene, write_scene
 
 from tests.conftest import sample_scene
 
@@ -60,7 +60,7 @@ def test_schema_version_and_extra_column(tmp_path: Path) -> None:
 
 
 def test_spawn_workers_read_the_blob(tmp_path: Path) -> None:
-    from pkg.store import count_point_bytes
+    from coperceive.store import count_point_bytes
 
     scene_dir = tmp_path / "scene"
     write_scene(sample_scene(), scene_dir)

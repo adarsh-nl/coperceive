@@ -5,8 +5,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pkg.model import Annotation, Scene, SharedObject
-from pkg.query import TimeMode, query_time
+from coperceive.model import Annotation, Scene, SharedObject
+from coperceive.query import TimeMode, query_time
 
 
 @dataclass(frozen=True)

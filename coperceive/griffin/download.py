@@ -28,7 +28,7 @@ def download(dest: Path, *, subset: str = SUBSET) -> Path:
     try:
         from huggingface_hub import hf_hub_download
     except ImportError as exc:
-        raise RuntimeError("install the griffin extra: pip install 'pkg[griffin]'") from exc
+        raise RuntimeError("install the griffin extra: pip install 'coperceive[griffin]'") from exc
     target = dest / subset
     target.mkdir(parents=True, exist_ok=True)
     for name in ALLOW:

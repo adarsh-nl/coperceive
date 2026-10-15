@@ -1,18 +1,15 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Cooperative multi-agent perception data library.
+"""Cooperative multi-agent perception data library."""
 
-The distribution name ``pkg`` is a placeholder until a name is chosen.
-"""
-
-from pkg.errors import (
+from coperceive.errors import (
+    CoperceiveError,
     ExtrapolationError,
     GapError,
-    PkgError,
     SchemaVersionError,
     TimeQueryError,
     ToleranceError,
 )
-from pkg.model import (
+from coperceive.model import (
     SCHEMA_VERSION,
     Agent,
     Annotation,
@@ -23,9 +20,9 @@ from pkg.model import (
     Sensor,
     SharedObject,
 )
-from pkg.query import TimeHit, TimeMode, query_time
-from pkg.se3 import SE3
-from pkg.transform import T_dst_from_src, lookup_pose
+from coperceive.query import TimeHit, TimeMode, query_time
+from coperceive.se3 import SE3
+from coperceive.transform import T_dst_from_src, lookup_pose
 
 __version__ = "0.0.0"
 
@@ -37,7 +34,7 @@ __all__ = [
     "ExtrapolationError",
     "GapError",
     "ImageRef",
-    "PkgError",
+    "CoperceiveError",
     "PointCloud",
     "SE3",
     "Scene",

@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from pkg.se3 import SE3
+from coperceive.se3 import SE3
 
 SCHEMA_VERSION = 1
 

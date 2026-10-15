@@ -9,9 +9,9 @@ extending the last pose.
 
 from __future__ import annotations
 
-from pkg.errors import ExtrapolationError, GapError, TimeQueryError
-from pkg.model import Agent, Scene
-from pkg.se3 import SE3, slerp
+from coperceive.errors import ExtrapolationError, GapError, TimeQueryError
+from coperceive.model import Agent, Scene
+from coperceive.se3 import SE3, slerp
 
 
 def lookup_pose(agent: Agent, time_us: int, *, max_gap_us: int) -> SE3:

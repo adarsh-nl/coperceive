@@ -4,8 +4,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pkg.griffin.download import verify_md5
-from pkg.griffin.raw import load_scene, parse_label_line
+from coperceive.griffin.download import verify_md5
+from coperceive.griffin.raw import load_scene, parse_label_line
 
 
 def test_label_line_and_one_scene(tmp_path: Path) -> None:

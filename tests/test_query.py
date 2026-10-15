@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import pytest
-from pkg.errors import ExtrapolationError, GapError, ToleranceError
-from pkg.query import TimeMode, query_time
-from pkg.se3 import SE3
-from pkg.transform import T_dst_from_src, lookup_pose
+from coperceive.errors import ExtrapolationError, GapError, ToleranceError
+from coperceive.query import TimeMode, query_time
+from coperceive.se3 import SE3
+from coperceive.transform import T_dst_from_src, lookup_pose
 
 from tests.conftest import sample_scene
 

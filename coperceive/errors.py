@@ -2,15 +2,15 @@
 """Errors for time queries and on-disk schema checks."""
 
 
-class PkgError(Exception):
+class CoperceiveError(Exception):
     """Base error for this library."""
 
 
-class SchemaVersionError(PkgError):
+class SchemaVersionError(CoperceiveError):
     """The file's schema version is not the one this build reads."""
 
 
-class TimeQueryError(PkgError):
+class TimeQueryError(CoperceiveError):
     """A time query could not be answered."""
 
 

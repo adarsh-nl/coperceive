@@ -1,6 +1,6 @@
 # Name candidates
 
-The installable name in this repository is `pkg`. That string is a placeholder. None of the candidates below contain `123d` or the name of another project in the related-work table.
+Adarsh chose `coperceive` on 2026-10-15. The record is in [naming.md](naming.md). The table below is the earlier check. None of these candidates contain `123d` or the name of another project in the related-work table.
 
 Checked 2026-10-15 with `GET https://pypi.org/pypi/<name>/json` and `GET https://github.com/<name>/<name>`. HTTP 404 is recorded as free on that index. This is not a trademark search by counsel.
 
@@ -18,4 +18,4 @@ Checked 2026-10-15 with `GET https://pypi.org/pypi/<name>/json` and `GET https:/
 
 Look at **poseledger**, **sceneory**, and **hexadview** first. **enuscope** and **voxcoop** are free on PyPI and on `github.com/<name>/<name>`, and each has a nearby existing name that counsel should see before a public release.
 
-Absence of a search hit is not a clearance. Adarsh picks the name. Until then the distribution, the import, and the command stay `pkg`.
+Absence of a search hit is not a clearance. The chosen name is `coperceive`.

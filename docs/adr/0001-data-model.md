@@ -22,7 +22,7 @@ A cooperative scene has several agents. Griffin’s vehicle and drone share fram
 
 ## Decision
 
-Option 2. Implemented in `pkg.model`, `pkg.query`, `pkg.transform`, and `pkg.diagnostics`.
+Option 2. Implemented in `coperceive.model`, `coperceive.query`, `coperceive.transform`, and `coperceive.diagnostics`.
 
 - `Scene` has `world_frame`, `Clock`, agents, sensors, annotations, optional shared objects, point clouds, and image paths.
 - `Clock.scale_note` is required. Griffin’s note says `time_us = frame_id * 100000` assumes the paper’s 10 Hz lidar rate.

@@ -1,6 +1,6 @@
-# pkg
+# coperceive
 
-A cooperative, multi-agent perception data library. The name **pkg** is a placeholder until Adarsh chooses one. See `docs/design/names.md`.
+A cooperative, multi-agent perception data library. The name is recorded in `docs/design/naming.md`.
 
 Phase 0 is the scaffold: a scene model, a hybrid on-disk layout, a Griffin reader, a local web page, and the measurements behind the design notes. It does not train models.
 
@@ -11,22 +11,22 @@ Python 3.10–3.13.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[app,griffin]"
-pkg --help
+coperceive --help
 ```
 
 Extras: `torch`, `viewer` (rerun-sdk 0.22.1 and viser 0.2.23), `app`, `griffin`, `docs`, `dev`.
 
-The licence file is Apache-2.0 and is waiting for confirmation. See `docs/adr/0006-licence.md`.
+The licence file is Apache-2.0. The repository stays private. Both are waiting for a final confirmation. See `docs/adr/0006-licence.md`.
 
 ## Local page
 
 ```bash
-pkg serve --root /path/to/a/workdir
+coperceive serve --root /path/to/a/workdir
 ```
 
 The default bind is `127.0.0.1:8731`. A non-loopback host requires `--token`. Behind a proxy, pass `--root-path` with the prefix the proxy adds.
 
-The page in the wheel is the Vite build in `pkg/app/static`. Rebuild it from `web/` with `npm run build` after a UI change.
+The page in the wheel is the Vite build in `coperceive/app/static`. Rebuild it from `web/` with `npm run build` after a UI change.
 
 ## Griffin
 

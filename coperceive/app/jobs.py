@@ -14,7 +14,7 @@ from pathlib import Path
 # Phase 0 allow-list. Add names here on purpose; do not accept a free-form command.
 ALLOW: dict[str, tuple[str, ...]] = {"echo": ("echo",)}
 
-CSRF_HEADER = "x-pkg-request"
+CSRF_HEADER = "x-coperceive-request"
 
 
 def open_db(path: Path) -> sqlite3.Connection:

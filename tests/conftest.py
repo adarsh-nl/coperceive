@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import struct
 
-from pkg.model import (
+from coperceive.model import (
     SCHEMA_VERSION,
     Agent,
     Annotation,
@@ -14,7 +14,7 @@ from pkg.model import (
     Sensor,
     StampedPose,
 )
-from pkg.se3 import SE3
+from coperceive.se3 import SE3
 
 
 def sample_scene() -> Scene:

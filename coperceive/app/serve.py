@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Process entry used by ``pkg serve``."""
+"""Process entry used by ``coperceive serve``."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from pathlib import Path
 
 import uvicorn
 
-from pkg.app.server import create_app
+from coperceive.app.server import create_app
 
 
 def run(*, host: str, port: int, root: str, token: str | None, root_path: str) -> None:

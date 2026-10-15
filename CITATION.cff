@@ -1,8 +1,6 @@
 cff-version: 1.2.0
-title: pkg
-message: >-
-  The distribution name pkg is a placeholder. If you use this software,
-  cite it as below until a name is chosen.
+title: coperceive
+message: If you use this software, please cite it as below.
 type: software
 authors:
   - given-names: Adarsh

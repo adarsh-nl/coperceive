@@ -38,7 +38,7 @@ The full 25 m lidar zip is 214,487,013 bytes. Parsing all 7,000 ASCII PLY files 
 
 ## Decision
 
-Hybrid, as `pkg.store` writes it.
+Hybrid, as `coperceive.store` writes it.
 
 - `manifest.json` holds schema version, world frame, clock, agents, and sensors.
 - `poses.parquet`, `annotations.parquet`, `objects.parquet`, `images.parquet`, `point_index.parquet`.

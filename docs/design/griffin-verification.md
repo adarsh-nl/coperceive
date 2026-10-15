@@ -9,7 +9,7 @@ Date: 2026-10-15. Dataset bytes stay outside the git tree. This page records wha
 - Hugging Face dataset `wjh-svm/Griffin`: README YAML and the tree API under `datasets/`.
 - Local files, MD5-checked, downloaded earlier with `huggingface_hub` into `/tmp/griffin-25m` (not in git): `md5.txt`, `drone_metadata.zip`, `vehicle_metadata.zip`, `vehicle_lidar.zip` for `griffin_50scenes_25m`.
 
-The downloader in `pkg.griffin.download` allow-lists those three zips plus `md5.txt`. It does not log tokens.
+The downloader in `coperceive.griffin.download` allow-lists those three zips plus `md5.txt`. It does not log tokens.
 
 ## Paper and toolkit
 

@@ -30,14 +30,14 @@ The page replaces a terminal for a person who already has the data on disk. It i
 
 Option 1.
 
-- `pkg serve` defaults to `127.0.0.1:8731`. A host outside `{127.0.0.1, localhost, ::1}` without `--token` exits 2.
+- `coperceive serve` defaults to `127.0.0.1:8731`. A host outside `{127.0.0.1, localhost, ::1}` without `--token` exits 2.
 - When a token is set, `/api/*` requires `Authorization: Bearer <token>`.
-- `POST`, `PUT`, `PATCH`, and `DELETE` require `X-Pkg-Request: 1`.
+- `POST`, `PUT`, `PATCH`, and `DELETE` require `X-Coperceive-Request: 1`.
 - `confine` resolves the path and requires `is_relative_to` the root.
 - The only allow-listed job name is `echo`. Anything else, including `bash`, is a 400. Arguments are a list. `shell` is false.
 - Jobs are rows in SQLite under the server root.
 - `GET /api/events` is a short server-sent stream. The page also polls `/api/jobs` every two seconds, because `EventSource` cannot set an Authorization header. The page uses `fetch` so it can.
-- The UI is Vite, React, and TypeScript. `@radix-ui/react-label` labels the fields. TanStack Query holds health and jobs. `openapi-fetch` is generated from `web/openapi.json` into `web/src/api/schema.ts`. Vite `base` is `./`, and the build writes `pkg/app/static`.
+- The UI is Vite, React, and TypeScript. `@radix-ui/react-label` labels the fields. TanStack Query holds health and jobs. `openapi-fetch` is generated from `web/openapi.json` into `web/src/api/schema.ts`. Vite `base` is `./`, and the build writes `coperceive/app/static`.
 - `--root-path` is passed to FastAPI and Uvicorn. The page calls APIs relative to `document.baseURI`, so a prefix that the browser can see is kept.
 
 ## Consequences

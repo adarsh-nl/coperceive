@@ -4,17 +4,17 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from coperceive.app.jobs import confine
+from coperceive.app.server import create_app
+from coperceive.cli import main
 from fastapi.testclient import TestClient
-from pkg.app.jobs import confine
-from pkg.app.server import create_app
-from pkg.cli import main
 
 
 def test_help_and_schema(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["--help"])
     assert exc.value.code == 0
-    assert "placeholder" in capsys.readouterr().out
+    assert "coperceive" in capsys.readouterr().out
     main(["schema"])
     assert capsys.readouterr().out.strip() == "1"
 
@@ -35,15 +35,15 @@ def test_path_confinement(tmp_path: Path) -> None:
 
 def test_jobs_sse_and_files(tmp_path: Path) -> None:
     (tmp_path / "note.txt").write_text("hello", encoding="utf-8")
-    app = create_app(root=tmp_path, token="secret", root_path="/user/pkg")
+    app = create_app(root=tmp_path, token="secret", root_path="/user/coperceive")
     client = TestClient(app)
     denied = client.get("/api/health")
     assert denied.status_code == 401
     headers = {"Authorization": "Bearer secret"}
-    assert client.get("/api/health", headers=headers).json()["root_path"] == "/user/pkg"
+    assert client.get("/api/health", headers=headers).json()["root_path"] == "/user/coperceive"
     missing = client.post("/api/jobs", headers=headers, json={"name": "echo", "args": ["hi"]})
     assert missing.status_code == 403
-    headers["X-Pkg-Request"] = "1"
+    headers["X-Coperceive-Request"] = "1"
     blocked = client.post(
         "/api/jobs", headers=headers, json={"name": "bash", "args": ["-c", "true"]}
     )

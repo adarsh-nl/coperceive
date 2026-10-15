@@ -1,5 +1,5 @@
-site_name: pkg
-site_description: Cooperative multi-agent perception data. The name is a placeholder.
+site_name: coperceive
+site_description: Cooperative multi-agent perception data.
 theme:
   name: material
   palette:
@@ -8,7 +8,8 @@ theme:
 nav:
   - Overview: index.md
   - Positioning: design/positioning.md
-  - Names: design/names.md
+  - Name: design/naming.md
+  - Earlier candidates: design/names.md
   - Griffin verification: design/griffin-verification.md
   - Decisions:
       - Data model: adr/0001-data-model.md

@@ -1,25 +1,23 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Command line. ``pkg`` is the placeholder name."""
+"""Command line for coperceive."""
 
 from __future__ import annotations
 
 import argparse
 import sys
 
-from pkg import __version__
-from pkg.model import SCHEMA_VERSION
+from coperceive import __version__
+from coperceive.model import SCHEMA_VERSION
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="pkg",
-        description=(
-            "Cooperative multi-agent perception data tools. The program name is a placeholder."
-        ),
+        prog="coperceive",
+        description=("Cooperative multi-agent perception data tools."),
     )
-    parser.add_argument("--version", action="version", version=f"pkg {__version__}")
+    parser.add_argument("--version", action="version", version=f"coperceive {__version__}")
     sub = parser.add_subparsers(dest="command")
 
     schema = sub.add_parser("schema", help="Print the on-disk schema version.")
@@ -63,7 +61,7 @@ def _serve(args: argparse.Namespace) -> None:
         raise SystemExit(2)
     import importlib
 
-    module = importlib.import_module("pkg.app.serve")
+    module = importlib.import_module("coperceive.app.serve")
     run = module.run  # type: ignore[attr-defined]
     run(
         host=args.host,

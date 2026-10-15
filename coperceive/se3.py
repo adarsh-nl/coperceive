@@ -9,7 +9,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass
 
-from pkg.errors import ExtrapolationError
+from coperceive.errors import ExtrapolationError
 
 
 def _dot(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> float:

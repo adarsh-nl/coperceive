@@ -11,8 +11,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from pkg.diagnostics import shared_objects
-from pkg.model import (
+from coperceive.diagnostics import shared_objects
+from coperceive.model import (
     SCHEMA_VERSION,
     Agent,
     Annotation,
@@ -23,7 +23,7 @@ from pkg.model import (
     Sensor,
     StampedPose,
 )
-from pkg.se3 import SE3
+from coperceive.se3 import SE3
 
 _CLOCK_NOTE = (
     "Griffin pose 'timestamp' is the integer frame id, equal to the file stem. "

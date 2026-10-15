@@ -1,8 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
-import pkg
+import coperceive
 
 
 def test_version() -> None:
-    assert pkg.__version__ == "0.0.0"
+    assert coperceive.__version__ == "0.0.0"

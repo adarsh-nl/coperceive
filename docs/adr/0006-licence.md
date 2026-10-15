@@ -26,4 +26,4 @@ Recommend Apache-2.0. The tree uses that text until Adarsh says otherwise. Copyr
 
 - If the choice becomes MIT, replace `LICENSE`, the `pyproject.toml` classifier, and `CITATION.cff` together.
 - Third-party notices for Griffin’s toolkit licence stay in `THIRD_PARTY_NOTICES.md` either way.
-- Publishing the repository is a separate decision. A public repo named `pkg` would occupy a placeholder. Prefer a private repo until the name and v0.1 exist. That is Adarsh’s call, not a licence choice.
+- The name is coperceive. The repository stays private for now. Apache-2.0 stays in the tree. Both the licence and visibility are still waiting for Adarsh’s final word.

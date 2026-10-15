@@ -1,8 +1,8 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "pkg",
-    "description": "Local cooperative-perception data app. The name pkg is a placeholder.",
+    "title": "coperceive",
+    "description": "Local cooperative-perception data app.",
     "version": "0.0.0"
   },
   "paths": {

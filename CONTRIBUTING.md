@@ -13,7 +13,7 @@ python3 -m venv .venv
 .venv/bin/pytest
 ```
 
-Python 3.10 through 3.13. Pyright is strict on `pkg` and `tests`, except `pkg/app`, `pkg/griffin`, and their tests.
+Python 3.10 through 3.13. Pyright is strict on `coperceive` and `tests`, except `coperceive/app`, `coperceive/griffin`, and their tests.
 
 Docs:
 
@@ -28,7 +28,7 @@ The web page:
 cd web && npm install && npm run build
 ```
 
-That writes `pkg/app/static`. Regenerate the client after an API change:
+That writes `coperceive/app/static`. Regenerate the client after an API change:
 
 ```bash
 cd web && npx openapi-typescript openapi.json -o src/api/schema.ts

@@ -5,7 +5,7 @@ export default defineConfig({
   plugins: [react()],
   base: "./",
   build: {
-    outDir: "../pkg/app/static",
+    outDir: "../coperceive/app/static",
     emptyOutDir: true,
   },
   server: {

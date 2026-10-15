@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
 
-const TOKEN_KEY = "pkg-token";
+const TOKEN_KEY = "coperceive-token";
 
 function storedToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? "";
@@ -49,7 +49,7 @@ export default function App() {
     mutationFn: async (args: string[]) => {
       const result = await clientFor(token).POST("/api/jobs", {
         body: { name: "echo", args },
-        headers: { "X-Pkg-Request": "1" },
+        headers: { "X-Coperceive-Request": "1" },
       });
       if (!result.response.ok) {
         throw new Error(await errorDetail(result.response));
@@ -120,7 +120,7 @@ export default function App() {
   return (
     <main className="page">
       <header>
-        <span className="badge">placeholder name: pkg</span>
+        <span className="badge">coperceive</span>
         <h1>Local data desk</h1>
         <p>
           A single-user page for the cooperative perception library. It runs on
@@ -218,7 +218,7 @@ export default function App() {
               <button type="submit">Read</button>
             </form>
             {!filePath && !fileText && !fileError ? (
-              <p className="muted">Enter a path inside the directory passed to pkg serve.</p>
+              <p className="muted">Enter a path inside the directory passed to coperceive serve.</p>
             ) : null}
             {fileError ? (
               <p className="alert" role="alert">

@@ -4,8 +4,8 @@ from __future__ import annotations
 import math
 
 import pytest
-from pkg.errors import ExtrapolationError
-from pkg.se3 import SE3, slerp
+from coperceive.errors import ExtrapolationError
+from coperceive.se3 import SE3, slerp
 
 
 def test_yaw_90_maps_x_to_y() -> None:

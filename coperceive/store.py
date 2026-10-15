@@ -19,8 +19,8 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from pkg.errors import SchemaVersionError
-from pkg.model import (
+from coperceive.errors import SchemaVersionError
+from coperceive.model import (
     SCHEMA_VERSION,
     Agent,
     Annotation,
@@ -32,7 +32,7 @@ from pkg.model import (
     SharedObject,
     StampedPose,
 )
-from pkg.se3 import SE3
+from coperceive.se3 import SE3
 
 
 def write_scene(scene: Scene, path: Path) -> None:

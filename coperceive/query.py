@@ -10,7 +10,7 @@ from __future__ import annotations
 import enum
 from dataclasses import dataclass
 
-from pkg.errors import TimeQueryError, ToleranceError
+from coperceive.errors import TimeQueryError, ToleranceError
 
 
 class TimeMode(enum.Enum):

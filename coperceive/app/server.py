@@ -13,7 +13,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from pkg.app.jobs import CSRF_HEADER, confine, list_jobs, open_db, run_job
+from coperceive.app.jobs import CSRF_HEADER, confine, list_jobs, open_db, run_job
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
@@ -27,10 +27,10 @@ def create_app(*, root: str | Path, token: str | None, root_path: str = "") -> F
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
     app = FastAPI(
-        title="pkg",
+        title="coperceive",
         version="0.0.0",
         root_path=root_path,
-        description="Local cooperative-perception data app. The name pkg is a placeholder.",
+        description="Local cooperative-perception data app.",
     )
     app.state.root = root_path_obj
     app.state.token = token

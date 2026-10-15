@@ -20,7 +20,7 @@ Rerun’s quaternion was passed as xyzw. Viser’s quaternion is wxyz. Frustums 
 
 1. **Rerun.** Timeline, offline `.rrd`, Python logging. The viewer is a separate port. Licence on the repo is MIT OR Apache-2.0, with an open-core product around it. Embedding in our page means an iframe or a second proxy route.
 2. **viser.** Python process, web UI, sliders and per-agent checkboxes in the spike server. Also a separate port. Apache-2.0. Jupyter and SSH tunneling are ordinary port forwards. A JupyterHub path prefix does not automatically apply to that second port unless a proxy route is added.
-3. **three.js in this app.** Same origin as `pkg serve`, so the page’s relative URLs and `root_path` cover it. More UI work. The spike showed the scene can be drawn. Licence of three.js is MIT.
+3. **three.js in this app.** Same origin as `coperceive serve`, so the page’s relative URLs and `root_path` cover it. More UI work. The spike showed the scene can be drawn. Licence of three.js is MIT.
 
 Foxglove Studio is archived and its open-source edition was discontinued (see the positioning note). MCAP remains a file format, not the viewer.
 
