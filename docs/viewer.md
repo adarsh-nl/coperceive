@@ -12,7 +12,7 @@ Open `http://127.0.0.1:8731/`. The Viewer tab is the default. Scene directories 
 
 The scrubber steps through recorded pose times. A time that is not a sample is omitted. Poses use `max_gap_us` 0, so the page does not interpolate. Camera images are not drawn. Each camera with `fy` and `cy` is a frustum: vertical field of view `2 * atan(cy / fy)`, aspect `width / height` when both sizes are set, otherwise `cx / cy`. The lines are 4 m deep in the sensor frame, with +Z forward. The world is z-up. Vehicle agents are drawn in `#e67828` and UAV agents in `#2878dc`. A checkbox hides that agent's points, boxes, frustums, and axes.
 
-Lidar points are 6 CSS pixels and do not shrink with distance, so a sparse sweep stays visible. The page talks to the server only over HTTP. Rebuild the static files from `web/` with `npm run build` after a UI change. `npm` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer and this app uses TypeScript 6.
+Lidar points are 2 CSS pixels and do not shrink with distance. A 6 pixel size filled the dense part of a Griffin vehicle sweep. The page talks to the server only over HTTP. Rebuild the static files from `web/` with `npm run build` after a UI change. `npm` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer and this app uses TypeScript 6.
 
 ## HTTP
 

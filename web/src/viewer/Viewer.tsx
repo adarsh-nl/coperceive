@@ -254,7 +254,7 @@ export default function Viewer({ token }: { token: string }) {
     controls.target.set(0, 0, 0);
     const points = new THREE.Points(
       new THREE.BufferGeometry(),
-      new THREE.PointsMaterial({ size: 6, sizeAttenuation: false, vertexColors: true }),
+      new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true }),
     );
     const boxes = new THREE.LineSegments(
       new THREE.BufferGeometry(),

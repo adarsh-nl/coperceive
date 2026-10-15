@@ -10,7 +10,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 
 ## State
 
-- The Viewer tab is the default page. It lists direct child directories of the server root that contain `manifest.json`. The scrubber steps through recorded pose times. `max_gap_us` is 0, so a time that is not a sample is omitted. Camera images are not drawn. Frustums use `2 * atan(cy / fy)` and +Z forward. Lidar points are 6 CSS pixels and do not shrink with distance.
+- The Viewer tab is the default page. It lists direct child directories of the server root that contain `manifest.json`. The scrubber steps through recorded pose times. `max_gap_us` is 0, so a time that is not a sample is omitted. Camera images are not drawn. Frustums use `2 * atan(cy / fy)` and +Z forward. Lidar points are 2 CSS pixels and do not shrink with distance.
 - `GET /api/scenes`, `GET /api/scenes/{id}`, `GET /api/scenes/{id}/frame`, `GET /api/scenes/{id}/points`, and `POST /api/scenes/{id}/export/rerun` are the viewer API. A scene id that contains `/`, `\`, or `..` is 400. Auth is checked before the CSRF header, so a POST with no bearer token is 401 and a token without `X-Coperceive-Request: 1` is 403.
 - `coperceive export rerun SCENE --out FILE.rrd` writes the same recording. A missing manifest exits 2. A missing `viewer` extra exits 2. The timeline name is `coperceive`. Rerun quaternions are xyzw. The HTTP pose stays `(qw, qx, qy, qz)`. `rerun analytics disable` runs before `rr.init` when the binary is next to the interpreter. `spawn` is false.
 - `coperceive.viewdata` does not import FastAPI or Rerun. `export_rerun` imports `rerun` inside the function. The React page calls the server only over HTTP.
@@ -46,7 +46,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 14. Image paths are written for every camera calib even when the dev tier did not download images.
 15. Schema number. Still `1`.
 16. Desktop shell. Tauri is the plan and Electron is the fallback. Say if that order should be reversed before any shell work. The shell was not built.
-17. Lidar points are 6 CSS pixels. Say if a dense Griffin cloud should use a smaller size.
+17. Lidar points are 2 CSS pixels. On Town06-001, 6 CSS pixels filled about half of the densest 80×80 patch of the default view. Say if 2 is still too large or too small.
 
 ## Griffin-25m validation
 
@@ -75,7 +75,7 @@ Python 3.12.3. Commands and results from 2026-10-15, on this phase’s tree:
 - `pyright` — 0 errors, 0 warnings, 0 informations (pyright 1.1.414, strict on the core, including `coperceive/viewdata.py`, `coperceive/rerun_export.py`, `coperceive/dataset.py`, `coperceive/validate.py`, and their tests). Excluded: `coperceive/app`, `coperceive/griffin`, `tests/test_app.py`, `tests/test_griffin.py`, `tests/test_griffin_phase2.py`
 - `pytest -o addopts= -q` — 77 passed, 1 skipped, 6 warnings in 2.56s (pytest 9.1.1). The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()` in the dataset worker test and the parallel convert test.
 - `pytest --cov=coperceive --cov-report=term-missing -q` — exit 0, coverage 87% (3216 statements, 310 missed, branch coverage on)
-- `python -m build --wheel` — built `dist/coperceive-0.0.0-py3-none-any.whl` (build 1.6.1, hatchling 1.32.4). The wheel contains `coperceive/viewdata.py`, `coperceive/rerun_export.py`, and `coperceive/app/static/index.html` pointing at `index-BsGpDfev.js`.
+- `python -m build --wheel` — built `dist/coperceive-0.0.0-py3-none-any.whl` (build 1.6.1, hatchling 1.32.4). The wheel contains `coperceive/viewdata.py`, `coperceive/rerun_export.py`, and `coperceive/app/static/index.html`. The page in that gate build was `index-BsGpDfev.js`. The 2 px point-size change ships `index-BAPWDmG4.js`.
 - Fresh venv `/tmp/coperceive-phase5-fresh`, run from `/tmp` so the source tree was not on `sys.path`: `pip install dist/coperceive-0.0.0-py3-none-any.whl`. `coperceive --help` printed “Cooperative multi-agent perception data tools.” and listed `schema`, `serve`, `download`, `convert`, `validate`, and `export`. `coperceive schema` printed `1`. `coperceive export rerun --help` listed `scene` and `--out`. `coperceive validate --help` listed `--strict`. `import coperceive` loaded `/tmp/coperceive-phase5-fresh/lib/python3.12/site-packages/coperceive/__init__.py`. `import coperceive.dataset` raised `ModuleNotFoundError: No module named 'torch'`.
 - `mkdocs build` — succeeded (MkDocs 1.6.1, Material 9.7.7). Material printed its MkDocs 2.0 warning. The site was written to `site/`.
 - `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 15 commits scanned (the branch before this handover’s commit)
