@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from typing import cast
 
 from coperceive import __version__
 from coperceive.model import SCHEMA_VERSION
@@ -101,6 +102,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="Parallel scenes. 0 uses up to 8 processes.",
     )
     griffin_convert.set_defaults(func=_convert_griffin)
+
+    validate = sub.add_parser(
+        "validate",
+        help="Write a JSON report and a Markdown report for schema 1 scenes.",
+    )
+    validate.add_argument("root", help="Directory of scene directories.")
+    validate.add_argument(
+        "--json",
+        default="coperceive-validate.json",
+        help="JSON report path. Relative paths are written from the current directory.",
+    )
+    validate.add_argument(
+        "--markdown",
+        default="coperceive-validate.md",
+        help="Markdown report path.",
+    )
+    validate.set_defaults(func=_validate)
     return parser
 
 
@@ -112,6 +130,33 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
     func(args)
+
+
+def _validate(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from coperceive.validate import validate_root, write_report
+
+    root = Path(args.root)
+    if not root.is_dir():
+        print(f"not a directory: {root}", file=sys.stderr)
+        raise SystemExit(2)
+    report = validate_root(root)
+    json_path = Path(args.json)
+    markdown_path = Path(args.markdown)
+    write_report(report, json_path, markdown_path)
+    aggregate = report["aggregate"]
+    print(f"wrote {json_path}")
+    print(f"wrote {markdown_path}")
+    if isinstance(aggregate, dict):
+        values = cast(dict[object, object], aggregate)
+        print(
+            "scenes {scenes_read} failed {scenes_failed} missing_frames {missing_frames}".format(
+                scenes_read=values.get("scenes_read"),
+                scenes_failed=values.get("scenes_failed"),
+                missing_frames=values.get("missing_frames"),
+            )
+        )
 
 
 def _schema(_args: argparse.Namespace) -> None:
