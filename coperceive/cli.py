@@ -124,6 +124,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Exit 1 when the report contains a hard failure. The default exit is 0.",
     )
     validate.set_defaults(func=_validate)
+
+    export = sub.add_parser("export", help="Export a scene to another format.")
+    export_sub = export.add_subparsers(dest="export_format", required=True)
+    rerun_export = export_sub.add_parser(
+        "rerun",
+        help="Write a Rerun .rrd. Requires the viewer extra.",
+    )
+    rerun_export.add_argument("scene", help="One schema 1 scene directory.")
+    rerun_export.add_argument("--out", required=True, help="Path of the .rrd file.")
+    rerun_export.set_defaults(func=_export_rerun)
     return parser
 
 
@@ -178,6 +188,25 @@ def _warning_count(aggregate: dict[object, object]) -> int:
         if type(value) is int:
             total += value
     return total
+
+
+def _export_rerun(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from coperceive.rerun_export import RerunUnavailable, export_rerun
+    from coperceive.store import read_scene
+
+    scene_dir = Path(args.scene)
+    if not (scene_dir / "manifest.json").is_file():
+        print(f"not a scene directory: {scene_dir}", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        samples = export_rerun(read_scene(scene_dir), Path(args.out))
+    except RerunUnavailable as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {args.out}")
+    print(f"samples {samples}")
 
 
 def _schema(_args: argparse.Namespace) -> None:

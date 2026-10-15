@@ -1,6 +1,6 @@
 # ADR 0003 — Viewer
 
-Status: accepted as the plan for a later phase. Phase 1 does not embed a viewer.
+Status: accepted. Phase 5 draws the scene with three.js inside this app and writes a Rerun `.rrd`. The spike records below are unchanged. The desktop shell is ADR 0007 and is not built.
 
 ## Context
 
