@@ -7,6 +7,7 @@ theme:
     primary: teal
 nav:
   - Overview: index.md
+  - Format: spec/format.md
   - Positioning: design/positioning.md
   - Name: design/naming.md
   - Earlier candidates: design/names.md

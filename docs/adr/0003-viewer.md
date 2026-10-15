@@ -1,6 +1,6 @@
 # ADR 0003 — Viewer
 
-Status: proposed. Phase 0 does not embed a 3D viewer. Adarsh confirms the choice before one is built.
+Status: accepted as the plan for a later phase. Phase 1 does not embed a viewer.
 
 ## Context
 

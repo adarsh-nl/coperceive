@@ -1,8 +1,8 @@
 # coperceive
 
-A cooperative, multi-agent perception data library. The name is recorded in `docs/design/naming.md`.
+A cooperative, multi-agent perception data library. Source: <https://github.com/adarsh-nl/coperceive>. The name is recorded in `docs/design/naming.md`.
 
-Phase 0 is the scaffold: a scene model, a hybrid on-disk layout, a Griffin reader, a local web page, and the measurements behind the design notes. It does not train models.
+Phase 1 is the scene model and the hybrid on-disk format. The contract a third party can implement is `docs/spec/format.md`. A Griffin reader and a local page came with the Phase 0 scaffold. This tree does not train models and does not embed a viewer.
 
 ## Install
 
@@ -16,7 +16,7 @@ coperceive --help
 
 Extras: `torch`, `viewer` (rerun-sdk 0.22.1 and viser 0.2.23), `app`, `griffin`, `docs`, `dev`.
 
-The licence file is Apache-2.0. The repository stays private. Both are waiting for a final confirmation. See `docs/adr/0006-licence.md`.
+The licence is Apache-2.0. The repository stays private. See `docs/adr/0006-licence.md`.
 
 ## Local page
 

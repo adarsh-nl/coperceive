@@ -1,6 +1,6 @@
 # ADR 0002 — On-disk format
 
-Status: proposed. The scaffold writes this layout. Adarsh can replace it before v0.1.
+Status: accepted for schema 1. The byte layout is specified in `docs/spec/format.md`. Replacing it means a new schema version.
 
 ## Context
 
@@ -53,4 +53,4 @@ Arrow IPC is close on the sensor scan and faster to write, and larger. HDF5 wins
 - Parquet tooling can open the tables. The blob needs the index.
 - mmap of the blob is available to callers. The library’s worker test uses a spawn process and `stat`, which is the DataLoader-shaped check that was actually run.
 - A PyTorch `DataLoader` was not run. `python3 -c "import torch"` in the earlier environment printed that torch was absent, and torch was not installed for this scaffold. The command that was not run is a `DataLoader` with `num_workers > 0` over `read_points_at`.
-- This choice is reversible before v0.1. Adarsh confirms or replaces it.
+- Schema 1 is the hybrid layout in `docs/spec/format.md`. A replacement is a new schema version.

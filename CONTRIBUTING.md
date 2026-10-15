@@ -1,6 +1,6 @@
 # Contributing
 
-The maintainer is Adarsh (github.com/adarsh-nl). Phase 0 is a proposal. Do not add detectors, fusion, accounts, or a second dataset until the open decisions in `HANDOVER.md` are settled.
+The maintainer is Adarsh (github.com/adarsh-nl). Phase 1 is the scene model and `docs/spec/format.md`. Do not add detectors, fusion, accounts, a viewer, or a second dataset. Open decisions are in `HANDOVER.md`.
 
 ## Setup
 

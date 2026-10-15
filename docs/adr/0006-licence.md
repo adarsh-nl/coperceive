@@ -1,6 +1,6 @@
 # ADR 0006 — Licence
 
-Status: proposed. The file `LICENSE` is Apache-2.0 so the tree has a licence. Adarsh has not confirmed it.
+Status: accepted. The licence is Apache-2.0. The repository stays private.
 
 ## Context
 
@@ -26,4 +26,4 @@ Recommend Apache-2.0. The tree uses that text until Adarsh says otherwise. Copyr
 
 - If the choice becomes MIT, replace `LICENSE`, the `pyproject.toml` classifier, and `CITATION.cff` together.
 - Third-party notices for Griffin’s toolkit licence stay in `THIRD_PARTY_NOTICES.md` either way.
-- The name is coperceive. The repository stays private for now. Apache-2.0 stays in the tree. Both the licence and visibility are still waiting for Adarsh’s final word.
+- The name is coperceive. Apache-2.0 is the licence. The repository stays private.

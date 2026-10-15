@@ -2,6 +2,15 @@
 
 ## 0.0.0
 
+Phase 1 scene model and schema 1 hybrid store. The contract is `docs/spec/format.md`.
+
+- Agent types `vehicle`, `uav`, `infrastructure`, `other`, plus a string platform map.
+- Sensors `camera`, `lidar`, `radar` with `body ← sensor` and an optional camera pinhole.
+- Boxes carry a class, an optional track id, an optional visibility, and a `body` or `world` frame.
+- `T(dst ← src, t)` covers world, body, and sensor. No default gap. No silent extrapolation.
+- Per-agent time queries report `dt_us` for `exact`, `nearest`, `backward`, and `forward`.
+- Scene objects are exactly the track ids shared by two or more agents that agree on one class.
+
 Phase 0 scaffold. The distribution, import, and command name are `coperceive`.
 
 - Scene model, time queries, and `T(dst ← src, t)` with explicit interpolation limits.
