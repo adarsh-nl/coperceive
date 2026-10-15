@@ -44,6 +44,7 @@ The browser build bundles the direct `web/` dependencies. Their `package.json` l
 | @tanstack/react-query | MIT |
 | @radix-ui/react-label | MIT |
 | openapi-fetch | MIT |
+| three | MIT |
 | @fontsource/ibm-plex-sans, @fontsource/ibm-plex-mono | OFL-1.1 |
 
 Transitive licences ship inside the built assets. `web/node_modules` is not committed.

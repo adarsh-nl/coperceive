@@ -14,6 +14,7 @@ nav:
   - Griffin verification: design/griffin-verification.md
   - Griffin dataset: datasets/griffin.md
   - Validate: validate.md
+  - Viewer: viewer.md
   - Decisions:
       - Data model: adr/0001-data-model.md
       - On-disk format: adr/0002-on-disk-format.md
@@ -21,6 +22,7 @@ nav:
       - Web app: adr/0004-web-app.md
       - Docs generator: adr/0005-docs-generator.md
       - Licence: adr/0006-licence.md
+      - Desktop packaging: adr/0007-desktop.md
 markdown_extensions:
   - tables
   - toc:

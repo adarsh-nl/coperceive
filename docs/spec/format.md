@@ -260,4 +260,4 @@ Little-endian float32, no header, no padding between sweeps. Each point is `x, y
 
 ## What schema 1 does not store
 
-Radar or lidar measurement models, distortion, map geometry, embeddings, and image bytes. A second dataset is out of scope. A viewer is a later phase.
+Radar or lidar measurement models, distortion, map geometry, embeddings, and image bytes. A second dataset is out of scope. The viewer reads this layout. It does not add fields to it.
