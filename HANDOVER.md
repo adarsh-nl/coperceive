@@ -51,7 +51,7 @@ Python 3.12.3. Commands and results from 2026-10-15:
 - `python -m build --wheel` — built `dist/coperceive-0.0.0-py3-none-any.whl`
 - Fresh venv: `pip install dist/coperceive-0.0.0-py3-none-any.whl` then `coperceive --help` printed “Cooperative multi-agent perception data tools.” and `coperceive schema` printed `1`
 - `mkdocs build` — succeeded (MkDocs 1.6.1, Material 9.7.7)
-- `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks on the commits present before this phase's commit
+- `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 7 commits scanned
 - `gitleaks detect --no-git --source . --redact --no-banner --exit-code 1` — no leaks in the working tree (3.69 MB scanned)
 
 Not run here:
