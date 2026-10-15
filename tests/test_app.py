@@ -1,12 +1,26 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import struct
 from pathlib import Path
 
 import pytest
 from coperceive.app.jobs import confine
 from coperceive.app.server import create_app
 from coperceive.cli import main
+from coperceive.model import (
+    SCHEMA_VERSION,
+    Agent,
+    AgentType,
+    Clock,
+    Modality,
+    PointCloud,
+    Scene,
+    Sensor,
+    StampedPose,
+)
+from coperceive.se3 import SE3
+from coperceive.store import write_scene
 from fastapi.testclient import TestClient
 
 
@@ -60,3 +74,67 @@ def test_jobs_sse_and_files(tmp_path: Path) -> None:
     assert listed.text == "hello"
     escaped = client.get("/api/files", headers=headers, params={"path": "../note.txt"})
     assert escaped.status_code == 400
+
+
+def _viewer_scene(root: Path) -> None:
+    pose = StampedPose(0, SE3.identity().translation(10.0, 0.0, 0.0))
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    sensor = Sensor("lidar_top", "vehicle", Modality.LIDAR, SE3.identity())
+    cloud = PointCloud("vehicle", "lidar_top", 0, 1, struct.pack("<ffff", 1.0, 0.0, 0.0, 1.0))
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="desk",
+        world_frame="ENU",
+        clock=Clock("us", "app viewer fixture"),
+        agents=(agent,),
+        sensors=(sensor,),
+        annotations=(),
+        objects=(),
+        point_clouds=(cloud,),
+    )
+    write_scene(scene, root / "desk")
+
+
+def test_viewer_api_lists_a_frame_and_rejects_a_bad_id(tmp_path: Path) -> None:
+    _viewer_scene(tmp_path)
+    app = create_app(root=tmp_path, token=None)
+    client = TestClient(app)
+    listed = client.get("/api/scenes")
+    assert listed.status_code == 200
+    assert listed.json() == [{"scene_id": "desk"}]
+    summary = client.get("/api/scenes/desk")
+    assert summary.status_code == 200
+    assert summary.json()["times_us"] == [0]
+    frame = client.get("/api/scenes/desk/frame", params={"time_us": 0})
+    assert frame.status_code == 200
+    assert frame.json()["point_sensors"][0]["count"] == 1
+    points = client.get(
+        "/api/scenes/desk/points",
+        params={"time_us": 0, "agent_id": "vehicle", "sensor_id": "lidar_top"},
+    )
+    assert points.status_code == 200
+    assert struct.unpack("<fff", points.content) == pytest.approx((11.0, 0.0, 0.0))
+    denied = client.get("/api/scenes/foo..bar")
+    assert denied.status_code == 400
+    missing = client.get("/api/scenes/nope")
+    assert missing.status_code == 404
+
+
+def test_rerun_export_route_writes_under_the_root(tmp_path: Path) -> None:
+    pytest.importorskip("rerun")
+    _viewer_scene(tmp_path)
+    app = create_app(root=tmp_path, token="secret")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret", "X-Coperceive-Request": "1"}
+    missing = client.post("/api/scenes/desk/export/rerun")
+    assert missing.status_code == 401
+    no_header = client.post(
+        "/api/scenes/desk/export/rerun",
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert no_header.status_code == 403
+    created = client.post("/api/scenes/desk/export/rerun", headers=headers)
+    assert created.status_code == 200
+    body = created.json()
+    assert body["samples"] == 1
+    assert (tmp_path / body["path"]).is_file()
