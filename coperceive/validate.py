@@ -138,14 +138,21 @@ def altitude_phase(
     return ("none", 0)
 
 
-def validate_root(root: Path, thresholds: Thresholds | None = None) -> dict[str, object]:
+def validate_root(
+    root: Path,
+    thresholds: Thresholds | None = None,
+    maps: Path | None = None,
+) -> dict[str, object]:
     """Read every scene directory under ``root`` and return a JSON-ready report."""
     limits = Thresholds() if thresholds is None else thresholds
     if not root.is_dir():
         raise FileNotFoundError(root)
+    maps_root = _maps_root(root, maps)
     paths = _scene_dirs(root)
     scenes: list[dict[str, object]] = []
     pooled = _Pools()
+    centreline_pool = _CentrelinePool()
+    map_cache: dict[str, object] = {}
     for path in paths:
         try:
             scene = read_scene(path)
@@ -159,6 +166,7 @@ def validate_root(root: Path, thresholds: Thresholds | None = None) -> dict[str,
             )
             continue
         row = _scene_report(scene, path, limits, pooled)
+        row["centreline"] = _centreline_row(scene, maps_root, map_cache, centreline_pool)
         scenes.append(row)
     report: dict[str, object] = {
         "root": str(root.resolve()),
@@ -174,6 +182,7 @@ def validate_root(root: Path, thresholds: Thresholds | None = None) -> dict[str,
         "official": _official(scenes),
     }
     aggregate = pooled.aggregate(scenes, limits)
+    aggregate["centreline"] = centreline_pool.aggregate(maps_root)
     hard = _hard_failures(scenes)
     aggregate["hard_failure_count"] = len(hard)
     aggregate["hard_failures"] = hard[:50]
@@ -314,6 +323,112 @@ class _Pools:
             "uav_only_tracks": self.uav_only,
             "both_tracks": self.both,
         }
+
+
+class _CentrelinePool:
+    def __init__(self) -> None:
+        self.pose_lane: list[float] = []
+        self.pose_reference: list[float] = []
+        self.box_lane: list[float] = []
+        self.heading: list[float] = []
+        self.scenes_measured = 0
+        self.scenes_skipped = 0
+
+    def aggregate(self, maps_root: Path | None) -> dict[str, object]:
+        lane = distribution(self.pose_lane)
+        payload: dict[str, object] = {
+            "maps_root": None if maps_root is None else str(maps_root),
+            "scenes_measured": self.scenes_measured,
+            "scenes_skipped": self.scenes_skipped,
+            "vehicle_pose_to_lane_centre_m": lane.as_json(),
+            "vehicle_pose_to_reference_m": distribution(self.pose_reference).as_json(),
+            "vehicle_box_to_lane_centre_m": distribution(self.box_lane).as_json(),
+            "vehicle_pose_heading_error_deg": distribution(self.heading).as_json(),
+            "claim_m": 0.24,
+            "lane_centre_median_minus_claim_m": (
+                None if lane.median is None else lane.median - 0.24
+            ),
+            "claim_note": (
+                "0.24 m is the Town03 road-centreline figure recorded in "
+                "docs/design/griffin-verification.md before this map check. "
+                "lane_centre_median_minus_claim_m is the measured lane-centre median "
+                "minus that figure, not a pass/fail gate."
+            ),
+        }
+        if maps_root is None:
+            payload["status"] = "not measured"
+            payload["reason"] = "no maps directory"
+        elif self.scenes_measured == 0:
+            payload["status"] = "not measured"
+            payload["reason"] = "no scene linked to a map in the maps directory"
+        else:
+            payload["status"] = "measured"
+        return payload
+
+
+def _maps_root(root: Path, maps: Path | None) -> Path | None:
+    if maps is not None:
+        if not maps.is_dir():
+            raise FileNotFoundError(maps)
+        return maps
+    candidate = root / "maps"
+    if not candidate.is_dir():
+        return None
+    for child in candidate.iterdir():
+        if child.is_dir() and (child / "manifest.json").is_file():
+            return candidate
+    return None
+
+
+def _centreline_row(
+    scene: Scene,
+    maps_root: Path | None,
+    cache: dict[str, object],
+    pool: _CentrelinePool,
+) -> dict[str, object]:
+    if maps_root is None:
+        pool.scenes_skipped += 1
+        return {"status": "not measured", "reason": "no maps directory"}
+    from coperceive.hdmap.measure import collect_centreline, indexes_for, sample_as_json
+    from coperceive.hdmap.store import find_map, load_map, scene_map_name
+
+    map_name = scene_map_name(scene)
+    if map_name is None:
+        pool.scenes_skipped += 1
+        return {"status": "not measured", "reason": "scene has no single map_name"}
+    cached = cache.get(map_name)
+    if cached is None:
+        try:
+            directory = find_map(maps_root, map_name)
+        except ValueError as exc:
+            pool.scenes_skipped += 1
+            return {"status": "not measured", "map_name": map_name, "reason": str(exc)}
+        if directory is None:
+            cache[map_name] = None
+        else:
+            hdmap = load_map(directory)
+            cache[map_name] = (hdmap, indexes_for(hdmap))
+        cached = cache[map_name]
+    if cached is None:
+        pool.scenes_skipped += 1
+        return {
+            "status": "not measured",
+            "map_name": map_name,
+            "reason": "map asset is not in the maps directory",
+        }
+    from coperceive.hdmap.index import SegmentIndex
+    from coperceive.hdmap.store import HdMap
+
+    pair = cast("tuple[HdMap, tuple[SegmentIndex, SegmentIndex]]", cached)
+    hdmap, indexes = pair
+    lanes, reference = indexes
+    sample = collect_centreline(scene, lanes, reference)
+    pool.pose_lane.extend(sample.pose_lane_m)
+    pool.pose_reference.extend(sample.pose_reference_m)
+    pool.box_lane.extend(sample.box_lane_m)
+    pool.heading.extend(sample.heading_error_deg)
+    pool.scenes_measured += 1
+    return sample_as_json(hdmap, sample)
 
 
 def _scene_dirs(root: Path) -> list[Path]:
@@ -1019,6 +1134,7 @@ def _bullet_block(row: dict[str, object]) -> list[str]:
         "altitude",
         "agreement",
         "coverage",
+        "centreline",
         "time_sync",
         "cross_sync",
     ):

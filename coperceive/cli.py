@@ -8,6 +8,7 @@ import sys
 from typing import cast
 
 from coperceive import __version__
+from coperceive.hdmap.commands import add_parser
 from coperceive.model import SCHEMA_VERSION
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
@@ -38,7 +39,14 @@ def build_parser() -> argparse.ArgumentParser:
         default="",
         help="URL prefix when the app sits behind a JupyterHub or similar proxy.",
     )
+    serve.add_argument(
+        "--maps",
+        default=None,
+        help="Shared HD-map root. Defaults to ROOT/maps when that directory exists.",
+    )
     serve.set_defaults(func=_serve)
+
+    add_parser(sub)
 
     download = sub.add_parser("download", help="Download a dataset.")
     download_sub = download.add_subparsers(dest="dataset", required=True)
@@ -123,6 +131,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Exit 1 when the report contains a hard failure. The default exit is 0.",
     )
+    validate.add_argument(
+        "--maps",
+        default=None,
+        help="Shared HD-map root. Defaults to ROOT/maps when that directory holds a map.",
+    )
     validate.set_defaults(func=_validate)
 
     export = sub.add_parser("export", help="Export a scene to another format.")
@@ -156,7 +169,7 @@ def _validate(args: argparse.Namespace) -> None:
     if not root.is_dir():
         print(f"not a directory: {root}", file=sys.stderr)
         raise SystemExit(2)
-    report = validate_root(root)
+    report = validate_root(root, maps=None if args.maps is None else Path(args.maps))
     json_path = Path(args.json)
     markdown_path = Path(args.markdown)
     write_report(report, json_path, markdown_path)
@@ -241,6 +254,7 @@ def _serve(args: argparse.Namespace) -> None:
         root=args.root,
         token=args.token,
         root_path=args.root_path,
+        maps=args.maps,
     )
 
 

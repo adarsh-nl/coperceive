@@ -41,11 +41,14 @@ type FrameDocument = {
 type Stage = {
   points: THREE.Points;
   boxes: THREE.LineSegments;
+  mapLines: THREE.LineSegments;
   frustums: THREE.Group;
   agents: THREE.Group;
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
 };
+
+type Anchor = { x: number; y: number; z: number };
 
 const COLORS: Record<string, number> = {
   vehicle: 0xe67828,
@@ -139,6 +142,113 @@ function frustumLines(fovY: number, aspect: number, color: number): THREE.LineSe
   return new THREE.LineSegments(geometry, new THREE.LineBasicMaterial({ color }));
 }
 
+function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
+  const geometry = new THREE.BufferGeometry();
+  const view = new DataView(buffer);
+  if (buffer.byteLength < 4) {
+    geometry.setAttribute("position", new THREE.Float32BufferAttribute([], 3));
+    return geometry;
+  }
+  let offset = 0;
+  const count = view.getUint32(offset, true);
+  offset += 4;
+  const positions: number[] = [];
+  const colors: number[] = [];
+  const lane = new THREE.Color(0x7dcea0);
+  const edge = new THREE.Color(0x9aa7b2);
+  for (let index = 0; index < count; index += 1) {
+    if (offset + 8 > buffer.byteLength) {
+      break;
+    }
+    const layer = view.getUint32(offset, true);
+    offset += 4;
+    const vertices = view.getUint32(offset, true);
+    offset += 4;
+    const color = layer === 1 ? lane : edge;
+    const coords: number[] = [];
+    for (let vertex = 0; vertex < vertices; vertex += 1) {
+      coords.push(
+        view.getFloat32(offset, true),
+        view.getFloat32(offset + 4, true),
+        view.getFloat32(offset + 8, true),
+      );
+      offset += 12;
+    }
+    for (let vertex = 0; vertex + 1 < vertices; vertex += 1) {
+      positions.push(
+        coords[vertex * 3],
+        coords[vertex * 3 + 1],
+        coords[vertex * 3 + 2],
+        coords[(vertex + 1) * 3],
+        coords[(vertex + 1) * 3 + 1],
+        coords[(vertex + 1) * 3 + 2],
+      );
+      colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
+    }
+  }
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  return geometry;
+}
+
+function vehicleAnchor(frame: FrameDocument, types: Map<string, string>): Anchor | null {
+  for (const agent of frame.agents) {
+    if (types.get(agent.agent_id) === "vehicle" && isPose(agent.pose)) {
+      return { x: agent.pose.tx, y: agent.pose.ty, z: agent.pose.tz };
+    }
+  }
+  return null;
+}
+
+function frameNearCluster(stage: Stage, positions: number[], anchor: Anchor | null) {
+  const origin = anchor ?? medianAnchor(positions);
+  const kept: THREE.Vector3[] = [new THREE.Vector3(origin.x, origin.y, origin.z)];
+  const radius = 80;
+  for (let index = 0; index < positions.length; index += 3) {
+    const dx = positions[index] - origin.x;
+    const dy = positions[index + 1] - origin.y;
+    if (dx * dx + dy * dy <= radius * radius) {
+      kept.push(
+        new THREE.Vector3(positions[index], positions[index + 1], positions[index + 2]),
+      );
+    }
+  }
+  const box = new THREE.Box3().setFromPoints(kept);
+  const center = box.getCenter(new THREE.Vector3());
+  const size = box.getSize(new THREE.Vector3());
+  const span = Math.max(size.length() * 0.55, 18);
+  stage.controls.target.copy(center);
+  stage.camera.position.set(center.x + span, center.y - span, center.z + span * 0.75);
+  stage.camera.near = 0.1;
+  stage.camera.far = Math.max(5000, span * 40);
+  stage.camera.updateProjectionMatrix();
+  stage.controls.update();
+}
+
+function medianAnchor(positions: number[]): Anchor {
+  if (positions.length < 3) {
+    return { x: 0, y: 0, z: 0 };
+  }
+  const xs: number[] = [];
+  const ys: number[] = [];
+  const zs: number[] = [];
+  for (let index = 0; index < positions.length; index += 3) {
+    xs.push(positions[index]);
+    ys.push(positions[index + 1]);
+    zs.push(positions[index + 2]);
+  }
+  return { x: median(xs), y: median(ys), z: median(zs) };
+}
+
+function median(values: number[]): number {
+  const ordered = [...values].sort((a, b) => a - b);
+  const mid = Math.floor(ordered.length / 2);
+  if (ordered.length % 2 === 1) {
+    return ordered[mid] ?? 0;
+  }
+  return ((ordered[mid - 1] ?? 0) + (ordered[mid] ?? 0)) / 2;
+}
+
 function clearGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child);
@@ -177,14 +287,6 @@ async function drawFrame(
   stage.points.geometry = new THREE.BufferGeometry();
   stage.points.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
   stage.points.geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  if (positions.length > 0) {
-    stage.points.geometry.computeBoundingSphere();
-    const center = stage.points.geometry.boundingSphere?.center;
-    if (center) {
-      stage.controls.target.copy(center);
-      stage.camera.position.set(center.x + 25, center.y - 25, center.z + 18);
-    }
-  }
 
   const boxPositions: number[] = [];
   const boxColors: number[] = [];
@@ -226,6 +328,13 @@ async function drawFrame(
     applyPose(axes, agent.pose);
     stage.agents.add(axes);
   }
+  return { positions, anchor: vehicleAnchor(frame, types) };
+}
+
+function replaceMap(stage: Stage, buffer: ArrayBuffer) {
+  const next = mapGeometry(buffer);
+  stage.mapLines.geometry.dispose();
+  stage.mapLines.geometry = next;
 }
 
 export default function Viewer({ token }: { token: string }) {
@@ -237,7 +346,9 @@ export default function Viewer({ token }: { token: string }) {
   const [frameIndex, setFrameIndex] = useState(0);
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState("Choose a scene under the server root.");
+  const [mapNote, setMapNote] = useState("");
   const [exportNote, setExportNote] = useState("");
+  const framedScene = useRef("");
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -260,10 +371,19 @@ export default function Viewer({ token }: { token: string }) {
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ vertexColors: true }),
     );
+    const mapLines = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ vertexColors: true }),
+    );
+    mapLines.renderOrder = 0;
+    points.renderOrder = 1;
+    boxes.renderOrder = 2;
     const frustums = new THREE.Group();
     const agents = new THREE.Group();
-    scene.add(points, boxes, frustums, agents);
-    stageRef.current = { points, boxes, frustums, agents, camera, controls };
+    frustums.renderOrder = 3;
+    agents.renderOrder = 4;
+    scene.add(mapLines, points, boxes, frustums, agents);
+    stageRef.current = { points, boxes, mapLines, frustums, agents, camera, controls };
     let frameId = 0;
     const draw = () => {
       const width = canvas.clientWidth || 1;
@@ -283,6 +403,7 @@ export default function Viewer({ token }: { token: string }) {
       renderer.dispose();
       points.geometry.dispose();
       boxes.geometry.dispose();
+      mapLines.geometry.dispose();
       stageRef.current = null;
     };
   }, []);
@@ -382,12 +503,18 @@ export default function Viewer({ token }: { token: string }) {
         setStatus("The frame document was incomplete.");
         return;
       }
-      await drawFrame(stage, body, types, hidden, token, controller.signal);
+      const drawn = await drawFrame(stage, body, types, hidden, token, controller.signal);
+      if (framedScene.current !== summary.scene_id) {
+        frameNearCluster(stage, drawn.positions, drawn.anchor);
+        framedScene.current = summary.scene_id;
+      }
       const shown = body.point_sensors.reduce((sum, sensor) => {
         return hidden[sensor.agent_id] ? sum : sum + sensor.count;
       }, 0);
+      const boxes = body.boxes.filter((box) => !hidden[box.agent_id]).length;
+      const frustums = body.frustums.filter((frustum) => !hidden[frustum.agent_id]).length;
       setStatus(
-        `${summary.scene_id} at ${time} µs. ${shown} points, ${body.boxes.length} boxes, ${body.frustums.length} frustums.`,
+        `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}`,
       );
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) {
@@ -395,7 +522,37 @@ export default function Viewer({ token }: { token: string }) {
       }
     });
     return () => controller.abort();
-  }, [summary, frameIndex, hidden, token]);
+  }, [summary, frameIndex, hidden, token, mapNote]);
+
+  useEffect(() => {
+    if (!summary || !stageRef.current) {
+      return;
+    }
+    const stage = stageRef.current;
+    const controller = new AbortController();
+    void (async () => {
+      const response = await fetch(
+        `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/map/lines`,
+        { headers: authHeaders(token), signal: controller.signal },
+      );
+      if (response.status === 404) {
+        replaceMap(stage, new ArrayBuffer(0));
+        setMapNote("no map.");
+        return;
+      }
+      if (!response.ok) {
+        setMapNote(await errorDetail(response));
+        return;
+      }
+      replaceMap(stage, await response.arrayBuffer());
+      setMapNote("map drawn.");
+    })().catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setMapNote(error instanceof Error ? error.message : "Could not draw the map.");
+      }
+    });
+    return () => controller.abort();
+  }, [summary, token]);
 
   async function exportRerun() {
     if (!summary) {
