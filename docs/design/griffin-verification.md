@@ -56,7 +56,7 @@ Frame counts: 45 scenes with 149 frames, one with 148, one with 147. Sum 7,000. 
 
 `cruise_altitude` over the 47 scenes: min 23.084 m, median 25.236 m, max 26.919 m. That sits inside 25 ± 2 m. It is a per-scene cruise value, not a per-frame drone-minus-vehicle height. Per-frame vertical separation was measured in an earlier pass and was not repeated here.
 
-`map_name` is a string such as `Carla/Maps/Town03`. The extracted tree has no map geometry. The claim of a 0.24 m median distance from road centrelines was not measured. There is no centreline in the downloaded archives.
+`map_name` is a string such as `Carla/Maps/Town03`. The extracted tree has no map geometry. The 0.24 m road-centreline figure was not measured from these archives. The measurement against CARLA 0.9.15 OpenDRIVE is in the section below and in [ADR 0008](../adr/0008-hd-map.md).
 
 Vehicle and drone pose files use the same frame ids. On `Town03-000` frame 11185, the pose JSON field `timestamp` is the integer 11185, equal to the file stem. Keys present: `pitch`, `roll`, `timestamp`, `velocity`, `x`, `y`, `yaw`, `z`.
 
@@ -64,7 +64,7 @@ Vehicle and drone pose files use the same frame ids. On `Town03-000` frame 11185
 
 On `Town03-000`, 15 frames (every 10th), 251 shared track ids: with `R = Rz(yaw) @ Ry(pitch) @ Rx(roll)` in degrees, the world points of a shared id from the vehicle box and the drone box differ by at most 5.7e-14 m. Category mismatches in that sample: 0.
 
-So both agents are in one right-handed world frame for those boxes. The paper’s converted world is described as ENU. This check did not compare a zero-yaw axis to a map, so it does not decide east-versus-north. It does show the two agents are not in two unrelated frames. The scene model stores both in one scene.
+So both agents are in one right-handed world frame for those boxes. The paper’s converted world is described as ENU. This pose-to-pose check does not decide east. The OpenDRIVE alignment below does. The scene model stores both agents in one scene.
 
 The reader sets `time_us = frame_id * 100_000` and writes that assumption into the clock note. The files do not contain a measured wall clock. 100 ms is the 10 Hz lidar rate from the paper, not a timestamp recovered from the JSON.
 
@@ -86,10 +86,16 @@ property float32 I
 
 No drone lidar zip is in the 25 m file list. The drone calib directory can still name lidar stems. The paper says the drone has no lidar payload. Those calib files were not treated as a point-cloud sensor in the format spike.
 
+## Centreline and east
+
+Measured on 2026-10-15 against CARLA 0.9.15 OpenDRIVE for Town03, Town06, Town07, and Town10HD. The package URL is `https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`, 8,386,636,048 bytes, SHA-256 `7b2f432ce74b251593f95dcc8dee6d99ad9625c2a71a2d6d48f24d879de19ef7`. The `.xodr` files are not in git. `coperceive maps align` selected `identity` for every town and stored no translation. Griffin `+X` equals OpenDRIVE `+X`. Each file's `geoReference` is a transverse Mercator in metres. In PROJ, `+X` is easting and `+Y` is northing, so Griffin `+X` is east in that CRS. The residuals, the 0.24 m comparison, and the SHA-256 of each `.xodr` are in [ADR 0008](../adr/0008-hd-map.md).
+
+The pooled vehicle-pose median distance to the driving-lane centre is 0.013712643507518118 m over 7,000 poses. Median minus 0.24 m is −0.22628735649248188 m. The pooled median distance to the OpenDRIVE reference line is 1.7860191236754484 m. Neither median is 0.24 m.
+
 ## Not verified
 
 - Scene counts inside the 40 m, 55 m, and random metadata. Only the toolkit’s stated counts are quoted.
 - The NuScenes conversion, including any `maps/` directory it might write.
-- Road centrelines.
 - A wall-clock check of the 10 Hz assumption.
-- Which horizontal axis is east.
+- A compass survey of the east axis. The axis above is the OpenDRIVE CRS, not a surveyed bearing.
+- CARLA packages other than 0.9.15. Town07's lane-centre median is 0.1647962688524098 m, still with `identity`.

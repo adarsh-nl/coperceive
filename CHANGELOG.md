@@ -2,6 +2,8 @@
 
 ## 0.0.0
 
+Shared HD map. `coperceive maps fetch`, `maps ingest`, and `maps align` turn a CARLA OpenDRIVE file into a sidecar directory (`manifest.json`, `polylines.parquet`, `vertices.bin`) and store `world_from_opendrive`. Schema 1 is unchanged. The viewer draws lane centres and road edges under the lidar. `coperceive validate` reports vehicle-pose distance to the lane centre. The centreline block is not a hard failure. The status line ignores hidden agents, the first camera frame uses the near vehicle cluster, and `/favicon.ico` returns the SVG icon. The design is `docs/adr/0008-hd-map.md`.
+
 Phase 5 viewer. The local page draws lidar, boxes, and camera frustums with three.js, one scrubber, and a per-agent hide control. Lidar points are 2 CSS pixels. `coperceive export rerun` and `POST /api/scenes/{id}/export/rerun` write a Rerun `.rrd` of the same discrete samples. The desktop packaging plan is `docs/adr/0007-desktop.md`. The shell is not built.
 
 Phase 4 validation. `coperceive validate` writes a JSON report and a Markdown report for a directory of schema 1 scenes: time sync, UAV height above the vehicle, pose speed and acceleration, shared-track and nearest-centre agreement, coverage, and scene and frame counts against the toolkit figures. Speed above 40 m/s and acceleration above 20 m/s² are warnings. A 0.5 s trailing mean of speed is the smoothed acceleration check. The computed-pair gate is `max(2 m, 0.5 * the longer box length)` and stays labelled computed. The default exit is 0. `--strict` exits 1 on an unreadable scene, a missing frame, or a cross-agent pose miss. The Griffin-25m dev-tier numbers are in `docs/validate.md`.

@@ -260,4 +260,37 @@ Little-endian float32, no header, no padding between sweeps. Each point is `x, y
 
 ## What schema 1 does not store
 
-Radar or lidar measurement models, distortion, map geometry, embeddings, and image bytes. A second dataset is out of scope. The viewer reads this layout. It does not add fields to it.
+Radar or lidar measurement models, distortion, embeddings, and image bytes. Map geometry is not a file in the scene directory. It lives in the sidecar below. A second dataset is out of scope. The viewer reads this layout. It does not add fields to the scene.
+
+## Shared HD map
+
+A scene links to a map by the string `platform.map_name`, for example `Carla/Maps/Town03`. The map is one directory under a maps root. The directory name is the last path segment. The decision is [ADR 0008](../adr/0008-hd-map.md).
+
+```text
+maps/Town03/
+  manifest.json
+  polylines.parquet
+  vertices.bin
+```
+
+`manifest.json` is one object. `map_format` is `coperceive-hdmap`. `map_format_version` is `1`. `length_unit` is `m`. `world_from_opendrive` is a 3×3 matrix `r`, a translation `t` in metres, and a bool `measured`. The product is `p_world = R @ p_opendrive + t`. Vertices on disk stay in the OpenDRIVE frame. `measured` is false until `coperceive maps align` writes a transform.
+
+`vertices.bin` is little-endian float32 `x, y, z`, 12 bytes per vertex, no header.
+
+`polylines.parquet` addresses that blob by vertex index.
+
+| Column | Arrow |
+| --- | --- |
+| `polyline_id` | int64, required |
+| `layer` | string, required |
+| `road_id` | string, required |
+| `lane_id` | int64, null |
+| `side` | string, null |
+| `lane_type` | string, null |
+| `junction_id` | string, null |
+| `vertex_offset` | int64, required |
+| `vertex_count` | int64, required |
+
+`layer` is `reference`, `lane_centre`, or `road_edge`. `vertex_offset` is the first vertex. `vertex_count` is the number of vertices. The span is `[vertex_offset, vertex_offset + vertex_count)`.
+
+The viewer lines route sends lane centres and road edges after the transform. The reference line stays in the file and out of that blob.

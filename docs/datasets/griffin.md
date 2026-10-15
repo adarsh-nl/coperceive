@@ -142,7 +142,7 @@ Label lines: 177,697, every one 12 fields. No 11-field or 9-field line in this s
 
 The converter wrote 47 directories, 7,000 clouds, 19,922,961 points. `du -sb /tmp/griffin-scenes` was 333,097,959 bytes. `read_scene` on every directory: both agents, schema 1, world frame `ENU`. Drone platform on `Town03-000` is `subset=25m`, `map_name=Carla/Maps/Town03`, `cruise_altitude_m=25.7331649`. That scene has 149 poses, 149 clouds, and 40 shared objects.
 
-Shared-track world residual (`track_center_spread_m`, `max_gap_us=0`) over 813 tracks that occur on both agents at one timestamp: min 1.5694642960426368e-14 m, median 8.533456124013766e-14 m, max 4.576455661277233e-13 m. The earlier 15-frame Town03-000 sample was 5.7e-14 m. This is the full 25 m conversion. It is still roundoff. It still does not say which axis is east.
+Shared-track world residual (`track_center_spread_m`, `max_gap_us=0`) over 813 tracks that occur on both agents at one timestamp: min 1.5694642960426368e-14 m, median 8.533456124013766e-14 m, max 4.576455661277233e-13 m. The earlier 15-frame Town03-000 sample was 5.7e-14 m. This is the full 25 m conversion. It is still roundoff. Which horizontal axis is east is the OpenDRIVE alignment in [ADR 0008](../adr/0008-hd-map.md), not this residual.
 
 Per-frame pose `z`, 7,000 frames. Drone: min 16.798789978027344 m, median 26.5300931930542 m, max 34.67467498779297 m. Drone minus vehicle: min 16.811032561585307 m, median 26.410048661287874 m, max 29.66659187246114 m. The scene `cruise_altitude` stays near 25 m. The per-frame separation does not.
 
@@ -150,7 +150,17 @@ Drone calibration includes `lidar_bottom.json`, `lidar_front.json`, and `lidar_v
 
 The acknowledgement file is `/home/ubuntu/.local/share/coperceive/griffin-licence-accepted`. It records the MIT lines and `acknowledged_utc=2026-10-15T10:33:46Z`. It has no token.
 
-Not re-measured here: the 40 m and 55 m trees, the random-subset `.z01` bytes (the names and sizes were listed; the parts were not fetched), image pixels, and a map check of the east axis. The slow test `tests/test_griffin_phase2.py::test_real_griffin_release_loads` passed with `COPERCEIVE_GRIFFIN_RAW` pointed at this release. Without that variable the same test is skipped.
+Not re-measured here: the 40 m and 55 m trees, the random-subset `.z01` bytes (the names and sizes were listed; the parts were not fetched), and image pixels. The east axis is measured in [ADR 0008](../adr/0008-hd-map.md). The slow test `tests/test_griffin_phase2.py::test_real_griffin_release_loads` passed with `COPERCEIVE_GRIFFIN_RAW` pointed at this release. Without that variable the same test is skipped.
+
+## Maps
+
+```bash
+coperceive maps fetch --dest /path/outside/the/repo
+coperceive maps ingest --xodr /path/Town03.xodr --map-name Carla/Maps/Town03 --out /path/maps
+coperceive maps align --maps /path/maps --scenes /path/scenes
+```
+
+`fetch` downloads CARLA 0.9.15 unless `--package` points at a local tar.gz, and extracts `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr`. `ingest` writes one sidecar directory per town. `align` stores `world_from_opendrive` from the vehicle poses. The `.xodr` bytes are not committed. The layout is `docs/spec/format.md`.
 
 ## Validation
 

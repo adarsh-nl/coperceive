@@ -1,89 +1,101 @@
 # Handover
 
-Phase 5 is in the tree. Stop here. Do not start a desktop shell, a second dataset, or training code.
+The shared HD map is in the tree. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
 
 ## Goal
 
-An independent cooperative perception data platform Adarsh owns. Phase 5 draws a schema 1 scene in the local page with three.js and can write the same discrete samples to a Rerun `.rrd`. The on-disk contract is still schema 1 in `docs/spec/format.md`. The distribution, import, and command name are `coperceive`.
+An independent cooperative perception data platform Adarsh owns. Schema 1 scenes stay the contract in `docs/spec/format.md`. A CARLA town is a sidecar map, drawn under the lidar and used by `coperceive validate`. The distribution, import, and command name are `coperceive`.
 
-Clean-room rule: do not install, import, copy, paraphrase, or model naming or schema on kesai-labs/py123d. It was not opened for this phase. The Griffin toolkit was not re-opened. Altitude bands and official scene counts are the figures already recorded in `docs/design/griffin-verification.md` from `Dataset_Preparation.md`.
+Clean-room rule: do not install, import, copy, paraphrase, or model naming or schema on kesai-labs/py123d or the adarsh-nl fork. Neither was opened. The only outside idea used is a shared HD-map layer per town, drawn with the sensors. The Griffin toolkit was not re-opened. Altitude bands and official scene counts are the figures already recorded in `docs/design/griffin-verification.md`.
 
 ## State
 
-- The Viewer tab is the default page. It lists direct child directories of the server root that contain `manifest.json`. The scrubber steps through recorded pose times. `max_gap_us` is 0, so a time that is not a sample is omitted. Camera images are not drawn. Frustums use `2 * atan(cy / fy)` and +Z forward. Lidar points are 2 CSS pixels and do not shrink with distance.
-- `GET /api/scenes`, `GET /api/scenes/{id}`, `GET /api/scenes/{id}/frame`, `GET /api/scenes/{id}/points`, and `POST /api/scenes/{id}/export/rerun` are the viewer API. A scene id that contains `/`, `\`, or `..` is 400. Auth is checked before the CSRF header, so a POST with no bearer token is 401 and a token without `X-Coperceive-Request: 1` is 403.
-- `coperceive export rerun SCENE --out FILE.rrd` writes the same recording. A missing manifest exits 2. A missing `viewer` extra exits 2. The timeline name is `coperceive`. Rerun quaternions are xyzw. The HTTP pose stays `(qw, qx, qy, qz)`. `rerun analytics disable` runs before `rr.init` when the binary is next to the interpreter. `spawn` is false.
-- `coperceive.viewdata` does not import FastAPI or Rerun. `export_rerun` imports `rerun` inside the function. The React page calls the server only over HTTP.
-- The desktop plan is `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built. There is no `src-tauri/` and no Electron project.
-- Phase 4 validation is unchanged. `coperceive validate` still exits 0 by default. `--strict` exits 1 on an unreadable scene, a missing frame, or a cross-agent pose miss. Speed 40 m/s, instantaneous acceleration 20 m/s², and smoothed acceleration over 0.5 s are warnings. The computed gate is `max(2 m, 0.5 * the longer box length)` and stays labelled computed.
-- Schema version stays `1`. Griffin-25m conversion from Phase 2 was not re-downloaded. The validator was not re-run in this phase.
+- `coperceive maps fetch` extracts `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr` from CARLA 0.9.15 (`https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`). `maps ingest` writes `maps/<town>/manifest.json`, `polylines.parquet`, and `vertices.bin`. `maps align` stores `world_from_opendrive`. The `.xodr` bytes and the map directories are not in git.
+- The map format is `coperceive-hdmap` version 1. Vertices stay in the OpenDRIVE frame. The transform is a 3×3 matrix plus a translation, because a reflection is allowed and a quaternion cannot store one. Schema version stays `1`.
+- The viewer draws lane centres and road edges under the lidar. `GET /api/scenes/{id}/map/lines` returns the world-frame blob. A missing map is 404 and the status ends in `no map.`
+- The status line counts boxes and frustums for agents that are still shown. The first camera frame uses the vehicle pose and lidar points within 80 m horizontally. Later scrubs do not move the camera. `GET /favicon.ico` returns `favicon.svg`.
+- `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
+- The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
 
 ## Decisions already in the code
 
-- three.js is inside this app. Rerun is an `.rrd` export, not the hub page. viser stays in the `[viewer]` extra and is not the page.
-- The server keeps one decoded scene in memory.
-- The page and the server stay separate processes so a later shell can spawn `coperceive serve --host 127.0.0.1`.
-- Phase 4 choices stand: warnings rather than hard failures for the speed and acceleration thresholds, the size-scaled computed gate, and exit 0 unless `--strict`.
-- Phase 3 choices stand: discrete `Scene.at`, no pixel rounding, `z <= 0` behind, computed pairs are not ground truth, one reference agent, `identity_collate`, CPU torch in CI, `timezone.utc` for the licence stamp.
-- Phase 2 Griffin choices stand: schema `1`, null visibility, drone lidar calibs without clouds, `time_us = frame_id * 100000`, east taken from the toolkit pose comment. Source: https://github.com/adarsh-nl/coperceive
-- More DataLoader workers were slower than `num_workers=0` on the Phase 3 machine. That was not changed.
+- The map is a sidecar keyed by `platform.map_name`. Geometry is not copied into each scene.
+- Driving-lane centre is the primary centreline. The OpenDRIVE reference line is reported beside it.
+- Alignment candidates keep z up. A horizontal translation is stored only when it cuts the median residual by at least 1 m. `tz` stays 0.
+- On Griffin-25m against CARLA 0.9.15, every town selected `identity`. Griffin `+X` equals OpenDRIVE `+X`. The header CRS is transverse Mercator, so in PROJ that axis is easting. This is the file frame, not a compass survey.
+- Positive OpenDRIVE lane ids are driven against `+s`. The nearest-segment heading for those lanes is reversed by π.
+- Centreline distance does not fail validate. `lane_centre_median_minus_claim_m` subtracts 0.24 m from the measured median.
+- Phase 5 choices stand: three.js in the page, Rerun as an `.rrd` export, lidar points at 2 CSS pixels, loopback bind unless `--token` is set.
+- Phase 4 choices stand: warnings for speed and acceleration, the size-scaled computed gate, exit 0 unless `--strict`.
+- Phase 3 and Phase 2 choices stand, including schema `1`, null visibility, and `time_us = frame_id * 100000`.
 
 ## Open questions for Adarsh
 
-1. 40 m/s and 20 m/s² stay warnings. Smoothed acceleration uses the same 20 m/s² and a 0.5 s trailing window, and is also a warning. Say if the smoothed check should become a hard failure. On Griffin-25m it warns on 0 steps.
-2. The computed gate is `max(2 m, 0.5 * the longer box length)`. Griffin-25m has 11 computed pairs, centre median 4.071134798976429 m, max 4.518411314835206 m. Say if the floor or the 0.5 length fraction should change.
-3. Is the 2 m / 5-frame / 40% phase rule the split you want? It labels only Town06-001 (descent, 38 frames). Town06-011 climbs by less than 2 m and stays `none`.
+1. 40 m/s and 20 m/s² stay warnings. Smoothed acceleration uses the same 20 m/s² and a 0.5 s trailing window. On Griffin-25m the smoothed check warns on 0 steps.
+2. The computed gate is `max(2 m, 0.5 * the longer box length)`. Griffin-25m has 11 computed pairs, centre median 4.071134798976429 m, max 4.518411314835206 m.
+3. Is the 2 m / 5-frame / 40% phase rule the split you want? It labels only Town06-001.
 4. “About 150” frames stays informational. Every Griffin-25m scene is 147, 148, or 149.
-5. The default exit is 0. `--strict` exits 1 on an unreadable scene, a missing frame, or a cross-agent pose miss.
-6. `Scene.at` still returns the discrete sample. Say if training should use an interpolated pose instead.
+5. The default exit is 0. `--strict` exits 1 on an unreadable scene, a missing frame, or a cross-agent pose miss. The centreline block does not count.
+6. `Scene.at` still returns the discrete sample.
 7. Is +Z depth, with no pixel rounding, the camera contract to keep?
-8. `CooperativeDataset` indexes one reference agent. Say if the index should be the union of agent times.
+8. `CooperativeDataset` indexes one reference agent.
 9. Identity collate versus a padded cloud batch. Training code was not added.
-10. On the Phase 3 machine, more DataLoader workers were slower than `num_workers=0`. A different shard was not built.
-11. Visibility. Keep null when the field is absent, or match the toolkit and store `1.0`?
+10. On the Phase 3 machine, more DataLoader workers were slower than `num_workers=0`.
+11. Visibility. Keep null when the field is absent, or store `1.0`?
 12. Drone lidar calibs with no clouds. Keep them as sensors, or drop stems that have no point files?
-13. East. The toolkit comment is the only evidence. A map check was not done.
-14. Image paths are written for every camera calib even when the dev tier did not download images.
-15. Schema number. Still `1`.
-16. Desktop shell. Tauri is the plan and Electron is the fallback. Say if that order should be reversed before any shell work. The shell was not built.
-17. Lidar points are 2 CSS pixels. On Town06-001, 6 CSS pixels filled about half of the densest 80×80 patch of the default view. Say if 2 is still too large or too small.
+13. East is Griffin `+X` = OpenDRIVE `+X` = PROJ easting on these four files. Say if you want a compass check on top of that.
+14. The 0.24 m claim is not the measured median. Lane-centre median is 0.013712643507518118 m. Reference-line median is 1.7860191236754484 m. Say which quantity the 0.24 m figure was meant to be.
+15. Town07's lane-centre median is 0.1647962688524098 m, with `identity` still ahead of the next candidate by metres. Say if another CARLA package should be ingested.
+16. Sample step is 1.0 m. Say if the sidecar should be finer.
+17. Image paths are written for every camera calib even when the dev tier did not download images.
+18. Schema number. Still `1`. The map is `coperceive-hdmap` version 1, separate from the scene schema.
+19. Desktop shell. Tauri is the plan and Electron is the fallback. The shell was not built.
+20. Lidar points are 2 CSS pixels. Say if 2 is still too large or too small.
 
-## Griffin-25m validation
+## Griffin-25m map check
 
-This phase did not re-run the validator. The numbers below are the 2026-10-15 run already recorded in `docs/validate.md`, from `validate_root(Path("/tmp/griffin-scenes"))` then `write_report` to `/tmp/coperceive-validate-25m.json` and `/tmp/coperceive-validate-25m.md`. Elapsed 5.737 s. Those report files are not in git.
+Downloaded and converted on this machine on 2026-10-15. `coperceive download griffin --subset 25m --preset dev --dest /tmp/griffin-raw --accept-griffin-terms`, then `coperceive convert griffin --subset 25m --raw-root /tmp/griffin-raw/griffin_50scenes_25m/griffin-release --out /tmp/griffin-scenes`. 47 scenes. Recordings are not in git.
 
-- Scenes read 47, failed 0. Official 25 m count matches (47). Frames 7,000. Missing frames 0. Every pose gap is 100,000 µs, rate 10 Hz. Cross-agent misses at tolerance 0: 0 of 7,000. Nearest absolute `dt` is 0.
-- Per-frame drone `z` minus vehicle `z`: 7,000 samples, min 16.811032561585307 m, p05 24.353514404036105 m, median 26.410151720046997 m, p95 28.216206969693303 m, max 29.66659187246114 m. Inside [23, 27] m: 4,520. Outside: 2,480.
-- `cruise_altitude_m` over 47 scenes, same report, validator percentile: min 23.08411411 m, p05 23.29079752 m, median 25.23606834 m, p95 26.69679135 m, max 26.91940837 m. All inside 25±2 m.
-- Scene median height minus `cruise_altitude_m`: min −0.9936694535794466 m, median 1.243236409414063 m, max 2.0082581264744377 m.
-- Phases: descent 1, none 46. Town06-001 is the descent, 38 frames, `cruise_altitude_m` 24.51687333. Phase samples: min 16.811032561585307 m, median 23.507026061415672 m, max 26.08574439957738 m. Cruise-only samples (6,962): min 21.820821456611156 m, median 26.431367035023868 m, max 29.66659187246114 m.
-- The Phase 2 range 16.8–29.7 m, median 26.4 m, is this per-frame difference. The toolkit 25±2 m figure is the cruise field. The flown height sits about 1.2 m above that field. The low tail is the Town06-001 descent, not a dataset-wide takeoff.
-- Speed max 24.579697456127064 m/s (Town03-002), warnings at 40 m/s: 0. Instantaneous acceleration max 26.239874369602163 m/s² (Town10HD-011), warnings at 20 m/s²: 22. Smoothed acceleration max 15.712867500264949 m/s², warnings: 0. Hard failures: 0.
-- Shared-track pairs 61,302. Centre error median 2.929642751054232e-14 m, max 4.576455661277233e-13 m. Yaw median 0 deg, max 1.0231815394945443e-12 deg. Length, width, and height error 0.
-- Computed pairs 11, `ground_truth` false. Centre min 1.092018395040389 m, median 4.071134798976429 m, max 4.518411314835206 m.
-- Coverage: vehicle only 40 tracks, drone only 406, both 834.
-- Frame counts are not exactly 150: 45 scenes of 149, Town03-010 of 148, Town10HD-009 of 147.
+CARLA package `/tmp/CARLA_0.9.15.tar.gz`: 8,386,636,048 bytes, SHA-256 `7b2f432ce74b251593f95dcc8dee6d99ad9625c2a71a2d6d48f24d879de19ef7`. OpenDRIVE SHA-256 values are in `docs/adr/0008-hd-map.md`.
 
-The 40 m, 55 m, and random subsets were not validated.
+`coperceive maps align --maps /tmp/coperceive-maps --scenes /tmp/griffin-scenes` selected `identity` for all four towns and stored no translation.
+
+| Map | Poses | Median m | Heading median deg | Next candidate |
+| --- | ---: | ---: | ---: | --- |
+| Town03 | 1936 | 0.013712643507518118 | 0.24974331271204164 | rot180, 0.9566292293761771 m |
+| Town06 | 1788 | 0.0019174357069388736 | 0.027407758135083782 | reflect_x, 23.651517233061078 m |
+| Town07 | 1490 | 0.1647962688524098 | 2.4803696188618147 | swap_neg, 6.108792644120575 m |
+| Town10HD | 1786 | 0.03035693727363501 | 0.23833585438623572 | reflect_x, 0.8693663665846356 m |
+
+`coperceive validate /tmp/griffin-scenes --maps /tmp/coperceive-maps` wrote `/tmp/coperceive-validate-25m.json` and `/tmp/coperceive-validate-25m.md`. Those files are not in git. Stdout: `scenes 47 failed 0 missing_frames 0 warnings 22 hard 0`.
+
+Centreline, 7,000 vehicle poses: lane-centre median 0.013712643507518118 m (p95 0.662319574473314 m, max 1.7440808533399281 m). Median minus 0.24 m is −0.22628735649248188 m. Reference-line median 1.7860191236754484 m. Heading-error median 0.20308361215973036 deg (p95 8.561008872962589 deg, max 161.4437770562339 deg). Vehicle boxes to the lane centre: 66,647 boxes, median 0.05214550975125978 m, max 46.31949753942487 m.
+
+Vehicle pose `z` from `poses.parquet`: 7,000 values, median −0.01233192440122366 m, max 7.992929458618164 m. On Town03-012, 15 poses (every 10th frame) sit near 7.99 m and the gap to a nearby lane-centre sample has median −0.012375831604003906 m. `tz` stays 0.
+
+The earlier Phase 4 totals (speed, altitude, shared tracks, 11 computed pairs, 22 instantaneous acceleration warnings) are still the same run's non-map rows. They are copied in `docs/validate.md`. The 40 m, 55 m, and random subsets were not validated.
+
+## Browser check
+
+`coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps`.
+
+Town03-000 at 1118500000 µs, vehicle shown: `2929 points, 55 boxes, 9 frustums. map drawn.` Vehicle hidden: `0 points, 35 boxes, 5 frustums. map drawn.` The green lane centres and grey road edges stayed on screen. The camera was a close intersection, not the whole town. `GET /favicon.ico` returned 200 `image/svg+xml`, and the icon rendered. `GET /favicon.svg` returned 200. `GET /api/scenes/Town03-000/map/lines` returned 200 and 360,812 bytes.
 
 ## Gates on this machine
 
-Python 3.12.3. Commands and results from 2026-10-15, on this phase’s tree:
+Python 3.12.3. Commands on 2026-10-15 after the map code was in the tree. Pyright and pytest below were run after `pip install -e ".[viewer]"` and the CPU torch wheel. The first pyright, before those extras, reported 27 errors, all `import rerun` / `import torch` missing. With the extras installed it is clean. CI installs both.
 
-- `ruff check .` — all checks passed (ruff 0.17.0)
-- `ruff format --check .` — 72 files already formatted (ruff 0.17.0)
-- `pyright` — 0 errors, 0 warnings, 0 informations (pyright 1.1.414, strict on the core, including `coperceive/viewdata.py`, `coperceive/rerun_export.py`, `coperceive/dataset.py`, `coperceive/validate.py`, and their tests). Excluded: `coperceive/app`, `coperceive/griffin`, `tests/test_app.py`, `tests/test_griffin.py`, `tests/test_griffin_phase2.py`
-- `pytest -o addopts= -q` — 77 passed, 1 skipped, 6 warnings in 2.56s (pytest 9.1.1). The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()` in the dataset worker test and the parallel convert test.
-- `pytest --cov=coperceive --cov-report=term-missing -q` — exit 0, coverage 87% (3216 statements, 310 missed, branch coverage on)
-- `python -m build --wheel` — built `dist/coperceive-0.0.0-py3-none-any.whl` (build 1.6.1, hatchling 1.32.4). The wheel contains `coperceive/viewdata.py`, `coperceive/rerun_export.py`, and `coperceive/app/static/index.html`. The page in that gate build was `index-BsGpDfev.js`. The 2 px point-size change ships `index-BAPWDmG4.js`.
-- Fresh venv `/tmp/coperceive-phase5-fresh`, run from `/tmp` so the source tree was not on `sys.path`: `pip install dist/coperceive-0.0.0-py3-none-any.whl`. `coperceive --help` printed “Cooperative multi-agent perception data tools.” and listed `schema`, `serve`, `download`, `convert`, `validate`, and `export`. `coperceive schema` printed `1`. `coperceive export rerun --help` listed `scene` and `--out`. `coperceive validate --help` listed `--strict`. `import coperceive` loaded `/tmp/coperceive-phase5-fresh/lib/python3.12/site-packages/coperceive/__init__.py`. `import coperceive.dataset` raised `ModuleNotFoundError: No module named 'torch'`.
-- `mkdocs build` — succeeded (MkDocs 1.6.1, Material 9.7.7). Material printed its MkDocs 2.0 warning. The site was written to `site/`.
-- `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 15 commits scanned (the branch before this handover’s commit)
-- `gitleaks detect --no-git --source . --redact --no-banner --exit-code 1` — no leaks in the working tree (5.20 MB scanned), including this file before the commit. The git scan above does not include this commit.
-
-Python 3.10 is not installed on this machine. The 3.10 result is the GitHub Actions job.
-
-The browser check used `coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/coperceive-viewer-demo` and a synthetic scene `desk` (vehicle, drone, two pose times, one box, one frustum). The page listed `desk`, the scrubber moved from `0` µs to `100000` µs, hiding the vehicle dropped the reported point count, the Desk tab still showed the jobs page, and Export Rerun wrote `/tmp/coperceive-viewer-demo/exports/desk.rrd` (17,466 bytes, 2 samples). Orbit moved the box, the frustum, and the axis triads. A blue drone point was visible with the vehicle hidden. The two orange vehicle points sit on the orange box and were hard to separate from the wireframe in that fixture. A Griffin scene was not opened in the browser.
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — passed (ruff 0.17.1)
+- `pyright` — 0 errors, 0 warnings, 0 informations (pyright 1.1.414, strict). Excluded: `coperceive/app`, `coperceive/griffin`, `tests/test_app.py`, `tests/test_griffin.py`, `tests/test_griffin_phase2.py`
+- `pytest --override-ini addopts= --tb=no -q` — 89 passed, 1 skipped, 6 warnings in 2.61 s (pytest 9.1.1). The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()` in the dataset worker test and the parallel convert test.
+- `pytest --cov=coperceive --cov-report=term-missing -q` — exit 0, coverage 85% (4483 statements, 506 missed, branch coverage on)
+- `python -m build --wheel` — built `dist/coperceive-0.0.0-py3-none-any.whl` (build installed for the gate, hatchling 1.32.4). The wheel contains `coperceive/hdmap/` and `coperceive/app/static/assets/index-DRF1eOHR.js`.
+- Fresh venv `/tmp/coperceive-hdmap-fresh`, commands run from `/tmp`: `pip install dist/coperceive-0.0.0-py3-none-any.whl`. `coperceive --help` listed `schema`, `serve`, `maps`, `download`, `convert`, `validate`, and `export`. `coperceive schema` printed `1`. `coperceive maps --help` listed `fetch`, `ingest`, and `align`. `import coperceive.hdmap` loaded `/tmp/coperceive-hdmap-fresh/lib/python3.12/site-packages/coperceive/hdmap/__init__.py`. `import coperceive.dataset` raised `ModuleNotFoundError: No module named 'torch'`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1; the Material plugin printed its MkDocs 2.0 warning). The site was written to `site/`.
+- `gitleaks detect --no-git --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 5.54 MB scanned.
+- `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 18 commits scanned, through `d0c20b2`. The docs commit that adds this paragraph is not in that scan.
+- Python 3.10, 3.11, and 3.13 were not run on this machine. Those versions are the GitHub Actions matrix.
 
 ## Commands
 
@@ -95,15 +107,14 @@ python3 -m venv .venv
 .venv/bin/ruff format --check .
 .venv/bin/pyright
 .venv/bin/pytest
-.venv/bin/pytest --cov=coperceive --cov-report=term-missing
-.venv/bin/mkdocs build
 cd web && npm install --legacy-peer-deps && npm run build
-coperceive serve --root /path/to/scene-parent
-coperceive export rerun /path/scene --out /path/scene.rrd
+coperceive maps fetch --dest /path/outside/the/repo
+coperceive maps ingest --xodr /path/Town03.xodr --map-name Carla/Maps/Town03 --out /path/maps
+coperceive maps align --maps /path/maps --scenes /path/scenes
+coperceive validate /path/scenes --maps /path/maps
+coperceive serve --host 127.0.0.1 --root /path/scenes --maps /path/maps
 ```
-
-The Griffin-25m scenes used for the Phase 4 report were already at `/tmp/griffin-scenes`. They are not in git.
 
 ## Next
 
-Stop. Phase 5 is the in-app viewer and the Rerun export. Do not start the desktop shell from this note.
+Stop. The desktop shell is still out of scope.
