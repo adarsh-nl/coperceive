@@ -1,0 +1,120 @@
+:root {
+  color: #1c1915;
+  background: #f3efe6;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  line-height: 1.45;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+}
+
+button, input {
+  font: inherit;
+}
+
+code, .mono {
+  font-family: "IBM Plex Mono", ui-monospace, monospace;
+}
+
+.page {
+  max-width: 980px;
+  margin: 0 auto;
+  padding: 28px 20px 64px;
+}
+
+header h1 {
+  margin: 0 0 6px;
+  font-size: 1.8rem;
+  letter-spacing: -0.03em;
+}
+
+header p {
+  margin: 0;
+  max-width: 62ch;
+}
+
+.badge {
+  display: inline-block;
+  margin-bottom: 10px;
+  padding: 2px 8px;
+  border: 1px solid #c8bfb0;
+  border-radius: 999px;
+  color: #5c564c;
+  font-size: 0.78rem;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: 1.3fr 0.7fr;
+  gap: 16px;
+  margin-top: 22px;
+}
+
+.card {
+  background: #fffdf8;
+  border: 1px solid #e3dccd;
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.card h2 {
+  margin: 0 0 10px;
+  font-size: 1.05rem;
+}
+
+.ok { color: #0f6e56; }
+.bad { color: #8d2f2a; }
+.muted { color: #5c564c; }
+
+form, .stack {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+label { font-weight: 600; font-size: 0.92rem; }
+
+input {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #c8bfb0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+button {
+  align-self: flex-start;
+  padding: 8px 14px;
+  border: 0;
+  border-radius: 8px;
+  background: #0f6e6b;
+  color: white;
+  cursor: pointer;
+}
+
+button:disabled { opacity: 0.6; cursor: wait; }
+
+.jobs { list-style: none; padding: 0; margin: 12px 0 0; }
+.jobs li {
+  padding: 10px 0;
+  border-top: 1px solid #eee6d8;
+}
+
+.output {
+  white-space: pre-wrap;
+  margin: 6px 0 0;
+  color: #1c1915;
+}
+
+.alert {
+  margin: 8px 0 0;
+  color: #8d2f2a;
+}
+
+@media (max-width: 800px) {
+  .grid { grid-template-columns: 1fr; }
+  .page { padding: 18px 14px 48px; }
+}

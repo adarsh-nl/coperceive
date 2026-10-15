@@ -1,0 +1,234 @@
+import { Label } from "@radix-ui/react-label";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useState, type FormEvent } from "react";
+import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
+
+const TOKEN_KEY = "pkg-token";
+
+function storedToken(): string {
+  return sessionStorage.getItem(TOKEN_KEY) ?? "";
+}
+
+export default function App() {
+  const queryClient = useQueryClient();
+  const [token, setToken] = useState(storedToken);
+  const [argument, setArgument] = useState("hello from the data desk");
+  const [filePath, setFilePath] = useState("");
+  const [fileText, setFileText] = useState("");
+  const [fileError, setFileError] = useState("");
+  const [streamNote, setStreamNote] = useState("Event stream idle.");
+
+  useEffect(() => {
+    sessionStorage.setItem(TOKEN_KEY, token);
+  }, [token]);
+
+  const health = useQuery({
+    queryKey: ["health", token],
+    queryFn: async () => {
+      const result = await clientFor(token).GET("/api/health");
+      if (!result.response.ok || !result.data) {
+        throw new Error(await errorDetail(result.response));
+      }
+      return result.data;
+    },
+  });
+
+  const jobs = useQuery({
+    queryKey: ["jobs", token],
+    queryFn: async () => {
+      const result = await clientFor(token).GET("/api/jobs");
+      if (!result.response.ok || !result.data) {
+        throw new Error(await errorDetail(result.response));
+      }
+      return result.data.filter(isJob);
+    },
+    refetchInterval: 2000,
+  });
+
+  const createJob = useMutation({
+    mutationFn: async (args: string[]) => {
+      const result = await clientFor(token).POST("/api/jobs", {
+        body: { name: "echo", args },
+        headers: { "X-Pkg-Request": "1" },
+      });
+      if (!result.response.ok) {
+        throw new Error(await errorDetail(result.response));
+      }
+      return result.data;
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["jobs", token] });
+    },
+  });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const headers = authHeaders(token);
+    void (async () => {
+      try {
+        const response = await fetch(`${apiBase()}/api/events`, {
+          headers,
+          signal: controller.signal,
+        });
+        if (!response.ok || !response.body) {
+          setStreamNote(`Event stream refused: ${await errorDetail(response)}`);
+          return;
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        setStreamNote("Event stream open.");
+        for (;;) {
+          const chunk = await reader.read();
+          if (chunk.done) {
+            setStreamNote("Event stream closed.");
+            break;
+          }
+          buffer += decoder.decode(chunk.value, { stream: true });
+          if (buffer.includes("data:")) {
+            setStreamNote("Event stream delivered a job snapshot.");
+            await queryClient.invalidateQueries({ queryKey: ["jobs", token] });
+          }
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          const message = error instanceof Error ? error.message : "stream failed";
+          setStreamNote(message);
+        }
+      }
+    })();
+    return () => controller.abort();
+  }, [queryClient, token]);
+
+  async function readFile(event: FormEvent) {
+    event.preventDefault();
+    setFileError("");
+    setFileText("");
+    const response = await fetch(
+      `${apiBase()}/api/files?path=${encodeURIComponent(filePath)}`,
+      { headers: authHeaders(token) },
+    );
+    if (!response.ok) {
+      setFileError(await errorDetail(response));
+      return;
+    }
+    setFileText(await response.text());
+  }
+
+  const jobRows: Job[] = jobs.data ?? [];
+
+  return (
+    <main className="page">
+      <header>
+        <span className="badge">placeholder name: pkg</span>
+        <h1>Local data desk</h1>
+        <p>
+          A single-user page for the cooperative perception library. It runs on
+          this machine, talks only to the API beside it, and can start the one
+          allow-listed command in this build: <code>echo</code>.
+        </p>
+      </header>
+
+      <div className="grid">
+        <section className="card">
+          <h2>Jobs</h2>
+          <form
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              createJob.mutate([argument]);
+            }}
+          >
+            <Label htmlFor="echo-arg">Text for echo</Label>
+            <input
+              id="echo-arg"
+              value={argument}
+              onChange={(event) => setArgument(event.target.value)}
+            />
+            <button type="submit" disabled={createJob.isPending}>
+              {createJob.isPending ? "Running echo…" : "Run echo"}
+            </button>
+          </form>
+          {createJob.isError ? (
+            <p className="alert" role="alert">
+              {createJob.error.message}
+            </p>
+          ) : null}
+          {jobs.isLoading ? <p className="muted">Loading jobs…</p> : null}
+          {jobs.isError ? (
+            <p className="alert" role="alert">
+              Could not list jobs. {jobs.error.message}
+            </p>
+          ) : null}
+          {jobs.isSuccess && jobRows.length === 0 ? (
+            <p className="muted">No jobs yet. Echo is the only command this build will run.</p>
+          ) : null}
+          {jobRows.length > 0 ? (
+            <ul className="jobs">
+              {jobRows.map((job) => (
+                <li key={job.id}>
+                  <strong>#{job.id}</strong> <span className="mono">{job.argv}</span>{" "}
+                  <span className={job.status === "ok" ? "ok" : "bad"}>{job.status}</span>
+                  <pre className="output">{job.output}</pre>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          <p className="muted">{streamNote} The list also refreshes every two seconds.</p>
+        </section>
+
+        <div className="stack">
+          <section className="card">
+            <h2>This process</h2>
+            {health.isLoading ? <p className="muted">Checking the API…</p> : null}
+            {health.isError ? (
+              <p className="alert" role="alert">
+                The API did not answer. {health.error.message}
+              </p>
+            ) : null}
+            {health.isSuccess ? (
+              <p className="ok">
+                API is up. Root path: <span className="mono">{health.data.root_path || "/"}</span>
+              </p>
+            ) : null}
+            <Label htmlFor="token">Bearer token</Label>
+            <input
+              id="token"
+              type="password"
+              autoComplete="off"
+              value={token}
+              onChange={(event) => setToken(event.target.value)}
+              placeholder="Leave empty when the server has no token"
+            />
+            <p className="muted">
+              Stored in this tab only. A non-loopback bind refuses to start without a token.
+            </p>
+          </section>
+
+          <section className="card">
+            <h2>Read a file under the server root</h2>
+            <form className="stack" onSubmit={readFile}>
+              <Label htmlFor="file-path">Relative path</Label>
+              <input
+                id="file-path"
+                value={filePath}
+                onChange={(event) => setFilePath(event.target.value)}
+                placeholder="note.txt"
+              />
+              <button type="submit">Read</button>
+            </form>
+            {!filePath && !fileText && !fileError ? (
+              <p className="muted">Enter a path inside the directory passed to pkg serve.</p>
+            ) : null}
+            {fileError ? (
+              <p className="alert" role="alert">
+                {fileError}
+              </p>
+            ) : null}
+            {fileText ? <pre className="output">{fileText}</pre> : null}
+          </section>
+        </div>
+      </div>
+    </main>
+  );
+}
