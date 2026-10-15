@@ -12,9 +12,10 @@ from coperceive.diagnostics import alignment, shared_objects
 from coperceive.errors import SchemaVersionError
 from coperceive.model import SCHEMA_VERSION
 from coperceive.query import TimeMode
-from coperceive.store import read_points_at, read_scene, write_scene
+from coperceive.store import OBJECT_SCHEMA, read_points_at, read_scene, write_scene
 
 from tests.conftest import sample_scene
+from tests.cooperative import cooperative_scene
 
 
 def test_roundtrip_and_shared_ids(tmp_path: Path) -> None:
@@ -68,3 +69,13 @@ def test_spawn_workers_read_the_blob(tmp_path: Path) -> None:
     with ctx.Pool(2) as pool:
         counts = pool.map(count_point_bytes, [str(scene_dir), str(scene_dir)])
     assert counts == [16, 16]
+
+
+def test_reader_rejects_an_object_id_that_is_not_shared(tmp_path: Path) -> None:
+    root = tmp_path / "scene"
+    write_scene(cooperative_scene(), root)
+    rows = pq.read_table(root / "objects.parquet").to_pylist()
+    rows.append({"track_id": "99", "category": "pedestrian"})
+    pq.write_table(pa.Table.from_pylist(rows, schema=OBJECT_SCHEMA), root / "objects.parquet")
+    with pytest.raises(ValueError, match="scene objects"):
+        read_scene(root)

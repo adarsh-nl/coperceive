@@ -15,9 +15,11 @@ from coperceive.diagnostics import shared_objects
 from coperceive.model import (
     SCHEMA_VERSION,
     Agent,
+    AgentType,
     Annotation,
     Clock,
     ImageRef,
+    Modality,
     PointCloud,
     Scene,
     Sensor,
@@ -30,10 +32,6 @@ _CLOCK_NOTE = (
     "time_us = frame_id * 100000 assumes the 10 Hz rate stated for the lidar in "
     "the Griffin paper. The files do not contain a measured wall clock."
 )
-_CAMERAS = {
-    "vehicle": ("front", "back", "left", "right"),
-    "drone": ("front", "back", "left", "right", "bottom"),
-}
 _SIDES = (("vehicle-side", "vehicle"), ("drone-side", "drone"))
 
 
@@ -59,9 +57,10 @@ def load_scene(release_root: Path, scene_name: str) -> Scene:
     clouds: list[PointCloud] = []
     for side, agent_id in _SIDES:
         agents.append(_poses(release_root / side, agent_id, frames))
-        sensors.extend(_sensors(release_root / side, agent_id))
+        side_sensors = _sensors(release_root / side, agent_id)
+        sensors.extend(side_sensors)
         annotations.extend(_labels(release_root / side, agent_id, frames))
-        images.extend(_image_refs(agent_id, frames))
+        images.extend(_image_refs(agent_id, frames, side_sensors))
         if agent_id == "vehicle":
             clouds.extend(_lidar(release_root / side, frames))
     return Scene(
@@ -88,7 +87,7 @@ def parse_label_line(line: str, *, agent_id: str, time_us: int) -> Annotation:
         time_us=time_us,
         track_id=str(int(numbers[9])),
         category=parts[0],
-        center_body=(numbers[0], numbers[1], numbers[2]),
+        center=(numbers[0], numbers[1], numbers[2]),
         size_lwh=(numbers[3], numbers[4], numbers[5]),
         box_from_rpy=SE3.from_rpy_deg(numbers[6], numbers[7], numbers[8]),
         visibility=numbers[10],
@@ -110,8 +109,12 @@ def parse_pose(payload: dict[str, object]) -> tuple[int, SE3]:
     return frame, pose
 
 
-def read_ascii_ply(path: Path) -> PointCloud:
-    """ASCII PLY with float properties x, y, z, I. Returns an unscoped cloud; caller sets ids."""
+def read_ascii_ply(path: Path) -> tuple[int, bytes]:
+    """ASCII PLY with float properties x, y, z, I.
+
+    Returns ``(count, little-endian x, y, z, intensity)``. The caller attaches
+    the agent, sensor, and time.
+    """
     text = path.read_text(encoding="utf-8")
     header, _, body = text.partition("end_header\n")
     count = 0
@@ -125,14 +128,7 @@ def read_ascii_ply(path: Path) -> PointCloud:
         values.extend(float(part) for part in line.split())
         if len(values) >= count * 4:
             break
-    blob = _f32_bytes(values[: count * 4])
-    return PointCloud(
-        agent_id="",
-        sensor_id="",
-        time_us=0,
-        count=count,
-        xyz_i_f32=blob,
-    )
+    return count, _f32_bytes(values[: count * 4])
 
 
 def _f32_bytes(values: list[float]) -> bytes:
@@ -149,7 +145,7 @@ def _poses(side: Path, agent_id: str, frames: list[int]) -> Agent:
         if file_frame != frame:
             raise ValueError(f"{side} pose {frame} has timestamp {file_frame}")
         stamped.append(StampedPose(time_us=frame * 100_000, world_from_body=pose))
-    agent_type = "drone" if agent_id == "drone" else "vehicle"
+    agent_type = AgentType.UAV if agent_id == "drone" else AgentType.VEHICLE
     return Agent(agent_id=agent_id, agent_type=agent_type, poses=tuple(stamped))
 
 
@@ -173,7 +169,7 @@ def _sensors(side: Path, agent_id: str) -> list[Sensor]:
         )
         intrinsic = payload.get("intrinsic")
         width = height = fx = fy = cx = cy = None
-        modality = "lidar" if path.stem.startswith("lidar") else "camera"
+        modality = Modality.LIDAR if path.stem.startswith("lidar") else Modality.CAMERA
         if intrinsic is not None:
             fx = float(intrinsic[0][0])
             fy = float(intrinsic[1][1])
@@ -181,7 +177,7 @@ def _sensors(side: Path, agent_id: str) -> list[Sensor]:
             cy = float(intrinsic[1][2])
             width = int(round(cx * 2))
             height = int(round(cy * 2))
-            modality = "camera"
+            modality = Modality.CAMERA
         sensors.append(
             Sensor(
                 sensor_id=path.stem,
@@ -218,17 +214,20 @@ def _labels(side: Path, agent_id: str, frames: list[int]) -> list[Annotation]:
     return rows
 
 
-def _image_refs(agent_id: str, frames: list[int]) -> list[ImageRef]:
+def _image_refs(agent_id: str, frames: list[int], sensors: list[Sensor]) -> list[ImageRef]:
+    """Path refs for camera calibs that were actually read. Bytes stay outside the store."""
     side = "drone-side" if agent_id == "drone" else "vehicle-side"
     refs: list[ImageRef] = []
-    for frame in frames:
-        for camera in _CAMERAS[agent_id]:
+    for sensor in sensors:
+        if sensor.modality is not Modality.CAMERA:
+            continue
+        for frame in frames:
             refs.append(
                 ImageRef(
                     agent_id=agent_id,
-                    sensor_id=camera,
+                    sensor_id=sensor.sensor_id,
                     time_us=frame * 100_000,
-                    path=f"{side}/camera/{camera}/{frame:06d}.png",
+                    path=f"{side}/camera/{sensor.sensor_id}/{frame:06d}.png",
                 )
             )
     return refs
@@ -243,14 +242,14 @@ def _lidar(side: Path, frames: list[int]) -> list[PointCloud]:
         path = lidar / f"{frame:06d}.ply"
         if not path.exists():
             continue
-        cloud = read_ascii_ply(path)
+        count, blob = read_ascii_ply(path)
         clouds.append(
             PointCloud(
                 agent_id="vehicle",
                 sensor_id="lidar_top",
                 time_us=frame * 100_000,
-                count=cloud.count,
-                xyz_i_f32=cloud.xyz_i_f32,
+                count=count,
+                xyz_i_f32=blob,
             )
         )
     return clouds

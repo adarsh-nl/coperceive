@@ -1,38 +1,102 @@
 # SPDX-License-Identifier: Apache-2.0
 """Hybrid on-disk scene: Parquet tables plus a float32 point blob.
 
-Layout under ``path``:
-
-* ``manifest.json`` — schema version, world frame, clock, agent and sensor rows
-* ``poses.parquet``, ``annotations.parquet``, ``objects.parquet``, ``images.parquet``
-* ``point_index.parquet`` and ``points.bin`` — little-endian float32 ``x,y,z,intensity``
-
-Images are paths, not bytes. Extra Parquet columns are ignored on read.
-A different ``schema_version`` raises :class:`SchemaVersionError`.
+See ``docs/spec/format.md``. One directory is one scene and holds every agent.
+Images are paths, not bytes. A reader that names a column list ignores extra
+columns. A different ``schema_version`` raises :class:`SchemaVersionError`.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
+from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from coperceive.diagnostics import require_shared_object_table
 from coperceive.errors import SchemaVersionError
 from coperceive.model import (
     SCHEMA_VERSION,
     Agent,
+    AgentType,
     Annotation,
+    BoxFrame,
     Clock,
     ImageRef,
+    Modality,
     PointCloud,
     Scene,
     Sensor,
     SharedObject,
     StampedPose,
+    require_time_us,
 )
 from coperceive.se3 import SE3
+
+POSE_SCHEMA = pa.schema(
+    [
+        pa.field("agent_id", pa.string(), nullable=False),
+        pa.field("time_us", pa.int64(), nullable=False),
+        pa.field("qw", pa.float64(), nullable=False),
+        pa.field("qx", pa.float64(), nullable=False),
+        pa.field("qy", pa.float64(), nullable=False),
+        pa.field("qz", pa.float64(), nullable=False),
+        pa.field("tx", pa.float64(), nullable=False),
+        pa.field("ty", pa.float64(), nullable=False),
+        pa.field("tz", pa.float64(), nullable=False),
+    ]
+)
+
+ANNOTATION_SCHEMA = pa.schema(
+    [
+        pa.field("agent_id", pa.string(), nullable=False),
+        pa.field("time_us", pa.int64(), nullable=False),
+        pa.field("track_id", pa.string(), nullable=True),
+        pa.field("category", pa.string(), nullable=False),
+        pa.field("cx", pa.float64(), nullable=False),
+        pa.field("cy", pa.float64(), nullable=False),
+        pa.field("cz", pa.float64(), nullable=False),
+        pa.field("length", pa.float64(), nullable=False),
+        pa.field("width", pa.float64(), nullable=False),
+        pa.field("height", pa.float64(), nullable=False),
+        pa.field("qw", pa.float64(), nullable=False),
+        pa.field("qx", pa.float64(), nullable=False),
+        pa.field("qy", pa.float64(), nullable=False),
+        pa.field("qz", pa.float64(), nullable=False),
+        pa.field("visibility", pa.float64(), nullable=True),
+        pa.field("frame", pa.string(), nullable=False),
+    ]
+)
+
+OBJECT_SCHEMA = pa.schema(
+    [
+        pa.field("track_id", pa.string(), nullable=False),
+        pa.field("category", pa.string(), nullable=False),
+    ]
+)
+
+IMAGE_SCHEMA = pa.schema(
+    [
+        pa.field("agent_id", pa.string(), nullable=False),
+        pa.field("sensor_id", pa.string(), nullable=False),
+        pa.field("time_us", pa.int64(), nullable=False),
+        pa.field("path", pa.string(), nullable=False),
+    ]
+)
+
+POINT_INDEX_SCHEMA = pa.schema(
+    [
+        pa.field("agent_id", pa.string(), nullable=False),
+        pa.field("sensor_id", pa.string(), nullable=False),
+        pa.field("time_us", pa.int64(), nullable=False),
+        pa.field("offset", pa.int64(), nullable=False),
+        pa.field("nbytes", pa.int64(), nullable=False),
+        pa.field("count", pa.int64(), nullable=False),
+    ]
+)
 
 
 def write_scene(scene: Scene, path: Path) -> None:
@@ -40,123 +104,124 @@ def write_scene(scene: Scene, path: Path) -> None:
         raise SchemaVersionError(
             f"writer supports schema {SCHEMA_VERSION}, scene has {scene.schema_version}"
         )
+    require_shared_object_table(scene)
     path.mkdir(parents=True, exist_ok=True)
     manifest = {
         "schema_version": scene.schema_version,
         "scene_id": scene.scene_id,
         "world_frame": scene.world_frame,
         "clock": {"unit": scene.clock.unit, "scale_note": scene.clock.scale_note},
-        "agents": [{"agent_id": a.agent_id, "agent_type": a.agent_type} for a in scene.agents],
-        "sensors": [_sensor_row(s) for s in scene.sensors],
+        "agents": [
+            {
+                "agent_id": agent.agent_id,
+                "agent_type": agent.agent_type.value,
+                "platform": {key: value for key, value in agent.platform},
+            }
+            for agent in scene.agents
+        ],
+        "sensors": [_sensor_row(sensor) for sensor in scene.sensors],
     }
     (path / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
-    pq.write_table(_pose_table(scene), path / "poses.parquet")
-    pq.write_table(_annotation_table(scene), path / "annotations.parquet")
-    pq.write_table(_object_table(scene), path / "objects.parquet")
-    pq.write_table(_image_table(scene), path / "images.parquet")
+    _write_table(_pose_rows(scene), POSE_SCHEMA, path / "poses.parquet")
+    _write_table(_annotation_rows(scene), ANNOTATION_SCHEMA, path / "annotations.parquet")
+    _write_table(_object_rows(scene), OBJECT_SCHEMA, path / "objects.parquet")
+    _write_table(_image_rows(scene), IMAGE_SCHEMA, path / "images.parquet")
     _write_points(scene, path)
 
 
 def read_scene(path: Path) -> Scene:
-    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
-    version = int(manifest["schema_version"])
+    manifest = _read_manifest(path / "manifest.json")
+    version = manifest["schema_version"]
+    if type(version) is not int:
+        raise SchemaVersionError("schema_version must be an int")
     if version != SCHEMA_VERSION:
         raise SchemaVersionError(f"file schema {version} != reader schema {SCHEMA_VERSION}")
-    poses = pq.read_table(path / "poses.parquet").to_pylist()
-    annotations = pq.read_table(
-        path / "annotations.parquet",
-        columns=[
-            "agent_id",
-            "time_us",
-            "track_id",
-            "category",
-            "cx",
-            "cy",
-            "cz",
-            "length",
-            "width",
-            "height",
-            "qw",
-            "qx",
-            "qy",
-            "qz",
-            "visibility",
-        ],
-    ).to_pylist()
-    objects = pq.read_table(path / "objects.parquet").to_pylist()
-    images = pq.read_table(path / "images.parquet").to_pylist()
-    by_agent: dict[str, list[StampedPose]] = {a["agent_id"]: [] for a in manifest["agents"]}
-    for row in poses:
-        by_agent[row["agent_id"]].append(
-            StampedPose(
-                time_us=int(row["time_us"]),
-                world_from_body=SE3(
-                    float(row["qw"]),
-                    float(row["qx"]),
-                    float(row["qy"]),
-                    float(row["qz"]),
-                    float(row["tx"]),
-                    float(row["ty"]),
-                    float(row["tz"]),
-                ),
+    poses = _rows(pq.read_table(path / "poses.parquet", columns=list(POSE_SCHEMA.names)))
+    annotations = _rows(
+        pq.read_table(path / "annotations.parquet", columns=list(ANNOTATION_SCHEMA.names))
+    )
+    objects = _rows(pq.read_table(path / "objects.parquet", columns=list(OBJECT_SCHEMA.names)))
+    images = _rows(pq.read_table(path / "images.parquet", columns=list(IMAGE_SCHEMA.names)))
+    agent_rows = _object_list(manifest.get("agents"), "agents")
+    by_agent: dict[str, list[StampedPose]] = {}
+    agents: list[Agent] = []
+    for row in agent_rows:
+        agent_id = _req_str(row, "agent_id")
+        by_agent[agent_id] = []
+        platform_raw = row.get("platform", {})
+        platform_map = _as_dict(platform_raw, f"agent {agent_id} platform")
+        platform: list[tuple[str, str]] = []
+        for key, value in platform_map.items():
+            if not isinstance(value, str):
+                raise ValueError(f"platform[{key}] must be a string")
+            platform.append((key, value))
+        agents.append(
+            Agent(
+                agent_id=agent_id,
+                agent_type=AgentType.parse(row.get("agent_type")),
+                poses=(),
+                platform=tuple(platform),
             )
         )
-    agents = tuple(
-        Agent(
-            agent_id=a["agent_id"],
-            agent_type=a["agent_type"],
-            poses=tuple(sorted(by_agent[a["agent_id"]], key=lambda p: p.time_us)),
+    for row in poses:
+        agent_id = _req_str(row, "agent_id")
+        if agent_id not in by_agent:
+            raise ValueError(f"pose names unknown agent {agent_id}")
+        by_agent[agent_id].append(
+            StampedPose(
+                time_us=_req_time(row, "time_us"),
+                world_from_body=_se3(row),
+            )
         )
-        for a in manifest["agents"]
+    posed = tuple(
+        Agent(
+            agent_id=agent.agent_id,
+            agent_type=agent.agent_type,
+            poses=tuple(sorted(by_agent[agent.agent_id], key=lambda pose: pose.time_us)),
+            platform=agent.platform,
+        )
+        for agent in agents
     )
-    sensors = tuple(_sensor_from_row(row) for row in manifest["sensors"])
-    return Scene(
+    clock = _as_dict(manifest.get("clock"), "clock")
+    scene = Scene(
         schema_version=version,
-        scene_id=str(manifest["scene_id"]),
-        world_frame=str(manifest["world_frame"]),
-        clock=Clock(
-            unit=str(manifest["clock"]["unit"]),
-            scale_note=str(manifest["clock"]["scale_note"]),
+        scene_id=_req_str(manifest, "scene_id"),
+        world_frame=_req_str(manifest, "world_frame"),
+        clock=Clock(unit=_req_str(clock, "unit"), scale_note=_req_str(clock, "scale_note")),
+        agents=posed,
+        sensors=tuple(
+            _sensor_from_row(row) for row in _object_list(manifest.get("sensors"), "sensors")
         ),
-        agents=agents,
-        sensors=sensors,
         annotations=tuple(_annotation_from_row(row) for row in annotations),
         objects=tuple(
-            SharedObject(track_id=str(row["track_id"]), category=str(row["category"]))
+            SharedObject(track_id=_req_str(row, "track_id"), category=_req_str(row, "category"))
             for row in objects
         ),
         point_clouds=_read_points(path),
         images=tuple(
             ImageRef(
-                agent_id=str(row["agent_id"]),
-                sensor_id=str(row["sensor_id"]),
-                time_us=int(row["time_us"]),
-                path=str(row["path"]),
+                agent_id=_req_str(row, "agent_id"),
+                sensor_id=_req_str(row, "sensor_id"),
+                time_us=_req_time(row, "time_us"),
+                path=_req_str(row, "path"),
             )
             for row in images
         ),
     )
+    require_shared_object_table(scene)
+    return scene
 
 
 def read_points_at(path: Path, *, agent_id: str, sensor_id: str, time_us: int) -> PointCloud:
     """Random-access one sweep. Used by worker processes."""
-    table = pq.read_table(path / "point_index.parquet")
-    for row in table.to_pylist():
+    table = pq.read_table(path / "point_index.parquet", columns=list(POINT_INDEX_SCHEMA.names))
+    for row in _rows(table):
         if (
             row["agent_id"] == agent_id
             and row["sensor_id"] == sensor_id
-            and int(row["time_us"]) == time_us
+            and _req_time(row, "time_us") == time_us
         ):
-            with (path / "points.bin").open("rb") as handle:
-                handle.seek(int(row["offset"]))
-                blob = handle.read(int(row["nbytes"]))
-            return PointCloud(
-                agent_id=agent_id,
-                sensor_id=sensor_id,
-                time_us=time_us,
-                count=int(row["count"]),
-                xyz_i_f32=blob,
-            )
+            return _cloud_from_index(path, row)
     raise KeyError((agent_id, sensor_id, time_us))
 
 
@@ -177,7 +242,7 @@ def _sensor_row(sensor: Sensor) -> dict[str, object]:
     return {
         "sensor_id": sensor.sensor_id,
         "agent_id": sensor.agent_id,
-        "modality": sensor.modality,
+        "modality": sensor.modality.value,
         "qw": pose.qw,
         "qx": pose.qx,
         "qy": pose.qy,
@@ -195,58 +260,35 @@ def _sensor_row(sensor: Sensor) -> dict[str, object]:
 
 
 def _sensor_from_row(row: dict[str, object]) -> Sensor:
-    def optional_int(key: str) -> int | None:
-        value = row.get(key)
-        return None if value is None else int(value)  # type: ignore[arg-type]
-
-    def optional_float(key: str) -> float | None:
-        value = row.get(key)
-        return None if value is None else float(value)  # type: ignore[arg-type]
-
     return Sensor(
-        sensor_id=str(row["sensor_id"]),
-        agent_id=str(row["agent_id"]),
-        modality=str(row["modality"]),
-        body_from_sensor=SE3(
-            float(row["qw"]),  # type: ignore[arg-type]
-            float(row["qx"]),  # type: ignore[arg-type]
-            float(row["qy"]),  # type: ignore[arg-type]
-            float(row["qz"]),  # type: ignore[arg-type]
-            float(row["tx"]),  # type: ignore[arg-type]
-            float(row["ty"]),  # type: ignore[arg-type]
-            float(row["tz"]),  # type: ignore[arg-type]
-        ),
-        image_width_px=optional_int("image_width_px"),
-        image_height_px=optional_int("image_height_px"),
-        fx=optional_float("fx"),
-        fy=optional_float("fy"),
-        cx=optional_float("cx"),
-        cy=optional_float("cy"),
+        sensor_id=_req_str(row, "sensor_id"),
+        agent_id=_req_str(row, "agent_id"),
+        modality=Modality.parse(row.get("modality")),
+        body_from_sensor=_se3(row),
+        image_width_px=_opt_int(row, "image_width_px"),
+        image_height_px=_opt_int(row, "image_height_px"),
+        fx=_opt_float(row, "fx"),
+        fy=_opt_float(row, "fy"),
+        cx=_opt_float(row, "cx"),
+        cy=_opt_float(row, "cy"),
     )
 
 
-def _pose_table(scene: Scene) -> pa.Table:
+def _pose_rows(scene: Scene) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for agent in scene.agents:
         for pose in agent.poses:
-            tf = pose.world_from_body
             rows.append(
                 {
                     "agent_id": agent.agent_id,
                     "time_us": pose.time_us,
-                    "qw": tf.qw,
-                    "qx": tf.qx,
-                    "qy": tf.qy,
-                    "qz": tf.qz,
-                    "tx": tf.tx,
-                    "ty": tf.ty,
-                    "tz": tf.tz,
+                    **_se3_row(pose.world_from_body),
                 }
             )
-    return pa.Table.from_pylist(rows)
+    return rows
 
 
-def _annotation_table(scene: Scene) -> pa.Table:
+def _annotation_rows(scene: Scene) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
     for ann in scene.annotations:
         rows.append(
@@ -255,9 +297,9 @@ def _annotation_table(scene: Scene) -> pa.Table:
                 "time_us": ann.time_us,
                 "track_id": ann.track_id,
                 "category": ann.category,
-                "cx": ann.center_body[0],
-                "cy": ann.center_body[1],
-                "cz": ann.center_body[2],
+                "cx": ann.center[0],
+                "cy": ann.center[1],
+                "cz": ann.center[2],
                 "length": ann.size_lwh[0],
                 "width": ann.size_lwh[1],
                 "height": ann.size_lwh[2],
@@ -266,67 +308,44 @@ def _annotation_table(scene: Scene) -> pa.Table:
                 "qy": ann.box_from_rpy.qy,
                 "qz": ann.box_from_rpy.qz,
                 "visibility": ann.visibility,
+                "frame": ann.frame.value,
             }
         )
-    if not rows:
-        return pa.table(
-            {
-                "agent_id": pa.array([], type=pa.string()),
-                "time_us": pa.array([], type=pa.int64()),
-                "track_id": pa.array([], type=pa.string()),
-                "category": pa.array([], type=pa.string()),
-                "cx": pa.array([], type=pa.float64()),
-                "cy": pa.array([], type=pa.float64()),
-                "cz": pa.array([], type=pa.float64()),
-                "length": pa.array([], type=pa.float64()),
-                "width": pa.array([], type=pa.float64()),
-                "height": pa.array([], type=pa.float64()),
-                "qw": pa.array([], type=pa.float64()),
-                "qx": pa.array([], type=pa.float64()),
-                "qy": pa.array([], type=pa.float64()),
-                "qz": pa.array([], type=pa.float64()),
-                "visibility": pa.array([], type=pa.float64()),
-            }
-        )
-    return pa.Table.from_pylist(rows)
+    return rows
 
 
 def _annotation_from_row(row: dict[str, object]) -> Annotation:
-    visibility = row["visibility"]
     return Annotation(
-        agent_id=str(row["agent_id"]),
-        time_us=int(row["time_us"]),  # type: ignore[arg-type]
-        track_id=str(row["track_id"]),
-        category=str(row["category"]),
-        center_body=(float(row["cx"]), float(row["cy"]), float(row["cz"])),  # type: ignore[arg-type]
-        size_lwh=(float(row["length"]), float(row["width"]), float(row["height"])),  # type: ignore[arg-type]
+        agent_id=_req_str(row, "agent_id"),
+        time_us=_req_time(row, "time_us"),
+        track_id=_opt_str(row, "track_id"),
+        category=_req_str(row, "category"),
+        center=(_req_float(row, "cx"), _req_float(row, "cy"), _req_float(row, "cz")),
+        size_lwh=(
+            _req_float(row, "length"),
+            _req_float(row, "width"),
+            _req_float(row, "height"),
+        ),
         box_from_rpy=SE3(
-            float(row["qw"]),  # type: ignore[arg-type]
-            float(row["qx"]),  # type: ignore[arg-type]
-            float(row["qy"]),  # type: ignore[arg-type]
-            float(row["qz"]),  # type: ignore[arg-type]
+            _req_float(row, "qw"),
+            _req_float(row, "qx"),
+            _req_float(row, "qy"),
+            _req_float(row, "qz"),
             0.0,
             0.0,
             0.0,
         ),
-        visibility=None if visibility is None else float(visibility),  # type: ignore[arg-type]
+        visibility=_opt_float(row, "visibility"),
+        frame=BoxFrame.parse(row.get("frame")),
     )
 
 
-def _object_table(scene: Scene) -> pa.Table:
-    rows = [{"track_id": obj.track_id, "category": obj.category} for obj in scene.objects]
-    if not rows:
-        return pa.table(
-            {
-                "track_id": pa.array([], type=pa.string()),
-                "category": pa.array([], type=pa.string()),
-            }
-        )
-    return pa.Table.from_pylist(rows)
+def _object_rows(scene: Scene) -> list[dict[str, object]]:
+    return [{"track_id": obj.track_id, "category": obj.category} for obj in scene.objects]
 
 
-def _image_table(scene: Scene) -> pa.Table:
-    rows = [
+def _image_rows(scene: Scene) -> list[dict[str, object]]:
+    return [
         {
             "agent_id": image.agent_id,
             "sensor_id": image.sensor_id,
@@ -335,16 +354,6 @@ def _image_table(scene: Scene) -> pa.Table:
         }
         for image in scene.images
     ]
-    if not rows:
-        return pa.table(
-            {
-                "agent_id": pa.array([], type=pa.string()),
-                "sensor_id": pa.array([], type=pa.string()),
-                "time_us": pa.array([], type=pa.int64()),
-                "path": pa.array([], type=pa.string()),
-            }
-        )
-    return pa.Table.from_pylist(rows)
 
 
 def _write_points(scene: Scene, path: Path) -> None:
@@ -365,40 +374,148 @@ def _write_points(scene: Scene, path: Path) -> None:
                 }
             )
             offset += len(cloud.xyz_i_f32)
-    if not rows:
-        pq.write_table(
-            pa.table(
-                {
-                    "agent_id": pa.array([], type=pa.string()),
-                    "sensor_id": pa.array([], type=pa.string()),
-                    "time_us": pa.array([], type=pa.int64()),
-                    "offset": pa.array([], type=pa.int64()),
-                    "nbytes": pa.array([], type=pa.int64()),
-                    "count": pa.array([], type=pa.int64()),
-                }
-            ),
-            path / "point_index.parquet",
-        )
-        return
-    pq.write_table(pa.Table.from_pylist(rows), path / "point_index.parquet")
+    _write_table(rows, POINT_INDEX_SCHEMA, path / "point_index.parquet")
 
 
 def _read_points(path: Path) -> tuple[PointCloud, ...]:
     index_path = path / "point_index.parquet"
     if not index_path.exists():
         return ()
-    clouds: list[PointCloud] = []
+    return tuple(
+        _cloud_from_index(path, row)
+        for row in _rows(pq.read_table(index_path, columns=list(POINT_INDEX_SCHEMA.names)))
+    )
+
+
+def _cloud_from_index(path: Path, row: dict[str, object]) -> PointCloud:
+    offset = _req_offset(row, "offset")
+    nbytes = _req_offset(row, "nbytes")
+    count = _req_offset(row, "count")
+    if nbytes != count * 16:
+        raise ValueError("point index nbytes must equal count * 16")
     with (path / "points.bin").open("rb") as handle:
-        for row in pq.read_table(index_path).to_pylist():
-            handle.seek(int(row["offset"]))
-            blob = handle.read(int(row["nbytes"]))
-            clouds.append(
-                PointCloud(
-                    agent_id=str(row["agent_id"]),
-                    sensor_id=str(row["sensor_id"]),
-                    time_us=int(row["time_us"]),
-                    count=int(row["count"]),
-                    xyz_i_f32=blob,
-                )
-            )
-    return tuple(clouds)
+        handle.seek(offset)
+        blob = handle.read(nbytes)
+    return PointCloud(
+        agent_id=_req_str(row, "agent_id"),
+        sensor_id=_req_str(row, "sensor_id"),
+        time_us=_req_time(row, "time_us"),
+        count=count,
+        xyz_i_f32=blob,
+    )
+
+
+def _write_table(rows: list[dict[str, object]], schema: pa.Schema, path: Path) -> None:
+    if rows:
+        table = pa.Table.from_pylist(rows, schema=schema)
+    else:
+        table = schema.empty_table()
+    pq.write_table(table, path)
+
+
+def _se3(row: dict[str, object]) -> SE3:
+    return SE3(
+        _req_float(row, "qw"),
+        _req_float(row, "qx"),
+        _req_float(row, "qy"),
+        _req_float(row, "qz"),
+        _req_float(row, "tx"),
+        _req_float(row, "ty"),
+        _req_float(row, "tz"),
+    )
+
+
+def _se3_row(pose: SE3) -> dict[str, float]:
+    return {
+        "qw": pose.qw,
+        "qx": pose.qx,
+        "qy": pose.qy,
+        "qz": pose.qz,
+        "tx": pose.tx,
+        "ty": pose.ty,
+        "tz": pose.tz,
+    }
+
+
+def _read_manifest(path: Path) -> dict[str, object]:
+    loaded: object = json.loads(path.read_text(encoding="utf-8"))
+    return _as_dict(loaded, "manifest.json")
+
+
+def _rows(table: pa.Table) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for item in table.to_pylist():
+        converted: dict[str, object] = {}
+        for key, value in item.items():
+            converted[key] = value
+        rows.append(converted)
+    return rows
+
+
+def _as_dict(value: object, what: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise ValueError(f"{what} must be an object")
+    result: dict[str, object] = {}
+    for key, item in cast(dict[object, object], value).items():
+        if not isinstance(key, str):
+            raise ValueError(f"{what} has a non-string key")
+        result[key] = item
+    return result
+
+
+def _object_list(value: object, what: str) -> list[dict[str, object]]:
+    if not isinstance(value, list):
+        raise ValueError(f"{what} must be a list")
+    return [_as_dict(item, what) for item in cast(list[object], value)]
+
+
+def _req_str(row: dict[str, object], key: str) -> str:
+    value = row.get(key)
+    if not isinstance(value, str) or value == "":
+        raise ValueError(f"{key} must be a non-empty string")
+    return value
+
+
+def _opt_str(row: dict[str, object], key: str) -> str | None:
+    value = row.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or value == "":
+        raise ValueError(f"{key} must be a non-empty string or null")
+    return value
+
+
+def _req_time(row: dict[str, object], key: str) -> int:
+    return require_time_us(row.get(key), key)
+
+
+def _req_offset(row: dict[str, object], key: str) -> int:
+    value = row.get(key)
+    if type(value) is not int or value < 0:
+        raise ValueError(f"{key} must be a non-negative int")
+    return value
+
+
+def _req_float(row: dict[str, object], key: str) -> float:
+    value = row.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{key} must be a float")
+    number = float(value)
+    if not math.isfinite(number):
+        raise ValueError(f"{key} must be finite")
+    return number
+
+
+def _opt_float(row: dict[str, object], key: str) -> float | None:
+    if key not in row or row[key] is None:
+        return None
+    return _req_float(row, key)
+
+
+def _opt_int(row: dict[str, object], key: str) -> int | None:
+    if key not in row or row[key] is None:
+        return None
+    value = row[key]
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{key} must be a positive int or null")
+    return value

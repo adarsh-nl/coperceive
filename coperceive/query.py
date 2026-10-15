@@ -11,6 +11,7 @@ import enum
 from dataclasses import dataclass
 
 from coperceive.errors import TimeQueryError, ToleranceError
+from coperceive.model import Scene, require_time_us
 
 
 class TimeMode(enum.Enum):
@@ -27,6 +28,22 @@ class TimeHit:
     dt_us: int
 
 
+@dataclass(frozen=True)
+class AgentTimeHit:
+    """One agent's discrete sample for a query.
+
+    ``dt_us`` is ``sample_time_us - query_time_us`` when ``matched`` is true.
+    A miss leaves the sample fields empty. It is not an exception: other
+    agents may still have a sample. ``tolerance_us`` is applied per agent.
+    """
+
+    agent_id: str
+    matched: bool
+    index: int | None
+    time_us: int | None
+    dt_us: int | None
+
+
 def query_time(
     times_us: tuple[int, ...] | list[int],
     query_us: int,
@@ -35,6 +52,9 @@ def query_time(
     tolerance_us: int,
 ) -> TimeHit:
     """Pick one sample. Raises if the selection is farther than ``tolerance_us``."""
+    require_time_us(query_us, "query_us")
+    if type(tolerance_us) is not int:
+        raise TimeQueryError("tolerance_us must be a Python int")
     if tolerance_us < 0:
         raise TimeQueryError("tolerance_us must be >= 0")
     if not times_us:
@@ -61,6 +81,40 @@ def query_time(
             f"tolerance is {tolerance_us} us"
         )
     return TimeHit(index=index, time_us=sample, dt_us=dt)
+
+
+def query_agents(
+    scene: Scene,
+    query_us: int,
+    mode: TimeMode,
+    *,
+    tolerance_us: int,
+) -> tuple[AgentTimeHit, ...]:
+    """Report every agent's ``dt_us``. An agent outside tolerance is a miss.
+
+    Invalid ``tolerance_us`` still raises. A miss is an empty
+    :class:`AgentTimeHit`, including an agent with no pose at or before the
+    query in backward mode, and no pose at or after it in forward mode.
+    """
+    require_time_us(query_us, "query_us")
+    if type(tolerance_us) is not int:
+        raise TimeQueryError("tolerance_us must be a Python int")
+    if tolerance_us < 0:
+        raise TimeQueryError("tolerance_us must be >= 0")
+    rows: list[AgentTimeHit] = []
+    for agent in scene.agents:
+        try:
+            hit = query_time(
+                scene.pose_times(agent.agent_id),
+                query_us,
+                mode,
+                tolerance_us=tolerance_us,
+            )
+        except TimeQueryError:
+            rows.append(AgentTimeHit(agent.agent_id, False, None, None, None))
+        else:
+            rows.append(AgentTimeHit(agent.agent_id, True, hit.index, hit.time_us, hit.dt_us))
+    return tuple(rows)
 
 
 def _exact_index(times_us: list[int] | tuple[int, ...], query_us: int, tolerance_us: int) -> int:

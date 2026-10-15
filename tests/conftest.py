@@ -3,12 +3,15 @@ from __future__ import annotations
 
 import struct
 
+from coperceive.diagnostics import shared_objects
 from coperceive.model import (
     SCHEMA_VERSION,
     Agent,
+    AgentType,
     Annotation,
     Clock,
     ImageRef,
+    Modality,
     PointCloud,
     Scene,
     Sensor,
@@ -20,7 +23,7 @@ from coperceive.se3 import SE3
 def sample_scene() -> Scene:
     vehicle = Agent(
         agent_id="vehicle",
-        agent_type="vehicle",
+        agent_type=AgentType.VEHICLE,
         poses=(
             StampedPose(0, SE3.identity().translation(0.0, 0.0, 0.0)),
             StampedPose(100_000, SE3.identity().translation(1.0, 0.0, 0.0)),
@@ -29,7 +32,7 @@ def sample_scene() -> Scene:
     )
     drone = Agent(
         agent_id="drone",
-        agent_type="drone",
+        agent_type=AgentType.UAV,
         poses=(
             StampedPose(0, SE3.identity().translation(0.0, 0.0, 25.0)),
             StampedPose(100_000, SE3.identity().translation(1.0, 0.0, 25.0)),
@@ -51,22 +54,35 @@ def sample_scene() -> Scene:
         count=1,
         xyz_i_f32=struct.pack("<4f", 1.0, 0.0, 0.0, 0.0),
     )
+    sensors = (
+        Sensor(
+            sensor_id="lidar_top",
+            agent_id="vehicle",
+            modality=Modality.LIDAR,
+            body_from_sensor=SE3.identity().translation(0.0, 0.0, 1.1),
+        ),
+        Sensor(
+            sensor_id="front",
+            agent_id="vehicle",
+            modality=Modality.CAMERA,
+            body_from_sensor=SE3.identity(),
+            image_width_px=1920,
+            image_height_px=1080,
+            fx=1000.0,
+            fy=1000.0,
+            cx=960.0,
+            cy=540.0,
+        ),
+    )
     return Scene(
         schema_version=SCHEMA_VERSION,
         scene_id="synthetic",
         world_frame="ENU",
         clock=Clock(unit="us", scale_note="synthetic 10 Hz"),
         agents=(vehicle, drone),
-        sensors=(
-            Sensor(
-                sensor_id="lidar_top",
-                agent_id="vehicle",
-                modality="lidar",
-                body_from_sensor=SE3.identity().translation(0.0, 0.0, 1.1),
-            ),
-        ),
+        sensors=sensors,
         annotations=annotations,
-        objects=(),
+        objects=shared_objects(annotations),
         point_clouds=(cloud,),
         images=(ImageRef("vehicle", "front", 100_000, "vehicle-side/camera/front/000001.png"),),
     )

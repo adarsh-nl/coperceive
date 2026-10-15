@@ -1,6 +1,8 @@
 # ADR 0001 — Scene data model
 
-Status: accepted for the Phase 0 scaffold. Schema version 1.
+Status: accepted. Schema version 1 is specified in `docs/spec/format.md`.
+
+Phase 1 keeps option 2 and tightens the fields. `agent_type` is `vehicle`, `uav`, `infrastructure`, or `other` (a Griffin drone is type `uav`; `agent_id` can still be `drone`). Platform metadata is a string map on the agent. Sensors are `camera`, `lidar`, or `radar`, with `body ← sensor` and an optional camera pinhole. A box has a class (`category`), an optional track id, an optional visibility, and a frame of `body` or `world`. `T(dst ← src, t)` names world, body, and sensor. `max_gap_us` and `tolerance_us` stay required. Scene objects are still only the track ids that at least two agents share under one category.
 
 ## Context
 

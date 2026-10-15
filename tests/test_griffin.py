@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coperceive.griffin.download import verify_md5
 from coperceive.griffin.raw import load_scene, parse_label_line
+from coperceive.model import AgentType
 
 
 def test_label_line_and_one_scene(tmp_path: Path) -> None:
@@ -57,6 +58,11 @@ def test_label_line_and_one_scene(tmp_path: Path) -> None:
             [0, 0, 1, 1.1],
             [0, 0, 0, 1],
         ]
+        if side == "vehicle-side":
+            (root / "calib" / "lidar_top.json").write_text(
+                json.dumps({"extrinsic": extrinsic}),
+                encoding="utf-8",
+            )
         (root / "calib" / "front.json").write_text(
             json.dumps(
                 {
@@ -78,6 +84,8 @@ def test_label_line_and_one_scene(tmp_path: Path) -> None:
     scene = load_scene(tmp_path, "Town03-000")
     assert scene.scene_id == "Town03-000"
     assert {agent.agent_id for agent in scene.agents} == {"vehicle", "drone"}
+    assert scene.agent("drone").agent_type is AgentType.UAV
+    assert scene.agent("vehicle").agent_type is AgentType.VEHICLE
     assert scene.objects[0].track_id == "7"
     assert scene.point_clouds[0].count == 1
     assert scene.clock.scale_note.startswith("Griffin pose")
