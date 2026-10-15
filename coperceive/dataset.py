@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import random
 from pathlib import Path
+from typing import cast
 
 import pyarrow.parquet as pq
 from torch.utils.data import Dataset
@@ -67,8 +68,7 @@ class CooperativeDataset(Dataset[CooperativeSample]):
         super().__init__()
         if type(tolerance_us) is not int or tolerance_us < 0:
             raise TimeQueryError("tolerance_us must be a Python int >= 0")
-        if not isinstance(mode, TimeMode):
-            raise ValueError("mode must be a TimeMode")
+        mode = _require_mode(mode)
         if type(stride) is not int or stride < 1:
             raise ValueError("stride must be an int >= 1")
         if seed is not None and type(seed) is not int:
@@ -94,6 +94,17 @@ class CooperativeDataset(Dataset[CooperativeSample]):
     def index(self) -> tuple[tuple[str, int], ...]:
         """``(absolute scene directory, reference time_us)`` in sample order."""
         return self._index
+
+    @property
+    def cached_scene_path(self) -> str | None:
+        """Directory of the scene held in memory, or null when nothing is cached.
+
+        Pickling clears the cache, so a restored dataset returns null until
+        the next ``__getitem__``.
+        """
+        if self._cached_scene is None:
+            return None
+        return self._cached_path
 
     def __getitem__(self, index: int) -> CooperativeSample:
         path_str, time_us = self._index[index]
@@ -155,8 +166,14 @@ class CooperativeDataset(Dataset[CooperativeSample]):
         )
 
 
+def _require_mode(value: object) -> TimeMode:
+    if not isinstance(value, TimeMode):
+        raise ValueError("mode must be a TimeMode")
+    return value
+
+
 def _names(
-    value: tuple[str, ...] | list[str] | None,
+    value: object,
     what: str,
     *,
     allow_empty: bool,
@@ -165,11 +182,15 @@ def _names(
         return None
     if isinstance(value, str) or not isinstance(value, (tuple, list)):
         raise ValueError(f"{what} must be a sequence of strings")
-    names = tuple(value)
+    items = cast(tuple[object, ...] | list[object], value)
+    names_list: list[str] = []
+    for item in items:
+        if type(item) is not str or item == "":
+            raise ValueError(f"{what} must be non-empty strings")
+        names_list.append(item)
+    names = tuple(names_list)
     if not allow_empty and len(names) == 0:
         raise ValueError(f"{what} must name at least one entry")
-    if any(type(name) is not str or name == "" for name in names):
-        raise ValueError(f"{what} must be non-empty strings")
     if len(set(names)) != len(names):
         raise ValueError(f"{what} has a duplicate")
     return names
@@ -198,16 +219,29 @@ def _build_index(
 
 
 def _reference_times(scene_dir: Path, agents: tuple[str, ...] | None) -> tuple[int, ...]:
-    manifest_obj = json.loads((scene_dir / "manifest.json").read_text(encoding="utf-8"))
-    if not isinstance(manifest_obj, dict):
+    loaded: object = json.loads((scene_dir / "manifest.json").read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
         raise ValueError(f"{scene_dir} manifest is not an object")
-    rows = manifest_obj.get("agents")
-    if not isinstance(rows, list) or len(rows) == 0:
+    manifest: dict[str, object] = {}
+    for key, item in cast(dict[object, object], loaded).items():
+        if not isinstance(key, str):
+            raise ValueError(f"{scene_dir} manifest has a non-string key")
+        manifest[key] = item
+    rows_obj = manifest.get("agents")
+    if not isinstance(rows_obj, list):
+        raise ValueError(f"{scene_dir} has no agents")
+    rows = cast(list[object], rows_obj)
+    if len(rows) == 0:
         raise ValueError(f"{scene_dir} has no agents")
     names: list[str] = []
-    for row in rows:
-        if not isinstance(row, dict):
+    for row_obj in rows:
+        if not isinstance(row_obj, dict):
             raise ValueError(f"{scene_dir} manifest agent is not an object")
+        row: dict[str, object] = {}
+        for key, item in cast(dict[object, object], row_obj).items():
+            if not isinstance(key, str):
+                raise ValueError(f"{scene_dir} manifest agent has a non-string key")
+            row[key] = item
         agent_id = row.get("agent_id")
         if type(agent_id) is not str or agent_id == "":
             raise ValueError(f"{scene_dir} manifest agent_id is missing")
@@ -221,11 +255,13 @@ def _reference_times(scene_dir: Path, agents: tuple[str, ...] | None) -> tuple[i
         reference = names[0]
     table = pq.read_table(scene_dir / "poses.parquet", columns=["agent_id", "time_us"])
     times: list[int] = []
-    agent_col = table.column("agent_id").to_pylist()
-    time_col = table.column("time_us").to_pylist()
-    for agent_id, time_us in zip(agent_col, time_col, strict=True):
-        if agent_id != reference:
+    for item in table.to_pylist():
+        pose: dict[str, object] = {}
+        for key, value in item.items():
+            pose[key] = value
+        if pose.get("agent_id") != reference:
             continue
+        time_us = pose.get("time_us")
         if type(time_us) is not int:
             raise ValueError(f"{scene_dir} pose time_us is not an int")
         times.append(time_us)

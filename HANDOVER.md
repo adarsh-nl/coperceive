@@ -27,7 +27,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - The torch default collate is not used. Clouds differ in length, and a miss has no pose. `identity_collate` is the provided batch function.
 - Dataset order with `seed` omitted is scene-directory name, then the reference agent's pose time. `stride` keeps every nth of those times. `seed` shuffles with `random.Random(seed)` in the parent before workers start.
 - The reference agent is `agents[0]` when `agents` is set, otherwise the first manifest agent. Griffin scenes index the vehicle (7,000 samples), not the union of vehicle and drone times.
-- `coperceive/dataset.py` and `tests/test_dataset.py` are excluded from pyright. The lint job does not install torch. Dataset tests call `pytest.importorskip("torch")`.
+- Pyright includes `coperceive/dataset.py` and `tests/test_dataset.py`. The lint job and the test job install the CPU torch wheel with `pip install torch --index-url https://download.pytorch.org/whl/cpu`. Dataset tests still call `pytest.importorskip("torch")` so a checkout without that wheel collects.
 - Phase 2 Griffin choices stand: schema `1`, null visibility, drone lidar calibs without clouds, `time_us = frame_id * 100000`, east taken from the toolkit pose comment. Source: https://github.com/adarsh-nl/coperceive
 - The Griffin licence acknowledgement uses `datetime.now(timezone.utc)`. `datetime.UTC` is Python 3.11+, and the 3.10 CI job failed while collecting the Griffin tests.
 
@@ -37,7 +37,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 2. Is +Z depth, with no pixel rounding, the camera contract to keep? It matches the Griffin toolkit's divide-by-z step and deliberately does not copy that toolkit's integer rounding.
 3. `CooperativeDataset` indexes one reference agent. Say if the index should be the union of agent times, or a stride in seconds, instead of every nth pose.
 4. Identity collate versus a padded cloud batch. Training code was not added.
-5. CI does not install torch, so the worker test is skipped there. This VM ran it. Say if the CPU wheel should be added to the test job.
+5. CI installs the CPU torch wheel in the lint job and the test job, so the dataset tests run on 3.10–3.13. The lint job needs the wheel because pyright resolves `import torch`.
 6. On this 4-vCPU VM, more DataLoader workers were slower than `num_workers=0` (each worker re-reads a scene). Say if a different shard, one scene per worker, is wanted.
 7. Visibility. Keep null when the field is absent, or match the toolkit and store `1.0`?
 8. Drone lidar calibs with no clouds. Keep them as sensors, or drop stems that have no point files?
@@ -66,7 +66,7 @@ Python 3.12.3. Commands and results from 2026-10-15:
 
 - `ruff check .` — all checks passed (ruff 0.17.0)
 - `ruff format --check .` — 64 files already formatted (ruff 0.17.0)
-- `pyright` — 0 errors, 0 warnings (pyright 1.1.414, strict on the core). Excluded: `coperceive/app`, `coperceive/griffin`, `coperceive/dataset.py`, `tests/test_app.py`, `tests/test_griffin.py`, `tests/test_griffin_phase2.py`, `tests/test_dataset.py`
+- `pyright` — 0 errors, 0 warnings (pyright 1.1.414, strict on the core, including `coperceive/dataset.py` and `tests/test_dataset.py`). Excluded: `coperceive/app`, `coperceive/griffin`, `tests/test_app.py`, `tests/test_griffin.py`, `tests/test_griffin_phase2.py`
 - `pytest -o addopts= -q` — 66 passed, 1 skipped, 6 warnings in 2.15s (pytest 9.1.1). The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()` in the dataset worker test and the parallel convert test.
 - `pytest --cov=coperceive --cov-report=term-missing -q` — exit 0, coverage 88% (2251 statements, 207 missed, branch coverage on)
 - `python -m build --wheel` — built `dist/coperceive-0.0.0-py3-none-any.whl` (build 1.6.1, hatchling 1.32.4)

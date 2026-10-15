@@ -67,10 +67,8 @@ select = ["E", "F", "I", "UP", "B", "W"]
 include = ["coperceive", "tests"]
 exclude = [
     "coperceive/app",
-    "coperceive/dataset.py",
     "coperceive/griffin",
     "tests/test_app.py",
-    "tests/test_dataset.py",
     "tests/test_griffin.py",
     "tests/test_griffin_phase2.py",
 ]

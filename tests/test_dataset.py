@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import pickle
 from pathlib import Path
+from typing import cast
 
 import pytest
 from coperceive.errors import TimeQueryError
 from coperceive.model import SCHEMA_VERSION, Agent, AgentType, Clock, Scene, StampedPose
 from coperceive.query import TimeMode
+from coperceive.sample import CooperativeSample
 from coperceive.se3 import SE3
 from coperceive.store import write_scene
 
@@ -130,14 +132,14 @@ def test_workers_match_and_pickle_drops_the_cache(tmp_path: Path) -> None:
     root = _root(tmp_path)
     dataset = CooperativeDataset(root, tolerance_us=0, seed=1)
     direct = [dataset[index] for index in range(len(dataset))]
-    assert dataset._cached_scene is not None
+    assert dataset.cached_scene_path is not None
 
-    cloned = pickle.loads(pickle.dumps(dataset))
-    assert cloned._cached_scene is None
-    assert cloned._cached_path is None
-    assert [cloned[index] for index in range(len(cloned))] == direct
+    restored = pickle.loads(pickle.dumps(dataset))
+    assert isinstance(restored, CooperativeDataset)
+    assert restored.cached_scene_path is None
+    assert [restored[index] for index in range(len(restored))] == direct
 
-    def collect(workers: int) -> list[object]:
+    def collect(workers: int) -> list[CooperativeSample]:
         loader = DataLoader(
             dataset,
             batch_size=2,
@@ -145,10 +147,12 @@ def test_workers_match_and_pickle_drops_the_cache(tmp_path: Path) -> None:
             shuffle=False,
             collate_fn=identity_collate,
         )
-        rows: list[object] = []
+        rows: list[CooperativeSample] = []
         for batch in loader:
             assert isinstance(batch, list)
-            rows.extend(batch)
+            for item in cast(list[object], batch):
+                assert isinstance(item, CooperativeSample)
+                rows.append(item)
         return rows
 
     assert collect(0) == direct

@@ -13,6 +13,7 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: ruff check .
       - run: ruff format --check .
       - run: pyright
@@ -29,6 +30,7 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[app,griffin,dev]"
+      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pytest
 
   gitleaks:
