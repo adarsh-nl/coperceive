@@ -94,7 +94,7 @@ Python 3.12.3. Commands on 2026-10-15 after the map code was in the tree. Pyrigh
 - Fresh venv `/tmp/coperceive-hdmap-fresh`, commands run from `/tmp`: `pip install dist/coperceive-0.0.0-py3-none-any.whl`. `coperceive --help` listed `schema`, `serve`, `maps`, `download`, `convert`, `validate`, and `export`. `coperceive schema` printed `1`. `coperceive maps --help` listed `fetch`, `ingest`, and `align`. `import coperceive.hdmap` loaded `/tmp/coperceive-hdmap-fresh/lib/python3.12/site-packages/coperceive/hdmap/__init__.py`. `import coperceive.dataset` raised `ModuleNotFoundError: No module named 'torch'`.
 - `mkdocs build` — succeeded (MkDocs 1.6.1; the Material plugin printed its MkDocs 2.0 warning). The site was written to `site/`.
 - `gitleaks detect --no-git --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 5.54 MB scanned.
-- `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 18 commits scanned, through `d0c20b2`. The docs commit that adds this paragraph is not in that scan.
+- `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 19 commits scanned, through `134c816`. This paragraph’s commit is not in that scan.
 - Python 3.10, 3.11, and 3.13 were not run on this machine. Those versions are the GitHub Actions matrix.
 
 ## Commands
