@@ -45,10 +45,12 @@ class Thresholds:
 
     max_speed_m_s: float = 40.0
     max_accel_m_s2: float = 20.0
+    smooth_window_s: float = 0.5
     gap_factor: float = 1.5
     sync_tolerance_us: int = 0
     nearest_tolerance_us: int = 1_000_000
-    computed_max_center_m: float = 5.0
+    computed_max_center_m: float = 2.0
+    computed_size_fraction: float = 0.5
     phase_delta_m: float = 2.0
     phase_min_frames: int = 5
     phase_max_fraction: float = 0.4
@@ -169,8 +171,30 @@ def validate_root(root: Path, thresholds: Thresholds | None = None) -> dict[str,
             "per scene. cruise_altitude_m is the release's per-scene cruise value."
         ),
         "scenes": scenes,
-        "aggregate": pooled.aggregate(scenes, limits),
         "official": _official(scenes),
+    }
+    aggregate = pooled.aggregate(scenes, limits)
+    hard = _hard_failures(scenes)
+    aggregate["hard_failure_count"] = len(hard)
+    aggregate["hard_failures"] = hard[:50]
+    report["aggregate"] = aggregate
+    report["checks"] = {
+        "warnings": (
+            "Instantaneous speed above max_speed_m_s, instantaneous acceleration "
+            "above max_accel_m_s2, and smoothed acceleration above the same "
+            "acceleration threshold are warnings. Smoothed speed is the trailing "
+            "mean of instantaneous speed over smooth_window_s. They do not change "
+            "the exit code."
+        ),
+        "hard_failures": (
+            "An unreadable scene, a missing frame, or a cross-agent pose miss at "
+            "sync_tolerance_us. The default exit code is 0 after the report is "
+            "written. --strict exits 1 when hard_failure_count is not zero."
+        ),
+        "computed_gate": (
+            "max(computed_max_center_m, computed_size_fraction * the longer box "
+            "length). The pair stays labelled computed and is not ground truth."
+        ),
     }
     report["altitude_finding"] = _altitude_finding(report)
     return report
@@ -237,6 +261,7 @@ class _Pools:
         self.computed_yaw: list[float] = []
         self.speeds: list[float] = []
         self.accels: list[float] = []
+        self.smoothed_accels: list[float] = []
         self.missing_frames = 0
         self.cross_queries = 0
         self.cross_misses = 0
@@ -246,6 +271,7 @@ class _Pools:
         self.both = 0
         self.speed_flags = 0
         self.accel_flags = 0
+        self.smoothed_accel_flags = 0
         self.phases: Counter[str] = Counter()
 
     def aggregate(self, scenes: list[dict[str, object]], limits: Thresholds) -> dict[str, object]:
@@ -260,10 +286,15 @@ class _Pools:
             "nearest_abs_dt_us": distribution(self.nearest_abs_dt).as_json(),
             "max_speed_m_s": None if not self.speeds else max(self.speeds),
             "max_accel_m_s2": None if not self.accels else max(self.accels),
-            "speed_flags": self.speed_flags,
-            "acceleration_flags": self.accel_flags,
+            "max_smoothed_accel_m_s2": (
+                None if not self.smoothed_accels else max(self.smoothed_accels)
+            ),
+            "speed_warnings": self.speed_flags,
+            "acceleration_warnings": self.accel_flags,
+            "smoothed_acceleration_warnings": self.smoothed_accel_flags,
             "speed_threshold_m_s": limits.max_speed_m_s,
             "acceleration_threshold_m_s2": limits.max_accel_m_s2,
+            "smooth_window_s": limits.smooth_window_s,
             "altitude_dz_m": distribution(self.dz).as_json(),
             "altitude_cruise_dz_m": distribution(self.cruise_dz).as_json(),
             "altitude_phase_dz_m": distribution(self.phase_dz).as_json(),
@@ -416,9 +447,13 @@ def _cross_sync(scene: Scene, limits: Thresholds, pooled: _Pools) -> list[dict[s
 
 
 def _poses(scene: Scene, limits: Thresholds, pooled: _Pools) -> dict[str, object]:
-    flags: list[dict[str, object]] = []
+    warnings: list[dict[str, object]] = []
     max_speed: float | None = None
     max_accel: float | None = None
+    max_smoothed: float | None = None
+    window_us = int(round(limits.smooth_window_s * 1_000_000.0))
+    if window_us < 1:
+        window_us = 1
     for agent in scene.agents:
         speeds: list[float] = []
         durations: list[float] = []
@@ -440,39 +475,61 @@ def _poses(scene: Scene, limits: Thresholds, pooled: _Pools) -> dict[str, object
                 max_speed = speed
             if speed > limits.max_speed_m_s:
                 pooled.speed_flags += 1
-                flags.append(
+                warnings.append(
                     {
                         "agent_id": agent.agent_id,
                         "time_us": end.time_us,
                         "kind": "speed",
+                        "severity": "warning",
                         "value": speed,
                         "threshold": limits.max_speed_m_s,
                     }
                 )
         for index in range(1, len(speeds)):
-            span = 0.5 * (durations[index] + durations[index - 1])
-            accel = math.inf if span <= 0.0 else (speeds[index] - speeds[index - 1]) / span
-            magnitude = abs(accel)
+            magnitude = _accel_magnitude(speeds, durations, index)
             pooled.accels.append(magnitude)
             if max_accel is None or magnitude > max_accel:
                 max_accel = magnitude
             if magnitude > limits.max_accel_m_s2:
                 pooled.accel_flags += 1
-                flags.append(
+                warnings.append(
                     {
                         "agent_id": agent.agent_id,
                         "time_us": stamps[index],
                         "kind": "acceleration",
+                        "severity": "warning",
                         "value": magnitude,
                         "threshold": limits.max_accel_m_s2,
                     }
                 )
-    flags.sort(key=lambda row: float(_number(row["value"])), reverse=True)
+        smoothed = _trailing_mean(speeds, stamps, window_us)
+        for index in range(1, len(smoothed)):
+            magnitude = _accel_magnitude(smoothed, durations, index)
+            pooled.smoothed_accels.append(magnitude)
+            if max_smoothed is None or magnitude > max_smoothed:
+                max_smoothed = magnitude
+            if magnitude > limits.max_accel_m_s2:
+                pooled.smoothed_accel_flags += 1
+                warnings.append(
+                    {
+                        "agent_id": agent.agent_id,
+                        "time_us": stamps[index],
+                        "kind": "smoothed_acceleration",
+                        "severity": "warning",
+                        "value": magnitude,
+                        "threshold": limits.max_accel_m_s2,
+                        "window_s": limits.smooth_window_s,
+                    }
+                )
+    warnings.sort(key=lambda row: float(_number(row["value"])), reverse=True)
     return {
         "max_speed_m_s": max_speed,
         "max_accel_m_s2": max_accel,
-        "flag_count": len(flags),
-        "flags": flags[:20],
+        "max_smoothed_accel_m_s2": max_smoothed,
+        "smooth_window_s": limits.smooth_window_s,
+        "warning_count": len(warnings),
+        "flag_count": len(warnings),
+        "warnings": warnings[:20],
     }
 
 
@@ -556,6 +613,7 @@ def _agreement(scene: Scene, limits: Thresholds, pooled: _Pools) -> dict[str, ob
                         time_us=time_us,
                         max_gap_us=0,
                         max_center_m=limits.computed_max_center_m,
+                        size_fraction=limits.computed_size_fraction,
                     )
                 except CoperceiveError:
                     continue
@@ -596,6 +654,8 @@ def _agreement(scene: Scene, limits: Thresholds, pooled: _Pools) -> dict[str, ob
             "ground_truth": False,
             "pairs": len(computed_center),
             "max_center_m": limits.computed_max_center_m,
+            "size_fraction": limits.computed_size_fraction,
+            "gate": "max(max_center_m, size_fraction * longer box length)",
             "center_error_m": distribution(computed_center).as_json(),
             "yaw_error_deg": distribution(computed_yaw).as_json(),
             "label": "computed",
@@ -806,6 +866,70 @@ def _nominal_dt(deltas: list[int]) -> int | None:
     return sorted(counts, key=lambda delta: (-counts[delta], delta))[0]
 
 
+def _hard_failures(scenes: list[dict[str, object]]) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for row in scenes:
+        scene_id = row.get("scene_id", row.get("path", ""))
+        if "error" in row:
+            rows.append(
+                {
+                    "kind": "unreadable_scene",
+                    "scene_id": scene_id,
+                    "detail": row["error"],
+                }
+            )
+            continue
+        missing = row.get("missing_frames")
+        if type(missing) is int and missing > 0:
+            rows.append(
+                {
+                    "kind": "missing_frames",
+                    "scene_id": scene_id,
+                    "count": missing,
+                }
+            )
+        cross = row.get("cross_sync")
+        if isinstance(cross, list):
+            for item in cast(list[object], cross):
+                if not isinstance(item, dict):
+                    continue
+                pair = cast(dict[object, object], item)
+                missed = pair.get("missed_at_sync_tolerance")
+                if type(missed) is int and missed > 0:
+                    rows.append(
+                        {
+                            "kind": "cross_agent_sync_miss",
+                            "scene_id": scene_id,
+                            "reference_agent": pair.get("reference_agent"),
+                            "other_agent": pair.get("other_agent"),
+                            "count": missed,
+                        }
+                    )
+    return rows
+
+
+def _accel_magnitude(series: list[float], durations: list[float], index: int) -> float:
+    span = 0.5 * (durations[index] + durations[index - 1])
+    if span <= 0.0:
+        return math.inf
+    return abs((series[index] - series[index - 1]) / span)
+
+
+def _trailing_mean(values: list[float], stamps: list[int], window_us: int) -> list[float]:
+    """Mean of samples whose stamp is in ``(stamp - window_us, stamp]``."""
+    means: list[float] = []
+    start = 0
+    total = 0.0
+    for index, stamp in enumerate(stamps):
+        total += values[index]
+        cutoff = stamp - window_us
+        while start < index and stamps[start] <= cutoff:
+            total -= values[start]
+            start += 1
+        means.append(total / (index - start + 1))
+    return means
+
+
 def _half_up(value: float) -> int:
     return int(math.floor(value + 0.5))
 
@@ -829,6 +953,8 @@ def _thresholds_json(limits: Thresholds) -> dict[str, object]:
         "sync_tolerance_us": limits.sync_tolerance_us,
         "nearest_tolerance_us": limits.nearest_tolerance_us,
         "computed_max_center_m": limits.computed_max_center_m,
+        "computed_size_fraction": limits.computed_size_fraction,
+        "smooth_window_s": limits.smooth_window_s,
         "phase_delta_m": limits.phase_delta_m,
         "phase_min_frames": limits.phase_min_frames,
         "phase_max_fraction": limits.phase_max_fraction,

@@ -118,6 +118,11 @@ def build_parser() -> argparse.ArgumentParser:
         default="coperceive-validate.md",
         help="Markdown report path.",
     )
+    validate.add_argument(
+        "--strict",
+        action="store_true",
+        help="Exit 1 when the report contains a hard failure. The default exit is 0.",
+    )
     validate.set_defaults(func=_validate)
     return parser
 
@@ -150,13 +155,29 @@ def _validate(args: argparse.Namespace) -> None:
     print(f"wrote {markdown_path}")
     if isinstance(aggregate, dict):
         values = cast(dict[object, object], aggregate)
+        warning_count = _warning_count(values)
+        hard = values.get("hard_failure_count")
         print(
-            "scenes {scenes_read} failed {scenes_failed} missing_frames {missing_frames}".format(
+            "scenes {scenes_read} failed {scenes_failed} missing_frames {missing_frames} "
+            "warnings {warnings} hard {hard}".format(
                 scenes_read=values.get("scenes_read"),
                 scenes_failed=values.get("scenes_failed"),
                 missing_frames=values.get("missing_frames"),
+                warnings=warning_count,
+                hard=hard,
             )
         )
+        if args.strict and type(hard) is int and hard > 0:
+            raise SystemExit(1)
+
+
+def _warning_count(aggregate: dict[object, object]) -> int:
+    total = 0
+    for key in ("speed_warnings", "acceleration_warnings", "smoothed_acceleration_warnings"):
+        value = aggregate.get(key)
+        if type(value) is int:
+            total += value
+    return total
 
 
 def _schema(_args: argparse.Namespace) -> None:

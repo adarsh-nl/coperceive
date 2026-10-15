@@ -10,12 +10,13 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 
 ## State
 
-- `coperceive validate <dataset-root>` writes JSON and Markdown. Defaults are `coperceive-validate.json` and `coperceive-validate.md` in the current directory. A root that is not a directory exits 2. A scene that fails to read is one error row. The process exits 0 after both files exist, including when checks flag samples.
+- `coperceive validate <dataset-root>` writes JSON and Markdown. Defaults are `coperceive-validate.json` and `coperceive-validate.md` in the current directory. A root that is not a directory exits 2. A scene that fails to read is one error row. The process exits 0 after both files exist. `--strict` exits 1 when `hard_failure_count` is not zero.
 - The validator does not import `coperceive.griffin`. The subset name is the `platform` value `subset`.
 - Time sync reports per-agent `dt`, the modal gap, the rate, and missing frames. A gap above `gap_factor` (1.5) times the modal gap counts `max(0, round(dt / nominal) - 1)` missing frames. Cross-agent match uses `sync_tolerance_us` 0. Nearest absolute `dt` uses `nearest_tolerance_us` of 1 s.
 - Altitude is drone `z` minus vehicle `z` at shared timestamps. The expected band is 25±2, 40±2, 55±2, or 20–60 m for subsets `25m`, `40m`, `55m`, and `random`. That band is the toolkit cruise figure. `cruise_altitude_m` is the per-scene field. A climb or descent is reported only when the phase rule fires.
-- Pose flags use 40 m/s and 20 m/s². Acceleration is the change in speed divided by the mean of the two neighbouring `dt` values. Thresholds are written into the report.
-- Shared track ids report centre, yaw, and size disagreement. Nearest-centre pairs inside 5 m are `computed` and `ground_truth` false. They are not written into `scene.objects`.
+- Pose warnings use 40 m/s and 20 m/s². Instantaneous acceleration is the change in speed divided by the mean of the two neighbouring `dt` values. Smoothed speed is the trailing mean of instantaneous speed over 0.5 s, and smoothed acceleration uses the same span. Both accelerations warn at 20 m/s². Thresholds are written into the report. They are not hard failures.
+- Hard failures are an unreadable scene, a missing frame, or a cross-agent pose miss at `sync_tolerance_us`.
+- Shared track ids report centre, yaw, and size disagreement. The computed fallback gate is `max(2 m, 0.5 * the longer box length)`. Those pairs are `computed` and `ground_truth` false. They are not written into `scene.objects`.
 - Coverage counts tracks seen by the vehicle only, the drone only, or both.
 - Official scene counts are 47, 54, 50, and 104. “About 150” frames is recorded, not treated as a hard failure.
 - Schema version stays `1`. Griffin-25m conversion from Phase 2 was reused from `/tmp/griffin-scenes` (47 scene directories). It was not re-downloaded.
@@ -27,19 +28,19 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - A phase is the longest prefix (climb) or suffix (descent) whose median is at least 2 m below the rest, with at least 80% of steps moving by at least 0.05 m that way, at least 5 frames, and at most 40% of the scene. Both ends matching is `none`. On the synthetic step series this labels 7 frames, because the longest mostly-descending suffix includes the last cruise samples.
 - The 25±2 m band is checked against `cruise_altitude_m` and against per-frame height, and the report says which is which. On Griffin-25m the cruise field is inside the band and the per-frame height is not.
 - Official frame text “about 150” is not a failure. All 47 Griffin-25m scenes are 147, 148, or 149.
-- Computed pairs use a 5 m centre gate and stay labelled computed.
-- Speed 40 m/s flags nothing on this tier. Acceleration 20 m/s² flags 22 steps. Those flags are the threshold, not a claim that the pose file is corrupt.
+- Computed pairs use the size-scaled gate and stay labelled computed.
+- Speed 40 m/s warns on nothing on this tier. Instantaneous acceleration 20 m/s² warns on 22 steps. Smoothed acceleration over 0.5 s warns on nothing (max 15.712867500264949 m/s²). Those warnings are the threshold, not a claim that the pose file is corrupt. Hard failures on this tier: 0.
 - Phase 3 choices stand: discrete `Scene.at`, no pixel rounding, `z <= 0` behind, computed pairs are not ground truth, one reference agent, `identity_collate`, CPU torch in CI, `timezone.utc` for the licence stamp.
 - Phase 2 Griffin choices stand: schema `1`, null visibility, drone lidar calibs without clouds, `time_us = frame_id * 100000`, east taken from the toolkit pose comment. Source: https://github.com/adarsh-nl/coperceive
 - More DataLoader workers were slower than `num_workers=0` on the Phase 3 machine. That was not changed.
 
 ## Open questions for Adarsh
 
-1. Are 40 m/s and 20 m/s² the pose limits to keep? On Griffin-25m the speed limit flags 0 steps and the acceleration limit flags 22.
-2. Is 5 m the right gate for a computed nearest-centre pair? This tier produced 46 such pairs, median centre error 4.2270493908856235 m.
+1. 40 m/s and 20 m/s² stay warnings. Smoothed acceleration uses the same 20 m/s² and a 0.5 s trailing window, and is also a warning. Say if the smoothed check should become a hard failure. On this tier it warns on 0 steps.
+2. The computed gate is `max(2 m, 0.5 * the longer box length)`. This tier now has 11 computed pairs, centre median 4.071134798976429 m, max 4.518411314835206 m. Say if the floor or the 0.5 length fraction should change.
 3. Is the 2 m / 5-frame / 40% phase rule the split you want? It labels only Town06-001 (descent, 38 frames). Town06-011 climbs by less than 2 m and stays `none`.
-4. Should “about 150” frames stay informational? Every Griffin-25m scene fails an exact-150 check.
-5. Should `coperceive validate` exit non-zero when a check flags samples, or keep exit 0 once the report exists?
+4. “About 150” frames stays informational. Every Griffin-25m scene is 147, 148, or 149.
+5. The default exit is 0. `--strict` exits 1 on an unreadable scene, a missing frame, or a cross-agent pose miss.
 6. `Scene.at` still returns the discrete sample. Say if training should use an interpolated pose instead.
 7. Is +Z depth, with no pixel rounding, the camera contract to keep?
 8. `CooperativeDataset` indexes one reference agent. Say if the index should be the union of agent times.
@@ -50,11 +51,11 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 13. East. The toolkit comment is the only evidence. A map check was not done.
 14. Image paths are written for every camera calib even when the dev tier did not download images.
 15. Schema number. Still `1`.
-16. Viewer and a second dataset. Not this phase.
+16. Viewer. Not this commit.
 
 ## Griffin-25m validation
 
-Command, from `/workspace`, on 2026-10-15. `validate_root(Path("/tmp/griffin-scenes"))` then `write_report` to `/tmp/coperceive-validate-25m.json` and `/tmp/coperceive-validate-25m.md`. Elapsed 5.584 s. The full tables are in `docs/validate.md`. Those report files are not in git.
+Command, from `/workspace`, on 2026-10-15, after the warning and gate changes. `validate_root(Path("/tmp/griffin-scenes"))` then `write_report` to `/tmp/coperceive-validate-25m.json` and `/tmp/coperceive-validate-25m.md`. Elapsed 5.737 s. The full tables are in `docs/validate.md`. Those report files are not in git.
 
 - Scenes read 47, failed 0. Official 25 m count matches (47). Frames 7,000. Missing frames 0. Every pose gap is 100,000 µs, rate 10 Hz. Cross-agent misses at tolerance 0: 0 of 7,000. Nearest absolute `dt` is 0.
 - Per-frame drone `z` minus vehicle `z`: 7,000 samples, min 16.811032561585307 m, p05 24.353514404036105 m, median 26.410151720046997 m, p95 28.216206969693303 m, max 29.66659187246114 m. Inside [23, 27] m: 4,520. Outside: 2,480.
@@ -62,9 +63,9 @@ Command, from `/workspace`, on 2026-10-15. `validate_root(Path("/tmp/griffin-sce
 - Scene median height minus `cruise_altitude_m`: min −0.9936694535794466 m, median 1.243236409414063 m, max 2.0082581264744377 m.
 - Phases: descent 1, none 46. Town06-001 is the descent, 38 frames, `cruise_altitude_m` 24.51687333. Phase samples: min 16.811032561585307 m, median 23.507026061415672 m, max 26.08574439957738 m. Cruise-only samples (6,962): min 21.820821456611156 m, median 26.431367035023868 m, max 29.66659187246114 m.
 - The Phase 2 range 16.8–29.7 m, median 26.4 m, is this per-frame difference. The toolkit 25±2 m figure is the cruise field. The flown height sits about 1.2 m above that field. The low tail is the Town06-001 descent, not a dataset-wide takeoff.
-- Speed max 24.579697456127064 m/s (Town03-002), flags at 40 m/s: 0. Acceleration max 26.239874369602163 m/s² (Town10HD-011), flags at 20 m/s²: 22 on 10 scenes.
+- Speed max 24.579697456127064 m/s (Town03-002), warnings at 40 m/s: 0. Instantaneous acceleration max 26.239874369602163 m/s² (Town10HD-011), warnings at 20 m/s²: 22. Smoothed acceleration max 15.712867500264949 m/s², warnings: 0. Hard failures: 0. The rerun elapsed 5.737 s.
 - Shared-track pairs 61,302. Centre error median 2.929642751054232e-14 m, max 4.576455661277233e-13 m. Yaw median 0 deg, max 1.0231815394945443e-12 deg. Length, width, and height error 0.
-- Computed pairs 46, `ground_truth` false. Centre median 4.2270493908856235 m, max 4.968817988334346 m.
+- Computed pairs 11, `ground_truth` false. Centre min 1.092018395040389 m, median 4.071134798976429 m, max 4.518411314835206 m.
 - Coverage: vehicle only 40 tracks, drone only 406, both 834.
 - Frame counts are not exactly 150: 45 scenes of 149, Town03-010 of 148, Town10HD-009 of 147.
 

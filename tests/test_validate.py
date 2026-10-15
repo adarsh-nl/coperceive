@@ -140,6 +140,10 @@ def test_injected_faults_are_reported(tmp_path: Path) -> None:
         _box("uav", "1", "car", (3.0, 0.0, 0.0), (6.0, 2.0, 1.5), 90.0),
         _box("vehicle", "9", "pedestrian", (10.0, 0.0, 0.0), (0.6, 0.6, 1.7), 0.0),
         _box("uav", "8", "sign", (11.0, 0.0, 0.0), (0.2, 0.8, 1.2), 0.0),
+        _box("vehicle", "7", "car", (20.0, 0.0, 0.0), (4.0, 2.0, 1.5), 0.0),
+        _box("uav", "6", "car", (24.0, 0.0, 0.0), (4.0, 2.0, 1.5), 0.0),
+        _box("vehicle", "3", "bus", (40.0, 0.0, 0.0), (12.0, 2.5, 3.0), 0.0),
+        _box("uav", "2", "bus", (44.0, 0.0, 0.0), (12.0, 2.5, 3.0), 0.0),
         _box("uav", "4", "truck", (100.0, 0.0, 0.0), (6.0, 2.5, 2.0), 0.0),
     )
     # Shared objects are required by the writer. Track 1 agrees. 9, 8, 4 do not.
@@ -174,6 +178,16 @@ def test_injected_faults_are_reported(tmp_path: Path) -> None:
     assert isinstance(flag_count, int)
     assert flag_count >= 1
     assert float(_number(pose["max_speed_m_s"])) > 40.0
+    warnings = pose["warnings"]
+    assert isinstance(warnings, list)
+    rows: list[dict[str, object]] = []
+    for item in cast(list[object], warnings):
+        if isinstance(item, dict):
+            rows.append(_mapping(cast(dict[object, object], item)))
+    kinds = {row.get("kind") for row in rows}
+    assert "speed" in kinds
+    assert "smoothed_acceleration" in kinds
+    assert all(row.get("severity") == "warning" for row in rows)
     cross = by_id["clock"]["cross_sync"]
     assert isinstance(cross, list)
     first = _mapping(cast(list[object], cross)[0])
@@ -191,11 +205,18 @@ def test_injected_faults_are_reported(tmp_path: Path) -> None:
     assert yaw["median"] == pytest.approx(90.0)
     assert computed["ground_truth"] is False
     assert computed["label"] == "computed"
-    assert computed["pairs"] == 1
+    assert computed["max_center_m"] == 2.0
+    assert computed["size_fraction"] == 0.5
+    # 1 m pedestrian/sign is inside the 2 m floor. 4 m cars of length 4 are
+    # outside max(2, 0.5*4). 4 m buses of length 12 are inside max(2, 0.5*12).
+    assert computed["pairs"] == 2
+    computed_center = _mapping(computed["center_error_m"])
+    assert computed_center["min"] == pytest.approx(1.0)
+    assert computed_center["max"] == pytest.approx(4.0)
     coverage = _mapping(by_id["boxes"]["coverage"])
     assert coverage["both_tracks"] == 1
-    assert coverage["vehicle_only_tracks"] == 1
-    assert coverage["uav_only_tracks"] == 2
+    assert coverage["vehicle_only_tracks"] == 3
+    assert coverage["uav_only_tracks"] == 4
     official = report["official"]
     assert isinstance(official, list)
     subsets: dict[str, dict[str, object]] = {}
@@ -207,6 +228,69 @@ def test_injected_faults_are_reported(tmp_path: Path) -> None:
     assert subsets["25m"]["measured_scenes"] == 1
     assert subsets["25m"]["expected_scenes"] == 47
     assert subsets["25m"]["scenes_match"] is False
+
+
+def test_a_one_step_spike_is_a_warning_and_a_gap_is_hard(tmp_path: Path) -> None:
+    xs = [0.0]
+    speeds = [10.0, 10.0, 10.0, 12.6, 10.0, 10.0, 10.0, 10.0]
+    for speed in speeds:
+        xs.append(xs[-1] + speed * 0.1)
+    agent = _agent(
+        "vehicle",
+        AgentType.VEHICLE,
+        tuple(_pose(index * 100_000, xs[index], 0.0, 0.0) for index in range(len(xs))),
+    )
+    root = tmp_path / "spike"
+    write_scene(_scene("spike", (agent,)), root / "spike")
+    report = validate_root(root)
+    pose = _mapping(_by_scene(report)["spike"]["pose"])
+    instantaneous = float(_number(pose["max_accel_m_s2"]))
+    smoothed = float(_number(pose["max_smoothed_accel_m_s2"]))
+    assert instantaneous > 20.0
+    assert smoothed < instantaneous
+    assert smoothed < 20.0
+    aggregate = _mapping(report["aggregate"])
+    assert aggregate["acceleration_warnings"] == 2
+    assert aggregate["smoothed_acceleration_warnings"] == 0
+    assert aggregate["hard_failure_count"] == 0
+
+
+def test_strict_exits_on_a_missing_frame(tmp_path: Path) -> None:
+    dropped = _agent(
+        "vehicle",
+        AgentType.VEHICLE,
+        (
+            _pose(0, 0.0, 0.0, 0.0),
+            _pose(100_000, 1.0, 0.0, 0.0),
+            _pose(200_000, 2.0, 0.0, 0.0),
+            _pose(400_000, 4.0, 0.0, 0.0),
+        ),
+    )
+    root = tmp_path / "gap"
+    write_scene(_scene("gap", (dropped,)), root / "gap")
+    main(
+        [
+            "validate",
+            str(root),
+            "--json",
+            str(tmp_path / "gap.json"),
+            "--markdown",
+            str(tmp_path / "gap.md"),
+        ]
+    )
+    with pytest.raises(SystemExit) as raised:
+        main(
+            [
+                "validate",
+                str(root),
+                "--strict",
+                "--json",
+                str(tmp_path / "gap-strict.json"),
+                "--markdown",
+                str(tmp_path / "gap-strict.md"),
+            ]
+        )
+    assert raised.value.code == 1
 
 
 def test_cli_writes_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -251,6 +335,18 @@ def test_cli_writes_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixt
     assert "computed_is_ground_truth" in text
     captured = capsys.readouterr()
     assert "scenes 1" in captured.out
+    assert "hard 0" in captured.out
+    main(
+        [
+            "validate",
+            str(root),
+            "--strict",
+            "--json",
+            str(tmp_path / "strict-flat.json"),
+            "--markdown",
+            str(tmp_path / "strict-flat.md"),
+        ]
+    )
     with pytest.raises(SystemExit) as raised:
         main(["validate", str(tmp_path / "missing")])
     assert raised.value.code == 2

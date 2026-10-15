@@ -43,7 +43,7 @@ coperceive convert griffin --subset 25m --raw-root /path/griffin-release --out /
 coperceive validate /path/scenes --json report.json --markdown report.md
 ```
 
-The report covers time sync, UAV height above the vehicle, pose speed and acceleration, shared-track and nearest-centre box agreement, coverage, and scene and frame counts. Checks that flag samples still exit 0 once both files exist. A missing directory exits 2. The Griffin-25m figures are in `docs/validate.md`.
+The report covers time sync, UAV height above the vehicle, pose speed and acceleration, shared-track and nearest-centre box agreement, coverage, and scene and frame counts. The default exit is 0 once both files exist. `--strict` exits 1 on a hard failure: an unreadable scene, a missing frame, or a cross-agent pose miss. Speed and acceleration are warnings. A missing directory exits 2. The Griffin-25m figures are in `docs/validate.md`.
 
 ## Tests
 
