@@ -151,3 +151,7 @@ Drone calibration includes `lidar_bottom.json`, `lidar_front.json`, and `lidar_v
 The acknowledgement file is `/home/ubuntu/.local/share/coperceive/griffin-licence-accepted`. It records the MIT lines and `acknowledged_utc=2026-10-15T10:33:46Z`. It has no token.
 
 Not re-measured here: the 40 m and 55 m trees, the random-subset `.z01` bytes (the names and sizes were listed; the parts were not fetched), image pixels, and a map check of the east axis. The slow test `tests/test_griffin_phase2.py::test_real_griffin_release_loads` passed with `COPERCEIVE_GRIFFIN_RAW` pointed at this release. Without that variable the same test is skipped.
+
+## Validation
+
+`coperceive validate /tmp/griffin-scenes` was run again on this conversion on 2026-10-15 after the warning and gate changes. Elapsed 5.737 s. The aggregate is in `docs/validate.md`. The per-frame drone-minus-vehicle height (min 16.811032561585307 m, median 26.410151720046997 m, max 29.66659187246114 m) is wider than 25±2 m. Every scene's `cruise_altitude_m` is inside that band. The toolkit band is the cruise field. The low tail is a descent on Town06-001, 38 frames. Missing frames on this tier: 0. Hard failures: 0. Instantaneous acceleration warnings: 22. Smoothed acceleration warnings over 0.5 s: 0 (max 15.712867500264949 m/s²). Shared-track centre error stays at roundoff (median 2.929642751054232e-14 m over 61,302 pairs). Computed pairs under the size-scaled gate: 11.

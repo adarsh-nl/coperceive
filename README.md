@@ -2,7 +2,7 @@
 
 A cooperative, multi-agent perception data library. Source: <https://github.com/adarsh-nl/coperceive>. The name is recorded in `docs/design/naming.md`.
 
-Phase 1 is the scene model and the hybrid on-disk format. The contract a third party can implement is `docs/spec/format.md`. A Griffin reader and a local page came with the Phase 0 scaffold. This tree does not train models and does not embed a viewer.
+Phase 1 is the scene model and the hybrid on-disk format. Phase 3 adds `Scene.at`, camera projection, cross-agent box queries, and `CooperativeDataset` in the `torch` extra. Phase 4 adds `coperceive validate`, which writes a JSON report and a Markdown report for a directory of schema 1 scenes. Phase 5 draws those scenes in the local page with three.js and can write a Rerun `.rrd`. The contract a third party can implement is `docs/spec/format.md`. A Griffin reader and a local page came with the Phase 0 scaffold. This tree does not train models and does not build a desktop shell.
 
 ## Install
 
@@ -14,7 +14,7 @@ python3 -m venv .venv
 coperceive --help
 ```
 
-Extras: `torch`, `viewer` (rerun-sdk 0.22.1 and viser 0.2.23), `app`, `griffin`, `docs`, `dev`.
+Extras: `torch` (`coperceive.dataset.CooperativeDataset`; not imported by `coperceive`), `viewer` (rerun-sdk 0.22.1 and viser 0.2.23), `app`, `griffin`, `docs`, `dev`.
 
 The licence is Apache-2.0. The repository stays private. See `docs/adr/0006-licence.md`.
 
@@ -26,7 +26,13 @@ coperceive serve --root /path/to/a/workdir
 
 The default bind is `127.0.0.1:8731`. A non-loopback host requires `--token`. Behind a proxy, pass `--root-path` with the prefix the proxy adds.
 
-The page in the wheel is the Vite build in `coperceive/app/static`. Rebuild it from `web/` with `npm run build` after a UI change.
+The page in the wheel is the Vite build in `coperceive/app/static`. Rebuild it from `web/` with `npm run build` after a UI change. The Viewer tab lists scene directories under `--root`, steps through recorded pose times, and can hide an agent. Export Rerun writes `exports/<scene_id>.rrd` under that root and needs the `viewer` extra. The same export from a terminal:
+
+```bash
+coperceive export rerun /path/scene --out /path/scene.rrd
+```
+
+The page talks to the server only over HTTP. `coperceive.viewdata` does not import FastAPI or Rerun. A later desktop package is described in `docs/adr/0007-desktop.md` and is not built.
 
 ## Griffin
 
@@ -36,6 +42,14 @@ coperceive convert griffin --subset 25m --raw-root /path/griffin-release --out /
 ```
 
 `--preset dev` is drone metadata, vehicle metadata, and vehicle LiDAR. Camera archives are selected only with `--components`. The download needs the `griffin` extra, checks the MIT card and toolkit licence, and writes outside the git checkout. Recordings are not committed. Conventions are in `docs/datasets/griffin.md`. Earlier measurements are in `docs/design/griffin-verification.md`.
+
+## Validate
+
+```bash
+coperceive validate /path/scenes --json report.json --markdown report.md
+```
+
+The report covers time sync, UAV height above the vehicle, pose speed and acceleration, shared-track and nearest-centre box agreement, coverage, and scene and frame counts. The default exit is 0 once both files exist. `--strict` exits 1 on a hard failure: an unreadable scene, a missing frame, or a cross-agent pose miss. Speed and acceleration are warnings. A missing directory exits 2. The Griffin-25m figures are in `docs/validate.md`.
 
 ## Tests
 

@@ -9,7 +9,7 @@ that the toolkit ``LICENSE.txt`` was the MIT text. It does not store a token.
 from __future__ import annotations
 
 import os
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 CARD_LICENSE = "mit"
@@ -77,7 +77,7 @@ def write_acknowledgement(
 ) -> Path:
     target = ack_path() if path is None else path
     target.parent.mkdir(parents=True, exist_ok=True)
-    stamp = when if when is not None else datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    stamp = when if when is not None else datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     text = (
         f"{notice}\n"
         "Acknowledged once for this machine. Dataset bytes stay outside the git checkout.\n"

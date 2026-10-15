@@ -1,6 +1,6 @@
 # Contributing
 
-The maintainer is Adarsh (github.com/adarsh-nl). Phase 1 is the scene model and `docs/spec/format.md`. Do not add detectors, fusion, accounts, a viewer, or a second dataset. Open decisions are in `HANDOVER.md`.
+The maintainer is Adarsh (github.com/adarsh-nl). The scene contract is `docs/spec/format.md`. Do not add detectors, fusion, accounts, a second dataset, or a desktop shell. The in-app viewer and the Rerun export are Phase 5. Open decisions are in `HANDOVER.md`.
 
 ## Setup
 
@@ -25,7 +25,7 @@ Docs:
 The web page:
 
 ```bash
-cd web && npm install && npm run build
+cd web && npm install --legacy-peer-deps && npm run build
 ```
 
 That writes `coperceive/app/static`. Regenerate the client after an API change:
