@@ -1,0 +1,19 @@
+{
+  "scene_id": "Town03-000",
+  "frames": 149,
+  "ply_parse_s": 0.37031991899993955,
+  "images": "not downloaded",
+  "rerun": {
+    "version": "0.22.1",
+    "log_seconds": 0.5824512710000818,
+    "rrd_bytes": 5965363,
+    "rrd": "/tmp/spikes/viewer/town03-000.rrd"
+  },
+  "three_payload": {
+    "frames": 22,
+    "bytes": 4051964,
+    "write_s": 0.09130065300007573,
+    "points_frame0": 2929,
+    "frustums": 9
+  }
+}

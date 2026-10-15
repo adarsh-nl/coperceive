@@ -1,0 +1,82 @@
+{
+  "parquet": {
+    "all_agents_at_t": {
+      "median_ms": 7.647503000043798,
+      "p95_ms": 9.50834599996142,
+      "checksum": -1829.7351193502545
+    },
+    "one_sensor_across_scene": {
+      "median_ms": 3.1292249999523847,
+      "p95_ms": 3.647677999992993,
+      "checksum": 474872.5663070306
+    }
+  },
+  "arrow": {
+    "all_agents_at_t": {
+      "median_ms": 1.3573830000268572,
+      "p95_ms": 2.13178000001335,
+      "checksum": -1829.7351193502545
+    },
+    "one_sensor_across_scene": {
+      "median_ms": 0.48768099998142134,
+      "p95_ms": 0.5689179999990301,
+      "checksum": 474872.5663070306
+    },
+    "mmap": true
+  },
+  "zarr": {
+    "all_agents_at_t": {
+      "median_ms": 1.955205999934151,
+      "p95_ms": 2.567781000038849,
+      "checksum": -1880.7352294921875
+    },
+    "one_sensor_across_scene": {
+      "median_ms": 43.29323599995405,
+      "p95_ms": 46.10749799996938,
+      "checksum": 474872.53125
+    }
+  },
+  "hdf5": {
+    "all_agents_at_t": {
+      "median_ms": 0.6597660000124961,
+      "p95_ms": 0.9180619999824557,
+      "checksum": -1880.7352294921875
+    },
+    "one_sensor_across_scene": {
+      "median_ms": 36.42575499998202,
+      "p95_ms": 37.63737399992806,
+      "checksum": 474872.53125
+    }
+  },
+  "mcap": {
+    "all_agents_at_t": {
+      "median_ms": 1.6230439999844748,
+      "p95_ms": 1.7176329999983864,
+      "checksum": -1880.735107421875
+    },
+    "one_sensor_across_scene": {
+      "median_ms": 11.017528999900605,
+      "p95_ms": 11.839928999961558,
+      "checksum": 474872.57151794434
+    }
+  },
+  "hybrid_parquet_bin": {
+    "all_agents_at_t": {
+      "median_ms": 2.288801000077001,
+      "p95_ms": 2.7649539999856643,
+      "checksum": -1829.735107421875
+    },
+    "one_sensor_across_scene": {
+      "median_ms": 0.5490379999173456,
+      "p95_ms": 0.6176729999651798,
+      "checksum": 474872.5625
+    }
+  },
+  "hybrid_full_read": {
+    "one_sensor_across_scene": {
+      "median_ms": 0.6729870000299343,
+      "p95_ms": 0.7269489999544021,
+      "checksum": 474872.5625
+    }
+  }
+}

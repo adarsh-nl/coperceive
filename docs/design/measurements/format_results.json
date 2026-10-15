@@ -1,0 +1,129 @@
+{
+  "scene_id": "Town03-000",
+  "frames": 149,
+  "poses": 298,
+  "boxes": 7213,
+  "image_refs": 1341,
+  "points": 437760,
+  "ply_parse_seconds": 0.34608701699994526,
+  "formats": {
+    "parquet": {
+      "write_seconds": 0.08332973300002777,
+      "bytes": 5833195,
+      "point_rows": 437760,
+      "all_agents_at_t": {
+        "median_ms": 6.229107000081058,
+        "p95_ms": 7.583009999962087,
+        "n": 3038
+      },
+      "one_sensor_across_scene": {
+        "median_ms": 3.5565580000138652,
+        "p95_ms": 3.7595869999904608,
+        "n": 437760
+      }
+    },
+    "arrow": {
+      "write_seconds": 0.005310592999990149,
+      "bytes": 9813120,
+      "point_rows": 437760,
+      "all_agents_at_t": {
+        "median_ms": 1.6880389999869294,
+        "p95_ms": 2.072268000006261,
+        "n": 3038
+      },
+      "one_sensor_across_scene": {
+        "median_ms": 0.0690950000716839,
+        "p95_ms": 0.08670299996538233,
+        "n": 437760
+      }
+    },
+    "zarr": {
+      "write_seconds": 0.12055952899993372,
+      "bytes": 5426572,
+      "padded_max_points": 3083,
+      "all_agents_at_t": {
+        "median_ms": 2.785909000067477,
+        "p95_ms": 3.3204699999487275,
+        "n": 3085
+      },
+      "one_sensor_across_scene": {
+        "median_ms": 41.65322500000457,
+        "p95_ms": 45.74953900009859,
+        "n": 459367
+      }
+    },
+    "hdf5": {
+      "write_seconds": 0.1642249599999559,
+      "bytes": 5280602,
+      "all_agents_at_t": {
+        "median_ms": 0.6386089999068645,
+        "p95_ms": 0.758698000026925,
+        "n": 3085
+      },
+      "one_sensor_across_scene": {
+        "median_ms": 36.963183999887406,
+        "p95_ms": 38.17401499998141,
+        "n": 149
+      }
+    },
+    "mcap": {
+      "write_seconds": 0.046019008000030226,
+      "bytes": 5223873,
+      "all_agents_at_t": {
+        "median_ms": 1.615289000028497,
+        "p95_ms": 1.739550000024792,
+        "n": 0
+      },
+      "one_sensor_across_scene": {
+        "median_ms": 10.58853500001078,
+        "p95_ms": 11.715448000018114,
+        "n": 437760
+      }
+    },
+    "hybrid_parquet_bin": {
+      "write_seconds": 0.027075072000002365,
+      "bytes": 7489011,
+      "all_agents_at_t": {
+        "median_ms": 2.2367290000602225,
+        "p95_ms": 2.549575999978515,
+        "n": 3038
+      },
+      "one_sensor_across_scene": {
+        "median_ms": 0.042198000073767616,
+        "p95_ms": 0.05533499995635793,
+        "n": 437760
+      },
+      "image_reference_bytes": 14869
+    }
+  },
+  "worker_spawn_hybrid": {
+    "seconds": 0.34197411800005284,
+    "bytes": 7004160,
+    "workers": 4,
+    "errors": 0
+  },
+  "schema_evolution_parquet": {
+    "old_columns": 9,
+    "new_columns": [
+      "agent",
+      "frame",
+      "time_us",
+      "x",
+      "y",
+      "z",
+      "roll_deg",
+      "pitch_deg",
+      "yaw_deg",
+      "quality"
+    ],
+    "old_reader_subset_rows": 298,
+    "note": "PyArrow reads a declared column subset from a file that has extra columns. A missing column is not filled unless the caller appends it."
+  },
+  "full_lidar_bin": {
+    "files": 7000,
+    "points": 19922961,
+    "seconds": 15.624784019999993,
+    "bin_bytes": 318767376,
+    "zip_bytes": 214487013
+  }
+}

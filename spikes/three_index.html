@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>three spike</title>
+  <style>
+    body { margin: 0; font-family: sans-serif; background: #111; color: #eee; }
+    #bar { position: absolute; z-index: 2; display: flex; gap: 12px; padding: 8px; }
+    canvas { width: 100vw; height: 100vh; display: block; }
+  </style>
+</head>
+<body>
+  <div id="bar">
+    <label>frame <input id="frame" type="range" min="0" value="0" /></label>
+    <label><input id="vehicle" type="checkbox" checked /> vehicle</label>
+    <label><input id="drone" type="checkbox" checked /> drone</label>
+    <span id="status">loading</span>
+  </div>
+  <canvas id="c"></canvas>
+  <script type="importmap">
+    { "imports": { "three": "./node_modules/three/build/three.module.js" } }
+  </script>
+  <script type="module">
+    import * as THREE from "three";
+    const res = await fetch("./frames.json");
+    const data = await res.json();
+    const canvas = document.getElementById("c");
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    renderer.setSize(1280, 800, false);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x111111);
+    const camera = new THREE.PerspectiveCamera(60, 1280 / 800, 0.1, 500);
+    camera.position.set(40, -40, 30);
+    camera.up.set(0, 0, 1);
+    camera.lookAt(0, 0, 0);
+    const pointsGeo = new THREE.BufferGeometry();
+    const points = new THREE.Points(pointsGeo, new THREE.PointsMaterial({ size: 0.15, color: 0xe67828 }));
+    scene.add(points);
+    const vehicleGroup = new THREE.Group();
+    const droneGroup = new THREE.Group();
+    scene.add(vehicleGroup, droneGroup);
+    const slider = document.getElementById("frame");
+    slider.max = String(data.frames.length - 1);
+    document.getElementById("vehicle").onchange = (e) => { vehicleGroup.visible = e.target.checked; points.visible = e.target.checked; };
+    document.getElementById("drone").onchange = (e) => { droneGroup.visible = e.target.checked; };
+
+    function frustumLines(fovY, aspect, color) {
+      const h = Math.tan(fovY / 2) * 4;
+      const w = h * aspect;
+      const origin = new THREE.Vector3(0, 0, 0);
+      const corners = [[-w, -h, 4], [w, -h, 4], [w, h, 4], [-w, h, 4]];
+      const verts = [];
+      for (let i = 0; i < 4; i++) {
+        verts.push(0, 0, 0, ...corners[i], ...corners[i], ...corners[(i + 1) % 4]);
+      }
+      const geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
+      return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color }));
+    }
+
+    const frustumObjs = data.frames[0].frustums.map((f) => {
+      const obj = frustumLines(f.fov_y, f.aspect, f.agent === "vehicle" ? 0xe67828 : 0x2878dc);
+      (f.agent === "vehicle" ? vehicleGroup : droneGroup).add(obj);
+      return obj;
+    });
+
+    function show(i) {
+      const frame = data.frames[i];
+      const arr = new Float32Array(frame.points);
+      pointsGeo.setAttribute("position", new THREE.BufferAttribute(arr, 3));
+      pointsGeo.computeBoundingSphere();
+      const c = pointsGeo.boundingSphere.center;
+      camera.position.set(c.x + 25, c.y - 25, c.z + 20);
+      camera.lookAt(c);
+      frame.frustums.forEach((f, k) => {
+        const obj = frustumObjs[k];
+        obj.position.set(f.position[0], f.position[1], f.position[2]);
+        const [w, x, y, z] = f.wxyz;
+        obj.quaternion.set(x, y, z, w);
+      });
+    }
+    show(0);
+    slider.oninput = () => show(Number(slider.value));
+
+    // Scrub while measuring, so the cost includes buffer updates.
+    const t0 = performance.now();
+    let n = 0;
+    function loop() {
+      show(n % data.frames.length);
+      renderer.render(scene, camera);
+      n += 1;
+      if (performance.now() - t0 < 2000) requestAnimationFrame(loop);
+      else finish();
+    }
+    function finish() {
+      const rafFps = n / ((performance.now() - t0) / 1000);
+      const t1 = performance.now();
+      const N = 60;
+      for (let i = 0; i < N; i++) {
+        show(i % data.frames.length);
+        renderer.render(scene, camera);
+      }
+      const renderMs = (performance.now() - t1) / N;
+      const body = JSON.stringify({
+        raf_fps: rafFps,
+        unthrottled_render_ms: renderMs,
+        frames: data.frames.length,
+        points: data.frames[0].points.length / 3,
+        frustums: data.frames[0].frustums.length,
+        renderer: renderer.capabilities.isWebGL2 ? "webgl2" : "webgl",
+      });
+      document.getElementById("status").textContent = body;
+      fetch("/result", { method: "POST", headers: { "Content-Type": "application/json" }, body });
+    }
+    requestAnimationFrame(loop);
+  </script>
+</body>
+</html>

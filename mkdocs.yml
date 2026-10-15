@@ -1,0 +1,25 @@
+site_name: pkg
+site_description: Cooperative multi-agent perception data. The name is a placeholder.
+theme:
+  name: material
+  palette:
+    scheme: default
+    primary: teal
+nav:
+  - Overview: index.md
+  - Positioning: design/positioning.md
+  - Names: design/names.md
+  - Griffin verification: design/griffin-verification.md
+  - Decisions:
+      - Data model: adr/0001-data-model.md
+      - On-disk format: adr/0002-on-disk-format.md
+      - Viewer: adr/0003-viewer.md
+      - Web app: adr/0004-web-app.md
+      - Docs generator: adr/0005-docs-generator.md
+      - Licence: adr/0006-licence.md
+markdown_extensions:
+  - tables
+  - toc:
+      permalink: true
+docs_dir: docs
+strict: false

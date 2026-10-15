@@ -1,0 +1,23 @@
+{
+  "measured_at": "2026-10-15",
+  "docs": {
+    "mkdocs": "1.6.1",
+    "mkdocs_material": "9.7.7",
+    "mkdocs_wall_seconds": 0.408,
+    "mkdocs_reported_seconds": 0.21,
+    "sphinx": "9.1.0",
+    "myst_parser": "5.1.0",
+    "sphinx_wall_seconds": 0.505,
+    "page": "one markdown page titled Spike"
+  },
+  "web": {
+    "fastapi_create_app_ms": 15.36,
+    "fastapi_health_median_ms": 1.403,
+    "fastapi_health_p95_ms": 2.012,
+    "starlette_create_app_ms": 0.04,
+    "starlette_health_median_ms": 1.032,
+    "starlette_health_p95_ms": 1.395,
+    "requests": 100,
+    "note": "TestClient on this VM. Not a browser measurement."
+  }
+}
