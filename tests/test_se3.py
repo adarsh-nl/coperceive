@@ -33,3 +33,11 @@ def test_slerp_endpoints_and_refuses_extrapolation() -> None:
         slerp(a, b, 1.1)
     with pytest.raises(ExtrapolationError):
         slerp(a, b, -0.01)
+
+
+def test_slerp_halfway_through_a_quarter_turn_is_yaw_45() -> None:
+    mid = slerp(SE3.identity(), SE3.from_rpy_deg(0.0, 0.0, 90.0), 0.5)
+    x, y, z = mid.apply((1.0, 0.0, 0.0))
+    assert x == pytest.approx(math.cos(math.radians(45.0)))
+    assert y == pytest.approx(math.sin(math.radians(45.0)))
+    assert z == pytest.approx(0.0)

@@ -101,6 +101,14 @@ class SE3:
     ty: float
     tz: float
 
+    def __post_init__(self) -> None:
+        for name in ("qw", "qx", "qy", "qz", "tx", "ty", "tz"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"SE3.{name} must be a finite float")
+            if not math.isfinite(float(value)):
+                raise ValueError(f"SE3.{name} must be a finite float")
+
     @staticmethod
     def identity() -> SE3:
         return SE3(1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
