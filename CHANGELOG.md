@@ -2,6 +2,8 @@
 
 ## 0.0.0
 
+Phase 3 cooperative queries. `Scene.at` returns every agent's pose, sensors, and boxes at one time, with per-agent `dt_us`. A miss is reported. Camera projection uses the pinhole and the rigid extrinsic, and reports behind-camera and out-of-image points without rounding. Cross-agent box queries label a distance match as computed, not ground truth, when the track id is not a shared object. `CooperativeDataset` is the `torch` extra: configurable agents, sensors, and sampling, with a per-worker lazy open.
+
 Phase 2 Griffin download and conversion. `coperceive download griffin` fetches a subset from `wjh-svm/Griffin`. `coperceive convert griffin` writes one schema 1 scene for the vehicle and the drone. Conventions are in `docs/datasets/griffin.md`.
 
 Phase 1 scene model and schema 1 hybrid store. The contract is `docs/spec/format.md`.

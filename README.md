@@ -2,7 +2,7 @@
 
 A cooperative, multi-agent perception data library. Source: <https://github.com/adarsh-nl/coperceive>. The name is recorded in `docs/design/naming.md`.
 
-Phase 1 is the scene model and the hybrid on-disk format. The contract a third party can implement is `docs/spec/format.md`. A Griffin reader and a local page came with the Phase 0 scaffold. This tree does not train models and does not embed a viewer.
+Phase 1 is the scene model and the hybrid on-disk format. Phase 3 adds `Scene.at`, camera projection, cross-agent box queries, and `CooperativeDataset` in the `torch` extra. The contract a third party can implement is `docs/spec/format.md`. A Griffin reader and a local page came with the Phase 0 scaffold. This tree does not train models and does not embed a viewer.
 
 ## Install
 
@@ -14,7 +14,7 @@ python3 -m venv .venv
 coperceive --help
 ```
 
-Extras: `torch`, `viewer` (rerun-sdk 0.22.1 and viser 0.2.23), `app`, `griffin`, `docs`, `dev`.
+Extras: `torch` (`coperceive.dataset.CooperativeDataset`; not imported by `coperceive`), `viewer` (rerun-sdk 0.22.1 and viser 0.2.23), `app`, `griffin`, `docs`, `dev`.
 
 The licence is Apache-2.0. The repository stays private. See `docs/adr/0006-licence.md`.
 
