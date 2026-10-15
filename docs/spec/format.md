@@ -39,7 +39,7 @@ Each sample is `world ← body`: it takes a point in the agent body frame into t
 
 A rigid transform is a unit quaternion `(qw, qx, qy, qz)` and a translation `(tx, ty, tz)` in metres. Either quaternion sign is the same rotation. The action on a point is `p' = R p + t`. The quaternion product is the Hamilton product. Composition `A ∘ B` applies `B` first.
 
-`SE3.from_rpy_deg(roll, pitch, yaw)` builds `R = Rz(yaw) @ Ry(pitch) @ Rx(roll)` with angles in degrees. That is the composition under which Griffin-25m vehicle and drone boxes that share a track id land on the same world point (at most 5.7e-14 m on the Town03-000 sample in `docs/design/griffin-verification.md`). The axis that is east was not measured. The world-frame name does not decide it.
+`SE3.from_rpy_deg(roll, pitch, yaw)` builds `R = Rz(yaw) @ Ry(pitch) @ Rx(roll)` with angles in degrees. That is the composition under which Griffin-25m vehicle and drone boxes that share a track id land on the same world point (at most 5.7e-14 m on the Town03-000 sample in `docs/design/griffin-verification.md`). Griffin conventions, including the toolkit's east-axis comment, are in `docs/datasets/griffin.md`. The axis that is east was not measured against a map. The world-frame name does not decide it.
 
 ## Sensors
 

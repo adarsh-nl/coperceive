@@ -65,7 +65,13 @@ select = ["E", "F", "I", "UP", "B", "W"]
 
 [tool.pyright]
 include = ["coperceive", "tests"]
-exclude = ["coperceive/app", "coperceive/griffin", "tests/test_app.py", "tests/test_griffin.py"]
+exclude = [
+    "coperceive/app",
+    "coperceive/griffin",
+    "tests/test_app.py",
+    "tests/test_griffin.py",
+    "tests/test_griffin_phase2.py",
+]
 typeCheckingMode = "strict"
 pythonVersion = "3.10"
 venvPath = "."
@@ -75,6 +81,7 @@ stubPath = "typings"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = ["slow: needs a local Griffin release (set COPERCEIVE_GRIFFIN_RAW)"]
 
 [tool.coverage.run]
 source = ["coperceive"]

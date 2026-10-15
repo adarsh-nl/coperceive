@@ -2,6 +2,8 @@
 
 ## 0.0.0
 
+Phase 2 Griffin download and conversion. `coperceive download griffin` fetches a subset from `wjh-svm/Griffin`. `coperceive convert griffin` writes one schema 1 scene for the vehicle and the drone. Conventions are in `docs/datasets/griffin.md`.
+
 Phase 1 scene model and schema 1 hybrid store. The contract is `docs/spec/format.md`.
 
 - Agent types `vehicle`, `uav`, `infrastructure`, `other`, plus a string platform map.

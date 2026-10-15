@@ -12,6 +12,7 @@ nav:
   - Name: design/naming.md
   - Earlier candidates: design/names.md
   - Griffin verification: design/griffin-verification.md
+  - Griffin dataset: datasets/griffin.md
   - Decisions:
       - Data model: adr/0001-data-model.md
       - On-disk format: adr/0002-on-disk-format.md

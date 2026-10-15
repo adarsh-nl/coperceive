@@ -30,7 +30,12 @@ The page in the wheel is the Vite build in `coperceive/app/static`. Rebuild it f
 
 ## Griffin
 
-Only `griffin_50scenes_25m` metadata and vehicle LiDAR are allow-listed. The download needs the `griffin` extra and writes outside the git checkout. Recordings are not committed. Checks and disagreements with the paper and the toolkit are in `docs/design/griffin-verification.md`.
+```bash
+coperceive download griffin --subset 25m --preset dev --dest /path/outside/the/repo --dry-run
+coperceive convert griffin --subset 25m --raw-root /path/griffin-release --out /path/scenes
+```
+
+`--preset dev` is drone metadata, vehicle metadata, and vehicle LiDAR. Camera archives are selected only with `--components`. The download needs the `griffin` extra, checks the MIT card and toolkit licence, and writes outside the git checkout. Recordings are not committed. Conventions are in `docs/datasets/griffin.md`. Earlier measurements are in `docs/design/griffin-verification.md`.
 
 ## Tests
 
