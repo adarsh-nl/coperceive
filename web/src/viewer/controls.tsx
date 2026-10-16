@@ -270,6 +270,16 @@ export function IconMoon() {
   );
 }
 
+export function IconImage() {
+  return (
+    <svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">
+      <rect x="1.6" y="3" width="12.8" height="10" rx="1.4" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="5.4" cy="6.4" r="1.05" fill="currentColor" />
+      <path d="M2.4 11.4l3.1-2.8 2.1 1.8 1.9-1.5 3.6 2.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
 export function IconGear() {
   return (
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">

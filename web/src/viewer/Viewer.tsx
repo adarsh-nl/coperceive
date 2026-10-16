@@ -9,6 +9,11 @@ import {
   defaultAppearance,
   loadAppearance,
   saveAppearance,
+  setAllFrustumImages,
+  setNoFrustumImages,
+  showCameraImage,
+  toggleFrustumImages,
+  toggleOneFrustumImage,
   type Appearance,
 } from "./appearance";
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
@@ -17,7 +22,7 @@ import { createFrameCache, type FrameCache } from "./cache";
 import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
 import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
 import type { PickRecord } from "./inspect";
-import { pickFromObject, syncPicks } from "./picks";
+import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
 import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
 import { formatClock, indexAfter, neighborSpeed, stepIndex, type Speed } from "./playback";
@@ -67,6 +72,7 @@ type Stage = {
   labelNodes: Map<string, CSS2DObject>;
   clearMotion: () => void;
   picks: THREE.Group;
+  frustumPicks: THREE.Group;
   images: THREE.Group;
   imagePlanes: Map<string, THREE.Mesh>;
   highlight: THREE.Mesh;
@@ -459,6 +465,7 @@ async function drawFrame(
   }
 
   clearGroup(stage.frustums);
+  const pickable: { key: string; fovY: number; aspect: number; pose: Pose }[] = [];
   for (const frustum of frame.frustums) {
     if (!appearance.frustums || hidden[frustum.agent_id] || !isPose(frustum.pose)) {
       continue;
@@ -466,7 +473,14 @@ async function drawFrame(
     const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(types.get(frustum.agent_id) ?? ""));
     applyPose(lines, frustum.pose);
     stage.frustums.add(lines);
+    pickable.push({
+      key: cameraKey(frustum.agent_id, frustum.sensor_id),
+      fovY: frustum.fov_y_rad,
+      aspect: frustum.aspect,
+      pose: frustum.pose,
+    });
   }
+  syncFrustumPicks(stage.frustumPicks, pickable);
 
   clearGroup(stage.agents);
   for (const agent of frame.agents) {
@@ -678,6 +692,8 @@ export default function Viewer({
   const paintWait = useRef<((time: number) => void) | null>(null);
   const onPickRef = useRef<(value: PickRecord | null) => void>(() => undefined);
   onPickRef.current = setPick;
+  const onFrustumRef = useRef<(key: string) => void>(() => undefined);
+  const cameraKeysRef = useRef<string[]>([]);
 
   useEffect(() => {
     lengthRef.current = summary?.times_us.length ?? 0;
@@ -718,7 +734,6 @@ export default function Viewer({
     }
     setLoop(true);
     setPlaying(true);
-    setAppearance((current) => (current.frustumImages ? current : { ...current, frustumImages: true, frustums: true }));
   }, [poster, summary]);
 
   useEffect(() => {
@@ -786,6 +801,7 @@ export default function Viewer({
     const images = new THREE.Group();
     const imagePlanes = new Map<string, THREE.Mesh>();
     const picks = new THREE.Group();
+    const frustumPicks = new THREE.Group();
     const highlight = new THREE.Mesh(
       new THREE.BoxGeometry(1, 1, 1),
       new THREE.MeshBasicMaterial({ color: 0xf4f4ed, wireframe: true }),
@@ -812,7 +828,7 @@ export default function Viewer({
     const trailLines = new Map<string, THREE.Line>();
     const leaderLines = new Map<string, THREE.Line>();
     const labelNodes = new Map<string, CSS2DObject>();
-    scene.add(grid, mapLines, points, boxes, solids, frustums, images, picks, highlight, agents, trails, leaders, labels);
+    scene.add(grid, mapLines, points, boxes, solids, frustums, images, picks, frustumPicks, highlight, agents, trails, leaders, labels);
     const clock = new THREE.Clock();
     let frameId = 0;
     let sizedWidth = 0;
@@ -917,8 +933,18 @@ export default function Viewer({
         ),
         camera,
       );
-      const hit = raycaster.intersectObjects(picks.children, false)[0];
-      onPickRef.current(hit ? pickFromObject(hit.object) : null);
+      const boxHit = raycaster.intersectObjects(picks.children, false)[0];
+      const frustumHit = raycaster.intersectObjects(frustumPicks.children, false)[0];
+      if (boxHit && (!frustumHit || boxHit.distance <= frustumHit.distance)) {
+        onPickRef.current(pickFromObject(boxHit.object));
+        return;
+      }
+      const cameraKeyHit = frustumHit?.object.userData.cameraKey;
+      if (frustumHit && typeof cameraKeyHit === "string") {
+        onFrustumRef.current(cameraKeyHit);
+        return;
+      }
+      onPickRef.current(null);
     };
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointerup", onPointerUp);
@@ -996,6 +1022,7 @@ export default function Viewer({
       labelNodes,
       clearMotion,
       picks,
+      frustumPicks,
       images,
       imagePlanes,
       highlight,
@@ -1013,6 +1040,11 @@ export default function Viewer({
       controls.removeEventListener("start", onStart);
       controls.removeEventListener("end", onEnd);
       disposeImageTextures();
+      for (const child of frustumPicks.children) {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+        }
+      }
       for (const mesh of imagePlanes.values()) {
         mesh.geometry.dispose();
         if (mesh.material instanceof THREE.Material) {
@@ -1313,9 +1345,22 @@ export default function Viewer({
       return;
     }
     let cancelled = false;
-    const show = appearance.frustumImages && appearance.frustums;
-    stage.images.visible = show;
-    if (!show) {
+    const imageWanted = (key: string) => appearance.frustums && (poster || showCameraImage(appearance, key));
+    const wanted = frame.frustums.filter((frustum) => {
+      if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+        return false;
+      }
+      const key = cameraKey(frustum.agent_id, frustum.sensor_id);
+      if (viewpoint === "camera" && key === cameraId) {
+        return false;
+      }
+      return imageWanted(key);
+    });
+    stage.images.visible = wanted.length > 0;
+    if (wanted.length === 0) {
+      for (const mesh of stage.imagePlanes.values()) {
+        mesh.visible = false;
+      }
       stage.requestRender();
       return;
     }
@@ -1323,14 +1368,8 @@ export default function Viewer({
     void (async () => {
       const seen = new Set<string>();
       await Promise.all(
-        frame.frustums.map(async (frustum) => {
-          if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
-            return;
-          }
+        wanted.map(async (frustum) => {
           const key = cameraKey(frustum.agent_id, frustum.sensor_id);
-          if (viewpoint === "camera" && key === cameraId) {
-            return;
-          }
           const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE);
           if (cancelled || !bitmap) {
             return;
@@ -1371,7 +1410,7 @@ export default function Viewer({
       }
       const nextTime = summary?.times_us[frameIndex + 1];
       if (typeof nextTime === "number") {
-        for (const frustum of frame.frustums) {
+        for (const frustum of wanted) {
           void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE).catch(() => undefined);
         }
       }
@@ -1380,7 +1419,7 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [cameraFrame, appearance.frustumImages, appearance.frustums, appearance.frustumOpacity, hidden, token, viewpoint, cameraId, summary, frameIndex]);
+  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, token, viewpoint, cameraId, summary, frameIndex, poster]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -1885,6 +1924,24 @@ export default function Viewer({
   }
   const cameraSpeed = agentSpeed(cameraAgent);
 
+  const cameraChoices = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: { key: string; agent: string; sensor: string }[] = [];
+    for (const frustum of cameraFrame?.frustums ?? []) {
+      const key = cameraKey(frustum.agent_id, frustum.sensor_id);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      rows.push({ key, agent: frustum.agent_id, sensor: frustum.sensor_id });
+    }
+    return rows;
+  }, [cameraFrame]);
+  cameraKeysRef.current = cameraChoices.map((row) => row.key);
+  onFrustumRef.current = (key) => {
+    setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current));
+  };
+
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (
     <div className="crumb">
@@ -1950,7 +2007,7 @@ export default function Viewer({
               <EyeToggle
                 on={appearance.frustumImages}
                 label="Frustum images"
-                onChange={() => setAppearance((current) => ({ ...current, frustumImages: !current.frustumImages }))}
+                onChange={() => setAppearance((current) => toggleFrustumImages(current))}
               />
               {appearance.frustumImages ? (
                 <Slider
@@ -1962,6 +2019,35 @@ export default function Viewer({
                   onChange={(value) => setAppearance((current) => ({ ...current, frustumOpacity: value }))}
                 />
               ) : null}
+              <details className="cam-fold">
+                <summary>
+                  Cameras
+                  <span className="num">{cameraChoices.filter((row) => showCameraImage(appearance, row.key)).length}</span>
+                </summary>
+                <div className="cam-actions">
+                  <button type="button" onClick={() => setAppearance((current) => setAllFrustumImages(current))}>
+                    All
+                  </button>
+                  <button type="button" onClick={() => setAppearance((current) => setNoFrustumImages(current))}>
+                    None
+                  </button>
+                </div>
+                <div className="cam-list">
+                  {cameraChoices.length === 0 ? <p className="muted">No cameras in this sample.</p> : null}
+                  {cameraChoices.map((row) => (
+                    <EyeToggle
+                      key={row.key}
+                      on={showCameraImage(appearance, row.key)}
+                      label={`${row.agent} ${row.sensor}`}
+                      onChange={() =>
+                        setAppearance((current) =>
+                          toggleOneFrustumImage(current, row.key, cameraChoices.map((item) => item.key)),
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              </details>
             </div>
           </details>
           <details open>
@@ -2119,6 +2205,10 @@ export default function Viewer({
                 hidden={hidden}
                 cacheRef={cacheRef}
                 focusKey={cameraId}
+                imageOn={(key) => showCameraImage(appearance, key)}
+                onToggleImage={(key) =>
+                  setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
+                }
                 onSelect={(key) => {
                   cameraKeyRef.current = key;
                   setCameraId(key);

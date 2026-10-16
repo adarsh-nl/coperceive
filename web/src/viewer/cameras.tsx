@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import type { FrameCache } from "./cache";
+import { IconImage } from "./controls";
 import { cameraKey, type FrameBox, type FrameFrustum, type FrameSensor } from "./types";
 import { projectToImage, type Pinhole } from "./project";
 
@@ -386,6 +387,8 @@ export default function CameraStrip({
   hidden,
   cacheRef,
   focusKey,
+  imageOn,
+  onToggleImage,
   onSelect,
   hud,
 }: {
@@ -400,6 +403,8 @@ export default function CameraStrip({
   hidden: Record<string, boolean>;
   cacheRef: RefObject<FrameCache>;
   focusKey: string;
+  imageOn: (key: string) => boolean;
+  onToggleImage: (key: string) => void;
   onSelect: (key: string) => void;
   hud: { speed: string; heading: number; stamp: string } | null;
 }) {
@@ -650,16 +655,28 @@ export default function CameraStrip({
       <div className="pip-thumbs" role="group" aria-label="Cameras">
         {panels.map((camera) => {
           const key = cameraKey(camera.agent_id, camera.sensor_id);
+          const shownImage = imageOn(key);
           return (
-            <button
-              key={key}
-              type="button"
-              aria-pressed={focus ? key === cameraKey(focus.agent_id, focus.sensor_id) : false}
-              onClick={() => onSelect(key)}
-            >
-              {camera.sensor_id}
-              <span>{camera.agent_id}</span>
-            </button>
+            <div key={key} className="pip-chip">
+              <button
+                type="button"
+                className="pip-name"
+                aria-pressed={focus ? key === cameraKey(focus.agent_id, focus.sensor_id) : false}
+                onClick={() => onSelect(key)}
+              >
+                {camera.sensor_id}
+                <span>{camera.agent_id}</span>
+              </button>
+              <button
+                type="button"
+                className="pip-image"
+                aria-pressed={shownImage}
+                aria-label={`${shownImage ? "Hide" : "Show"} ${camera.agent_id} ${camera.sensor_id} on its frustum`}
+                onClick={() => onToggleImage(key)}
+              >
+                <IconImage />
+              </button>
+            </div>
           );
         })}
       </div>

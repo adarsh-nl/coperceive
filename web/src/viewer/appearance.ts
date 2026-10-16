@@ -15,6 +15,8 @@ export type Appearance = {
   theme: ThemeName;
   frustumImages: boolean;
   frustumOpacity: number;
+  /** null means every camera. An array is the cameras allowed to show an image. */
+  frustumImageCameras: string[] | null;
 };
 
 export const VIEW_KEY = "coperceive-view";
@@ -45,9 +47,55 @@ export function defaultAppearance(): Appearance {
     boxStyle: "wire",
     hiddenClasses: [],
     theme: "light",
-    frustumImages: true,
+    frustumImages: false,
     frustumOpacity: 0.85,
+    frustumImageCameras: null,
   };
+}
+
+export function showCameraImage(appearance: Appearance, key: string): boolean {
+  if (!appearance.frustumImages) {
+    return false;
+  }
+  const chosen = appearance.frustumImageCameras;
+  return chosen === null || chosen.includes(key);
+}
+
+export function toggleFrustumImages(appearance: Appearance): Appearance {
+  if (appearance.frustumImages) {
+    return { ...appearance, frustumImages: false };
+  }
+  const chosen = appearance.frustumImageCameras;
+  const empty = chosen !== null && chosen.length === 0;
+  return { ...appearance, frustumImages: true, frustumImageCameras: empty ? null : chosen };
+}
+
+export function setAllFrustumImages(appearance: Appearance): Appearance {
+  return { ...appearance, frustumImages: true, frustumImageCameras: null };
+}
+
+export function setNoFrustumImages(appearance: Appearance): Appearance {
+  return { ...appearance, frustumImages: false, frustumImageCameras: [] };
+}
+
+export function toggleOneFrustumImage(
+  appearance: Appearance,
+  key: string,
+  cameras: readonly string[],
+): Appearance {
+  const known = cameras.includes(key) ? [...cameras] : [...cameras, key];
+  if (showCameraImage(appearance, key)) {
+    const source = appearance.frustumImageCameras === null ? known : appearance.frustumImageCameras;
+    const next = source.filter((item) => item !== key);
+    return { ...appearance, frustumImages: next.length > 0, frustumImageCameras: next };
+  }
+  if (!appearance.frustumImages) {
+    return { ...appearance, frustumImages: true, frustumImageCameras: [key] };
+  }
+  const source = appearance.frustumImageCameras === null ? known : appearance.frustumImageCameras;
+  const next = source.includes(key) ? source : [...source, key];
+  const every = known.length > 0 && known.every((item) => next.includes(item));
+  return { ...appearance, frustumImages: true, frustumImageCameras: every ? null : next };
 }
 
 export function classColor(category: string): number {
@@ -85,8 +133,9 @@ export function loadAppearance(): Appearance {
       boxStyle: row.boxStyle === "solid" ? "solid" : "wire",
       hiddenClasses: classes(row.hiddenClasses),
       theme: row.theme === "dark" ? "dark" : row.theme === "light" ? "light" : base.theme,
-      frustumImages: bool(row.frustumImages, base.frustumImages),
+      frustumImages: "frustumImageCameras" in row ? bool(row.frustumImages, false) : false,
       frustumOpacity: opacity(row.frustumOpacity, base.frustumOpacity),
+      frustumImageCameras: cameraChoice(row.frustumImageCameras),
     };
   } catch {
     return base;
@@ -115,6 +164,7 @@ function writeAppearance(value: Appearance): void {
     theme: value.theme,
     frustumImages: value.frustumImages,
     frustumOpacity: value.frustumOpacity,
+    frustumImageCameras: value.frustumImageCameras,
   };
   localStorage.setItem(VIEW_KEY, JSON.stringify(stored));
 }
@@ -135,6 +185,15 @@ function opacity(value: unknown, fallback: number): number {
     return fallback;
   }
   return Math.min(1, Math.max(0.15, value));
+}
+
+function cameraChoice(value: unknown): string[] | null {
+  if (!Array.isArray(value)) {
+    return null;
+  }
+  return value
+    .filter((item): item is string => typeof item === "string" && item.length > 0 && item.length < 160)
+    .slice(0, 80);
 }
 
 function classes(value: unknown): string[] {

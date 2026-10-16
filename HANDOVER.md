@@ -261,7 +261,7 @@ The page at `/` is a landing view. `#/viewer` opens the viewer. The top bar is o
 
 The right column keeps the agent cards, then a scene summary (duration, samples, agents, boxes by class), a selected-object inspector, and an 80 m radar. Clicking a box reports class, track id, pose-delta speed, distance to each agent, and which agents have a nearby box.
 
-Frustum images are a layer. The far plane, 12 m out, uses that camera’s frame for the playhead. Images are decoded at 360 px on the existing worker and the texture is reused. Opacity is a slider. The picture-in-picture panel stays. Looking through a camera hides that camera’s plane.
+Frustum images start off. The far plane, 12 m out, uses that camera’s frame for the playhead when the camera is enabled. The layer toggle, an expandable camera list with All and None, the picture-in-picture chip, and a click on the frustum all write the same choice into `coperceive-view`. A saved view from before per-camera choices loads with images off. Only enabled cameras are decoded, at 360 px on the existing worker, and the texture is reused. Opacity is a slider. The picture-in-picture panel stays. Looking through a camera hides that camera’s plane. The landing poster still draws every frustum image and does not store that choice.
 
 Bencho’s free blocks are MIT. The landing interactions are written here and do not copy that source. On Town03-000 the landing default is light, and dark sets the page background to `#101010`. With `prefers-reduced-motion: reduce`, the hero, shimmer, and tilt animations are `none`.
 
@@ -272,5 +272,5 @@ Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did n
 - `ruff check .` — all checks passed (ruff 0.17.1)
 - `ruff format --check .` — 87 files already formatted
 - `pyright` — 0 errors, 0 warnings, 0 informations
-- `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 3.19 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
-- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-CYY8i7aU.js` and `index-B38akdLR.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.
+- `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 6.77 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-BBhIjMFy.js` and `index-CCdy_1eI.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.

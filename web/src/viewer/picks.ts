@@ -1,6 +1,7 @@
 import * as THREE from "three";
+import { imagePlaneGeometry } from "./frustumImages";
 import { toPick, type PickRecord } from "./inspect";
-import type { FrameBox } from "./types";
+import type { FrameBox, Pose } from "./types";
 
 const material = new THREE.MeshBasicMaterial({
   transparent: true,
@@ -8,6 +9,41 @@ const material = new THREE.MeshBasicMaterial({
   depthWrite: false,
   colorWrite: false,
 });
+
+const planeMaterial = new THREE.MeshBasicMaterial({
+  transparent: true,
+  opacity: 0,
+  depthWrite: false,
+  colorWrite: false,
+  side: THREE.DoubleSide,
+});
+
+export type FrustumPick = { key: string; fovY: number; aspect: number; pose: Pose };
+
+export function syncFrustumPicks(group: THREE.Group, items: readonly FrustumPick[]): void {
+  while (group.children.length > items.length) {
+    const child = group.children.pop();
+    if (child instanceof THREE.Mesh) {
+      child.geometry.dispose();
+    }
+  }
+  items.forEach((item, index) => {
+    let mesh = group.children[index];
+    if (!(mesh instanceof THREE.Mesh)) {
+      mesh = new THREE.Mesh(imagePlaneGeometry(item.fovY, item.aspect), planeMaterial);
+      mesh.frustumCulled = false;
+      group.add(mesh);
+    } else if (mesh.userData.fovY !== item.fovY || mesh.userData.aspect !== item.aspect) {
+      mesh.geometry.dispose();
+      mesh.geometry = imagePlaneGeometry(item.fovY, item.aspect);
+    }
+    mesh.userData.fovY = item.fovY;
+    mesh.userData.aspect = item.aspect;
+    mesh.userData.cameraKey = item.key;
+    mesh.position.set(item.pose.tx, item.pose.ty, item.pose.tz);
+    mesh.quaternion.set(item.pose.qx, item.pose.qy, item.pose.qz, item.pose.qw);
+  });
+}
 
 export function syncPicks(group: THREE.Group, boxes: readonly FrameBox[], shown: (box: FrameBox) => boolean): void {
   const picks: PickRecord[] = [];
