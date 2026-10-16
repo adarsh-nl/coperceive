@@ -2,6 +2,10 @@
 
 ## 0.0.0
 
+Bird's-eye and camera-overlay figures. `coperceive export bev` and `coperceive export overlay`, and the same two buttons on the page, write a PNG or SVG for one recorded sample. The bird's-eye figure draws the map, boxes, lidar, and agent trails with east to the right. The overlay draws the stored camera image and the pinhole projection. The CI lint job installs the `app` extra so pyright can resolve FastAPI in `tests/test_hdmap.py`.
+
+View settings. The page can hide points, boxes, frustums, the map, and axes, color boxes by agent or class, set point size and box style, filter categories, and switch dark or light. The choices are in `localStorage` under `coperceive-view`. The bearer token stays in `sessionStorage`.
+
 Sequence export. `coperceive export sequence` and the page write one camera's images, or the live 3D view, to MP4, GIF, or PNG at a chosen size and fps. Each recorded sample is one frame. MP4 uses `ffmpeg` on `PATH`. Rerun export is unchanged.
 
 Camera images. The page shows one panel per camera at the current sample. `GET /api/scenes/{id}/image` returns the file named in `images.parquet`, confined to that scene directory. Boxes and lidar can be projected onto the image. Image bytes stay outside the repository. Playback follows elapsed pose time. A slow draw skips to the sample the clock has reached and does not run ahead of it.

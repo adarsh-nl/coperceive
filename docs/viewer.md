@@ -37,6 +37,8 @@ Lidar points are 2 CSS pixels and do not shrink with distance. A 6 pixel size fi
 | POST | `/api/scenes/{scene_id}/export/rerun` | `{path, samples}` |
 | POST | `/api/scenes/{scene_id}/export/sequence` | `{path, frames, width, height, fps, format}` for one camera |
 | POST | `/api/scenes/{scene_id}/export/view` | the same fields for uploaded canvas frames |
+| POST | `/api/scenes/{scene_id}/export/bev` | bird's-eye PNG or SVG: `{path, format, time_us, width, height, map_drawn, points, boxes}` |
+| POST | `/api/scenes/{scene_id}/export/overlay` | camera image with projected boxes and lidar, same fields |
 
 A scene id that is empty, contains a slash or backslash, or contains `..` is 400. A missing `manifest.json` is 404. Point bytes are empty when that sweep is absent. The server keeps one decoded scene in memory and replaces it when the path changes.
 
@@ -78,6 +80,26 @@ MP4 runs `ffmpeg` from `PATH` with `shell` false. GIF and PNG use Pillow. A miss
 
 The page has the same camera export, plus **This view**, which steps the 3D canvas and posts those bitmaps. This view accepts at most 60 frames, because the bitmaps are uploaded. A camera export reads the files on the server and accepts 600. `POST /api/scenes/{id}/export/sequence` is the camera. `POST /api/scenes/{id}/export/view` is the canvas, with base64 PNG frames. Both write under `exports/` through `confine`, and both still require `X-Coperceive-Request: 1`. Rerun export is unchanged.
 
+## View settings
+
+The row under export toggles lidar points, boxes, frustums, the map, and agent axes. Color is by agent type or by box class. Point size is 1, 2, 3, or 4 CSS pixels. Boxes are a wireframe or a translucent solid with the wire kept. Categories in the current sample can be hidden. Theme is dark or light. The choices are stored in `localStorage` under `coperceive-view`. That object has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Reset view restores the defaults: every layer on, color by agent, 2 px points, wire boxes, dark, no hidden class.
+
+Class color is used for boxes only. Points and frustums stay colored by agent, because a sweep has no class. The photo strip keeps its own Boxes and Lidar checkboxes and does not read this row.
+
+## Bird's-eye and camera overlay
+
+```bash
+coperceive export bev /path/scene --out /path/bev.svg --maps /path/maps --time-us 1118500000
+coperceive export overlay /path/scene --out /path/front.png \
+  --agent vehicle --sensor front --time-us 1118500000
+```
+
+`--format` is `png` or `svg`. When it is omitted, the `--out` suffix selects it. The bird's-eye axes are east (+X) to the right and north (+Y) up. The window is the shown agents' trails, the boxes, and lidar within 120 m, with padding. It is not the whole town. Lane centres and road edges are drawn when `--maps` (or `<scene>/../maps`) resolves the scene's `map_name`. The camera figure is the stored image with the pinhole projection on top. `z <= 0` is omitted. A path that leaves the scene directory is refused.
+
+The page buttons are **Bird's-eye** and **Camera overlay**. They use the current sample and the view settings (layers, theme, colour, hidden classes, hidden agents). The file is written under `exports/` and downloaded. PNG and SVG are both offered. The 3D bird's-eye viewpoint is unchanged.
+
+`POST /api/scenes/{id}/export/bev` and `POST /api/scenes/{id}/export/overlay` return `{path, format, time_us, width, height, map_drawn, points, boxes}`. Both still require `X-Coperceive-Request: 1`.
+
 ## What this phase does not do
 
-It does not store view settings. That is the next slice in [viewer-features.md](design/viewer-features.md). It does not draw the matplotlib bird's-eye plot. It does not open a second viewer port or package a Tauri or Electron app. It does not load Griffin recordings or OpenDRIVE bytes into the repository.
+It does not draw radar, semantic or instance labels, or depth colour, and it does not show exposure or provenance, because the Griffin-25m dev tier does not carry those fields. It does not open a second viewer port or package a Tauri or Electron app. It does not load Griffin recordings or OpenDRIVE bytes into the repository.

@@ -226,6 +226,40 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenes/{scene_id}/export/bev": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scene Bev */
+        post: operations["scene_bev_api_scenes__scene_id__export_bev_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenes/{scene_id}/export/overlay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scene Overlay */
+        post: operations["scene_overlay_api_scenes__scene_id__export_overlay_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/files": {
         parameters: {
             query?: never;
@@ -261,6 +295,93 @@ export interface components {
             name: string;
             /** Args */
             args?: string[];
+        };
+        /** OverlayRequest */
+        OverlayRequest: {
+            /** Agent Id */
+            agent_id: string;
+            /** Sensor Id */
+            sensor_id: string;
+            /** Time Us */
+            time_us?: number | null;
+            /**
+             * Format
+             * @default png
+             */
+            format: string;
+            /**
+             * Theme
+             * @default dark
+             */
+            theme: string;
+            /**
+             * Color By
+             * @default agent
+             */
+            color_by: string;
+            /**
+             * Points
+             * @default true
+             */
+            points: boolean;
+            /**
+             * Boxes
+             * @default true
+             */
+            boxes: boolean;
+            /**
+             * Box Style
+             * @default wire
+             */
+            box_style: string;
+            /** Hidden Classes */
+            hidden_classes?: string[];
+            /** Agents */
+            agents?: string[] | null;
+        };
+        /** PlotRequest */
+        PlotRequest: {
+            /** Time Us */
+            time_us?: number | null;
+            /**
+             * Format
+             * @default png
+             */
+            format: string;
+            /**
+             * Theme
+             * @default dark
+             */
+            theme: string;
+            /**
+             * Color By
+             * @default agent
+             */
+            color_by: string;
+            /**
+             * Points
+             * @default true
+             */
+            points: boolean;
+            /**
+             * Boxes
+             * @default true
+             */
+            boxes: boolean;
+            /**
+             * Map
+             * @default true
+             */
+            map: boolean;
+            /**
+             * Box Style
+             * @default wire
+             */
+            box_style: string;
+            /** Hidden Classes */
+            hidden_classes?: string[];
+            /** Agents */
+            agents?: string[] | null;
         };
         /** SequenceRequest */
         SequenceRequest: {
@@ -730,6 +851,80 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": components["schemas"]["ViewSequenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_bev_api_scenes__scene_id__export_bev_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_overlay_api_scenes__scene_id__export_overlay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OverlayRequest"];
             };
         };
         responses: {

@@ -295,6 +295,73 @@ def test_sequence_export_route_writes_gif_and_view(tmp_path: Path) -> None:
     assert (tmp_path / saved["path"]).is_file()
 
 
+def test_plot_routes_require_the_csrf_header_and_write_svg(tmp_path: Path) -> None:
+    pose = StampedPose(0, SE3.identity())
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    camera = Sensor(
+        "front",
+        "vehicle",
+        Modality.CAMERA,
+        SE3.identity(),
+        16,
+        16,
+        8.0,
+        8.0,
+        8.0,
+        8.0,
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="desk",
+        world_frame="ENU",
+        clock=Clock("us", "plot route"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, "camera/front/0.png"),),
+    )
+    write_scene(scene, tmp_path / "desk")
+    image = tmp_path / "desk" / "camera" / "front" / "0.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    app = create_app(root=tmp_path, token="secret")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret", "X-Coperceive-Request": "1"}
+    denied = client.post(
+        "/api/scenes/desk/export/bev",
+        headers={"Authorization": "Bearer secret"},
+        json={"format": "svg"},
+    )
+    assert denied.status_code == 403
+    created = client.post(
+        "/api/scenes/desk/export/bev",
+        headers=headers,
+        json={"format": "svg", "time_us": 0},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["format"] == "svg"
+    assert body["boxes"] == 0
+    assert (tmp_path / body["path"]).is_file()
+    assert (tmp_path / body["path"]).read_text(encoding="utf-8").startswith("<?xml")
+    missing = client.post(
+        "/api/scenes/desk/export/overlay",
+        headers=headers,
+        json={"agent_id": "vehicle", "sensor_id": "missing", "format": "png"},
+    )
+    assert missing.status_code == 404
+    overlay = client.post(
+        "/api/scenes/desk/export/overlay",
+        headers=headers,
+        json={"agent_id": "vehicle", "sensor_id": "front", "format": "png", "time_us": 0},
+    )
+    assert overlay.status_code == 200
+    saved = overlay.json()
+    assert saved["path"].endswith(".png")
+    assert (tmp_path / saved["path"]).is_file()
+
+
 def test_map_http_and_favicon(tmp_path: Path) -> None:
     xodr = tmp_path / "Town03.xodr"
     _straight(xodr)

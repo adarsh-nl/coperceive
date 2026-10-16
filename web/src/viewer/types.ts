@@ -22,7 +22,13 @@ export type SceneSummary = {
   times_us: number[];
 };
 
-export type FrameBox = { agent_id: string; lines: number[] };
+export type FrameBox = {
+  agent_id: string;
+  lines: number[];
+  category?: string;
+  size_lwh?: number[];
+  pose?: Pose | null;
+};
 export type FrameFrustum = {
   agent_id: string;
   sensor_id: string;
