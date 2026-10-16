@@ -572,6 +572,108 @@
         }
       }
     },
+    "/api/scenes/{scene_id}/export/bev": {
+      "post": {
+        "summary": "Scene Bev",
+        "operationId": "scene_bev_api_scenes__scene_id__export_bev_post",
+        "parameters": [
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlotRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Scene Bev Api Scenes  Scene Id  Export Bev Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/scenes/{scene_id}/export/overlay": {
+      "post": {
+        "summary": "Scene Overlay",
+        "operationId": "scene_overlay_api_scenes__scene_id__export_overlay_post",
+        "parameters": [
+          {
+            "name": "scene_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Scene Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OverlayRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "title": "Response Scene Overlay Api Scenes  Scene Id  Export Overlay Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/files": {
       "get": {
         "summary": "Files",
@@ -647,6 +749,159 @@
           "name"
         ],
         "title": "JobRequest"
+      },
+      "OverlayRequest": {
+        "properties": {
+          "agent_id": {
+            "type": "string",
+            "title": "Agent Id"
+          },
+          "sensor_id": {
+            "type": "string",
+            "title": "Sensor Id"
+          },
+          "time_us": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Us"
+          },
+          "format": {
+            "type": "string",
+            "title": "Format",
+            "default": "png"
+          },
+          "theme": {
+            "type": "string",
+            "title": "Theme",
+            "default": "dark"
+          },
+          "color_by": {
+            "type": "string",
+            "title": "Color By",
+            "default": "agent"
+          },
+          "points": {
+            "type": "boolean",
+            "title": "Points",
+            "default": true
+          },
+          "boxes": {
+            "type": "boolean",
+            "title": "Boxes",
+            "default": true
+          },
+          "box_style": {
+            "type": "string",
+            "title": "Box Style",
+            "default": "wire"
+          },
+          "hidden_classes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hidden Classes"
+          },
+          "agents": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agents"
+          }
+        },
+        "type": "object",
+        "required": [
+          "agent_id",
+          "sensor_id"
+        ],
+        "title": "OverlayRequest"
+      },
+      "PlotRequest": {
+        "properties": {
+          "time_us": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Time Us"
+          },
+          "format": {
+            "type": "string",
+            "title": "Format",
+            "default": "png"
+          },
+          "theme": {
+            "type": "string",
+            "title": "Theme",
+            "default": "dark"
+          },
+          "color_by": {
+            "type": "string",
+            "title": "Color By",
+            "default": "agent"
+          },
+          "points": {
+            "type": "boolean",
+            "title": "Points",
+            "default": true
+          },
+          "boxes": {
+            "type": "boolean",
+            "title": "Boxes",
+            "default": true
+          },
+          "map": {
+            "type": "boolean",
+            "title": "Map",
+            "default": true
+          },
+          "box_style": {
+            "type": "string",
+            "title": "Box Style",
+            "default": "wire"
+          },
+          "hidden_classes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Hidden Classes"
+          },
+          "agents": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agents"
+          }
+        },
+        "type": "object",
+        "title": "PlotRequest"
       },
       "SequenceRequest": {
         "properties": {
