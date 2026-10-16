@@ -149,7 +149,7 @@ export default function App() {
           </button>
         </div>
         <details className="settings">
-          <summary>Settings</summary>
+          <summary className="ghost">Settings</summary>
           <div className="settings-pop">
             <label htmlFor="token-global">
               Bearer token

@@ -245,15 +245,15 @@ The viewer checklist in `docs/design/viewer-features.md` is marked. Radar, segme
 
 The web shell is light by default (`#F4F4ED` page, `#F7F7F1` panels, `#D8D8C7` borders, `#1C1C1C` text) with a dark theme on the same layout. The viewport stays `#141414` in both. View settings, including the theme, stay in `localStorage` under `coperceive-view`. The bearer token stays in `sessionStorage`. Playback still follows `(t[i+1] − t[i]) / speed` and does not depend on `frameIndex` inside the play effect.
 
-Bloom is `UnrealBloomPass` on layer 1 (lidar, wire boxes, trails). The map and the ground grid are not on that layer. A UAV label is a `CSS2DObject` with the id and altitude. Viewpoint easing is a 0.48 s time constant; reduced motion still snaps. Chase pressed again returns to orbit. The selected camera is a draggable picture-in-picture panel. Sequence, still, bird's-eye, camera overlay, and Rerun share one export dialog.
+Bloom is `UnrealBloomPass` on layer 1 (lidar, wire boxes, trails). The map and the ground grid are not on that layer. Lane centres are `#C6F3DC`. The grid fades with distance from the camera. A vignette sits over the viewport. A UAV label is a glass `CSS2DObject` with the id and altitude, clamped inside the viewport. Viewpoint easing is a 0.48 s time constant; reduced motion still snaps. Chase pressed again returns to orbit. `#DE3B21` is the playhead and the Play button. The selected camera is a draggable, resizable picture-in-picture panel, 420 px wide, 16:9. Speed on a card is the pose delta, in m/s and km/h. Sequence, still, bird's-eye, camera overlay, and Rerun share one export dialog.
 
 ## UI redesign check
 
 `coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps` on 2026-10-16. Town03-000, light theme, orbit, sample 1: the status pill read `Town03-000 · Orbit` and the clock read `1118.5 s · sample 1 / 149`. The drone label read `drone  28.3 m`. Dark theme sets the panel colour to `#1A1A1A`. The export dialog title is `Export`.
 
-With loop on, play at 1× moved the clock from sample 1 to sample 37 in about 4 s, then through bird's-eye, chase, drone, and camera while the clock kept the recorded pace. The clock wrapped from sample 132 to sample 6. Pressing Chase while chase was already selected returned the status to Orbit. That pass is `ui_redesign_walkthrough.mp4`, 26 s.
+With loop on, play at 1× moved the clock from sample 1 to sample 37 in about 4 s, then through bird's-eye, chase, drone, and camera while the clock kept the recorded pace. The clock wrapped from sample 132 to sample 6. Pressing Chase while chase was already selected returned the status to Orbit.
 
-`prefers-reduced-motion` was not flipped in the browser. Dragging the picture-in-picture panel was not exercised. A scene with no UAV pose was not opened.
+On sample 1 the vehicle pose delta is 0.0 m/s. The drone is 1.0 m/s, 4 km/h, heading 326°, altitude 28.3 m. Dragging the camera panel moved it, and the resize handle changed its width from 420 px to 490 px. In the drone viewpoint the label is clamped inside the viewport. With `prefers-reduced-motion: reduce`, the viewpoint highlight transition is 0 s and two frames 700 ms apart after a viewpoint change were identical. Every Griffin-25m scene on this machine has a UAV. With the drone removed from the scene and frame documents, Town03-000 in the drone viewpoint read `No UAV pose at this sample, so the drone view is holding.` and drew no drone label.
 
 ## Gates for the UI redesign
 
@@ -262,5 +262,5 @@ Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did n
 - `ruff check .` — all checks passed (ruff 0.17.1)
 - `ruff format --check .` — 87 files already formatted
 - `pyright` — 0 errors, 0 warnings, 0 informations
-- `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 3.18 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
-- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-BNAGUMzr.js` and `index-C_P0_gm4.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.
+- `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 4.06 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-XSr7Kncv.js` and `index-BYmWyIAf.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.

@@ -14,9 +14,10 @@ import {
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
 import CameraStrip from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
+import { EyeToggle, Menu, Segmented, SwatchToggle } from "./controls";
 import ExportDialog from "./ExportDialog";
 import { formatClock, indexAfter, neighborSpeed, stepIndex, type Speed } from "./playback";
-import { formatHeading, formatSpeed, headingDeg, speedMps } from "./telemetry";
+import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
 import Timeline, { type Marker } from "./timeline";
 import {
   cameraKey,
@@ -98,6 +99,73 @@ function colorFor(agentType: string): number {
   return COLORS[agentType] ?? 0xb7b1a6;
 }
 
+function fadingGrid(): THREE.LineSegments {
+  const size = 240;
+  const divisions = 24;
+  const step = size / divisions;
+  const half = size / 2;
+  const positions: number[] = [];
+  for (let index = 0; index <= divisions; index += 1) {
+    const place = -half + index * step;
+    positions.push(-half, place, 0, half, place, 0, place, -half, 0, place, half, 0);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: { uColor: { value: new THREE.Color("#3a3a3a") } },
+    vertexShader: `
+      varying vec3 vWorld;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorld = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying vec3 vWorld;
+      void main() {
+        float depth = distance(cameraPosition, vWorld);
+        float fade = smoothstep(150.0, 24.0, depth);
+        gl_FragColor = vec4(uColor, fade * 0.55);
+      }
+    `,
+  });
+  const lines = new THREE.LineSegments(geometry, material);
+  lines.frustumCulled = false;
+  return lines;
+}
+
+function clampDroneTags(host: HTMLElement) {
+  const bounds = host.getBoundingClientRect();
+  const pad = 10;
+  for (const node of host.querySelectorAll<HTMLElement>(".drone-tag")) {
+    node.classList.remove("clamped");
+    const box = node.getBoundingClientRect();
+    if (box.width === 0 && box.height === 0) {
+      continue;
+    }
+    let dx = 0;
+    let dy = 0;
+    if (box.left < bounds.left + pad) {
+      dx = bounds.left + pad - box.left;
+    } else if (box.right > bounds.right - pad) {
+      dx = bounds.right - pad - box.right;
+    }
+    if (box.top < bounds.top + pad) {
+      dy = bounds.top + pad - box.top;
+    } else if (box.bottom > bounds.bottom - pad) {
+      dy = bounds.bottom - pad - box.bottom;
+    }
+    if (dx !== 0 || dy !== 0) {
+      node.style.transform = `${node.style.transform} translate(${dx}px, ${dy}px)`;
+      node.classList.add("clamped");
+    }
+  }
+}
+
 function cssColor(value: number): string {
   return `#${value.toString(16).padStart(6, "0")}`;
 }
@@ -140,8 +208,8 @@ function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
   offset += 4;
   const positions: number[] = [];
   const colors: number[] = [];
-  const lane = new THREE.Color(0x7dcea0);
-  const edge = new THREE.Color(0x9aa7b2);
+  const lane = new THREE.Color(0xc6f3dc);
+  const edge = new THREE.Color(0xc5d0d8);
   for (let index = 0; index < count; index += 1) {
     if (offset + 8 > buffer.byteLength) {
       break;
@@ -559,6 +627,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
     agentSpeed: Record<string, number[]>;
     markers: Marker[];
   }>({ points: [], speeds: [], boxes: [], agentSpeed: {}, markers: [] });
+  const [liveSpeed, setLiveSpeed] = useState<Record<string, number>>({});
   const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
@@ -662,13 +731,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
     frustums.renderOrder = 3;
     agents.renderOrder = 4;
     solids.renderOrder = 2;
-    const grid = new THREE.GridHelper(240, 24, 0x2a2a2a, 0x202020);
-    grid.rotation.x = Math.PI / 2;
-    const gridMaterials = Array.isArray(grid.material) ? grid.material : [grid.material];
-    for (const material of gridMaterials) {
-      material.transparent = true;
-      material.opacity = 0.45;
-    }
+    const grid = fadingGrid();
     const trails = new THREE.Group();
     const leaders = new THREE.Group();
     const labels = new THREE.Group();
@@ -742,6 +805,9 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       camera.updateProjectionMatrix();
       bloom.render();
       labelRenderer.render(scene, camera);
+      if (labelHost instanceof HTMLElement) {
+        clampDroneTags(labelHost);
+      }
       if (easing) {
         requestRender();
       }
@@ -852,8 +918,8 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       bloom.dispose();
       labelRenderer.domElement.remove();
       grid.geometry.dispose();
-      for (const material of gridMaterials) {
-        material.dispose();
+      if (grid.material instanceof THREE.Material) {
+        grid.material.dispose();
       }
       renderer.dispose();
       points.geometry.dispose();
@@ -1116,6 +1182,21 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       }
     });
   }, [summary, frameIndex, hidden, appearance, token, mapNote]);
+
+  useEffect(() => {
+    const latest = latestRef.current;
+    if (!summary || !latest || !summary.times_us.includes(latest.frame.time_us)) {
+      return;
+    }
+    const shown = appearance.points
+      ? latest.frame.point_sensors.reduce((sum, sensor) => (hidden[sensor.agent_id] ? sum : sum + sensor.count), 0)
+      : 0;
+    const boxes = latest.frame.boxes.filter((box) => boxShown(box, hidden, appearance)).length;
+    const frustums = latest.frame.frustums.filter((frustum) => appearance.frustums && !hidden[frustum.agent_id]).length;
+    setStatus(
+      `${summary.scene_id} at ${latest.frame.time_us} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(viewpoint, latest.frame, latest.types, cameraId)}`,
+    );
+  }, [viewpoint, cameraId, summary, mapNote, hidden, appearance]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
@@ -1491,6 +1572,18 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
         }
         previous = frame;
         previousTime = time;
+        if (index >= 1) {
+          for (const row of Object.values(agentSpeed)) {
+            const next = row[1];
+            if (typeof next === "number") {
+              row[0] = next;
+            }
+          }
+          const leadSpeed = speeds[1];
+          if (typeof leadSpeed === "number") {
+            speeds[0] = leadSpeed;
+          }
+        }
         if (index % 12 === 0 || index === times.length - 1) {
           setSeries({
             points: [...points],
@@ -1506,6 +1599,44 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       cancelled = true;
     };
   }, [summary, token, hidden, appearance]);
+
+  useEffect(() => {
+    if (!summary || !cameraFrame) {
+      return;
+    }
+    const times = summary.times_us;
+    const index = times.findIndex((time) => time === cameraFrame.time_us);
+    const neighbor = index > 0 ? index - 1 : index + 1;
+    const neighborTime = times[neighbor];
+    const currentTime = times[index];
+    if (index < 0 || typeof neighborTime !== "number" || typeof currentTime !== "number" || neighbor === index) {
+      return;
+    }
+    let cancelled = false;
+    const frame = cameraFrame;
+    void (async () => {
+      const other = await cacheRef.current.loadFrame(summary.scene_id, neighborTime, token);
+      if (cancelled) {
+        return;
+      }
+      const next: Record<string, number> = {};
+      for (const agent of summary.agents) {
+        const here = frame.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+        const there = other.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+        if (!isPose(here) || !isPose(there)) {
+          continue;
+        }
+        const value = index > 0 ? speedMps(there, here, currentTime - neighborTime) : speedMps(here, there, neighborTime - currentTime);
+        if (value !== null) {
+          next[agent.agent_id] = value;
+        }
+      }
+      setLiveSpeed(next);
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [summary, cameraFrame, token]);
 
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
   const timeUs = summary?.times_us[Math.min(frameIndex, last)];
@@ -1529,22 +1660,31 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
     /could not|incomplete|refused|failed/i.test(status) ? "bad" : /holding|no frustum|no map/i.test(status) ? "wait" : "live";
   const cameraAgent = cameraId.slice(0, cameraId.indexOf("/"));
   const cameraPose = cameraFrame?.agents.find((agent) => agent.agent_id === cameraAgent)?.pose;
-  const cameraSpeed = frameIndex > 0 ? series.agentSpeed[cameraAgent]?.[frameIndex] : undefined;
+  function agentSpeed(agentId: string): number | null {
+    const live = liveSpeed[agentId];
+    if (typeof live === "number") {
+      return live;
+    }
+    const row = series.agentSpeed[agentId];
+    const sample = frameIndex > 0 ? row?.[frameIndex] : row?.[1];
+    return typeof sample === "number" ? sample : null;
+  }
+  const cameraSpeed = agentSpeed(cameraAgent);
 
   const tools = (
     <div className="top-tools">
-      <label htmlFor="scene-id">
-        Scene
-        <select id="scene-id" value={sceneId} onChange={(event) => setSceneId(event.target.value)}>
-          {scenes.length === 0 ? <option value="">No scenes</option> : null}
-          {scenes.map((id) => (
-            <option key={id} value={id}>
-              {id}
-            </option>
-          ))}
-        </select>
-      </label>
-      <button type="button" onClick={() => setExportOpen(true)} disabled={!summary}>
+      <Menu
+        id="scene-id"
+        label="Scene"
+        value={sceneId}
+        options={
+          scenes.length === 0
+            ? [{ value: "", label: "No scenes" }]
+            : scenes.map((id) => ({ value: id, label: id }))
+        }
+        onChange={setSceneId}
+      />
+      <button type="button" className="ghost" onClick={() => setExportOpen(true)} disabled={!summary}>
         Export
       </button>
       <button
@@ -1577,14 +1717,12 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
                   ["axes", "Axes"],
                 ] as const
               ).map(([key, label]) => (
-                <label key={key} className="check">
-                  <input
-                    type="checkbox"
-                    checked={appearance[key]}
-                    onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
-                  />
-                  {label}
-                </label>
+                <EyeToggle
+                  key={key}
+                  on={appearance[key]}
+                  label={label}
+                  onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
+                />
               ))}
             </div>
           </details>
@@ -1599,22 +1737,23 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
                 const boxes = cameraFrame?.boxes.filter((box) => box.agent_id === agent.agent_id).length ?? 0;
                 return (
                   <li key={agent.agent_id}>
-                    <label>
-                      <input
-                        type="checkbox"
-                        checked={!hidden[agent.agent_id]}
-                        onChange={() =>
-                          setHidden((current) => ({
-                            ...current,
-                            [agent.agent_id]: !current[agent.agent_id],
-                          }))
-                        }
-                      />
-                      <i style={{ background: AGENT_INK[agent.agent_type] ?? "#b7b1a6" }} aria-hidden="true" />
-                      <span>{agent.agent_id}</span>
-                      <span className="num">{points}</span>
-                      <span className="num">{boxes}</span>
-                    </label>
+                    <SwatchToggle
+                      on={!hidden[agent.agent_id]}
+                      label={agent.agent_id}
+                      color={AGENT_INK[agent.agent_type] ?? "#b7b1a6"}
+                      meta={
+                        <>
+                          <span className="num">{points}</span>
+                          <span className="num">{boxes}</span>
+                        </>
+                      }
+                      onChange={() =>
+                        setHidden((current) => ({
+                          ...current,
+                          [agent.agent_id]: !current[agent.agent_id],
+                        }))
+                      }
+                    />
                   </li>
                 );
               })}
@@ -1625,79 +1764,57 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
             {categories.length === 0 ? <p className="muted">No classes in this sample.</p> : null}
             <div className="checks">
               {categories.map((category) => (
-                <label key={category} className="check">
-                  <input
-                    type="checkbox"
-                    checked={!appearance.hiddenClasses.includes(category)}
-                    onChange={() =>
-                      setAppearance((current) => {
-                        const next = new Set(current.hiddenClasses);
-                        if (next.has(category)) {
-                          next.delete(category);
-                        } else {
-                          next.add(category);
-                        }
-                        return { ...current, hiddenClasses: [...next] };
-                      })
-                    }
-                  />
-                  <i style={{ background: cssColor(classColor(category)) }} aria-hidden="true" />
-                  {category}
-                </label>
+                <SwatchToggle
+                  key={category}
+                  on={!appearance.hiddenClasses.includes(category)}
+                  label={category}
+                  color={cssColor(classColor(category))}
+                  onChange={() =>
+                    setAppearance((current) => {
+                      const next = new Set(current.hiddenClasses);
+                      if (next.has(category)) {
+                        next.delete(category);
+                      } else {
+                        next.add(category);
+                      }
+                      return { ...current, hiddenClasses: [...next] };
+                    })
+                  }
+                />
               ))}
             </div>
           </details>
           <details>
             <summary>Display</summary>
             <div className="stack">
-              <label htmlFor="color-by">
-                Color
-                <select
-                  id="color-by"
-                  value={appearance.colorBy}
-                  onChange={(event) =>
-                    setAppearance((current) => ({
-                      ...current,
-                      colorBy: event.target.value === "class" ? "class" : "agent",
-                    }))
-                  }
-                >
-                  <option value="agent">Agent</option>
-                  <option value="class">Class</option>
-                </select>
-              </label>
-              <label htmlFor="point-size">
-                Point size
-                <select
-                  id="point-size"
-                  value={String(appearance.pointSize)}
-                  onChange={(event) =>
-                    setAppearance((current) => ({ ...current, pointSize: Number(event.target.value) }))
-                  }
-                >
-                  {[1, 2, 3, 4].map((size) => (
-                    <option key={size} value={size}>
-                      {size} px
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label htmlFor="box-style">
-                Boxes
-                <select
-                  id="box-style"
-                  value={appearance.boxStyle}
-                  onChange={(event) =>
-                    setAppearance((current) => ({
-                      ...current,
-                      boxStyle: event.target.value === "solid" ? "solid" : "wire",
-                    }))
-                  }
-                >
-                  <option value="wire">Wire</option>
-                  <option value="solid">Solid</option>
-                </select>
-              </label>
+              <Segmented
+                label="Color"
+                value={appearance.colorBy}
+                options={[
+                  { value: "agent", label: "Agent" },
+                  { value: "class", label: "Class" },
+                ]}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, colorBy: value === "class" ? "class" : "agent" }))
+                }
+              />
+              <Segmented
+                label="Point size"
+                value={String(appearance.pointSize)}
+                options={[1, 2, 3, 4].map((size) => ({ value: String(size), label: String(size) }))}
+                onChange={(value) => setAppearance((current) => ({ ...current, pointSize: Number(value) }))}
+              />
+              <Segmented
+                label="Boxes"
+                value={appearance.boxStyle}
+                options={[
+                  { value: "wire", label: "Wire" },
+                  { value: "solid", label: "Solid" },
+                ]}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, boxStyle: value === "solid" ? "solid" : "wire" }))
+                }
+              />
               <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
                 Reset view
               </button>
@@ -1714,13 +1831,20 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
               onPointerDown={() => canvasRef.current?.focus()}
             />
             <div className="label-host" />
+            <div className="vignette" aria-hidden="true" />
             <div className="glass status-pill">
               <i className={tone} aria-hidden="true" />
               <span>
                 {summary ? summary.scene_id : "No scene"} · {viewpointLabel}
               </span>
             </div>
-            <div className="glass view-pill" role="group" aria-label="Viewpoint">
+            <div
+              className="glass view-pill"
+              role="group"
+              aria-label="Viewpoint"
+              style={{ ["--count" as string]: VIEWPOINTS.length, ["--index" as string]: Math.max(0, VIEWPOINTS.findIndex((item) => item.id === viewpoint)) }}
+            >
+              <span className="view-slide" aria-hidden="true" />
               {VIEWPOINTS.map((item) => (
                 <button
                   key={item.id}
@@ -1741,7 +1865,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
                 <i style={{ background: "#3C8DFF" }} /> Drone
               </span>
               <span>
-                <i style={{ background: "#7dcea0" }} /> Lane
+                <i style={{ background: "#c6f3dc" }} /> Lane
               </span>
             </div>
             {cameraFrame && summary ? (
@@ -1763,7 +1887,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
                   chooseViewpoint("camera");
                 }}
                 hud={{
-                  speed: formatSpeed(typeof cameraSpeed === "number" ? cameraSpeed : null),
+                  speed: formatSpeed(cameraSpeed),
                   heading: isPose(cameraPose) ? headingDeg(cameraPose) : 0,
                   stamp: typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s",
                 }}
@@ -1776,22 +1900,25 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
           <h2>Telemetry</h2>
           {(summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).map((agent) => {
             const pose = cameraFrame?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
-            const sampleSpeed = frameIndex > 0 ? series.agentSpeed[agent.agent_id]?.[frameIndex] : undefined;
+            const sampleSpeed = agentSpeed(agent.agent_id);
+            const history = series.agentSpeed[agent.agent_id] ?? [];
+            const paths = sparkPaths(history, 22);
             const points =
               cameraFrame?.point_sensors
                 .filter((sensor) => sensor.agent_id === agent.agent_id)
                 .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
+            const ink = AGENT_INK[agent.agent_type] ?? "#b7b1a6";
             return (
               <article key={agent.agent_id} className="tele">
                 <header>
-                  <i style={{ background: AGENT_INK[agent.agent_type] ?? "#b7b1a6" }} aria-hidden="true" />
+                  <i style={{ background: ink }} aria-hidden="true" />
                   <strong>{agent.agent_id}</strong>
                   <span>{agent.agent_type}</span>
                 </header>
                 <dl>
                   <div>
                     <dt>Speed</dt>
-                    <dd className="num">{formatSpeed(typeof sampleSpeed === "number" ? sampleSpeed : null)}</dd>
+                    <dd className="num">{formatSpeed(sampleSpeed)}</dd>
                   </div>
                   <div>
                     <dt>Heading</dt>
@@ -1808,6 +1935,10 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
                     <dd className="num">{points}</dd>
                   </div>
                 </dl>
+                <svg className="tele-spark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
+                  <path d={paths.area} fill={ink} opacity="0.18" />
+                  <path d={paths.line} stroke={ink} />
+                </svg>
               </article>
             );
           })}
@@ -1837,61 +1968,48 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       />
       <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)}>
         <div className="export-bar">
-          <label htmlFor="export-source">
-            Source
-            <select id="export-source" value={exportSource} onChange={(event) => setExportSource(event.target.value)}>
-              <option value="view">This view</option>
-              {cameras.map((sensor) => {
+          <Menu
+            id="export-source"
+            label="Source"
+            value={exportSource}
+            options={[
+              { value: "view", label: "This view" },
+              ...cameras.map((sensor) => {
                 const key = cameraKey(sensor.agent_id, sensor.sensor_id);
-                return (
-                  <option key={key} value={key}>
-                    {sensor.sensor_id} · {sensor.agent_id}
-                  </option>
-                );
-              })}
-            </select>
-          </label>
-          <label htmlFor="export-format">
-            Format
-            <select
-              id="export-format"
-              value={exportFormat}
-              onChange={(event) => {
-                const next = event.target.value;
-                if (next === "mp4" || next === "gif" || next === "png") {
-                  setExportFormat(next);
-                }
-              }}
-            >
-              <option value="mp4">MP4</option>
-              <option value="gif">GIF</option>
-              <option value="png">PNG frames</option>
-            </select>
-          </label>
-          <label htmlFor="export-fps">
-            fps
-            <select
-              id="export-fps"
-              value={String(exportFps)}
-              onChange={(event) => setExportFps(Number(event.target.value))}
-            >
-              {EXPORT_FPS.map((item) => (
-                <option key={item} value={item}>
-                  {item}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label htmlFor="export-size">
-            Size
-            <select id="export-size" value={exportSize} onChange={(event) => setExportSize(event.target.value)}>
-              {EXPORT_SIZES.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.label}
-                </option>
-              ))}
-            </select>
-          </label>
+                return { value: key, label: `${sensor.sensor_id} · ${sensor.agent_id}` };
+              }),
+            ]}
+            onChange={setExportSource}
+          />
+          <Menu
+            id="export-format"
+            label="Format"
+            value={exportFormat}
+            options={[
+              { value: "mp4", label: "MP4" },
+              { value: "gif", label: "GIF" },
+              { value: "png", label: "PNG frames" },
+            ]}
+            onChange={(value) => {
+              if (value === "mp4" || value === "gif" || value === "png") {
+                setExportFormat(value);
+              }
+            }}
+          />
+          <Menu
+            id="export-fps"
+            label="fps"
+            value={String(exportFps)}
+            options={EXPORT_FPS.map((item) => ({ value: String(item), label: String(item) }))}
+            onChange={(value) => setExportFps(Number(value))}
+          />
+          <Menu
+            id="export-size"
+            label="Size"
+            value={exportSize}
+            options={EXPORT_SIZES.map((item) => ({ value: item.id, label: item.label }))}
+            onChange={setExportSize}
+          />
           <label htmlFor="export-start">
             From
             <input
@@ -1927,28 +2045,26 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
           <button type="button" className="ghost" onClick={() => void exportSequence(true)} disabled={!summary || exporting}>
             Save still
           </button>
-          <button type="button" onClick={() => void exportSequence(false)} disabled={!summary || exporting}>
+          <button type="button" className="ghost" onClick={() => void exportSequence(false)} disabled={!summary || exporting}>
             Export sequence
           </button>
         </div>
         <div className="plot-bar">
-          <label htmlFor="plot-format">
-            Plot
-            <select
-              id="plot-format"
-              value={plotFormat}
-              onChange={(event) => {
-                const next = event.target.value;
-                if (next === "png" || next === "svg") {
-                  setPlotFormat(next);
-                }
-              }}
-            >
-              <option value="png">PNG</option>
-              <option value="svg">SVG</option>
-            </select>
-          </label>
-          <button type="button" onClick={() => void savePlot("bev")} disabled={!summary || plotting}>
+          <Menu
+            id="plot-format"
+            label="Plot"
+            value={plotFormat}
+            options={[
+              { value: "png", label: "PNG" },
+              { value: "svg", label: "SVG" },
+            ]}
+            onChange={(value) => {
+              if (value === "png" || value === "svg") {
+                setPlotFormat(value);
+              }
+            }}
+          />
+          <button type="button" className="ghost" onClick={() => void savePlot("bev")} disabled={!summary || plotting}>
             Bird's-eye
           </button>
           <button

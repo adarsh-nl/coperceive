@@ -2,7 +2,7 @@
 
 ## 0.0.0
 
-Web UI. The viewer is a light control shell around a dark rounded viewport, with a dark theme as well. Geist and Geist Mono are the faces. Layers, agents, and classes sit on the left. Telemetry sits on the right. The timeline has a red playhead, sparklines, and range markers. Lidar, trails, and box wires use a selective bloom. A UAV has a ground leader and a pinned label. The selected camera is a draggable picture-in-picture panel. Sequence, still, bird's-eye, camera overlay, and Rerun export share one dialog. Playback timing is unchanged. The bearer token stays in `sessionStorage`.
+Web UI. The viewer is a light control shell around a dark rounded viewport, with a dark theme as well. Geist and Geist Mono are the faces. Layers, agents, and classes sit on the left. Telemetry sits on the right and is computed from pose deltas, in m/s and km/h. The timeline has a red playhead, filled sparklines, and range markers. Lidar, trails, and box wires use a selective bloom. A UAV has a ground leader and a glass label that stays inside the view. The selected camera is a draggable, resizable picture-in-picture panel. Red is reserved for the playhead and Play. Sequence, still, bird's-eye, camera overlay, and Rerun export share one dialog. Playback timing is unchanged. The bearer token stays in `sessionStorage`.
 
 Bird's-eye and camera-overlay figures. `coperceive export bev` and `coperceive export overlay`, and the same two buttons on the page, write a PNG or SVG for one recorded sample. The bird's-eye figure draws the map, boxes, lidar, and agent trails with east to the right. The overlay draws the stored camera image and the pinhole projection. The CI lint job installs the `app` extra so pyright can resolve FastAPI in `tests/test_hdmap.py`.
 

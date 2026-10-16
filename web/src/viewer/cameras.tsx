@@ -249,7 +249,7 @@ function drawOverlay(
   }
   const pixelX = camera.imageWidth && camera.imageWidth > 0 ? naturalWidth / camera.imageWidth : 1;
   const pixelY = camera.imageHeight && camera.imageHeight > 0 ? naturalHeight / camera.imageHeight : 1;
-  const fit = Math.min(width / naturalWidth, height / naturalHeight);
+  const fit = Math.max(width / naturalWidth, height / naturalHeight);
   const destWidth = naturalWidth * fit;
   const destHeight = naturalHeight * fit;
   const originX = (width - destWidth) / 2;
@@ -412,7 +412,9 @@ export default function CameraStrip({
   const [cloudTime, setCloudTime] = useState<number | null>(null);
   const [note, setNote] = useState("");
   const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
+  const [width, setWidth] = useState(420);
   const dragRef = useRef<{ dx: number; dy: number; hostW: number; hostH: number; width: number; height: number } | null>(null);
+  const resizeRef = useRef<{ x: number; width: number } | null>(null);
   const sceneRef = useRef(sceneId);
 
   useEffect(() => {
@@ -541,11 +543,45 @@ export default function CameraStrip({
     setPlace({ left, top });
   }
 
+  function onResizeStart(event: ReactPointerEvent<HTMLButtonElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.stopPropagation();
+    resizeRef.current = { x: event.clientX, width };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function onResizeMove(event: ReactPointerEvent<HTMLButtonElement>) {
+    const resize = resizeRef.current;
+    const shell = event.currentTarget.parentElement;
+    const host = shell?.parentElement;
+    if (!resize || !shell || !host || !event.currentTarget.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+    const hostBox = host.getBoundingClientRect();
+    const next = Math.min(Math.max(280, resize.width + (event.clientX - resize.x)), Math.max(280, hostBox.width - 16));
+    setWidth(next);
+    setPlace((current) => {
+      if (!current) {
+        return current;
+      }
+      const box = shell.getBoundingClientRect();
+      return {
+        left: Math.min(current.left, Math.max(0, hostBox.width - next)),
+        top: Math.min(current.top, Math.max(0, hostBox.height - box.height)),
+      };
+    });
+  }
+
   return (
     <section
       className="pip"
       aria-label="Agent camera"
-      style={place ? { left: place.left, top: place.top, right: "auto", bottom: "auto" } : undefined}
+      style={{
+        width,
+        ...(place ? { left: place.left, top: place.top, right: "auto", bottom: "auto" } : {}),
+      }}
     >
       <div
         className="pip-bar"
@@ -555,15 +591,28 @@ export default function CameraStrip({
           dragRef.current = null;
         }}
       >
+        <span className="grip" aria-hidden="true">
+          <i /><i /><i /><i /><i /><i />
+        </span>
         <strong>Camera</strong>
-        <label className="check">
-          <input type="checkbox" checked={showBoxes} onChange={() => setShowBoxes((current) => !current)} />
+        <button
+          type="button"
+          className="pip-toggle"
+          aria-pressed={showBoxes}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => setShowBoxes((current) => !current)}
+        >
           Boxes
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={showLidar} onChange={() => setShowLidar((current) => !current)} />
+        </button>
+        <button
+          type="button"
+          className="pip-toggle"
+          aria-pressed={showLidar}
+          onPointerDown={(event) => event.stopPropagation()}
+          onClick={() => setShowLidar((current) => !current)}
+        >
           Lidar
-        </label>
+        </button>
         <span className="pip-drag">Drag</span>
       </div>
       {focus ? (
@@ -578,15 +627,15 @@ export default function CameraStrip({
             showBoxes={showBoxes}
             showLidar={showLidar}
           />
-          <div className="hud">
-            <div className="compass" aria-hidden="true">
-              <div className="compass-tape" style={{ transform: `translateX(${(-heading / 360) * 240}px)` }}>
-                {["N", "E", "S", "W", "N", "E", "S", "W"].map((name, item) => (
-                  <span key={`${name}-${item}`}>{name}</span>
-                ))}
-              </div>
-              <i />
+          <div className="compass" aria-hidden="true">
+            <div className="compass-tape" style={{ transform: `translateX(${(-heading / 360) * 304}px)` }}>
+              {["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N", "NE", "E", "SE", "S", "SW", "W", "NW"].map((name, item) => (
+                <span key={`${name}-${item}`}>{name}</span>
+              ))}
             </div>
+            <i />
+          </div>
+          <div className="hud">
             <p className="num">
               <span>{hud?.speed ?? "—"}</span>
               <span>{hud ? `${hud.heading.toFixed(0)}°` : "—"}</span>
@@ -612,6 +661,16 @@ export default function CameraStrip({
         })}
       </div>
       {note ? <p className="muted">{note}</p> : null}
+      <button
+        type="button"
+        className="pip-resize"
+        aria-label="Resize camera panel"
+        onPointerDown={onResizeStart}
+        onPointerMove={onResizeMove}
+        onPointerUp={() => {
+          resizeRef.current = null;
+        }}
+      />
     </section>
   );
 }
