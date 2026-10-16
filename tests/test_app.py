@@ -9,6 +9,8 @@ import pytest
 from coperceive.app.jobs import confine
 from coperceive.app.server import create_app
 from coperceive.cli import main
+from coperceive.hdmap.opendrive import parse_opendrive
+from coperceive.hdmap.store import write_map
 from coperceive.model import (
     SCHEMA_VERSION,
     Agent,
@@ -24,6 +26,8 @@ from coperceive.model import (
 from coperceive.se3 import SE3
 from coperceive.store import write_scene
 from fastapi.testclient import TestClient
+
+from tests.test_hdmap import _scene_on_lane, _straight
 
 
 def test_help_and_schema(capsys: pytest.CaptureFixture[str]) -> None:
@@ -289,3 +293,31 @@ def test_sequence_export_route_writes_gif_and_view(tmp_path: Path) -> None:
     assert saved["frames"] == 1
     assert saved["path"].endswith(".png")
     assert (tmp_path / saved["path"]).is_file()
+
+
+def test_map_http_and_favicon(tmp_path: Path) -> None:
+    xodr = tmp_path / "Town03.xodr"
+    _straight(xodr)
+    maps = tmp_path / "maps"
+    write_map(
+        parse_opendrive(xodr, sample_step_m=25),
+        maps / "Town03",
+        map_name="Carla/Maps/Town03",
+        source={"licence": "MIT"},
+    )
+    scenes = tmp_path / "scenes"
+    _scene_on_lane(scenes)
+    app = create_app(root=scenes, token=None, maps=maps)
+    client = TestClient(app)
+    summary = client.get("/api/scenes/Town03-000/map")
+    assert summary.status_code == 200
+    assert summary.json()["available"] is True
+    lines = client.get("/api/scenes/Town03-000/map/lines")
+    assert lines.status_code == 200
+    count = struct.unpack_from("<I", lines.content)[0]
+    assert count > 0
+    icon = client.get("/favicon.ico")
+    assert icon.status_code == 200
+    assert icon.headers["content-type"].startswith("image/svg")
+    missing = client.get("/api/scenes/Town03-000/map/lines")
+    assert missing.status_code == 200
