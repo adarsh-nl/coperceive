@@ -15,6 +15,7 @@ import array
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 from matplotlib.axes import Axes
@@ -275,11 +276,14 @@ def render_overlay(
     if relative is None:
         raise PlotNotFound("image not found")
     image_file = _confine_file(scene_dir, relative)
-    with Image.open(image_file) as opened:
+    opened = cast(Image.Image, Image.open(image_file))
+    try:
         rgb = opened.convert("RGB")
         # Copy before the file closes. asarray can be a view of the Pillow buffer.
-        pixels = np.array(rgb)
+        pixels = cast(np.ndarray[tuple[int, int, int], np.dtype[np.uint8]], np.array(rgb))
         image_size = rgb.size
+    finally:
+        opened.close()
     figure = Figure(
         figsize=(image_size[0] / 100.0, image_size[1] / 100.0),
         dpi=100,

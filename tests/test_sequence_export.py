@@ -4,6 +4,7 @@ from __future__ import annotations
 import io
 import shutil
 from pathlib import Path
+from typing import cast
 
 import pytest
 from coperceive.cli import main
@@ -118,7 +119,8 @@ def test_png_sequence_and_gif(tmp_path: Path) -> None:
     )
     assert gif.frames == 2
     assert gif.width == 16
-    with Image.open(gif_path) as image:
+    image = cast(Image.Image, Image.open(gif_path))
+    try:
         count = 0
         try:
             while True:
@@ -128,6 +130,8 @@ def test_png_sequence_and_gif(tmp_path: Path) -> None:
             pass
         assert count == 2
         assert image.info["duration"] == 100
+    finally:
+        image.close()
 
 
 def test_single_png_file_and_missing_image(tmp_path: Path) -> None:
