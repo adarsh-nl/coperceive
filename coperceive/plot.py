@@ -287,7 +287,7 @@ def render_overlay(
     )
     axes = _axes(figure)
     axes.set_position((0.0, 0.0, 1.0, 1.0))
-    axes.imshow(pixels, origin="upper", interpolation="nearest")
+    axes.imshow(pixels, origin="upper", interpolation="nearest", aspect="auto")
     axes.set_axis_off()
     scale_u = image_size[0] / sensor.image_width_px if sensor.image_width_px else 1.0
     scale_v = image_size[1] / sensor.image_height_px if sensor.image_height_px else 1.0
@@ -299,8 +299,13 @@ def render_overlay(
     point_count = 0
     if points:
         point_count = _draw_overlay_points(axes, scene, when, chosen, sensor, scale_u, scale_v)
-    axes.set_xlim(0, image_size[0])
-    axes.set_ylim(image_size[1], 0)
+    # imshow places each pixel centre on an integer. Limits of (0, width)
+    # leave half a pixel of the figure colour on the far edge, and
+    # matplotlib 3.10 rounds that into a full empty row.
+    axes.set_xlim(-0.5, image_size[0] - 0.5)
+    axes.set_ylim(image_size[1] - 0.5, -0.5)
+    axes.set_aspect("auto")
+    axes.set_position((0.0, 0.0, 1.0, 1.0))
     axes.text(
         0.01,
         0.98,
