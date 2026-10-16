@@ -96,3 +96,13 @@ def test_axis_remap_conjugates_a_pose() -> None:
     # (0,1,0) to (-1, 0, 0) + t.
     ahead = world_from_body_flu.apply((1.0, 0.0, 0.0))
     assert ahead == pytest.approx((0.0, 2.0, 3.0))
+
+
+def test_camera_remap_targets_rdf_not_flu() -> None:
+    assert AxisRemap.parse_camera("RDF").is_identity
+    # An OpenGL-style camera (x right, y up, z back) looks along -z. In RDF
+    # that direction is +z, and its up (+y) is RDF -y.
+    rub = AxisRemap.parse_camera("RUB")
+    assert rub.point((0.0, 0.0, -1.0)) == pytest.approx((0.0, 0.0, 1.0))
+    assert rub.point((0.0, 1.0, 0.0)) == pytest.approx((0.0, -1.0, 0.0))
+    assert AxisRemap.parse("RFU").inverse().then(AxisRemap.parse("RFU")).is_identity

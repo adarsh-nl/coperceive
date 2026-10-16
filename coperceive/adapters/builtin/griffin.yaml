@@ -1,0 +1,111 @@
+# SPDX-License-Identifier: Apache-2.0
+# Griffin aerial-ground release, as coperceive/griffin/raw.py reads it.
+# Every rule here is listed against that code in docs/adr/0009-dataset-adapters.md.
+adapter: griffin
+spec_version: 1
+
+params:
+  subset:
+    allowed: [25m, 40m, 55m, random]
+
+world_frame: ENU
+
+clock:
+  from: frame
+  unit: frame
+  scale_us: 100000
+  scale_note: >-
+    Griffin pose 'timestamp' is the integer frame id, equal to the file stem.
+    time_us = frame_id * 100000 assumes the 10 Hz rate stated for the lidar in
+    the Griffin paper. The files do not contain a measured wall clock.
+
+scenes:
+  index:
+    file: vehicle-side/scene_infos.json
+    must_equal: [drone-side/scene_infos.json]
+    scene_id: name
+    samples: info.frames
+    sample_kind: frame
+    platform:
+      map_name: {field: info.map_name}
+      cruise_altitude_m: {field: info.cruise_altitude, number: true, format: ".10g"}
+      subset: {param: subset}
+
+agents:
+  - {id: vehicle, type: vehicle, root: vehicle-side}
+  - {id: drone, type: uav, root: drone-side}
+
+conventions:
+  length_unit: m
+  angle_unit: deg
+  body_axes: FLU
+  camera_axes: RDF
+
+streams:
+  poses:
+    reader: json_record
+    path: "{agent_root}/pose/{frame:06d}.json"
+    missing: error
+    translation: [x, y, z]
+    rotation:
+      euler: {fields: [roll, pitch, yaw], order: zyx, frame: intrinsic}
+    check: {timestamp: frame}
+
+  sensors:
+    reader: json_record
+    path: "{agent_root}/calib/{sensor}.json"
+    extrinsic:
+      matrix: {field: extrinsic, shape: 4x4}
+      direction: child_to_parent
+    intrinsic: {matrix: intrinsic, optional: true}
+    image_size:
+      derive: principal_point_x2
+      reason: >-
+        Image bytes are not in the dev tier. 2*cx and 2*cy rounded is the
+        stand-in the Phase 0 reader used; see docs/datasets/griffin.md.
+    modality:
+      - {has_intrinsic: true, modality: camera}
+      - {stem_prefix: lidar, modality: lidar}
+      - {default: camera}
+
+  boxes:
+    reader: text_rows
+    path: "{agent_root}/label/{frame:06d}.txt"
+    missing: error
+    frame: body
+    variants:
+      12: [category, cx, cy, cz, length, width, height, roll, pitch, yaw, track_id, visibility]
+      11: [category, cx, cy, cz, length, width, height, roll, pitch, yaw, track_id]
+      9: [category, cx, cy, cz, length, width, height, yaw, track_id]
+    rotation:
+      euler: {fields: [roll, pitch, yaw], order: zyx, frame: intrinsic}
+      missing_angles:
+        fill: zero
+        reason: >-
+          A 9-field Griffin line has no roll or pitch. The toolkit fills 0.
+          Those zeros are the toolkit's fill-in, not a measured angle
+          (docs/datasets/griffin.md). TODO: carry the missing-angle fact
+          through the schema instead of storing a zero.
+    track_id_cast: int_string
+    class_map_unknown: keep
+
+  images:
+    for_each: camera
+    path: "{agent_root}/camera/{sensor}/{frame:06d}.png"
+    require_file: false
+
+  lidar:
+    reader: ply
+    agents: [vehicle]
+    sensor: lidar_top
+    directory: "{agent_root}/lidar/lidar_top"
+    when_directory_absent: skip
+    path: "{agent_root}/lidar/lidar_top/{frame:06d}.ply"
+    fields: {x: x, y: y, z: z, intensity: I}
+    missing: error
+
+checks:
+  required_per_sample: [poses, boxes]
+
+report:
+  variant_counts: boxes

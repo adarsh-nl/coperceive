@@ -141,6 +141,25 @@ class AxisRemap:
             raise RotationError(f"axes {letters!r} are left-handed")
         return AxisRemap(rows)
 
+    @staticmethod
+    def parse_camera(letters: str) -> AxisRemap:
+        """Source camera axes onto the library camera convention, ``RDF``."""
+        return AxisRemap.parse("RDF").inverse().then(AxisRemap.parse(letters))
+
+    def inverse(self) -> AxisRemap:
+        r = self.rows
+        return AxisRemap(
+            ((r[0][0], r[1][0], r[2][0]), (r[0][1], r[1][1], r[2][1]), (r[0][2], r[1][2], r[2][2]))
+        )
+
+    def then(self, first: AxisRemap) -> AxisRemap:
+        """``self @ first``: apply ``first``, then ``self``."""
+        a, b = self.rows, first.rows
+        rows = tuple(
+            tuple(sum(a[i][k] * b[k][j] for k in range(3)) for j in range(3)) for i in range(3)
+        )
+        return AxisRemap(rows)  # type: ignore[arg-type]
+
     @property
     def is_identity(self) -> bool:
         return self.rows == ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
@@ -156,8 +175,7 @@ class AxisRemap:
         return SE3.from_matrix(self.rows)
 
     def inverse_se3(self) -> SE3:
-        r = self.rows
-        return SE3.from_matrix(((r[0][0], r[1][0], r[2][0]), (r[0][1], r[1][1], r[2][1]), (r[0][2], r[1][2], r[2][2])))
+        return self.inverse().as_se3()
 
     def world_from_body(self, world_from_source_body: SE3) -> SE3:
         """The same pose with the body axes expressed in FLU. The origin stays."""
