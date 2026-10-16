@@ -29,6 +29,12 @@ export type FrameFrustum = {
   pose: Pose;
   fov_y_rad: number;
   aspect: number;
+  image_width_px?: number | null;
+  image_height_px?: number | null;
+  fx?: number | null;
+  fy?: number | null;
+  cx?: number | null;
+  cy?: number | null;
 };
 export type FrameSensor = { agent_id: string; sensor_id: string; count: number };
 export type FrameDocument = {

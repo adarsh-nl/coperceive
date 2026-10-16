@@ -119,6 +119,14 @@ def frame_document(scene: Scene, time_us: int) -> dict[str, object]:
     }
 
 
+def image_path(scene: Scene, time_us: int, agent_id: str, sensor_id: str) -> str | None:
+    """Relative path recorded for one camera sample, or ``None`` when it is absent."""
+    for image in scene.images:
+        if image.time_us == time_us and image.agent_id == agent_id and image.sensor_id == sensor_id:
+            return image.path
+    return None
+
+
 def frame_points(scene: Scene, time_us: int, agent_id: str, sensor_id: str) -> bytes:
     """World ``x, y, z`` float32 bytes for one sweep. Empty when that sweep is absent."""
     for cloud in scene.point_clouds:
@@ -176,6 +184,12 @@ def _frustums(scene: Scene, time_us: int) -> list[dict[str, object]]:
                 "pose": _pose_json(world_from_sensor),
                 "fov_y_rad": fov,
                 "aspect": aspect,
+                "image_width_px": sensor.image_width_px,
+                "image_height_px": sensor.image_height_px,
+                "fx": sensor.fx,
+                "fy": sensor.fy,
+                "cx": sensor.cx,
+                "cy": sensor.cy,
             }
         )
     return rows

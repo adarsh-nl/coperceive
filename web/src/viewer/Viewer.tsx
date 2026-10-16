@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
+import CameraStrip from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
 import { formatClock, frameDelayMs, neighborSpeed, SPEEDS, stepIndex, type Speed } from "./playback";
 import {
@@ -326,6 +327,7 @@ export default function Viewer({ token }: { token: string }) {
   const [speed, setSpeed] = useState<Speed>(1);
   const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
   const [cameraId, setCameraId] = useState("");
+  const [cameraFrame, setCameraFrame] = useState<FrameDocument | null>(null);
   const framedScene = useRef("");
   const modeRef = useRef<Viewpoint>("orbit");
   const cameraKeyRef = useRef("");
@@ -588,6 +590,7 @@ export default function Viewer({ token }: { token: string }) {
       setFrameIndex(0);
       setHidden({});
       setPlaying(false);
+      setCameraFrame(null);
       const cameras = body.sensors.filter((sensor) => sensor.modality === "camera");
       setCameraId((current) => {
         const stillThere = cameras.some((sensor) => cameraKey(sensor.agent_id, sensor.sensor_id) === current);
@@ -642,6 +645,7 @@ export default function Viewer({ token }: { token: string }) {
       }, 0);
       const boxes = body.boxes.filter((box) => !hidden[box.agent_id]).length;
       const frustums = body.frustums.filter((frustum) => !hidden[frustum.agent_id]).length;
+      setCameraFrame(body);
       setStatus(
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
@@ -725,6 +729,10 @@ export default function Viewer({ token }: { token: string }) {
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
   const timeUs = summary?.times_us[Math.min(frameIndex, last)];
   const cameras = (summary?.sensors ?? []).filter((sensor) => sensor.modality === "camera");
+  const agentTypes = useMemo(
+    () => new Map((summary?.agents ?? []).map((agent) => [agent.agent_id, agent.agent_type])),
+    [summary],
+  );
   const viewpointLabel = VIEWPOINTS.find((item) => item.id === viewpoint)?.label ?? "Orbit";
 
   return (
@@ -863,6 +871,20 @@ export default function Viewer({ token }: { token: string }) {
           </label>
         ))}
       </div>
+      {cameraFrame && summary ? (
+        <CameraStrip
+          token={token}
+          sceneId={summary.scene_id}
+          timeUs={cameraFrame.time_us}
+          nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
+          frustums={cameraFrame.frustums}
+          boxes={cameraFrame.boxes}
+          pointSensors={cameraFrame.point_sensors}
+          types={agentTypes}
+          hidden={hidden}
+          cacheRef={cacheRef}
+        />
+      ) : null}
       <p className="muted status-line">{status}</p>
       <p className="hint">
         {playing ? "Playing" : "Paused"} at {speed}×{loop ? ", loop on" : ""}. {viewpointLabel}. Click the

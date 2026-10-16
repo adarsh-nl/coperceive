@@ -2,6 +2,8 @@
 
 ## 0.0.0
 
+Camera images. The page shows one panel per camera at the current sample. `GET /api/scenes/{id}/image` returns the file named in `images.parquet`, confined to that scene directory. Boxes and lidar can be projected onto the image. Image bytes stay outside the repository.
+
 Playback and viewpoints. The local page plays recorded pose times at 0.25×–4×, loops, steps, and scrubs, and prefetches the next samples. Viewpoints are orbit, bird's-eye, chase, drone, and look-through a camera frustum. The page uses a dark theme. The feature checklist is `docs/design/viewer-features.md`. Images, sequence export, and the customisation panel are not in this slice. Rerun export is unchanged.
 
 Shared HD map. `coperceive maps fetch`, `maps ingest`, and `maps align` turn a CARLA OpenDRIVE file into a sidecar directory (`manifest.json`, `polylines.parquet`, `vertices.bin`) and store `world_from_opendrive`. Schema 1 is unchanged. The viewer draws lane centres and road edges under the lidar. `coperceive validate` reports vehicle-pose distance to the lane centre. The centreline block is not a hard failure. The status line ignores hidden agents, the first camera frame uses the near vehicle cluster, and `/favicon.ico` returns the SVG icon. The design is `docs/adr/0008-hd-map.md`.

@@ -97,6 +97,9 @@ def test_world_point_and_box_follow_the_body_pose() -> None:
     frustum = cast(dict[object, object], frustum_item)
     assert frustum["fov_y_rad"] == pytest.approx(2.0 * math.atan(0.5))
     assert frustum["aspect"] == pytest.approx(2.0)
+    assert frustum["image_width_px"] == 200
+    assert frustum["fx"] == pytest.approx(100.0)
+    assert frustum["cy"] == pytest.approx(50.0)
     summary = summarize(scene)
     assert summary["times_us"] == [0, 100_000]
     later = frame_points(scene, 100_000, "vehicle", "lidar_top")

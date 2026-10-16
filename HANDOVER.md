@@ -1,6 +1,6 @@
 # Handover
 
-Phase 6 slice 1 is in the tree: playback, viewpoints, and the dark page. Images, sequence export, and the customisation panel are not started. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+Phase 6 slice 2 is in the tree: camera images for the current sample, with box and lidar overlays. Playback, viewpoints, and the dark page are the slice under this one. Sequence export and the customisation panel are not started. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
 
 ## Goal
 
@@ -14,7 +14,8 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - The map format is `coperceive-hdmap` version 1. Vertices stay in the OpenDRIVE frame. The transform is a 3×3 matrix plus a translation, because a reflection is allowed and a quaternion cannot store one. Schema version stays `1`.
 - The viewer draws lane centres and road edges under the lidar. `GET /api/scenes/{id}/map/lines` returns the world-frame blob. A missing map is 404 and the status ends in `no map.`
 - The status line counts boxes and frustums for agents that are still shown. Orbit frames the vehicle pose and lidar points within 80 m horizontally once per scene. Later scrubs do not move an orbit camera. `GET /favicon.ico` returns `favicon.svg`.
-- Playback uses the recorded gap between pose times at 0.25×, 0.5×, 1×, 2×, and 4×. The page caches 16 frame documents and 48 point sweeps and requests the next four samples. Viewpoints ease over 180 ms. Look-through uses sensor +Z as forward and sensor −Y as up. The checklist is `docs/design/viewer-features.md`. No new HTTP route.
+- Playback uses the recorded gap between pose times at 0.25×, 0.5×, 1×, 2×, and 4×. The page caches 16 frame documents and 48 point sweeps and requests the next four samples. Viewpoints ease over 180 ms. Look-through uses sensor +Z as forward and sensor −Y as up. The checklist is `docs/design/viewer-features.md`.
+- `GET /api/scenes/{id}/image` returns the file named in `images.parquet` for that sample. The path is confined to the scene directory. A path that leaves the scene is 400. A missing row or a missing file is 404. The page shows one panel per camera. Boxes start on and Lidar starts off. The strip keeps the last complete sample until the next images arrive. Image bytes are not in git.
 - `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
 - The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
 
@@ -48,11 +49,11 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 14. The 0.24 m claim is not the measured median. Lane-centre median is 0.013712643507518118 m. Reference-line median is 1.7860191236754484 m. Say which quantity the 0.24 m figure was meant to be.
 15. Town07's lane-centre median is 0.1647962688524098 m, with `identity` still ahead of the next candidate by metres. Say if another CARLA package should be ingested.
 16. Sample step is 1.0 m. Say if the sidecar should be finer.
-17. Image paths are written for every camera calib even when the dev tier did not download images.
+17. Image paths are written for every camera even when the file is absent. On this machine only Town03-000 has the PNG bytes, under the scene directory, outside git. Other scenes return 404.
 18. Schema number. Still `1`. The map is `coperceive-hdmap` version 1, separate from the scene schema.
 19. Desktop shell. Tauri is the plan and Electron is the fallback. The shell was not built.
 20. Lidar points are 2 CSS pixels. Say if 2 is still too large or too small.
-21. This slice is playback and viewpoints only. Say if the next slice should be images, export, or the customisation panel.
+21. Town03-000's nine cameras were unpacked one archive at a time. A full extract of all nine archives for every scene was not done: the dry-run `required_free_bytes` for that was 324550526424. Say if more scenes should be unpacked.
 22. Dark is the only theme until the customisation slice stores the choice. Say if a light theme has to land sooner.
 23. Look-through uses sensor −Y as up because the Town03-000 front camera's +Y points down. Say if another dataset uses the opposite axis.
 
@@ -111,9 +112,19 @@ Python 3.12.3. Commands on 2026-10-15 after the map code was in the tree. Pyrigh
 - `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 19 commits scanned, through `134c816`. This paragraph’s commit is not in that scan.
 - Python 3.10, 3.11, and 3.13 were not run on this machine. Those versions are the GitHub Actions matrix.
 
-## Gates for this slice
+## Phase 6 camera check
 
-Python 3.12.3, on 2026-10-16, after the playback page was in the tree. The map-phase gate list above is the earlier run. This slice did not rebuild the wheel.
+`coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps` on 2026-10-16. Town03-000 at 1118500000 µs, all nine cameras present as files: `GET /api/scenes/Town03-000/image` returned 200 `image/png` for vehicle front (2,926,270 bytes). The PNG is 1920×1080. The stored pinhole is `fx = fy = 687.2924957435579`, `cx = 960`, `cy = 540`, `image_width_px = 1920`, `image_height_px = 1080`.
+
+The page showed a photo in every panel: vehicle back, front, left, right, and drone back, bottom, front, left, right. Vehicle front has the road in the lower half, and the wireframes sit on the cars. Drone bottom looks down at the road. Boxes is a photo overlay; the 3D boxes stay when it is unchecked. Lidar draws the sweep on the photo and starts off. Town03-001 shows `No image file for this sample.` The Desk tab still shows Jobs. A 390 px wide window can scroll to the strip.
+
+The extract log ended `done files=1341`. `HF_TOKEN` was unset. The download used an anonymous Hub request. The zips were deleted after the Town03-000 members were written. No image file is in git.
+
+In `town03_camera_playback.mp4` the on-screen clock was sample 1 / 149 at file time 10 s and sample 97 / 149 at file time 14 s, while the speed control read 1×. That is about 24 steps per second. The delay function was not changed in this slice. The earlier playback recording measured 148 steps in about 15 s. The photos stayed on screen during that run and changed with the sample. They did not sit on `Loading image…`.
+
+## Gates for the playback slice
+
+Python 3.12.3, on 2026-10-16, after the playback page was in the tree. The map-phase gate list above is the earlier run. That slice did not rebuild the wheel.
 
 - `ruff check .` — all checks passed (ruff 0.17.1)
 - `ruff format --check .` — passed
@@ -121,6 +132,18 @@ Python 3.12.3, on 2026-10-16, after the playback page was in the tree. The map-p
 - `pytest --override-ini addopts= --tb=line -q` — 89 passed, 1 skipped, 6 warnings in 2.64 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
 - `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
 - `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-DoaPsDlj.js` and `index-DrTviwvX.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine.
+
+## Gates for the camera slice
+
+Python 3.12.3, on 2026-10-16, after the image route and the camera strip were in the tree. This slice did not rebuild the wheel and did not run gitleaks.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — passed
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=short -q` — 90 passed, 1 skipped, 6 warnings in 2.97 s. The new test is `test_image_route_serves_the_recorded_file`. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-KV2yBqvj.js` and `index-BLVkEqEi.css`
 - Python 3.10, 3.11, and 3.13 were not run on this machine.
 
 ## Commands
@@ -143,4 +166,4 @@ coperceive serve --host 127.0.0.1 --root /path/scenes --maps /path/maps
 
 ## Next
 
-Stop. The next slice is camera images, then sequence export, then the customisation panel. The matplotlib bird's-eye plot and camera overlays stay on that list. The desktop shell is still out of scope.
+Stop. The next slice is sequence export, then the customisation panel. The matplotlib bird's-eye plot stays on that list. The desktop shell is still out of scope.

@@ -12,7 +12,7 @@ Open `http://127.0.0.1:8731/`. The Viewer tab is the default. Scene directories 
 
 The scrubber steps through recorded pose times. A time that is not a sample is omitted. Poses use `max_gap_us` 0, so the page does not interpolate. Play waits `(t[i+1] − t[i]) / speed` between samples. Speeds are 0.25×, 0.5×, 1×, 2×, and 4×. A non-positive gap uses 100 ms. Loop waits one gap on the last sample, then wraps. Without loop, playback pauses on the last sample. Left and Right step one sample and pause. The frame JSON and point sweeps are kept for 16 frames and 48 sweeps, and the next four samples are requested after each draw. Hiding an agent does not drop that cache.
 
-Camera images are not drawn. Each camera with `fy` and `cy` is a frustum: vertical field of view `2 * atan(cy / fy)`, aspect `width / height` when both sizes are set, otherwise `cx / cy`. The lines are 4 m deep in the sensor frame, with +Z forward. The world is z-up. Vehicle agents are drawn in `#e67828` and UAV agents in `#2878dc`. A checkbox hides that agent's points, boxes, frustums, and axes. The status line counts points, boxes, and frustums for agents that are still shown.
+Each camera with `fy` and `cy` is a frustum: vertical field of view `2 * atan(cy / fy)`, aspect `width / height` when both sizes are set, otherwise `cx / cy`. The lines are 4 m deep in the sensor frame, with +Z forward. The world is z-up. Vehicle agents are drawn in `#e67828` and UAV agents in `#2878dc`. A checkbox hides that agent's points, boxes, frustums, and axes. The status line counts points, boxes, and frustums for agents that are still shown.
 
 The first visit to a scene, in orbit, places the camera on the vehicle pose, or on the median point when that pose is missing. Points farther than 80 m in the horizontal plane are left out of that frame. The target is the centre of the remaining box. The camera sits at `span` along x, `-span` along y, and `0.75 * span` along z, with `span = max(box diagonal * 0.55, 18)`. Later scrubs keep that orbit camera until the viewpoint changes. The town map is not part of the frame, so a map that spans hundreds of metres does not zoom the view out.
 
@@ -30,6 +30,7 @@ Lidar points are 2 CSS pixels and do not shrink with distance. A 6 pixel size fi
 | GET | `/api/scenes/{scene_id}` | agents, sensors, `times_us` |
 | GET | `/api/scenes/{scene_id}/frame?time_us=` | poses, box lines, frustums, point-sensor counts |
 | GET | `/api/scenes/{scene_id}/points?time_us=&agent_id=&sensor_id=` | little-endian float32 `x, y, z` in the world frame |
+| GET | `/api/scenes/{scene_id}/image?time_us=&agent_id=&sensor_id=` | the image file recorded for that sample, or 404 |
 | GET | `/api/scenes/{scene_id}/map` | whether a sidecar map is linked |
 | GET | `/api/scenes/{scene_id}/map/lines` | world-frame polylines, or 404 |
 | GET | `/favicon.ico` | `favicon.svg` as `image/svg+xml` |
@@ -53,6 +54,12 @@ The recording uses the timeline name `coperceive`, in seconds. Transforms and bo
 
 Little-endian. A `uint32` polyline count, then for each polyline a `uint32` layer code, a `uint32` vertex count, and float32 `x, y, z`. Code 1 is the lane centre, code 2 is the road edge. The reference line is stored in the map directory and is not in this blob. The transform `world_from_opendrive` has already been applied.
 
+## Camera images
+
+The frame document's frustum rows also carry `image_width_px`, `image_height_px`, `fx`, `fy`, `cx`, and `cy`. A strip under the transport shows one panel per camera at the current sample. `GET /api/scenes/{id}/image` resolves the path stored in `images.parquet` and confines it to that scene directory. A path that leaves the scene is 400. A missing row or a missing file is 404. The panel then says `No image file for this sample.`
+
+Boxes and lidar are drawn on the image in the browser. The pixel is `u = fx * x / z + cx`, `v = fy * y / z + cy`, with `z` the camera-frame depth. `z <= 0` is not drawn. When the decoded file is a different size from `image_width_px` and `image_height_px`, those pixels are scaled onto the file. The Boxes checkbox starts on and the Lidar checkbox starts off. Hiding an agent hides that agent's boxes and points on the image as well. The next sample's images are requested after the current ones load, and a second request for the same file waits on the first. The strip keeps the last complete sample on screen until the next images arrive, so during play it can sit a sample or two behind the 3D view instead of flashing empty. A 404 is remembered until the scene changes, so a file that appears later needs a reload.
+
 ## What this phase does not do
 
-It does not draw camera images, export an MP4, or store view settings. Those are the next slices in [viewer-features.md](design/viewer-features.md). It does not open a second viewer port or package a Tauri or Electron app. It does not load Griffin recordings or OpenDRIVE bytes into the repository.
+It does not export an MP4, or store view settings. Those are the next slices in [viewer-features.md](design/viewer-features.md). It does not open a second viewer port or package a Tauri or Electron app. It does not load Griffin recordings or OpenDRIVE bytes into the repository.

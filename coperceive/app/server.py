@@ -18,7 +18,20 @@ from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
 from coperceive.model import Scene
 from coperceive.rerun_export import RerunUnavailable, export_rerun
 from coperceive.store import read_scene
-from coperceive.viewdata import frame_document, frame_points, scene_directories, summarize
+from coperceive.viewdata import (
+    frame_document,
+    frame_points,
+    image_path,
+    scene_directories,
+    summarize,
+)
+
+_IMAGE_TYPES = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+}
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
@@ -122,6 +135,22 @@ def create_app(
         if not svg.is_file():
             raise HTTPException(status_code=404, detail="favicon not found")
         return FileResponse(svg, media_type="image/svg+xml")
+
+    @app.get("/api/scenes/{scene_id}/image")
+    def scene_image(scene_id: str, time_us: int, agent_id: str, sensor_id: str) -> FileResponse:
+        scene = _cached_scene(app, scene_id)
+        relative = image_path(scene, time_us, agent_id, sensor_id)
+        if relative is None:
+            raise HTTPException(status_code=404, detail="image not found")
+        scene_dir = _scene_dir(app.state.root, scene_id)
+        try:
+            target = confine(scene_dir, relative)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not target.is_file():
+            raise HTTPException(status_code=404, detail="image not found")
+        media = _IMAGE_TYPES.get(target.suffix.lower(), "application/octet-stream")
+        return FileResponse(target, media_type=media)
 
     @app.get("/api/scenes/{scene_id}/points")
     def scene_points(scene_id: str, time_us: int, agent_id: str, sensor_id: str) -> Response:
