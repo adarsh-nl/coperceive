@@ -432,6 +432,11 @@ export default function Viewer({ token }: { token: string }) {
   const [exportStart, setExportStart] = useState(1);
   const [exportEnd, setExportEnd] = useState(10);
   const [exporting, setExporting] = useState(false);
+  const [plotFormat, setPlotFormat] = useState<"png" | "svg">("png");
+  const [plotNote, setPlotNote] = useState("");
+  const [plotUrl, setPlotUrl] = useState<string | null>(null);
+  const [plotAlt, setPlotAlt] = useState("Bird's-eye plot");
+  const [plotting, setPlotting] = useState(false);
   const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
@@ -1025,11 +1030,18 @@ export default function Viewer({ token }: { token: string }) {
       width?: unknown;
       height?: unknown;
       fps?: unknown;
+      points?: unknown;
+      boxes?: unknown;
+      map_drawn?: unknown;
     };
   }
 
   async function downloadExported(relative: string) {
-    const file = relative.endsWith(".mp4") || relative.endsWith(".gif") || relative.endsWith(".png");
+    const file =
+      relative.endsWith(".mp4") ||
+      relative.endsWith(".gif") ||
+      relative.endsWith(".png") ||
+      relative.endsWith(".svg");
     if (!file) {
       return;
     }
@@ -1136,6 +1148,77 @@ export default function Viewer({ token }: { token: string }) {
     }
     const body = (await response.json()) as { path?: unknown; samples?: unknown };
     setExportNote(`Wrote ${String(body.path)} (${String(body.samples)} samples).`);
+  }
+
+  async function savePlot(kind: "bev" | "overlay") {
+    if (!summary || plotting) {
+      return;
+    }
+    const when = summary.times_us[Math.min(frameIndex, Math.max(summary.times_us.length - 1, 0))];
+    if (typeof when !== "number") {
+      return;
+    }
+    const shown = summary.agents.filter((agent) => !hidden[agent.agent_id]).map((agent) => agent.agent_id);
+    if (shown.length === 0) {
+      setPlotNote("Show an agent to draw the plot.");
+      return;
+    }
+    let agentId = "";
+    let sensorId = "";
+    if (kind === "overlay") {
+      const slash = cameraId.indexOf("/");
+      if (slash <= 0) {
+        setPlotNote("Choose a camera for the overlay.");
+        return;
+      }
+      agentId = cameraId.slice(0, slash);
+      sensorId = cameraId.slice(slash + 1);
+    }
+    setPlotting(true);
+    setPlotNote(kind === "bev" ? "Drawing the bird's-eye plot…" : "Drawing the camera overlay…");
+    try {
+      const saved = await postExport(summary.scene_id, kind === "bev" ? "/export/bev" : "/export/overlay", {
+        time_us: when,
+        format: plotFormat,
+        theme: appearance.theme,
+        color_by: appearance.colorBy,
+        points: appearance.points,
+        boxes: appearance.boxes,
+        map: appearance.map,
+        box_style: appearance.boxStyle,
+        hidden_classes: appearance.hiddenClasses,
+        agents: shown,
+        ...(kind === "overlay" ? { agent_id: agentId, sensor_id: sensorId } : {}),
+      });
+      const path = typeof saved.path === "string" ? saved.path : "";
+      const mapNote = saved.map_drawn === true ? ", map drawn" : "";
+      setPlotNote(
+        `Wrote ${path} (${String(saved.points)} points, ${String(saved.boxes)} boxes${mapNote}).`,
+      );
+      setPlotAlt(kind === "bev" ? "Bird's-eye plot of the current sample" : "Camera overlay of the current sample");
+      const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(path)}`, {
+        headers: authHeaders(token),
+      });
+      if (!response.ok) {
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      setPlotUrl((previous) => {
+        if (previous) {
+          URL.revokeObjectURL(previous);
+        }
+        return url;
+      });
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = path.split("/").pop() ?? `plot.${plotFormat}`;
+      link.click();
+    } catch (error) {
+      setPlotNote(error instanceof Error ? error.message : "Plot failed.");
+    } finally {
+      setPlotting(false);
+    }
   }
 
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
@@ -1298,6 +1381,37 @@ export default function Viewer({ token }: { token: string }) {
           {exportNote || "Each sample in the range is one frame. 10 fps matches a 10 Hz recording."}
         </span>
       </div>
+      <div className="plot-bar">
+        <label htmlFor="plot-format">Plot</label>
+        <select
+          id="plot-format"
+          value={plotFormat}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === "png" || next === "svg") {
+              setPlotFormat(next);
+            }
+          }}
+        >
+          <option value="png">PNG</option>
+          <option value="svg">SVG</option>
+        </select>
+        <button type="button" onClick={() => void savePlot("bev")} disabled={!summary || plotting}>
+          Bird's-eye
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => void savePlot("overlay")}
+          disabled={!summary || plotting || cameras.length === 0}
+        >
+          Camera overlay
+        </button>
+        <span className="muted">
+          {plotNote || "East is to the right. The file uses the current sample, layers, and theme."}
+        </span>
+      </div>
+      {plotUrl ? <img className="plot-preview" src={plotUrl} alt={plotAlt} /> : null}
       <div className="customise-bar">
         <span className="muted">View</span>
         {(

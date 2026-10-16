@@ -18,6 +18,7 @@ from pydantic import BaseModel, Field
 from coperceive.app.jobs import CSRF_HEADER, confine, list_jobs, open_db, run_job
 from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
 from coperceive.model import Scene
+from coperceive.plot import PlotError, PlotNotFound, PlotResult, render_bev, render_overlay
 from coperceive.rerun_export import RerunUnavailable, export_rerun
 from coperceive.sequence_export import (
     FORMATS,
@@ -62,6 +63,33 @@ class SequenceRequest(BaseModel):
     width: int = 0
     height: int = 0
     format: str
+
+
+class PlotRequest(BaseModel):
+    time_us: int | None = None
+    format: str = "png"
+    theme: str = "dark"
+    color_by: str = "agent"
+    points: bool = True
+    boxes: bool = True
+    map: bool = True
+    box_style: str = "wire"
+    hidden_classes: list[str] = Field(default_factory=list)
+    agents: list[str] | None = None
+
+
+class OverlayRequest(BaseModel):
+    agent_id: str
+    sensor_id: str
+    time_us: int | None = None
+    format: str = "png"
+    theme: str = "dark"
+    color_by: str = "agent"
+    points: bool = True
+    boxes: bool = True
+    box_style: str = "wire"
+    hidden_classes: list[str] = Field(default_factory=list)
+    agents: list[str] | None = None
 
 
 class ViewSequenceRequest(BaseModel):
@@ -249,6 +277,65 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _export_body(app.state.root, result)
 
+    @app.post("/api/scenes/{scene_id}/export/bev")
+    def scene_bev(scene_id: str, body: PlotRequest) -> dict[str, object]:
+        scene = _cached_scene(app, scene_id)
+        try:
+            when = _plot_time(scene, body.time_us)
+            relative = _plot_relative(scene.scene_id, "bev", when, body.format)
+            dest = confine(app.state.root, relative)
+            result = render_bev(
+                scene,
+                dest,
+                time_us=when,
+                hdmap=_scene_hdmap(app, scene),
+                format=body.format,
+                theme=body.theme,
+                color_by=body.color_by,
+                points=body.points,
+                boxes=body.boxes,
+                draw_map=body.map,
+                box_style=body.box_style,
+                hidden_classes=tuple(body.hidden_classes),
+                agents=None if body.agents is None else tuple(body.agents),
+            )
+        except PlotNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except PlotError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _plot_body(app.state.root, result)
+
+    @app.post("/api/scenes/{scene_id}/export/overlay")
+    def scene_overlay(scene_id: str, body: OverlayRequest) -> dict[str, object]:
+        scene = _cached_scene(app, scene_id)
+        scene_dir = _scene_dir(app.state.root, scene_id)
+        try:
+            when = _plot_time(scene, body.time_us)
+            label = _export_label(body.agent_id, body.sensor_id)
+            relative = _plot_relative(scene.scene_id, f"{label}-overlay", when, body.format)
+            dest = confine(app.state.root, relative)
+            result = render_overlay(
+                scene,
+                scene_dir,
+                dest,
+                agent_id=body.agent_id,
+                sensor_id=body.sensor_id,
+                time_us=when,
+                format=body.format,
+                theme=body.theme,
+                color_by=body.color_by,
+                points=body.points,
+                boxes=body.boxes,
+                box_style=body.box_style,
+                hidden_classes=tuple(body.hidden_classes),
+                agents=None if body.agents is None else tuple(body.agents),
+            )
+        except PlotNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PlotError, SequenceExportError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _plot_body(app.state.root, result)
+
     @app.get("/api/files")
     def files(path: str) -> FileResponse:
         try:
@@ -380,6 +467,39 @@ def _decode_frame(item: str) -> bytes:
         return base64.b64decode(item, validate=True)
     except Exception as exc:
         raise SequenceExportError("a frame is not base64") from exc
+
+
+def _plot_time(scene: Scene, time_us: int | None) -> int:
+    times = pose_times(scene)
+    if time_us is None:
+        if not times:
+            raise PlotError("scene has no pose times")
+        return times[0]
+    return time_us
+
+
+def _plot_relative(scene_id: str, label: str, time_us: int, fmt: str) -> str:
+    if fmt not in {"png", "svg"}:
+        raise PlotError("format must be png or svg")
+    if time_us < 0:
+        raise PlotError("bad sample time")
+    if _EXPORT_NAME.fullmatch(scene_id) is None or _EXPORT_NAME.fullmatch(label) is None:
+        raise PlotError("bad export name")
+    return f"exports/{scene_id}-{label}-{time_us}.{fmt}"
+
+
+def _plot_body(root: Path, result: PlotResult) -> dict[str, object]:
+    relative = result.dest.resolve().relative_to(root.resolve())
+    return {
+        "path": relative.as_posix(),
+        "format": result.format,
+        "time_us": result.time_us,
+        "width": result.width,
+        "height": result.height,
+        "map_drawn": result.map_drawn,
+        "points": result.points,
+        "boxes": result.boxes,
+    }
 
 
 def _export_body(root: Path, result: SequenceExport) -> dict[str, object]:
