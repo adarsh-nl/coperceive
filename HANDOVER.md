@@ -274,3 +274,9 @@ Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did n
 - `pyright` — 0 errors, 0 warnings, 0 informations
 - `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 6.77 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
 - `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-BBhIjMFy.js` and `index-CCdy_1eI.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.
+
+## Dataset adapters (proposed, 2026-10-17)
+
+`docs/adr/0009-dataset-adapters.md` is a proposal, not code. It covers a declarative YAML manifest mapped onto schema 1, generic readers, the `coperceive.adapters` and `coperceive.readers` entry points, `coperceive adapters list|check|ingest`, a rule-by-rule mapping of `griffin/raw.py` and `griffin/convert.py` onto the manifest, and the regression test that must show the Griffin adapter writes identical scenes. Schema 1 is unchanged. Nothing is implemented. Eight decisions for Adarsh are listed at the end of the ADR. "No second dataset" still stands.
+
+This session ran on the EEMCS HPC login node. The repo was cloned over SSH, because HTTPS has no credentials there. `gh` is not installed, so the draft PR has to be opened from the compare page. The section-0 gates were **not run**: the login node allows only commands under a minute, and `node`/`npm` are not on PATH or in `module avail`. An sbatch job for `ps,main-cpu` that creates `.venv`, installs as CI does (CPU torch included) and runs ruff, pyright, pytest and mkdocs is at `~/scripts/slurm/coperceive-gates.sbatch` on that machine, outside the repo. It has not been submitted. Whether compute nodes can reach PyPI is not known.
