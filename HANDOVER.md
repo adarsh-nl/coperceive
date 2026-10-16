@@ -1,6 +1,23 @@
 # Handover
 
-The web viewer is a light control shell around a dark viewport, with a dark theme on the same layout. Phase 6 (playback, cameras, sequence export, view settings, and the bird's-eye and overlay figures) is on main. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+Main is `0c36928`, the merge of pull request #12 (UI redesign, landing page, frustum images off by default, Pillow 13 pyright fix). Phase 6 playback, cameras, sequence export, view settings, and the bird's-eye and overlay figures are on main. The page is a light control shell around a dark viewport, with a dark theme on the same layout.
+
+## Where things stand
+
+Merged into main and deleted from the remote, because each tip was an ancestor of main and none had an open pull request: `cursor/carla-hd-maps-0452`, `cursor/phase6-birds-eye-plot-0452`, `cursor/phase6-camera-images-0452`, `cursor/phase6-customisation-0452`, `cursor/phase6-playback-viewpoints-0452`, `cursor/phase6-sequence-export-0452`, `cursor/ui-redesign-0452`, `feat/phase1-core`, `feat/phase2-griffin`, `feat/phase3-query`, `feat/phase5-viewer`. `main` was not deleted.
+
+Left on the remote: `feat/phase4-validate`. Its tip is not an ancestor of main. The commit that is not in main's history is `7af9239` ("Merge pull request #5 from adarsh-nl/feat/phase5-viewer"). The branch is behind main. It was not deleted.
+
+Open pull request: draft #13, `cursor/phase7-release-0452`, "feat: package 0.1.0 with a Tauri desktop shell". It is not merged. No tag was pushed, nothing was published to PyPI, and no GitHub Release was created. Do not continue that branch.
+
+## Roadmap
+
+1. The repository goes public after a review.
+2. Dataset-agnostic adapters.
+3. The eval engine. Prediction files first, then a live model plugin.
+4. PyPI and the Tauri desktop app.
+
+Do not start a second dataset or training code.
 
 ## Goal
 
@@ -19,7 +36,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - Sequence export writes every recorded sample from the start time through the end time as one frame. `fps` is the file's playback rate. `coperceive export sequence` reads one camera. The page can also post bitmaps of the live 3D view, at most 60 frames. A camera export accepts 600. MP4 needs `ffmpeg` on `PATH` with `shell` false. GIF and PNG use Pillow. Files land in `exports/` under the server root. Rerun export is unchanged.
 - View settings live in `localStorage` under `coperceive-view`. The object is layers, color, point size, box style, hidden classes, and theme. It has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Defaults are every layer on, color by agent, 2 px points, wire boxes, and light. Class color applies to boxes. Points and frustums stay colored by agent. The photo strip keeps its own Boxes and Lidar checkboxes.
 - `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
-- The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
+- The desktop plan on main is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. A draft implementation is pull request #13 and stays unmerged. PyPI and that shell come after the eval engine.
 
 ## Decisions already in the code
 
