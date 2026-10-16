@@ -2,7 +2,7 @@
 
 ## 0.0.0
 
-Camera images. The page shows one panel per camera at the current sample. `GET /api/scenes/{id}/image` returns the file named in `images.parquet`, confined to that scene directory. Boxes and lidar can be projected onto the image. Image bytes stay outside the repository.
+Camera images. The page shows one panel per camera at the current sample. `GET /api/scenes/{id}/image` returns the file named in `images.parquet`, confined to that scene directory. Boxes and lidar can be projected onto the image. Image bytes stay outside the repository. Playback follows elapsed pose time. A slow draw skips to the sample the clock has reached and does not run ahead of it.
 
 Playback and viewpoints. The local page plays recorded pose times at 0.25×–4×, loops, steps, and scrubs, and prefetches the next samples. Viewpoints are orbit, bird's-eye, chase, drone, and look-through a camera frustum. The page uses a dark theme. The feature checklist is `docs/design/viewer-features.md`. Images, sequence export, and the customisation panel are not in this slice. Rerun export is unchanged.
 

@@ -80,7 +80,7 @@ export function cameraGoal(pose: Pose, fovYRad: number): CameraGoal {
   };
 }
 
-export function orbitGoal(positions: number[], anchor: Anchor | null): CameraGoal {
+export function orbitGoal(positions: ArrayLike<number>, anchor: Anchor | null): CameraGoal {
   const origin = anchor ?? medianAnchor(positions);
   const kept: THREE.Vector3[] = [new THREE.Vector3(origin.x, origin.y, origin.z)];
   const radius = 80;
@@ -108,7 +108,7 @@ export function orbitGoal(positions: number[], anchor: Anchor | null): CameraGoa
   };
 }
 
-function medianAnchor(positions: number[]): Anchor {
+function medianAnchor(positions: ArrayLike<number>): Anchor {
   if (positions.length < 3) {
     return { x: 0, y: 0, z: 0 };
   }

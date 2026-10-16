@@ -4,7 +4,7 @@ import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import CameraStrip from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
-import { formatClock, frameDelayMs, neighborSpeed, SPEEDS, stepIndex, type Speed } from "./playback";
+import { formatClock, indexAfter, neighborSpeed, SPEEDS, stepIndex, type Speed } from "./playback";
 import {
   cameraKey,
   isPose,
@@ -34,9 +34,10 @@ type Stage = {
   agents: THREE.Group;
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
+  requestRender: () => void;
 };
 
-type Drawn = { positions: number[]; anchor: { x: number; y: number; z: number } | null };
+type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
 
 const COLORS: Record<string, number> = {
   vehicle: 0xe67828,
@@ -135,7 +136,37 @@ function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
 function clearGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child);
+    const object = child as THREE.LineSegments;
+    object.geometry?.dispose();
+    const material = object.material;
+    if (Array.isArray(material)) {
+      for (const item of material) {
+        item.dispose();
+      }
+    } else {
+      material?.dispose();
+    }
   }
+}
+
+function replaceColored(geometry: THREE.BufferGeometry, positions: Float32Array, colors: Float32Array) {
+  const current = geometry.getAttribute("position");
+  const colored = geometry.getAttribute("color");
+  if (
+    current instanceof THREE.BufferAttribute &&
+    colored instanceof THREE.BufferAttribute &&
+    current.array.length === positions.length &&
+    colored.array.length === colors.length
+  ) {
+    (current.array as Float32Array).set(positions);
+    (colored.array as Float32Array).set(colors);
+    current.needsUpdate = true;
+    colored.needsUpdate = true;
+  } else {
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  }
+  geometry.computeBoundingSphere();
 }
 
 function agentPose(frame: FrameDocument, types: Map<string, string>, agentType: string): Pose | null {
@@ -206,8 +237,8 @@ async function drawFrame(
   cache: FrameCache,
   stale: () => boolean,
 ): Promise<Drawn | null> {
-  const positions: number[] = [];
-  const colors: number[] = [];
+  let pointCount = 0;
+  const sweeps: { xyz: Float32Array; color: THREE.Color }[] = [];
   for (const sensor of frame.point_sensors) {
     if (hidden[sensor.agent_id] || sensor.count === 0) {
       continue;
@@ -223,36 +254,50 @@ async function drawFrame(
       return null;
     }
     const xyz = new Float32Array(buffer);
-    const color = new THREE.Color(colorFor(types.get(sensor.agent_id) ?? ""));
-    for (let index = 0; index < xyz.length; index += 3) {
-      positions.push(xyz[index] ?? 0, xyz[index + 1] ?? 0, xyz[index + 2] ?? 0);
-      colors.push(color.r, color.g, color.b);
-    }
+    pointCount += xyz.length / 3;
+    sweeps.push({ xyz, color: new THREE.Color(colorFor(types.get(sensor.agent_id) ?? "")) });
   }
   if (stale()) {
     return null;
   }
-  stage.points.geometry.dispose();
-  stage.points.geometry = new THREE.BufferGeometry();
-  stage.points.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  stage.points.geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  const positions = new Float32Array(pointCount * 3);
+  const colors = new Float32Array(pointCount * 3);
+  let cursor = 0;
+  for (const sweep of sweeps) {
+    positions.set(sweep.xyz, cursor);
+    for (let index = 0; index < sweep.xyz.length; index += 3) {
+      colors[cursor + index] = sweep.color.r;
+      colors[cursor + index + 1] = sweep.color.g;
+      colors[cursor + index + 2] = sweep.color.b;
+    }
+    cursor += sweep.xyz.length;
+  }
+  replaceColored(stage.points.geometry, positions, colors);
 
-  const boxPositions: number[] = [];
-  const boxColors: number[] = [];
+  let boxFloats = 0;
   for (const box of frame.boxes) {
     if (hidden[box.agent_id] || !Array.isArray(box.lines)) {
       continue;
     }
-    const color = new THREE.Color(colorFor(types.get(box.agent_id) ?? ""));
-    boxPositions.push(...box.lines);
-    for (let index = 0; index < box.lines.length; index += 3) {
-      boxColors.push(color.r, color.g, color.b);
-    }
+    boxFloats += box.lines.length;
   }
-  stage.boxes.geometry.dispose();
-  stage.boxes.geometry = new THREE.BufferGeometry();
-  stage.boxes.geometry.setAttribute("position", new THREE.Float32BufferAttribute(boxPositions, 3));
-  stage.boxes.geometry.setAttribute("color", new THREE.Float32BufferAttribute(boxColors, 3));
+  const boxPositions = new Float32Array(boxFloats);
+  const boxColors = new Float32Array(boxFloats);
+  let boxCursor = 0;
+  for (const box of frame.boxes) {
+    if (hidden[box.agent_id] || !Array.isArray(box.lines)) {
+      continue;
+    }
+    boxPositions.set(box.lines, boxCursor);
+    const color = new THREE.Color(colorFor(types.get(box.agent_id) ?? ""));
+    for (let index = 0; index < box.lines.length; index += 3) {
+      boxColors[boxCursor + index] = color.r;
+      boxColors[boxCursor + index + 1] = color.g;
+      boxColors[boxCursor + index + 2] = color.b;
+    }
+    boxCursor += box.lines.length;
+  }
+  replaceColored(stage.boxes.geometry, boxPositions, boxColors);
 
   clearGroup(stage.frustums);
   for (const frustum of frame.frustums) {
@@ -349,6 +394,10 @@ export default function Viewer({ token }: { token: string }) {
   }, [summary, loop, cameraId, viewpoint, frameIndex]);
 
   useEffect(() => {
+    stageRef.current?.requestRender();
+  }, [viewpoint, cameraId]);
+
+  useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
     const apply = () => {
       reduceMotionRef.current = media.matches;
@@ -393,14 +442,25 @@ export default function Viewer({ token }: { token: string }) {
     frustums.renderOrder = 3;
     agents.renderOrder = 4;
     scene.add(mapLines, points, boxes, frustums, agents);
-    stageRef.current = { points, boxes, mapLines, frustums, agents, camera, controls };
     const clock = new THREE.Clock();
     let frameId = 0;
+    let sizedWidth = 0;
+    let sizedHeight = 0;
+    let sizedRatio = 0;
+    let dragging = false;
+    let damp = 0;
     const draw = () => {
+      frameId = 0;
       const width = canvas.clientWidth || 1;
       const height = canvas.clientHeight || 1;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      renderer.setSize(width, height, false);
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      if (width !== sizedWidth || height !== sizedHeight || ratio !== sizedRatio) {
+        renderer.setPixelRatio(ratio);
+        renderer.setSize(width, height, false);
+        sizedWidth = width;
+        sizedHeight = height;
+        sizedRatio = ratio;
+      }
       camera.aspect = width / height;
       const dt = clock.getDelta();
       const mode = modeRef.current;
@@ -413,10 +473,15 @@ export default function Viewer({ token }: { token: string }) {
         orbitHomeRef.current,
       );
       const orbitFree = mode === "orbit" && !settleRef.current;
+      let easing = false;
       if (orbitFree) {
         controls.enabled = true;
         controls.enableDamping = true;
         controls.update();
+        if (!dragging && damp > 0) {
+          damp -= 1;
+        }
+        easing = dragging || damp > 0;
       } else if (goal) {
         controls.enabled = false;
         const arrived = reduceMotionRef.current
@@ -428,13 +493,39 @@ export default function Viewer({ token }: { token: string }) {
           controls.enabled = true;
           controls.update();
         }
+        easing = !arrived;
       }
       camera.updateProjectionMatrix();
       renderer.render(scene, camera);
+      if (easing) {
+        requestRender();
+      }
+    };
+    const requestRender = () => {
+      if (frameId !== 0) {
+        return;
+      }
       frameId = window.requestAnimationFrame(draw);
     };
-    draw();
+    const onStart = () => {
+      dragging = true;
+      requestRender();
+    };
+    const onEnd = () => {
+      dragging = false;
+      damp = 24;
+      requestRender();
+    };
+    controls.addEventListener("start", onStart);
+    controls.addEventListener("end", onEnd);
+    const resize = new ResizeObserver(requestRender);
+    resize.observe(canvas);
+    stageRef.current = { points, boxes, mapLines, frustums, agents, camera, controls, requestRender };
+    requestRender();
     return () => {
+      resize.disconnect();
+      controls.removeEventListener("start", onStart);
+      controls.removeEventListener("end", onEnd);
       window.cancelAnimationFrame(frameId);
       controls.dispose();
       renderer.dispose();
@@ -511,25 +602,56 @@ export default function Viewer({ token }: { token: string }) {
     if (!playing || !summary) {
       return;
     }
-    const length = summary.times_us.length;
-    if (length === 0) {
+    const times = summary.times_us;
+    if (times.length < 2) {
       return;
     }
-    const atEnd = frameIndex >= length - 1;
-    const basis = atEnd ? length - 2 : frameIndex;
-    const delay = frameDelayMs(summary.times_us, basis, speed);
-    if (delay === null) {
-      return;
-    }
-    const id = window.setTimeout(() => {
-      if (atEnd && !loop) {
+    let originIndex = frameRef.current;
+    let cursor = originIndex;
+    let origin = performance.now();
+    let stopped = false;
+    let timeoutId = 0;
+
+    const tick = () => {
+      if (stopped) {
+        return;
+      }
+      if (frameRef.current !== cursor) {
+        originIndex = frameRef.current;
+        cursor = originIndex;
+        origin = performance.now();
+      }
+      let place = indexAfter(times, originIndex, performance.now() - origin, speed, loopRef.current);
+      cursor = place.index;
+      frameRef.current = place.index;
+      setFrameIndex(place.index);
+      if (place.done) {
         setPlaying(false);
         return;
       }
-      setFrameIndex((current) => stepIndex(current, 1, length, loop));
-    }, delay);
-    return () => window.clearTimeout(id);
-  }, [playing, summary, frameIndex, speed, loop]);
+      // Drawing may have used part of this gap. Land on the sample that
+      // matches the clock now, then wait for the next one. The index never
+      // runs ahead of elapsed time.
+      place = indexAfter(times, originIndex, performance.now() - origin, speed, loopRef.current);
+      if (place.index !== frameRef.current) {
+        cursor = place.index;
+        frameRef.current = place.index;
+        setFrameIndex(place.index);
+      }
+      if (place.done) {
+        setPlaying(false);
+        return;
+      }
+      timeoutId = window.setTimeout(tick, place.remainMs > 0 ? place.remainMs : 16);
+    };
+
+    const first = indexAfter(times, originIndex, 0, speed, loopRef.current);
+    timeoutId = window.setTimeout(tick, first.remainMs > 0 ? first.remainMs : 16);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [playing, summary, speed, loop]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -631,6 +753,7 @@ export default function Viewer({ token }: { token: string }) {
       if (!drawn || stale()) {
         return;
       }
+      stage.requestRender();
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
         orbitHomeRef.current = home;
@@ -670,6 +793,7 @@ export default function Viewer({ token }: { token: string }) {
       });
       if (response.status === 404) {
         replaceMap(stage, new ArrayBuffer(0));
+        stage.requestRender();
         setMapNote("no map.");
         return;
       }
@@ -678,6 +802,7 @@ export default function Viewer({ token }: { token: string }) {
         return;
       }
       replaceMap(stage, await response.arrayBuffer());
+      stage.requestRender();
       setMapNote("map drawn.");
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) {

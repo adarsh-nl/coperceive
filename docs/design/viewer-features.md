@@ -45,7 +45,7 @@ The paper's body frame is ISO 8855 (x forward, y left, z up) and its camera fram
 
 ## This slice
 
-Playback speeds are 0.25, 0.5, 1, 2, and 4. At 1× the delay from sample *i* to sample *i+1* is `(t[i+1] − t[i]) / 1000` milliseconds. A non-positive gap falls back to 100 ms, which is the Griffin 10 Hz step. Loop waits that same gap on the last sample, then wraps. Without loop, playback pauses on the last sample.
+Playback speeds are 0.25, 0.5, 1, 2, and 4. At 1× the delay from sample *i* to sample *i+1* is `(t[i+1] − t[i]) / 1000` milliseconds. A non-positive gap falls back to 100 ms, which is the Griffin 10 Hz step. The clock follows elapsed time. A late draw skips to the sample that elapsed time has reached. It does not play ahead of that clock. Loop waits that same gap on the last sample, then wraps. Without loop, playback pauses on the last sample.
 
 Keyboard, ignored while a text field, select, or textarea is focused: Space play/pause, Left/Right step one sample and pause, `L` loop, `[` and `]` speed, `1` orbit, `2` bird's-eye, `3` chase, `4` drone, `5` camera.
 

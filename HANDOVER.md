@@ -120,7 +120,9 @@ The page showed a photo in every panel: vehicle back, front, left, right, and dr
 
 The extract log ended `done files=1341`. `HF_TOKEN` was unset. The download used an anonymous Hub request. The zips were deleted after the Town03-000 members were written. No image file is in git.
 
-In `town03_camera_playback.mp4` the on-screen clock was sample 1 / 149 at file time 10 s and sample 97 / 149 at file time 14 s, while the speed control read 1×. That is about 24 steps per second. The delay function was not changed in this slice. The earlier playback recording measured 148 steps in about 15 s. The photos stayed on screen during that run and changed with the sample. They did not sit on `Loading image…`.
+The pose gap is 100000 µs, so 1× is 10 samples per second. `town03_camera_playback.mp4` shows sample 1 at file time 10.5 s and sample 94 at file time 13.0 s, then the clock sits on sample 97. That file-time rate is not the page timer. A wall-clock trace of the same page, with the speed control on 1×, stepped once per about 250 ms (about 4 samples per second). Each timeout was armed for 100 ms and fired late. Image loads did not schedule extra steps. The timeout lived in an effect that depended on the sample index, so it started only after React committed the new sample, and PNG decode plus the 3D draw sat on the main thread in front of that wait.
+
+The clock now follows elapsed time. A draw that runs long skips to the sample that elapsed time has reached, and the index does not run ahead of that clock. Photos are decoded on a worker to a 640 px bitmap. The 3D view redraws when the sample, the map, or the camera changes. On the Griffin display, a 20 fps grab of the transport went from sample 2 at 0.45 s to sample 39 at 4.15 s, 37 steps in 3.70 s, 10.0 per second. In `town03_1x_ten_steps.mp4` the status line read 1120400000 µs at file time 13.0 s and 1124300000 µs at file time 17.0 s, which is 39 steps in 4.0 s, while the hint said `Playing at 1×`. A headless Chrome run went from sample 1 to sample 40 in 4.084 s, 9.55 per second, and no sample was ahead of elapsed time.
 
 ## Gates for the playback slice
 
@@ -144,6 +146,18 @@ Python 3.12.3, on 2026-10-16, after the image route and the camera strip were in
 - `pytest --override-ini addopts= --tb=short -q` — 90 passed, 1 skipped, 6 warnings in 2.97 s. The new test is `test_image_route_serves_the_recorded_file`. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
 - `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
 - `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-KV2yBqvj.js` and `index-BLVkEqEi.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine.
+
+## Gates for the playback-rate fix
+
+Python 3.12.3, on 2026-10-16, after the elapsed-time clock. This fix did not rebuild the wheel and did not run gitleaks.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 83 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 90 passed, 1 skipped, 6 warnings in 4.47 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-D0TRq-iP.js` and `index-BWFAAdbI.css`
 - Python 3.10, 3.11, and 3.13 were not run on this machine.
 
 ## Commands

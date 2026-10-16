@@ -20,6 +20,57 @@ export function frameDelayMs(times: readonly number[], index: number, speed: num
   return dtUs / 1000 / speed;
 }
 
+export type PlaybackPlace = {
+  index: number;
+  done: boolean;
+  remainMs: number;
+};
+
+function gapUs(times: readonly number[], index: number): number {
+  const delay = frameDelayMs(times, index, 1);
+  if (delay === null) {
+    return FALLBACK_GAP_MS * 1000;
+  }
+  return delay * 1000;
+}
+
+/** Sample that should be on screen after `elapsedMs` of playback at `speed`. */
+export function indexAfter(
+  times: readonly number[],
+  originIndex: number,
+  elapsedMs: number,
+  speed: number,
+  loop: boolean,
+): PlaybackPlace {
+  const length = times.length;
+  const idle = { index: Math.max(0, originIndex), done: false, remainMs: FALLBACK_GAP_MS };
+  if (length < 2 || speed <= 0 || !Number.isFinite(elapsedMs) || elapsedMs < 0) {
+    return idle;
+  }
+  let remainingUs = elapsedMs * 1000 * speed;
+  let index = Math.min(Math.max(originIndex, 0), length - 1);
+  let guard = 0;
+  while (guard < length * 4 + 8) {
+    guard += 1;
+    const atEnd = index >= length - 1;
+    const basis = atEnd ? length - 2 : index;
+    const gap = gapUs(times, basis);
+    if (remainingUs < gap) {
+      return { index, done: false, remainMs: (gap - remainingUs) / 1000 / speed };
+    }
+    remainingUs -= gap;
+    if (atEnd) {
+      if (!loop) {
+        return { index, done: true, remainMs: 0 };
+      }
+      index = 0;
+      continue;
+    }
+    index += 1;
+  }
+  return { index, done: !loop && index >= length - 1, remainMs: 0 };
+}
+
 export function stepIndex(index: number, delta: number, length: number, loop: boolean): number {
   if (length <= 0) {
     return 0;

@@ -299,18 +299,10 @@ button.ghost {
   background: var(--bg-sunken);
   overflow: hidden;
 }
-.camera-frame img {
-  width: 100%;
-  height: 100%;
-  object-fit: contain;
-  display: block;
-}
 .camera-frame canvas {
-  position: absolute;
-  inset: 0;
   width: 100%;
   height: 100%;
-  pointer-events: none;
+  display: block;
 }
 .camera-missing {
   margin: 0;
