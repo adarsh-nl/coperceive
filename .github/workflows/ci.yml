@@ -12,7 +12,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev,viewer]"
+      # app is required so pyright can resolve fastapi in tests/test_hdmap.py.
+      # That test is included; coperceive/app itself stays excluded.
+      - run: pip install -e ".[app,dev,viewer]"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: ruff check .
       - run: ruff format --check .
