@@ -1,10 +1,10 @@
 # Handover
 
-The shared HD map is in the tree. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+Phase 6 slice 1 is in the tree: playback, viewpoints, and the dark page. Images, sequence export, and the customisation panel are not started. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
 
 ## Goal
 
-An independent cooperative perception data platform Adarsh owns. Schema 1 scenes stay the contract in `docs/spec/format.md`. A CARLA town is a sidecar map, drawn under the lidar and used by `coperceive validate`. The distribution, import, and command name are `coperceive`.
+An independent cooperative perception data platform Adarsh owns. Schema 1 scenes stay the contract in `docs/spec/format.md`. A CARLA town is a sidecar map, drawn under the lidar and used by `coperceive validate`. The page plays those samples and can sit in orbit, bird's-eye, chase, drone, or a camera frustum. The distribution, import, and command name are `coperceive`.
 
 Clean-room rule: do not install, import, copy, paraphrase, or model naming or schema on kesai-labs/py123d or the adarsh-nl fork. Neither was opened. The only outside idea used is a shared HD-map layer per town, drawn with the sensors. The Griffin toolkit was not re-opened. Altitude bands and official scene counts are the figures already recorded in `docs/design/griffin-verification.md`.
 
@@ -13,7 +13,8 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - `coperceive maps fetch` extracts `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr` from CARLA 0.9.15 (`https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`). `maps ingest` writes `maps/<town>/manifest.json`, `polylines.parquet`, and `vertices.bin`. `maps align` stores `world_from_opendrive`. The `.xodr` bytes and the map directories are not in git.
 - The map format is `coperceive-hdmap` version 1. Vertices stay in the OpenDRIVE frame. The transform is a 3×3 matrix plus a translation, because a reflection is allowed and a quaternion cannot store one. Schema version stays `1`.
 - The viewer draws lane centres and road edges under the lidar. `GET /api/scenes/{id}/map/lines` returns the world-frame blob. A missing map is 404 and the status ends in `no map.`
-- The status line counts boxes and frustums for agents that are still shown. The first camera frame uses the vehicle pose and lidar points within 80 m horizontally. Later scrubs do not move the camera. `GET /favicon.ico` returns `favicon.svg`.
+- The status line counts boxes and frustums for agents that are still shown. Orbit frames the vehicle pose and lidar points within 80 m horizontally once per scene. Later scrubs do not move an orbit camera. `GET /favicon.ico` returns `favicon.svg`.
+- Playback uses the recorded gap between pose times at 0.25×, 0.5×, 1×, 2×, and 4×. The page caches 16 frame documents and 48 point sweeps and requests the next four samples. Viewpoints ease over 180 ms. Look-through uses sensor +Z as forward and sensor −Y as up. The checklist is `docs/design/viewer-features.md`. No new HTTP route.
 - `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
 - The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
 
@@ -51,6 +52,9 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 18. Schema number. Still `1`. The map is `coperceive-hdmap` version 1, separate from the scene schema.
 19. Desktop shell. Tauri is the plan and Electron is the fallback. The shell was not built.
 20. Lidar points are 2 CSS pixels. Say if 2 is still too large or too small.
+21. This slice is playback and viewpoints only. Say if the next slice should be images, export, or the customisation panel.
+22. Dark is the only theme until the customisation slice stores the choice. Say if a light theme has to land sooner.
+23. Look-through uses sensor −Y as up because the Town03-000 front camera's +Y points down. Say if another dataset uses the opposite axis.
 
 ## Griffin-25m map check
 
@@ -75,6 +79,16 @@ Vehicle pose `z` from `poses.parquet`: 7,000 values, median −0.012331924401223
 
 The earlier Phase 4 totals (speed, altitude, shared tracks, 11 computed pairs, 22 instantaneous acceleration warnings) are still the same run's non-map rows. They are copied in `docs/validate.md`. The 40 m, 55 m, and random subsets were not validated.
 
+## Phase 6 playback check
+
+`coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps` on 2026-10-16. Town03-000, sample 1, vehicle shown: `Town03-000 at 1118500000 µs. 2929 points, 55 boxes, 9 frustums. map drawn.` Vehicle hidden at 1122500000 µs: `0 points, 33 boxes, 5 frustums. map drawn.`
+
+The pose gap is 100000 µs. In the playback recording the clock moved from 1118500000 µs to 1133300000 µs, which is 148 steps, while the video clock ran about 15 s. That is the 10 Hz recording at 1×.
+
+Vehicle front camera at 1118500000 µs: sensor +Y in world is (0, −0.005, −1), so it points down. The page uses sensor −Y as `camera.up`. The front-camera screenshot has the road in the lower half of the view. Drone bottom +Z in world is about (0, 0, −1), so that view looks down.
+
+Loop, 4×, and a scene with no UAV pose were not exercised on Griffin. The delay function is the same one 1× uses.
+
 ## Browser check
 
 `coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps`.
@@ -97,6 +111,18 @@ Python 3.12.3. Commands on 2026-10-15 after the map code was in the tree. Pyrigh
 - `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 19 commits scanned, through `134c816`. This paragraph’s commit is not in that scan.
 - Python 3.10, 3.11, and 3.13 were not run on this machine. Those versions are the GitHub Actions matrix.
 
+## Gates for this slice
+
+Python 3.12.3, on 2026-10-16, after the playback page was in the tree. The map-phase gate list above is the earlier run. This slice did not rebuild the wheel.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — passed
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 89 passed, 1 skipped, 6 warnings in 2.64 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-DoaPsDlj.js` and `index-DrTviwvX.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine.
+
 ## Commands
 
 ```bash
@@ -117,4 +143,4 @@ coperceive serve --host 127.0.0.1 --root /path/scenes --maps /path/maps
 
 ## Next
 
-Stop. The desktop shell is still out of scope.
+Stop. The next slice is camera images, then sequence export, then the customisation panel. The matplotlib bird's-eye plot and camera overlays stay on that list. The desktop shell is still out of scope.

@@ -12,6 +12,7 @@ nav:
   - Name: design/naming.md
   - Earlier candidates: design/names.md
   - Griffin verification: design/griffin-verification.md
+  - Viewer features: design/viewer-features.md
   - Griffin dataset: datasets/griffin.md
   - Validate: validate.md
   - Viewer: viewer.md

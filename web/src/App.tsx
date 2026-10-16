@@ -120,16 +120,15 @@ export default function App() {
   const jobRows: Job[] = jobs.data ?? [];
 
   return (
-    <main className="page">
+    <main className={tab === "viewer" ? "page page-wide" : "page"}>
       <header>
         <span className="badge">coperceive</span>
         <h1>Local data desk</h1>
         <p>
-          A single-user page for the cooperative perception library. The viewer
-          and this desk both talk to the API on this origin. The only
-          allow-listed job in this build is <code>echo</code>.
+          The viewer plays a scene on this origin. This desk runs the allow-listed <code>echo</code> job.
         </p>
       </header>
+      <div className="topbar">
       <div className="tabs" role="tablist">
         <button
           type="button"
@@ -150,16 +149,17 @@ export default function App() {
           Desk
         </button>
       </div>
-      <div className="token-row">
-        <Label htmlFor="token-global">Bearer token</Label>
+      <label className="token-inline" htmlFor="token-global">
+        Bearer token
         <input
           id="token-global"
           type="password"
           autoComplete="off"
           value={token}
           onChange={(event) => setToken(event.target.value)}
-          placeholder="Leave empty when the server has no token"
+          placeholder="Empty when the server has no token"
         />
+      </label>
       </div>
       {tab === "viewer" ? <Viewer token={token} /> : null}
 

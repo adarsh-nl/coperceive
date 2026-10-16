@@ -2,41 +2,28 @@ import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
-
-type Pose = {
-  qw: number;
-  qx: number;
-  qy: number;
-  qz: number;
-  tx: number;
-  ty: number;
-  tz: number;
-};
-
-type SceneSummary = {
-  scene_id: string;
-  world_frame: string;
-  agents: { agent_id: string; agent_type: string }[];
-  times_us: number[];
-};
-
-type FrameBox = { agent_id: string; lines: number[] };
-type FrameFrustum = {
-  agent_id: string;
-  sensor_id: string;
-  pose: Pose;
-  fov_y_rad: number;
-  aspect: number;
-};
-type FrameSensor = { agent_id: string; sensor_id: string; count: number };
-type FrameDocument = {
-  scene_id: string;
-  time_us: number;
-  agents: { agent_id: string; pose: Pose | null }[];
-  boxes: FrameBox[];
-  frustums: FrameFrustum[];
-  point_sensors: FrameSensor[];
-};
+import { createFrameCache, type FrameCache } from "./cache";
+import { formatClock, frameDelayMs, neighborSpeed, SPEEDS, stepIndex, type Speed } from "./playback";
+import {
+  cameraKey,
+  isPose,
+  isSummary,
+  type FrameDocument,
+  type FrameFrustum,
+  type Pose,
+  type SceneSummary,
+} from "./types";
+import {
+  applyGoal,
+  approachGoal,
+  birdGoal,
+  cameraGoal,
+  chaseGoal,
+  droneGoal,
+  orbitGoal,
+  type CameraGoal,
+  type Viewpoint,
+} from "./viewpoints";
 
 type Stage = {
   points: THREE.Points;
@@ -48,59 +35,25 @@ type Stage = {
   controls: OrbitControls;
 };
 
-type Anchor = { x: number; y: number; z: number };
+type Drawn = { positions: number[]; anchor: { x: number; y: number; z: number } | null };
 
 const COLORS: Record<string, number> = {
   vehicle: 0xe67828,
   uav: 0x2878dc,
 };
 
+const VIEWPOINTS: { id: Viewpoint; label: string; shortcut: string }[] = [
+  { id: "orbit", label: "Orbit", shortcut: "1" },
+  { id: "bird", label: "Bird's-eye", shortcut: "2" },
+  { id: "chase", label: "Chase", shortcut: "3" },
+  { id: "drone", label: "Drone", shortcut: "4" },
+  { id: "camera", label: "Camera", shortcut: "5" },
+];
+
+const PREFETCH_FRAMES = 4;
+
 function colorFor(agentType: string): number {
   return COLORS[agentType] ?? 0xb7b1a6;
-}
-
-function isPose(value: unknown): value is Pose {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const row = value as Record<string, unknown>;
-  return ["qw", "qx", "qy", "qz", "tx", "ty", "tz"].every((key) => typeof row[key] === "number");
-}
-
-function isSummary(value: unknown): value is SceneSummary {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const row = value as Record<string, unknown>;
-  return (
-    typeof row.scene_id === "string" &&
-    typeof row.world_frame === "string" &&
-    Array.isArray(row.agents) &&
-    Array.isArray(row.times_us) &&
-    row.times_us.every((item) => typeof item === "number") &&
-    row.agents.every(
-      (item) =>
-        !!item &&
-        typeof item === "object" &&
-        typeof (item as { agent_id?: unknown }).agent_id === "string" &&
-        typeof (item as { agent_type?: unknown }).agent_type === "string",
-    )
-  );
-}
-
-function isFrame(value: unknown): value is FrameDocument {
-  if (!value || typeof value !== "object") {
-    return false;
-  }
-  const row = value as Record<string, unknown>;
-  return (
-    typeof row.scene_id === "string" &&
-    typeof row.time_us === "number" &&
-    Array.isArray(row.agents) &&
-    Array.isArray(row.boxes) &&
-    Array.isArray(row.frustums) &&
-    Array.isArray(row.point_sensors)
-  );
 }
 
 function applyPose(object: THREE.Object3D, pose: Pose) {
@@ -120,22 +73,9 @@ function frustumLines(fovY: number, aspect: number, color: number): THREE.LineSe
   ];
   const verts: number[] = [];
   for (let index = 0; index < 4; index += 1) {
-    const corner = corners[index];
-    const next = corners[(index + 1) % 4];
-    verts.push(
-      0,
-      0,
-      0,
-      corner[0],
-      corner[1],
-      corner[2],
-      corner[0],
-      corner[1],
-      corner[2],
-      next[0],
-      next[1],
-      next[2],
-    );
+    const corner = corners[index] ?? [0, 0, 0];
+    const next = corners[(index + 1) % 4] ?? [0, 0, 0];
+    verts.push(0, 0, 0, corner[0], corner[1], corner[2], corner[0], corner[1], corner[2], next[0], next[1], next[2]);
   }
   const geometry = new THREE.BufferGeometry();
   geometry.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
@@ -176,12 +116,12 @@ function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
     }
     for (let vertex = 0; vertex + 1 < vertices; vertex += 1) {
       positions.push(
-        coords[vertex * 3],
-        coords[vertex * 3 + 1],
-        coords[vertex * 3 + 2],
-        coords[(vertex + 1) * 3],
-        coords[(vertex + 1) * 3 + 1],
-        coords[(vertex + 1) * 3 + 2],
+        coords[vertex * 3] ?? 0,
+        coords[vertex * 3 + 1] ?? 0,
+        coords[vertex * 3 + 2] ?? 0,
+        coords[(vertex + 1) * 3] ?? 0,
+        coords[(vertex + 1) * 3 + 1] ?? 0,
+        coords[(vertex + 1) * 3 + 2] ?? 0,
       );
       colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
     }
@@ -191,68 +131,69 @@ function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
   return geometry;
 }
 
-function vehicleAnchor(frame: FrameDocument, types: Map<string, string>): Anchor | null {
+function clearGroup(group: THREE.Group) {
+  for (const child of [...group.children]) {
+    group.remove(child);
+  }
+}
+
+function agentPose(frame: FrameDocument, types: Map<string, string>, agentType: string): Pose | null {
   for (const agent of frame.agents) {
-    if (types.get(agent.agent_id) === "vehicle" && isPose(agent.pose)) {
-      return { x: agent.pose.tx, y: agent.pose.ty, z: agent.pose.tz };
+    if (types.get(agent.agent_id) === agentType && isPose(agent.pose)) {
+      return agent.pose;
     }
   }
   return null;
 }
 
-function frameNearCluster(stage: Stage, positions: number[], anchor: Anchor | null) {
-  const origin = anchor ?? medianAnchor(positions);
-  const kept: THREE.Vector3[] = [new THREE.Vector3(origin.x, origin.y, origin.z)];
-  const radius = 80;
-  for (let index = 0; index < positions.length; index += 3) {
-    const dx = positions[index] - origin.x;
-    const dy = positions[index + 1] - origin.y;
-    if (dx * dx + dy * dy <= radius * radius) {
-      kept.push(
-        new THREE.Vector3(positions[index], positions[index + 1], positions[index + 2]),
-      );
+function frustumFor(frame: FrameDocument, key: string): FrameFrustum | null {
+  for (const frustum of frame.frustums) {
+    if (cameraKey(frustum.agent_id, frustum.sensor_id) === key && isPose(frustum.pose)) {
+      return frustum;
     }
   }
-  const box = new THREE.Box3().setFromPoints(kept);
-  const center = box.getCenter(new THREE.Vector3());
-  const size = box.getSize(new THREE.Vector3());
-  const span = Math.max(size.length() * 0.55, 18);
-  stage.controls.target.copy(center);
-  stage.camera.position.set(center.x + span, center.y - span, center.z + span * 0.75);
-  stage.camera.near = 0.1;
-  stage.camera.far = Math.max(5000, span * 40);
-  stage.camera.updateProjectionMatrix();
-  stage.controls.update();
+  return null;
 }
 
-function medianAnchor(positions: number[]): Anchor {
-  if (positions.length < 3) {
-    return { x: 0, y: 0, z: 0 };
+function holdNote(mode: Viewpoint, frame: FrameDocument, types: Map<string, string>, key: string): string {
+  if (mode === "chase" && !agentPose(frame, types, "vehicle")) {
+    return " No vehicle pose at this sample, so chase is holding.";
   }
-  const xs: number[] = [];
-  const ys: number[] = [];
-  const zs: number[] = [];
-  for (let index = 0; index < positions.length; index += 3) {
-    xs.push(positions[index]);
-    ys.push(positions[index + 1]);
-    zs.push(positions[index + 2]);
+  if (mode === "bird" && !agentPose(frame, types, "vehicle")) {
+    return " No vehicle pose at this sample, so bird's-eye is holding.";
   }
-  return { x: median(xs), y: median(ys), z: median(zs) };
+  if (mode === "drone" && (!agentPose(frame, types, "uav") || !agentPose(frame, types, "vehicle"))) {
+    return " No UAV pose at this sample, so the drone view is holding.";
+  }
+  if (mode === "camera" && !frustumFor(frame, key)) {
+    return " That camera has no frustum at this sample.";
+  }
+  return "";
 }
 
-function median(values: number[]): number {
-  const ordered = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(ordered.length / 2);
-  if (ordered.length % 2 === 1) {
-    return ordered[mid] ?? 0;
+function goalFor(
+  mode: Viewpoint,
+  frame: FrameDocument | null,
+  types: Map<string, string>,
+  key: string,
+  home: CameraGoal | null,
+): CameraGoal | null {
+  if (!frame || mode === "orbit") {
+    return home;
   }
-  return ((ordered[mid - 1] ?? 0) + (ordered[mid] ?? 0)) / 2;
-}
-
-function clearGroup(group: THREE.Group) {
-  for (const child of [...group.children]) {
-    group.remove(child);
+  const vehicle = agentPose(frame, types, "vehicle");
+  if (mode === "bird") {
+    return vehicle ? birdGoal(vehicle) : null;
   }
+  if (mode === "chase") {
+    return vehicle ? chaseGoal(vehicle) : null;
+  }
+  if (mode === "drone") {
+    const drone = agentPose(frame, types, "uav");
+    return drone && vehicle ? droneGoal(drone, vehicle) : null;
+  }
+  const frustum = frustumFor(frame, key);
+  return frustum && isPose(frustum.pose) ? cameraGoal(frustum.pose, frustum.fov_y_rad) : null;
 }
 
 async function drawFrame(
@@ -261,27 +202,34 @@ async function drawFrame(
   types: Map<string, string>,
   hidden: Record<string, boolean>,
   token: string,
-  signal: AbortSignal,
-) {
+  cache: FrameCache,
+  stale: () => boolean,
+): Promise<Drawn | null> {
   const positions: number[] = [];
   const colors: number[] = [];
   for (const sensor of frame.point_sensors) {
     if (hidden[sensor.agent_id] || sensor.count === 0) {
       continue;
     }
-    const response = await fetch(
-      `${apiBase()}/api/scenes/${encodeURIComponent(frame.scene_id)}/points?time_us=${frame.time_us}&agent_id=${encodeURIComponent(sensor.agent_id)}&sensor_id=${encodeURIComponent(sensor.sensor_id)}`,
-      { headers: authHeaders(token), signal },
+    const buffer = await cache.loadPoints(
+      frame.scene_id,
+      frame.time_us,
+      sensor.agent_id,
+      sensor.sensor_id,
+      token,
     );
-    if (!response.ok) {
-      throw new Error(await errorDetail(response));
+    if (stale()) {
+      return null;
     }
-    const xyz = new Float32Array(await response.arrayBuffer());
+    const xyz = new Float32Array(buffer);
     const color = new THREE.Color(colorFor(types.get(sensor.agent_id) ?? ""));
     for (let index = 0; index < xyz.length; index += 3) {
-      positions.push(xyz[index], xyz[index + 1], xyz[index + 2]);
+      positions.push(xyz[index] ?? 0, xyz[index + 1] ?? 0, xyz[index + 2] ?? 0);
       colors.push(color.r, color.g, color.b);
     }
+  }
+  if (stale()) {
+    return null;
   }
   stage.points.geometry.dispose();
   stage.points.geometry = new THREE.BufferGeometry();
@@ -310,11 +258,7 @@ async function drawFrame(
     if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
       continue;
     }
-    const lines = frustumLines(
-      frustum.fov_y_rad,
-      frustum.aspect,
-      colorFor(types.get(frustum.agent_id) ?? ""),
-    );
+    const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(types.get(frustum.agent_id) ?? ""));
     applyPose(lines, frustum.pose);
     stage.frustums.add(lines);
   }
@@ -328,7 +272,11 @@ async function drawFrame(
     applyPose(axes, agent.pose);
     stage.agents.add(axes);
   }
-  return { positions, anchor: vehicleAnchor(frame, types) };
+  const vehicle = agentPose(frame, types, "vehicle");
+  return {
+    positions,
+    anchor: vehicle ? { x: vehicle.tx, y: vehicle.ty, z: vehicle.tz } : null,
+  };
 }
 
 function replaceMap(stage: Stage, buffer: ArrayBuffer) {
@@ -337,9 +285,34 @@ function replaceMap(stage: Stage, buffer: ArrayBuffer) {
   stage.mapLines.geometry = next;
 }
 
+function prefetchAhead(
+  cache: FrameCache,
+  summary: SceneSummary,
+  frameIndex: number,
+  token: string,
+) {
+  const times = summary.times_us.slice(frameIndex + 1, frameIndex + 1 + PREFETCH_FRAMES);
+  for (const time of times) {
+    void cache
+      .loadFrame(summary.scene_id, time, token)
+      .then((frame) => {
+        for (const sensor of frame.point_sensors) {
+          if (sensor.count === 0) {
+            continue;
+          }
+          void cache
+            .loadPoints(summary.scene_id, time, sensor.agent_id, sensor.sensor_id, token)
+            .catch(() => undefined);
+        }
+      })
+      .catch(() => undefined);
+  }
+}
+
 export default function Viewer({ token }: { token: string }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<Stage | null>(null);
+  const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
   const [sceneId, setSceneId] = useState("");
   const [summary, setSummary] = useState<SceneSummary | null>(null);
@@ -348,21 +321,56 @@ export default function Viewer({ token }: { token: string }) {
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
   const [exportNote, setExportNote] = useState("");
+  const [playing, setPlaying] = useState(false);
+  const [loop, setLoop] = useState(false);
+  const [speed, setSpeed] = useState<Speed>(1);
+  const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
+  const [cameraId, setCameraId] = useState("");
   const framedScene = useRef("");
+  const modeRef = useRef<Viewpoint>("orbit");
+  const cameraKeyRef = useRef("");
+  const latestRef = useRef<{ frame: FrameDocument; types: Map<string, string> } | null>(null);
+  const orbitHomeRef = useRef<CameraGoal | null>(null);
+  const settleRef = useRef(false);
+  const reduceMotionRef = useRef(false);
+  const lengthRef = useRef(0);
+  const loopRef = useRef(false);
+  const frameRef = useRef(0);
+  const drawGen = useRef(0);
+
+  useEffect(() => {
+    lengthRef.current = summary?.times_us.length ?? 0;
+    loopRef.current = loop;
+    frameRef.current = frameIndex;
+    cameraKeyRef.current = cameraId;
+    modeRef.current = viewpoint;
+  }, [summary, loop, cameraId, viewpoint, frameIndex]);
+
+  useEffect(() => {
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const apply = () => {
+      reduceMotionRef.current = media.matches;
+    };
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, []);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
       return;
     }
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: false });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x16130f);
+    scene.background = new THREE.Color(0x0e100d);
     const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 5000);
     camera.up.set(0, 0, 1);
     camera.position.set(40, -40, 25);
     const controls = new OrbitControls(camera, canvas);
     controls.target.set(0, 0, 0);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.08;
     const points = new THREE.Points(
       new THREE.BufferGeometry(),
       new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true }),
@@ -384,15 +392,42 @@ export default function Viewer({ token }: { token: string }) {
     agents.renderOrder = 4;
     scene.add(mapLines, points, boxes, frustums, agents);
     stageRef.current = { points, boxes, mapLines, frustums, agents, camera, controls };
+    const clock = new THREE.Clock();
     let frameId = 0;
     const draw = () => {
       const width = canvas.clientWidth || 1;
       const height = canvas.clientHeight || 1;
-      renderer.setPixelRatio(window.devicePixelRatio || 1);
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
+      const dt = clock.getDelta();
+      const mode = modeRef.current;
+      const latest = latestRef.current;
+      const goal = goalFor(
+        mode,
+        latest?.frame ?? null,
+        latest?.types ?? new Map(),
+        cameraKeyRef.current,
+        orbitHomeRef.current,
+      );
+      const orbitFree = mode === "orbit" && !settleRef.current;
+      if (orbitFree) {
+        controls.enabled = true;
+        controls.enableDamping = true;
+        controls.update();
+      } else if (goal) {
+        controls.enabled = false;
+        const arrived = reduceMotionRef.current
+          ? (applyGoal(camera, controls.target, goal), true)
+          : approachGoal(camera, controls.target, goal, dt);
+        if (mode === "orbit" && arrived) {
+          applyGoal(camera, controls.target, goal);
+          settleRef.current = false;
+          controls.enabled = true;
+          controls.update();
+        }
+      }
       camera.updateProjectionMatrix();
-      controls.update();
       renderer.render(scene, camera);
       frameId = window.requestAnimationFrame(draw);
     };
@@ -407,6 +442,92 @@ export default function Viewer({ token }: { token: string }) {
       stageRef.current = null;
     };
   }, []);
+
+  useEffect(() => {
+    function onKey(event: KeyboardEvent) {
+      const target = event.target;
+      if (target instanceof HTMLElement) {
+        const tag = target.tagName;
+        if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA" || target.isContentEditable) {
+          return;
+        }
+        if (tag === "BUTTON" && event.key === " ") {
+          return;
+        }
+      }
+      if (event.metaKey || event.ctrlKey || event.altKey) {
+        return;
+      }
+      if (event.key === " ") {
+        event.preventDefault();
+        setPlaying((current) => {
+          if (current) {
+            return false;
+          }
+          if (lengthRef.current < 2) {
+            return false;
+          }
+          if (!loopRef.current && frameRef.current >= lengthRef.current - 1) {
+            setFrameIndex(0);
+          }
+          return true;
+        });
+      } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        event.preventDefault();
+        setPlaying(false);
+        const delta = event.key === "ArrowLeft" ? -1 : 1;
+        setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loopRef.current));
+      } else if (event.key === "l" || event.key === "L") {
+        setLoop((current) => !current);
+      } else if (event.key === "[" || event.key === "]") {
+        const direction = event.key === "]" ? 1 : -1;
+        setSpeed((current) => neighborSpeed(current, direction));
+      } else if (event.key === "1") {
+        chooseViewpoint("orbit");
+      } else if (event.key === "2") {
+        chooseViewpoint("bird");
+      } else if (event.key === "3") {
+        chooseViewpoint("chase");
+      } else if (event.key === "4") {
+        chooseViewpoint("drone");
+      } else if (event.key === "5") {
+        chooseViewpoint("camera");
+      }
+    }
+    function chooseViewpoint(next: Viewpoint) {
+      if (next === "orbit") {
+        settleRef.current = true;
+      }
+      modeRef.current = next;
+      setViewpoint(next);
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  useEffect(() => {
+    if (!playing || !summary) {
+      return;
+    }
+    const length = summary.times_us.length;
+    if (length === 0) {
+      return;
+    }
+    const atEnd = frameIndex >= length - 1;
+    const basis = atEnd ? length - 2 : frameIndex;
+    const delay = frameDelayMs(summary.times_us, basis, speed);
+    if (delay === null) {
+      return;
+    }
+    const id = window.setTimeout(() => {
+      if (atEnd && !loop) {
+        setPlaying(false);
+        return;
+      }
+      setFrameIndex((current) => stepIndex(current, 1, length, loop));
+    }, delay);
+    return () => window.clearTimeout(id);
+  }, [playing, summary, frameIndex, speed, loop]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -425,11 +546,7 @@ export default function Viewer({ token }: { token: string }) {
         return;
       }
       const ids = body.flatMap((item) => {
-        if (
-          item &&
-          typeof item === "object" &&
-          typeof (item as { scene_id?: unknown }).scene_id === "string"
-        ) {
+        if (item && typeof item === "object" && typeof (item as { scene_id?: unknown }).scene_id === "string") {
           return [(item as { scene_id: string }).scene_id];
         }
         return [];
@@ -451,6 +568,7 @@ export default function Viewer({ token }: { token: string }) {
     if (!sceneId) {
       return;
     }
+    cacheRef.current.clear();
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}`, {
@@ -469,6 +587,16 @@ export default function Viewer({ token }: { token: string }) {
       setSummary(body);
       setFrameIndex(0);
       setHidden({});
+      setPlaying(false);
+      const cameras = body.sensors.filter((sensor) => sensor.modality === "camera");
+      setCameraId((current) => {
+        const stillThere = cameras.some((sensor) => cameraKey(sensor.agent_id, sensor.sensor_id) === current);
+        if (stillThere) {
+          return current;
+        }
+        const first = cameras[0];
+        return first ? cameraKey(first.agent_id, first.sensor_id) : "";
+      });
       setStatus(`${body.scene_id}: ${body.times_us.length} samples, world ${body.world_frame}.`);
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) {
@@ -487,25 +615,26 @@ export default function Viewer({ token }: { token: string }) {
       return;
     }
     const stage = stageRef.current;
-    const controller = new AbortController();
+    const gen = ++drawGen.current;
     const types = new Map(summary.agents.map((agent) => [agent.agent_id, agent.agent_type]));
+    const stale = () => drawGen.current !== gen;
     void (async () => {
-      const response = await fetch(
-        `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/frame?time_us=${time}`,
-        { headers: authHeaders(token), signal: controller.signal },
-      );
-      if (!response.ok) {
-        setStatus(await errorDetail(response));
+      const body = await cacheRef.current.loadFrame(summary.scene_id, time, token);
+      if (stale()) {
         return;
       }
-      const body = (await response.json()) as unknown;
-      if (!isFrame(body)) {
-        setStatus("The frame document was incomplete.");
+      latestRef.current = { frame: body, types };
+      const drawn = await drawFrame(stage, body, types, hidden, token, cacheRef.current, stale);
+      if (!drawn || stale()) {
         return;
       }
-      const drawn = await drawFrame(stage, body, types, hidden, token, controller.signal);
       if (framedScene.current !== summary.scene_id) {
-        frameNearCluster(stage, drawn.positions, drawn.anchor);
+        const home = orbitGoal(drawn.positions, drawn.anchor);
+        orbitHomeRef.current = home;
+        const snap = goalFor(modeRef.current, body, types, cameraKeyRef.current, home) ?? home;
+        applyGoal(stage.camera, stage.controls.target, snap);
+        stage.controls.enabled = modeRef.current === "orbit";
+        settleRef.current = false;
         framedScene.current = summary.scene_id;
       }
       const shown = body.point_sensors.reduce((sum, sensor) => {
@@ -514,14 +643,14 @@ export default function Viewer({ token }: { token: string }) {
       const boxes = body.boxes.filter((box) => !hidden[box.agent_id]).length;
       const frustums = body.frustums.filter((frustum) => !hidden[frustum.agent_id]).length;
       setStatus(
-        `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}`,
+        `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
+      prefetchAhead(cacheRef.current, summary, frameIndex, token);
     })().catch((error: unknown) => {
-      if (!controller.signal.aborted) {
+      if (!stale()) {
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
       }
     });
-    return () => controller.abort();
   }, [summary, frameIndex, hidden, token, mapNote]);
 
   useEffect(() => {
@@ -531,10 +660,10 @@ export default function Viewer({ token }: { token: string }) {
     const stage = stageRef.current;
     const controller = new AbortController();
     void (async () => {
-      const response = await fetch(
-        `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/map/lines`,
-        { headers: authHeaders(token), signal: controller.signal },
-      );
+      const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/map/lines`, {
+        headers: authHeaders(token),
+        signal: controller.signal,
+      });
       if (response.status === 404) {
         replaceMap(stage, new ArrayBuffer(0));
         setMapNote("no map.");
@@ -554,18 +683,37 @@ export default function Viewer({ token }: { token: string }) {
     return () => controller.abort();
   }, [summary, token]);
 
+  function togglePlay() {
+    canvasRef.current?.focus();
+    if (!summary || summary.times_us.length < 2) {
+      return;
+    }
+    if (!playing && !loop && frameIndex >= summary.times_us.length - 1) {
+      setFrameIndex(0);
+      setPlaying(true);
+      return;
+    }
+    setPlaying((current) => !current);
+  }
+
+  function chooseViewpoint(next: Viewpoint) {
+    if (next === "orbit") {
+      settleRef.current = true;
+    }
+    modeRef.current = next;
+    setViewpoint(next);
+    canvasRef.current?.focus();
+  }
+
   async function exportRerun() {
     if (!summary) {
       return;
     }
     setExportNote("Writing the .rrd…");
-    const response = await fetch(
-      `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/export/rerun`,
-      {
-        method: "POST",
-        headers: { ...authHeaders(token), "X-Coperceive-Request": "1" },
-      },
-    );
+    const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/export/rerun`, {
+      method: "POST",
+      headers: { ...authHeaders(token), "X-Coperceive-Request": "1" },
+    });
     if (!response.ok) {
       setExportNote(await errorDetail(response));
       return;
@@ -575,16 +723,16 @@ export default function Viewer({ token }: { token: string }) {
   }
 
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
+  const timeUs = summary?.times_us[Math.min(frameIndex, last)];
+  const cameras = (summary?.sensors ?? []).filter((sensor) => sensor.modality === "camera");
+  const viewpointLabel = VIEWPOINTS.find((item) => item.id === viewpoint)?.label ?? "Orbit";
 
   return (
     <section className="card viewer-card">
-      <h2>Viewer</h2>
-      <p className="muted">
-        three.js on this origin. The scrubber steps through recorded pose times and does not
-        interpolate. Camera images are not drawn; the frustums are the pinholes. Rerun export writes
-        an <span className="mono">.rrd</span> under the server root and needs the viewer extra.
-      </p>
-      <div className="viewer-bar">
+      <div className="viewer-head">
+        <h2>Viewer</h2>
+      </div>
+      <div className="viewer-toolbar">
         <label htmlFor="scene-id">Scene</label>
         <select id="scene-id" value={sceneId} onChange={(event) => setSceneId(event.target.value)}>
           {scenes.length === 0 ? <option value="">No scenes</option> : null}
@@ -594,8 +742,100 @@ export default function Viewer({ token }: { token: string }) {
             </option>
           ))}
         </select>
-        <label htmlFor="scrubber">
-          Sample {summary ? frameIndex + 1 : 0} / {summary ? summary.times_us.length : 0}
+        <div className="segment" role="group" aria-label="Viewpoint">
+          {VIEWPOINTS.map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              aria-pressed={viewpoint === item.id}
+              onClick={() => chooseViewpoint(item.id)}
+            >
+              {item.label}
+            </button>
+          ))}
+        </div>
+        <label htmlFor="camera-id">Camera</label>
+        <select
+          id="camera-id"
+          value={cameraId}
+          disabled={cameras.length === 0}
+          onChange={(event) => {
+            cameraKeyRef.current = event.target.value;
+            setCameraId(event.target.value);
+            chooseViewpoint("camera");
+          }}
+        >
+          {cameras.length === 0 ? <option value="">No cameras</option> : null}
+          {cameras.map((sensor) => {
+            const key = cameraKey(sensor.agent_id, sensor.sensor_id);
+            return (
+              <option key={key} value={key}>
+                {sensor.sensor_id} · {sensor.agent_id}
+              </option>
+            );
+          })}
+        </select>
+        <button type="button" className="ghost" onClick={() => void exportRerun()} disabled={!summary}>
+          Export Rerun
+        </button>
+      </div>
+      <canvas
+        ref={canvasRef}
+        className="viewer-canvas"
+        tabIndex={0}
+        aria-label="Scene view. Click here, then use Space to play and 1 through 5 for viewpoints."
+        onPointerDown={() => canvasRef.current?.focus()}
+      />
+      <div className="transport">
+        <button type="button" onClick={togglePlay} disabled={!summary || (summary.times_us.length < 2)}>
+          {playing ? "Pause" : "Play"}
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => {
+            setPlaying(false);
+            setFrameIndex((current) => stepIndex(current, -1, lengthRef.current, loop));
+          }}
+          disabled={!summary}
+        >
+          Step back
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => {
+            setPlaying(false);
+            setFrameIndex((current) => stepIndex(current, 1, lengthRef.current, loop));
+          }}
+          disabled={!summary}
+        >
+          Step forward
+        </button>
+        <label htmlFor="speed">Speed</label>
+        <select
+          id="speed"
+          value={String(speed)}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (SPEEDS.includes(next as Speed)) {
+              setSpeed(next as Speed);
+            }
+          }}
+        >
+          {SPEEDS.map((item) => (
+            <option key={item} value={item}>
+              {item}×
+            </option>
+          ))}
+        </select>
+        <label className="check" htmlFor="loop">
+          <input id="loop" type="checkbox" checked={loop} onChange={() => setLoop((current) => !current)} />
+          Loop
+        </label>
+        <label className="clock" htmlFor="scrubber">
+          {typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s"} · sample{" "}
+          {summary ? Math.min(frameIndex, last) + 1 : 0} / {summary ? summary.times_us.length : 0}
         </label>
         <input
           id="scrubber"
@@ -605,9 +845,6 @@ export default function Viewer({ token }: { token: string }) {
           value={Math.min(frameIndex, last)}
           onChange={(event) => setFrameIndex(Number(event.target.value))}
         />
-        <button type="button" onClick={() => void exportRerun()} disabled={!summary}>
-          Export Rerun
-        </button>
       </div>
       <div className="viewer-agents">
         {(summary?.agents ?? []).map((agent) => (
@@ -626,8 +863,11 @@ export default function Viewer({ token }: { token: string }) {
           </label>
         ))}
       </div>
-      <canvas ref={canvasRef} className="viewer-canvas" />
-      <p className="muted">{status}</p>
+      <p className="muted status-line">{status}</p>
+      <p className="hint">
+        {playing ? "Playing" : "Paused"} at {speed}×{loop ? ", loop on" : ""}. {viewpointLabel}. Click the
+        view, then Space plays, arrows step, L loops, [ ] change speed, and 1–5 pick a viewpoint.
+      </p>
       {exportNote ? <p className="muted">{exportNote}</p> : null}
     </section>
   );
