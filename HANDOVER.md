@@ -6,9 +6,11 @@ Main is `0c36928`, the merge of pull request #12 (UI redesign, landing page, fru
 
 Merged into main and deleted from the remote, because each tip was an ancestor of main and none had an open pull request: `cursor/carla-hd-maps-0452`, `cursor/phase6-birds-eye-plot-0452`, `cursor/phase6-camera-images-0452`, `cursor/phase6-customisation-0452`, `cursor/phase6-playback-viewpoints-0452`, `cursor/phase6-sequence-export-0452`, `cursor/ui-redesign-0452`, `feat/phase1-core`, `feat/phase2-griffin`, `feat/phase3-query`, `feat/phase5-viewer`. `main` was not deleted.
 
-Left on the remote: `feat/phase4-validate`. Its tip is not an ancestor of main. The commit that is not in main's history is `7af9239` ("Merge pull request #5 from adarsh-nl/feat/phase5-viewer"). The branch is behind main. It was not deleted.
+Remote branches other than `main`:
 
-Open pull request: draft #13, `cursor/phase7-release-0452`, "feat: package 0.1.0 with a Tauri desktop shell". It is not merged. No tag was pushed, nothing was published to PyPI, and no GitHub Release was created. Do not continue that branch.
+- `feat/phase4-validate`. Its tip is not an ancestor of main. The commit that is not in main's history is `7af9239` ("Merge pull request #5 from adarsh-nl/feat/phase5-viewer"). The branch is behind main. It was not deleted.
+- `cursor/phase7-release-0452`. Draft pull request #13, "feat: package 0.1.0 with a Tauri desktop shell". Not merged. No tag was pushed, nothing was published to PyPI, and no GitHub Release was created. Do not continue that branch.
+- `cursor/handover-roadmap-0452`. Draft pull request #14. This file.
 
 ## Roadmap
 
