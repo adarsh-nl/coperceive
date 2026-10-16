@@ -59,6 +59,16 @@ Camera intrinsics are an optional pinhole, each field independent:
 
 Null means the source did not record that number. Lidar and radar have no measurement model in schema 1. They still store the extrinsic. Distortion is not stored.
 
+### Axis conventions
+
+Schema 1 does not store an axis convention. The library assumes one, and every adapter ([ADR 0009](../adr/0009-dataset-adapters.md)) writes it:
+
+- body: `+X` forward, `+Y` left, `+Z` up, metres;
+- camera sensor: `+X` right, `+Y` down, `+Z` forward (depth);
+- lidar and radar sensor: the body axes.
+
+The chase viewpoint sits behind body `+X`, projection treats sensor `+Z` as depth, and the camera viewpoint uses sensor `−Y` as up. A source with other axes is remapped at ingest. This paragraph documents the existing assumption; it is not a schema change.
+
 ## Annotations
 
 A row is one 3D box from one agent at one time.
