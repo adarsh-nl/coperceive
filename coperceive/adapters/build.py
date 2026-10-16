@@ -182,6 +182,24 @@ class ManifestAdapter:
             counts[ref.scene_id] = tuple(sorted(tally.items()))
         return CheckReport(len(refs), tuple(errors), counts, tuple(sorted(variants.items())))
 
+    def variant_counts(self, raw_root: Path, ref: SceneRef) -> tuple[tuple[int, int], ...]:
+        """Label-line widths per count, for ``report.variant_counts``. Reads only labels."""
+        boxes = self.spec.streams.boxes
+        if self.spec.report.variant_counts is None or boxes is None:
+            return ()
+        counts: dict[int, int] = {}
+        for ctx in self._agents(raw_root, ref.scene_id, dict(ref.params)):
+            for sample in ref.samples:
+                values = _with_sample(ctx.values, sample)
+                path = self._path(raw_root, boxes.path, values)
+                if not path.is_file():
+                    if boxes.missing == "skip":
+                        continue
+                    raise BuildError(f"{ctx.agent_id}: missing label file {boxes.path.expand(values)}")
+                for parts in read_text_rows(path):
+                    counts[len(parts)] = counts.get(len(parts), 0) + 1
+        return tuple(sorted(counts.items()))
+
     # -- building ----------------------------------------------------------------
 
     def _build(
