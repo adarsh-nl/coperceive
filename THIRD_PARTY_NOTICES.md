@@ -32,6 +32,10 @@ SOFTWARE.
 
 The Hugging Face dataset card YAML says `license: mit`. That covers the software the card is attached to. It is not permission to commit the recordings here.
 
+## CARLA
+
+Town OpenDRIVE files are read from the CARLA 0.9.15 package, `https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`. CARLA is MIT, `https://github.com/carla-simulator/carla`. The `.xodr` bytes and the derived map directories are not committed. `coperceive maps fetch` writes them outside this repository.
+
 ## Python and JavaScript dependencies
 
 NumPy, PyArrow, FastAPI, Uvicorn, Pydantic, huggingface_hub, and the development tools are installed from PyPI under their own licences. They are not vendored.
@@ -44,6 +48,7 @@ The browser build bundles the direct `web/` dependencies. Their `package.json` l
 | @tanstack/react-query | MIT |
 | @radix-ui/react-label | MIT |
 | openapi-fetch | MIT |
+| three | MIT |
 | @fontsource/ibm-plex-sans, @fontsource/ibm-plex-mono | OFL-1.1 |
 
 Transitive licences ship inside the built assets. `web/node_modules` is not committed.

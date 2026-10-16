@@ -114,6 +114,33 @@ button:disabled { opacity: 0.6; cursor: wait; }
   color: #8d2f2a;
 }
 
+.tabs { display: flex; gap: 8px; margin-top: 18px; }
+.tab {
+  background: transparent;
+  color: #1c1915;
+  border: 1px solid #c8bfb0;
+}
+.tab.selected { background: #0f6e6b; color: white; border-color: #0f6e6b; }
+
+.token-row { display: flex; flex-direction: column; gap: 6px; max-width: 360px; margin-top: 12px; }
+.viewer-card { margin-top: 16px; }
+.viewer-bar, .viewer-agents {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.viewer-bar select, .viewer-bar input[type="range"] { width: auto; min-width: 160px; }
+.viewer-agents label { font-weight: 500; }
+.viewer-canvas {
+  width: 100%;
+  height: 68vh;
+  display: block;
+  border-radius: 10px;
+  background: #16130f;
+}
+
 @media (max-width: 800px) {
   .grid { grid-template-columns: 1fr; }
   .page { padding: 18px 14px 48px; }

@@ -18,6 +18,21 @@ def test_label_line_and_one_scene(tmp_path: Path) -> None:
     assert ann.track_id == "7"
     assert ann.category == "car"
     assert ann.visibility == 0.5
+    missing_visibility = parse_label_line(
+        "car 1 2 0.5 4 1.8 1.5 0 0 90 7",
+        agent_id="vehicle",
+        time_us=100_000,
+    )
+    assert missing_visibility.visibility is None
+    assert missing_visibility.box_from_rpy.qz != 0.0
+    short = parse_label_line(
+        "car 1 2 0.5 4 1.8 1.5 90 7",
+        agent_id="vehicle",
+        time_us=100_000,
+    )
+    assert short.visibility is None
+    assert short.box_from_rpy.qx == 0.0
+    assert short.box_from_rpy.qy == 0.0
 
     frames = ["000000", "000001"]
     info = [

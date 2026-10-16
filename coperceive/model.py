@@ -9,7 +9,11 @@ from __future__ import annotations
 import enum
 import math
 from dataclasses import dataclass
-from typing import cast
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from coperceive.query import TimeMode
+    from coperceive.sample import CooperativeSample
 
 from coperceive.se3 import SE3
 
@@ -329,3 +333,21 @@ class Scene:
 
     def pose_times(self, agent_id: str) -> tuple[int, ...]:
         return tuple(pose.time_us for pose in self.agent(agent_id).poses)
+
+    def at(
+        self,
+        t: int,
+        *,
+        tolerance: int,
+        mode: TimeMode | None = None,
+    ) -> CooperativeSample:
+        """Every agent's pose, sensors, and boxes at ``t``, plus each ``dt_us``.
+
+        ``tolerance`` is ``tolerance_us`` in microseconds and is required.
+        ``mode`` defaults to nearest. A miss stays in the result.
+        """
+        from coperceive.query import TimeMode as RuntimeMode
+        from coperceive.sample import scene_at
+
+        chosen = RuntimeMode.NEAREST if mode is None else mode
+        return scene_at(self, t, tolerance=tolerance, mode=chosen)

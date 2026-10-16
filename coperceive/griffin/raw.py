@@ -78,19 +78,39 @@ def load_scene(release_root: Path, scene_name: str) -> Scene:
 
 
 def parse_label_line(line: str, *, agent_id: str, time_us: int) -> Annotation:
+    """Parse one Griffin label line into a body-frame box.
+
+    Twelve fields are ``type x y z l w h roll pitch yaw id visibility``.
+    Eleven fields omit visibility; it is stored as null, not as a filled-in
+    1.0. Nine fields omit roll, pitch, and visibility; roll and pitch are 0
+    and visibility is null. Lengths, widths, heights, and translations are
+    metres. Angles are degrees. See ``docs/datasets/griffin.md``.
+    """
     parts = line.split()
-    if len(parts) != 12:
-        raise ValueError(f"expected 12 label fields, got {len(parts)}")
-    numbers = [float(part) for part in parts[1:]]
+    if len(parts) == 12:
+        roll, pitch, yaw = float(parts[7]), float(parts[8]), float(parts[9])
+        track = str(int(float(parts[10])))
+        visibility: float | None = float(parts[11])
+    elif len(parts) == 11:
+        roll, pitch, yaw = float(parts[7]), float(parts[8]), float(parts[9])
+        track = str(int(float(parts[10])))
+        visibility = None
+    elif len(parts) == 9:
+        roll, pitch = 0.0, 0.0
+        yaw = float(parts[7])
+        track = str(int(float(parts[8])))
+        visibility = None
+    else:
+        raise ValueError(f"expected 12, 11, or 9 label fields, got {len(parts)}")
     return Annotation(
         agent_id=agent_id,
         time_us=time_us,
-        track_id=str(int(numbers[9])),
+        track_id=track,
         category=parts[0],
-        center=(numbers[0], numbers[1], numbers[2]),
-        size_lwh=(numbers[3], numbers[4], numbers[5]),
-        box_from_rpy=SE3.from_rpy_deg(numbers[6], numbers[7], numbers[8]),
-        visibility=numbers[10],
+        center=(float(parts[1]), float(parts[2]), float(parts[3])),
+        size_lwh=(float(parts[4]), float(parts[5]), float(parts[6])),
+        box_from_rpy=SE3.from_rpy_deg(roll, pitch, yaw),
+        visibility=visibility,
     )
 
 

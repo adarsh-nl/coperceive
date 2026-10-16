@@ -9,11 +9,16 @@ from collections.abc import AsyncIterator
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from coperceive.app.jobs import CSRF_HEADER, confine, list_jobs, open_db, run_job
+from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
+from coperceive.model import Scene
+from coperceive.rerun_export import RerunUnavailable, export_rerun
+from coperceive.store import read_scene
+from coperceive.viewdata import frame_document, frame_points, scene_directories, summarize
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
@@ -23,7 +28,13 @@ class JobRequest(BaseModel):
     args: list[str] = Field(default_factory=list)
 
 
-def create_app(*, root: str | Path, token: str | None, root_path: str = "") -> FastAPI:
+def create_app(
+    *,
+    root: str | Path,
+    token: str | None,
+    root_path: str = "",
+    maps: str | Path | None = None,
+) -> FastAPI:
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
     app = FastAPI(
@@ -35,6 +46,9 @@ def create_app(*, root: str | Path, token: str | None, root_path: str = "") -> F
     app.state.root = root_path_obj
     app.state.token = token
     app.state.db_path = root_path_obj / "jobs.sqlite"
+    app.state.scene_cache = _SceneCache()
+    app.state.maps = _maps_root(root_path_obj, maps)
+    app.state.map_cache = {}
 
     @app.middleware("http")
     async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -77,6 +91,57 @@ def create_app(*, root: str | Path, token: str | None, root_path: str = "") -> F
     async def events() -> StreamingResponse:
         return StreamingResponse(_event_stream(app.state.db_path), media_type="text/event-stream")
 
+    @app.get("/api/scenes")
+    def scenes() -> list[dict[str, str]]:
+        return [{"scene_id": path.name} for path in scene_directories(app.state.root)]
+
+    @app.get("/api/scenes/{scene_id}")
+    def scene_summary(scene_id: str) -> dict[str, object]:
+        return summarize(_cached_scene(app, scene_id))
+
+    @app.get("/api/scenes/{scene_id}/frame")
+    def scene_frame(scene_id: str, time_us: int) -> dict[str, object]:
+        return frame_document(_cached_scene(app, scene_id), time_us)
+
+    @app.get("/api/scenes/{scene_id}/map")
+    def scene_map(scene_id: str) -> dict[str, object]:
+        scene = _cached_scene(app, scene_id)
+        return _map_summary(app, scene)
+
+    @app.get("/api/scenes/{scene_id}/map/lines")
+    def scene_map_lines(scene_id: str) -> Response:
+        scene = _cached_scene(app, scene_id)
+        hdmap = _scene_hdmap(app, scene)
+        if hdmap is None:
+            raise HTTPException(status_code=404, detail="map not found")
+        return Response(content=hdmap.lines_blob(), media_type="application/octet-stream")
+
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> FileResponse:
+        svg = _STATIC / "favicon.svg"
+        if not svg.is_file():
+            raise HTTPException(status_code=404, detail="favicon not found")
+        return FileResponse(svg, media_type="image/svg+xml")
+
+    @app.get("/api/scenes/{scene_id}/points")
+    def scene_points(scene_id: str, time_us: int, agent_id: str, sensor_id: str) -> Response:
+        blob = frame_points(_cached_scene(app, scene_id), time_us, agent_id, sensor_id)
+        return Response(content=blob, media_type="application/octet-stream")
+
+    @app.post("/api/scenes/{scene_id}/export/rerun")
+    def scene_rerun(scene_id: str) -> dict[str, object]:
+        scene = _cached_scene(app, scene_id)
+        relative = Path("exports") / f"{scene.scene_id}.rrd"
+        try:
+            dest = confine(app.state.root, str(relative))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            samples = export_rerun(scene, dest)
+        except RerunUnavailable as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return {"path": relative.as_posix(), "samples": samples}
+
     @app.get("/api/files")
     def files(path: str) -> FileResponse:
         try:
@@ -90,6 +155,93 @@ def create_app(*, root: str | Path, token: str | None, root_path: str = "") -> F
     if (_STATIC / "index.html").is_file():
         app.mount("/", StaticFiles(directory=_STATIC, html=True), name="static")
     return app
+
+
+class _SceneCache:
+    """One decoded scene. The viewer re-reads when the path changes."""
+
+    def __init__(self) -> None:
+        self.path: Path | None = None
+        self.scene: Scene | None = None
+
+    def load(self, path: Path) -> Scene:
+        resolved = path.resolve()
+        if self.scene is None or self.path != resolved:
+            self.scene = read_scene(resolved)
+            self.path = resolved
+        if self.scene is None:
+            raise FileNotFoundError(resolved)
+        return self.scene
+
+
+def _scene_dir(root: Path, scene_id: str) -> Path:
+    if scene_id == "" or "/" in scene_id or "\\" in scene_id or ".." in scene_id:
+        raise HTTPException(status_code=400, detail="bad scene id")
+    path = (root / scene_id).resolve()
+    try:
+        path.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="bad scene id") from exc
+    if not (path / "manifest.json").is_file():
+        raise HTTPException(status_code=404, detail="scene not found")
+    return path
+
+
+def _cached_scene(app: FastAPI, scene_id: str) -> Scene:
+    path = _scene_dir(app.state.root, scene_id)
+    cache = app.state.scene_cache
+    return cache.load(path)  # type: ignore[no-any-return]
+
+
+def _maps_root(root: Path, maps: str | Path | None) -> Path | None:
+    if maps is None:
+        candidate = (root / "maps").resolve()
+        return candidate if candidate.is_dir() else None
+    return Path(maps).resolve()
+
+
+def _scene_hdmap(app: FastAPI, scene: Scene) -> HdMap | None:
+    maps = app.state.maps
+    if not isinstance(maps, Path):
+        return None
+    name = scene_map_name(scene)
+    if name is None:
+        return None
+    cache = app.state.map_cache
+    if isinstance(cache, dict) and name in cache:
+        found = cache[name]
+        return found if isinstance(found, HdMap) else None
+    try:
+        directory = find_map(maps, name)
+    except ValueError:
+        if isinstance(cache, dict):
+            cache[name] = None
+        return None
+    if directory is None:
+        if isinstance(cache, dict):
+            cache[name] = None
+        return None
+    hdmap = load_map(directory)
+    if isinstance(cache, dict):
+        cache[name] = hdmap
+    return hdmap
+
+
+def _map_summary(app: FastAPI, scene: Scene) -> dict[str, object]:
+    name = scene_map_name(scene)
+    hdmap = _scene_hdmap(app, scene)
+    if hdmap is None:
+        return {"map_name": name, "available": False}
+    counts: dict[str, int] = {}
+    for item in hdmap.polylines:
+        counts[item.layer] = counts.get(item.layer, 0) + 1
+    return {
+        "map_name": hdmap.map_name,
+        "available": True,
+        "alignment_measured": hdmap.world_from_opendrive.measured,
+        "sample_step_m": hdmap.sample_step_m,
+        "layers": counts,
+    }
 
 
 def _json_error(status: int, detail: str):

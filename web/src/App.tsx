@@ -2,6 +2,7 @@ import { Label } from "@radix-ui/react-label";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
+import Viewer from "./viewer/Viewer";
 
 const TOKEN_KEY = "coperceive-token";
 
@@ -17,6 +18,7 @@ export default function App() {
   const [fileText, setFileText] = useState("");
   const [fileError, setFileError] = useState("");
   const [streamNote, setStreamNote] = useState("Event stream idle.");
+  const [tab, setTab] = useState<"viewer" | "desk">("viewer");
 
   useEffect(() => {
     sessionStorage.setItem(TOKEN_KEY, token);
@@ -123,13 +125,45 @@ export default function App() {
         <span className="badge">coperceive</span>
         <h1>Local data desk</h1>
         <p>
-          A single-user page for the cooperative perception library. It runs on
-          this machine, talks only to the API beside it, and can start the one
-          allow-listed command in this build: <code>echo</code>.
+          A single-user page for the cooperative perception library. The viewer
+          and this desk both talk to the API on this origin. The only
+          allow-listed job in this build is <code>echo</code>.
         </p>
       </header>
+      <div className="tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "viewer"}
+          className={tab === "viewer" ? "tab selected" : "tab"}
+          onClick={() => setTab("viewer")}
+        >
+          Viewer
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === "desk"}
+          className={tab === "desk" ? "tab selected" : "tab"}
+          onClick={() => setTab("desk")}
+        >
+          Desk
+        </button>
+      </div>
+      <div className="token-row">
+        <Label htmlFor="token-global">Bearer token</Label>
+        <input
+          id="token-global"
+          type="password"
+          autoComplete="off"
+          value={token}
+          onChange={(event) => setToken(event.target.value)}
+          placeholder="Leave empty when the server has no token"
+        />
+      </div>
+      {tab === "viewer" ? <Viewer token={token} /> : null}
 
-      <div className="grid">
+      {tab === "desk" ? <div className="grid">
         <section className="card">
           <h2>Jobs</h2>
           <form
@@ -228,7 +262,7 @@ export default function App() {
             {fileText ? <pre className="output">{fileText}</pre> : null}
           </section>
         </div>
-      </div>
+      </div> : null}
     </main>
   );
 }
