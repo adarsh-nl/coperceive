@@ -26,10 +26,11 @@ coperceive serve --root /path/to/a/workdir --maps /path/to/maps
 
 The default bind is `127.0.0.1:8731`. A non-loopback host requires `--token`. Behind a proxy, pass `--root-path` with the prefix the proxy adds.
 
-The page in the wheel is the Vite build in `coperceive/app/static`. Rebuild it from `web/` with `npm run build` after a UI change. The Viewer tab lists scene directories under `--root`, plays recorded pose times, and can hide an agent. Viewpoints are orbit, bird's-eye, chase, drone, and a camera frustum. Export Rerun writes `exports/<scene_id>.rrd` under that root and needs the `viewer` extra. The same export from a terminal:
+The page in the wheel is the Vite build in `coperceive/app/static`. Rebuild it from `web/` with `npm run build` after a UI change. The Viewer tab lists scene directories under `--root`, plays recorded pose times, and can hide an agent. Viewpoints are orbit, bird's-eye, chase, drone, and a camera frustum. A strip under the transport shows each camera image for the current sample, with boxes and lidar projected onto it when those files exist beside the scene. Export Rerun writes `exports/<scene_id>.rrd` under that root and needs the `viewer` extra. Export sequence writes a camera MP4, GIF, or PNG sequence, and the page can also save the live 3D view. A view row toggles layers, colors, point size, box style, categories, and dark or light, and stores that in `localStorage` without the bearer token. The same exports from a terminal:
 
 ```bash
 coperceive export rerun /path/scene --out /path/scene.rrd
+coperceive export sequence /path/scene --out /path/front.mp4 --agent vehicle --sensor front
 ```
 
 The page talks to the server only over HTTP. `coperceive.viewdata` does not import FastAPI or Rerun. Lane centres and road edges are drawn under the lidar when `--maps` resolves the scene's `map_name`. A later desktop package is described in `docs/adr/0007-desktop.md` and is not built.

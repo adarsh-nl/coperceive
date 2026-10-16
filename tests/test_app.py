@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import base64
 import struct
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from coperceive.model import (
     Agent,
     AgentType,
     Clock,
+    ImageRef,
     Modality,
     PointCloud,
     Scene,
@@ -124,6 +126,75 @@ def test_viewer_api_lists_a_frame_and_rejects_a_bad_id(tmp_path: Path) -> None:
     assert missing.status_code == 404
 
 
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+
+
+def test_image_route_serves_the_recorded_file(tmp_path: Path) -> None:
+    pose = StampedPose(0, SE3.identity())
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    camera = Sensor(
+        "front",
+        "vehicle",
+        Modality.CAMERA,
+        SE3.identity(),
+        1,
+        1,
+        1.0,
+        1.0,
+        0.5,
+        0.5,
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="desk",
+        world_frame="ENU",
+        clock=Clock("us", "image fixture"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, "camera/front/000000.png"),),
+    )
+    write_scene(scene, tmp_path / "desk")
+    image = tmp_path / "desk" / "camera" / "front" / "000000.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    outside = tmp_path / "secret.png"
+    outside.write_bytes(_PNG)
+    escaped = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="leak",
+        world_frame="ENU",
+        clock=Clock("us", "image fixture"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, "../secret.png"),),
+    )
+    write_scene(escaped, tmp_path / "leak")
+    client = TestClient(create_app(root=tmp_path, token=None))
+    found = client.get(
+        "/api/scenes/desk/image",
+        params={"time_us": 0, "agent_id": "vehicle", "sensor_id": "front"},
+    )
+    assert found.status_code == 200
+    assert found.headers["content-type"].startswith("image/png")
+    assert found.content == _PNG
+    absent = client.get(
+        "/api/scenes/desk/image",
+        params={"time_us": 1, "agent_id": "vehicle", "sensor_id": "front"},
+    )
+    assert absent.status_code == 404
+    leaked = client.get(
+        "/api/scenes/leak/image",
+        params={"time_us": 0, "agent_id": "vehicle", "sensor_id": "front"},
+    )
+    assert leaked.status_code == 400
+
+
 def test_rerun_export_route_writes_under_the_root(tmp_path: Path) -> None:
     pytest.importorskip("rerun")
     _viewer_scene(tmp_path)
@@ -142,6 +213,153 @@ def test_rerun_export_route_writes_under_the_root(tmp_path: Path) -> None:
     body = created.json()
     assert body["samples"] == 1
     assert (tmp_path / body["path"]).is_file()
+
+
+def test_sequence_export_route_writes_gif_and_view(tmp_path: Path) -> None:
+    pose = StampedPose(0, SE3.identity())
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    camera = Sensor(
+        "front",
+        "vehicle",
+        Modality.CAMERA,
+        SE3.identity(),
+        16,
+        16,
+        8.0,
+        8.0,
+        8.0,
+        8.0,
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="desk",
+        world_frame="ENU",
+        clock=Clock("us", "sequence route"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, "camera/front/0.png"),),
+    )
+    write_scene(scene, tmp_path / "desk")
+    image = tmp_path / "desk" / "camera" / "front" / "0.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    app = create_app(root=tmp_path, token="secret")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret", "X-Coperceive-Request": "1"}
+    denied = client.post(
+        "/api/scenes/desk/export/sequence",
+        headers={"Authorization": "Bearer secret"},
+        json={"agent_id": "vehicle", "sensor_id": "front", "format": "gif"},
+    )
+    assert denied.status_code == 403
+    created = client.post(
+        "/api/scenes/desk/export/sequence",
+        headers=headers,
+        json={
+            "agent_id": "vehicle",
+            "sensor_id": "front",
+            "format": "gif",
+            "fps": 10,
+            "width": 16,
+            "height": 16,
+        },
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["frames"] == 1
+    assert body["format"] == "gif"
+    assert (tmp_path / body["path"]).is_file()
+    escaped = client.post(
+        "/api/scenes/desk/export/sequence",
+        headers=headers,
+        json={"agent_id": "../vehicle", "sensor_id": "front", "format": "gif"},
+    )
+    assert escaped.status_code == 400
+    view = client.post(
+        "/api/scenes/desk/export/view",
+        headers=headers,
+        json={
+            "format": "png",
+            "fps": 10,
+            "start_us": 0,
+            "end_us": 0,
+            "frames_b64": [base64.b64encode(_PNG).decode("ascii")],
+        },
+    )
+    assert view.status_code == 200
+    saved = view.json()
+    assert saved["frames"] == 1
+    assert saved["path"].endswith(".png")
+    assert (tmp_path / saved["path"]).is_file()
+
+
+def test_plot_routes_require_the_csrf_header_and_write_svg(tmp_path: Path) -> None:
+    pose = StampedPose(0, SE3.identity())
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    camera = Sensor(
+        "front",
+        "vehicle",
+        Modality.CAMERA,
+        SE3.identity(),
+        16,
+        16,
+        8.0,
+        8.0,
+        8.0,
+        8.0,
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="desk",
+        world_frame="ENU",
+        clock=Clock("us", "plot route"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, "camera/front/0.png"),),
+    )
+    write_scene(scene, tmp_path / "desk")
+    image = tmp_path / "desk" / "camera" / "front" / "0.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    app = create_app(root=tmp_path, token="secret")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret", "X-Coperceive-Request": "1"}
+    denied = client.post(
+        "/api/scenes/desk/export/bev",
+        headers={"Authorization": "Bearer secret"},
+        json={"format": "svg"},
+    )
+    assert denied.status_code == 403
+    created = client.post(
+        "/api/scenes/desk/export/bev",
+        headers=headers,
+        json={"format": "svg", "time_us": 0},
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["format"] == "svg"
+    assert body["boxes"] == 0
+    assert (tmp_path / body["path"]).is_file()
+    assert (tmp_path / body["path"]).read_text(encoding="utf-8").startswith("<?xml")
+    missing = client.post(
+        "/api/scenes/desk/export/overlay",
+        headers=headers,
+        json={"agent_id": "vehicle", "sensor_id": "missing", "format": "png"},
+    )
+    assert missing.status_code == 404
+    overlay = client.post(
+        "/api/scenes/desk/export/overlay",
+        headers=headers,
+        json={"agent_id": "vehicle", "sensor_id": "front", "format": "png", "time_us": 0},
+    )
+    assert overlay.status_code == 200
+    saved = overlay.json()
+    assert saved["path"].endswith(".png")
+    assert (tmp_path / saved["path"]).is_file()
 
 
 def test_map_http_and_favicon(tmp_path: Path) -> None:

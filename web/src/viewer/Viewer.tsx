@@ -1,9 +1,17 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
+import {
+  classColor,
+  defaultAppearance,
+  loadAppearance,
+  saveAppearance,
+  type Appearance,
+} from "./appearance";
+import CameraStrip from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
-import { formatClock, frameDelayMs, neighborSpeed, SPEEDS, stepIndex, type Speed } from "./playback";
+import { formatClock, indexAfter, neighborSpeed, SPEEDS, stepIndex, type Speed } from "./playback";
 import {
   cameraKey,
   isPose,
@@ -33,14 +41,27 @@ type Stage = {
   agents: THREE.Group;
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
+  solids: THREE.Group;
+  requestRender: () => void;
+  captureView: (width: number, height: number) => string;
+  setTheme: (theme: Appearance["theme"]) => void;
 };
 
-type Drawn = { positions: number[]; anchor: { x: number; y: number; z: number } | null };
+type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
 
 const COLORS: Record<string, number> = {
   vehicle: 0xe67828,
   uav: 0x2878dc,
 };
+
+const EXPORT_SIZES = [
+  { id: "640x360", width: 640, height: 360, label: "640×360" },
+  { id: "960x540", width: 960, height: 540, label: "960×540" },
+  { id: "1280x720", width: 1280, height: 720, label: "1280×720" },
+  { id: "1920x1080", width: 1920, height: 1080, label: "1920×1080" },
+] as const;
+
+const EXPORT_FPS = [5, 10, 15, 30] as const;
 
 const VIEWPOINTS: { id: Viewpoint; label: string; shortcut: string }[] = [
   { id: "orbit", label: "Orbit", shortcut: "1" },
@@ -134,7 +155,37 @@ function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
 function clearGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child);
+    const object = child as THREE.LineSegments;
+    object.geometry?.dispose();
+    const material = object.material;
+    if (Array.isArray(material)) {
+      for (const item of material) {
+        item.dispose();
+      }
+    } else {
+      material?.dispose();
+    }
   }
+}
+
+function replaceColored(geometry: THREE.BufferGeometry, positions: Float32Array, colors: Float32Array) {
+  const current = geometry.getAttribute("position");
+  const colored = geometry.getAttribute("color");
+  if (
+    current instanceof THREE.BufferAttribute &&
+    colored instanceof THREE.BufferAttribute &&
+    current.array.length === positions.length &&
+    colored.array.length === colors.length
+  ) {
+    (current.array as Float32Array).set(positions);
+    (colored.array as Float32Array).set(colors);
+    current.needsUpdate = true;
+    colored.needsUpdate = true;
+  } else {
+    geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+  }
+  geometry.computeBoundingSphere();
 }
 
 function agentPose(frame: FrameDocument, types: Map<string, string>, agentType: string): Pose | null {
@@ -196,19 +247,34 @@ function goalFor(
   return frustum && isPose(frustum.pose) ? cameraGoal(frustum.pose, frustum.fov_y_rad) : null;
 }
 
+function boxShown(box: FrameDocument["boxes"][number], hidden: Record<string, boolean>, appearance: Appearance) {
+  if (!appearance.boxes || hidden[box.agent_id]) {
+    return false;
+  }
+  return typeof box.category !== "string" || !appearance.hiddenClasses.includes(box.category);
+}
+
+function boxColor(box: FrameDocument["boxes"][number], types: Map<string, string>, appearance: Appearance) {
+  if (appearance.colorBy === "class" && typeof box.category === "string") {
+    return classColor(box.category);
+  }
+  return colorFor(types.get(box.agent_id) ?? "");
+}
+
 async function drawFrame(
   stage: Stage,
   frame: FrameDocument,
   types: Map<string, string>,
   hidden: Record<string, boolean>,
+  appearance: Appearance,
   token: string,
   cache: FrameCache,
   stale: () => boolean,
 ): Promise<Drawn | null> {
-  const positions: number[] = [];
-  const colors: number[] = [];
+  let pointCount = 0;
+  const sweeps: { xyz: Float32Array; color: THREE.Color }[] = [];
   for (const sensor of frame.point_sensors) {
-    if (hidden[sensor.agent_id] || sensor.count === 0) {
+    if (!appearance.points || hidden[sensor.agent_id] || sensor.count === 0) {
       continue;
     }
     const buffer = await cache.loadPoints(
@@ -222,40 +288,78 @@ async function drawFrame(
       return null;
     }
     const xyz = new Float32Array(buffer);
-    const color = new THREE.Color(colorFor(types.get(sensor.agent_id) ?? ""));
-    for (let index = 0; index < xyz.length; index += 3) {
-      positions.push(xyz[index] ?? 0, xyz[index + 1] ?? 0, xyz[index + 2] ?? 0);
-      colors.push(color.r, color.g, color.b);
-    }
+    pointCount += xyz.length / 3;
+    sweeps.push({ xyz, color: new THREE.Color(colorFor(types.get(sensor.agent_id) ?? "")) });
   }
   if (stale()) {
     return null;
   }
-  stage.points.geometry.dispose();
-  stage.points.geometry = new THREE.BufferGeometry();
-  stage.points.geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  stage.points.geometry.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
+  const positions = new Float32Array(pointCount * 3);
+  const colors = new Float32Array(pointCount * 3);
+  let cursor = 0;
+  for (const sweep of sweeps) {
+    positions.set(sweep.xyz, cursor);
+    for (let index = 0; index < sweep.xyz.length; index += 3) {
+      colors[cursor + index] = sweep.color.r;
+      colors[cursor + index + 1] = sweep.color.g;
+      colors[cursor + index + 2] = sweep.color.b;
+    }
+    cursor += sweep.xyz.length;
+  }
+  replaceColored(stage.points.geometry, positions, colors);
 
-  const boxPositions: number[] = [];
-  const boxColors: number[] = [];
+  let boxFloats = 0;
   for (const box of frame.boxes) {
-    if (hidden[box.agent_id] || !Array.isArray(box.lines)) {
+    if (!boxShown(box, hidden, appearance) || !Array.isArray(box.lines)) {
       continue;
     }
-    const color = new THREE.Color(colorFor(types.get(box.agent_id) ?? ""));
-    boxPositions.push(...box.lines);
+    boxFloats += box.lines.length;
+  }
+  const boxPositions = new Float32Array(boxFloats);
+  const boxColors = new Float32Array(boxFloats);
+  let boxCursor = 0;
+  for (const box of frame.boxes) {
+    if (!boxShown(box, hidden, appearance) || !Array.isArray(box.lines)) {
+      continue;
+    }
+    boxPositions.set(box.lines, boxCursor);
+    const color = new THREE.Color(boxColor(box, types, appearance));
     for (let index = 0; index < box.lines.length; index += 3) {
-      boxColors.push(color.r, color.g, color.b);
+      boxColors[boxCursor + index] = color.r;
+      boxColors[boxCursor + index + 1] = color.g;
+      boxColors[boxCursor + index + 2] = color.b;
+    }
+    boxCursor += box.lines.length;
+  }
+  replaceColored(stage.boxes.geometry, boxPositions, boxColors);
+
+  clearGroup(stage.solids);
+  if (appearance.boxStyle === "solid") {
+    for (const box of frame.boxes) {
+      if (!boxShown(box, hidden, appearance) || !box.pose || !isPose(box.pose) || !Array.isArray(box.size_lwh)) {
+        continue;
+      }
+      const [length, width, height] = box.size_lwh;
+      if (typeof length !== "number" || typeof width !== "number" || typeof height !== "number") {
+        continue;
+      }
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(length, width, height),
+        new THREE.MeshBasicMaterial({
+          color: boxColor(box, types, appearance),
+          transparent: true,
+          opacity: 0.28,
+          depthWrite: false,
+        }),
+      );
+      applyPose(mesh, box.pose);
+      stage.solids.add(mesh);
     }
   }
-  stage.boxes.geometry.dispose();
-  stage.boxes.geometry = new THREE.BufferGeometry();
-  stage.boxes.geometry.setAttribute("position", new THREE.Float32BufferAttribute(boxPositions, 3));
-  stage.boxes.geometry.setAttribute("color", new THREE.Float32BufferAttribute(boxColors, 3));
 
   clearGroup(stage.frustums);
   for (const frustum of frame.frustums) {
-    if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+    if (!appearance.frustums || hidden[frustum.agent_id] || !isPose(frustum.pose)) {
       continue;
     }
     const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(types.get(frustum.agent_id) ?? ""));
@@ -265,7 +369,7 @@ async function drawFrame(
 
   clearGroup(stage.agents);
   for (const agent of frame.agents) {
-    if (hidden[agent.agent_id] || !isPose(agent.pose)) {
+    if (!appearance.axes || hidden[agent.agent_id] || !isPose(agent.pose)) {
       continue;
     }
     const axes = new THREE.AxesHelper(2);
@@ -321,11 +425,27 @@ export default function Viewer({ token }: { token: string }) {
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
   const [exportNote, setExportNote] = useState("");
+  const [exportSource, setExportSource] = useState("view");
+  const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | "png">("mp4");
+  const [exportFps, setExportFps] = useState(10);
+  const [exportSize, setExportSize] = useState<string>("960x540");
+  const [exportStart, setExportStart] = useState(1);
+  const [exportEnd, setExportEnd] = useState(10);
+  const [exporting, setExporting] = useState(false);
+  const [plotFormat, setPlotFormat] = useState<"png" | "svg">("png");
+  const [plotNote, setPlotNote] = useState("");
+  const [plotUrl, setPlotUrl] = useState<string | null>(null);
+  const [plotAlt, setPlotAlt] = useState("Bird's-eye plot");
+  const [plotting, setPlotting] = useState(false);
+  const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
+  const appearanceRef = useRef(appearance);
+  appearanceRef.current = appearance;
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(false);
   const [speed, setSpeed] = useState<Speed>(1);
   const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
   const [cameraId, setCameraId] = useState("");
+  const [cameraFrame, setCameraFrame] = useState<FrameDocument | null>(null);
   const framedScene = useRef("");
   const modeRef = useRef<Viewpoint>("orbit");
   const cameraKeyRef = useRef("");
@@ -337,6 +457,7 @@ export default function Viewer({ token }: { token: string }) {
   const loopRef = useRef(false);
   const frameRef = useRef(0);
   const drawGen = useRef(0);
+  const paintWait = useRef<((time: number) => void) | null>(null);
 
   useEffect(() => {
     lengthRef.current = summary?.times_us.length ?? 0;
@@ -345,6 +466,30 @@ export default function Viewer({ token }: { token: string }) {
     cameraKeyRef.current = cameraId;
     modeRef.current = viewpoint;
   }, [summary, loop, cameraId, viewpoint, frameIndex]);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = appearance.theme;
+    saveAppearance(appearance);
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+    stage.points.visible = appearance.points;
+    stage.boxes.visible = appearance.boxes;
+    stage.frustums.visible = appearance.frustums;
+    stage.mapLines.visible = appearance.map;
+    stage.agents.visible = appearance.axes;
+    stage.solids.visible = appearance.boxes && appearance.boxStyle === "solid";
+    const material = stage.points.material;
+    if (material instanceof THREE.PointsMaterial) {
+      material.size = appearance.pointSize;
+    }
+    stage.setTheme(appearance.theme);
+  }, [appearance]);
+
+  useEffect(() => {
+    stageRef.current?.requestRender();
+  }, [viewpoint, cameraId]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -361,7 +506,7 @@ export default function Viewer({ token }: { token: string }) {
     if (!canvas) {
       return;
     }
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0e100d);
     const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 5000);
@@ -388,17 +533,30 @@ export default function Viewer({ token }: { token: string }) {
     boxes.renderOrder = 2;
     const frustums = new THREE.Group();
     const agents = new THREE.Group();
+    const solids = new THREE.Group();
     frustums.renderOrder = 3;
     agents.renderOrder = 4;
-    scene.add(mapLines, points, boxes, frustums, agents);
-    stageRef.current = { points, boxes, mapLines, frustums, agents, camera, controls };
+    solids.renderOrder = 2;
+    scene.add(mapLines, points, boxes, solids, frustums, agents);
     const clock = new THREE.Clock();
     let frameId = 0;
+    let sizedWidth = 0;
+    let sizedHeight = 0;
+    let sizedRatio = 0;
+    let dragging = false;
+    let damp = 0;
     const draw = () => {
+      frameId = 0;
       const width = canvas.clientWidth || 1;
       const height = canvas.clientHeight || 1;
-      renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-      renderer.setSize(width, height, false);
+      const ratio = Math.min(window.devicePixelRatio || 1, 2);
+      if (width !== sizedWidth || height !== sizedHeight || ratio !== sizedRatio) {
+        renderer.setPixelRatio(ratio);
+        renderer.setSize(width, height, false);
+        sizedWidth = width;
+        sizedHeight = height;
+        sizedRatio = ratio;
+      }
       camera.aspect = width / height;
       const dt = clock.getDelta();
       const mode = modeRef.current;
@@ -411,10 +569,15 @@ export default function Viewer({ token }: { token: string }) {
         orbitHomeRef.current,
       );
       const orbitFree = mode === "orbit" && !settleRef.current;
+      let easing = false;
       if (orbitFree) {
         controls.enabled = true;
         controls.enableDamping = true;
         controls.update();
+        if (!dragging && damp > 0) {
+          damp -= 1;
+        }
+        easing = dragging || damp > 0;
       } else if (goal) {
         controls.enabled = false;
         const arrived = reduceMotionRef.current
@@ -426,19 +589,92 @@ export default function Viewer({ token }: { token: string }) {
           controls.enabled = true;
           controls.update();
         }
+        easing = !arrived;
       }
       camera.updateProjectionMatrix();
       renderer.render(scene, camera);
+      if (easing) {
+        requestRender();
+      }
+    };
+    const requestRender = () => {
+      if (frameId !== 0) {
+        return;
+      }
       frameId = window.requestAnimationFrame(draw);
     };
-    draw();
+    const onStart = () => {
+      dragging = true;
+      requestRender();
+    };
+    const onEnd = () => {
+      dragging = false;
+      damp = 24;
+      requestRender();
+    };
+    controls.addEventListener("start", onStart);
+    controls.addEventListener("end", onEnd);
+    const resize = new ResizeObserver(requestRender);
+    resize.observe(canvas);
+    const captureView = (width: number, height: number) => {
+      const mode = modeRef.current;
+      const latest = latestRef.current;
+      const goal = goalFor(
+        mode,
+        latest?.frame ?? null,
+        latest?.types ?? new Map(),
+        cameraKeyRef.current,
+        orbitHomeRef.current,
+      );
+      if (goal && mode !== "orbit") {
+        applyGoal(camera, controls.target, goal);
+      }
+      renderer.setPixelRatio(1);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / Math.max(height, 1);
+      camera.updateProjectionMatrix();
+      renderer.render(scene, camera);
+      const url = canvas.toDataURL("image/png");
+      sizedWidth = 0;
+      sizedHeight = 0;
+      sizedRatio = 0;
+      requestRender();
+      return url;
+    };
+    const setTheme = (theme: Appearance["theme"]) => {
+      scene.background = new THREE.Color(theme === "light" ? 0xe7e2d6 : 0x0e100d);
+      requestRender();
+    };
+    stageRef.current = {
+      points,
+      boxes,
+      mapLines,
+      frustums,
+      agents,
+      solids,
+      camera,
+      controls,
+      requestRender,
+      captureView,
+      setTheme,
+    };
+    setTheme(appearanceRef.current.theme);
+    const pointsMaterial = points.material;
+    if (pointsMaterial instanceof THREE.PointsMaterial) {
+      pointsMaterial.size = appearanceRef.current.pointSize;
+    }
+    requestRender();
     return () => {
+      resize.disconnect();
+      controls.removeEventListener("start", onStart);
+      controls.removeEventListener("end", onEnd);
       window.cancelAnimationFrame(frameId);
       controls.dispose();
       renderer.dispose();
       points.geometry.dispose();
       boxes.geometry.dispose();
       mapLines.geometry.dispose();
+      clearGroup(solids);
       stageRef.current = null;
     };
   }, []);
@@ -509,25 +745,56 @@ export default function Viewer({ token }: { token: string }) {
     if (!playing || !summary) {
       return;
     }
-    const length = summary.times_us.length;
-    if (length === 0) {
+    const times = summary.times_us;
+    if (times.length < 2) {
       return;
     }
-    const atEnd = frameIndex >= length - 1;
-    const basis = atEnd ? length - 2 : frameIndex;
-    const delay = frameDelayMs(summary.times_us, basis, speed);
-    if (delay === null) {
-      return;
-    }
-    const id = window.setTimeout(() => {
-      if (atEnd && !loop) {
+    let originIndex = frameRef.current;
+    let cursor = originIndex;
+    let origin = performance.now();
+    let stopped = false;
+    let timeoutId = 0;
+
+    const tick = () => {
+      if (stopped) {
+        return;
+      }
+      if (frameRef.current !== cursor) {
+        originIndex = frameRef.current;
+        cursor = originIndex;
+        origin = performance.now();
+      }
+      let place = indexAfter(times, originIndex, performance.now() - origin, speed, loopRef.current);
+      cursor = place.index;
+      frameRef.current = place.index;
+      setFrameIndex(place.index);
+      if (place.done) {
         setPlaying(false);
         return;
       }
-      setFrameIndex((current) => stepIndex(current, 1, length, loop));
-    }, delay);
-    return () => window.clearTimeout(id);
-  }, [playing, summary, frameIndex, speed, loop]);
+      // Drawing may have used part of this gap. Land on the sample that
+      // matches the clock now, then wait for the next one. The index never
+      // runs ahead of elapsed time.
+      place = indexAfter(times, originIndex, performance.now() - origin, speed, loopRef.current);
+      if (place.index !== frameRef.current) {
+        cursor = place.index;
+        frameRef.current = place.index;
+        setFrameIndex(place.index);
+      }
+      if (place.done) {
+        setPlaying(false);
+        return;
+      }
+      timeoutId = window.setTimeout(tick, place.remainMs > 0 ? place.remainMs : 16);
+    };
+
+    const first = indexAfter(times, originIndex, 0, speed, loopRef.current);
+    timeoutId = window.setTimeout(tick, first.remainMs > 0 ? first.remainMs : 16);
+    return () => {
+      stopped = true;
+      window.clearTimeout(timeoutId);
+    };
+  }, [playing, summary, speed, loop]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -586,8 +853,12 @@ export default function Viewer({ token }: { token: string }) {
       }
       setSummary(body);
       setFrameIndex(0);
+      setExportStart(1);
+      setExportEnd(Math.min(10, body.times_us.length));
+      setExportSource("view");
       setHidden({});
       setPlaying(false);
+      setCameraFrame(null);
       const cameras = body.sensors.filter((sensor) => sensor.modality === "camera");
       setCameraId((current) => {
         const stillThere = cameras.some((sensor) => cameraKey(sensor.agent_id, sensor.sensor_id) === current);
@@ -624,10 +895,11 @@ export default function Viewer({ token }: { token: string }) {
         return;
       }
       latestRef.current = { frame: body, types };
-      const drawn = await drawFrame(stage, body, types, hidden, token, cacheRef.current, stale);
+      const drawn = await drawFrame(stage, body, types, hidden, appearance, token, cacheRef.current, stale);
       if (!drawn || stale()) {
         return;
       }
+      stage.requestRender();
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
         orbitHomeRef.current = home;
@@ -637,21 +909,25 @@ export default function Viewer({ token }: { token: string }) {
         settleRef.current = false;
         framedScene.current = summary.scene_id;
       }
-      const shown = body.point_sensors.reduce((sum, sensor) => {
-        return hidden[sensor.agent_id] ? sum : sum + sensor.count;
-      }, 0);
-      const boxes = body.boxes.filter((box) => !hidden[box.agent_id]).length;
-      const frustums = body.frustums.filter((frustum) => !hidden[frustum.agent_id]).length;
+      const shown = appearance.points
+        ? body.point_sensors.reduce((sum, sensor) => {
+            return hidden[sensor.agent_id] ? sum : sum + sensor.count;
+          }, 0)
+        : 0;
+      const boxes = body.boxes.filter((box) => boxShown(box, hidden, appearance)).length;
+      const frustums = body.frustums.filter((frustum) => appearance.frustums && !hidden[frustum.agent_id]).length;
+      setCameraFrame(body);
       setStatus(
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
       prefetchAhead(cacheRef.current, summary, frameIndex, token);
+      paintWait.current?.(time);
     })().catch((error: unknown) => {
       if (!stale()) {
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
       }
     });
-  }, [summary, frameIndex, hidden, token, mapNote]);
+  }, [summary, frameIndex, hidden, appearance, token, mapNote]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
@@ -666,6 +942,7 @@ export default function Viewer({ token }: { token: string }) {
       });
       if (response.status === 404) {
         replaceMap(stage, new ArrayBuffer(0));
+        stage.requestRender();
         setMapNote("no map.");
         return;
       }
@@ -674,6 +951,7 @@ export default function Viewer({ token }: { token: string }) {
         return;
       }
       replaceMap(stage, await response.arrayBuffer());
+      stage.requestRender();
       setMapNote("map drawn.");
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) {
@@ -705,6 +983,156 @@ export default function Viewer({ token }: { token: string }) {
     canvasRef.current?.focus();
   }
 
+  function exportSizeChoice() {
+    return EXPORT_SIZES.find((item) => item.id === exportSize) ?? EXPORT_SIZES[1];
+  }
+
+  async function waitForSample(index: number, time: number) {
+    if (frameRef.current === index && latestRef.current?.frame.time_us === time) {
+      await new Promise((resolve) => {
+        window.requestAnimationFrame(() => resolve(undefined));
+      });
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        paintWait.current = null;
+        reject(new Error("That sample did not finish drawing."));
+      }, 8000);
+      paintWait.current = (drawn) => {
+        if (drawn !== time) {
+          return;
+        }
+        paintWait.current = null;
+        window.clearTimeout(timer);
+        window.requestAnimationFrame(() => resolve());
+      };
+      setFrameIndex(index);
+    });
+  }
+
+  async function postExport(scene: string, path: string, payload: unknown) {
+    const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(scene)}${path}`, {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "X-Coperceive-Request": "1",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(await errorDetail(response));
+    }
+    return (await response.json()) as {
+      path?: unknown;
+      frames?: unknown;
+      width?: unknown;
+      height?: unknown;
+      fps?: unknown;
+      points?: unknown;
+      boxes?: unknown;
+      map_drawn?: unknown;
+    };
+  }
+
+  async function downloadExported(relative: string) {
+    const file =
+      relative.endsWith(".mp4") ||
+      relative.endsWith(".gif") ||
+      relative.endsWith(".png") ||
+      relative.endsWith(".svg");
+    if (!file) {
+      return;
+    }
+    const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(relative)}`, {
+      headers: authHeaders(token),
+    });
+    if (!response.ok) {
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = relative.split("/").pop() ?? "sequence";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportSequence(still: boolean) {
+    if (!summary || exporting) {
+      return;
+    }
+    const length = summary.times_us.length;
+    const start = still ? frameIndex : exportStart - 1;
+    const end = still ? frameIndex : exportEnd - 1;
+    if (start < 0 || end < start || end >= length) {
+      setExportNote("The sample range is outside this scene.");
+      return;
+    }
+    const count = end - start + 1;
+    if (exportSource === "view" && count > 60) {
+      setExportNote("This view exports at most 60 samples. A camera can cover a longer range.");
+      return;
+    }
+    const size = exportSizeChoice();
+    const format = still ? "png" : exportFormat;
+    setExporting(true);
+    setPlaying(false);
+    setExportNote(still ? "Writing the still…" : "Writing the sequence…");
+    try {
+      const startUs = summary.times_us[start];
+      const endUs = summary.times_us[end];
+      let saved: { path?: unknown; frames?: unknown; width?: unknown; height?: unknown; fps?: unknown };
+      if (exportSource === "view") {
+        const stage = stageRef.current;
+        if (!stage) {
+          throw new Error("The view is not ready.");
+        }
+        const frames: string[] = [];
+        for (let index = start; index <= end; index += 1) {
+          const time = summary.times_us[index];
+          if (typeof time !== "number") {
+            throw new Error("That sample is not in the scene.");
+          }
+          setExportNote(`Drawing sample ${index + 1}…`);
+          await waitForSample(index, time);
+          const url = stage.captureView(size.width, size.height);
+          frames.push(url.slice(url.indexOf(",") + 1));
+        }
+        saved = await postExport(summary.scene_id, "/export/view", {
+          format,
+          fps: exportFps,
+          start_us: startUs,
+          end_us: endUs,
+          frames_b64: frames,
+        });
+      } else {
+        const slash = exportSource.indexOf("/");
+        saved = await postExport(summary.scene_id, "/export/sequence", {
+          agent_id: exportSource.slice(0, slash),
+          sensor_id: exportSource.slice(slash + 1),
+          start_us: startUs,
+          end_us: endUs,
+          fps: exportFps,
+          width: size.width,
+          height: size.height,
+          format,
+        });
+      }
+      const path = typeof saved.path === "string" ? saved.path : "";
+      setExportNote(
+        `Wrote ${path} (${String(saved.frames)} frames, ${String(saved.width)}×${String(saved.height)} at ${String(saved.fps)} fps).`,
+      );
+      await downloadExported(path);
+    } catch (error) {
+      setExportNote(error instanceof Error ? error.message : "Export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   async function exportRerun() {
     if (!summary) {
       return;
@@ -722,10 +1150,94 @@ export default function Viewer({ token }: { token: string }) {
     setExportNote(`Wrote ${String(body.path)} (${String(body.samples)} samples).`);
   }
 
+  async function savePlot(kind: "bev" | "overlay") {
+    if (!summary || plotting) {
+      return;
+    }
+    const when = summary.times_us[Math.min(frameIndex, Math.max(summary.times_us.length - 1, 0))];
+    if (typeof when !== "number") {
+      return;
+    }
+    const shown = summary.agents.filter((agent) => !hidden[agent.agent_id]).map((agent) => agent.agent_id);
+    if (shown.length === 0) {
+      setPlotNote("Show an agent to draw the plot.");
+      return;
+    }
+    let agentId = "";
+    let sensorId = "";
+    if (kind === "overlay") {
+      const slash = cameraId.indexOf("/");
+      if (slash <= 0) {
+        setPlotNote("Choose a camera for the overlay.");
+        return;
+      }
+      agentId = cameraId.slice(0, slash);
+      sensorId = cameraId.slice(slash + 1);
+    }
+    setPlotting(true);
+    setPlotNote(kind === "bev" ? "Drawing the bird's-eye plot…" : "Drawing the camera overlay…");
+    try {
+      const saved = await postExport(summary.scene_id, kind === "bev" ? "/export/bev" : "/export/overlay", {
+        time_us: when,
+        format: plotFormat,
+        theme: appearance.theme,
+        color_by: appearance.colorBy,
+        points: appearance.points,
+        boxes: appearance.boxes,
+        map: appearance.map,
+        box_style: appearance.boxStyle,
+        hidden_classes: appearance.hiddenClasses,
+        agents: shown,
+        ...(kind === "overlay" ? { agent_id: agentId, sensor_id: sensorId } : {}),
+      });
+      const path = typeof saved.path === "string" ? saved.path : "";
+      const mapNote = saved.map_drawn === true ? ", map drawn" : "";
+      setPlotNote(
+        `Wrote ${path} (${String(saved.points)} points, ${String(saved.boxes)} boxes${mapNote}).`,
+      );
+      setPlotAlt(kind === "bev" ? "Bird's-eye plot of the current sample" : "Camera overlay of the current sample");
+      const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(path)}`, {
+        headers: authHeaders(token),
+      });
+      if (!response.ok) {
+        return;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      setPlotUrl((previous) => {
+        if (previous) {
+          URL.revokeObjectURL(previous);
+        }
+        return url;
+      });
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = path.split("/").pop() ?? `plot.${plotFormat}`;
+      link.click();
+    } catch (error) {
+      setPlotNote(error instanceof Error ? error.message : "Plot failed.");
+    } finally {
+      setPlotting(false);
+    }
+  }
+
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
   const timeUs = summary?.times_us[Math.min(frameIndex, last)];
   const cameras = (summary?.sensors ?? []).filter((sensor) => sensor.modality === "camera");
+  const agentTypes = useMemo(
+    () => new Map((summary?.agents ?? []).map((agent) => [agent.agent_id, agent.agent_type])),
+    [summary],
+  );
   const viewpointLabel = VIEWPOINTS.find((item) => item.id === viewpoint)?.label ?? "Orbit";
+  const categories = useMemo(() => {
+    const names = new Set<string>();
+    for (const box of cameraFrame?.boxes ?? []) {
+      if (typeof box.category === "string" && box.category) {
+        names.add(box.category);
+      }
+    }
+    return [...names].sort();
+  }, [cameraFrame]);
 
   return (
     <section className="card viewer-card">
@@ -775,9 +1287,230 @@ export default function Viewer({ token }: { token: string }) {
             );
           })}
         </select>
-        <button type="button" className="ghost" onClick={() => void exportRerun()} disabled={!summary}>
+        <button type="button" className="ghost" onClick={() => void exportRerun()} disabled={!summary || exporting}>
           Export Rerun
         </button>
+      </div>
+      <div className="export-bar">
+        <label htmlFor="export-source">Export</label>
+        <select
+          id="export-source"
+          value={exportSource}
+          onChange={(event) => setExportSource(event.target.value)}
+        >
+          <option value="view">This view</option>
+          {cameras.map((sensor) => {
+            const key = cameraKey(sensor.agent_id, sensor.sensor_id);
+            return (
+              <option key={key} value={key}>
+                {sensor.sensor_id} · {sensor.agent_id}
+              </option>
+            );
+          })}
+        </select>
+        <label htmlFor="export-format">Format</label>
+        <select
+          id="export-format"
+          value={exportFormat}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === "mp4" || next === "gif" || next === "png") {
+              setExportFormat(next);
+            }
+          }}
+        >
+          <option value="mp4">MP4</option>
+          <option value="gif">GIF</option>
+          <option value="png">PNG frames</option>
+        </select>
+        <label htmlFor="export-fps">fps</label>
+        <select
+          id="export-fps"
+          value={String(exportFps)}
+          onChange={(event) => setExportFps(Number(event.target.value))}
+        >
+          {EXPORT_FPS.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="export-size">Size</label>
+        <select id="export-size" value={exportSize} onChange={(event) => setExportSize(event.target.value)}>
+          {EXPORT_SIZES.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="export-start">From</label>
+        <input
+          id="export-start"
+          type="number"
+          min={1}
+          max={summary ? summary.times_us.length : 1}
+          value={exportStart}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (Number.isInteger(next)) {
+              setExportStart(next);
+            }
+          }}
+        />
+        <label htmlFor="export-end">to</label>
+        <input
+          id="export-end"
+          type="number"
+          min={1}
+          max={summary ? summary.times_us.length : 1}
+          value={exportEnd}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (Number.isInteger(next)) {
+              setExportEnd(next);
+            }
+          }}
+        />
+        <button type="button" className="ghost" onClick={() => void exportSequence(true)} disabled={!summary || exporting}>
+          Save still
+        </button>
+        <button type="button" onClick={() => void exportSequence(false)} disabled={!summary || exporting}>
+          Export sequence
+        </button>
+        <span className="muted">
+          {exportNote || "Each sample in the range is one frame. 10 fps matches a 10 Hz recording."}
+        </span>
+      </div>
+      <div className="plot-bar">
+        <label htmlFor="plot-format">Plot</label>
+        <select
+          id="plot-format"
+          value={plotFormat}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === "png" || next === "svg") {
+              setPlotFormat(next);
+            }
+          }}
+        >
+          <option value="png">PNG</option>
+          <option value="svg">SVG</option>
+        </select>
+        <button type="button" onClick={() => void savePlot("bev")} disabled={!summary || plotting}>
+          Bird's-eye
+        </button>
+        <button
+          type="button"
+          className="ghost"
+          onClick={() => void savePlot("overlay")}
+          disabled={!summary || plotting || cameras.length === 0}
+        >
+          Camera overlay
+        </button>
+        <span className="muted">
+          {plotNote || "East is to the right. The file uses the current sample, layers, and theme."}
+        </span>
+      </div>
+      {plotUrl ? <img className="plot-preview" src={plotUrl} alt={plotAlt} /> : null}
+      <div className="customise-bar">
+        <span className="muted">View</span>
+        {(
+          [
+            ["points", "Points"],
+            ["boxes", "Boxes"],
+            ["frustums", "Frustums"],
+            ["map", "Map"],
+            ["axes", "Axes"],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key} className="check">
+            <input
+              type="checkbox"
+              checked={appearance[key]}
+              onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
+            />
+            {label}
+          </label>
+        ))}
+        <label htmlFor="color-by">Color</label>
+        <select
+          id="color-by"
+          value={appearance.colorBy}
+          onChange={(event) =>
+            setAppearance((current) => ({
+              ...current,
+              colorBy: event.target.value === "class" ? "class" : "agent",
+            }))
+          }
+        >
+          <option value="agent">Agent</option>
+          <option value="class">Class</option>
+        </select>
+        <label htmlFor="point-size">Point size</label>
+        <select
+          id="point-size"
+          value={String(appearance.pointSize)}
+          onChange={(event) =>
+            setAppearance((current) => ({ ...current, pointSize: Number(event.target.value) }))
+          }
+        >
+          {[1, 2, 3, 4].map((size) => (
+            <option key={size} value={size}>
+              {size} px
+            </option>
+          ))}
+        </select>
+        <label htmlFor="box-style">Boxes</label>
+        <select
+          id="box-style"
+          value={appearance.boxStyle}
+          onChange={(event) =>
+            setAppearance((current) => ({
+              ...current,
+              boxStyle: event.target.value === "solid" ? "solid" : "wire",
+            }))
+          }
+        >
+          <option value="wire">Wire</option>
+          <option value="solid">Solid</option>
+        </select>
+        <label htmlFor="theme">Theme</label>
+        <select
+          id="theme"
+          value={appearance.theme}
+          onChange={(event) =>
+            setAppearance((current) => ({
+              ...current,
+              theme: event.target.value === "light" ? "light" : "dark",
+            }))
+          }
+        >
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+        <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
+          Reset view
+        </button>
+        {categories.map((category) => (
+          <label key={category} className="check">
+            <input
+              type="checkbox"
+              checked={!appearance.hiddenClasses.includes(category)}
+              onChange={() =>
+                setAppearance((current) => {
+                  const hidden = new Set(current.hiddenClasses);
+                  if (hidden.has(category)) {
+                    hidden.delete(category);
+                  } else {
+                    hidden.add(category);
+                  }
+                  return { ...current, hiddenClasses: [...hidden] };
+                })
+              }
+            />
+            {category}
+          </label>
+        ))}
       </div>
       <canvas
         ref={canvasRef}
@@ -846,6 +1579,11 @@ export default function Viewer({ token }: { token: string }) {
           onChange={(event) => setFrameIndex(Number(event.target.value))}
         />
       </div>
+      <p className="muted status-line">{status}</p>
+      <p className="hint">
+        {playing ? "Playing" : "Paused"} at {speed}×{loop ? ", loop on" : ""}. {viewpointLabel}. Click the
+        view, then Space plays, arrows step, L loops, [ ] change speed, and 1–5 pick a viewpoint.
+      </p>
       <div className="viewer-agents">
         {(summary?.agents ?? []).map((agent) => (
           <label key={agent.agent_id}>
@@ -863,11 +1601,20 @@ export default function Viewer({ token }: { token: string }) {
           </label>
         ))}
       </div>
-      <p className="muted status-line">{status}</p>
-      <p className="hint">
-        {playing ? "Playing" : "Paused"} at {speed}×{loop ? ", loop on" : ""}. {viewpointLabel}. Click the
-        view, then Space plays, arrows step, L loops, [ ] change speed, and 1–5 pick a viewpoint.
-      </p>
+      {cameraFrame && summary ? (
+        <CameraStrip
+          token={token}
+          sceneId={summary.scene_id}
+          timeUs={cameraFrame.time_us}
+          nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
+          frustums={cameraFrame.frustums}
+          boxes={cameraFrame.boxes}
+          pointSensors={cameraFrame.point_sensors}
+          types={agentTypes}
+          hidden={hidden}
+          cacheRef={cacheRef}
+        />
+      ) : null}
       {exportNote ? <p className="muted">{exportNote}</p> : null}
     </section>
   );
