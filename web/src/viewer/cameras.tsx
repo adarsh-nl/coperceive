@@ -19,9 +19,10 @@ self.onmessage = async (event) => {
   const data = event.data;
   try {
     const blob = new Blob([data.buffer], { type: data.type || "image/png" });
+    const width = data.width > 0 ? data.width : ${STRIP_WIDTH};
     let bitmap;
     try {
-      bitmap = await createImageBitmap(blob, { resizeWidth: ${STRIP_WIDTH}, resizeQuality: "low" });
+      bitmap = await createImageBitmap(blob, { resizeWidth: width, resizeQuality: "low" });
     } catch (err) {
       bitmap = await createImageBitmap(blob);
     }
@@ -42,7 +43,7 @@ let workerCount = 0;
 let decodeId = 1;
 const spareWorkers: Worker[] = [];
 const decodeJobs = new Map<number, PendingDecode>();
-const decodeQueue: { id: number; buffer: ArrayBuffer; type: string }[] = [];
+const decodeQueue: { id: number; buffer: ArrayBuffer; type: string; width: number }[] = [];
 
 function workerScript(): string {
   if (!workerUrl) {
@@ -90,12 +91,12 @@ function drainDecoders() {
   }
 }
 
-function decodeBitmap(buffer: ArrayBuffer, type: string): Promise<ImageBitmap> {
+function decodeBitmap(buffer: ArrayBuffer, type: string, width: number): Promise<ImageBitmap> {
   const id = decodeId;
   decodeId += 1;
   return new Promise((resolve, reject) => {
     decodeJobs.set(id, { resolve, reject });
-    decodeQueue.push({ id, buffer, type });
+    decodeQueue.push({ id, buffer, type, width });
     drainDecoders();
   });
 }
@@ -140,14 +141,15 @@ function clearBlobs() {
   inflight.clear();
 }
 
-async function loadImage(
+export async function loadImage(
   sceneId: string,
   timeUs: number,
   agentId: string,
   sensorId: string,
   token: string,
+  width = STRIP_WIDTH,
 ): Promise<ImageBitmap | null> {
-  const key = `${sceneId}|${timeUs}|${agentId}|${sensorId}`;
+  const key = `${sceneId}|${timeUs}|${agentId}|${sensorId}|${width}`;
   if (missing.has(key)) {
     return null;
   }
@@ -161,7 +163,7 @@ async function loadImage(
   if (pending) {
     return pending;
   }
-  const request = fetchImage(key, sceneId, timeUs, agentId, sensorId, token);
+  const request = fetchImage(key, sceneId, timeUs, agentId, sensorId, token, width);
   inflight.set(key, request);
   try {
     return await request;
@@ -177,6 +179,7 @@ async function fetchImage(
   agentId: string,
   sensorId: string,
   token: string,
+  width: number,
 ): Promise<ImageBitmap | null> {
   const response = await fetch(
     `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}`,
@@ -191,7 +194,7 @@ async function fetchImage(
   }
   const type = response.headers.get("content-type") ?? "image/png";
   const buffer = await response.arrayBuffer();
-  return rememberBitmap(key, await decodeBitmap(buffer, type));
+  return rememberBitmap(key, await decodeBitmap(buffer, type, width));
 }
 
 function pinhole(camera: FrameFrustum): Pinhole | null {

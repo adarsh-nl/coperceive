@@ -255,6 +255,16 @@ With loop on, play at 1× moved the clock from sample 1 to sample 37 in about 4 
 
 On sample 1 the vehicle pose delta is 0.0 m/s. The drone is 1.0 m/s, 4 km/h, heading 326°, altitude 28.3 m. Dragging the camera panel moved it, and the resize handle changed its width from 420 px to 490 px. In the drone viewpoint the label is clamped inside the viewport. With `prefers-reduced-motion: reduce`, the viewpoint highlight transition is 0 s and two frames 700 ms apart after a viewpoint change were identical. Every Griffin-25m scene on this machine has a UAV. With the drone removed from the scene and frame documents, Town03-000 in the drone viewpoint read `No UAV pose at this sample, so the drone view is holding.` and drew no drone label.
 
+## Landing, frustum images, and the side column
+
+The page at `/` is a landing view. `#/viewer` opens the viewer. The top bar is one 32 px row: brand, the current map and scene id, Viewer/Desk in the centre, then Export, a theme icon, and Settings. Speed stays on one line. Camera chips wrap inside the picture-in-picture panel. The timecode flag sits under the tick labels.
+
+The right column keeps the agent cards, then a scene summary (duration, samples, agents, boxes by class), a selected-object inspector, and an 80 m radar. Clicking a box reports class, track id, pose-delta speed, distance to each agent, and which agents have a nearby box.
+
+Frustum images are a layer. The far plane, 12 m out, uses that camera’s frame for the playhead. Images are decoded at 360 px on the existing worker and the texture is reused. Opacity is a slider. The picture-in-picture panel stays. Looking through a camera hides that camera’s plane.
+
+Bencho’s free blocks are MIT. The landing interactions are written here and do not copy that source. On Town03-000 the landing default is light, and dark sets the page background to `#101010`. With `prefers-reduced-motion: reduce`, the hero, shimmer, and tilt animations are `none`.
+
 ## Gates for the UI redesign
 
 Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did not rebuild the wheel and did not run gitleaks or `mkdocs build`. Python 3.10, 3.11, and 3.13 were not run on this machine. There is no web test suite.
@@ -262,5 +272,5 @@ Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did n
 - `ruff check .` — all checks passed (ruff 0.17.1)
 - `ruff format --check .` — 87 files already formatted
 - `pyright` — 0 errors, 0 warnings, 0 informations
-- `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 4.06 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
-- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-XSr7Kncv.js` and `index-BYmWyIAf.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.
+- `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 3.19 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-CYY8i7aU.js` and `index-B38akdLR.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.

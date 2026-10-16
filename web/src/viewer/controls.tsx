@@ -8,12 +8,14 @@ export function Menu({
   value,
   options,
   onChange,
+  ariaLabel,
 }: {
   id: string;
   label?: string;
   value: string;
   options: readonly MenuOption[];
   onChange: (value: string) => void;
+  ariaLabel?: string;
 }) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -52,6 +54,7 @@ export function Menu({
         id={id}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-label={label ? undefined : ariaLabel}
         aria-labelledby={label ? `${id}-label` : undefined}
         onClick={() => setOpen((currentOpen) => !currentOpen)}
       >
@@ -181,6 +184,97 @@ export function IconLoop() {
         fill="currentColor"
         d="M3.2 6.2A4.5 4.5 0 0 1 11 4h1.2L10.6 5.6 11.8 6.8 15 3.6 11.8.4 10.6 1.6 12.2 3H11a5.7 5.7 0 0 0-5.5 4.1l1.2.4A4.5 4.5 0 0 1 3.2 6.2zM12.8 9.8A4.5 4.5 0 0 1 5 12H3.8l1.6-1.6L4.2 9.2 1 12.4l3.2 3.2 1.2-1.2L3.8 13H5a5.7 5.7 0 0 0 5.5-4.1l-1.2-.4a4.5 4.5 0 0 1 3.5 1.3z"
       />
+    </svg>
+  );
+}
+
+export function Slider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const ratio = max <= min ? 0 : (value - min) / (max - min);
+  function seek(clientX: number) {
+    const box = ref.current?.getBoundingClientRect();
+    if (!box || box.width <= 0) {
+      return;
+    }
+    const next = min + Math.min(1, Math.max(0, (clientX - box.left) / box.width)) * (max - min);
+    const stepped = Math.round(next / step) * step;
+    onChange(Math.min(max, Math.max(min, Number(stepped.toFixed(4)))));
+  }
+  return (
+    <div className="slider-field">
+      <span className="field-label">{label}</span>
+      <div
+        className="slider"
+        ref={ref}
+        role="slider"
+        tabIndex={0}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-valuenow={value}
+        aria-valuetext={`${Math.round(value * 100)}%`}
+        aria-label={label}
+        style={{ ["--at" as string]: `${ratio * 100}%` }}
+        onPointerDown={(event) => {
+          event.currentTarget.setPointerCapture(event.pointerId);
+          seek(event.clientX);
+        }}
+        onPointerMove={(event) => {
+          if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+            seek(event.clientX);
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "ArrowRight" || event.key === "ArrowUp") {
+            event.preventDefault();
+            onChange(Math.min(max, Number((value + step).toFixed(4))));
+          } else if (event.key === "ArrowLeft" || event.key === "ArrowDown") {
+            event.preventDefault();
+            onChange(Math.max(min, Number((value - step).toFixed(4))));
+          }
+        }}
+      >
+        <i style={{ width: `${ratio * 100}%` }} />
+      </div>
+    </div>
+  );
+}
+
+export function IconSun() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.3" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path stroke="currentColor" strokeWidth="1.4" d="M8 1.5v1.7M8 12.8v1.7M1.5 8h1.7M12.8 8h1.7M3.3 3.3l1.2 1.2M11.5 11.5l1.2 1.2M12.7 3.3 11.5 4.5M4.5 11.5 3.3 12.7" />
+    </svg>
+  );
+}
+
+export function IconMoon() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <path fill="currentColor" d="M9.2 1.6a6.2 6.2 0 1 0 5.2 9.4 5.2 5.2 0 0 1-5.2-9.4z" />
+    </svg>
+  );
+}
+
+export function IconGear() {
+  return (
+    <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
+      <circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.4" />
+      <path stroke="currentColor" strokeWidth="1.4" d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M12.8 3.2 11.4 4.6M4.6 11.4 3.2 12.8" />
     </svg>
   );
 }

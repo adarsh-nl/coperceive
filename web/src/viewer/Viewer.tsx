@@ -12,9 +12,13 @@ import {
   type Appearance,
 } from "./appearance";
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
-import CameraStrip from "./cameras";
+import CameraStrip, { loadImage } from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
-import { EyeToggle, Menu, Segmented, SwatchToggle } from "./controls";
+import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
+import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
+import type { PickRecord } from "./inspect";
+import { pickFromObject, syncPicks } from "./picks";
+import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
 import { formatClock, indexAfter, neighborSpeed, stepIndex, type Speed } from "./playback";
 import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
@@ -62,6 +66,10 @@ type Stage = {
   leaderLines: Map<string, THREE.Line>;
   labelNodes: Map<string, CSS2DObject>;
   clearMotion: () => void;
+  picks: THREE.Group;
+  images: THREE.Group;
+  imagePlanes: Map<string, THREE.Mesh>;
+  highlight: THREE.Mesh;
 };
 
 type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
@@ -176,7 +184,7 @@ function applyPose(object: THREE.Object3D, pose: Pose) {
 }
 
 function frustumLines(fovY: number, aspect: number, color: number): THREE.LineSegments {
-  const depth = 4;
+  const depth = FRUSTUM_DEPTH;
   const halfHeight = Math.tan(fovY / 2) * depth;
   const halfWidth = halfHeight * aspect;
   const corners = [
@@ -595,7 +603,25 @@ function syncMotion(stage: Stage, frame: FrameDocument, types: Map<string, strin
   }
 }
 
-export default function Viewer({ token, slot }: { token: string; slot: HTMLElement | null }) {
+export type ClockMark = { ratio: number; label: string };
+
+export default function Viewer({
+  token,
+  slot,
+  actions,
+  poster = false,
+  scrubTo = null,
+  onClock,
+  onTheme,
+}: {
+  token: string;
+  slot: HTMLElement | null;
+  actions: HTMLElement | null;
+  poster?: boolean;
+  scrubTo?: number | null;
+  onClock?: (mark: ClockMark) => void;
+  onTheme?: (theme: Appearance["theme"]) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<Stage | null>(null);
   const cacheRef = useRef<FrameCache>(createFrameCache());
@@ -636,6 +662,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
   const [speed, setSpeed] = useState<Speed>(1);
   const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
   const [cameraId, setCameraId] = useState("");
+  const [pick, setPick] = useState<PickRecord | null>(null);
   const [cameraFrame, setCameraFrame] = useState<FrameDocument | null>(null);
   const framedScene = useRef("");
   const modeRef = useRef<Viewpoint>("orbit");
@@ -649,6 +676,8 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
   const frameRef = useRef(0);
   const drawGen = useRef(0);
   const paintWait = useRef<((time: number) => void) | null>(null);
+  const onPickRef = useRef<(value: PickRecord | null) => void>(() => undefined);
+  onPickRef.current = setPick;
 
   useEffect(() => {
     lengthRef.current = summary?.times_us.length ?? 0;
@@ -661,6 +690,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = appearance.theme;
     saveAppearance(appearance);
+    onTheme?.(appearance.theme);
     const stage = stageRef.current;
     if (!stage) {
       return;
@@ -676,11 +706,38 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       material.size = appearance.pointSize;
     }
     stage.setTheme(appearance.theme);
-  }, [appearance]);
+  }, [appearance, onTheme]);
 
   useEffect(() => {
     stageRef.current?.requestRender();
   }, [viewpoint, cameraId]);
+
+  useEffect(() => {
+    if (!poster || !summary) {
+      return;
+    }
+    setLoop(true);
+    setPlaying(true);
+    setAppearance((current) => (current.frustumImages ? current : { ...current, frustumImages: true, frustums: true }));
+  }, [poster, summary]);
+
+  useEffect(() => {
+    if (!poster || scrubTo === null || !summary) {
+      return;
+    }
+    const last = Math.max(summary.times_us.length - 1, 0);
+    setPlaying(false);
+    setFrameIndex(Math.round(Math.min(1, Math.max(0, scrubTo)) * last));
+  }, [poster, scrubTo, summary]);
+
+  useEffect(() => {
+    if (!poster || !onClock || !summary) {
+      return;
+    }
+    const last = Math.max(summary.times_us.length - 1, 1);
+    const time = summary.times_us[Math.min(frameIndex, summary.times_us.length - 1)];
+    onClock({ ratio: Math.min(frameIndex, last) / last, label: formatClock(typeof time === "number" ? time : 0) });
+  }, [poster, onClock, summary, frameIndex]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -726,6 +783,15 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
     points.renderOrder = 1;
     boxes.renderOrder = 2;
     const frustums = new THREE.Group();
+    const images = new THREE.Group();
+    const imagePlanes = new Map<string, THREE.Mesh>();
+    const picks = new THREE.Group();
+    const highlight = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0xf4f4ed, wireframe: true }),
+    );
+    highlight.visible = false;
+    highlight.frustumCulled = false;
     const agents = new THREE.Group();
     const solids = new THREE.Group();
     frustums.renderOrder = 3;
@@ -746,7 +812,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
     const trailLines = new Map<string, THREE.Line>();
     const leaderLines = new Map<string, THREE.Line>();
     const labelNodes = new Map<string, CSS2DObject>();
-    scene.add(grid, mapLines, points, boxes, solids, frustums, agents, trails, leaders, labels);
+    scene.add(grid, mapLines, points, boxes, solids, frustums, images, picks, highlight, agents, trails, leaders, labels);
     const clock = new THREE.Clock();
     let frameId = 0;
     let sizedWidth = 0;
@@ -829,6 +895,33 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
     };
     controls.addEventListener("start", onStart);
     controls.addEventListener("end", onEnd);
+    let downX = 0;
+    let downY = 0;
+    const onPointerDown = (event: PointerEvent) => {
+      downX = event.clientX;
+      downY = event.clientY;
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (Math.hypot(event.clientX - downX, event.clientY - downY) > 5) {
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(
+        new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        ),
+        camera,
+      );
+      const hit = raycaster.intersectObjects(picks.children, false)[0];
+      onPickRef.current(hit ? pickFromObject(hit.object) : null);
+    };
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointerup", onPointerUp);
     const resize = new ResizeObserver(requestRender);
     resize.observe(canvas);
     const captureView = (width: number, height: number) => {
@@ -902,6 +995,10 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       leaderLines,
       labelNodes,
       clearMotion,
+      picks,
+      images,
+      imagePlanes,
+      highlight,
     };
     setTheme(appearanceRef.current.theme);
     const pointsMaterial = points.material;
@@ -911,8 +1008,17 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
     requestRender();
     return () => {
       resize.disconnect();
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointerup", onPointerUp);
       controls.removeEventListener("start", onStart);
       controls.removeEventListener("end", onEnd);
+      disposeImageTextures();
+      for (const mesh of imagePlanes.values()) {
+        mesh.geometry.dispose();
+        if (mesh.material instanceof THREE.Material) {
+          mesh.material.dispose();
+        }
+      }
       window.cancelAnimationFrame(frameId);
       controls.dispose();
       bloom.dispose();
@@ -1110,6 +1216,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       setExportEnd(Math.min(10, body.times_us.length));
       setExportSource("view");
       setHidden({});
+      setPick(null);
       setPlaying(false);
       setCameraFrame(null);
       const cameras = body.sensors.filter((sensor) => sensor.modality === "camera");
@@ -1153,6 +1260,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
         return;
       }
       syncMotion(stage, body, types, hidden);
+      syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
       stage.requestRender();
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
@@ -1197,6 +1305,112 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
       `${summary.scene_id} at ${latest.frame.time_us} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(viewpoint, latest.frame, latest.types, cameraId)}`,
     );
   }, [viewpoint, cameraId, summary, mapNote, hidden, appearance]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    const frame = cameraFrame;
+    if (!stage || !frame) {
+      return;
+    }
+    let cancelled = false;
+    const show = appearance.frustumImages && appearance.frustums;
+    stage.images.visible = show;
+    if (!show) {
+      stage.requestRender();
+      return;
+    }
+    const opacity = appearance.frustumOpacity;
+    void (async () => {
+      const seen = new Set<string>();
+      await Promise.all(
+        frame.frustums.map(async (frustum) => {
+          if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+            return;
+          }
+          const key = cameraKey(frustum.agent_id, frustum.sensor_id);
+          if (viewpoint === "camera" && key === cameraId) {
+            return;
+          }
+          const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE);
+          if (cancelled || !bitmap) {
+            return;
+          }
+          seen.add(key);
+          let mesh = stage.imagePlanes.get(key);
+          if (!mesh || mesh.userData.aspect !== frustum.aspect || mesh.userData.fov !== frustum.fov_y_rad) {
+            if (mesh) {
+              stage.images.remove(mesh);
+              mesh.geometry.dispose();
+              if (mesh.material instanceof THREE.Material) {
+                mesh.material.dispose();
+              }
+            }
+            mesh = createImagePlane(frustum.fov_y_rad, frustum.aspect);
+            mesh.userData.aspect = frustum.aspect;
+            mesh.userData.fov = frustum.fov_y_rad;
+            stage.images.add(mesh);
+            stage.imagePlanes.set(key, mesh);
+          }
+          applyPose(mesh, frustum.pose);
+          const material = mesh.material;
+          if (material instanceof THREE.MeshBasicMaterial) {
+            material.opacity = opacity;
+            material.map = textureForBitmap(`${frame.scene_id}|${frame.time_us}|${key}|${FRUSTUM_TEXTURE}`, bitmap);
+            material.needsUpdate = true;
+          }
+          mesh.visible = true;
+        }),
+      );
+      if (cancelled) {
+        return;
+      }
+      for (const [key, mesh] of stage.imagePlanes) {
+        if (!seen.has(key)) {
+          mesh.visible = false;
+        }
+      }
+      const nextTime = summary?.times_us[frameIndex + 1];
+      if (typeof nextTime === "number") {
+        for (const frustum of frame.frustums) {
+          void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE).catch(() => undefined);
+        }
+      }
+      stage.requestRender();
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraFrame, appearance.frustumImages, appearance.frustums, appearance.frustumOpacity, hidden, token, viewpoint, cameraId, summary, frameIndex]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+    const mesh = stage.highlight;
+    const match = pick
+      ? stage.picks.children.find((child) => {
+          const stored = pickFromObject(child);
+          if (!stored || stored.agentId !== pick.agentId) {
+            return false;
+          }
+          if (pick.trackId && stored.trackId) {
+            return stored.trackId === pick.trackId;
+          }
+          return stored.index === pick.index;
+        })
+      : undefined;
+    if (!(match instanceof THREE.Mesh)) {
+      mesh.visible = false;
+      stage.requestRender();
+      return;
+    }
+    mesh.position.copy(match.position);
+    mesh.quaternion.copy(match.quaternion);
+    mesh.scale.copy(match.scale).multiplyScalar(1.04);
+    mesh.visible = true;
+    stage.requestRender();
+  }, [pick, cameraFrame]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
@@ -1671,11 +1885,14 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
   }
   const cameraSpeed = agentSpeed(cameraAgent);
 
-  const tools = (
-    <div className="top-tools">
+  const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
+  const crumb = (
+    <div className="crumb">
+      <span className="crumb-dataset">{sceneId ? sceneStem : "Scenes"}</span>
+      <span className="crumb-sep" aria-hidden="true">/</span>
       <Menu
         id="scene-id"
-        label="Scene"
+        ariaLabel="Scene"
         value={sceneId}
         options={
           scenes.length === 0
@@ -1684,25 +1901,31 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
         }
         onChange={setSceneId}
       />
+    </div>
+  );
+  const actionTools = (
+    <div className="top-actions">
       <button type="button" className="ghost" onClick={() => setExportOpen(true)} disabled={!summary}>
         Export
       </button>
       <button
         type="button"
-        className="ghost"
+        className="icon ghost"
+        aria-label={appearance.theme === "dark" ? "Use light theme" : "Use dark theme"}
         aria-pressed={appearance.theme === "dark"}
         onClick={() =>
           setAppearance((current) => ({ ...current, theme: current.theme === "dark" ? "light" : "dark" }))
         }
       >
-        {appearance.theme === "dark" ? "Dark" : "Light"}
+        {appearance.theme === "dark" ? <IconMoon /> : <IconSun />}
       </button>
     </div>
   );
 
   return (
-    <div className="viewer">
-      {slot ? createPortal(tools, slot) : tools}
+    <div className={poster ? "viewer viewer-poster" : "viewer"}>
+      {slot ? createPortal(crumb, slot) : null}
+      {actions ? createPortal(actionTools, actions) : null}
       <div className="workspace">
         <aside className="panel" aria-label="Layers and agents">
           <details open>
@@ -1724,6 +1947,21 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
                   onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
                 />
               ))}
+              <EyeToggle
+                on={appearance.frustumImages}
+                label="Frustum images"
+                onChange={() => setAppearance((current) => ({ ...current, frustumImages: !current.frustumImages }))}
+              />
+              {appearance.frustumImages ? (
+                <Slider
+                  label="Image opacity"
+                  value={appearance.frustumOpacity}
+                  min={0.15}
+                  max={1}
+                  step={0.05}
+                  onChange={(value) => setAppearance((current) => ({ ...current, frustumOpacity: value }))}
+                />
+              ) : null}
             </div>
           </details>
           <details open>
@@ -1916,7 +2154,7 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
                   <span>{agent.agent_type}</span>
                 </header>
                 <dl>
-                  <div>
+                  <div className="span-2">
                     <dt>Speed</dt>
                     <dd className="num">{formatSpeed(sampleSpeed)}</dd>
                   </div>
@@ -1942,6 +2180,9 @@ export default function Viewer({ token, slot }: { token: string; slot: HTMLEleme
               </article>
             );
           })}
+          <SceneCard summary={summary} frame={cameraFrame} />
+          <Inspector pick={pick} frame={cameraFrame} summary={summary} token={token} cache={cacheRef.current} />
+          <Radar frame={cameraFrame} pick={pick} types={agentTypes} />
         </aside>
       </div>
       <Timeline

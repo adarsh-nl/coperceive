@@ -13,6 +13,8 @@ export type Appearance = {
   boxStyle: BoxStyle;
   hiddenClasses: string[];
   theme: ThemeName;
+  frustumImages: boolean;
+  frustumOpacity: number;
 };
 
 export const VIEW_KEY = "coperceive-view";
@@ -43,6 +45,8 @@ export function defaultAppearance(): Appearance {
     boxStyle: "wire",
     hiddenClasses: [],
     theme: "light",
+    frustumImages: true,
+    frustumOpacity: 0.85,
   };
 }
 
@@ -81,6 +85,8 @@ export function loadAppearance(): Appearance {
       boxStyle: row.boxStyle === "solid" ? "solid" : "wire",
       hiddenClasses: classes(row.hiddenClasses),
       theme: row.theme === "dark" ? "dark" : row.theme === "light" ? "light" : base.theme,
+      frustumImages: bool(row.frustumImages, base.frustumImages),
+      frustumOpacity: opacity(row.frustumOpacity, base.frustumOpacity),
     };
   } catch {
     return base;
@@ -107,6 +113,8 @@ function writeAppearance(value: Appearance): void {
     boxStyle: value.boxStyle,
     hiddenClasses: value.hiddenClasses,
     theme: value.theme,
+    frustumImages: value.frustumImages,
+    frustumOpacity: value.frustumOpacity,
   };
   localStorage.setItem(VIEW_KEY, JSON.stringify(stored));
 }
@@ -120,6 +128,13 @@ function pointSize(value: unknown): number {
     return value;
   }
   return 2;
+}
+
+function opacity(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(1, Math.max(0.15, value));
 }
 
 function classes(value: unknown): string[] {
