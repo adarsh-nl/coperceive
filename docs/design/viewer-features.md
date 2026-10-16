@@ -36,7 +36,7 @@ The paper's body frame is ISO 8855 (x forward, y left, z up) and its camera fram
 | Free orbit | This slice. The first visit to a scene still frames the near vehicle cluster. |
 | Dark mode | This slice. Dark is the default. A light theme waits for the customisation slice so the choice can be stored with the other view settings. |
 | Images, camera strip, project boxes or lidar onto the image | This slice. One panel per camera at the current sample. Boxes and lidar are toggles. `HF_TOKEN` stays in the environment. Image bytes are not committed. |
-| MP4, and a frame sequence at a chosen resolution and frame rate | Later slice, from the page and from the CLI. GIF and PNG frames are in that slice because the page should be able to save a still and a short loop. Rerun `.rrd` export stays. |
+| MP4, and a frame sequence at a chosen resolution and frame rate | This slice, from the page and from the CLI. GIF and PNG frames are in that slice. Each recorded sample is one frame, and `fps` is how fast the file plays them. Rerun `.rrd` export stays. |
 | Color, point size, box style, per-layer toggles, category filters | Later slice. Settings live in `localStorage` and must not include the bearer token. The token stays in `sessionStorage`. |
 | Matplotlib bird's-eye plot and camera-overlay plot | Later slice, after images. The 3D bird's-eye in this slice is not that plot. |
 | Radar visualization | Not in the Griffin-25m dev tier this page is checked against. The schema already allows a radar sensor. No radar layer until a scene has radar sweeps. |
@@ -60,5 +60,7 @@ Viewpoints:
 Mode changes ease the camera with a 180 ms time constant. `prefers-reduced-motion: reduce` snaps. A new scene snaps, so the camera does not fly across towns. Follow views keep easing while the recording plays.
 
 The frame JSON and the point buffers are cached in memory (16 frames, 48 sweeps) and the next four samples are requested after each draw. Hiding an agent does not drop the cache. The status line still counts only agents that are shown.
+
+Sequence export writes the samples from a start time through an end time. The page can save the current sample as a PNG still, or the range as MP4, GIF, or a PNG directory, from the live 3D view or from one camera. The CLI writes one camera. 10 fps is the Griffin recorded pace. The live view is limited to 60 frames. A camera export can hold 600.
 
 `GET /api/scenes/{scene_id}/image` returns the file named in `images.parquet` for that sample. The path is confined to the scene directory. A path that leaves the scene is 400. A missing row or a missing file is 404. The strip shows one panel per camera, with Boxes on and Lidar off. It keeps the last complete sample until the next images arrive. The pixel is `u = fx * x / z + cx`, `v = fy * y / z + cy`. When the decoded image size differs from `image_width_px` and `image_height_px`, those pixels are scaled onto the file. `z <= 0` is not drawn. The next sample's images are requested after the current ones. No shell. Bind and token rules are unchanged.

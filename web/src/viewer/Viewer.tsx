@@ -35,6 +35,7 @@ type Stage = {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   requestRender: () => void;
+  captureView: (width: number, height: number) => string;
 };
 
 type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
@@ -43,6 +44,15 @@ const COLORS: Record<string, number> = {
   vehicle: 0xe67828,
   uav: 0x2878dc,
 };
+
+const EXPORT_SIZES = [
+  { id: "640x360", width: 640, height: 360, label: "640×360" },
+  { id: "960x540", width: 960, height: 540, label: "960×540" },
+  { id: "1280x720", width: 1280, height: 720, label: "1280×720" },
+  { id: "1920x1080", width: 1920, height: 1080, label: "1920×1080" },
+] as const;
+
+const EXPORT_FPS = [5, 10, 15, 30] as const;
 
 const VIEWPOINTS: { id: Viewpoint; label: string; shortcut: string }[] = [
   { id: "orbit", label: "Orbit", shortcut: "1" },
@@ -367,6 +377,13 @@ export default function Viewer({ token }: { token: string }) {
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
   const [exportNote, setExportNote] = useState("");
+  const [exportSource, setExportSource] = useState("view");
+  const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | "png">("mp4");
+  const [exportFps, setExportFps] = useState(10);
+  const [exportSize, setExportSize] = useState<string>("960x540");
+  const [exportStart, setExportStart] = useState(1);
+  const [exportEnd, setExportEnd] = useState(10);
+  const [exporting, setExporting] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(false);
   const [speed, setSpeed] = useState<Speed>(1);
@@ -384,6 +401,7 @@ export default function Viewer({ token }: { token: string }) {
   const loopRef = useRef(false);
   const frameRef = useRef(0);
   const drawGen = useRef(0);
+  const paintWait = useRef<((time: number) => void) | null>(null);
 
   useEffect(() => {
     lengthRef.current = summary?.times_us.length ?? 0;
@@ -412,7 +430,7 @@ export default function Viewer({ token }: { token: string }) {
     if (!canvas) {
       return;
     }
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x0e100d);
     const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 5000);
@@ -520,7 +538,42 @@ export default function Viewer({ token }: { token: string }) {
     controls.addEventListener("end", onEnd);
     const resize = new ResizeObserver(requestRender);
     resize.observe(canvas);
-    stageRef.current = { points, boxes, mapLines, frustums, agents, camera, controls, requestRender };
+    const captureView = (width: number, height: number) => {
+      const mode = modeRef.current;
+      const latest = latestRef.current;
+      const goal = goalFor(
+        mode,
+        latest?.frame ?? null,
+        latest?.types ?? new Map(),
+        cameraKeyRef.current,
+        orbitHomeRef.current,
+      );
+      if (goal && mode !== "orbit") {
+        applyGoal(camera, controls.target, goal);
+      }
+      renderer.setPixelRatio(1);
+      renderer.setSize(width, height, false);
+      camera.aspect = width / Math.max(height, 1);
+      camera.updateProjectionMatrix();
+      renderer.render(scene, camera);
+      const url = canvas.toDataURL("image/png");
+      sizedWidth = 0;
+      sizedHeight = 0;
+      sizedRatio = 0;
+      requestRender();
+      return url;
+    };
+    stageRef.current = {
+      points,
+      boxes,
+      mapLines,
+      frustums,
+      agents,
+      camera,
+      controls,
+      requestRender,
+      captureView,
+    };
     requestRender();
     return () => {
       resize.disconnect();
@@ -710,6 +763,9 @@ export default function Viewer({ token }: { token: string }) {
       }
       setSummary(body);
       setFrameIndex(0);
+      setExportStart(1);
+      setExportEnd(Math.min(10, body.times_us.length));
+      setExportSource("view");
       setHidden({});
       setPlaying(false);
       setCameraFrame(null);
@@ -773,6 +829,7 @@ export default function Viewer({ token }: { token: string }) {
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
       prefetchAhead(cacheRef.current, summary, frameIndex, token);
+      paintWait.current?.(time);
     })().catch((error: unknown) => {
       if (!stale()) {
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
@@ -832,6 +889,149 @@ export default function Viewer({ token }: { token: string }) {
     modeRef.current = next;
     setViewpoint(next);
     canvasRef.current?.focus();
+  }
+
+  function exportSizeChoice() {
+    return EXPORT_SIZES.find((item) => item.id === exportSize) ?? EXPORT_SIZES[1];
+  }
+
+  async function waitForSample(index: number, time: number) {
+    if (frameRef.current === index && latestRef.current?.frame.time_us === time) {
+      await new Promise((resolve) => {
+        window.requestAnimationFrame(() => resolve(undefined));
+      });
+      return;
+    }
+    await new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        paintWait.current = null;
+        reject(new Error("That sample did not finish drawing."));
+      }, 8000);
+      paintWait.current = (drawn) => {
+        if (drawn !== time) {
+          return;
+        }
+        paintWait.current = null;
+        window.clearTimeout(timer);
+        window.requestAnimationFrame(() => resolve());
+      };
+      setFrameIndex(index);
+    });
+  }
+
+  async function postExport(scene: string, path: string, payload: unknown) {
+    const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(scene)}${path}`, {
+      method: "POST",
+      headers: {
+        ...authHeaders(token),
+        "X-Coperceive-Request": "1",
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+    if (!response.ok) {
+      throw new Error(await errorDetail(response));
+    }
+    return (await response.json()) as {
+      path?: unknown;
+      frames?: unknown;
+      width?: unknown;
+      height?: unknown;
+      fps?: unknown;
+    };
+  }
+
+  async function downloadExported(relative: string) {
+    const file = relative.endsWith(".mp4") || relative.endsWith(".gif") || relative.endsWith(".png");
+    if (!file) {
+      return;
+    }
+    const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(relative)}`, {
+      headers: authHeaders(token),
+    });
+    if (!response.ok) {
+      return;
+    }
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = relative.split("/").pop() ?? "sequence";
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  async function exportSequence(still: boolean) {
+    if (!summary || exporting) {
+      return;
+    }
+    const length = summary.times_us.length;
+    const start = still ? frameIndex : exportStart - 1;
+    const end = still ? frameIndex : exportEnd - 1;
+    if (start < 0 || end < start || end >= length) {
+      setExportNote("The sample range is outside this scene.");
+      return;
+    }
+    const count = end - start + 1;
+    if (exportSource === "view" && count > 60) {
+      setExportNote("This view exports at most 60 samples. A camera can cover a longer range.");
+      return;
+    }
+    const size = exportSizeChoice();
+    const format = still ? "png" : exportFormat;
+    setExporting(true);
+    setPlaying(false);
+    setExportNote(still ? "Writing the still…" : "Writing the sequence…");
+    try {
+      const startUs = summary.times_us[start];
+      const endUs = summary.times_us[end];
+      let saved: { path?: unknown; frames?: unknown; width?: unknown; height?: unknown; fps?: unknown };
+      if (exportSource === "view") {
+        const stage = stageRef.current;
+        if (!stage) {
+          throw new Error("The view is not ready.");
+        }
+        const frames: string[] = [];
+        for (let index = start; index <= end; index += 1) {
+          const time = summary.times_us[index];
+          if (typeof time !== "number") {
+            throw new Error("That sample is not in the scene.");
+          }
+          setExportNote(`Drawing sample ${index + 1}…`);
+          await waitForSample(index, time);
+          const url = stage.captureView(size.width, size.height);
+          frames.push(url.slice(url.indexOf(",") + 1));
+        }
+        saved = await postExport(summary.scene_id, "/export/view", {
+          format,
+          fps: exportFps,
+          start_us: startUs,
+          end_us: endUs,
+          frames_b64: frames,
+        });
+      } else {
+        const slash = exportSource.indexOf("/");
+        saved = await postExport(summary.scene_id, "/export/sequence", {
+          agent_id: exportSource.slice(0, slash),
+          sensor_id: exportSource.slice(slash + 1),
+          start_us: startUs,
+          end_us: endUs,
+          fps: exportFps,
+          width: size.width,
+          height: size.height,
+          format,
+        });
+      }
+      const path = typeof saved.path === "string" ? saved.path : "";
+      setExportNote(
+        `Wrote ${path} (${String(saved.frames)} frames, ${String(saved.width)}×${String(saved.height)} at ${String(saved.fps)} fps).`,
+      );
+      await downloadExported(path);
+    } catch (error) {
+      setExportNote(error instanceof Error ? error.message : "Export failed.");
+    } finally {
+      setExporting(false);
+    }
   }
 
   async function exportRerun() {
@@ -908,9 +1108,99 @@ export default function Viewer({ token }: { token: string }) {
             );
           })}
         </select>
-        <button type="button" className="ghost" onClick={() => void exportRerun()} disabled={!summary}>
+        <button type="button" className="ghost" onClick={() => void exportRerun()} disabled={!summary || exporting}>
           Export Rerun
         </button>
+      </div>
+      <div className="export-bar">
+        <label htmlFor="export-source">Export</label>
+        <select
+          id="export-source"
+          value={exportSource}
+          onChange={(event) => setExportSource(event.target.value)}
+        >
+          <option value="view">This view</option>
+          {cameras.map((sensor) => {
+            const key = cameraKey(sensor.agent_id, sensor.sensor_id);
+            return (
+              <option key={key} value={key}>
+                {sensor.sensor_id} · {sensor.agent_id}
+              </option>
+            );
+          })}
+        </select>
+        <label htmlFor="export-format">Format</label>
+        <select
+          id="export-format"
+          value={exportFormat}
+          onChange={(event) => {
+            const next = event.target.value;
+            if (next === "mp4" || next === "gif" || next === "png") {
+              setExportFormat(next);
+            }
+          }}
+        >
+          <option value="mp4">MP4</option>
+          <option value="gif">GIF</option>
+          <option value="png">PNG frames</option>
+        </select>
+        <label htmlFor="export-fps">fps</label>
+        <select
+          id="export-fps"
+          value={String(exportFps)}
+          onChange={(event) => setExportFps(Number(event.target.value))}
+        >
+          {EXPORT_FPS.map((item) => (
+            <option key={item} value={item}>
+              {item}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="export-size">Size</label>
+        <select id="export-size" value={exportSize} onChange={(event) => setExportSize(event.target.value)}>
+          {EXPORT_SIZES.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.label}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="export-start">From</label>
+        <input
+          id="export-start"
+          type="number"
+          min={1}
+          max={summary ? summary.times_us.length : 1}
+          value={exportStart}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (Number.isInteger(next)) {
+              setExportStart(next);
+            }
+          }}
+        />
+        <label htmlFor="export-end">to</label>
+        <input
+          id="export-end"
+          type="number"
+          min={1}
+          max={summary ? summary.times_us.length : 1}
+          value={exportEnd}
+          onChange={(event) => {
+            const next = Number(event.target.value);
+            if (Number.isInteger(next)) {
+              setExportEnd(next);
+            }
+          }}
+        />
+        <button type="button" className="ghost" onClick={() => void exportSequence(true)} disabled={!summary || exporting}>
+          Save still
+        </button>
+        <button type="button" onClick={() => void exportSequence(false)} disabled={!summary || exporting}>
+          Export sequence
+        </button>
+        <span className="muted">
+          {exportNote || "Each sample in the range is one frame. 10 fps matches a 10 Hz recording."}
+        </span>
       </div>
       <canvas
         ref={canvasRef}

@@ -214,8 +214,19 @@ button.ghost {
   align-items: center;
 }
 
-.viewer-toolbar { margin-bottom: 12px; }
+.viewer-toolbar { margin-bottom: 8px; }
 .viewer-toolbar select { width: auto; min-width: 9rem; max-width: 16rem; }
+
+.export-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.export-bar select { width: auto; min-width: 6.5rem; max-width: 14rem; }
+.export-bar input[type="number"] { width: 4.5rem; }
 
 .segment {
   display: inline-flex;

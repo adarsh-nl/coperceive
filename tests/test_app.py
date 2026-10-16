@@ -209,3 +209,83 @@ def test_rerun_export_route_writes_under_the_root(tmp_path: Path) -> None:
     body = created.json()
     assert body["samples"] == 1
     assert (tmp_path / body["path"]).is_file()
+
+
+def test_sequence_export_route_writes_gif_and_view(tmp_path: Path) -> None:
+    pose = StampedPose(0, SE3.identity())
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    camera = Sensor(
+        "front",
+        "vehicle",
+        Modality.CAMERA,
+        SE3.identity(),
+        16,
+        16,
+        8.0,
+        8.0,
+        8.0,
+        8.0,
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="desk",
+        world_frame="ENU",
+        clock=Clock("us", "sequence route"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, "camera/front/0.png"),),
+    )
+    write_scene(scene, tmp_path / "desk")
+    image = tmp_path / "desk" / "camera" / "front" / "0.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    app = create_app(root=tmp_path, token="secret")
+    client = TestClient(app)
+    headers = {"Authorization": "Bearer secret", "X-Coperceive-Request": "1"}
+    denied = client.post(
+        "/api/scenes/desk/export/sequence",
+        headers={"Authorization": "Bearer secret"},
+        json={"agent_id": "vehicle", "sensor_id": "front", "format": "gif"},
+    )
+    assert denied.status_code == 403
+    created = client.post(
+        "/api/scenes/desk/export/sequence",
+        headers=headers,
+        json={
+            "agent_id": "vehicle",
+            "sensor_id": "front",
+            "format": "gif",
+            "fps": 10,
+            "width": 16,
+            "height": 16,
+        },
+    )
+    assert created.status_code == 200
+    body = created.json()
+    assert body["frames"] == 1
+    assert body["format"] == "gif"
+    assert (tmp_path / body["path"]).is_file()
+    escaped = client.post(
+        "/api/scenes/desk/export/sequence",
+        headers=headers,
+        json={"agent_id": "../vehicle", "sensor_id": "front", "format": "gif"},
+    )
+    assert escaped.status_code == 400
+    view = client.post(
+        "/api/scenes/desk/export/view",
+        headers=headers,
+        json={
+            "format": "png",
+            "fps": 10,
+            "start_us": 0,
+            "end_us": 0,
+            "frames_b64": [base64.b64encode(_PNG).decode("ascii")],
+        },
+    )
+    assert view.status_code == 200
+    saved = view.json()
+    assert saved["frames"] == 1
+    assert saved["path"].endswith(".png")
+    assert (tmp_path / saved["path"]).is_file()

@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
+import re
 from collections.abc import AsyncIterator
 from pathlib import Path
 
@@ -17,11 +19,21 @@ from coperceive.app.jobs import CSRF_HEADER, confine, list_jobs, open_db, run_jo
 from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
 from coperceive.model import Scene
 from coperceive.rerun_export import RerunUnavailable, export_rerun
+from coperceive.sequence_export import (
+    FORMATS,
+    SequenceExport,
+    SequenceExportError,
+    SequenceNotFound,
+    export_camera_sequence,
+    export_rendered_frames,
+    samples_in_range,
+)
 from coperceive.store import read_scene
 from coperceive.viewdata import (
     frame_document,
     frame_points,
     image_path,
+    pose_times,
     scene_directories,
     summarize,
 )
@@ -39,6 +51,28 @@ _STATIC = Path(__file__).resolve().parent / "static"
 class JobRequest(BaseModel):
     name: str = Field(examples=["echo"])
     args: list[str] = Field(default_factory=list)
+
+
+class SequenceRequest(BaseModel):
+    agent_id: str
+    sensor_id: str
+    start_us: int | None = None
+    end_us: int | None = None
+    fps: int = 10
+    width: int = 0
+    height: int = 0
+    format: str
+
+
+class ViewSequenceRequest(BaseModel):
+    format: str
+    fps: int
+    start_us: int
+    end_us: int
+    frames_b64: list[str] = Field(default_factory=list)
+
+
+_EXPORT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
 
 def create_app(
@@ -171,6 +205,50 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return {"path": relative.as_posix(), "samples": samples}
 
+    @app.post("/api/scenes/{scene_id}/export/sequence")
+    def scene_sequence(scene_id: str, body: SequenceRequest) -> dict[str, object]:
+        scene = _cached_scene(app, scene_id)
+        scene_dir = _scene_dir(app.state.root, scene_id)
+        try:
+            times = samples_in_range(list(pose_times(scene)), body.start_us, body.end_us)
+            label = _export_label(body.agent_id, body.sensor_id)
+            relative = _export_relative(
+                scene.scene_id, label, times[0], times[-1], body.format, len(times)
+            )
+            dest = confine(app.state.root, relative)
+            result = export_camera_sequence(
+                scene,
+                scene_dir,
+                dest,
+                agent_id=body.agent_id,
+                sensor_id=body.sensor_id,
+                start_us=body.start_us,
+                end_us=body.end_us,
+                fps=body.fps,
+                width=body.width,
+                height=body.height,
+                format=body.format,
+            )
+        except SequenceNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except SequenceExportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _export_body(app.state.root, result)
+
+    @app.post("/api/scenes/{scene_id}/export/view")
+    def scene_view(scene_id: str, body: ViewSequenceRequest) -> dict[str, object]:
+        scene = _cached_scene(app, scene_id)
+        try:
+            frames = [_decode_frame(item) for item in body.frames_b64]
+            relative = _export_relative(
+                scene.scene_id, "view", body.start_us, body.end_us, body.format, len(frames)
+            )
+            dest = confine(app.state.root, relative)
+            result = export_rendered_frames(frames, dest, fps=body.fps, format=body.format)
+        except SequenceExportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return _export_body(app.state.root, result)
+
     @app.get("/api/files")
     def files(path: str) -> FileResponse:
         try:
@@ -270,6 +348,49 @@ def _map_summary(app: FastAPI, scene: Scene) -> dict[str, object]:
         "alignment_measured": hdmap.world_from_opendrive.measured,
         "sample_step_m": hdmap.sample_step_m,
         "layers": counts,
+    }
+
+
+def _export_label(agent_id: str, sensor_id: str) -> str:
+    if _EXPORT_NAME.fullmatch(agent_id) is None or _EXPORT_NAME.fullmatch(sensor_id) is None:
+        raise SequenceExportError("agent and sensor ids must be letters, digits, '_' or '-'")
+    return f"{agent_id}-{sensor_id}"
+
+
+def _export_relative(
+    scene_id: str,
+    label: str,
+    start_us: int,
+    end_us: int,
+    fmt: str,
+    count: int,
+) -> str:
+    if fmt not in FORMATS:
+        raise SequenceExportError("format must be mp4, gif, or png")
+    if _EXPORT_NAME.fullmatch(scene_id) is None or _EXPORT_NAME.fullmatch(label) is None:
+        raise SequenceExportError("bad export name")
+    stem = f"{scene_id}-{label}-{start_us}-{end_us}"
+    if fmt == "png" and count != 1:
+        return f"exports/{stem}"
+    return f"exports/{stem}.{fmt}"
+
+
+def _decode_frame(item: str) -> bytes:
+    try:
+        return base64.b64decode(item, validate=True)
+    except Exception as exc:
+        raise SequenceExportError("a frame is not base64") from exc
+
+
+def _export_body(root: Path, result: SequenceExport) -> dict[str, object]:
+    relative = result.dest.resolve().relative_to(root.resolve())
+    return {
+        "path": relative.as_posix(),
+        "frames": result.frames,
+        "width": result.width,
+        "height": result.height,
+        "fps": result.fps,
+        "format": result.format,
     }
 
 
