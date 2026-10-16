@@ -26,6 +26,8 @@ export type FrameBox = {
   agent_id: string;
   lines: number[];
   category?: string;
+  track_id?: string | null;
+  center?: number[];
   size_lwh?: number[];
   pose?: Pose | null;
 };

@@ -2,7 +2,22 @@ import { Label } from "@radix-ui/react-label";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
+import Landing, { readTheme, writeTheme } from "./landing/Landing";
+import { IconGear } from "./viewer/controls";
+import type { ThemeName } from "./viewer/appearance";
 import Viewer from "./viewer/Viewer";
+
+function useHashRoute(): "home" | "viewer" {
+  const [route, setRoute] = useState<"home" | "viewer">(() =>
+    window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home",
+  );
+  useEffect(() => {
+    const onHash = () => setRoute(window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home");
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  return route;
+}
 
 const TOKEN_KEY = "coperceive-token";
 
@@ -12,17 +27,25 @@ function storedToken(): string {
 
 export default function App() {
   const queryClient = useQueryClient();
+  const route = useHashRoute();
   const [token, setToken] = useState(storedToken);
+  const [theme, setTheme] = useState<ThemeName>(readTheme);
   const [argument, setArgument] = useState("hello from the data desk");
   const [filePath, setFilePath] = useState("");
   const [fileText, setFileText] = useState("");
   const [fileError, setFileError] = useState("");
   const [streamNote, setStreamNote] = useState("Event stream idle.");
   const [tab, setTab] = useState<"viewer" | "desk">("viewer");
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null);
+  const [actions, setActions] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     sessionStorage.setItem(TOKEN_KEY, token);
   }, [token]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+  }, [theme]);
 
   const health = useQuery({
     queryKey: ["health", token],
@@ -119,51 +142,80 @@ export default function App() {
 
   const jobRows: Job[] = jobs.data ?? [];
 
-  return (
-    <main className={tab === "viewer" ? "page page-wide" : "page"}>
-      <header>
-        <span className="badge">coperceive</span>
-        <h1>Local data desk</h1>
-        <p>
-          The viewer plays a scene on this origin. This desk runs the allow-listed <code>echo</code> job.
-        </p>
-      </header>
-      <div className="topbar">
-      <div className="tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "viewer"}
-          className={tab === "viewer" ? "tab selected" : "tab"}
-          onClick={() => setTab("viewer")}
-        >
-          Viewer
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "desk"}
-          className={tab === "desk" ? "tab selected" : "tab"}
-          onClick={() => setTab("desk")}
-        >
-          Desk
-        </button>
-      </div>
-      <label className="token-inline" htmlFor="token-global">
-        Bearer token
-        <input
-          id="token-global"
-          type="password"
-          autoComplete="off"
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
-          placeholder="Empty when the server has no token"
-        />
-      </label>
-      </div>
-      {tab === "viewer" ? <Viewer token={token} /> : null}
+  if (route === "home") {
+    return (
+      <Landing
+        token={token}
+        theme={theme}
+        onTheme={(next) => {
+          writeTheme(next);
+          setTheme(next);
+        }}
+        onOpen={() => {
+          window.location.hash = "#/viewer";
+        }}
+      />
+    );
+  }
 
-      {tab === "desk" ? <div className="grid">
+  return (
+    <div className={tab === "viewer" ? "shell" : "shell shell-desk"}>
+      <header className="topbar">
+        <div className="top-cluster">
+          <a className="brand" href="#/">
+            <span className="brand-mark" aria-hidden="true" />
+            coperceive
+          </a>
+          <div className="top-slot" ref={setSlot} />
+        </div>
+        <div className="tabs" role="tablist" aria-label="Sections">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "viewer"}
+            className={tab === "viewer" ? "tab selected" : "tab"}
+            onClick={() => setTab("viewer")}
+          >
+            Viewer
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "desk"}
+            className={tab === "desk" ? "tab selected" : "tab"}
+            onClick={() => setTab("desk")}
+          >
+            Desk
+          </button>
+        </div>
+        <div className="top-cluster top-end">
+          <div className="top-actions" ref={setActions} />
+          <details className="settings">
+            <summary className="icon ghost" aria-label="Settings">
+              <IconGear />
+            </summary>
+          <div className="settings-pop">
+            <label htmlFor="token-global">
+              Bearer token
+              <input
+                id="token-global"
+                type="password"
+                autoComplete="off"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                placeholder="Empty when the server has no token"
+              />
+            </label>
+            <p className="muted">Stored in this tab only. A non-loopback bind refuses to start without a token.</p>
+          </div>
+          </details>
+        </div>
+      </header>
+      {tab === "viewer" ? (
+        <Viewer token={token} slot={slot} actions={actions} onTheme={setTheme} />
+      ) : null}
+
+      {tab === "desk" ? <div className="desk"><h1>Local data desk</h1><p className="muted">This desk runs the allow-listed <code>echo</code> job.</p><div className="grid">
         <section className="card">
           <h2>Jobs</h2>
           <form
@@ -262,7 +314,7 @@ export default function App() {
             {fileText ? <pre className="output">{fileText}</pre> : null}
           </section>
         </div>
-      </div> : null}
-    </main>
+      </div></div> : null}
+    </div>
   );
 }

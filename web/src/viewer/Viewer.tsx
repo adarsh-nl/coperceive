@@ -1,17 +1,33 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import {
   classColor,
   defaultAppearance,
   loadAppearance,
   saveAppearance,
+  setAllFrustumImages,
+  setNoFrustumImages,
+  showCameraImage,
+  toggleFrustumImages,
+  toggleOneFrustumImage,
   type Appearance,
 } from "./appearance";
-import CameraStrip from "./cameras";
+import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
+import CameraStrip, { loadImage } from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
-import { formatClock, indexAfter, neighborSpeed, SPEEDS, stepIndex, type Speed } from "./playback";
+import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
+import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
+import type { PickRecord } from "./inspect";
+import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
+import { Inspector, Radar, SceneCard } from "./SidePanel";
+import ExportDialog from "./ExportDialog";
+import { formatClock, indexAfter, neighborSpeed, stepIndex, type Speed } from "./playback";
+import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
+import Timeline, { type Marker } from "./timeline";
 import {
   cameraKey,
   isPose,
@@ -45,13 +61,33 @@ type Stage = {
   requestRender: () => void;
   captureView: (width: number, height: number) => string;
   setTheme: (theme: Appearance["theme"]) => void;
+  bloom: BloomRig;
+  labelRenderer: CSS2DRenderer;
+  trails: THREE.Group;
+  leaders: THREE.Group;
+  labels: THREE.Group;
+  trailLog: Map<string, Map<number, { x: number; y: number; z: number }>>;
+  trailLines: Map<string, THREE.Line>;
+  leaderLines: Map<string, THREE.Line>;
+  labelNodes: Map<string, CSS2DObject>;
+  clearMotion: () => void;
+  picks: THREE.Group;
+  frustumPicks: THREE.Group;
+  images: THREE.Group;
+  imagePlanes: Map<string, THREE.Mesh>;
+  highlight: THREE.Mesh;
 };
 
 type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
 
 const COLORS: Record<string, number> = {
-  vehicle: 0xe67828,
-  uav: 0x2878dc,
+  vehicle: 0xf58a1f,
+  uav: 0x3c8dff,
+};
+
+const AGENT_INK: Record<string, string> = {
+  vehicle: "#F58A1F",
+  uav: "#3C8DFF",
 };
 
 const EXPORT_SIZES = [
@@ -77,13 +113,84 @@ function colorFor(agentType: string): number {
   return COLORS[agentType] ?? 0xb7b1a6;
 }
 
+function fadingGrid(): THREE.LineSegments {
+  const size = 240;
+  const divisions = 24;
+  const step = size / divisions;
+  const half = size / 2;
+  const positions: number[] = [];
+  for (let index = 0; index <= divisions; index += 1) {
+    const place = -half + index * step;
+    positions.push(-half, place, 0, half, place, 0, place, -half, 0, place, half, 0);
+  }
+  const geometry = new THREE.BufferGeometry();
+  geometry.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
+  const material = new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    uniforms: { uColor: { value: new THREE.Color("#3a3a3a") } },
+    vertexShader: `
+      varying vec3 vWorld;
+      void main() {
+        vec4 world = modelMatrix * vec4(position, 1.0);
+        vWorld = world.xyz;
+        gl_Position = projectionMatrix * viewMatrix * world;
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 uColor;
+      varying vec3 vWorld;
+      void main() {
+        float depth = distance(cameraPosition, vWorld);
+        float fade = smoothstep(150.0, 24.0, depth);
+        gl_FragColor = vec4(uColor, fade * 0.55);
+      }
+    `,
+  });
+  const lines = new THREE.LineSegments(geometry, material);
+  lines.frustumCulled = false;
+  return lines;
+}
+
+function clampDroneTags(host: HTMLElement) {
+  const bounds = host.getBoundingClientRect();
+  const pad = 10;
+  for (const node of host.querySelectorAll<HTMLElement>(".drone-tag")) {
+    node.classList.remove("clamped");
+    const box = node.getBoundingClientRect();
+    if (box.width === 0 && box.height === 0) {
+      continue;
+    }
+    let dx = 0;
+    let dy = 0;
+    if (box.left < bounds.left + pad) {
+      dx = bounds.left + pad - box.left;
+    } else if (box.right > bounds.right - pad) {
+      dx = bounds.right - pad - box.right;
+    }
+    if (box.top < bounds.top + pad) {
+      dy = bounds.top + pad - box.top;
+    } else if (box.bottom > bounds.bottom - pad) {
+      dy = bounds.bottom - pad - box.bottom;
+    }
+    if (dx !== 0 || dy !== 0) {
+      node.style.transform = `${node.style.transform} translate(${dx}px, ${dy}px)`;
+      node.classList.add("clamped");
+    }
+  }
+}
+
+function cssColor(value: number): string {
+  return `#${value.toString(16).padStart(6, "0")}`;
+}
+
 function applyPose(object: THREE.Object3D, pose: Pose) {
   object.position.set(pose.tx, pose.ty, pose.tz);
   object.quaternion.set(pose.qx, pose.qy, pose.qz, pose.qw);
 }
 
 function frustumLines(fovY: number, aspect: number, color: number): THREE.LineSegments {
-  const depth = 4;
+  const depth = FRUSTUM_DEPTH;
   const halfHeight = Math.tan(fovY / 2) * depth;
   const halfWidth = halfHeight * aspect;
   const corners = [
@@ -115,8 +222,8 @@ function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
   offset += 4;
   const positions: number[] = [];
   const colors: number[] = [];
-  const lane = new THREE.Color(0x7dcea0);
-  const edge = new THREE.Color(0x9aa7b2);
+  const lane = new THREE.Color(0xc6f3dc);
+  const edge = new THREE.Color(0xc5d0d8);
   for (let index = 0; index < count; index += 1) {
     if (offset + 8 > buffer.byteLength) {
       break;
@@ -358,6 +465,7 @@ async function drawFrame(
   }
 
   clearGroup(stage.frustums);
+  const pickable: { key: string; fovY: number; aspect: number; pose: Pose }[] = [];
   for (const frustum of frame.frustums) {
     if (!appearance.frustums || hidden[frustum.agent_id] || !isPose(frustum.pose)) {
       continue;
@@ -365,7 +473,14 @@ async function drawFrame(
     const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(types.get(frustum.agent_id) ?? ""));
     applyPose(lines, frustum.pose);
     stage.frustums.add(lines);
+    pickable.push({
+      key: cameraKey(frustum.agent_id, frustum.sensor_id),
+      fovY: frustum.fov_y_rad,
+      aspect: frustum.aspect,
+      pose: frustum.pose,
+    });
   }
+  syncFrustumPicks(stage.frustumPicks, pickable);
 
   clearGroup(stage.agents);
   for (const agent of frame.agents) {
@@ -413,7 +528,114 @@ function prefetchAhead(
   }
 }
 
-export default function Viewer({ token }: { token: string }) {
+function syncMotion(stage: Stage, frame: FrameDocument, types: Map<string, string>, hidden: Record<string, boolean>) {
+  const alive = new Set<string>();
+  for (const agent of frame.agents) {
+    if (!isPose(agent.pose)) {
+      continue;
+    }
+    alive.add(agent.agent_id);
+    let log = stage.trailLog.get(agent.agent_id);
+    if (!log) {
+      log = new Map();
+      stage.trailLog.set(agent.agent_id, log);
+    }
+    log.set(frame.time_us, { x: agent.pose.tx, y: agent.pose.ty, z: agent.pose.tz });
+    const times = [...log.keys()].sort((a, b) => a - b);
+    const positions = new Float32Array(times.length * 3);
+    for (let index = 0; index < times.length; index += 1) {
+      const point = log.get(times[index] ?? 0);
+      if (!point) {
+        continue;
+      }
+      positions[index * 3] = point.x;
+      positions[index * 3 + 1] = point.y;
+      positions[index * 3 + 2] = point.z;
+    }
+    let line = stage.trailLines.get(agent.agent_id);
+    if (!line) {
+      line = new THREE.Line(
+        new THREE.BufferGeometry(),
+        new THREE.LineBasicMaterial({ color: colorFor(types.get(agent.agent_id) ?? "") }),
+      );
+      line.frustumCulled = false;
+      enableBloom(line);
+      stage.trails.add(line);
+      stage.trailLines.set(agent.agent_id, line);
+    }
+    line.geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+    line.geometry.computeBoundingSphere();
+    const material = line.material;
+    if (material instanceof THREE.LineBasicMaterial) {
+      material.color.setHex(colorFor(types.get(agent.agent_id) ?? ""));
+    }
+    line.visible = !hidden[agent.agent_id] && times.length > 1;
+
+    const drone = types.get(agent.agent_id) === "uav";
+    let leader = stage.leaderLines.get(agent.agent_id);
+    if (drone && !leader) {
+      const geometry = new THREE.BufferGeometry();
+      geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(6), 3));
+      leader = new THREE.Line(geometry, new THREE.LineBasicMaterial({ color: COLORS.uav }));
+      leader.frustumCulled = false;
+      stage.leaders.add(leader);
+      stage.leaderLines.set(agent.agent_id, leader);
+    }
+    if (leader) {
+      const attribute = leader.geometry.getAttribute("position");
+      if (attribute instanceof THREE.BufferAttribute && attribute.array instanceof Float32Array) {
+        const array = attribute.array;
+        array[0] = agent.pose.tx;
+        array[1] = agent.pose.ty;
+        array[2] = agent.pose.tz;
+        array[3] = agent.pose.tx;
+        array[4] = agent.pose.ty;
+        array[5] = 0;
+        attribute.needsUpdate = true;
+      }
+      leader.visible = drone && !hidden[agent.agent_id];
+    }
+    let label = stage.labelNodes.get(agent.agent_id);
+    if (drone && !label) {
+      const element = document.createElement("div");
+      element.className = "drone-tag num";
+      label = new CSS2DObject(element);
+      label.center.set(0.5, 1.2);
+      stage.labels.add(label);
+      stage.labelNodes.set(agent.agent_id, label);
+    }
+    if (label) {
+      label.position.set(agent.pose.tx, agent.pose.ty, agent.pose.tz);
+      label.element.textContent = `${agent.agent_id}  ${agent.pose.tz.toFixed(1)} m`;
+      label.visible = drone && !hidden[agent.agent_id];
+    }
+  }
+  for (const [id, line] of stage.trailLines) {
+    if (!alive.has(id)) {
+      line.visible = false;
+    }
+  }
+}
+
+export type ClockMark = { ratio: number; label: string };
+
+export default function Viewer({
+  token,
+  slot,
+  actions,
+  poster = false,
+  scrubTo = null,
+  onClock,
+  onTheme,
+}: {
+  token: string;
+  slot: HTMLElement | null;
+  actions: HTMLElement | null;
+  poster?: boolean;
+  scrubTo?: number | null;
+  onClock?: (mark: ClockMark) => void;
+  onTheme?: (theme: Appearance["theme"]) => void;
+}) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<Stage | null>(null);
   const cacheRef = useRef<FrameCache>(createFrameCache());
@@ -437,6 +659,15 @@ export default function Viewer({ token }: { token: string }) {
   const [plotUrl, setPlotUrl] = useState<string | null>(null);
   const [plotAlt, setPlotAlt] = useState("Bird's-eye plot");
   const [plotting, setPlotting] = useState(false);
+  const [exportOpen, setExportOpen] = useState(false);
+  const [series, setSeries] = useState<{
+    points: number[];
+    speeds: number[];
+    boxes: number[];
+    agentSpeed: Record<string, number[]>;
+    markers: Marker[];
+  }>({ points: [], speeds: [], boxes: [], agentSpeed: {}, markers: [] });
+  const [liveSpeed, setLiveSpeed] = useState<Record<string, number>>({});
   const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
@@ -445,6 +676,7 @@ export default function Viewer({ token }: { token: string }) {
   const [speed, setSpeed] = useState<Speed>(1);
   const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
   const [cameraId, setCameraId] = useState("");
+  const [pick, setPick] = useState<PickRecord | null>(null);
   const [cameraFrame, setCameraFrame] = useState<FrameDocument | null>(null);
   const framedScene = useRef("");
   const modeRef = useRef<Viewpoint>("orbit");
@@ -458,6 +690,10 @@ export default function Viewer({ token }: { token: string }) {
   const frameRef = useRef(0);
   const drawGen = useRef(0);
   const paintWait = useRef<((time: number) => void) | null>(null);
+  const onPickRef = useRef<(value: PickRecord | null) => void>(() => undefined);
+  onPickRef.current = setPick;
+  const onFrustumRef = useRef<(key: string) => void>(() => undefined);
+  const cameraKeysRef = useRef<string[]>([]);
 
   useEffect(() => {
     lengthRef.current = summary?.times_us.length ?? 0;
@@ -470,6 +706,7 @@ export default function Viewer({ token }: { token: string }) {
   useLayoutEffect(() => {
     document.documentElement.dataset.theme = appearance.theme;
     saveAppearance(appearance);
+    onTheme?.(appearance.theme);
     const stage = stageRef.current;
     if (!stage) {
       return;
@@ -485,11 +722,37 @@ export default function Viewer({ token }: { token: string }) {
       material.size = appearance.pointSize;
     }
     stage.setTheme(appearance.theme);
-  }, [appearance]);
+  }, [appearance, onTheme]);
 
   useEffect(() => {
     stageRef.current?.requestRender();
   }, [viewpoint, cameraId]);
+
+  useEffect(() => {
+    if (!poster || !summary) {
+      return;
+    }
+    setLoop(true);
+    setPlaying(true);
+  }, [poster, summary]);
+
+  useEffect(() => {
+    if (!poster || scrubTo === null || !summary) {
+      return;
+    }
+    const last = Math.max(summary.times_us.length - 1, 0);
+    setPlaying(false);
+    setFrameIndex(Math.round(Math.min(1, Math.max(0, scrubTo)) * last));
+  }, [poster, scrubTo, summary]);
+
+  useEffect(() => {
+    if (!poster || !onClock || !summary) {
+      return;
+    }
+    const last = Math.max(summary.times_us.length - 1, 1);
+    const time = summary.times_us[Math.min(frameIndex, summary.times_us.length - 1)];
+    onClock({ ratio: Math.min(frameIndex, last) / last, label: formatClock(typeof time === "number" ? time : 0) });
+  }, [poster, onClock, summary, frameIndex]);
 
   useEffect(() => {
     const media = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -508,10 +771,11 @@ export default function Viewer({ token }: { token: string }) {
     }
     const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x0e100d);
+    scene.background = new THREE.Color(0x141414);
     const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 5000);
     camera.up.set(0, 0, 1);
     camera.position.set(40, -40, 25);
+    camera.layers.enable(BLOOM_LAYER);
     const controls = new OrbitControls(camera, canvas);
     controls.target.set(0, 0, 0);
     controls.enableDamping = true;
@@ -524,6 +788,8 @@ export default function Viewer({ token }: { token: string }) {
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ vertexColors: true }),
     );
+    enableBloom(points);
+    enableBloom(boxes);
     const mapLines = new THREE.LineSegments(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ vertexColors: true }),
@@ -532,12 +798,37 @@ export default function Viewer({ token }: { token: string }) {
     points.renderOrder = 1;
     boxes.renderOrder = 2;
     const frustums = new THREE.Group();
+    const images = new THREE.Group();
+    const imagePlanes = new Map<string, THREE.Mesh>();
+    const picks = new THREE.Group();
+    const frustumPicks = new THREE.Group();
+    const highlight = new THREE.Mesh(
+      new THREE.BoxGeometry(1, 1, 1),
+      new THREE.MeshBasicMaterial({ color: 0xf4f4ed, wireframe: true }),
+    );
+    highlight.visible = false;
+    highlight.frustumCulled = false;
     const agents = new THREE.Group();
     const solids = new THREE.Group();
     frustums.renderOrder = 3;
     agents.renderOrder = 4;
     solids.renderOrder = 2;
-    scene.add(mapLines, points, boxes, solids, frustums, agents);
+    const grid = fadingGrid();
+    const trails = new THREE.Group();
+    const leaders = new THREE.Group();
+    const labels = new THREE.Group();
+    const labelRenderer = new CSS2DRenderer();
+    labelRenderer.domElement.className = "label-layer";
+    const labelHost = canvas.parentElement?.querySelector(".label-host");
+    if (labelHost) {
+      labelHost.appendChild(labelRenderer.domElement);
+    }
+    const bloom = createBloom(renderer, scene, camera);
+    const trailLog = new Map<string, Map<number, { x: number; y: number; z: number }>>();
+    const trailLines = new Map<string, THREE.Line>();
+    const leaderLines = new Map<string, THREE.Line>();
+    const labelNodes = new Map<string, CSS2DObject>();
+    scene.add(grid, mapLines, points, boxes, solids, frustums, images, picks, frustumPicks, highlight, agents, trails, leaders, labels);
     const clock = new THREE.Clock();
     let frameId = 0;
     let sizedWidth = 0;
@@ -553,6 +844,8 @@ export default function Viewer({ token }: { token: string }) {
       if (width !== sizedWidth || height !== sizedHeight || ratio !== sizedRatio) {
         renderer.setPixelRatio(ratio);
         renderer.setSize(width, height, false);
+        bloom.setSize(width, height, ratio);
+        labelRenderer.setSize(width, height);
         sizedWidth = width;
         sizedHeight = height;
         sizedRatio = ratio;
@@ -592,7 +885,11 @@ export default function Viewer({ token }: { token: string }) {
         easing = !arrived;
       }
       camera.updateProjectionMatrix();
-      renderer.render(scene, camera);
+      bloom.render();
+      labelRenderer.render(scene, camera);
+      if (labelHost instanceof HTMLElement) {
+        clampDroneTags(labelHost);
+      }
       if (easing) {
         requestRender();
       }
@@ -614,6 +911,43 @@ export default function Viewer({ token }: { token: string }) {
     };
     controls.addEventListener("start", onStart);
     controls.addEventListener("end", onEnd);
+    let downX = 0;
+    let downY = 0;
+    const onPointerDown = (event: PointerEvent) => {
+      downX = event.clientX;
+      downY = event.clientY;
+    };
+    const onPointerUp = (event: PointerEvent) => {
+      if (Math.hypot(event.clientX - downX, event.clientY - downY) > 5) {
+        return;
+      }
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) {
+        return;
+      }
+      const raycaster = new THREE.Raycaster();
+      raycaster.setFromCamera(
+        new THREE.Vector2(
+          ((event.clientX - rect.left) / rect.width) * 2 - 1,
+          -((event.clientY - rect.top) / rect.height) * 2 + 1,
+        ),
+        camera,
+      );
+      const boxHit = raycaster.intersectObjects(picks.children, false)[0];
+      const frustumHit = raycaster.intersectObjects(frustumPicks.children, false)[0];
+      if (boxHit && (!frustumHit || boxHit.distance <= frustumHit.distance)) {
+        onPickRef.current(pickFromObject(boxHit.object));
+        return;
+      }
+      const cameraKeyHit = frustumHit?.object.userData.cameraKey;
+      if (frustumHit && typeof cameraKeyHit === "string") {
+        onFrustumRef.current(cameraKeyHit);
+        return;
+      }
+      onPickRef.current(null);
+    };
+    canvas.addEventListener("pointerdown", onPointerDown);
+    canvas.addEventListener("pointerup", onPointerUp);
     const resize = new ResizeObserver(requestRender);
     resize.observe(canvas);
     const captureView = (width: number, height: number) => {
@@ -631,9 +965,11 @@ export default function Viewer({ token }: { token: string }) {
       }
       renderer.setPixelRatio(1);
       renderer.setSize(width, height, false);
+      bloom.setSize(width, height, 1);
+      labelRenderer.setSize(width, height);
       camera.aspect = width / Math.max(height, 1);
       camera.updateProjectionMatrix();
-      renderer.render(scene, camera);
+      bloom.render();
       const url = canvas.toDataURL("image/png");
       sizedWidth = 0;
       sizedHeight = 0;
@@ -642,8 +978,26 @@ export default function Viewer({ token }: { token: string }) {
       return url;
     };
     const setTheme = (theme: Appearance["theme"]) => {
-      scene.background = new THREE.Color(theme === "light" ? 0xe7e2d6 : 0x0e100d);
+      scene.background = new THREE.Color(theme === "light" || theme === "dark" ? 0x141414 : 0x141414);
       requestRender();
+    };
+    const clearMotion = () => {
+      trailLog.clear();
+      for (const line of trailLines.values()) {
+        trails.remove(line);
+        line.geometry.dispose();
+      }
+      trailLines.clear();
+      for (const line of leaderLines.values()) {
+        leaders.remove(line);
+        line.geometry.dispose();
+      }
+      leaderLines.clear();
+      for (const label of labelNodes.values()) {
+        labels.remove(label);
+        label.element.remove();
+      }
+      labelNodes.clear();
     };
     stageRef.current = {
       points,
@@ -657,6 +1011,21 @@ export default function Viewer({ token }: { token: string }) {
       requestRender,
       captureView,
       setTheme,
+      bloom,
+      labelRenderer,
+      trails,
+      leaders,
+      labels,
+      trailLog,
+      trailLines,
+      leaderLines,
+      labelNodes,
+      clearMotion,
+      picks,
+      frustumPicks,
+      images,
+      imagePlanes,
+      highlight,
     };
     setTheme(appearanceRef.current.theme);
     const pointsMaterial = points.material;
@@ -666,10 +1035,30 @@ export default function Viewer({ token }: { token: string }) {
     requestRender();
     return () => {
       resize.disconnect();
+      canvas.removeEventListener("pointerdown", onPointerDown);
+      canvas.removeEventListener("pointerup", onPointerUp);
       controls.removeEventListener("start", onStart);
       controls.removeEventListener("end", onEnd);
+      disposeImageTextures();
+      for (const child of frustumPicks.children) {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+        }
+      }
+      for (const mesh of imagePlanes.values()) {
+        mesh.geometry.dispose();
+        if (mesh.material instanceof THREE.Material) {
+          mesh.material.dispose();
+        }
+      }
       window.cancelAnimationFrame(frameId);
       controls.dispose();
+      bloom.dispose();
+      labelRenderer.domElement.remove();
+      grid.geometry.dispose();
+      if (grid.material instanceof THREE.Material) {
+        grid.material.dispose();
+      }
       renderer.dispose();
       points.geometry.dispose();
       boxes.geometry.dispose();
@@ -731,11 +1120,12 @@ export default function Viewer({ token }: { token: string }) {
       }
     }
     function chooseViewpoint(next: Viewpoint) {
-      if (next === "orbit") {
+      const resolved = next === "chase" && modeRef.current === "chase" ? "orbit" : next;
+      if (resolved === "orbit") {
         settleRef.current = true;
       }
-      modeRef.current = next;
-      setViewpoint(next);
+      modeRef.current = resolved;
+      setViewpoint(resolved);
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -836,6 +1226,7 @@ export default function Viewer({ token }: { token: string }) {
       return;
     }
     cacheRef.current.clear();
+    stageRef.current?.clearMotion();
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}`, {
@@ -857,6 +1248,7 @@ export default function Viewer({ token }: { token: string }) {
       setExportEnd(Math.min(10, body.times_us.length));
       setExportSource("view");
       setHidden({});
+      setPick(null);
       setPlaying(false);
       setCameraFrame(null);
       const cameras = body.sensors.filter((sensor) => sensor.modality === "camera");
@@ -899,6 +1291,8 @@ export default function Viewer({ token }: { token: string }) {
       if (!drawn || stale()) {
         return;
       }
+      syncMotion(stage, body, types, hidden);
+      syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
       stage.requestRender();
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
@@ -928,6 +1322,134 @@ export default function Viewer({ token }: { token: string }) {
       }
     });
   }, [summary, frameIndex, hidden, appearance, token, mapNote]);
+
+  useEffect(() => {
+    const latest = latestRef.current;
+    if (!summary || !latest || !summary.times_us.includes(latest.frame.time_us)) {
+      return;
+    }
+    const shown = appearance.points
+      ? latest.frame.point_sensors.reduce((sum, sensor) => (hidden[sensor.agent_id] ? sum : sum + sensor.count), 0)
+      : 0;
+    const boxes = latest.frame.boxes.filter((box) => boxShown(box, hidden, appearance)).length;
+    const frustums = latest.frame.frustums.filter((frustum) => appearance.frustums && !hidden[frustum.agent_id]).length;
+    setStatus(
+      `${summary.scene_id} at ${latest.frame.time_us} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(viewpoint, latest.frame, latest.types, cameraId)}`,
+    );
+  }, [viewpoint, cameraId, summary, mapNote, hidden, appearance]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    const frame = cameraFrame;
+    if (!stage || !frame) {
+      return;
+    }
+    let cancelled = false;
+    const imageWanted = (key: string) => appearance.frustums && (poster || showCameraImage(appearance, key));
+    const wanted = frame.frustums.filter((frustum) => {
+      if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+        return false;
+      }
+      const key = cameraKey(frustum.agent_id, frustum.sensor_id);
+      if (viewpoint === "camera" && key === cameraId) {
+        return false;
+      }
+      return imageWanted(key);
+    });
+    stage.images.visible = wanted.length > 0;
+    if (wanted.length === 0) {
+      for (const mesh of stage.imagePlanes.values()) {
+        mesh.visible = false;
+      }
+      stage.requestRender();
+      return;
+    }
+    const opacity = appearance.frustumOpacity;
+    void (async () => {
+      const seen = new Set<string>();
+      await Promise.all(
+        wanted.map(async (frustum) => {
+          const key = cameraKey(frustum.agent_id, frustum.sensor_id);
+          const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE);
+          if (cancelled || !bitmap) {
+            return;
+          }
+          seen.add(key);
+          let mesh = stage.imagePlanes.get(key);
+          if (!mesh || mesh.userData.aspect !== frustum.aspect || mesh.userData.fov !== frustum.fov_y_rad) {
+            if (mesh) {
+              stage.images.remove(mesh);
+              mesh.geometry.dispose();
+              if (mesh.material instanceof THREE.Material) {
+                mesh.material.dispose();
+              }
+            }
+            mesh = createImagePlane(frustum.fov_y_rad, frustum.aspect);
+            mesh.userData.aspect = frustum.aspect;
+            mesh.userData.fov = frustum.fov_y_rad;
+            stage.images.add(mesh);
+            stage.imagePlanes.set(key, mesh);
+          }
+          applyPose(mesh, frustum.pose);
+          const material = mesh.material;
+          if (material instanceof THREE.MeshBasicMaterial) {
+            material.opacity = opacity;
+            material.map = textureForBitmap(`${frame.scene_id}|${frame.time_us}|${key}|${FRUSTUM_TEXTURE}`, bitmap);
+            material.needsUpdate = true;
+          }
+          mesh.visible = true;
+        }),
+      );
+      if (cancelled) {
+        return;
+      }
+      for (const [key, mesh] of stage.imagePlanes) {
+        if (!seen.has(key)) {
+          mesh.visible = false;
+        }
+      }
+      const nextTime = summary?.times_us[frameIndex + 1];
+      if (typeof nextTime === "number") {
+        for (const frustum of wanted) {
+          void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE).catch(() => undefined);
+        }
+      }
+      stage.requestRender();
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, token, viewpoint, cameraId, summary, frameIndex, poster]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+    const mesh = stage.highlight;
+    const match = pick
+      ? stage.picks.children.find((child) => {
+          const stored = pickFromObject(child);
+          if (!stored || stored.agentId !== pick.agentId) {
+            return false;
+          }
+          if (pick.trackId && stored.trackId) {
+            return stored.trackId === pick.trackId;
+          }
+          return stored.index === pick.index;
+        })
+      : undefined;
+    if (!(match instanceof THREE.Mesh)) {
+      mesh.visible = false;
+      stage.requestRender();
+      return;
+    }
+    mesh.position.copy(match.position);
+    mesh.quaternion.copy(match.quaternion);
+    mesh.scale.copy(match.scale).multiplyScalar(1.04);
+    mesh.visible = true;
+    stage.requestRender();
+  }, [pick, cameraFrame]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
@@ -975,11 +1497,12 @@ export default function Viewer({ token }: { token: string }) {
   }
 
   function chooseViewpoint(next: Viewpoint) {
-    if (next === "orbit") {
+    const resolved = next === "chase" && modeRef.current === "chase" ? "orbit" : next;
+    if (resolved === "orbit") {
       settleRef.current = true;
     }
-    modeRef.current = next;
-    setViewpoint(next);
+    modeRef.current = resolved;
+    setViewpoint(resolved);
     canvasRef.current?.focus();
   }
 
@@ -1221,6 +1744,153 @@ export default function Viewer({ token }: { token: string }) {
     }
   }
 
+  useEffect(() => {
+    if (!summary) {
+      return;
+    }
+    let cancelled = false;
+    const times = summary.times_us;
+    const vehicleId = summary.agents.find((agent) => agent.agent_type === "vehicle")?.agent_id ?? "";
+    void (async () => {
+      const points: number[] = [];
+      const speeds: number[] = [];
+      const boxes: number[] = [];
+      const agentSpeed: Record<string, number[]> = {};
+      for (const agent of summary.agents) {
+        agentSpeed[agent.agent_id] = [];
+      }
+      const markers: Marker[] = [];
+      let previous: FrameDocument | null = null;
+      let previousTime = 0;
+      for (let index = 0; index < times.length; index += 1) {
+        if (cancelled) {
+          return;
+        }
+        const time = times[index];
+        if (typeof time !== "number") {
+          continue;
+        }
+        const frame = await cacheRef.current.loadFrame(summary.scene_id, time, token);
+        if (cancelled) {
+          return;
+        }
+        let pointCount = 0;
+        for (const sensor of frame.point_sensors) {
+          if (appearance.points && !hidden[sensor.agent_id]) {
+            pointCount += sensor.count;
+          }
+        }
+        points.push(pointCount);
+        boxes.push(frame.boxes.filter((box) => boxShown(box, hidden, appearance)).length);
+        for (const agent of summary.agents) {
+          const current = frame.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+          const prior = previous?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+          const value = isPose(current) && isPose(prior) ? speedMps(prior, current, time - previousTime) : null;
+          agentSpeed[agent.agent_id]?.push(value ?? 0);
+        }
+        const lead = vehicleId ? agentSpeed[vehicleId] : undefined;
+        speeds.push(lead && lead.length > 0 ? (lead[lead.length - 1] ?? 0) : 0);
+        if (previous && time - previousTime > 150_000 && markers.length < 24) {
+          markers.push({ index, label: "Sweep gap" });
+        }
+        const vehicleNow = frame.agents.find((item) => item.agent_id === vehicleId)?.pose;
+        const vehicleThen = previous?.agents.find((item) => item.agent_id === vehicleId)?.pose;
+        for (const agent of summary.agents) {
+          if (markers.length >= 24) {
+            break;
+          }
+          const now = frame.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+          const then = previous?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+          if (!isPose(then) && isPose(now)) {
+            markers.push({ index, label: `${agent.agent_id} enters` });
+          } else if (isPose(then) && !isPose(now)) {
+            markers.push({ index, label: `${agent.agent_id} leaves` });
+          } else if (
+            agent.agent_id !== vehicleId &&
+            isPose(now) &&
+            isPose(vehicleNow) &&
+            isPose(then) &&
+            isPose(vehicleThen)
+          ) {
+            const far = (pose: Pose, origin: Pose) => Math.hypot(pose.tx - origin.tx, pose.ty - origin.ty);
+            const wasOut = far(then, vehicleThen) > 80;
+            const isOut = far(now, vehicleNow) > 80;
+            if (wasOut !== isOut) {
+              markers.push({
+                index,
+                label: `${agent.agent_id} ${isOut ? "leaves range" : "enters range"}`,
+              });
+            }
+          }
+        }
+        previous = frame;
+        previousTime = time;
+        if (index >= 1) {
+          for (const row of Object.values(agentSpeed)) {
+            const next = row[1];
+            if (typeof next === "number") {
+              row[0] = next;
+            }
+          }
+          const leadSpeed = speeds[1];
+          if (typeof leadSpeed === "number") {
+            speeds[0] = leadSpeed;
+          }
+        }
+        if (index % 12 === 0 || index === times.length - 1) {
+          setSeries({
+            points: [...points],
+            speeds: [...speeds],
+            boxes: [...boxes],
+            agentSpeed: Object.fromEntries(Object.entries(agentSpeed).map(([id, values]) => [id, [...values]])),
+            markers: [...markers],
+          });
+        }
+      }
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [summary, token, hidden, appearance]);
+
+  useEffect(() => {
+    if (!summary || !cameraFrame) {
+      return;
+    }
+    const times = summary.times_us;
+    const index = times.findIndex((time) => time === cameraFrame.time_us);
+    const neighbor = index > 0 ? index - 1 : index + 1;
+    const neighborTime = times[neighbor];
+    const currentTime = times[index];
+    if (index < 0 || typeof neighborTime !== "number" || typeof currentTime !== "number" || neighbor === index) {
+      return;
+    }
+    let cancelled = false;
+    const frame = cameraFrame;
+    void (async () => {
+      const other = await cacheRef.current.loadFrame(summary.scene_id, neighborTime, token);
+      if (cancelled) {
+        return;
+      }
+      const next: Record<string, number> = {};
+      for (const agent of summary.agents) {
+        const here = frame.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+        const there = other.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+        if (!isPose(here) || !isPose(there)) {
+          continue;
+        }
+        const value = index > 0 ? speedMps(there, here, currentTime - neighborTime) : speedMps(here, there, neighborTime - currentTime);
+        if (value !== null) {
+          next[agent.agent_id] = value;
+        }
+      }
+      setLiveSpeed(next);
+    })().catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [summary, cameraFrame, token]);
+
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
   const timeUs = summary?.times_us[Math.min(frameIndex, last)];
   const cameras = (summary?.sensors ?? []).filter((sensor) => sensor.modality === "camera");
@@ -1239,383 +1909,510 @@ export default function Viewer({ token }: { token: string }) {
     return [...names].sort();
   }, [cameraFrame]);
 
-  return (
-    <section className="card viewer-card">
-      <div className="viewer-head">
-        <h2>Viewer</h2>
-      </div>
-      <div className="viewer-toolbar">
-        <label htmlFor="scene-id">Scene</label>
-        <select id="scene-id" value={sceneId} onChange={(event) => setSceneId(event.target.value)}>
-          {scenes.length === 0 ? <option value="">No scenes</option> : null}
-          {scenes.map((id) => (
-            <option key={id} value={id}>
-              {id}
-            </option>
-          ))}
-        </select>
-        <div className="segment" role="group" aria-label="Viewpoint">
-          {VIEWPOINTS.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              aria-pressed={viewpoint === item.id}
-              onClick={() => chooseViewpoint(item.id)}
-            >
-              {item.label}
-            </button>
-          ))}
-        </div>
-        <label htmlFor="camera-id">Camera</label>
-        <select
-          id="camera-id"
-          value={cameraId}
-          disabled={cameras.length === 0}
-          onChange={(event) => {
-            cameraKeyRef.current = event.target.value;
-            setCameraId(event.target.value);
-            chooseViewpoint("camera");
-          }}
-        >
-          {cameras.length === 0 ? <option value="">No cameras</option> : null}
-          {cameras.map((sensor) => {
-            const key = cameraKey(sensor.agent_id, sensor.sensor_id);
-            return (
-              <option key={key} value={key}>
-                {sensor.sensor_id} · {sensor.agent_id}
-              </option>
-            );
-          })}
-        </select>
-        <button type="button" className="ghost" onClick={() => void exportRerun()} disabled={!summary || exporting}>
-          Export Rerun
-        </button>
-      </div>
-      <div className="export-bar">
-        <label htmlFor="export-source">Export</label>
-        <select
-          id="export-source"
-          value={exportSource}
-          onChange={(event) => setExportSource(event.target.value)}
-        >
-          <option value="view">This view</option>
-          {cameras.map((sensor) => {
-            const key = cameraKey(sensor.agent_id, sensor.sensor_id);
-            return (
-              <option key={key} value={key}>
-                {sensor.sensor_id} · {sensor.agent_id}
-              </option>
-            );
-          })}
-        </select>
-        <label htmlFor="export-format">Format</label>
-        <select
-          id="export-format"
-          value={exportFormat}
-          onChange={(event) => {
-            const next = event.target.value;
-            if (next === "mp4" || next === "gif" || next === "png") {
-              setExportFormat(next);
-            }
-          }}
-        >
-          <option value="mp4">MP4</option>
-          <option value="gif">GIF</option>
-          <option value="png">PNG frames</option>
-        </select>
-        <label htmlFor="export-fps">fps</label>
-        <select
-          id="export-fps"
-          value={String(exportFps)}
-          onChange={(event) => setExportFps(Number(event.target.value))}
-        >
-          {EXPORT_FPS.map((item) => (
-            <option key={item} value={item}>
-              {item}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="export-size">Size</label>
-        <select id="export-size" value={exportSize} onChange={(event) => setExportSize(event.target.value)}>
-          {EXPORT_SIZES.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.label}
-            </option>
-          ))}
-        </select>
-        <label htmlFor="export-start">From</label>
-        <input
-          id="export-start"
-          type="number"
-          min={1}
-          max={summary ? summary.times_us.length : 1}
-          value={exportStart}
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            if (Number.isInteger(next)) {
-              setExportStart(next);
-            }
-          }}
-        />
-        <label htmlFor="export-end">to</label>
-        <input
-          id="export-end"
-          type="number"
-          min={1}
-          max={summary ? summary.times_us.length : 1}
-          value={exportEnd}
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            if (Number.isInteger(next)) {
-              setExportEnd(next);
-            }
-          }}
-        />
-        <button type="button" className="ghost" onClick={() => void exportSequence(true)} disabled={!summary || exporting}>
-          Save still
-        </button>
-        <button type="button" onClick={() => void exportSequence(false)} disabled={!summary || exporting}>
-          Export sequence
-        </button>
-        <span className="muted">
-          {exportNote || "Each sample in the range is one frame. 10 fps matches a 10 Hz recording."}
-        </span>
-      </div>
-      <div className="plot-bar">
-        <label htmlFor="plot-format">Plot</label>
-        <select
-          id="plot-format"
-          value={plotFormat}
-          onChange={(event) => {
-            const next = event.target.value;
-            if (next === "png" || next === "svg") {
-              setPlotFormat(next);
-            }
-          }}
-        >
-          <option value="png">PNG</option>
-          <option value="svg">SVG</option>
-        </select>
-        <button type="button" onClick={() => void savePlot("bev")} disabled={!summary || plotting}>
-          Bird's-eye
-        </button>
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => void savePlot("overlay")}
-          disabled={!summary || plotting || cameras.length === 0}
-        >
-          Camera overlay
-        </button>
-        <span className="muted">
-          {plotNote || "East is to the right. The file uses the current sample, layers, and theme."}
-        </span>
-      </div>
-      {plotUrl ? <img className="plot-preview" src={plotUrl} alt={plotAlt} /> : null}
-      <div className="customise-bar">
-        <span className="muted">View</span>
-        {(
-          [
-            ["points", "Points"],
-            ["boxes", "Boxes"],
-            ["frustums", "Frustums"],
-            ["map", "Map"],
-            ["axes", "Axes"],
-          ] as const
-        ).map(([key, label]) => (
-          <label key={key} className="check">
-            <input
-              type="checkbox"
-              checked={appearance[key]}
-              onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
-            />
-            {label}
-          </label>
-        ))}
-        <label htmlFor="color-by">Color</label>
-        <select
-          id="color-by"
-          value={appearance.colorBy}
-          onChange={(event) =>
-            setAppearance((current) => ({
-              ...current,
-              colorBy: event.target.value === "class" ? "class" : "agent",
-            }))
-          }
-        >
-          <option value="agent">Agent</option>
-          <option value="class">Class</option>
-        </select>
-        <label htmlFor="point-size">Point size</label>
-        <select
-          id="point-size"
-          value={String(appearance.pointSize)}
-          onChange={(event) =>
-            setAppearance((current) => ({ ...current, pointSize: Number(event.target.value) }))
-          }
-        >
-          {[1, 2, 3, 4].map((size) => (
-            <option key={size} value={size}>
-              {size} px
-            </option>
-          ))}
-        </select>
-        <label htmlFor="box-style">Boxes</label>
-        <select
-          id="box-style"
-          value={appearance.boxStyle}
-          onChange={(event) =>
-            setAppearance((current) => ({
-              ...current,
-              boxStyle: event.target.value === "solid" ? "solid" : "wire",
-            }))
-          }
-        >
-          <option value="wire">Wire</option>
-          <option value="solid">Solid</option>
-        </select>
-        <label htmlFor="theme">Theme</label>
-        <select
-          id="theme"
-          value={appearance.theme}
-          onChange={(event) =>
-            setAppearance((current) => ({
-              ...current,
-              theme: event.target.value === "light" ? "light" : "dark",
-            }))
-          }
-        >
-          <option value="dark">Dark</option>
-          <option value="light">Light</option>
-        </select>
-        <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
-          Reset view
-        </button>
-        {categories.map((category) => (
-          <label key={category} className="check">
-            <input
-              type="checkbox"
-              checked={!appearance.hiddenClasses.includes(category)}
-              onChange={() =>
-                setAppearance((current) => {
-                  const hidden = new Set(current.hiddenClasses);
-                  if (hidden.has(category)) {
-                    hidden.delete(category);
-                  } else {
-                    hidden.add(category);
-                  }
-                  return { ...current, hiddenClasses: [...hidden] };
-                })
-              }
-            />
-            {category}
-          </label>
-        ))}
-      </div>
-      <canvas
-        ref={canvasRef}
-        className="viewer-canvas"
-        tabIndex={0}
-        aria-label="Scene view. Click here, then use Space to play and 1 through 5 for viewpoints."
-        onPointerDown={() => canvasRef.current?.focus()}
+  const tone =
+    /could not|incomplete|refused|failed/i.test(status) ? "bad" : /holding|no frustum|no map/i.test(status) ? "wait" : "live";
+  const cameraAgent = cameraId.slice(0, cameraId.indexOf("/"));
+  const cameraPose = cameraFrame?.agents.find((agent) => agent.agent_id === cameraAgent)?.pose;
+  function agentSpeed(agentId: string): number | null {
+    const live = liveSpeed[agentId];
+    if (typeof live === "number") {
+      return live;
+    }
+    const row = series.agentSpeed[agentId];
+    const sample = frameIndex > 0 ? row?.[frameIndex] : row?.[1];
+    return typeof sample === "number" ? sample : null;
+  }
+  const cameraSpeed = agentSpeed(cameraAgent);
+
+  const cameraChoices = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: { key: string; agent: string; sensor: string }[] = [];
+    for (const frustum of cameraFrame?.frustums ?? []) {
+      const key = cameraKey(frustum.agent_id, frustum.sensor_id);
+      if (seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      rows.push({ key, agent: frustum.agent_id, sensor: frustum.sensor_id });
+    }
+    return rows;
+  }, [cameraFrame]);
+  cameraKeysRef.current = cameraChoices.map((row) => row.key);
+  onFrustumRef.current = (key) => {
+    setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current));
+  };
+
+  const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
+  const crumb = (
+    <div className="crumb">
+      <span className="crumb-dataset">{sceneId ? sceneStem : "Scenes"}</span>
+      <span className="crumb-sep" aria-hidden="true">/</span>
+      <Menu
+        id="scene-id"
+        ariaLabel="Scene"
+        value={sceneId}
+        options={
+          scenes.length === 0
+            ? [{ value: "", label: "No scenes" }]
+            : scenes.map((id) => ({ value: id, label: id }))
+        }
+        onChange={setSceneId}
       />
-      <div className="transport">
-        <button type="button" onClick={togglePlay} disabled={!summary || (summary.times_us.length < 2)}>
-          {playing ? "Pause" : "Play"}
-        </button>
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => {
-            setPlaying(false);
-            setFrameIndex((current) => stepIndex(current, -1, lengthRef.current, loop));
-          }}
-          disabled={!summary}
-        >
-          Step back
-        </button>
-        <button
-          type="button"
-          className="ghost"
-          onClick={() => {
-            setPlaying(false);
-            setFrameIndex((current) => stepIndex(current, 1, lengthRef.current, loop));
-          }}
-          disabled={!summary}
-        >
-          Step forward
-        </button>
-        <label htmlFor="speed">Speed</label>
-        <select
-          id="speed"
-          value={String(speed)}
-          onChange={(event) => {
-            const next = Number(event.target.value);
-            if (SPEEDS.includes(next as Speed)) {
-              setSpeed(next as Speed);
-            }
-          }}
-        >
-          {SPEEDS.map((item) => (
-            <option key={item} value={item}>
-              {item}×
-            </option>
-          ))}
-        </select>
-        <label className="check" htmlFor="loop">
-          <input id="loop" type="checkbox" checked={loop} onChange={() => setLoop((current) => !current)} />
-          Loop
-        </label>
-        <label className="clock" htmlFor="scrubber">
-          {typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s"} · sample{" "}
-          {summary ? Math.min(frameIndex, last) + 1 : 0} / {summary ? summary.times_us.length : 0}
-        </label>
-        <input
-          id="scrubber"
-          type="range"
-          min={0}
-          max={last}
-          value={Math.min(frameIndex, last)}
-          onChange={(event) => setFrameIndex(Number(event.target.value))}
-        />
-      </div>
-      <p className="muted status-line">{status}</p>
-      <p className="hint">
-        {playing ? "Playing" : "Paused"} at {speed}×{loop ? ", loop on" : ""}. {viewpointLabel}. Click the
-        view, then Space plays, arrows step, L loops, [ ] change speed, and 1–5 pick a viewpoint.
-      </p>
-      <div className="viewer-agents">
-        {(summary?.agents ?? []).map((agent) => (
-          <label key={agent.agent_id}>
-            <input
-              type="checkbox"
-              checked={!hidden[agent.agent_id]}
-              onChange={() =>
-                setHidden((current) => ({
-                  ...current,
-                  [agent.agent_id]: !current[agent.agent_id],
-                }))
-              }
+    </div>
+  );
+  const actionTools = (
+    <div className="top-actions">
+      <button type="button" className="ghost" onClick={() => setExportOpen(true)} disabled={!summary}>
+        Export
+      </button>
+      <button
+        type="button"
+        className="icon ghost"
+        aria-label={appearance.theme === "dark" ? "Use light theme" : "Use dark theme"}
+        aria-pressed={appearance.theme === "dark"}
+        onClick={() =>
+          setAppearance((current) => ({ ...current, theme: current.theme === "dark" ? "light" : "dark" }))
+        }
+      >
+        {appearance.theme === "dark" ? <IconMoon /> : <IconSun />}
+      </button>
+    </div>
+  );
+
+  return (
+    <div className={poster ? "viewer viewer-poster" : "viewer"}>
+      {slot ? createPortal(crumb, slot) : null}
+      {actions ? createPortal(actionTools, actions) : null}
+      <div className="workspace">
+        <aside className="panel" aria-label="Layers and agents">
+          <details open>
+            <summary>Layers</summary>
+            <div className="checks">
+              {(
+                [
+                  ["points", "Points"],
+                  ["boxes", "Boxes"],
+                  ["frustums", "Frustums"],
+                  ["map", "Map"],
+                  ["axes", "Axes"],
+                ] as const
+              ).map(([key, label]) => (
+                <EyeToggle
+                  key={key}
+                  on={appearance[key]}
+                  label={label}
+                  onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
+                />
+              ))}
+              <EyeToggle
+                on={appearance.frustumImages}
+                label="Frustum images"
+                onChange={() => setAppearance((current) => toggleFrustumImages(current))}
+              />
+              {appearance.frustumImages ? (
+                <Slider
+                  label="Image opacity"
+                  value={appearance.frustumOpacity}
+                  min={0.15}
+                  max={1}
+                  step={0.05}
+                  onChange={(value) => setAppearance((current) => ({ ...current, frustumOpacity: value }))}
+                />
+              ) : null}
+              <details className="cam-fold">
+                <summary>
+                  Cameras
+                  <span className="num">{cameraChoices.filter((row) => showCameraImage(appearance, row.key)).length}</span>
+                </summary>
+                <div className="cam-actions">
+                  <button type="button" onClick={() => setAppearance((current) => setAllFrustumImages(current))}>
+                    All
+                  </button>
+                  <button type="button" onClick={() => setAppearance((current) => setNoFrustumImages(current))}>
+                    None
+                  </button>
+                </div>
+                <div className="cam-list">
+                  {cameraChoices.length === 0 ? <p className="muted">No cameras in this sample.</p> : null}
+                  {cameraChoices.map((row) => (
+                    <EyeToggle
+                      key={row.key}
+                      on={showCameraImage(appearance, row.key)}
+                      label={`${row.agent} ${row.sensor}`}
+                      onChange={() =>
+                        setAppearance((current) =>
+                          toggleOneFrustumImage(current, row.key, cameraChoices.map((item) => item.key)),
+                        )
+                      }
+                    />
+                  ))}
+                </div>
+              </details>
+            </div>
+          </details>
+          <details open>
+            <summary>Agents</summary>
+            <ul className="agent-list">
+              {(summary?.agents ?? []).map((agent) => {
+                const points =
+                  cameraFrame?.point_sensors
+                    .filter((sensor) => sensor.agent_id === agent.agent_id)
+                    .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
+                const boxes = cameraFrame?.boxes.filter((box) => box.agent_id === agent.agent_id).length ?? 0;
+                return (
+                  <li key={agent.agent_id}>
+                    <SwatchToggle
+                      on={!hidden[agent.agent_id]}
+                      label={agent.agent_id}
+                      color={AGENT_INK[agent.agent_type] ?? "#b7b1a6"}
+                      meta={
+                        <>
+                          <span className="num">{points}</span>
+                          <span className="num">{boxes}</span>
+                        </>
+                      }
+                      onChange={() =>
+                        setHidden((current) => ({
+                          ...current,
+                          [agent.agent_id]: !current[agent.agent_id],
+                        }))
+                      }
+                    />
+                  </li>
+                );
+              })}
+            </ul>
+          </details>
+          <details open>
+            <summary>Classes</summary>
+            {categories.length === 0 ? <p className="muted">No classes in this sample.</p> : null}
+            <div className="checks">
+              {categories.map((category) => (
+                <SwatchToggle
+                  key={category}
+                  on={!appearance.hiddenClasses.includes(category)}
+                  label={category}
+                  color={cssColor(classColor(category))}
+                  onChange={() =>
+                    setAppearance((current) => {
+                      const next = new Set(current.hiddenClasses);
+                      if (next.has(category)) {
+                        next.delete(category);
+                      } else {
+                        next.add(category);
+                      }
+                      return { ...current, hiddenClasses: [...next] };
+                    })
+                  }
+                />
+              ))}
+            </div>
+          </details>
+          <details>
+            <summary>Display</summary>
+            <div className="stack">
+              <Segmented
+                label="Color"
+                value={appearance.colorBy}
+                options={[
+                  { value: "agent", label: "Agent" },
+                  { value: "class", label: "Class" },
+                ]}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, colorBy: value === "class" ? "class" : "agent" }))
+                }
+              />
+              <Segmented
+                label="Point size"
+                value={String(appearance.pointSize)}
+                options={[1, 2, 3, 4].map((size) => ({ value: String(size), label: String(size) }))}
+                onChange={(value) => setAppearance((current) => ({ ...current, pointSize: Number(value) }))}
+              />
+              <Segmented
+                label="Boxes"
+                value={appearance.boxStyle}
+                options={[
+                  { value: "wire", label: "Wire" },
+                  { value: "solid", label: "Solid" },
+                ]}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, boxStyle: value === "solid" ? "solid" : "wire" }))
+                }
+              />
+              <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
+                Reset view
+              </button>
+            </div>
+          </details>
+        </aside>
+        <div className="stage">
+          <div className="viewport">
+            <canvas
+              ref={canvasRef}
+              className="viewer-canvas"
+              tabIndex={0}
+              aria-label="Scene view. Click here, then use Space to play and 1 through 5 for viewpoints."
+              onPointerDown={() => canvasRef.current?.focus()}
             />
-            {agent.agent_id}
-          </label>
-        ))}
+            <div className="label-host" />
+            <div className="vignette" aria-hidden="true" />
+            <div className="glass status-pill">
+              <i className={tone} aria-hidden="true" />
+              <span>
+                {summary ? summary.scene_id : "No scene"} · {viewpointLabel}
+              </span>
+            </div>
+            <div
+              className="glass view-pill"
+              role="group"
+              aria-label="Viewpoint"
+              style={{ ["--count" as string]: VIEWPOINTS.length, ["--index" as string]: Math.max(0, VIEWPOINTS.findIndex((item) => item.id === viewpoint)) }}
+            >
+              <span className="view-slide" aria-hidden="true" />
+              {VIEWPOINTS.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-pressed={viewpoint === item.id}
+                  aria-keyshortcuts={item.shortcut}
+                  onClick={() => chooseViewpoint(item.id)}
+                >
+                  {item.id === "chase" ? "Chase" : item.label}
+                </button>
+              ))}
+            </div>
+            <div className="glass legend" aria-label="Legend">
+              <span>
+                <i style={{ background: "#F58A1F" }} /> Vehicle
+              </span>
+              <span>
+                <i style={{ background: "#3C8DFF" }} /> Drone
+              </span>
+              <span>
+                <i style={{ background: "#c6f3dc" }} /> Lane
+              </span>
+            </div>
+            {cameraFrame && summary ? (
+              <CameraStrip
+                token={token}
+                sceneId={summary.scene_id}
+                timeUs={cameraFrame.time_us}
+                nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
+                frustums={cameraFrame.frustums}
+                boxes={cameraFrame.boxes}
+                pointSensors={cameraFrame.point_sensors}
+                types={agentTypes}
+                hidden={hidden}
+                cacheRef={cacheRef}
+                focusKey={cameraId}
+                imageOn={(key) => showCameraImage(appearance, key)}
+                onToggleImage={(key) =>
+                  setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
+                }
+                onSelect={(key) => {
+                  cameraKeyRef.current = key;
+                  setCameraId(key);
+                  chooseViewpoint("camera");
+                }}
+                hud={{
+                  speed: formatSpeed(cameraSpeed),
+                  heading: isPose(cameraPose) ? headingDeg(cameraPose) : 0,
+                  stamp: typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s",
+                }}
+              />
+            ) : null}
+          </div>
+          <p className="status-line">{status}</p>
+        </div>
+        <aside className="panel panel-right" aria-label="Agent telemetry">
+          <h2>Telemetry</h2>
+          {(summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).map((agent) => {
+            const pose = cameraFrame?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+            const sampleSpeed = agentSpeed(agent.agent_id);
+            const history = series.agentSpeed[agent.agent_id] ?? [];
+            const paths = sparkPaths(history, 22);
+            const points =
+              cameraFrame?.point_sensors
+                .filter((sensor) => sensor.agent_id === agent.agent_id)
+                .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
+            const ink = AGENT_INK[agent.agent_type] ?? "#b7b1a6";
+            return (
+              <article key={agent.agent_id} className="tele">
+                <header>
+                  <i style={{ background: ink }} aria-hidden="true" />
+                  <strong>{agent.agent_id}</strong>
+                  <span>{agent.agent_type}</span>
+                </header>
+                <dl>
+                  <div className="span-2">
+                    <dt>Speed</dt>
+                    <dd className="num">{formatSpeed(sampleSpeed)}</dd>
+                  </div>
+                  <div>
+                    <dt>Heading</dt>
+                    <dd className="num">{formatHeading(isPose(pose) ? headingDeg(pose) : null)}</dd>
+                  </div>
+                  {agent.agent_type === "uav" && isPose(pose) ? (
+                    <div>
+                      <dt>Altitude</dt>
+                      <dd className="num">{pose.tz.toFixed(1)} m</dd>
+                    </div>
+                  ) : null}
+                  <div>
+                    <dt>Points</dt>
+                    <dd className="num">{points}</dd>
+                  </div>
+                </dl>
+                <svg className="tele-spark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
+                  <path d={paths.area} fill={ink} opacity="0.18" />
+                  <path d={paths.line} stroke={ink} />
+                </svg>
+              </article>
+            );
+          })}
+          <SceneCard summary={summary} frame={cameraFrame} />
+          <Inspector pick={pick} frame={cameraFrame} summary={summary} token={token} cache={cacheRef.current} />
+          <Radar frame={cameraFrame} pick={pick} types={agentTypes} />
+        </aside>
       </div>
-      {cameraFrame && summary ? (
-        <CameraStrip
-          token={token}
-          sceneId={summary.scene_id}
-          timeUs={cameraFrame.time_us}
-          nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
-          frustums={cameraFrame.frustums}
-          boxes={cameraFrame.boxes}
-          pointSensors={cameraFrame.point_sensors}
-          types={agentTypes}
-          hidden={hidden}
-          cacheRef={cacheRef}
-        />
-      ) : null}
-      {exportNote ? <p className="muted">{exportNote}</p> : null}
-    </section>
+      <Timeline
+        length={summary?.times_us.length ?? 0}
+        index={Math.min(frameIndex, last)}
+        timeUs={typeof timeUs === "number" ? timeUs : null}
+        times={summary?.times_us ?? []}
+        playing={playing}
+        speed={speed}
+        loop={loop}
+        disabled={!summary || (summary.times_us.length < 2)}
+        points={series.points}
+        speeds={series.speeds}
+        boxes={series.boxes}
+        markers={series.markers}
+        onIndex={(index) => setFrameIndex(index)}
+        onStep={(delta) => {
+          setPlaying(false);
+          setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loop));
+        }}
+        onToggle={togglePlay}
+        onSpeed={setSpeed}
+        onLoop={() => setLoop((current) => !current)}
+      />
+      <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)}>
+        <div className="export-bar">
+          <Menu
+            id="export-source"
+            label="Source"
+            value={exportSource}
+            options={[
+              { value: "view", label: "This view" },
+              ...cameras.map((sensor) => {
+                const key = cameraKey(sensor.agent_id, sensor.sensor_id);
+                return { value: key, label: `${sensor.sensor_id} · ${sensor.agent_id}` };
+              }),
+            ]}
+            onChange={setExportSource}
+          />
+          <Menu
+            id="export-format"
+            label="Format"
+            value={exportFormat}
+            options={[
+              { value: "mp4", label: "MP4" },
+              { value: "gif", label: "GIF" },
+              { value: "png", label: "PNG frames" },
+            ]}
+            onChange={(value) => {
+              if (value === "mp4" || value === "gif" || value === "png") {
+                setExportFormat(value);
+              }
+            }}
+          />
+          <Menu
+            id="export-fps"
+            label="fps"
+            value={String(exportFps)}
+            options={EXPORT_FPS.map((item) => ({ value: String(item), label: String(item) }))}
+            onChange={(value) => setExportFps(Number(value))}
+          />
+          <Menu
+            id="export-size"
+            label="Size"
+            value={exportSize}
+            options={EXPORT_SIZES.map((item) => ({ value: item.id, label: item.label }))}
+            onChange={setExportSize}
+          />
+          <label htmlFor="export-start">
+            From
+            <input
+              id="export-start"
+              type="number"
+              min={1}
+              max={summary ? summary.times_us.length : 1}
+              value={exportStart}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (Number.isInteger(next)) {
+                  setExportStart(next);
+                }
+              }}
+            />
+          </label>
+          <label htmlFor="export-end">
+            To
+            <input
+              id="export-end"
+              type="number"
+              min={1}
+              max={summary ? summary.times_us.length : 1}
+              value={exportEnd}
+              onChange={(event) => {
+                const next = Number(event.target.value);
+                if (Number.isInteger(next)) {
+                  setExportEnd(next);
+                }
+              }}
+            />
+          </label>
+          <button type="button" className="ghost" onClick={() => void exportSequence(true)} disabled={!summary || exporting}>
+            Save still
+          </button>
+          <button type="button" className="ghost" onClick={() => void exportSequence(false)} disabled={!summary || exporting}>
+            Export sequence
+          </button>
+        </div>
+        <div className="plot-bar">
+          <Menu
+            id="plot-format"
+            label="Plot"
+            value={plotFormat}
+            options={[
+              { value: "png", label: "PNG" },
+              { value: "svg", label: "SVG" },
+            ]}
+            onChange={(value) => {
+              if (value === "png" || value === "svg") {
+                setPlotFormat(value);
+              }
+            }}
+          />
+          <button type="button" className="ghost" onClick={() => void savePlot("bev")} disabled={!summary || plotting}>
+            Bird's-eye
+          </button>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => void savePlot("overlay")}
+            disabled={!summary || plotting || cameras.length === 0}
+          >
+            Camera overlay
+          </button>
+          <button type="button" className="ghost" onClick={() => void exportRerun()} disabled={!summary || exporting}>
+            Export Rerun
+          </button>
+        </div>
+        <p className="muted">{exportNote || plotNote || "Sequence, still, bird's-eye, camera overlay, and Rerun use the current sample and layers."}</p>
+        {plotUrl ? <img className="plot-preview" src={plotUrl} alt={plotAlt} /> : null}
+      </ExportDialog>
+    </div>
   );
 }

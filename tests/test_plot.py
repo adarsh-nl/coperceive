@@ -162,8 +162,11 @@ def test_bev_png_and_svg_draw_trails_boxes_and_lidar(tmp_path: Path) -> None:
     assert png.time_us == 0
     assert png.width == 960
     assert png.height == 960
-    with Image.open(png.dest) as image:
+    image = cast(Image.Image, Image.open(png.dest))
+    try:
         assert image.size == (960, 960)
+    finally:
+        image.close()
     svg = render_bev(
         scene,
         tmp_path / "bev.svg",
@@ -205,10 +208,13 @@ def test_overlay_projects_the_point_in_front_and_confines_the_path(tmp_path: Pat
     assert saved.boxes == 1
     assert saved.width == 16
     assert saved.height == 16
-    with Image.open(saved.dest) as rendered:
+    rendered = cast(Image.Image, Image.open(saved.dest))
+    try:
         # The source photo is (30, 40, 50). A closed Pillow buffer used to
         # leave this figure the theme background instead of the photo.
         corner = cast(tuple[int, int, int], rendered.convert("RGB").getpixel((0, saved.height - 1)))
+    finally:
+        rendered.close()
     assert abs(corner[0] - 30) < 8
     assert abs(corner[1] - 40) < 8
     assert abs(corner[2] - 50) < 8
