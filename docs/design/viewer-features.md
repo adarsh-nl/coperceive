@@ -34,7 +34,7 @@ The paper's body frame is ISO 8855 (x forward, y left, z up) and its camera fram
 | Bird's-eye viewpoint | Done. This is a 3D camera 48 m above the vehicle. It is not the matplotlib figure. |
 | Look through a camera | Done. The 3D view uses the frustum pose, vertical field of view, and aspect. The RGB frame is the camera strip, not a texture on the frustum. |
 | Free orbit | Done. The first visit to a scene still frames the near vehicle cluster. |
-| Dark mode | Done. Dark is the default. The view settings store dark or light. |
+| Dark mode | Done. Light is the default. The view settings store dark or light. |
 | Images, camera strip, project boxes or lidar onto the image | Done. One panel per camera at the current sample. Boxes and lidar are toggles. `HF_TOKEN` stays in the environment. Image bytes are not committed. |
 | MP4, and a frame sequence at a chosen resolution and frame rate | Done, from the page and from the CLI. GIF and PNG frames are included. Each recorded sample is one frame, and `fps` is how fast the file plays them. Rerun `.rrd` export stays. |
 | Color, point size, box style, per-layer toggles, category filters | Done. Settings live in `localStorage` under `coperceive-view` and must not include the bearer token. The token stays in `sessionStorage`. |

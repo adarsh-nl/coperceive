@@ -19,6 +19,7 @@ export default function App() {
   const [fileError, setFileError] = useState("");
   const [streamNote, setStreamNote] = useState("Event stream idle.");
   const [tab, setTab] = useState<"viewer" | "desk">("viewer");
+  const [slot, setSlot] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
     sessionStorage.setItem(TOKEN_KEY, token);
@@ -120,50 +121,54 @@ export default function App() {
   const jobRows: Job[] = jobs.data ?? [];
 
   return (
-    <main className={tab === "viewer" ? "page page-wide" : "page"}>
-      <header>
-        <span className="badge">coperceive</span>
-        <h1>Local data desk</h1>
-        <p>
-          The viewer plays a scene on this origin. This desk runs the allow-listed <code>echo</code> job.
-        </p>
+    <div className={tab === "viewer" ? "shell" : "shell shell-desk"}>
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true" />
+          coperceive
+        </div>
+        <div className="top-slot" ref={setSlot} />
+        <div className="tabs" role="tablist" aria-label="Sections">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "viewer"}
+            className={tab === "viewer" ? "tab selected" : "tab"}
+            onClick={() => setTab("viewer")}
+          >
+            Viewer
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "desk"}
+            className={tab === "desk" ? "tab selected" : "tab"}
+            onClick={() => setTab("desk")}
+          >
+            Desk
+          </button>
+        </div>
+        <details className="settings">
+          <summary>Settings</summary>
+          <div className="settings-pop">
+            <label htmlFor="token-global">
+              Bearer token
+              <input
+                id="token-global"
+                type="password"
+                autoComplete="off"
+                value={token}
+                onChange={(event) => setToken(event.target.value)}
+                placeholder="Empty when the server has no token"
+              />
+            </label>
+            <p className="muted">Stored in this tab only. A non-loopback bind refuses to start without a token.</p>
+          </div>
+        </details>
       </header>
-      <div className="topbar">
-      <div className="tabs" role="tablist">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "viewer"}
-          className={tab === "viewer" ? "tab selected" : "tab"}
-          onClick={() => setTab("viewer")}
-        >
-          Viewer
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "desk"}
-          className={tab === "desk" ? "tab selected" : "tab"}
-          onClick={() => setTab("desk")}
-        >
-          Desk
-        </button>
-      </div>
-      <label className="token-inline" htmlFor="token-global">
-        Bearer token
-        <input
-          id="token-global"
-          type="password"
-          autoComplete="off"
-          value={token}
-          onChange={(event) => setToken(event.target.value)}
-          placeholder="Empty when the server has no token"
-        />
-      </label>
-      </div>
-      {tab === "viewer" ? <Viewer token={token} /> : null}
+      {tab === "viewer" ? <Viewer token={token} slot={slot} /> : null}
 
-      {tab === "desk" ? <div className="grid">
+      {tab === "desk" ? <div className="desk"><h1>Local data desk</h1><p className="muted">This desk runs the allow-listed <code>echo</code> job.</p><div className="grid">
         <section className="card">
           <h2>Jobs</h2>
           <form
@@ -262,7 +267,7 @@ export default function App() {
             {fileText ? <pre className="output">{fileText}</pre> : null}
           </section>
         </div>
-      </div> : null}
-    </main>
+      </div></div> : null}
+    </div>
   );
 }

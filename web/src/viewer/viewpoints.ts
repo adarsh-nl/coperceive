@@ -132,7 +132,7 @@ function median(values: number[]): number {
   return ((ordered[mid - 1] ?? 0) + (ordered[mid] ?? 0)) / 2;
 }
 
-const SMOOTH_SECONDS = 0.18;
+const SMOOTH_SECONDS = 0.48;
 
 export function applyGoal(camera: THREE.PerspectiveCamera, target: THREE.Vector3, goal: CameraGoal) {
   camera.position.copy(goal.position);

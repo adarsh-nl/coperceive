@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import type { FrameCache } from "./cache";
 import { cameraKey, type FrameBox, type FrameFrustum, type FrameSensor } from "./types";
@@ -7,8 +7,8 @@ import { projectToImage, type Pinhole } from "./project";
 type Cloud = { agentId: string; xyz: Float32Array };
 
 const INK: Record<string, string> = {
-  vehicle: "#e67828",
-  uav: "#2878dc",
+  vehicle: "#F58A1F",
+  uav: "#3C8DFF",
 };
 
 const STRIP_WIDTH = 640;
@@ -382,6 +382,9 @@ export default function CameraStrip({
   types,
   hidden,
   cacheRef,
+  focusKey,
+  onSelect,
+  hud,
 }: {
   token: string;
   sceneId: string;
@@ -393,9 +396,12 @@ export default function CameraStrip({
   types: Map<string, string>;
   hidden: Record<string, boolean>;
   cacheRef: RefObject<FrameCache>;
+  focusKey: string;
+  onSelect: (key: string) => void;
+  hud: { speed: string; heading: number; stamp: string } | null;
 }) {
   const [showBoxes, setShowBoxes] = useState(true);
-  const [showLidar, setShowLidar] = useState(false);
+  const [showLidar, setShowLidar] = useState(true);
   const [shown, setShown] = useState<{
     timeUs: number;
     urls: Record<string, ImageBitmap | null>;
@@ -405,6 +411,8 @@ export default function CameraStrip({
   const [clouds, setClouds] = useState<Cloud[]>([]);
   const [cloudTime, setCloudTime] = useState<number | null>(null);
   const [note, setNote] = useState("");
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
+  const dragRef = useRef<{ dx: number; dy: number; hostW: number; hostH: number; width: number; height: number } | null>(null);
   const sceneRef = useRef(sceneId);
 
   useEffect(() => {
@@ -495,10 +503,59 @@ export default function CameraStrip({
     return null;
   }
 
+  const panels = shown?.frustums ?? frustums;
+  const focus = panels.find((camera) => cameraKey(camera.agent_id, camera.sensor_id) === focusKey) ?? panels[0];
+  const heading = hud?.heading ?? 0;
+
+  function onDragStart(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    const shell = event.currentTarget.parentElement;
+    const host = shell?.parentElement;
+    if (!shell || !host) {
+      return;
+    }
+    const box = shell.getBoundingClientRect();
+    const hostBox = host.getBoundingClientRect();
+    dragRef.current = {
+      dx: event.clientX - box.left,
+      dy: event.clientY - box.top,
+      hostW: hostBox.width,
+      hostH: hostBox.height,
+      width: box.width,
+      height: box.height,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function onDragMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    const host = event.currentTarget.parentElement?.parentElement;
+    if (!drag || !host || !event.currentTarget.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+    const hostBox = host.getBoundingClientRect();
+    const left = Math.min(Math.max(0, event.clientX - hostBox.left - drag.dx), Math.max(0, drag.hostW - drag.width));
+    const top = Math.min(Math.max(0, event.clientY - hostBox.top - drag.dy), Math.max(0, drag.hostH - drag.height));
+    setPlace({ left, top });
+  }
+
   return (
-    <section className="camera-strip" aria-label="Camera images">
-      <div className="camera-tools">
-        <h3>Cameras</h3>
+    <section
+      className="pip"
+      aria-label="Agent camera"
+      style={place ? { left: place.left, top: place.top, right: "auto", bottom: "auto" } : undefined}
+    >
+      <div
+        className="pip-bar"
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={() => {
+          dragRef.current = null;
+        }}
+      >
+        <strong>Camera</strong>
         <label className="check">
           <input type="checkbox" checked={showBoxes} onChange={() => setShowBoxes((current) => !current)} />
           Boxes
@@ -507,26 +564,54 @@ export default function CameraStrip({
           <input type="checkbox" checked={showLidar} onChange={() => setShowLidar((current) => !current)} />
           Lidar
         </label>
-        {note ? <span className="muted">{note}</span> : null}
+        <span className="pip-drag">Drag</span>
       </div>
-      <div className="camera-row">
-        {(shown?.frustums ?? frustums).map((camera) => {
+      {focus ? (
+        <div className="pip-stage">
+          <CameraPanel
+            camera={focus}
+            bitmap={shown ? shown.urls[cameraKey(focus.agent_id, focus.sensor_id)] : undefined}
+            boxes={shown?.boxes ?? []}
+            clouds={shown && cloudTime === shown.timeUs ? clouds : []}
+            types={types}
+            hidden={hidden}
+            showBoxes={showBoxes}
+            showLidar={showLidar}
+          />
+          <div className="hud">
+            <div className="compass" aria-hidden="true">
+              <div className="compass-tape" style={{ transform: `translateX(${(-heading / 360) * 240}px)` }}>
+                {["N", "E", "S", "W", "N", "E", "S", "W"].map((name, item) => (
+                  <span key={`${name}-${item}`}>{name}</span>
+                ))}
+              </div>
+              <i />
+            </div>
+            <p className="num">
+              <span>{hud?.speed ?? "—"}</span>
+              <span>{hud ? `${hud.heading.toFixed(0)}°` : "—"}</span>
+              <span>{hud?.stamp ?? "—"}</span>
+            </p>
+          </div>
+        </div>
+      ) : null}
+      <div className="pip-thumbs" role="group" aria-label="Cameras">
+        {panels.map((camera) => {
           const key = cameraKey(camera.agent_id, camera.sensor_id);
           return (
-            <CameraPanel
+            <button
               key={key}
-              camera={camera}
-              bitmap={shown ? shown.urls[key] : undefined}
-              boxes={shown?.boxes ?? []}
-              clouds={shown && cloudTime === shown.timeUs ? clouds : []}
-              types={types}
-              hidden={hidden}
-              showBoxes={showBoxes}
-              showLidar={showLidar}
-            />
+              type="button"
+              aria-pressed={focus ? key === cameraKey(focus.agent_id, focus.sensor_id) : false}
+              onClick={() => onSelect(key)}
+            >
+              {camera.sensor_id}
+              <span>{camera.agent_id}</span>
+            </button>
           );
         })}
       </div>
+      {note ? <p className="muted">{note}</p> : null}
     </section>
   );
 }

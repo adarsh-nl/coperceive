@@ -42,7 +42,7 @@ export function defaultAppearance(): Appearance {
     pointSize: 2,
     boxStyle: "wire",
     hiddenClasses: [],
-    theme: "dark",
+    theme: "light",
   };
 }
 
@@ -80,7 +80,7 @@ export function loadAppearance(): Appearance {
       pointSize: pointSize(row.pointSize),
       boxStyle: row.boxStyle === "solid" ? "solid" : "wire",
       hiddenClasses: classes(row.hiddenClasses),
-      theme: row.theme === "light" ? "light" : "dark",
+      theme: row.theme === "dark" ? "dark" : row.theme === "light" ? "light" : base.theme,
     };
   } catch {
     return base;

@@ -3,9 +3,8 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App.tsx";
 import "./index.css";
-import "@fontsource/ibm-plex-sans/400.css";
-import "@fontsource/ibm-plex-sans/600.css";
-import "@fontsource/ibm-plex-mono/400.css";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 
 const queryClient = new QueryClient({
   defaultOptions: { queries: { retry: 1, refetchOnWindowFocus: false } },

@@ -1,6 +1,6 @@
 # Handover
 
-Phase 6 slice 4 is in the tree: view settings for layers, color, point size, box style, categories, and dark or light. Sequence export, camera images, playback, and viewpoints are the slices under this one. The matplotlib bird's-eye plot is not started. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+The web viewer is a light control shell around a dark viewport, with a dark theme on the same layout. Phase 6 (playback, cameras, sequence export, view settings, and the bird's-eye and overlay figures) is on main. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
 
 ## Goal
 
@@ -17,7 +17,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - Playback uses the recorded gap between pose times at 0.25×, 0.5×, 1×, 2×, and 4×. The page caches 16 frame documents and 48 point sweeps and requests the next four samples. Viewpoints ease over 180 ms. Look-through uses sensor +Z as forward and sensor −Y as up. The checklist is `docs/design/viewer-features.md`.
 - `GET /api/scenes/{id}/image` returns the file named in `images.parquet` for that sample. The path is confined to the scene directory. A path that leaves the scene is 400. A missing row or a missing file is 404. The page shows one panel per camera. Boxes start on and Lidar starts off. The strip keeps the last complete sample until the next images arrive. Image bytes are not in git.
 - Sequence export writes every recorded sample from the start time through the end time as one frame. `fps` is the file's playback rate. `coperceive export sequence` reads one camera. The page can also post bitmaps of the live 3D view, at most 60 frames. A camera export accepts 600. MP4 needs `ffmpeg` on `PATH` with `shell` false. GIF and PNG use Pillow. Files land in `exports/` under the server root. Rerun export is unchanged.
-- View settings live in `localStorage` under `coperceive-view`. The object is layers, color, point size, box style, hidden classes, and theme. It has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Defaults are every layer on, color by agent, 2 px points, wire boxes, and dark. Class color applies to boxes. Points and frustums stay colored by agent. The photo strip keeps its own Boxes and Lidar checkboxes.
+- View settings live in `localStorage` under `coperceive-view`. The object is layers, color, point size, box style, hidden classes, and theme. It has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Defaults are every layer on, color by agent, 2 px points, wire boxes, and light. Class color applies to boxes. Points and frustums stay colored by agent. The photo strip keeps its own Boxes and Lidar checkboxes.
 - `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
 - The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
 
@@ -56,7 +56,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 19. Desktop shell. Tauri is the plan and Electron is the fallback. The shell was not built.
 20. Lidar points are 2 CSS pixels. Say if 2 is still too large or too small.
 21. Town03-000's nine cameras were unpacked one archive at a time. A full extract of all nine archives for every scene was not done: the dry-run `required_free_bytes` for that was 324550526424. Say if more scenes should be unpacked.
-22. Dark is the default. Light is stored with the other view settings. Say if the light palette should change.
+22. Light is the default. Dark is stored with the other view settings. The viewport stays `#141414` in both. Say if the light palette should change.
 23. Look-through uses sensor −Y as up because the Town03-000 front camera's +Y points down. Say if another dataset uses the opposite axis.
 24. Sequence export keeps one frame per recorded sample. 10 fps is realtime on Griffin. Say if a chosen fps should resample the timeline instead.
 25. The live 3D view export stops at 60 frames because those bitmaps are uploaded. A camera export reads files on the server and stops at 600. Say if the view cap should be higher.
@@ -240,3 +240,27 @@ Python 3.12.3, on 2026-10-16. This slice did not rebuild the wheel and did not r
 ## Next
 
 The viewer checklist in `docs/design/viewer-features.md` is marked. Radar, segmentation, depth color, and exposure stay not done: the Griffin-25m dev tier does not carry them. The desktop shell is still out of scope.
+
+## UI redesign
+
+The web shell is light by default (`#F4F4ED` page, `#F7F7F1` panels, `#D8D8C7` borders, `#1C1C1C` text) with a dark theme on the same layout. The viewport stays `#141414` in both. View settings, including the theme, stay in `localStorage` under `coperceive-view`. The bearer token stays in `sessionStorage`. Playback still follows `(t[i+1] − t[i]) / speed` and does not depend on `frameIndex` inside the play effect.
+
+Bloom is `UnrealBloomPass` on layer 1 (lidar, wire boxes, trails). The map and the ground grid are not on that layer. A UAV label is a `CSS2DObject` with the id and altitude. Viewpoint easing is a 0.48 s time constant; reduced motion still snaps. Chase pressed again returns to orbit. The selected camera is a draggable picture-in-picture panel. Sequence, still, bird's-eye, camera overlay, and Rerun share one export dialog.
+
+## UI redesign check
+
+`coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps` on 2026-10-16. Town03-000, light theme, orbit, sample 1: the status pill read `Town03-000 · Orbit` and the clock read `1118.5 s · sample 1 / 149`. The drone label read `drone  28.3 m`. Dark theme sets the panel colour to `#1A1A1A`. The export dialog title is `Export`.
+
+With loop on, play at 1× moved the clock from sample 1 to sample 37 in about 4 s, then through bird's-eye, chase, drone, and camera while the clock kept the recorded pace. The clock wrapped from sample 132 to sample 6. Pressing Chase while chase was already selected returned the status to Orbit. That pass is `ui_redesign_walkthrough.mp4`, 26 s.
+
+`prefers-reduced-motion` was not flipped in the browser. Dragging the picture-in-picture panel was not exercised. A scene with no UAV pose was not opened.
+
+## Gates for the UI redesign
+
+Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did not rebuild the wheel and did not run gitleaks or `mkdocs build`. Python 3.10, 3.11, and 3.13 were not run on this machine. There is no web test suite.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 87 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 3.18 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-BNAGUMzr.js` and `index-C_P0_gm4.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.
