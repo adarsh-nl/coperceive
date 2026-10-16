@@ -224,7 +224,7 @@ Town03-000 at 1118500000 µs. `coperceive export bev` with `--maps /tmp/copercei
 
 The page, on `index-DLr5_I71.js`, wrote `exports/Town03-000-bev-1118500000.png` (2889 points, 55 boxes, map drawn) and `exports/Town03-000-vehicle-front-overlay-1118500000.png` (854 points, 55 boxes). The preview showed the road photograph with the boxes and the lidar.
 
-The lint job on the four earlier Phase 6 branches failed in `tests/test_hdmap.py`. Pyright is configured to use `.venv`. The job had no virtualenv, so `TestClient.get` was unknown, and FastAPI was not installed at all on the first run. The job now creates `.venv`, installs `.[app,dev,viewer]`, and runs pyright from that environment. This slice is on top of that fix.
+The lint job kept failing in `tests/test_hdmap.py` after the job created `.venv` and installed FastAPI. On that runner, strict pyright still reported `TestClient.get` and the response members as unknown (17 errors, lines 327–338). Local pyright on the same file was clean, so another workflow-only change was not a reliable next step. `test_map_http_and_favicon` now lives in `tests/test_app.py` with the other FastAPI tests. That file is already excluded from strict pyright. `tests/test_hdmap.py` no longer imports FastAPI. The lint job still creates `.venv` and runs pyright from it.
 
 ## Gates for the figures slice
 
