@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 from typing import cast
 
 from coperceive import __version__
@@ -147,6 +148,61 @@ def build_parser() -> argparse.ArgumentParser:
     rerun_export.add_argument("scene", help="One schema 1 scene directory.")
     rerun_export.add_argument("--out", required=True, help="Path of the .rrd file.")
     rerun_export.set_defaults(func=_export_rerun)
+    sequence_export = export_sub.add_parser(
+        "sequence",
+        help="Write one camera's images to MP4, GIF, or PNG. MP4 needs ffmpeg.",
+    )
+    sequence_export.add_argument("scene", help="One schema 1 scene directory.")
+    sequence_export.add_argument("--out", required=True, help="File, or a directory of PNG frames.")
+    sequence_export.add_argument("--agent", required=True, help="Agent that owns the camera.")
+    sequence_export.add_argument("--sensor", required=True, help="Camera sensor id.")
+    sequence_export.add_argument("--start-us", type=int, default=None, help="Inclusive start, µs.")
+    sequence_export.add_argument("--end-us", type=int, default=None, help="Inclusive end, µs.")
+    sequence_export.add_argument("--fps", type=int, default=10, help="File rate. Default 10.")
+    sequence_export.add_argument("--width", type=int, default=0, help="0 keeps the image width.")
+    sequence_export.add_argument("--height", type=int, default=0, help="0 keeps the image height.")
+    sequence_export.add_argument(
+        "--format",
+        choices=("mp4", "gif", "png"),
+        default=None,
+        help="mp4, gif, or png. Default follows the --out suffix, or png for a directory.",
+    )
+    sequence_export.set_defaults(func=_export_sequence)
+    bev_export = export_sub.add_parser(
+        "bev",
+        help="Write a bird's-eye PNG or SVG of one sample.",
+    )
+    bev_export.add_argument("scene", help="One schema 1 scene directory.")
+    bev_export.add_argument("--out", required=True, help="Path ending in .png or .svg.")
+    bev_export.add_argument("--time-us", type=int, default=None, help="Recorded sample, µs.")
+    bev_export.add_argument("--maps", default=None, help="Directory of sidecar maps.")
+    bev_export.add_argument(
+        "--format",
+        choices=("png", "svg"),
+        default=None,
+        help="png or svg. Default follows the --out suffix.",
+    )
+    bev_export.add_argument("--theme", choices=("dark", "light"), default="dark")
+    bev_export.add_argument("--color", choices=("agent", "class"), default="agent")
+    bev_export.set_defaults(func=_export_bev)
+    overlay_export = export_sub.add_parser(
+        "overlay",
+        help="Write a camera image with boxes and lidar projected on it.",
+    )
+    overlay_export.add_argument("scene", help="One schema 1 scene directory.")
+    overlay_export.add_argument("--out", required=True, help="Path ending in .png or .svg.")
+    overlay_export.add_argument("--agent", required=True, help="Agent that owns the camera.")
+    overlay_export.add_argument("--sensor", required=True, help="Camera sensor id.")
+    overlay_export.add_argument("--time-us", type=int, default=None, help="Recorded sample, µs.")
+    overlay_export.add_argument(
+        "--format",
+        choices=("png", "svg"),
+        default=None,
+        help="png or svg. Default follows the --out suffix.",
+    )
+    overlay_export.add_argument("--theme", choices=("dark", "light"), default="dark")
+    overlay_export.add_argument("--color", choices=("agent", "class"), default="agent")
+    overlay_export.set_defaults(func=_export_overlay)
     return parser
 
 
@@ -201,6 +257,123 @@ def _warning_count(aggregate: dict[object, object]) -> int:
         if type(value) is int:
             total += value
     return total
+
+
+def _export_sequence(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from coperceive.sequence_export import SequenceExportError, export_camera_sequence
+    from coperceive.store import read_scene
+
+    scene_dir = Path(args.scene)
+    if not (scene_dir / "manifest.json").is_file():
+        print(f"not a scene directory: {scene_dir}", file=sys.stderr)
+        raise SystemExit(2)
+    dest = Path(args.out)
+    fmt = args.format
+    if not isinstance(fmt, str):
+        suffix = dest.suffix.lower()
+        if suffix == ".mp4":
+            fmt = "mp4"
+        elif suffix == ".gif":
+            fmt = "gif"
+        elif suffix == ".png":
+            fmt = "png"
+        else:
+            fmt = "png"
+    try:
+        result = export_camera_sequence(
+            read_scene(scene_dir),
+            scene_dir,
+            dest,
+            agent_id=args.agent,
+            sensor_id=args.sensor,
+            start_us=args.start_us,
+            end_us=args.end_us,
+            fps=args.fps,
+            width=args.width,
+            height=args.height,
+            format=fmt,
+        )
+    except SequenceExportError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {result.dest}")
+    print(f"frames {result.frames} width {result.width} height {result.height} fps {result.fps}")
+
+
+def _scene_dir(args: argparse.Namespace) -> Path:
+    scene_dir = Path(args.scene)
+    if not (scene_dir / "manifest.json").is_file():
+        print(f"not a scene directory: {scene_dir}", file=sys.stderr)
+        raise SystemExit(2)
+    return scene_dir
+
+
+def _export_bev(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from coperceive.hdmap.store import find_map, load_map, scene_map_name
+    from coperceive.plot import PlotError, render_bev
+    from coperceive.store import read_scene
+
+    scene_dir = _scene_dir(args)
+    scene = read_scene(scene_dir)
+    hdmap = None
+    maps = args.maps
+    root = Path(maps) if isinstance(maps, str) else scene_dir.parent / "maps"
+    name = scene_map_name(scene)
+    if name is not None and root.is_dir():
+        directory = find_map(root, name)
+        if directory is not None:
+            hdmap = load_map(directory)
+    try:
+        result = render_bev(
+            scene,
+            Path(args.out),
+            time_us=args.time_us,
+            hdmap=hdmap,
+            format=args.format if isinstance(args.format, str) else None,
+            theme=args.theme,
+            color_by=args.color,
+        )
+    except PlotError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {result.dest}")
+    print(
+        f"time_us {result.time_us} width {result.width} height {result.height} "
+        f"points {result.points} boxes {result.boxes} map {int(result.map_drawn)}"
+    )
+
+
+def _export_overlay(args: argparse.Namespace) -> None:
+    from pathlib import Path
+
+    from coperceive.plot import PlotError, render_overlay
+    from coperceive.store import read_scene
+
+    scene_dir = _scene_dir(args)
+    try:
+        result = render_overlay(
+            read_scene(scene_dir),
+            scene_dir,
+            Path(args.out),
+            agent_id=args.agent,
+            sensor_id=args.sensor,
+            time_us=args.time_us,
+            format=args.format if isinstance(args.format, str) else None,
+            theme=args.theme,
+            color_by=args.color,
+        )
+    except PlotError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {result.dest}")
+    print(
+        f"time_us {result.time_us} width {result.width} height {result.height} "
+        f"points {result.points} boxes {result.boxes}"
+    )
 
 
 def _export_rerun(args: argparse.Namespace) -> None:

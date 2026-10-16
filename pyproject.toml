@@ -26,6 +26,8 @@ dependencies = [
     # interpreter can install: NumPy 2.3+ and PyArrow 22+ drop Python 3.10.
     "numpy>=1.26.4",
     "pyarrow>=18",
+    "pillow>=10.4",
+    "matplotlib>=3.8",
 ]
 
 [project.urls]

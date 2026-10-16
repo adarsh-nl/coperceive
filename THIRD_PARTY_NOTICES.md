@@ -38,7 +38,7 @@ Town OpenDRIVE files are read from the CARLA 0.9.15 package, `https://downloads.
 
 ## Python and JavaScript dependencies
 
-NumPy, PyArrow, FastAPI, Uvicorn, Pydantic, huggingface_hub, and the development tools are installed from PyPI under their own licences. They are not vendored.
+NumPy, PyArrow, Pillow, FastAPI, Uvicorn, Pydantic, huggingface_hub, and the development tools are installed from PyPI under their own licences. They are not vendored. MP4 export runs a system `ffmpeg` when it is on `PATH`. That binary is not vendored.
 
 The browser build bundles the direct `web/` dependencies. Their `package.json` licence fields at install time:
 

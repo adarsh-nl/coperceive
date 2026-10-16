@@ -35,6 +35,10 @@ Lidar points are 2 CSS pixels and do not shrink with distance. A 6 pixel size fi
 | GET | `/api/scenes/{scene_id}/map/lines` | world-frame polylines, or 404 |
 | GET | `/favicon.ico` | `favicon.svg` as `image/svg+xml` |
 | POST | `/api/scenes/{scene_id}/export/rerun` | `{path, samples}` |
+| POST | `/api/scenes/{scene_id}/export/sequence` | `{path, frames, width, height, fps, format}` for one camera |
+| POST | `/api/scenes/{scene_id}/export/view` | the same fields for uploaded canvas frames |
+| POST | `/api/scenes/{scene_id}/export/bev` | bird's-eye PNG or SVG: `{path, format, time_us, width, height, map_drawn, points, boxes}` |
+| POST | `/api/scenes/{scene_id}/export/overlay` | camera image with projected boxes and lidar, same fields |
 
 A scene id that is empty, contains a slash or backslash, or contains `..` is 400. A missing `manifest.json` is 404. Point bytes are empty when that sweep is absent. The server keeps one decoded scene in memory and replaces it when the path changes.
 
@@ -60,6 +64,42 @@ The frame document's frustum rows also carry `image_width_px`, `image_height_px`
 
 Boxes and lidar are drawn on the image in the browser. The pixel is `u = fx * x / z + cx`, `v = fy * y / z + cy`, with `z` the camera-frame depth. `z <= 0` is not drawn. The strip sends each file to a worker, which decodes a 640 px wide bitmap. When that bitmap's size differs from `image_width_px` and `image_height_px`, the projected pixels are scaled onto the bitmap. The route still returns the original file. The 3D view redraws when the sample, the map, or the camera changes. It does not render a new frame on every display refresh while the view is still. The Boxes checkbox starts on and the Lidar checkbox starts off. Hiding an agent hides that agent's boxes and points on the image as well. The next sample's images are requested after the current ones load, and a second request for the same file waits on the first. The strip keeps the last complete sample on screen until the next images arrive, so during play it can sit a sample or two behind the 3D view instead of flashing empty. A 404 is remembered until the scene changes, so a file that appears later needs a reload.
 
+## Sequence export
+
+Each recorded sample in the inclusive range is one frame. `fps` is the file's playback rate. It does not drop or repeat samples. On Griffin's 100 ms pose gap, 10 fps is the recorded pace. A non-positive gap is not resampled; the sample is still one frame.
+
+```bash
+coperceive export sequence /path/scene --out /path/front.mp4 \
+  --agent vehicle --sensor front --start-us 1118500000 --end-us 1119400000 \
+  --fps 10 --width 960 --height 540
+```
+
+`--format` is `mp4`, `gif`, or `png`. When it is omitted, `.mp4`, `.gif`, and `.png` select the format, and any other path is a directory of `frame_000001.png` onward. A `.png` file holds one frame. Width and height of 0 keep the image size. Both edges must be from 2 to 1920, and odd values are rounded down to an even size so MP4 can use `yuv420p`. The image path is confined to the scene directory. A missing file fails the export.
+
+MP4 runs `ffmpeg` from `PATH` with `shell` false. GIF and PNG use Pillow. A missing `ffmpeg` leaves GIF and PNG working.
+
+The page has the same camera export, plus **This view**, which steps the 3D canvas and posts those bitmaps. This view accepts at most 60 frames, because the bitmaps are uploaded. A camera export reads the files on the server and accepts 600. `POST /api/scenes/{id}/export/sequence` is the camera. `POST /api/scenes/{id}/export/view` is the canvas, with base64 PNG frames. Both write under `exports/` through `confine`, and both still require `X-Coperceive-Request: 1`. Rerun export is unchanged.
+
+## View settings
+
+The row under export toggles lidar points, boxes, frustums, the map, and agent axes. Color is by agent type or by box class. Point size is 1, 2, 3, or 4 CSS pixels. Boxes are a wireframe or a translucent solid with the wire kept. Categories in the current sample can be hidden. Theme is dark or light. The choices are stored in `localStorage` under `coperceive-view`. That object has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Reset view restores the defaults: every layer on, color by agent, 2 px points, wire boxes, dark, no hidden class.
+
+Class color is used for boxes only. Points and frustums stay colored by agent, because a sweep has no class. The photo strip keeps its own Boxes and Lidar checkboxes and does not read this row.
+
+## Bird's-eye and camera overlay
+
+```bash
+coperceive export bev /path/scene --out /path/bev.svg --maps /path/maps --time-us 1118500000
+coperceive export overlay /path/scene --out /path/front.png \
+  --agent vehicle --sensor front --time-us 1118500000
+```
+
+`--format` is `png` or `svg`. When it is omitted, the `--out` suffix selects it. The bird's-eye axes are east (+X) to the right and north (+Y) up. The window is the shown agents' trails, the boxes, and lidar within 120 m, with padding. It is not the whole town. Lane centres and road edges are drawn when `--maps` (or `<scene>/../maps`) resolves the scene's `map_name`. The camera figure is the stored image with the pinhole projection on top. `z <= 0` is omitted. A path that leaves the scene directory is refused.
+
+The page buttons are **Bird's-eye** and **Camera overlay**. They use the current sample and the view settings (layers, theme, colour, hidden classes, hidden agents). The file is written under `exports/` and downloaded. PNG and SVG are both offered. The 3D bird's-eye viewpoint is unchanged.
+
+`POST /api/scenes/{id}/export/bev` and `POST /api/scenes/{id}/export/overlay` return `{path, format, time_us, width, height, map_drawn, points, boxes}`. Both still require `X-Coperceive-Request: 1`.
+
 ## What this phase does not do
 
-It does not export an MP4, or store view settings. Those are the next slices in [viewer-features.md](design/viewer-features.md). It does not open a second viewer port or package a Tauri or Electron app. It does not load Griffin recordings or OpenDRIVE bytes into the repository.
+It does not draw radar, semantic or instance labels, or depth colour, and it does not show exposure or provenance, because the Griffin-25m dev tier does not carry those fields. It does not open a second viewer port or package a Tauri or Electron app. It does not load Griffin recordings or OpenDRIVE bytes into the repository.
