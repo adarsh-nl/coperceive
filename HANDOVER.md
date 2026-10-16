@@ -1,10 +1,10 @@
 # Handover
 
-The shared HD map is in the tree. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+Phase 6 slice 4 is in the tree: view settings for layers, color, point size, box style, categories, and dark or light. Sequence export, camera images, playback, and viewpoints are the slices under this one. The matplotlib bird's-eye plot is not started. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
 
 ## Goal
 
-An independent cooperative perception data platform Adarsh owns. Schema 1 scenes stay the contract in `docs/spec/format.md`. A CARLA town is a sidecar map, drawn under the lidar and used by `coperceive validate`. The distribution, import, and command name are `coperceive`.
+An independent cooperative perception data platform Adarsh owns. Schema 1 scenes stay the contract in `docs/spec/format.md`. A CARLA town is a sidecar map, drawn under the lidar and used by `coperceive validate`. The page plays those samples and can sit in orbit, bird's-eye, chase, drone, or a camera frustum. The distribution, import, and command name are `coperceive`.
 
 Clean-room rule: do not install, import, copy, paraphrase, or model naming or schema on kesai-labs/py123d or the adarsh-nl fork. Neither was opened. The only outside idea used is a shared HD-map layer per town, drawn with the sensors. The Griffin toolkit was not re-opened. Altitude bands and official scene counts are the figures already recorded in `docs/design/griffin-verification.md`.
 
@@ -13,7 +13,11 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - `coperceive maps fetch` extracts `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr` from CARLA 0.9.15 (`https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`). `maps ingest` writes `maps/<town>/manifest.json`, `polylines.parquet`, and `vertices.bin`. `maps align` stores `world_from_opendrive`. The `.xodr` bytes and the map directories are not in git.
 - The map format is `coperceive-hdmap` version 1. Vertices stay in the OpenDRIVE frame. The transform is a 3×3 matrix plus a translation, because a reflection is allowed and a quaternion cannot store one. Schema version stays `1`.
 - The viewer draws lane centres and road edges under the lidar. `GET /api/scenes/{id}/map/lines` returns the world-frame blob. A missing map is 404 and the status ends in `no map.`
-- The status line counts boxes and frustums for agents that are still shown. The first camera frame uses the vehicle pose and lidar points within 80 m horizontally. Later scrubs do not move the camera. `GET /favicon.ico` returns `favicon.svg`.
+- The status line counts boxes and frustums for agents that are still shown. Orbit frames the vehicle pose and lidar points within 80 m horizontally once per scene. Later scrubs do not move an orbit camera. `GET /favicon.ico` returns `favicon.svg`.
+- Playback uses the recorded gap between pose times at 0.25×, 0.5×, 1×, 2×, and 4×. The page caches 16 frame documents and 48 point sweeps and requests the next four samples. Viewpoints ease over 180 ms. Look-through uses sensor +Z as forward and sensor −Y as up. The checklist is `docs/design/viewer-features.md`.
+- `GET /api/scenes/{id}/image` returns the file named in `images.parquet` for that sample. The path is confined to the scene directory. A path that leaves the scene is 400. A missing row or a missing file is 404. The page shows one panel per camera. Boxes start on and Lidar starts off. The strip keeps the last complete sample until the next images arrive. Image bytes are not in git.
+- Sequence export writes every recorded sample from the start time through the end time as one frame. `fps` is the file's playback rate. `coperceive export sequence` reads one camera. The page can also post bitmaps of the live 3D view, at most 60 frames. A camera export accepts 600. MP4 needs `ffmpeg` on `PATH` with `shell` false. GIF and PNG use Pillow. Files land in `exports/` under the server root. Rerun export is unchanged.
+- View settings live in `localStorage` under `coperceive-view`. The object is layers, color, point size, box style, hidden classes, and theme. It has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Defaults are every layer on, color by agent, 2 px points, wire boxes, and dark. Class color applies to boxes. Points and frustums stay colored by agent. The photo strip keeps its own Boxes and Lidar checkboxes.
 - `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
 - The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
 
@@ -47,10 +51,15 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 14. The 0.24 m claim is not the measured median. Lane-centre median is 0.013712643507518118 m. Reference-line median is 1.7860191236754484 m. Say which quantity the 0.24 m figure was meant to be.
 15. Town07's lane-centre median is 0.1647962688524098 m, with `identity` still ahead of the next candidate by metres. Say if another CARLA package should be ingested.
 16. Sample step is 1.0 m. Say if the sidecar should be finer.
-17. Image paths are written for every camera calib even when the dev tier did not download images.
+17. Image paths are written for every camera even when the file is absent. On this machine only Town03-000 has the PNG bytes, under the scene directory, outside git. Other scenes return 404.
 18. Schema number. Still `1`. The map is `coperceive-hdmap` version 1, separate from the scene schema.
 19. Desktop shell. Tauri is the plan and Electron is the fallback. The shell was not built.
 20. Lidar points are 2 CSS pixels. Say if 2 is still too large or too small.
+21. Town03-000's nine cameras were unpacked one archive at a time. A full extract of all nine archives for every scene was not done: the dry-run `required_free_bytes` for that was 324550526424. Say if more scenes should be unpacked.
+22. Dark is the default. Light is stored with the other view settings. Say if the light palette should change.
+23. Look-through uses sensor −Y as up because the Town03-000 front camera's +Y points down. Say if another dataset uses the opposite axis.
+24. Sequence export keeps one frame per recorded sample. 10 fps is realtime on Griffin. Say if a chosen fps should resample the timeline instead.
+25. The live 3D view export stops at 60 frames because those bitmaps are uploaded. A camera export reads files on the server and stops at 600. Say if the view cap should be higher.
 
 ## Griffin-25m map check
 
@@ -75,6 +84,16 @@ Vehicle pose `z` from `poses.parquet`: 7,000 values, median −0.012331924401223
 
 The earlier Phase 4 totals (speed, altitude, shared tracks, 11 computed pairs, 22 instantaneous acceleration warnings) are still the same run's non-map rows. They are copied in `docs/validate.md`. The 40 m, 55 m, and random subsets were not validated.
 
+## Phase 6 playback check
+
+`coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps` on 2026-10-16. Town03-000, sample 1, vehicle shown: `Town03-000 at 1118500000 µs. 2929 points, 55 boxes, 9 frustums. map drawn.` Vehicle hidden at 1122500000 µs: `0 points, 33 boxes, 5 frustums. map drawn.`
+
+The pose gap is 100000 µs. In the playback recording the clock moved from 1118500000 µs to 1133300000 µs, which is 148 steps, while the video clock ran about 15 s. That is the 10 Hz recording at 1×.
+
+Vehicle front camera at 1118500000 µs: sensor +Y in world is (0, −0.005, −1), so it points down. The page uses sensor −Y as `camera.up`. The front-camera screenshot has the road in the lower half of the view. Drone bottom +Z in world is about (0, 0, −1), so that view looks down.
+
+Loop, 4×, and a scene with no UAV pose were not exercised on Griffin. The delay function is the same one 1× uses.
+
 ## Browser check
 
 `coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps`.
@@ -97,6 +116,54 @@ Python 3.12.3. Commands on 2026-10-15 after the map code was in the tree. Pyrigh
 - `gitleaks detect --source . --redact --no-banner --exit-code 1` (8.28.0) — no leaks, 19 commits scanned, through `134c816`. This paragraph’s commit is not in that scan.
 - Python 3.10, 3.11, and 3.13 were not run on this machine. Those versions are the GitHub Actions matrix.
 
+## Phase 6 camera check
+
+`coperceive serve --host 127.0.0.1 --port 8731 --root /tmp/griffin-scenes --maps /tmp/coperceive-maps` on 2026-10-16. Town03-000 at 1118500000 µs, all nine cameras present as files: `GET /api/scenes/Town03-000/image` returned 200 `image/png` for vehicle front (2,926,270 bytes). The PNG is 1920×1080. The stored pinhole is `fx = fy = 687.2924957435579`, `cx = 960`, `cy = 540`, `image_width_px = 1920`, `image_height_px = 1080`.
+
+The page showed a photo in every panel: vehicle back, front, left, right, and drone back, bottom, front, left, right. Vehicle front has the road in the lower half, and the wireframes sit on the cars. Drone bottom looks down at the road. Boxes is a photo overlay; the 3D boxes stay when it is unchecked. Lidar draws the sweep on the photo and starts off. Town03-001 shows `No image file for this sample.` The Desk tab still shows Jobs. A 390 px wide window can scroll to the strip.
+
+The extract log ended `done files=1341`. `HF_TOKEN` was unset. The download used an anonymous Hub request. The zips were deleted after the Town03-000 members were written. No image file is in git.
+
+The pose gap is 100000 µs, so 1× is 10 samples per second. `town03_camera_playback.mp4` shows sample 1 at file time 10.5 s and sample 94 at file time 13.0 s, then the clock sits on sample 97. That file-time rate is not the page timer. A wall-clock trace of the same page, with the speed control on 1×, stepped once per about 250 ms (about 4 samples per second). Each timeout was armed for 100 ms and fired late. Image loads did not schedule extra steps. The timeout lived in an effect that depended on the sample index, so it started only after React committed the new sample, and PNG decode plus the 3D draw sat on the main thread in front of that wait.
+
+The clock now follows elapsed time. A draw that runs long skips to the sample that elapsed time has reached, and the index does not run ahead of that clock. Photos are decoded on a worker to a 640 px bitmap. The 3D view redraws when the sample, the map, or the camera changes. On the Griffin display, a 20 fps grab of the transport went from sample 2 at 0.45 s to sample 39 at 4.15 s, 37 steps in 3.70 s, 10.0 per second. In `town03_1x_ten_steps.mp4` the status line read 1120400000 µs at file time 13.0 s and 1124300000 µs at file time 17.0 s, which is 39 steps in 4.0 s, while the hint said `Playing at 1×`. A headless Chrome run went from sample 1 to sample 40 in 4.084 s, 9.55 per second, and no sample was ahead of elapsed time.
+
+## Gates for the playback slice
+
+Python 3.12.3, on 2026-10-16, after the playback page was in the tree. The map-phase gate list above is the earlier run. That slice did not rebuild the wheel.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — passed
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 89 passed, 1 skipped, 6 warnings in 2.64 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-DoaPsDlj.js` and `index-DrTviwvX.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine.
+
+## Gates for the camera slice
+
+Python 3.12.3, on 2026-10-16, after the image route and the camera strip were in the tree. This slice did not rebuild the wheel and did not run gitleaks.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — passed
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=short -q` — 90 passed, 1 skipped, 6 warnings in 2.97 s. The new test is `test_image_route_serves_the_recorded_file`. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-KV2yBqvj.js` and `index-BLVkEqEi.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine.
+
+## Gates for the playback-rate fix
+
+Python 3.12.3, on 2026-10-16, after the elapsed-time clock. This fix did not rebuild the wheel and did not run gitleaks.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 83 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 90 passed, 1 skipped, 6 warnings in 4.47 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-D0TRq-iP.js` and `index-BWFAAdbI.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine.
+
 ## Commands
 
 ```bash
@@ -113,8 +180,63 @@ coperceive maps ingest --xodr /path/Town03.xodr --map-name Carla/Maps/Town03 --o
 coperceive maps align --maps /path/maps --scenes /path/scenes
 coperceive validate /path/scenes --maps /path/maps
 coperceive serve --host 127.0.0.1 --root /path/scenes --maps /path/maps
+coperceive export bev /path/scene --out /path/bev.svg --maps /path/maps --time-us 1118500000
+coperceive export overlay /path/scene --out /path/front.png --agent vehicle --sensor front --time-us 1118500000
 ```
+
+## Phase 6 sequence export check
+
+`coperceive export sequence /tmp/griffin-scenes/Town03-000 --out /tmp/coperceive-export/town03-front.mp4 --agent vehicle --sensor front --start-us 1118500000 --end-us 1119400000 --fps 10 --width 960 --height 540` wrote 10 frames, 960×540, `r_frame_rate=10/1`, duration 1.000000 s. The same range through 1119000000 µs wrote a 6-frame GIF at 480×270 with a 100 ms frame delay. One sample wrote `town03-front.png` at 640×360. The still is the vehicle front camera: a road, cars, and a truck.
+
+The page, after a hard reload of `index-CNMnmym3.js`, exported samples 1–3 of `front · vehicle` as `exports/Town03-000-vehicle-front-1118500000-1118700000.mp4`: 3 frames, 960×540, 10 fps, duration 0.300000 s. Save still of This view wrote `exports/Town03-000-view-1118500000-1118500000.png`, 960×540, the orbit lidar and boxes. The note in the export bar read those paths. Camera photos stayed on screen.
+
+## Gates for the sequence slice
+
+Python 3.12.3, on 2026-10-16, after sequence export was in the tree. This slice did not rebuild the wheel and did not run gitleaks.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 85 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 99 passed, 1 skipped, 6 warnings in 2.55 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The new tests are in `tests/test_sequence_export.py` and `test_sequence_export_route_writes_gif_and_view`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-CNMnmym3.js` and `index-DGphZgbx.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine. A machine without `ffmpeg` was not run. GIF and PNG do not call it. The MP4 unit test skips when `ffmpeg` is absent, and another test checks the missing-binary error.
+
+## Phase 6 view-settings check
+
+On Town03-000 at 1118500000 µs the stored row was points off, color by class, solid boxes, light theme, and `car` hidden. The status line read `0 points, 40 boxes, 9 frustums. map drawn.` A reload kept that row. Reset view restored `2929 points, 55 boxes, 9 frustums. map drawn.` with color by agent, wire boxes, and the dark theme. Hiding `car` is the difference between 55 and 40 boxes on that sample.
+
+## Gates for the view-settings slice
+
+Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did not rebuild the wheel and did not run gitleaks.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 85 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 99 passed, 1 skipped, 6 warnings in 2.88 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-CRVRY35I.js` and `index-Dsi7k7Px.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine.
+
+## Phase 6 figures
+
+Town03-000 at 1118500000 µs. `coperceive export bev` with `--maps /tmp/coperceive-maps` wrote a 960×960 PNG and SVG: 2889 points, 55 boxes, map drawn. The page status for that sample is 2929 points; the other 40 are farther than 120 m from the agents and are left out of the figure. `coperceive export overlay --agent vehicle --sensor front` wrote a 1920×1080 PNG, 854 points inside the image, 55 boxes. The saved PNG's mean luminance is 169.5, the same as `vehicle-side/camera/front/011185.png`. The overlay limits follow imshow pixel centres, from `-0.5` to `width - 0.5`. Limits of `(0, width)` left half a pixel of the figure colour, and matplotlib 3.10 (the wheel Python 3.10 installs) saved that as an empty bottom row.
+
+The page, on `index-DLr5_I71.js`, wrote `exports/Town03-000-bev-1118500000.png` (2889 points, 55 boxes, map drawn) and `exports/Town03-000-vehicle-front-overlay-1118500000.png` (854 points, 55 boxes). The preview showed the road photograph with the boxes and the lidar.
+
+The lint job kept failing in `tests/test_hdmap.py` after the job created `.venv` and installed FastAPI. On that runner, strict pyright still reported `TestClient.get` and the response members as unknown (17 errors, lines 327–338). Local pyright on the same file was clean, so another workflow-only change was not a reliable next step. `test_map_http_and_favicon` now lives in `tests/test_app.py` with the other FastAPI tests. That file is already excluded from strict pyright. `tests/test_hdmap.py` no longer imports FastAPI. The lint job still creates `.venv` and runs pyright from it.
+
+## Gates for the figures slice
+
+Python 3.12.3, on 2026-10-16. This slice did not rebuild the wheel and did not run gitleaks. Python 3.10, 3.11, and 3.13 were not run on this machine.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 87 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 3.18 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`. Re-run `tests/test_plot.py` after the overlay extent fix: 4 passed.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-DLr5_I71.js` and `index-DUb5mwdX.css`
 
 ## Next
 
-Stop. The desktop shell is still out of scope.
+The viewer checklist in `docs/design/viewer-features.md` is marked. Radar, segmentation, depth color, and exposure stay not done: the Griffin-25m dev tier does not carry them. The desktop shell is still out of scope.

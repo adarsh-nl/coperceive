@@ -107,6 +107,57 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/scenes/{scene_id}/map": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scene Map */
+        get: operations["scene_map_api_scenes__scene_id__map_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenes/{scene_id}/map/lines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scene Map Lines */
+        get: operations["scene_map_lines_api_scenes__scene_id__map_lines_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenes/{scene_id}/image": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Scene Image */
+        get: operations["scene_image_api_scenes__scene_id__image_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/scenes/{scene_id}/points": {
         parameters: {
             query?: never;
@@ -135,6 +186,74 @@ export interface paths {
         put?: never;
         /** Scene Rerun */
         post: operations["scene_rerun_api_scenes__scene_id__export_rerun_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenes/{scene_id}/export/sequence": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scene Sequence */
+        post: operations["scene_sequence_api_scenes__scene_id__export_sequence_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenes/{scene_id}/export/view": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scene View */
+        post: operations["scene_view_api_scenes__scene_id__export_view_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenes/{scene_id}/export/bev": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scene Bev */
+        post: operations["scene_bev_api_scenes__scene_id__export_bev_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/scenes/{scene_id}/export/overlay": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Scene Overlay */
+        post: operations["scene_overlay_api_scenes__scene_id__export_overlay_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -177,6 +296,121 @@ export interface components {
             /** Args */
             args?: string[];
         };
+        /** OverlayRequest */
+        OverlayRequest: {
+            /** Agent Id */
+            agent_id: string;
+            /** Sensor Id */
+            sensor_id: string;
+            /** Time Us */
+            time_us?: number | null;
+            /**
+             * Format
+             * @default png
+             */
+            format: string;
+            /**
+             * Theme
+             * @default dark
+             */
+            theme: string;
+            /**
+             * Color By
+             * @default agent
+             */
+            color_by: string;
+            /**
+             * Points
+             * @default true
+             */
+            points: boolean;
+            /**
+             * Boxes
+             * @default true
+             */
+            boxes: boolean;
+            /**
+             * Box Style
+             * @default wire
+             */
+            box_style: string;
+            /** Hidden Classes */
+            hidden_classes?: string[];
+            /** Agents */
+            agents?: string[] | null;
+        };
+        /** PlotRequest */
+        PlotRequest: {
+            /** Time Us */
+            time_us?: number | null;
+            /**
+             * Format
+             * @default png
+             */
+            format: string;
+            /**
+             * Theme
+             * @default dark
+             */
+            theme: string;
+            /**
+             * Color By
+             * @default agent
+             */
+            color_by: string;
+            /**
+             * Points
+             * @default true
+             */
+            points: boolean;
+            /**
+             * Boxes
+             * @default true
+             */
+            boxes: boolean;
+            /**
+             * Map
+             * @default true
+             */
+            map: boolean;
+            /**
+             * Box Style
+             * @default wire
+             */
+            box_style: string;
+            /** Hidden Classes */
+            hidden_classes?: string[];
+            /** Agents */
+            agents?: string[] | null;
+        };
+        /** SequenceRequest */
+        SequenceRequest: {
+            /** Agent Id */
+            agent_id: string;
+            /** Sensor Id */
+            sensor_id: string;
+            /** Start Us */
+            start_us?: number | null;
+            /** End Us */
+            end_us?: number | null;
+            /**
+             * Fps
+             * @default 10
+             */
+            fps: number;
+            /**
+             * Width
+             * @default 0
+             */
+            width: number;
+            /**
+             * Height
+             * @default 0
+             */
+            height: number;
+            /** Format */
+            format: string;
+        };
         /** ValidationError */
         ValidationError: {
             /** Location */
@@ -189,6 +423,19 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** ViewSequenceRequest */
+        ViewSequenceRequest: {
+            /** Format */
+            format: string;
+            /** Fps */
+            fps: number;
+            /** Start Us */
+            start_us: number;
+            /** End Us */
+            end_us: number;
+            /** Frames B64 */
+            frames_b64?: string[];
         };
     };
     responses: never;
@@ -388,6 +635,105 @@ export interface operations {
             };
         };
     };
+    scene_map_api_scenes__scene_id__map_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_map_lines_api_scenes__scene_id__map_lines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_image_api_scenes__scene_id__image_get: {
+        parameters: {
+            query: {
+                time_us: number;
+                agent_id: string;
+                sensor_id: string;
+            };
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     scene_points_api_scenes__scene_id__points_get: {
         parameters: {
             query: {
@@ -433,6 +779,154 @@ export interface operations {
             cookie?: never;
         };
         requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_sequence_api_scenes__scene_id__export_sequence_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SequenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_view_api_scenes__scene_id__export_view_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ViewSequenceRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_bev_api_scenes__scene_id__export_bev_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["PlotRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
+                    };
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    scene_overlay_api_scenes__scene_id__export_overlay_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                scene_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["OverlayRequest"];
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {

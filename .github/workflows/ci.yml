@@ -12,11 +12,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - run: pip install -e ".[dev,viewer]"
-      - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: ruff check .
-      - run: ruff format --check .
-      - run: pyright
+      # Pyright is configured with venv = ".venv". A toolcache install is not a
+      # virtualenv, so strict mode treated TestClient.get as unknown. The app
+      # extra is required because tests/test_hdmap.py imports FastAPI.
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install -e ".[app,dev,viewer]"
+      - run: .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - run: .venv/bin/ruff check .
+      - run: .venv/bin/ruff format --check .
+      - run: .venv/bin/pyright
 
   test:
     runs-on: ubuntu-latest

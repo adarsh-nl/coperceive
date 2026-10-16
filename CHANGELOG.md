@@ -2,6 +2,16 @@
 
 ## 0.0.0
 
+Bird's-eye and camera-overlay figures. `coperceive export bev` and `coperceive export overlay`, and the same two buttons on the page, write a PNG or SVG for one recorded sample. The bird's-eye figure draws the map, boxes, lidar, and agent trails with east to the right. The overlay draws the stored camera image and the pinhole projection. The CI lint job installs the `app` extra so pyright can resolve FastAPI in `tests/test_hdmap.py`.
+
+View settings. The page can hide points, boxes, frustums, the map, and axes, color boxes by agent or class, set point size and box style, filter categories, and switch dark or light. The choices are in `localStorage` under `coperceive-view`. The bearer token stays in `sessionStorage`.
+
+Sequence export. `coperceive export sequence` and the page write one camera's images, or the live 3D view, to MP4, GIF, or PNG at a chosen size and fps. Each recorded sample is one frame. MP4 uses `ffmpeg` on `PATH`. Rerun export is unchanged.
+
+Camera images. The page shows one panel per camera at the current sample. `GET /api/scenes/{id}/image` returns the file named in `images.parquet`, confined to that scene directory. Boxes and lidar can be projected onto the image. Image bytes stay outside the repository. Playback follows elapsed pose time. A slow draw skips to the sample the clock has reached and does not run ahead of it.
+
+Playback and viewpoints. The local page plays recorded pose times at 0.25×–4×, loops, steps, and scrubs, and prefetches the next samples. Viewpoints are orbit, bird's-eye, chase, drone, and look-through a camera frustum. The page uses a dark theme. The feature checklist is `docs/design/viewer-features.md`. Images, sequence export, and the customisation panel are not in this slice. Rerun export is unchanged.
+
 Shared HD map. `coperceive maps fetch`, `maps ingest`, and `maps align` turn a CARLA OpenDRIVE file into a sidecar directory (`manifest.json`, `polylines.parquet`, `vertices.bin`) and store `world_from_opendrive`. Schema 1 is unchanged. The viewer draws lane centres and road edges under the lidar. `coperceive validate` reports vehicle-pose distance to the lane centre. The centreline block is not a hard failure. The status line ignores hidden agents, the first camera frame uses the near vehicle cluster, and `/favicon.ico` returns the SVG icon. The design is `docs/adr/0008-hd-map.md`.
 
 Phase 5 viewer. The local page draws lidar, boxes, and camera frustums with three.js, one scrubber, and a per-agent hide control. Lidar points are 2 CSS pixels. `coperceive export rerun` and `POST /api/scenes/{id}/export/rerun` write a Rerun `.rrd` of the same discrete samples. The desktop packaging plan is `docs/adr/0007-desktop.md`. The shell is not built.
