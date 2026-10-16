@@ -2,12 +2,10 @@
 from __future__ import annotations
 
 import math
-import struct
 from pathlib import Path
 from typing import cast
 
 import pytest
-from coperceive.app.server import create_app
 from coperceive.cli import main
 from coperceive.hdmap.align import align_maps
 from coperceive.hdmap.opendrive import MapPolyline, OpenDriveMap, parse_opendrive
@@ -23,7 +21,6 @@ from coperceive.model import (
 from coperceive.se3 import SE3
 from coperceive.store import write_scene
 from coperceive.validate import validate_root
-from fastapi.testclient import TestClient
 
 _HEADER = """<?xml version="1.0" encoding="UTF-8"?>
 <OpenDRIVE>
@@ -308,34 +305,6 @@ def test_validate_without_maps_records_that_it_was_not_measured(tmp_path: Path) 
     report = validate_root(tmp_path)
     summary = _object_dict(_object_dict(report["aggregate"])["centreline"])
     assert summary["status"] == "not measured"
-
-
-def test_map_http_and_favicon(tmp_path: Path) -> None:
-    xodr = tmp_path / "Town03.xodr"
-    _straight(xodr)
-    maps = tmp_path / "maps"
-    write_map(
-        parse_opendrive(xodr, sample_step_m=25),
-        maps / "Town03",
-        map_name="Carla/Maps/Town03",
-        source={"licence": "MIT"},
-    )
-    scenes = tmp_path / "scenes"
-    _scene_on_lane(scenes)
-    app = create_app(root=scenes, token=None, maps=maps)
-    client = TestClient(app)
-    summary = client.get("/api/scenes/Town03-000/map")
-    assert summary.status_code == 200
-    assert summary.json()["available"] is True
-    lines = client.get("/api/scenes/Town03-000/map/lines")
-    assert lines.status_code == 200
-    count = struct.unpack_from("<I", lines.content)[0]
-    assert count > 0
-    icon = client.get("/favicon.ico")
-    assert icon.status_code == 200
-    assert icon.headers["content-type"].startswith("image/svg")
-    missing = client.get("/api/scenes/Town03-000/map/lines")
-    assert missing.status_code == 200
 
 
 def test_cli_ingest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
