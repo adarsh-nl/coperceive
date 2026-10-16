@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "The page talks to the loopback server over HTTP. No shell commands.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

@@ -1,8 +1,14 @@
 # coperceive
 
-A cooperative, multi-agent perception data library. Source: <https://github.com/adarsh-nl/coperceive>. The name is recorded in `docs/design/naming.md`.
+Version 0.1.0. A cooperative, multi-agent perception data library. Source: <https://github.com/adarsh-nl/coperceive>. The name is recorded in `docs/design/naming.md`.
 
-Phase 1 is the scene model and the hybrid on-disk format. Phase 3 adds `Scene.at`, camera projection, cross-agent box queries, and `CooperativeDataset` in the `torch` extra. Phase 4 adds `coperceive validate`, which writes a JSON report and a Markdown report for a directory of schema 1 scenes. Phase 5 draws those scenes in the local page with three.js and can write a Rerun `.rrd`. A shared HD map per CARLA town is a sidecar next to those scenes. The contract a third party can implement is `docs/spec/format.md`. A Griffin reader and a local page came with the Phase 0 scaffold. This tree does not train models and does not build a desktop shell.
+The wheel ships the local page. `coperceive serve` binds `127.0.0.1` and requires `--root`. The desktop app in `desktop/` is a Tauri window around that same server. This tree does not train models.
+
+![Landing page](docs/images/landing.png)
+
+![Viewer](docs/images/viewer.png)
+
+Phase 1 is the scene model and the hybrid on-disk format. Phase 3 adds `Scene.at`, camera projection, cross-agent box queries, and `CooperativeDataset` in the `torch` extra. Phase 4 adds `coperceive validate`, which writes a JSON report and a Markdown report for a directory of schema 1 scenes. Phase 5 draws those scenes in the local page with three.js and can write a Rerun `.rrd`. A shared HD map per CARLA town is a sidecar next to those scenes. The contract a third party can implement is `docs/spec/format.md`.
 
 ## Install
 
@@ -10,13 +16,27 @@ Python 3.10–3.13.
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e ".[app,griffin]"
+.venv/bin/pip install dist/coperceive-0.1.0-py3-none-any.whl
+coperceive --version
+coperceive serve --root /path/to/a/workdir
+```
+
+`coperceive serve` without `--root` exits. FastAPI, Uvicorn, and Pydantic are dependencies of the wheel, so the page starts from that install. From a checkout:
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e ".[griffin]"
 coperceive --help
 ```
 
-Extras: `torch` (`coperceive.dataset.CooperativeDataset`; not imported by `coperceive`), `viewer` (rerun-sdk 0.22.1 and viser 0.2.23), `app`, `griffin`, `docs`, `dev`.
+Extras: `torch` (`coperceive.dataset.CooperativeDataset`; not imported by `coperceive`), `viewer` (rerun-sdk 0.22.1 and viser 0.2.23), `app` (the same server packages, kept so older install lines still work), `griffin`, `docs`, `dev`.
 
-The licence is Apache-2.0. The repository stays private. See `docs/adr/0006-licence.md`.
+The licence is Apache-2.0 (`LICENSE`). Geist and Geist Mono, the faces on the page, are SIL Open Font License 1.1. Copyright 2024 The Geist Project Authors (<https://github.com/vercel/geist-font>). The text ships in the wheel:
+
+- `coperceive/LICENSES/Geist-OFL.txt`
+- `coperceive/LICENSES/GeistMono-OFL.txt`
+
+Other notices are in `THIRD_PARTY_NOTICES.md`. The repository stays private. See `docs/adr/0006-licence.md`.
 
 ## Local page
 
@@ -33,7 +53,29 @@ coperceive export rerun /path/scene --out /path/scene.rrd
 coperceive export sequence /path/scene --out /path/front.mp4 --agent vehicle --sensor front
 ```
 
-The page talks to the server only over HTTP. `coperceive.viewdata` does not import FastAPI or Rerun. Lane centres and road edges are drawn under the lidar when `--maps` resolves the scene's `map_name`. A later desktop package is described in `docs/adr/0007-desktop.md` and is not built.
+The page talks to the server only over HTTP. `coperceive.viewdata` does not import FastAPI or Rerun. Lane centres and road edges are drawn under the lidar when `--maps` resolves the scene's `map_name`.
+
+## Desktop
+
+The shell is `desktop/`. It is the plan in `docs/adr/0007-desktop.md`. A Tauri window starts the PyInstaller sidecar `coperceive-server` as:
+
+```text
+coperceive-server serve --host 127.0.0.1 --port <chosen> --token <generated> --root <app data>
+```
+
+The token is written to `sessionStorage` under `coperceive-token` before the first request. It is not placed in the URL. The window loads `http://127.0.0.1:<port>/`. Closing the window stops the server. The same `coperceive` command from a terminal is unchanged.
+
+![Desktop window](docs/images/desktop.png)
+
+Build the Linux AppImage and deb from a checkout that already has the page in `coperceive/app/static`:
+
+```bash
+pip install . pyinstaller
+python desktop/build_sidecar.py
+cd desktop && npm install && npx tauri build --bundles appimage,deb
+```
+
+The pull-request workflow builds those two Linux bundles. `.github/workflows/release.yml` builds the wheel, the sdist, the Linux bundles, and the macOS and Windows bundles when a `v*` tag is pushed. That workflow uploads artifacts only. It does not publish to PyPI and it does not create a GitHub Release.
 
 ## Griffin
 

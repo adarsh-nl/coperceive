@@ -1,0 +1,75 @@
+name: release
+
+# Builds a wheel, an sdist, and desktop bundles when a v* tag is pushed.
+# It does not publish to PyPI, create a GitHub Release, or upload anywhere
+# except this workflow's artifacts. Publishing stays a separate decision.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build mkdocs-material
+      - run: mkdocs build
+      - run: python -m build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coperceive-dist
+          path: dist/*
+          if-no-files-found: error
+
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bundles: appimage,deb
+            artifact: coperceive-linux
+          - os: macos-latest
+            bundles: dmg,app
+            artifact: coperceive-macos
+          - os: windows-latest
+            bundles: nsis
+            artifact: coperceive-windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: desktop/src-tauri -> target
+      - name: Linux webview libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev patchelf libssl-dev
+      - run: pip install . pyinstaller
+      - run: python desktop/build_sidecar.py
+      - run: npm install
+        working-directory: desktop
+      - run: npx tauri build --bundles ${{ matrix.bundles }}
+        working-directory: desktop
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: desktop/src-tauri/target/release/bundle/
+          if-no-files-found: error

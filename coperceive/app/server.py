@@ -15,6 +15,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from coperceive import __version__
 from coperceive.app.jobs import CSRF_HEADER, confine, list_jobs, open_db, run_job
 from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
 from coperceive.model import Scene
@@ -114,7 +115,7 @@ def create_app(
     root_path_obj.mkdir(parents=True, exist_ok=True)
     app = FastAPI(
         title="coperceive",
-        version="0.0.0",
+        version=__version__,
         root_path=root_path,
         description="Local cooperative-perception data app.",
     )
