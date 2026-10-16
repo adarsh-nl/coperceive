@@ -50,5 +50,19 @@ The browser build bundles the direct `web/` dependencies. Their `package.json` l
 | openapi-fetch | MIT |
 | three | MIT |
 | @fontsource/ibm-plex-sans, @fontsource/ibm-plex-mono | OFL-1.1 |
+| @fontsource-variable/geist, @fontsource-variable/geist-mono | OFL-1.1 |
 
 Transitive licences ship inside the built assets. `web/node_modules` is not committed.
+
+## Geist and Geist Mono
+
+The page imports Geist and Geist Mono. Both are SIL Open Font License 1.1.
+
+Copyright 2024 The Geist Project Authors (<https://github.com/vercel/geist-font>)
+
+The licence text is part of the package, next to the woff2 files in the built page:
+
+- `coperceive/LICENSES/Geist-OFL.txt`
+- `coperceive/LICENSES/GeistMono-OFL.txt`
+
+IBM Plex Sans and IBM Plex Mono remain dependencies of `web/` and are not the faces the page imports.

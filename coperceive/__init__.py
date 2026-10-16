@@ -48,7 +48,7 @@ from coperceive.transform import (
     world_frame,
 )
 
-__version__ = "0.0.0"
+__version__ = "0.1.0"
 
 __all__ = [
     "SCHEMA_VERSION",

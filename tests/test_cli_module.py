@@ -5,4 +5,4 @@ import coperceive
 
 
 def test_version() -> None:
-    assert coperceive.__version__ == "0.0.0"
+    assert coperceive.__version__ == "0.1.0"

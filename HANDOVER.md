@@ -1,6 +1,6 @@
 # Handover
 
-The web viewer is a light control shell around a dark viewport, with a dark theme on the same layout. Phase 6 (playback, cameras, sequence export, view settings, and the bird's-eye and overlay figures) is on main. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+The web viewer is a light control shell around a dark viewport, with a dark theme on the same layout. Phase 6 (playback, cameras, sequence export, view settings, and the bird's-eye and overlay figures) is on main. Version 0.1.0 adds the Tauri desktop shell in `desktop/`. Do not start a second dataset or training code.
 
 ## Goal
 
@@ -19,7 +19,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - Sequence export writes every recorded sample from the start time through the end time as one frame. `fps` is the file's playback rate. `coperceive export sequence` reads one camera. The page can also post bitmaps of the live 3D view, at most 60 frames. A camera export accepts 600. MP4 needs `ffmpeg` on `PATH` with `shell` false. GIF and PNG use Pillow. Files land in `exports/` under the server root. Rerun export is unchanged.
 - View settings live in `localStorage` under `coperceive-view`. The object is layers, color, point size, box style, hidden classes, and theme. It has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Defaults are every layer on, color by agent, 2 px points, wire boxes, and light. Class color applies to boxes. Points and frustums stay colored by agent. The photo strip keeps its own Boxes and Lidar checkboxes.
 - `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
-- The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
+- The desktop shell is `desktop/`, recorded in `docs/adr/0007-desktop.md`. Tauri starts a PyInstaller sidecar on `127.0.0.1` with a generated bearer token in `sessionStorage`. The tag workflow builds bundles and does not publish them.
 
 ## Decisions already in the code
 

@@ -1,6 +1,6 @@
 # ADR 0007 — Desktop packaging
 
-Status: accepted as a plan. The desktop shell is not built in Phase 5.
+Status: implemented in 0.1.0. The shell is `desktop/`. Phase 5 only recorded the plan.
 
 ## Context
 
@@ -28,19 +28,19 @@ The split already in the tree:
 
 ## Decision
 
-Keep the split above. When a shell is built, prefer Tauri, and use Electron if the Python sidecar or the runtime bundle is harder under Tauri. Do not build either shell in this phase. Do not add `src-tauri/`, an Electron main process, or a PyInstaller spec.
+Keep the split above. The shell is Tauri. The Python server is a PyInstaller one-file sidecar, `coperceive-server`, spawned by the Rust process. It is not a shell plugin. Electron was the fallback and was not needed.
 
-A later shell would:
+The 0.1.0 shell:
 
-1. Ship the Vite build from `coperceive/app/static`, or load it from the installed wheel.
-2. Start `coperceive serve --host 127.0.0.1 --port <chosen> --token <generated> --root <user data directory>`.
-3. Open the window at that loopback origin. The page already stores the bearer token in `sessionStorage`. The shell can set that value before the first API call. Do not put the token in a URL query string.
-4. Stop the server when the window closes.
+1. Ships the Vite build inside the sidecar, from `coperceive/app/static` collected at freeze time.
+2. Starts `coperceive-server serve --host 127.0.0.1 --port <chosen> --token <generated> --root <app data directory>`.
+3. Opens the window at that loopback origin. An initialization script sets `sessionStorage['coperceive-token']` before the first API call. The token is not a URL query string.
+4. Stops the server when the window closes.
 
-The same `coperceive` command remains usable from a terminal.
+The same `coperceive` command remains usable from a terminal. A non-loopback bind still requires `--token`.
 
 ## Consequences
 
-- CI does not package a desktop app.
-- The routes in `docs/viewer.md` are the contract a shell would call.
-- Tauri is the planned shell. Electron is the fallback. Adarsh can reverse that choice before any shell work starts.
+- The pull-request workflow builds a Linux AppImage and a deb. `.github/workflows/release.yml` builds those plus macOS and Windows bundles when a `v*` tag is pushed, and uploads artifacts only. It does not publish to PyPI and it does not create a GitHub Release.
+- The routes in `docs/viewer.md` are the contract the shell calls.
+- Tauri is the shell. The sidecar binary is not committed.

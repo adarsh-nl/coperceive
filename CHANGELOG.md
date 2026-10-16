@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0
+
+First packaged release. The wheel and the sdist include the built page in `coperceive/app/static`. FastAPI, Uvicorn, and Pydantic are dependencies, so `pip install` is enough to run `coperceive serve`. `--root` is still required. The default bind stays `127.0.0.1`.
+
+The desktop shell is a Tauri window. It starts a PyInstaller sidecar on `127.0.0.1` with a generated bearer token, stores that token in `sessionStorage` under `coperceive-token`, and stops the server when the window closes. The token is not a URL query. CI builds a Linux AppImage and a deb on a pull request. The tag workflow also builds macOS and Windows bundles and uploads artifacts. It does not publish to PyPI and it does not create a GitHub Release.
+
+Geist and Geist Mono (OFL-1.1, copyright 2024 The Geist Project Authors) ship in `coperceive/LICENSES/Geist-OFL.txt` and `coperceive/LICENSES/GeistMono-OFL.txt`.
+
 ## 0.0.0
 
 Web UI. The page opens on a landing view, then the viewer. The top bar is one 32 px row: brand and scene, Viewer/Desk, then Export, theme, and settings. The right column adds a scene summary, a box inspector, and an 80 m radar. Camera frustum images start off. Each camera can be turned on from the layer list, its picture-in-picture chip, or a click on the frustum, and only those frames are decoded. The viewer is a light control shell around a dark rounded viewport, with a dark theme as well. Geist and Geist Mono are the faces. Layers, agents, and classes sit on the left. Telemetry sits on the right and is computed from pose deltas, in m/s and km/h. The timeline has a red playhead, filled sparklines, and range markers. Lidar, trails, and box wires use a selective bloom. A UAV has a ground leader and a glass label that stays inside the view. The selected camera is a draggable, resizable picture-in-picture panel. Red is reserved for the playhead and Play. Sequence, still, bird's-eye, camera overlay, and Rerun export share one dialog. Playback timing is unchanged. The bearer token stays in `sessionStorage`.
