@@ -78,6 +78,12 @@ MP4 runs `ffmpeg` from `PATH` with `shell` false. GIF and PNG use Pillow. A miss
 
 The page has the same camera export, plus **This view**, which steps the 3D canvas and posts those bitmaps. This view accepts at most 60 frames, because the bitmaps are uploaded. A camera export reads the files on the server and accepts 600. `POST /api/scenes/{id}/export/sequence` is the camera. `POST /api/scenes/{id}/export/view` is the canvas, with base64 PNG frames. Both write under `exports/` through `confine`, and both still require `X-Coperceive-Request: 1`. Rerun export is unchanged.
 
+## View settings
+
+The row under export toggles lidar points, boxes, frustums, the map, and agent axes. Color is by agent type or by box class. Point size is 1, 2, 3, or 4 CSS pixels. Boxes are a wireframe or a translucent solid with the wire kept. Categories in the current sample can be hidden. Theme is dark or light. The choices are stored in `localStorage` under `coperceive-view`. That object has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Reset view restores the defaults: every layer on, color by agent, 2 px points, wire boxes, dark, no hidden class.
+
+Class color is used for boxes only. Points and frustums stay colored by agent, because a sweep has no class. The photo strip keeps its own Boxes and Lidar checkboxes and does not read this row.
+
 ## What this phase does not do
 
-It does not store view settings. That is the next slice in [viewer-features.md](design/viewer-features.md). It does not draw the matplotlib bird's-eye plot. It does not open a second viewer port or package a Tauri or Electron app. It does not load Griffin recordings or OpenDRIVE bytes into the repository.
+It does not draw the matplotlib bird's-eye plot. It does not open a second viewer port or package a Tauri or Electron app. It does not load Griffin recordings or OpenDRIVE bytes into the repository.

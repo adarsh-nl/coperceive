@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
+import {
+  classColor,
+  defaultAppearance,
+  loadAppearance,
+  saveAppearance,
+  type Appearance,
+} from "./appearance";
 import CameraStrip from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
 import { formatClock, indexAfter, neighborSpeed, SPEEDS, stepIndex, type Speed } from "./playback";
@@ -34,8 +41,10 @@ type Stage = {
   agents: THREE.Group;
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
+  solids: THREE.Group;
   requestRender: () => void;
   captureView: (width: number, height: number) => string;
+  setTheme: (theme: Appearance["theme"]) => void;
 };
 
 type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
@@ -238,11 +247,26 @@ function goalFor(
   return frustum && isPose(frustum.pose) ? cameraGoal(frustum.pose, frustum.fov_y_rad) : null;
 }
 
+function boxShown(box: FrameDocument["boxes"][number], hidden: Record<string, boolean>, appearance: Appearance) {
+  if (!appearance.boxes || hidden[box.agent_id]) {
+    return false;
+  }
+  return typeof box.category !== "string" || !appearance.hiddenClasses.includes(box.category);
+}
+
+function boxColor(box: FrameDocument["boxes"][number], types: Map<string, string>, appearance: Appearance) {
+  if (appearance.colorBy === "class" && typeof box.category === "string") {
+    return classColor(box.category);
+  }
+  return colorFor(types.get(box.agent_id) ?? "");
+}
+
 async function drawFrame(
   stage: Stage,
   frame: FrameDocument,
   types: Map<string, string>,
   hidden: Record<string, boolean>,
+  appearance: Appearance,
   token: string,
   cache: FrameCache,
   stale: () => boolean,
@@ -250,7 +274,7 @@ async function drawFrame(
   let pointCount = 0;
   const sweeps: { xyz: Float32Array; color: THREE.Color }[] = [];
   for (const sensor of frame.point_sensors) {
-    if (hidden[sensor.agent_id] || sensor.count === 0) {
+    if (!appearance.points || hidden[sensor.agent_id] || sensor.count === 0) {
       continue;
     }
     const buffer = await cache.loadPoints(
@@ -286,7 +310,7 @@ async function drawFrame(
 
   let boxFloats = 0;
   for (const box of frame.boxes) {
-    if (hidden[box.agent_id] || !Array.isArray(box.lines)) {
+    if (!boxShown(box, hidden, appearance) || !Array.isArray(box.lines)) {
       continue;
     }
     boxFloats += box.lines.length;
@@ -295,11 +319,11 @@ async function drawFrame(
   const boxColors = new Float32Array(boxFloats);
   let boxCursor = 0;
   for (const box of frame.boxes) {
-    if (hidden[box.agent_id] || !Array.isArray(box.lines)) {
+    if (!boxShown(box, hidden, appearance) || !Array.isArray(box.lines)) {
       continue;
     }
     boxPositions.set(box.lines, boxCursor);
-    const color = new THREE.Color(colorFor(types.get(box.agent_id) ?? ""));
+    const color = new THREE.Color(boxColor(box, types, appearance));
     for (let index = 0; index < box.lines.length; index += 3) {
       boxColors[boxCursor + index] = color.r;
       boxColors[boxCursor + index + 1] = color.g;
@@ -309,9 +333,33 @@ async function drawFrame(
   }
   replaceColored(stage.boxes.geometry, boxPositions, boxColors);
 
+  clearGroup(stage.solids);
+  if (appearance.boxStyle === "solid") {
+    for (const box of frame.boxes) {
+      if (!boxShown(box, hidden, appearance) || !box.pose || !isPose(box.pose) || !Array.isArray(box.size_lwh)) {
+        continue;
+      }
+      const [length, width, height] = box.size_lwh;
+      if (typeof length !== "number" || typeof width !== "number" || typeof height !== "number") {
+        continue;
+      }
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(length, width, height),
+        new THREE.MeshBasicMaterial({
+          color: boxColor(box, types, appearance),
+          transparent: true,
+          opacity: 0.28,
+          depthWrite: false,
+        }),
+      );
+      applyPose(mesh, box.pose);
+      stage.solids.add(mesh);
+    }
+  }
+
   clearGroup(stage.frustums);
   for (const frustum of frame.frustums) {
-    if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+    if (!appearance.frustums || hidden[frustum.agent_id] || !isPose(frustum.pose)) {
       continue;
     }
     const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(types.get(frustum.agent_id) ?? ""));
@@ -321,7 +369,7 @@ async function drawFrame(
 
   clearGroup(stage.agents);
   for (const agent of frame.agents) {
-    if (hidden[agent.agent_id] || !isPose(agent.pose)) {
+    if (!appearance.axes || hidden[agent.agent_id] || !isPose(agent.pose)) {
       continue;
     }
     const axes = new THREE.AxesHelper(2);
@@ -384,6 +432,9 @@ export default function Viewer({ token }: { token: string }) {
   const [exportStart, setExportStart] = useState(1);
   const [exportEnd, setExportEnd] = useState(10);
   const [exporting, setExporting] = useState(false);
+  const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
+  const appearanceRef = useRef(appearance);
+  appearanceRef.current = appearance;
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(false);
   const [speed, setSpeed] = useState<Speed>(1);
@@ -410,6 +461,26 @@ export default function Viewer({ token }: { token: string }) {
     cameraKeyRef.current = cameraId;
     modeRef.current = viewpoint;
   }, [summary, loop, cameraId, viewpoint, frameIndex]);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.theme = appearance.theme;
+    saveAppearance(appearance);
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+    stage.points.visible = appearance.points;
+    stage.boxes.visible = appearance.boxes;
+    stage.frustums.visible = appearance.frustums;
+    stage.mapLines.visible = appearance.map;
+    stage.agents.visible = appearance.axes;
+    stage.solids.visible = appearance.boxes && appearance.boxStyle === "solid";
+    const material = stage.points.material;
+    if (material instanceof THREE.PointsMaterial) {
+      material.size = appearance.pointSize;
+    }
+    stage.setTheme(appearance.theme);
+  }, [appearance]);
 
   useEffect(() => {
     stageRef.current?.requestRender();
@@ -457,9 +528,11 @@ export default function Viewer({ token }: { token: string }) {
     boxes.renderOrder = 2;
     const frustums = new THREE.Group();
     const agents = new THREE.Group();
+    const solids = new THREE.Group();
     frustums.renderOrder = 3;
     agents.renderOrder = 4;
-    scene.add(mapLines, points, boxes, frustums, agents);
+    solids.renderOrder = 2;
+    scene.add(mapLines, points, boxes, solids, frustums, agents);
     const clock = new THREE.Clock();
     let frameId = 0;
     let sizedWidth = 0;
@@ -563,17 +636,28 @@ export default function Viewer({ token }: { token: string }) {
       requestRender();
       return url;
     };
+    const setTheme = (theme: Appearance["theme"]) => {
+      scene.background = new THREE.Color(theme === "light" ? 0xe7e2d6 : 0x0e100d);
+      requestRender();
+    };
     stageRef.current = {
       points,
       boxes,
       mapLines,
       frustums,
       agents,
+      solids,
       camera,
       controls,
       requestRender,
       captureView,
+      setTheme,
     };
+    setTheme(appearanceRef.current.theme);
+    const pointsMaterial = points.material;
+    if (pointsMaterial instanceof THREE.PointsMaterial) {
+      pointsMaterial.size = appearanceRef.current.pointSize;
+    }
     requestRender();
     return () => {
       resize.disconnect();
@@ -585,6 +669,7 @@ export default function Viewer({ token }: { token: string }) {
       points.geometry.dispose();
       boxes.geometry.dispose();
       mapLines.geometry.dispose();
+      clearGroup(solids);
       stageRef.current = null;
     };
   }, []);
@@ -805,7 +890,7 @@ export default function Viewer({ token }: { token: string }) {
         return;
       }
       latestRef.current = { frame: body, types };
-      const drawn = await drawFrame(stage, body, types, hidden, token, cacheRef.current, stale);
+      const drawn = await drawFrame(stage, body, types, hidden, appearance, token, cacheRef.current, stale);
       if (!drawn || stale()) {
         return;
       }
@@ -819,11 +904,13 @@ export default function Viewer({ token }: { token: string }) {
         settleRef.current = false;
         framedScene.current = summary.scene_id;
       }
-      const shown = body.point_sensors.reduce((sum, sensor) => {
-        return hidden[sensor.agent_id] ? sum : sum + sensor.count;
-      }, 0);
-      const boxes = body.boxes.filter((box) => !hidden[box.agent_id]).length;
-      const frustums = body.frustums.filter((frustum) => !hidden[frustum.agent_id]).length;
+      const shown = appearance.points
+        ? body.point_sensors.reduce((sum, sensor) => {
+            return hidden[sensor.agent_id] ? sum : sum + sensor.count;
+          }, 0)
+        : 0;
+      const boxes = body.boxes.filter((box) => boxShown(box, hidden, appearance)).length;
+      const frustums = body.frustums.filter((frustum) => appearance.frustums && !hidden[frustum.agent_id]).length;
       setCameraFrame(body);
       setStatus(
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
@@ -835,7 +922,7 @@ export default function Viewer({ token }: { token: string }) {
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
       }
     });
-  }, [summary, frameIndex, hidden, token, mapNote]);
+  }, [summary, frameIndex, hidden, appearance, token, mapNote]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
@@ -1059,6 +1146,15 @@ export default function Viewer({ token }: { token: string }) {
     [summary],
   );
   const viewpointLabel = VIEWPOINTS.find((item) => item.id === viewpoint)?.label ?? "Orbit";
+  const categories = useMemo(() => {
+    const names = new Set<string>();
+    for (const box of cameraFrame?.boxes ?? []) {
+      if (typeof box.category === "string" && box.category) {
+        names.add(box.category);
+      }
+    }
+    return [...names].sort();
+  }, [cameraFrame]);
 
   return (
     <section className="card viewer-card">
@@ -1202,6 +1298,106 @@ export default function Viewer({ token }: { token: string }) {
           {exportNote || "Each sample in the range is one frame. 10 fps matches a 10 Hz recording."}
         </span>
       </div>
+      <div className="customise-bar">
+        <span className="muted">View</span>
+        {(
+          [
+            ["points", "Points"],
+            ["boxes", "Boxes"],
+            ["frustums", "Frustums"],
+            ["map", "Map"],
+            ["axes", "Axes"],
+          ] as const
+        ).map(([key, label]) => (
+          <label key={key} className="check">
+            <input
+              type="checkbox"
+              checked={appearance[key]}
+              onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
+            />
+            {label}
+          </label>
+        ))}
+        <label htmlFor="color-by">Color</label>
+        <select
+          id="color-by"
+          value={appearance.colorBy}
+          onChange={(event) =>
+            setAppearance((current) => ({
+              ...current,
+              colorBy: event.target.value === "class" ? "class" : "agent",
+            }))
+          }
+        >
+          <option value="agent">Agent</option>
+          <option value="class">Class</option>
+        </select>
+        <label htmlFor="point-size">Point size</label>
+        <select
+          id="point-size"
+          value={String(appearance.pointSize)}
+          onChange={(event) =>
+            setAppearance((current) => ({ ...current, pointSize: Number(event.target.value) }))
+          }
+        >
+          {[1, 2, 3, 4].map((size) => (
+            <option key={size} value={size}>
+              {size} px
+            </option>
+          ))}
+        </select>
+        <label htmlFor="box-style">Boxes</label>
+        <select
+          id="box-style"
+          value={appearance.boxStyle}
+          onChange={(event) =>
+            setAppearance((current) => ({
+              ...current,
+              boxStyle: event.target.value === "solid" ? "solid" : "wire",
+            }))
+          }
+        >
+          <option value="wire">Wire</option>
+          <option value="solid">Solid</option>
+        </select>
+        <label htmlFor="theme">Theme</label>
+        <select
+          id="theme"
+          value={appearance.theme}
+          onChange={(event) =>
+            setAppearance((current) => ({
+              ...current,
+              theme: event.target.value === "light" ? "light" : "dark",
+            }))
+          }
+        >
+          <option value="dark">Dark</option>
+          <option value="light">Light</option>
+        </select>
+        <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
+          Reset view
+        </button>
+        {categories.map((category) => (
+          <label key={category} className="check">
+            <input
+              type="checkbox"
+              checked={!appearance.hiddenClasses.includes(category)}
+              onChange={() =>
+                setAppearance((current) => {
+                  const hidden = new Set(current.hiddenClasses);
+                  if (hidden.has(category)) {
+                    hidden.delete(category);
+                  } else {
+                    hidden.add(category);
+                  }
+                  return { ...current, hiddenClasses: [...hidden] };
+                })
+              }
+            />
+            {category}
+          </label>
+        ))}
+      </div>
       <canvas
         ref={canvasRef}
         className="viewer-canvas"
@@ -1269,6 +1465,11 @@ export default function Viewer({ token }: { token: string }) {
           onChange={(event) => setFrameIndex(Number(event.target.value))}
         />
       </div>
+      <p className="muted status-line">{status}</p>
+      <p className="hint">
+        {playing ? "Playing" : "Paused"} at {speed}×{loop ? ", loop on" : ""}. {viewpointLabel}. Click the
+        view, then Space plays, arrows step, L loops, [ ] change speed, and 1–5 pick a viewpoint.
+      </p>
       <div className="viewer-agents">
         {(summary?.agents ?? []).map((agent) => (
           <label key={agent.agent_id}>
@@ -1300,11 +1501,6 @@ export default function Viewer({ token }: { token: string }) {
           cacheRef={cacheRef}
         />
       ) : null}
-      <p className="muted status-line">{status}</p>
-      <p className="hint">
-        {playing ? "Playing" : "Paused"} at {speed}×{loop ? ", loop on" : ""}. {viewpointLabel}. Click the
-        view, then Space plays, arrows step, L loops, [ ] change speed, and 1–5 pick a viewpoint.
-      </p>
       {exportNote ? <p className="muted">{exportNote}</p> : null}
     </section>
   );

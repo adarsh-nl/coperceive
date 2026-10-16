@@ -34,10 +34,10 @@ The paper's body frame is ISO 8855 (x forward, y left, z up) and its camera fram
 | Bird's-eye | This slice is a 3D camera above the vehicle. The matplotlib bird's-eye plot from the paper is a later slice. |
 | Look through a camera | The 3D view uses the frustum pose, vertical field of view, and aspect. The RGB frame is the camera strip, not a texture on the frustum. |
 | Free orbit | This slice. The first visit to a scene still frames the near vehicle cluster. |
-| Dark mode | This slice. Dark is the default. A light theme waits for the customisation slice so the choice can be stored with the other view settings. |
+| Dark mode | Dark is the default. The customisation slice stores dark or light with the other view settings. |
 | Images, camera strip, project boxes or lidar onto the image | This slice. One panel per camera at the current sample. Boxes and lidar are toggles. `HF_TOKEN` stays in the environment. Image bytes are not committed. |
 | MP4, and a frame sequence at a chosen resolution and frame rate | This slice, from the page and from the CLI. GIF and PNG frames are in that slice. Each recorded sample is one frame, and `fps` is how fast the file plays them. Rerun `.rrd` export stays. |
-| Color, point size, box style, per-layer toggles, category filters | Later slice. Settings live in `localStorage` and must not include the bearer token. The token stays in `sessionStorage`. |
+| Color, point size, box style, per-layer toggles, category filters | This slice. Settings live in `localStorage` under `coperceive-view` and must not include the bearer token. The token stays in `sessionStorage`. |
 | Matplotlib bird's-eye plot and camera-overlay plot | Later slice, after images. The 3D bird's-eye in this slice is not that plot. |
 | Radar visualization | Not in the Griffin-25m dev tier this page is checked against. The schema already allows a radar sensor. No radar layer until a scene has radar sweeps. |
 | Semantic and instance segmentation, depth colorization | Not in the Griffin-25m dev tier. No palette is invented for labels we do not have. |

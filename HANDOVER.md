@@ -1,6 +1,6 @@
 # Handover
 
-Phase 6 slice 3 is in the tree: sequence export of a camera or the live 3D view to MP4, GIF, or PNG. Camera images, playback, and viewpoints are the slices under this one. The customisation panel is not started. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+Phase 6 slice 4 is in the tree: view settings for layers, color, point size, box style, categories, and dark or light. Sequence export, camera images, playback, and viewpoints are the slices under this one. The matplotlib bird's-eye plot is not started. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
 
 ## Goal
 
@@ -17,6 +17,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 - Playback uses the recorded gap between pose times at 0.25×, 0.5×, 1×, 2×, and 4×. The page caches 16 frame documents and 48 point sweeps and requests the next four samples. Viewpoints ease over 180 ms. Look-through uses sensor +Z as forward and sensor −Y as up. The checklist is `docs/design/viewer-features.md`.
 - `GET /api/scenes/{id}/image` returns the file named in `images.parquet` for that sample. The path is confined to the scene directory. A path that leaves the scene is 400. A missing row or a missing file is 404. The page shows one panel per camera. Boxes start on and Lidar starts off. The strip keeps the last complete sample until the next images arrive. Image bytes are not in git.
 - Sequence export writes every recorded sample from the start time through the end time as one frame. `fps` is the file's playback rate. `coperceive export sequence` reads one camera. The page can also post bitmaps of the live 3D view, at most 60 frames. A camera export accepts 600. MP4 needs `ffmpeg` on `PATH` with `shell` false. GIF and PNG use Pillow. Files land in `exports/` under the server root. Rerun export is unchanged.
+- View settings live in `localStorage` under `coperceive-view`. The object is layers, color, point size, box style, hidden classes, and theme. It has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Defaults are every layer on, color by agent, 2 px points, wire boxes, and dark. Class color applies to boxes. Points and frustums stay colored by agent. The photo strip keeps its own Boxes and Lidar checkboxes.
 - `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
 - The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
 
@@ -55,7 +56,7 @@ Clean-room rule: do not install, import, copy, paraphrase, or model naming or sc
 19. Desktop shell. Tauri is the plan and Electron is the fallback. The shell was not built.
 20. Lidar points are 2 CSS pixels. Say if 2 is still too large or too small.
 21. Town03-000's nine cameras were unpacked one archive at a time. A full extract of all nine archives for every scene was not done: the dry-run `required_free_bytes` for that was 324550526424. Say if more scenes should be unpacked.
-22. Dark is the only theme until the customisation slice stores the choice. Say if a light theme has to land sooner.
+22. Dark is the default. Light is stored with the other view settings. Say if the light palette should change.
 23. Look-through uses sensor −Y as up because the Town03-000 front camera's +Y points down. Say if another dataset uses the opposite axis.
 24. Sequence export keeps one frame per recorded sample. 10 fps is realtime on Griffin. Say if a chosen fps should resample the timeline instead.
 25. The live 3D view export stops at 60 frames because those bitmaps are uploaded. A camera export reads files on the server and stops at 600. Say if the view cap should be higher.
@@ -199,6 +200,22 @@ Python 3.12.3, on 2026-10-16, after sequence export was in the tree. This slice 
 - `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-CNMnmym3.js` and `index-DGphZgbx.css`
 - Python 3.10, 3.11, and 3.13 were not run on this machine. A machine without `ffmpeg` was not run. GIF and PNG do not call it. The MP4 unit test skips when `ffmpeg` is absent, and another test checks the missing-binary error.
 
+## Phase 6 view-settings check
+
+On Town03-000 at 1118500000 µs the stored row was points off, color by class, solid boxes, light theme, and `car` hidden. The status line read `0 points, 40 boxes, 9 frustums. map drawn.` A reload kept that row. Reset view restored `2929 points, 55 boxes, 9 frustums. map drawn.` with color by agent, wire boxes, and the dark theme. Hiding `car` is the difference between 55 and 40 boxes on that sample.
+
+## Gates for the view-settings slice
+
+Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did not rebuild the wheel and did not run gitleaks.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 85 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations
+- `pytest --override-ini addopts= --tb=line -q` — 99 passed, 1 skipped, 6 warnings in 2.88 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`.
+- `mkdocs build` — succeeded (MkDocs 1.6.1, Material MkDocs 2.0 warning)
+- `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-CRVRY35I.js` and `index-Dsi7k7Px.css`
+- Python 3.10, 3.11, and 3.13 were not run on this machine.
+
 ## Next
 
-Stop. The next slice is the customisation panel. The matplotlib bird's-eye plot stays on that list. The desktop shell is still out of scope.
+Stop. The matplotlib bird's-eye plot is the remaining viewer plot. The desktop shell is still out of scope.

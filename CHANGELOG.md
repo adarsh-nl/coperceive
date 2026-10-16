@@ -2,6 +2,8 @@
 
 ## 0.0.0
 
+View settings. The page can hide points, boxes, frustums, the map, and axes, color boxes by agent or class, set point size and box style, filter categories, and switch dark or light. The choices are in `localStorage` under `coperceive-view`. The bearer token stays in `sessionStorage`.
+
 Sequence export. `coperceive export sequence` and the page write one camera's images, or the live 3D view, to MP4, GIF, or PNG at a chosen size and fps. Each recorded sample is one frame. MP4 uses `ffmpeg` on `PATH`. Rerun export is unchanged.
 
 Camera images. The page shows one panel per camera at the current sample. `GET /api/scenes/{id}/image` returns the file named in `images.parquet`, confined to that scene directory. Boxes and lidar can be projected onto the image. Image bytes stay outside the repository. Playback follows elapsed pose time. A slow draw skips to the sample the clock has reached and does not run ahead of it.
