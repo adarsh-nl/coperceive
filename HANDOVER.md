@@ -508,3 +508,7 @@ $HOME/coperceive-adr0010/.venv/bin/python $HOME/coperceive-adr0010/scripts/griff
 ```
 
 Terminal 2 from the laptop: `ssh -J nanjaiyalathaa@hpc-head1.ewi.utwente.nl -L 8731:127.0.0.1:8731 nanjaiyalathaa@<node>` (the real node name, no angle brackets), then `http://127.0.0.1:8731/#/viewer`. The ten-scene run with lidar has not been timed in an allocation yet (expect a few minutes for the rsync and the convert with two workers).
+
+### Gates for the viewer check
+
+Job 627308 (`ps,main-cpu`, hpc-node12, 2 min 18 s, `REPO=~/coperceive-adr0010`, `COPERCEIVE_WEB_DIST=~/coperceive-web-dist`, `PYTEST_ADDOPTS=-rs`): ruff check and format clean, pyright 1.1.414 0 errors, **364 passed, 2 skipped** (the two Griffin-raw skips) in 62 s. The four browser tests and the five staging tests ran on the compute node, so headless Chromium starts there without extra system libraries; their screenshots are in `~/results/viewer-e2e/`.
