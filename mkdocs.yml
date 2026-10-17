@@ -8,6 +8,7 @@ theme:
 nav:
   - Overview: index.md
   - Format: spec/format.md
+  - Predictions and evaluation: spec/predictions.md
   - Positioning: design/positioning.md
   - Name: design/naming.md
   - Earlier candidates: design/names.md
