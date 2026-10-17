@@ -330,9 +330,12 @@ function CameraPanel({
   hidden,
   showBoxes,
   showLidar,
+  missingText,
 }: {
   camera: FrameFrustum;
   bitmap: ImageBitmap | null | undefined;
+  /** Shown when there is no image for this sample: per-sample or per-scene wording. */
+  missingText: string;
   boxes: FrameBox[];
   clouds: Cloud[];
   types: Map<string, string>;
@@ -369,7 +372,7 @@ function CameraPanel({
           <canvas ref={canvasRef} role="img" aria-label={`${label} at this sample`} />
         </div>
       ) : (
-        <p className="camera-missing">{bitmap === null ? "No image file for this sample." : "Loading image…"}</p>
+        <p className="camera-missing">{bitmap === null ? missingText : "Loading image…"}</p>
       )}
     </figure>
   );
@@ -391,6 +394,8 @@ export default function CameraStrip({
   onToggleImage,
   onSelect,
   hud,
+  imagesAvailable = true,
+  missingText = "No image file for this sample.",
 }: {
   token: string;
   sceneId: string;
@@ -407,6 +412,10 @@ export default function CameraStrip({
   onToggleImage: (key: string) => void;
   onSelect: (key: string) => void;
   hud: { speed: string; heading: number; stamp: string } | null;
+  /** False when the scene summary says no image file is staged: nothing is requested. */
+  imagesAvailable?: boolean;
+  /** The empty-state line for the focused panel. */
+  missingText?: string;
 }) {
   const [showBoxes, setShowBoxes] = useState(true);
   const [showLidar, setShowLidar] = useState(true);
@@ -442,6 +451,16 @@ export default function CameraStrip({
     const sampleBoxes = boxes;
     void (async () => {
       const next: Record<string, ImageBitmap | null> = {};
+      if (!imagesAvailable) {
+        for (const camera of sampleFrustums) {
+          next[cameraKey(camera.agent_id, camera.sensor_id)] = null;
+        }
+        if (!cancelled) {
+          setShown({ timeUs, urls: next, frustums: sampleFrustums, boxes: sampleBoxes });
+          setNote("");
+        }
+        return;
+      }
       try {
         await Promise.all(
           sampleFrustums.map(async (camera) => {
@@ -470,7 +489,7 @@ export default function CameraStrip({
     return () => {
       cancelled = true;
     };
-  }, [sceneId, timeUs, nextTimeUs, token, frustums, boxes]);
+  }, [imagesAvailable, sceneId, timeUs, nextTimeUs, token, frustums, boxes]);
 
   useEffect(() => {
     if (!showLidar) {
@@ -634,6 +653,7 @@ export default function CameraStrip({
             hidden={hidden}
             showBoxes={showBoxes}
             showLidar={showLidar}
+            missingText={missingText}
           />
           <div className="compass" aria-hidden="true">
             <div className="compass-tape" style={{ transform: `translateX(${(-heading / 360) * 304}px)` }}>

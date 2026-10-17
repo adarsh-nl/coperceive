@@ -35,6 +35,7 @@ import {
   type StatusChip,
 } from "./predictionLayer";
 import PredictionsBlock, { LineSample } from "./predictions";
+import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
 import {
   alignSeries,
   defaultOutput,
@@ -784,6 +785,7 @@ export default function Viewer({
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
+  const [mapInfo, setMapInfo] = useState<MapInfo | null>(null);
   const [exportNote, setExportNote] = useState("");
   const [exportSource, setExportSource] = useState("view");
   const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | "png">("mp4");
@@ -1660,6 +1662,7 @@ export default function Viewer({
       ? alignSeries(liveSeries.series.compare, activeOutput.agent_id, activeOutput.source, summary.times_us)
       : null;
   const liveEvalPick = evalPick && livePred ? followEvalPick(evalPick, livePred) : null;
+  const missing = missingNotes(summary, mapInfo, runs !== null && runs.length === 0 ? runNote : "");
   const pickedGt = cameraFrame && pick ? followPick(cameraFrame, pick) : null;
   const gtDetail = pickedGt && livePred ? gtEvalDetail(livePred, gtKey(pickedGt.agentId, pickedGt.trackId, pickedGt.center)) : null;
 
@@ -1675,7 +1678,15 @@ export default function Viewer({
         signal: controller.signal,
       });
       if (response.status === 404) {
-        setRunList({ sceneId, runs: [], note: "No prediction runs for this scene." });
+        const detail = await errorDetail(response);
+        setRunList({
+          sceneId,
+          runs: [],
+          note:
+            detail === "no predictions root"
+              ? "no predictions root; start the server with --predictions."
+              : "no prediction runs for this scene.",
+        });
         return;
       }
       if (!response.ok) {
@@ -1687,7 +1698,7 @@ export default function Viewer({
         setRunList({ sceneId, runs: [], note: "The prediction run list was incomplete." });
         return;
       }
-      setRunList({ sceneId, runs: body.runs, note: body.runs.length === 0 ? "No prediction runs for this scene." : "" });
+      setRunList({ sceneId, runs: body.runs, note: body.runs.length === 0 ? "no prediction runs for this scene." : "" });
       setRunId((current) =>
         body.runs.some((item) => item.run_id === current)
           ? current
@@ -1873,15 +1884,30 @@ export default function Viewer({
     }
     const stage = stageRef.current;
     const controller = new AbortController();
+    setMapInfo(null);
     void (async () => {
-      const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/map/lines`, {
+      const base = `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}`;
+      const which = await fetch(`${base}/map`, { headers: authHeaders(token), signal: controller.signal });
+      let info: MapInfo | null = null;
+      if (which.ok) {
+        const body = (await which.json()) as unknown;
+        info = isMapInfo(body) ? body : null;
+        setMapInfo(info);
+      }
+      if (info && !info.available) {
+        replaceMap(stage, new ArrayBuffer(0));
+        stage.requestRender();
+        setMapNote(mapNoteFor(info));
+        return;
+      }
+      const response = await fetch(`${base}/map/lines`, {
         headers: authHeaders(token),
         signal: controller.signal,
       });
       if (response.status === 404) {
         replaceMap(stage, new ArrayBuffer(0));
         stage.requestRender();
-        setMapNote("no map.");
+        setMapNote(mapNoteFor(info));
         return;
       }
       if (!response.ok) {
@@ -2417,6 +2443,8 @@ export default function Viewer({
                   onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
                 />
               ))}
+              {lidarNote(summary) ? <p className="muted empty-state">Points: {lidarNote(summary)}</p> : null}
+              {mapInfo && !mapInfo.available ? <p className="muted empty-state">Map: {mapNoteFor(mapInfo)}</p> : null}
               <EyeToggle
                 on={appearance.frustumImages}
                 label="Frustum images"
@@ -2602,6 +2630,13 @@ export default function Viewer({
                 {summary ? summary.scene_id : "No scene"} · {viewpointLabel}
               </span>
             </div>
+            {missing.length > 0 ? (
+              <ul className="glass empty-pill" aria-label="Missing data">
+                {missing.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : null}
             <div
               className="glass view-pill"
               role="group"
@@ -2652,6 +2687,8 @@ export default function Viewer({
                 hidden={hidden}
                 cacheRef={cacheRef}
                 focusKey={cameraId}
+                imagesAvailable={imageNote(summary) === null}
+                missingText={imageNote(summary) ? `No image: ${imageNote(summary)}` : "No image file for this sample."}
                 imageOn={(key) => showCameraImage(appearance, key)}
                 onToggleImage={(key) =>
                   setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))

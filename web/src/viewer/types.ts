@@ -20,6 +20,11 @@ export type SceneSummary = {
   agents: { agent_id: string; agent_type: string }[];
   sensors: SensorRow[];
   times_us: number[];
+  /** Lidar sweeps and camera rows the scene carries. `images_staged` says whether the
+   *  image files exist (null when there are no rows). Absent on an older server. */
+  point_sweeps?: number;
+  image_rows?: number;
+  images_staged?: boolean | null;
 };
 
 export type FrameBox = {
