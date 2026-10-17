@@ -16,15 +16,28 @@ from importlib import resources
 from pathlib import Path
 
 from coperceive.adapters.paths import PLACEHOLDERS, PathError, Template
+from coperceive.adapters.readers import registry as readers
 from coperceive.errors import CoperceiveError
 from coperceive.model import AgentType, Modality
 
 SPEC_VERSION = 1
 _NAME = re.compile(r"^[a-z0-9_-]+$")
-_READERS_RECORD = ("json_record", "yaml_record")
-_READERS_TABLE = ("json_table", "csv_rows")
-_READERS_BOXES = ("text_rows", "json_record", "yaml_record", "json_table")
-_READERS_LIDAR = ("ply", "pcd", "bin_f32")
+
+
+def _record_readers() -> tuple[str, ...]:
+    return readers.names("record") + readers.names("table")
+
+
+def _table_readers() -> tuple[str, ...]:
+    return readers.names("table")
+
+
+def _box_readers() -> tuple[str, ...]:
+    return readers.BUILTIN_TEXT + readers.names("record") + readers.names("table")
+
+
+def _lidar_readers() -> tuple[str, ...]:
+    return readers.names("lidar")
 
 
 class SpecError(CoperceiveError):
@@ -698,7 +711,7 @@ def _joins(node: _Node, extra: frozenset[str]) -> tuple[JoinSpec, ...]:
 def _poses(node: _Node | None, extra: frozenset[str]) -> PosesSpec:
     if node is None:
         raise SpecError("streams.poses: required")
-    reader = node.str("reader", choices=_READERS_RECORD + _READERS_TABLE)
+    reader = node.str("reader", choices=_record_readers())
     path = node.template("path", extra)
     assert path is not None
     translation = node.strs("translation", count=3)
@@ -716,7 +729,7 @@ def _poses(node: _Node | None, extra: frozenset[str]) -> PosesSpec:
         agent_field=node.opt_str("agent_field"),
         joins=_joins(node, extra),
     )
-    if reader in _READERS_TABLE and spec.sample_field is None:
+    if reader in _table_readers() and spec.sample_field is None:
         raise SpecError(f"{node.at('sample_field')}: required for a table reader")
     node.done()
     return spec
@@ -725,7 +738,7 @@ def _poses(node: _Node | None, extra: frozenset[str]) -> PosesSpec:
 def _sensors(node: _Node | None, extra: frozenset[str]) -> SensorsSpec:
     if node is None:
         raise SpecError("streams.sensors: required")
-    reader = node.str("reader", choices=_READERS_RECORD + _READERS_TABLE)
+    reader = node.str("reader", choices=_record_readers())
     path = node.template("path", extra)
     assert path is not None
     ext = node.sub("extrinsic")
@@ -810,7 +823,7 @@ def _sensors(node: _Node | None, extra: frozenset[str]) -> SensorsSpec:
         node.opt_str("sensor_field"),
         node.opt_str("agent_field"),
     )
-    if reader in _READERS_TABLE and spec.sensor_field is None:
+    if reader in _table_readers() and spec.sensor_field is None:
         raise SpecError(f"{node.at('sensor_field')}: required for a table reader")
     node.done()
     return spec
@@ -842,7 +855,7 @@ _BOX_COLUMNS = frozenset(
 def _boxes(node: _Node | None, extra: frozenset[str]) -> BoxesSpec | None:
     if node is None:
         return None
-    reader = node.str("reader", choices=_READERS_BOXES)
+    reader = node.str("reader", choices=_box_readers())
     path = node.template("path", extra)
     assert path is not None
     variants: dict[int, tuple[str, ...]] = {}
@@ -923,7 +936,7 @@ def _images(node: _Node | None, extra: frozenset[str]) -> ImagesSpec | None:
 def _lidar(node: _Node | None, extra: frozenset[str]) -> LidarSpec | None:
     if node is None:
         return None
-    reader = node.str("reader", choices=_READERS_LIDAR)
+    reader = node.str("reader", choices=_lidar_readers())
     path = node.template("path", extra)
     assert path is not None
     agents = node.strs("agents", optional=True) if node.has("agents") else None

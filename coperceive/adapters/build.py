@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from coperceive.adapters.paths import PathError, Template, confine
+from coperceive.adapters.readers import registry as readers
 from coperceive.adapters.readers.calib import pinhole_from_matrix
 from coperceive.adapters.readers.lidar import LidarError, read_bin_f32, read_pcd, read_ply
 from coperceive.adapters.readers.records import (
@@ -650,10 +651,17 @@ class ManifestAdapter:
                 return read_ply(path, fields=spec.fields, intensity_fill=spec.intensity_fill)
             if spec.reader == "pcd":
                 return read_pcd(path, fields=spec.fields, intensity_fill=spec.intensity_fill)
-            assert spec.stride is not None
-            return read_bin_f32(
-                path, stride=spec.stride, offsets=spec.offsets, intensity_fill=spec.intensity_fill
-            )
+            if spec.reader == "bin_f32":
+                assert spec.stride is not None
+                return read_bin_f32(
+                    path, stride=spec.stride, offsets=spec.offsets, intensity_fill=spec.intensity_fill
+                )
+            plugin = readers.plugin("lidar", spec.reader)
+            if plugin is None:
+                raise BuildError(f"reader {spec.reader!r} is not installed")
+            result = plugin(path, fields=spec.fields, intensity_fill=spec.intensity_fill)
+            count, blob = result  # type: ignore[misc]
+            return int(count), bytes(blob)  # type: ignore[arg-type]
         except (LidarError, ValueError, OSError) as exc:
             raise BuildError(f"{path.name}: {exc}") from None
 
@@ -718,6 +726,12 @@ class ManifestAdapter:
                 return read_json_record(path)
             if reader == "yaml_record":
                 return read_yaml_record(path)
+            plugin = readers.plugin("record", reader)
+            if plugin is not None:
+                record = plugin(path)
+                if not isinstance(record, dict):
+                    raise BuildError(f"{path.name}: reader {reader!r} did not return a mapping")
+                return {str(k): v for k, v in record.items()}  # type: ignore[union-attr]
         except (FieldError, ValueError, OSError) as exc:
             raise BuildError(f"{path.name}: {exc}") from None
         raise BuildError(f"reader {reader!r} does not read one record")
@@ -731,7 +745,7 @@ class ManifestAdapter:
         key_field: str | None,
     ) -> dict[str, dict[str, object]] | None:
         """Rows of a table reader keyed by ``key_field``. None for record readers."""
-        if reader not in {"json_table", "csv_rows"}:
+        if reader not in readers.names("table"):
             return None
         path = self._path(raw_root, template, values)
         if not path.is_file():
@@ -740,8 +754,16 @@ class ManifestAdapter:
             rows: list[dict[str, object]]
             if reader == "csv_rows":
                 rows = [dict(r) for r in read_csv_rows(path)]
-            else:
+            elif reader == "json_table":
                 rows = read_json_table(path)
+            else:
+                plugin = readers.plugin("table", reader)
+                if plugin is None:
+                    raise BuildError(f"reader {reader!r} is not installed")
+                loaded = plugin(path)
+                if not isinstance(loaded, list):
+                    raise BuildError(f"{path.name}: reader {reader!r} did not return a list")
+                rows = [dict(r) for r in loaded]  # type: ignore[union-attr]
         except (FieldError, ValueError, OSError) as exc:
             raise BuildError(f"{path.name}: {exc}") from None
         if key_field is None:
