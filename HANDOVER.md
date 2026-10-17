@@ -439,3 +439,28 @@ Did not match the plan: four build attempts and three inference attempts before 
 2. Rerun inside one job (the fixed `griffin-infer.sbatch`, ~24 min of A40) so the whole chain is a single job log, or accept the saved-output tail?
 3. Open the viewer on `~/results/627070/eval/scenes` with `--predictions ~/results/627070/eval/predictions` (images are not staged; boxes and lidar-free scenes will show) and judge the teal by eye.
 4. Drone-side and cooperative runs (the remaining checkpoints) as the next phase?
+
+### Follow-ups after the first real run (2026-10-17)
+
+1. `mAP@<t> all` (union of classes with ground truth) and `mAP@<t> model` (`run.json` categories) are both reported by `eval report`/`compare`; `metrics.json` carries `mean` and `mean_model` (`af3d4e8`). `gt_class_map` is a new eval-config key, applied to ground truth before matching, because the Griffin toolkit maps classes in code: `tools/griffin_data_converter/trans_kitti2nuscenes.py`, `obj_type_mapping` (`"truck": "car"`, `"bus": "car"`, `"motorcycle": "bicycle"`) and `projects/mmdet3d_plugin/datasets/griffin_dataset.py`, `class_names_nuscenes_mappings` (`'Truck': 'car'`, `'Bus': 'car'`), commit `9c02ba4a`. Spec, ADR and `docs/eval.md` updated; gates job 627098 at `af3d4e8`: 352 passed / 2 skipped, pyright 0, ruff clean.
+2. Clean single-job rerun: **job 627093** (A40 ctit092, 23 min 36 s; staging 11 min 17 s, toolkit conversion 1 min 32 s, inference 9 min 37 s, coperceive convert 2.4 s), everything inside the job including both evaluations. Compared with the saved-output run 627070 scene by scene (metrics `outputs` with the new `mean_model` key stripped, and every shared `matches.parquet` column): **identical** for `griffin25m-vehicle-agile-iter33024` and `…-centre`, 10 scenes each. Results: `~/results/627093/` (`report-iou.md`, `report-centre.md`, `predictions/`, `scenes/`, `griffin_json/`, logs).
+3. Mapped evaluations (`gt_class_map: {truck: car, bus: car, motorcycle: bicycle}`), run from the saved outputs under `~/results/627070/eval/` as runs `…-mapped` and `…-centre-mapped` (same 7,930 boxes):
+
+| config | tp | fp | miss | precision | recall | mAP all = model | car AP | bicycle AP | pedestrian AP |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
+| A unmapped, IoU 0.5 / 0.7 | 2,416 | 2,985 | 6,411 | 0.447 | 0.274 | all 0.088 / 0.074 · model 0.175 / 0.149 | 0.524 / 0.446 | 0.001 / 0.000 | 0.000 / 0.000 |
+| A mapped, IoU 0.5 / 0.7 | 3,003 | 2,398 | 5,824 | 0.556 | 0.340 | 0.150 / 0.106 | 0.423 / 0.316 | 0.026 / 0.000 | 0.000 / 0.000 |
+| B unmapped, centre 4 / 2 / 1 / 0.5 m | 2,884 | 2,517 | 5,943 | 0.534 | 0.327 | all 0.127 / 0.117 / 0.100 / 0.081 · model 0.255 / 0.234 / 0.200 / 0.163 | 0.655 / 0.599 / 0.560 / 0.483 | 0.014 / 0.014 / 0.011 / 0.003 | 0.095 / 0.087 / 0.029 / 0.002 |
+| B mapped, centre 4 / 2 / 1 / 0.5 m | 3,968 | 1,433 | 4,859 | 0.735 | 0.450 | 0.345 / 0.296 / 0.228 / 0.148 | 0.696 / 0.567 / 0.458 / 0.351 | 0.244 / 0.233 / 0.197 / 0.090 | 0.095 / 0.087 / 0.029 / 0.002 |
+
+With the map the union and model means coincide (every GT class is one of the model's three). Car AP at IoU 0.5 drops under the map (0.524 → 0.423) while precision and recall rise: trucks and buses now count as `car` ground truth, the model finds many of them within 2–4 m but not with 0.5 BEV IoU. The inference sbatch now writes the map into both configs for future runs. None of this is a comparison with the paper (no table quoted).
+
+Viewing from a laptop (the viewer binds to loopback; the `.venv`'s editable install points at `main`, so `PYTHONPATH` must name the worktree):
+
+```bash
+ssh -L 8731:127.0.0.1:8731 nanjaiyalathaa@hpc-head1.ewi.utwente.nl
+PYTHONPATH=$HOME/coperceive-adr0010 $HOME/coperceive-adr0010/.venv/bin/coperceive serve --host 127.0.0.1 --port 8731 \
+    --root $HOME/results/627070/eval/scenes --predictions $HOME/results/627070/eval/predictions
+```
+
+then `http://127.0.0.1:8731/#/viewer`. `627070/eval` holds all four runs (unmapped and mapped, IoU and centre); `627093/` holds the two unmapped runs under `scenes/` and `predictions/` directly. The scenes were converted from the trimmed tree: no lidar and no image files, so the page shows boxes, predictions and poses only. Checked through `TestClient` only, not in a browser.
