@@ -150,6 +150,17 @@ Normative AP values:
 - Two GT, one `tp`, no `fp`: `0.5`.
 - A category with ground truth and no prediction: `0.0`; a category with no ground truth: `null`.
 
+### Pooled AP
+
+The AP in `metrics.json` is per scene and is a diagnostic. The headline AP of a run, per output `(agent_id, source)` and per class, pools every detection across scenes the way OpenCOOD and KITTI do: one precision/recall curve per class over the predictions of every evaluated scene of that output, with `n_gt` summed over the scenes.
+
+1. Take, for every evaluated scene in scene-id order, the prediction rows of the output and the category from `matches.parquet` with their `status_at_<i>` (below) for the threshold, in `boxes.parquet` row order; concatenate them. `n_gt` is the sum over those scenes of the output's non-ignored ground-truth boxes of the category (`gt` rows with a status other than `ignored`).
+2. Run steps 2–5 of **AP** once over that list: sort by score descending with a stable sort (ties keep scene order, then file order), walk, envelope, area. A class whose pooled `n_gt` is 0 has no pooled AP (`null`, rendered `n/a`); a class with ground truth and no prediction has `0.0`.
+3. The pooled **mAP** at a threshold is the mean over the classes that have a pooled AP. The classes are the union, over the pooled scenes, of the categories of their `ap` tables.
+4. Pooling over several outputs (the `all` row of `eval report`) is the same rule over the rows of every output: `n_gt` and the records are summed over outputs too.
+
+Normative case: two scenes, each with one ground-truth car. Scene A has one `tp` at score 0.9; scene B one `fp` at 0.8 and one `tp` at 0.7. Pooled, `n_gt = 2` and the walk is tp, fp, tp: precisions 1, 1/2, 2/3 at recalls 1/2, 1/2, 1; the envelope is 1 at recall 1/2 and 2/3 at recall 1; AP `= 1/2 · 1 + 1/2 · 2/3 = 5/6 ≈ 0.833`. The mean of the per-scene APs (1.0 and 0.5) would be 0.75; that number is not reported anywhere.
+
 ## Cooperative views
 
 Computed per ground-truth box of agent X at time t, written on its `gt` row in `matches.parquet` and counted per output in `metrics.json`:
@@ -190,6 +201,9 @@ One row per prediction and one per ground-truth box of every evaluated output, i
 | `cx`, `cy`, `cz`, `length`, `width`, `height`, `qw`, `qx`, `qy`, `qz` | float64 | no | The box in the **world** frame. |
 | `status_single`, `status_fused`, `other_kind` | string | yes | GT only. |
 | `seen_by_other_gt`, `other_agent_tp` | bool | yes | GT only. |
+| `status_at_<i>` | string | yes | Predictions only, one column per entry of `config.thresholds` (`i` is its index: `status_at_0`, `status_at_1`, …): the prediction's status in the AP pass at `thresholds[i]` (§Matching step 7, `score_threshold` ignored): `tp`, `fp` or `ignored`. Null on GT rows. These let a reader build the pooled curve from the files without re-matching. |
+
+The spec columns above `status_at_<i>` come first and are the same for every config; a reader that asks for them alone (the viewer) sees the same table whatever `thresholds` is.
 
 ## `metrics.json`
 
@@ -225,7 +239,7 @@ One row per prediction and one per ground-truth box of every evaluated output, i
 
 Threshold keys are the shortest `repr` of the float (`"0.5"`, `"2.0"`). Numbers are plain JSON numbers; absent values are `null`, never `NaN`.
 
-`coperceive eval report <run_id>` prints, for a scenes root, one Markdown table row per scene and output (`scene`, `agent`, `source`, `gt`, `predictions`, `tp`, `fp`, `miss`, `precision`, `recall`, one `AP@<t>` column per threshold, `recovered`, `lost_by_fusion`) and an aggregate row that sums counts and recomputes precision and recall from the sums; the aggregate AP is the mean of the per-scene means over scenes that have one. `coperceive eval compare <a> <b>` prints the same table with `b − a` deltas.
+`coperceive eval report <run_id>` prints, for a scenes root, two Markdown tables. The first has one row per scene and output (`scene`, `agent`, `source`, `gt`, `predictions`, `tp`, `fp`, `miss`, `precision`, `recall`, one `AP@<t>` column per threshold, `recovered`, `lost_by_fusion`), where `AP@<t>` is that scene's `ap.<t>.mean`; then one row labelled `all` per output (`all`, `agent`, `source`) and a last row `all` with empty `agent` and `source`. An `all` row sums the counts over its scenes (and, for the last row, over outputs), recomputes `precision` and `recall` from the sums, and takes each `AP@<t>` from **Pooled AP**: the pooled mAP over the pooled scenes of that output, or of every output for the last row. It is not a mean of the per-scene means. The second table, after a blank line, has `agent`, `source`, `class` and one `AP@<t>` per threshold: the pooled AP per class, per output and then for `all`; a class without pooled ground truth shows `n/a`. `coperceive eval compare <a> <b>` prints the same tables with `b − a` deltas.
 
 ## HTTP
 

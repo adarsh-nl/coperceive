@@ -120,6 +120,29 @@ class EvaluationError(CoperceiveError):
     """A scene cannot be evaluated as the spec describes, or a result file is malformed."""
 
 
+def status_at_column(index: int) -> str:
+    """The §``matches.parquet`` column holding the AP-pass status at ``thresholds[index]``."""
+    return f"status_at_{index}"
+
+
+def status_at_columns(n_thresholds: int) -> list[str]:
+    """``status_at_0`` … ``status_at_<n-1>``, in the order of ``config.thresholds``."""
+    return [status_at_column(index) for index in range(n_thresholds)]
+
+
+def match_schema(n_thresholds: int) -> pa.Schema:
+    """:data:`MATCH_SCHEMA` followed by one nullable string ``status_at_<i>`` per threshold.
+
+    The file written by ``eval run`` has this schema; the spec columns come first so
+    a reader of :data:`MATCH_SCHEMA` alone (the viewer) sees the same table as before.
+    """
+    fields: list[pa.Field] = [MATCH_SCHEMA.field(name) for name in MATCH_SCHEMA.names]
+    fields.extend(
+        pa.field(name, pa.string(), nullable=True) for name in status_at_columns(n_thresholds)
+    )
+    return pa.schema(fields)
+
+
 def world_box(
     scene: Scene,
     agent_id: str,
@@ -215,6 +238,8 @@ class _Output:
     ap_records: dict[int, dict[str, list[_ApRecord]]] = field(
         default_factory=dict[int, dict[str, list[_ApRecord]]]
     )
+    # threshold index -> prediction row -> its AP-pass status (the ``status_at_<i>`` column).
+    ap_status: dict[int, dict[int, str]] = field(default_factory=dict[int, dict[int, str]])
 
     @property
     def key(self) -> tuple[str, str]:
@@ -330,9 +355,12 @@ def _match_output(
                 gt, preds, config, threshold_index=index, apply_score_threshold=False
             )
             records = output.ap_records.setdefault(index, {})
+            statuses = output.ap_status.setdefault(index, {})
             for pred in preds:
+                status = result.pred_status[pred.row]
+                statuses[pred.row] = status
                 records.setdefault(pred.category, []).append(
-                    _ApRecord(row=pred.row, score=pred.score, status=result.pred_status[pred.row])
+                    _ApRecord(row=pred.row, score=pred.score, status=status)
                 )
 
 
@@ -552,13 +580,18 @@ def _match_rows(
     output: _Output,
     gt_by_time: Mapping[int, Sequence[_PlacedGt]],
     cooperative: Mapping[int, GtCooperative],
+    config: EvalConfig,
     next_pair_id: int,
 ) -> tuple[list[dict[str, object]], int]:
     """The §``matches.parquet`` rows of one output: per time, gt rows then predictions.
 
     ``pair_id`` is handed out in row order, so it counts from 0 through the file.
+    A prediction row carries ``status_at_<i>`` per threshold, its status in the AP
+    pass at ``thresholds[i]`` (``score_threshold`` ignored); a gt row has them null.
     """
     rows: list[dict[str, object]] = []
+    indices = range(len(config.thresholds))
+    gt_status_at: dict[str, object] = {status_at_column(index): None for index in indices}
     for time_us, placed_gt in gt_by_time.items():
         result = output.display[time_us]
         by_gt = {pair.gt_row: pair for pair in result.pairs}
@@ -595,6 +628,7 @@ def _match_rows(
                     "other_kind": coop.other_kind,
                     "seen_by_other_gt": coop.seen_by_other_gt,
                     "other_agent_tp": coop.other_agent_tp,
+                    **gt_status_at,
                 }
             )
         for placed in output.preds.get(time_us, ()):
@@ -622,6 +656,10 @@ def _match_rows(
                     "other_kind": None,
                     "seen_by_other_gt": None,
                     "other_agent_tp": None,
+                    **{
+                        status_at_column(index): output.ap_status[index][pred_row]
+                        for index in indices
+                    },
                 }
             )
     return rows, next_pair_id
@@ -662,7 +700,7 @@ def evaluate_scene(
     for output in outputs:
         gt_by_time = gt_by_agent[output.agent_id]
         cooperative = cooperative_by_agent[output.agent_id]
-        rows, next_pair_id = _match_rows(output, gt_by_time, cooperative, next_pair_id)
+        rows, next_pair_id = _match_rows(output, gt_by_time, cooperative, config, next_pair_id)
         matches.extend(rows)
         samples, totals = _samples_and_totals(output, gt_by_time)
         metrics_outputs.append(
@@ -725,10 +763,20 @@ def _json_safe(value: object) -> object:
     return value
 
 
+def threshold_count(metrics: Mapping[str, object]) -> int:
+    """How many ``status_at_<i>`` columns the match table of this ``metrics.json`` has."""
+    config = metrics.get("config")
+    if not isinstance(config, Mapping):
+        return 0
+    thresholds = cast(Mapping[object, object], config).get("thresholds")
+    return len(cast(Sequence[object], thresholds)) if isinstance(thresholds, Sequence) else 0
+
+
 def write_scene_evaluation(directory: Path, result: SceneEvaluation) -> None:
-    """Write ``matches.parquet`` and ``metrics.json`` into ``directory``."""
+    """Write ``matches.parquet`` (schema :func:`match_schema`) and ``metrics.json``."""
     directory.mkdir(parents=True, exist_ok=True)
-    table = pa.Table.from_pylist(list(result.matches), schema=MATCH_SCHEMA)
+    schema = match_schema(threshold_count(result.metrics))
+    table = pa.Table.from_pylist(list(result.matches), schema=schema)
     pq.write_table(table, directory / MATCHES_FILE)
     text = json.dumps(_json_safe(result.metrics), indent=2, allow_nan=False)
     (directory / METRICS_FILE).write_text(text + "\n", encoding="utf-8")
@@ -770,11 +818,27 @@ def read_metrics(directory: Path) -> dict[str, object]:
     return metrics
 
 
-def read_matches(directory: Path) -> pa.Table:
-    """The ``matches.parquet`` table of one evaluated scene, §``matches.parquet`` columns."""
+def read_matches(directory: Path, *, columns: Sequence[str] | None = None) -> pa.Table:
+    """The ``matches.parquet`` table of one evaluated scene.
+
+    By default the :data:`MATCH_SCHEMA` columns, which every file has. ``columns``
+    names others too, such as :func:`status_at_columns`; a file that lacks one
+    (written before that column existed) is an :class:`EvaluationError` that says
+    to run ``eval run`` again, rather than a pyarrow message.
+    """
     path = scene_file(directory, MATCHES_FILE)
+    wanted = list(MATCH_SCHEMA.names) if columns is None else list(columns)
     try:
-        return pq.read_table(path, columns=list(MATCH_SCHEMA.names))
+        present = set(pq.read_schema(path).names)
+        missing = [name for name in wanted if name not in present]
+        if missing:
+            raise EvaluationError(
+                f"{path}: no column {missing[0]!r}; the file predates it, run "
+                "`coperceive eval run` again"
+            )
+        return pq.read_table(path, columns=wanted)
+    except EvaluationError:
+        raise
     except Exception as error:  # pyarrow error types are not in the stubs
         raise EvaluationError(f"{path}: {error}") from error
 

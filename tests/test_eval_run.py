@@ -30,15 +30,34 @@ from coperceive.evaluation.evaluate import (
     SceneEvaluation,
     evaluate_run,
     evaluate_scene,
+    match_schema,
     read_matches,
     read_metrics,
+    status_at_columns,
     world_box,
     write_scene_evaluation,
 )
 from coperceive.evaluation.geometry import bev_iou, centre_distance_m
+from coperceive.evaluation.metrics import average_precision
 from coperceive.evaluation.predictions import PredictionBox, RunMeta, write_run
-from coperceive.evaluation.report import Row, collect, render_compare, render_report
-from coperceive.model import BoxFrame, Scene
+from coperceive.evaluation.report import (
+    Row,
+    aggregate,
+    collect,
+    pooled_ap,
+    render_compare,
+    render_report,
+)
+from coperceive.model import (
+    SCHEMA_VERSION,
+    Agent,
+    AgentType,
+    Annotation,
+    BoxFrame,
+    Clock,
+    Scene,
+    StampedPose,
+)
 from coperceive.se3 import SE3
 from coperceive.store import write_scene
 
@@ -258,11 +277,20 @@ def test_matches_round_trip_with_the_spec_columns(
     _scene, _meta, boxes, result = evaluated
     assert MATCH_SCHEMA.names == MATCH_COLUMNS
     write_scene_evaluation(tmp_path, result)
+    # The default read is the spec's columns; the per-threshold AP statuses follow them
+    # in the file (§matches.parquet, one ``status_at_<i>`` per entry of ``thresholds``).
     table = read_matches(tmp_path)
     assert table.schema.names == MATCH_COLUMNS
-    rows = table.to_pylist()
+    assert status_at_columns(2) == ["status_at_0", "status_at_1"]
+    assert match_schema(2).names == [*MATCH_COLUMNS, "status_at_0", "status_at_1"]
+    full = read_matches(tmp_path, columns=match_schema(2).names)
+    assert full.schema.names == [*MATCH_COLUMNS, "status_at_0", "status_at_1"]
+    rows = full.to_pylist()
     assert len(rows) == len(result.matches)
     assert rows == [dict(row) for row in result.matches]
+    assert table.to_pylist() == [{key: row[key] for key in MATCH_COLUMNS} for row in result.matches]
+    with pytest.raises(EvaluationError, match="status_at_2"):
+        read_matches(tmp_path, columns=match_schema(3).names)
     # Outputs in first-appearance order, then time, then gt before prediction.
     outputs: list[tuple[object, object]] = []
     for row in rows:
@@ -287,6 +315,52 @@ def test_matches_round_trip_with_the_spec_columns(
     # Every prediction row is there once, with its boxes.parquet row index.
     prediction_rows = [row["row"] for row in rows if row["kind"] == "prediction"]
     assert sorted(prediction_rows) == list(range(len(boxes)))
+
+
+def test_status_at_columns_hold_the_ap_pass_status_per_threshold(
+    evaluated: tuple[Scene, RunMeta, tuple[PredictionBox, ...], SceneEvaluation],
+) -> None:
+    """``status_at_<i>`` is the status of the AP pass at ``thresholds[i]`` with the score
+    threshold ignored: ``tp``, ``fp`` or ``ignored``; null on ground-truth rows."""
+    scene, meta, boxes, result = evaluated
+    for row in result.matches:
+        if row["kind"] == "gt":
+            assert row["status_at_0"] is None and row["status_at_1"] is None
+            continue
+        assert row["status_at_0"] in {"tp", "fp", "ignored"}
+        assert row["status_at_1"] in {"tp", "fp", "ignored"}
+        # Display index 0 and every fixture score above 0.3: status_at_0 is the status.
+        assert row["status_at_0"] == row["status"]
+    # The 4 x 2 cars shifted 0.1 m have IoU 0.95: tp at 0.7 too; the diagonal cone is fp at both.
+    cars = [r for r in result.matches if r["kind"] == "prediction" and r["status"] == "tp"]
+    assert cars and all(r["status_at_1"] == "tp" for r in cars)
+    cone = next(r for r in result.matches if r["kind"] == "prediction" and r["category"] == "cone")
+    assert (cone["status"], cone["status_at_0"], cone["status_at_1"]) == ("fp", "fp", "fp")
+    # Under a score threshold nothing passes, the statuses say so and status_at does not.
+    strict = evaluate_scene(
+        scene, meta, boxes, parse_config({"score_threshold": 0.99}), created_utc=CREATED
+    )
+    predictions = [r for r in strict.matches if r["kind"] == "prediction"]
+    assert all(r["status"] == "below_threshold" for r in predictions)
+    assert [r["status_at_0"] for r in predictions] == [
+        r["status_at_0"] for r in result.matches if r["kind"] == "prediction"
+    ]
+    # The AP in metrics.json is the walk over these very statuses.
+    single = cast(dict[str, dict[str, object]], _output(result.metrics, "vehicle", "single")["ap"])
+    records = [
+        (cast(float, r["score"]), cast(str, r["status_at_1"]))
+        for r in sorted(
+            (
+                r
+                for r in result.matches
+                if r["kind"] == "prediction"
+                and (r["agent_id"], r["source"], r["category"]) == ("vehicle", "single", "car")
+            ),
+            key=lambda r: cast(int, r["row"]),
+        )
+    ]
+    n_car_gt = sum(1 for a in scene.annotations if a.agent_id == "vehicle" and a.category == "car")
+    assert average_precision(records, n_car_gt) == single["0.7"]["car"]
 
 
 def test_pair_ids_join_a_tp_prediction_to_its_gt(
@@ -696,9 +770,133 @@ def test_evaluate_run_reports_a_validation_error_and_continues(tmp_path: Path) -
 # --- report and compare ---
 
 
+def _tables(text: str) -> list[list[list[str]]]:
+    """The Markdown tables of a report, each a list of rows of stripped cells."""
+    tables: list[list[list[str]]] = []
+    current: list[list[str]] = []
+    for line in text.splitlines():
+        if line.startswith("|"):
+            current.append([cell.strip() for cell in line.strip("|").split("|")])
+        elif current:
+            tables.append(current)
+            current = []
+    if current:
+        tables.append(current)
+    return tables
+
+
 def _table(text: str) -> list[list[str]]:
-    lines = [line for line in text.splitlines() if line.startswith("|")]
-    return [[cell.strip() for cell in line.strip("|").split("|")] for line in lines]
+    """The first (main) table of a report."""
+    return _tables(text)[0]
+
+
+def _one_car_scene(scene_id: str) -> Scene:
+    """One agent, one pose at 0, one world-frame 4 x 2 car at the origin."""
+    vehicle = Agent(
+        agent_id="vehicle",
+        agent_type=AgentType.VEHICLE,
+        poses=(StampedPose(0, SE3.identity()),),
+    )
+    car = Annotation(
+        "vehicle",
+        0,
+        "1",
+        "car",
+        (0.0, 0.0, 0.0),
+        (4.0, 2.0, 1.5),
+        SE3.identity(),
+        None,
+        BoxFrame.WORLD,
+    )
+    return Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id=scene_id,
+        world_frame="ENU",
+        clock=Clock(unit="us", scale_note="pooled AP test"),
+        agents=(vehicle,),
+        sensors=(),
+        annotations=(car,),
+        objects=(),
+    )
+
+
+def _car(scene_id: str, score: float, cx: float, category: str = "car") -> PredictionBox:
+    return PredictionBox(
+        scene_id=scene_id,
+        agent_id="vehicle",
+        source="single",
+        time_us=0,
+        category=category,
+        score=score,
+        track_id=None,
+        center=(cx, 0.0, 0.0),
+        size_lwh=(4.0, 2.0, 1.5),
+        box_from_rpy=SE3.identity(),
+        frame=BoxFrame.WORLD,
+    )
+
+
+def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None:
+    """§Metrics, Pooled AP (the normative case). Scene a: one GT car, one tp at 0.9.
+    Scene b: one GT car, one fp at 0.8 and one tp at 0.7. Pooled over n_gt = 2 the walk
+    is tp, fp, tp: precisions 1, 1/2, 2/3 at recalls 1/2, 1/2, 1; envelope 1 at r = 1/2
+    and 2/3 at r = 1; AP = 1/2 * 1 + 1/2 * 2/3 = 5/6. The mean of the per-scene APs
+    (1.0 and 0.5) would be 0.75."""
+    root = tmp_path / "scenes"
+    for scene_id in ("a", "b"):
+        write_scene(_one_car_scene(scene_id), root / scene_id)
+    predictions = tmp_path / "predictions"
+    meta = RunMeta(
+        run_id="pooled",
+        model="test",
+        score_note="constant",
+        categories=("car", "pedestrian"),
+        sources=(("single", "own sensors"),),
+        created_utc=CREATED,
+    )
+    rows = (
+        _car("a", 0.9, 0.0),
+        _car("b", 0.8, 50.0),
+        _car("b", 0.7, 0.0),
+        _car("b", 0.6, 60.0, category="bicycle"),  # predicted only: no ground truth anywhere
+    )
+    write_run(predictions, meta.run_id, meta, rows)
+    report = evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    assert report.errors == ()
+    assert report.warnings == ("b: category 'bicycle' is not in run.json categories",)
+    collected = collect(root, predictions, meta.run_id)
+    assert [(row.scene_id, row.run_id) for row in collected] == [("a", "pooled"), ("b", "pooled")]
+    assert [row.values["AP@0.5"] for row in collected] == [1.0, 0.5]
+
+    per_class = pooled_ap(collected, DEFAULT_CONFIG.thresholds)
+    assert per_class == {
+        "0.5": {"bicycle": None, "car": pytest.approx(5 / 6), "pedestrian": None},
+        "0.7": {"bicycle": None, "car": pytest.approx(5 / 6), "pedestrian": None},
+    }
+    total = aggregate(collected, DEFAULT_CONFIG.thresholds)
+    assert total["AP@0.5"] == pytest.approx(5 / 6)
+    assert total["gt"] == 2 and total["tp"] == 2 and total["fp"] == 2
+
+    text = render_report(collected, DEFAULT_CONFIG.thresholds)
+    main, per_class_table = _tables(text)
+    header = main[0]
+    ap_column = header.index("AP@0.5")
+    body = {tuple(line[:3]): line for line in main[2:]}
+    assert body[("a", "vehicle", "single")][ap_column] == "1.000"
+    assert body[("b", "vehicle", "single")][ap_column] == "0.500"
+    assert body[("all", "vehicle", "single")][ap_column] == "0.833"
+    assert body[("all", "", "")][ap_column] == "0.833"
+    assert "0.750" not in body[("all", "", "")]
+    assert main[-1][:3] == ["all", "", ""]
+    assert per_class_table[0] == ["agent", "source", "class", "AP@0.5", "AP@0.7"]
+    assert per_class_table[2:] == [
+        ["vehicle", "single", "bicycle", "n/a", "n/a"],
+        ["vehicle", "single", "car", "0.833", "0.833"],
+        ["vehicle", "single", "pedestrian", "n/a", "n/a"],
+        ["all", "", "bicycle", "n/a", "n/a"],
+        ["all", "", "car", "0.833", "0.833"],
+        ["all", "", "pedestrian", "n/a", "n/a"],
+    ]
 
 
 def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) -> None:
@@ -731,28 +929,44 @@ def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) ->
         "lost_by_fusion",
     ]
     body = table[2:]
-    assert len(body) == len(rows) + 1
-    aggregate = body[-1]
-    assert aggregate[0] == "all"
+    # Scene rows, one pooled ``all`` row per output, then the pooled ``all`` row.
+    assert len(body) == len(rows) + n_outputs + 1
+    scene_lines = body[: len(rows)]
+    output_lines = body[len(rows) : -1]
+    assert [tuple(line[:3]) for line in output_lines] == [
+        ("all", agent, source)
+        for agent, source in dict.fromkeys((row.agent_id, row.source) for row in rows)
+    ]
+    total = body[-1]
+    assert total[:3] == ["all", "", ""]
     tp_column = header.index("tp")
-    assert int(aggregate[tp_column]) == sum(int(line[tp_column]) for line in body[:-1])
+    assert int(total[tp_column]) == sum(int(line[tp_column]) for line in scene_lines)
     gt_column = header.index("gt")
-    assert int(aggregate[gt_column]) == sum(cast(int, row.values["gt"]) for row in rows)
+    assert int(total[gt_column]) == sum(cast(int, row.values["gt"]) for row in rows)
     recall_column = header.index("recall")
-    expected_recall = int(aggregate[tp_column]) / int(aggregate[gt_column])
-    assert float(aggregate[recall_column]) == pytest.approx(expected_recall, abs=5e-4)
+    expected_recall = int(total[tp_column]) / int(total[gt_column])
+    assert float(total[recall_column]) == pytest.approx(expected_recall, abs=5e-4)
+    # Two copies of one scene pool to the per-scene values; the per-output rows and the
+    # mean over outputs differ from a mean of means only in what they pool.
+    ap_column = header.index("AP@0.5")
+    for line in output_lines:
+        scene_line = next(s for s in scene_lines if s[1:3] == line[1:3])
+        assert line[ap_column] == scene_line[ap_column]
+        assert int(line[tp_column]) == 2 * int(scene_line[tp_column])
 
 
 def test_render_report_shows_a_missing_count_as_n_a() -> None:
     # A truncated metrics.json leaves a count out; the table says so rather than printing 0.
     row = Row(scene_id="s", agent_id="a", source="single", values={"tp": 3, "precision": 0.5})
     table = _table(render_report([row], (0.5,)))
-    header, body, total = table[0], table[2], table[3]
+    header, body, total = table[0], table[2], table[-1]
     assert body[header.index("tp")] == "3"
     assert body[header.index("gt")] == "n/a"
     assert body[header.index("precision")] == "0.500"
     assert body[header.index("AP@0.5")] == "n/a"
+    assert total[:3] == ["all", "", ""]
     assert total[header.index("tp")] == "3"
+    assert total[header.index("AP@0.5")] == "n/a"
     compare = _table(render_compare([row], [row], (0.5,)))[2]
     assert compare[header.index("tp")] == "+0"
     assert compare[header.index("gt")] == "n/a"
@@ -771,5 +985,6 @@ def test_render_compare_shows_zero_deltas_for_the_same_files(tmp_path: Path) -> 
     for line in table[2:]:
         for cell in line[3:]:
             assert cell in {"+0", "+0.000", "n/a"}, cell
-    assert table[-1][0] == "all"
-    assert len(table) == len(rows) + 3
+    assert table[-1][:3] == ["all", "", ""]
+    n_outputs = len({(row.agent_id, row.source) for row in rows})
+    assert len(table) == len(rows) + n_outputs + 3
