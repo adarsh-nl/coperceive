@@ -281,8 +281,10 @@ ADR 0009 is accepted and implemented on branch `docs/adr-0009-adapters` (draft P
 
 - `coperceive/adapters/`: `paths` (templates, confinement), `rotation` (Euler/quaternion/matrix, `AxisRemap`), `readers/` (records, lidar, calib, plugin registry), `spec` (manifest dataclasses and validator, `spec_version` 1), `build` (`ManifestAdapter`, `SceneRef`, `check`), `ingest` (the shared driver, `Adapter` protocol), `registry` (built-ins, `coperceive.adapters` entry points, manifest files), `commands` (CLI), `builtin/griffin.yaml`.
 - `coperceive adapters list|check|ingest`. `check` writes nothing. `ingest` is `convert_griffin`'s driver generalised; `COMPLETE.json` gains `adapter`, `manifest_sha256`, `coperceive_version`, and old markers still skip.
-- `coperceive convert griffin` is unchanged and still runs `griffin/raw.py`. It becomes an alias for the adapter after the slow regression passes on the real release (next item). Then `raw.py` and the scene-building half of `convert.py` go.
-- Regression: `tests/test_adapters_griffin.py`. On the synthetic release (12/11/9-field label lines, a drone lidar calib with no clouds, a metadata-only tree) the adapter and the converter write byte-identical `manifest.json` and `points.bin`, equal Parquet tables (`Table.equals`, no metadata), equal `read_scene` results, and the same `COMPLETE.json` apart from the three provenance keys. **The real Griffin-25m comparison has not been run.** It is the `slow` test in that file with `COPERCEIVE_GRIFFIN_RAW` pointed at `griffin-release`; `~/scripts/slurm/coperceive-griffin-regression.sbatch` on the HPC runs it on a compute node once the raw path is filled in.
+- `coperceive convert griffin` is a permanent alias for the adapter (`griffin/convert.py` wraps `ingest` with the Griffin manifest; `ConvertReport`, `format_report`, the CLI flags and the printed lines are unchanged). `coperceive/griffin/raw.py` is removed. The pre-adapter reader and converter are frozen, verbatim, in `tests/griffin_reference.py` (`# pyright: basic`) so the regression compares two implementations; do not fix or extend that file.
+- Regression: `tests/test_adapters_griffin.py`. Synthetic releases (12/11/9-field label lines, a drone lidar calib with no clouds, a metadata-only tree) run in CI. **The real Griffin-25m comparison passed** on 2026-10-17: Slurm job 626732 on `ps,main-cpu`, raw tree `/datasets/eemcs/ps/cv/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release` staged to `/local` without `camera/` (642,289,560 bytes, rsync 12 min 16 s), both conversions with 4 workers, `pytest -m slow` 1 passed in 25.09 s. 47 scenes each side; old tree 333,298,663 bytes, new 333,305,525 bytes (the difference is the three provenance keys in 47 `COMPLETE.json` files, excluded from the comparison by name). Script: `~/scripts/slurm/coperceive-griffin-regression.sbatch`.
+- The first real run (job 626730) **failed** on `poses` of `Town03-000`. Measured on that scene: 145/149 vehicle and 147/149 drone pose rows differed by at most 3.3e-16 per quaternion component (translations exact), and 6906/7213 box rows stored the opposite sign of the same rotation (max component difference 1.72). Cause: `euler_to_se3` composed three single-axis quaternions where the old reader called `SE3.from_rpy_deg`. Fix in `c787a9d`: intrinsic `zyx` returns the `from_rpy_deg` closed form; `test_intrinsic_zyx_is_bit_identical_to_from_rpy_deg` pins it. The synthetic fixtures have zero angles and did not catch it.
+- CI on PR #15 (draft, https://github.com/adarsh-nl/coperceive/pull/15): 12 of 12 checks green at `24785c9` (lint, gitleaks, pytest 3.10–3.13, web build). The Euler fix and the alias switch were pushed after that run; re-check the PR page.
 - The toy KITTI-flavoured dataset (`tests/toy_dataset.py`, `docs/datasets/add-a-dataset.md`) exercises what Griffin does not: `scenes.glob`, `agents.discover`, a CSV pose table with an `xyzw` quaternion, `clock.from: field` in seconds, YAML calibs with translation plus Euler and explicit image sizes, bottom-centred boxes with `yaw_only` and a `class_map`, `bin_f32` lidar, and an `RFU` body remap. A test checks the doc quotes the manifest verbatim.
 - Not exercised on any real data: `pcd`, `json_table` joins, `yaw_only` on a real label file, non-identity camera remaps, `sensor:<id>` box frames, `centre_origin: bottom` beyond the toy. Nothing claims OPV2V, V2XSet, DAIR-V2X or nuScenes read correctly.
 - Schema 1 is unchanged. `docs/spec/format.md` now states the `FLU` body and `RDF` camera convention the code already assumed. `pyyaml` is a core dependency and `types-PyYAML` a dev one.
@@ -290,7 +292,7 @@ ADR 0009 is accepted and implemented on branch `docs/adr-0009-adapters` (draft P
 
 Pip on this HPC: the user-level pip config points `index-url` at a UTwente GitLab registry. The `.venv` install used `PIP_INDEX_URL=https://pypi.org/simple` to bypass it. Compute nodes cannot reach PyPI (job 626711 timed out), so `.venv` was installed on the login node and the gates job only runs the checks. `coperceive/app/static` is never rebuilt or committed from the HPC; CI builds the web app.
 
-## Gates for the adapters slice
+## Gates for the adapters slice (before the alias switch)
 
 Slurm job 626728 on `ps,main-cpu` (hpc-node, Python 3.13.14 from `module load python/3.13.14`, the repo `.venv`), 2026-10-17, at commit `48b7129`. `~/scripts/slurm/coperceive-gates.sbatch`. Elapsed 40 s. The wheel was built separately on the login node.
 
@@ -302,3 +304,18 @@ Slurm job 626728 on `ps,main-cpu` (hpc-node, Python 3.13.14 from `module load py
 - `pip wheel . --no-build-isolation --no-deps` on the login node — `coperceive-0.0.0-py3-none-any.whl` contains `coperceive/adapters/builtin/griffin.yaml` and the committed `app/static` assets.
 - `npm run build` was not run on the HPC; `coperceive/app/static` was not touched. Python 3.10, 3.11 and 3.12 were not run here; they are the GitHub Actions matrix.
 - Not run: the slow real-release regression (needs the raw path), gitleaks (not installed on the HPC; CI runs it).
+
+## Gates after the alias switch
+
+Slurm job 626744 on `ps,main-cpu`, Python 3.13.14, the repo `.venv`, 2026-10-17, at commit `a30ad70` (the alias switch). Elapsed 22 s.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 114 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations (strict; `tests/griffin_reference.py` is `# pyright: basic` by a file comment, the `pyproject.toml` exclusions are unchanged)
+- `pytest --override-ini addopts= --tb=short -q` — 175 passed, 2 skipped, 8 warnings in 8.22 s. The skips are the two `COPERCEIVE_GRIFFIN_RAW` tests (the real-release regression ran separately as job 626732 and passed). The warnings are the `fork()` `DeprecationWarning` from the parallel tests. The new test is `test_intrinsic_zyx_is_bit_identical_to_from_rpy_deg`.
+- `mkdocs build` — succeeded
+- Not run on the HPC: `npm run build` (CI), gitleaks (CI), Python 3.10–3.12 (CI). CI was green at `24785c9`; the two later commits (`c787a9d`, `a30ad70`) need the PR page checked again.
+
+## Next
+
+ADR 0010, evaluation engine step A (predictions format, import, matching, viewer overlay, timeline metrics), is drafted on branch `docs/adr-0010-eval-step-a` as `docs/adr/0010-eval-predictions.md`, status proposed, no PR, nothing implemented. Adarsh reviews it before any code.
