@@ -7,7 +7,7 @@ import asyncio
 import base64
 import json
 import re
-from collections.abc import AsyncIterator, Callable
+from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from coperceive.app.jobs import CSRF_HEADER, confine, list_jobs, open_db, run_job
+from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import predictions_root
 from coperceive.evalview import EvalViewError, frame_rows, runs_for_scene, series
@@ -121,12 +121,17 @@ def create_app(
     root_path: str = "",
     maps: str | Path | None = None,
     predictions: str | Path | None = None,
+    static: str | Path | None = None,
+    media_roots: Sequence[str | Path] = (),
 ) -> FastAPI:
     """The app over ``root``.
 
     ``predictions`` is the predictions root (``docs/spec/predictions.md`` §Layout);
     without it, ``<root>/predictions`` is used when it holds a run, else the
-    prediction routes answer 404 ``no predictions root``.
+    prediction routes answer 404 ``no predictions root``. ``static`` replaces the
+    packaged page with another build directory. ``media_roots`` are directories a
+    scene's image links may resolve into (a staged scene links ``<side>/camera``
+    to the dataset copy); without them an image outside the scene is 400.
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
@@ -145,6 +150,8 @@ def create_app(
     app.state.predictions = predictions_root(
         root_path_obj, None if predictions is None else Path(predictions).resolve()
     )
+    app.state.media_roots = tuple(Path(item).resolve() for item in media_roots)
+    static_dir = _STATIC if static is None else Path(static).resolve()
 
     @app.middleware("http")
     async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -193,7 +200,10 @@ def create_app(
 
     @app.get("/api/scenes/{scene_id}")
     def scene_summary(scene_id: str) -> dict[str, object]:
-        return summarize(_cached_scene(app, scene_id))
+        scene = _cached_scene(app, scene_id)
+        body = summarize(scene)
+        body["images_staged"] = _images_staged(app, scene, _scene_dir(app.state.root, scene_id))
+        return body
 
     @app.get("/api/scenes/{scene_id}/frame")
     def scene_frame(scene_id: str, time_us: int) -> dict[str, object]:
@@ -249,7 +259,7 @@ def create_app(
             raise HTTPException(status_code=404, detail="image not found")
         scene_dir = _scene_dir(app.state.root, scene_id)
         try:
-            target = confine(scene_dir, relative)
+            target = confine_media(scene_dir, relative, app.state.media_roots)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         if not target.is_file():
@@ -396,9 +406,25 @@ def create_app(
             raise HTTPException(status_code=404, detail="not a file")
         return FileResponse(target)
 
-    if (_STATIC / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=_STATIC, html=True), name="static")
+    if (static_dir / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
     return app
+
+
+def _images_staged(app: FastAPI, scene: Scene, scene_dir: Path) -> bool | None:
+    """Whether any recorded image file is present, judged on a sample of up to eight
+    rows. ``None`` when the scene records no images at all."""
+    rows = scene.images
+    if not rows:
+        return None
+    step = max(1, len(rows) // 8)
+    for image in rows[::step][:8]:
+        try:
+            if confine_media(scene_dir, image.path, app.state.media_roots).is_file():
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 class _SceneCache:

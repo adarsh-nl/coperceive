@@ -52,6 +52,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Predictions root. Defaults to ROOT/predictions when it holds a run.",
     )
+    serve.add_argument(
+        "--static",
+        default=None,
+        help="Serve this web build (a vite build directory with index.html) instead of "
+        "the packaged one.",
+    )
+    serve.add_argument(
+        "--media-root",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="Directory a scene's image links may resolve into, e.g. the dataset copy a "
+        "staged scene links its camera directories to. Repeatable.",
+    )
     serve.set_defaults(func=_serve)
 
     add_parser(sub)
@@ -460,6 +474,13 @@ def _serve(args: argparse.Namespace) -> None:
     if args.host not in _LOOPBACK and not args.token:
         print("refusing to bind a non-loopback host without --token", file=sys.stderr)
         raise SystemExit(2)
+    if args.static is not None and not (Path(args.static) / "index.html").is_file():
+        print(f"--static {args.static} has no index.html", file=sys.stderr)
+        raise SystemExit(2)
+    for media in args.media_root:
+        if not Path(media).is_dir():
+            print(f"--media-root {media} is not a directory", file=sys.stderr)
+            raise SystemExit(2)
     import importlib
 
     module = importlib.import_module("coperceive.app.serve")
@@ -472,6 +493,8 @@ def _serve(args: argparse.Namespace) -> None:
         root_path=args.root_path,
         maps=args.maps,
         predictions=args.predictions,
+        static=args.static,
+        media_roots=tuple(args.media_root),
     )
 
 

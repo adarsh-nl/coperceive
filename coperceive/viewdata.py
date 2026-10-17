@@ -79,6 +79,10 @@ def summarize(scene: Scene) -> dict[str, object]:
             for sensor in scene.sensors
         ],
         "times_us": list(pose_times(scene)),
+        # What the scene carries, so the page can say "no lidar staged" instead of
+        # drawing nothing. Whether image files exist is the server's to add.
+        "point_sweeps": len(scene.point_clouds),
+        "image_rows": len(scene.images),
     }
 
 

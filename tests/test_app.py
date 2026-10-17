@@ -568,3 +568,88 @@ def test_prediction_routes_answer_400_for_nul_and_overlong_ids(tmp_path: Path) -
             response = client.get(path, params={"time_us": 100000})
             assert response.status_code in {400, 404}, (path, response.status_code)
             assert response.status_code != 500
+
+
+def _camera_scene(scene_id: str, image_path: str) -> Scene:
+    pose = StampedPose(0, SE3.identity())
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    camera = Sensor("front", "vehicle", Modality.CAMERA, SE3.identity(), 1, 1, 1.0, 1.0, 0.5, 0.5)
+    return Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id=scene_id,
+        world_frame="ENU",
+        clock=Clock("us", "media fixture"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, image_path),),
+    )
+
+
+def test_static_option_serves_another_bundle(tmp_path: Path) -> None:
+    """``coperceive serve --static DIR`` serves that build instead of the packaged one, so a
+    bundle built out of tree (never committed from the HPC) can be viewed."""
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    (dist / "index.html").write_text("<title>fresh bundle</title>", encoding="utf-8")
+    root = tmp_path / "scenes"
+    root.mkdir()
+    client = TestClient(create_app(root=root, token=None, static=dist))
+    page = client.get("/")
+    assert page.status_code == 200
+    assert "fresh bundle" in page.text
+    with pytest.raises(SystemExit) as exc:
+        main(["serve", "--root", str(root), "--static", str(tmp_path / "missing")])
+    assert exc.value.code == 2
+
+
+def test_image_route_follows_a_symlink_only_into_a_media_root(tmp_path: Path) -> None:
+    """Staged Griffin scenes link ``<side>/camera`` to the dataset copy. The image route
+    serves such a file only when it resolves under a ``--media-root``; a link elsewhere
+    and a ``..`` path stay 400 even then."""
+    media = tmp_path / "release"
+    real = media / "vehicle-side" / "camera" / "front" / "000000.png"
+    real.parent.mkdir(parents=True)
+    real.write_bytes(_PNG)
+    elsewhere = tmp_path / "elsewhere" / "secret.png"
+    elsewhere.parent.mkdir()
+    elsewhere.write_bytes(_PNG)
+    root = tmp_path / "scenes"
+    write_scene(_camera_scene("linked", "vehicle-side/camera/front/000000.png"), root / "linked")
+    (root / "linked" / "vehicle-side").mkdir()
+    (root / "linked" / "vehicle-side" / "camera").symlink_to(media / "vehicle-side" / "camera")
+    write_scene(_camera_scene("stray", "leak/secret.png"), root / "stray")
+    (root / "stray" / "leak").symlink_to(elsewhere.parent)
+    dotted = "../../release/vehicle-side/camera/front/000000.png"
+    write_scene(_camera_scene("dotted", dotted), root / "dotted")
+    params = {"time_us": 0, "agent_id": "vehicle", "sensor_id": "front"}
+
+    plain = TestClient(create_app(root=root, token=None))
+    assert plain.get("/api/scenes/linked/image", params=params).status_code == 400
+
+    allowed = TestClient(create_app(root=root, token=None, media_roots=(media,)))
+    found = allowed.get("/api/scenes/linked/image", params=params)
+    assert found.status_code == 200
+    assert found.content == _PNG
+    assert allowed.get("/api/scenes/stray/image", params=params).status_code == 400
+    assert allowed.get("/api/scenes/dotted/image", params=params).status_code == 400
+
+
+def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
+    """The scene summary says how many lidar sweeps and image rows the scene has and whether
+    the image files are actually present, so the page can show an empty state per pane."""
+    root = tmp_path / "scenes"
+    write_scene(_camera_scene("bare", "vehicle-side/camera/front/000000.png"), root / "bare")
+    write_scene(_camera_scene("staged", "vehicle-side/camera/front/000000.png"), root / "staged")
+    staged_file = root / "staged" / "vehicle-side" / "camera" / "front" / "000000.png"
+    staged_file.parent.mkdir(parents=True)
+    staged_file.write_bytes(_PNG)
+    _viewer_scene(root)  # "desk": one lidar sweep, no image rows
+    client = TestClient(create_app(root=root, token=None))
+    bare = client.get("/api/scenes/bare").json()
+    assert (bare["point_sweeps"], bare["image_rows"], bare["images_staged"]) == (0, 1, False)
+    staged = client.get("/api/scenes/staged").json()
+    assert (staged["point_sweeps"], staged["image_rows"], staged["images_staged"]) == (0, 1, True)
+    desk = client.get("/api/scenes/desk").json()
+    assert (desk["point_sweeps"], desk["image_rows"], desk["images_staged"]) == (1, 0, None)

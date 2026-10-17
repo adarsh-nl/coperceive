@@ -9,6 +9,7 @@ from __future__ import annotations
 import sqlite3
 import subprocess
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 # Phase 0 allow-list. Add names here on purpose; do not accept a free-form command.
@@ -42,6 +43,27 @@ def confine(root: Path, relative: str) -> Path:
     if not candidate.is_relative_to(root_resolved):
         raise ValueError(f"path escapes the server root: {relative}")
     return candidate
+
+
+def confine_media(root: Path, relative: str, media_roots: Sequence[Path]) -> Path:
+    """``confine``, but a symlink may also land inside one of ``media_roots``.
+
+    A staged scene links its camera directories to the dataset copy instead of
+    duplicating the images. ``relative`` still has to be a plain relative path
+    (no ``..``, not absolute): the media roots widen where a link may point,
+    not what a recorded path may say.
+    """
+    parts = Path(relative).parts
+    if relative == "" or Path(relative).is_absolute() or ".." in parts:
+        raise ValueError(f"path escapes the server root: {relative}")
+    try:
+        return confine(root, relative)
+    except ValueError:
+        candidate = (root.resolve() / relative).resolve()
+        for media in media_roots:
+            if candidate.is_relative_to(media.resolve()):
+                return candidate
+        raise
 
 
 def argv_for(name: str, args: list[str]) -> list[str]:
