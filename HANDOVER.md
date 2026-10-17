@@ -475,3 +475,36 @@ ssh -J nanjaiyalathaa@hpc-head1.ewi.utwente.nl -L 8731:127.0.0.1:8731 nanjaiyala
 ```
 
 then open `http://127.0.0.1:8731/#/viewer` on the laptop. The second hop works only while the `srun` allocation holds the node. `627070/eval` holds all four runs (unmapped and mapped, IoU and centre); `627093/` holds the two unmapped runs under `scenes/` and `predictions/` directly. The scenes were converted from the trimmed tree: no lidar and no image files, so the page shows boxes, predictions and poses only. Checked through `TestClient` only, not in a browser.
+
+## Viewer check after Adarsh's first session (2026-10-17)
+
+Adarsh viewed `~/results/627070/eval` from his laptop (server on `hpc-head1`, single-hop tunnel) and reported: (1) Play does not advance frames, (2) the scene selector does not switch and feels hard-coded to Town03-000, (3) no Predictions block or prediction boxes even with `--predictions`, (4) points, images and map empty, (5) silent panes when data is missing.
+
+**What reproduced in headless Chromium** (Playwright 1.64, `chromium_headless_shell` 156, SwiftShader WebGL, on the login node, niced, ~25 s per run; script and JSON under the session scratchpad, screenshots sent to Adarsh): against the same root and the same committed bundle (`coperceive/app/static/assets/index-BBhIjMFy.js`), Play advanced the sample index with the clock (index 4 at 0.41 s, 49 at 4.97 s, Pause shown) and choosing Town06-007 switched: `GET /api/scenes/Town06-007`, `/frame?time_us=1752300000`, `/map/lines`, the status line, the crumb, the tick labels (1752.3 s … 1767.1 s) all followed. The server side answers correctly for every scene (`TestClient` probe: list, summary, frames, map lookup, predictions, 0.01–0.3 s each). So (1) and (2) did **not** reproduce here; the cross-engine runs (Firefox, WebKit, 250 ms latency, DPR 2, small window, real pointer events, switch while playing) are reported below. (3) reproduced exactly: the committed bundle has **zero** occurrences of "predictions". It was built at `049145c` (2026-10-16, before `92fafe0` added the predictions UI) and CI does not rebuild it (the `web` job only type-checks). (4) is the data: the eval scenes were converted from the trimmed tree without lidar or images, and no maps root existed. (5) was true: `no map.` in the status line was the only hint.
+
+**Root causes and fixes** (commits `dc93828`, `49aa354`, `560f980`, `8c7a745` on `feat/eval-step-a`):
+
+- (3) Stale packaged bundle. New `coperceive serve --static DIR` serves an out-of-tree build (`web/node_modules/.bin/vite build --outDir ~/coperceive-web-dist --emptyOutDir`, 3 s on the login node; nothing under `coperceive/app/static` was touched or committed). With it the Predictions block renders on the real run (Town06-007 sample 1: TP 1, FP 2, Miss 4, Ignored 8 at score 0.40). **Adarsh: `coperceive/app/static` still needs a rebuild and commit from a machine that may do that; the wheel ships the old page until then.**
+- (4) `scripts/griffin/stage_viewer.py` stages the 10 val scenes on a compute node without copying the dataset: val-only pose/label/calib plus the vehicle lidar (~150 MB) rsynced into `/local/$SLURM_JOB_ID/coperceive-viewer/raw`, `convert griffin` in process (so `points.bin` is written), `<scene>/<side>/camera` symlinked to the release (no PNG copied; served through the new `coperceive serve --media-root <release>`, which lets an image link resolve into an explicitly allowed directory and nothing else), the four CARLA town maps ingested and aligned. The OpenDRIVE files are at `~/maps-src/carla-0.9.15/` with `SHA256SUMS`: they came from public GitHub mirrors (autonomousvision/fail2drive and four byte-identical copies), every digest equal to the ADR 0008 pin; the 8.4 GB CARLA package was never downloaded. Section in `docs/datasets/griffin.md`. A one-scene run on the login node (Town06-007, `--no-lidar`, 1 worker) took 6.7 s; served with `--media-root` the first vehicle front image came back as a 2,831,892-byte PNG, without it 400; map lines 444,416 bytes; alignment identity, median residual 0.0011 m.
+- (5) Empty states: `GET /api/scenes/{id}` adds `point_sweeps`, `image_rows`, `images_staged`; the page shows a missing-data pill in the viewport (`Points: no lidar staged.`, `Camera: no camera images staged.`, `Map: no map for Town06.`, `Predictions: no prediction runs for this scene.` / `no predictions root; start the server with --predictions.`), repeats the points and map lines in the Layers pane, and the camera panel says `No image: …`. The map effect asks `/map` first, so the note names the scene's own town. The camera strip no longer requests images for a scene that has none staged (before: nine 404s per sample, ~90 per second during play on Griffin).
+- (1)(2) `tests/test_viewer_browser.py` pins the behaviour in a real browser: Play advances with the clock and pauses at the end; switching scenes in both directions re-reads frames, retakes the timeline and follows each town's map; the Predictions block names the run with counts; each pane names what is missing. Four tests, 26 s on the login node. CI gains an `e2e` job that builds `web/` fresh (so it tests the source, not the stale bundle) and uploads the screenshots. `playwright` joined the `dev` extra; on the HPC it is installed in the shared `.venv` with the browsers under `~/.cache/ms-playwright`.
+
+Serving the staged val scenes (replaces the block above for a full view; the old block still works for boxes-only):
+
+```bash
+ssh nanjaiyalathaa@hpc-head1.ewi.utwente.nl
+srun --partition=main --cpus-per-task=2 --mem=8G --time=2:00:00 --pty bash
+hostname                      # the node for the tunnel
+module load python/3.13.14
+export PYTHONPATH=$HOME/coperceive-adr0010
+$HOME/coperceive-adr0010/.venv/bin/python $HOME/coperceive-adr0010/scripts/griffin/stage_viewer.py \
+    --raw /datasets/eemcs/ps/cv/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release \
+    --split $HOME/src/griffin/data/split_datas/griffin_50scenes_25m.json \
+    --xodr-dir $HOME/maps-src/carla-0.9.15 \
+    --predictions $HOME/results/627093/predictions \
+    --static $HOME/coperceive-web-dist \
+    --workers 2
+# ... then run the `coperceive serve` line it prints last, in the same shell
+```
+
+Terminal 2 from the laptop: `ssh -J nanjaiyalathaa@hpc-head1.ewi.utwente.nl -L 8731:127.0.0.1:8731 nanjaiyalathaa@<node>` (the real node name, no angle brackets), then `http://127.0.0.1:8731/#/viewer`. The ten-scene run with lidar has not been timed in an allocation yet (expect a few minutes for the rsync and the convert with two workers).
