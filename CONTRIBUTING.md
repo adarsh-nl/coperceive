@@ -1,6 +1,6 @@
 # Contributing
 
-The maintainer is Adarsh (github.com/adarsh-nl). The scene contract is `docs/spec/format.md`. Do not add detectors, fusion, accounts, a second dataset, or a desktop shell. The in-app viewer and the Rerun export are Phase 5. Open decisions are in `HANDOVER.md`.
+The maintainer is Adarsh (github.com/adarsh-nl). The scene contract is `docs/spec/format.md`. Do not add detectors, fusion, accounts, a second dataset, or a desktop shell. A new dataset layout is a manifest under `coperceive/adapters/builtin/` (see `docs/datasets/add-a-dataset.md`), checked against a synthetic tree in `tests/`; a new file format is a reader in `coperceive/adapters/readers/` with its own fixture test. Neither is a reason to commit dataset bytes. The in-app viewer and the Rerun export are Phase 5. Open decisions are in `HANDOVER.md`.
 
 ## Setup
 
