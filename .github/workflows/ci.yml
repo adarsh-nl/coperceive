@@ -65,6 +65,38 @@ jobs:
       - run: npx tsc -b
         working-directory: web
 
+  e2e:
+    # The page in a real browser: play, scene switch, predictions, empty states.
+    # The bundle is built from web/ here, so the test sees the current source,
+    # not the committed coperceive/app/static.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[app,dev]"
+      - run: playwright install --with-deps chromium
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: web
+      - run: npx vite build --outDir /tmp/web-dist --emptyOutDir
+        working-directory: web
+      - run: pytest tests/test_viewer_browser.py -q -rs
+        env:
+          COPERCEIVE_WEB_DIST: /tmp/web-dist
+          COPERCEIVE_E2E_SHOTS: /tmp/e2e-shots
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: viewer-screenshots
+          path: /tmp/e2e-shots
+          if-no-files-found: ignore
+
   gitleaks:
     runs-on: ubuntu-latest
     steps:
