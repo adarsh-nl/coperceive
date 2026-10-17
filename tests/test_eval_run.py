@@ -4,10 +4,11 @@
 §``matches.parquet``, §``metrics.json``) on the cooperative fixture with the synthetic
 predictions of ``tests/eval_fixture.py``.
 
-Expected numbers are counted from the fixture here rather than quoted. The assertions
-stay on the 100000 µs sample: the fixture's 0.3 m cone at 200000 µs, shifted 0.1 m,
-has a BEV IoU of exactly 0.5 against the default display threshold, which rounding may
-put on either side.
+Expected numbers are counted from the fixture here rather than quoted. The count
+assertions stay on the 100000 µs sample, where every box is a 0.1 m shift along x. The
+fixture's 0.3 m cone at 200000 µs is shifted 0.1 m along the diagonal (BEV IoU 0.41, an
+``fp`` and a ``miss`` at both thresholds) so that no prediction sits exactly on the
+display threshold.
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from coperceive.evaluation.evaluate import (
     world_box,
     write_scene_evaluation,
 )
+from coperceive.evaluation.geometry import bev_iou, centre_distance_m
 from coperceive.evaluation.predictions import PredictionBox, RunMeta, write_run
 from coperceive.evaluation.report import Row, collect, render_compare, render_report
 from coperceive.model import BoxFrame, Scene
@@ -315,14 +317,55 @@ def test_pair_ids_join_a_tp_prediction_to_its_gt(
         assert gt["category"] == row["category"]
         assert gt["iou_bev"] == row["iou_bev"]
         assert cast(float, row["centre_error_m"]) == pytest.approx(0.1)
-        # IoU >= the display threshold; the cone pair sits exactly on 0.5.
-        assert cast(float, row["iou_bev"]) >= 0.5
+        # IoU >= the display threshold, and no fixture pair sits on it.
+        assert cast(float, row["iou_bev"]) > 0.5
     for row in result.matches:
         if row["status"] != "tp":
             assert row["pair_id"] is None
             assert row["iou_bev"] is None
             assert row["centre_error_m"] is None
             assert row["yaw_error_deg"] is None
+
+
+def test_no_fixture_prediction_sits_on_the_display_threshold(
+    evaluated: tuple[Scene, RunMeta, tuple[PredictionBox, ...], SceneEvaluation],
+) -> None:
+    """The fixture is nudged off the boundary: the 0.3 m cone, shifted 0.1 m along x,
+    would have IoU exactly 0.5; shifted along the diagonal it is a clear fp."""
+    scene, _meta, boxes, result = evaluated
+    cone_gt = next(a for a in scene.annotations if a.category == "cone")
+    cone_pred = next(b for b in boxes if b.category == "cone" and b.source == "single")
+    gt = world_box(
+        scene,
+        "vehicle",
+        cone_gt.time_us,
+        cone_gt.center,
+        cone_gt.size_lwh,
+        cone_gt.box_from_rpy,
+        cone_gt.frame,
+    )
+    pred = world_box(
+        scene,
+        "vehicle",
+        cone_pred.time_us,
+        cone_pred.center,
+        cone_pred.size_lwh,
+        cone_pred.box_from_rpy,
+        cone_pred.frame,
+    )
+    iou = bev_iou(gt, pred)
+    assert abs(iou - 0.5) > 0.05
+    assert centre_distance_m(gt, pred) == pytest.approx(0.1)
+    cone_rows = [
+        row
+        for row in result.matches
+        if row["category"] == "cone" and row["source"] == "single" and row["time_us"] == 200_000
+    ]
+    assert {row["kind"]: row["status"] for row in cone_rows} == {"gt": "miss", "prediction": "fp"}
+    # Every other synthetic pair is a 0.1 m shift of a box at least 0.2 m wide: IoU > 0.5.
+    for row in result.matches:
+        if row["iou_bev"] is not None:
+            assert cast(float, row["iou_bev"]) != 0.5
 
 
 def test_boxes_are_written_in_the_world_frame(

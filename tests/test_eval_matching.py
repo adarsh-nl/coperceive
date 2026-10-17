@@ -193,6 +193,43 @@ def test_iou_identical_box_is_tp_at_both_thresholds_and_a_shift_of_two_is_fp() -
     assert result.pairs == ()
 
 
+def test_iou_exactly_at_the_threshold_is_a_match() -> None:
+    """Rule 3: IoU passes with ``>=``. A 3 x 2 box and the same box shifted 1 m along
+    its length: intersection 2 x 2 = 4, union 6 + 6 - 4 = 8, IoU exactly 0.5 (every
+    coordinate is representable, so the clipping is exact). A tp at 0.5, an fp at 0.7."""
+    gt = [
+        GtBox(
+            row=0,
+            category="car",
+            track_id=None,
+            visibility=None,
+            world=_world(0.0, 0.0, length=3.0),
+            range_m=0.0,
+        )
+    ]
+    preds = [
+        PredBox(
+            row=0,
+            category="car",
+            score=0.9,
+            track_id=None,
+            world=_world(1.0, 0.0, length=3.0),
+            range_m=0.0,
+        )
+    ]
+    config = _iou_config()
+
+    at_half = _match(gt, preds, config, threshold_index=0)
+    assert at_half.pairs[0].iou_bev == 0.5
+    assert at_half.pred_status == {0: "tp"}
+    assert at_half.gt_status == {0: "tp"}
+
+    at_seven_tenths = _match(gt, preds, config, threshold_index=1)
+    assert at_seven_tenths.pred_status == {0: "fp"}
+    assert at_seven_tenths.gt_status == {0: "miss"}
+    assert at_seven_tenths.pairs == ()
+
+
 def test_iou_two_predictions_on_one_gt_give_one_tp_and_one_fp() -> None:
     gt = [_gt(0.0, 0.0)]
     preds = [_pred(0.0, 0.0, row=0, score=0.9), _pred(0.5, 0.0, row=1, score=0.8)]

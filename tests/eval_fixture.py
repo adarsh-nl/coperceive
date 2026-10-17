@@ -6,7 +6,9 @@ The numbers below are the fixture contract (plan, Task 3):
 * ``single`` on ``vehicle`` and ``uav``: every ground-truth box of that agent at
   every time, same category, centre ``+0.1`` m along world x, score ``0.9``,
   except track ``99`` (left out: a miss) and track ``5`` on the vehicle
-  (predicted as ``truck``: a wrong class).
+  (predicted as ``truck``: a wrong class). The ``cone`` (0.3 m square) is shifted
+  0.1 m along the world diagonal instead: along x its BEV IoU would be exactly
+  0.5, the default display threshold; on the diagonal it is 0.41, an ``fp``.
 * One extra ``single`` car on the vehicle at body ``(50, 50, 0)``, size
   ``(4, 2, 1.5)``, score ``0.8``, at every vehicle pose time (a false positive).
 * ``fused`` on the vehicle: every vehicle ground-truth box at ``+0.1`` m, score
@@ -17,12 +19,15 @@ Every prediction is in the ``body`` frame of its agent.
 
 from __future__ import annotations
 
+import math
+
 from coperceive.evaluation.predictions import PredictionBox, RunMeta
 from coperceive.model import Annotation, BoxFrame, Scene
 from coperceive.se3 import SE3
 from coperceive.transform import lookup_pose
 
 SHIFT_X_M = 0.1
+DIAGONAL_SHIFT_M = SHIFT_X_M / math.sqrt(2.0)  # the cone's shift along x and along y
 SINGLE_SCORE = 0.9
 FUSED_SCORE = 0.95
 FP_SCORE = 0.8
@@ -73,12 +78,13 @@ def synthetic_predictions(scene: Scene) -> tuple[RunMeta, tuple[PredictionBox, .
 
 
 def _shifted(scene: Scene, ann: Annotation, source: str, score: float) -> PredictionBox:
-    """``ann`` moved ``SHIFT_X_M`` along world x, expressed in the agent body frame."""
+    """``ann`` moved 0.1 m (along world x, or the diagonal for a cone), in the body frame."""
     world_from_body = lookup_pose(scene.agent(ann.agent_id), ann.time_us, max_gap_us=0)
     placed = ann.box_from_rpy.translation(*ann.center)
     world_from_box = world_from_body.compose(placed) if ann.frame is BoxFrame.BODY else placed
+    dx, dy = (DIAGONAL_SHIFT_M, DIAGONAL_SHIFT_M) if ann.category == "cone" else (SHIFT_X_M, 0.0)
     shifted = world_from_box.translation(
-        world_from_box.tx + SHIFT_X_M, world_from_box.ty, world_from_box.tz
+        world_from_box.tx + dx, world_from_box.ty + dy, world_from_box.tz
     )
     body_from_box = world_from_body.inverse().compose(shifted)
     category = "truck" if ann.agent_id == "vehicle" and ann.track_id == "5" else ann.category
