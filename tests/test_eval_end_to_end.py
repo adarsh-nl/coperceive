@@ -16,9 +16,8 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from pathlib import Path
-from typing import cast
+from typing import Protocol, cast
 
-import httpx
 import pytest
 from coperceive.app.server import create_app
 from coperceive.cli import main
@@ -37,18 +36,25 @@ CSRF = {"X-Coperceive-Request": "1"}
 Row = dict[str, object]
 
 
-def _get(client: TestClient, path: str, params: dict[str, object] | None = None) -> httpx.Response:
-    """Typed GET. The CI runner has reported TestClient's httpx base as unknown; keep that
-    to one place."""
-    response: httpx.Response = client.get(path, params=params)  # pyright: ignore[reportUnknownMemberType]
-    return response
+class _Response(Protocol):
+    """What this test reads from an HTTP response.
+
+    starlette 1.8 returns ``httpx2.Response`` (not ``httpx.Response``), and the CI
+    runner has reported TestClient's base class as unknown under strict pyright,
+    so the calls are typed by this protocol and kept in two helpers.
+    """
+
+    status_code: int
+
+    def json(self) -> object: ...
 
 
-def _post(client: TestClient, path: str, body: dict[str, object]) -> httpx.Response:
-    response: httpx.Response = client.post(  # pyright: ignore[reportUnknownMemberType]
-        path, headers=CSRF, json=body
-    )
-    return response
+def _get(client: TestClient, path: str, params: dict[str, int] | None = None) -> _Response:
+    return cast(_Response, client.get(path, params=params))  # pyright: ignore[reportUnknownMemberType]
+
+
+def _post(client: TestClient, path: str, body: dict[str, object]) -> _Response:
+    return cast(_Response, client.post(path, headers=CSRF, json=body))  # pyright: ignore[reportUnknownMemberType]
 
 
 def _jsonl_row(box: PredictionBox) -> Row:
@@ -124,7 +130,7 @@ def test_import_run_serve_export_and_compare(
     client: TestClient = TestClient(create_app(root=scenes, token=None))
     listed = _get(client, f"/api/scenes/{SCENE_ID}/predictions")
     assert listed.status_code == 200
-    runs = cast(list[Row], listed.json()["runs"])
+    runs = cast(list[Row], cast(Row, listed.json())["runs"])
     assert [run["run_id"] for run in runs] == [RUN_ID]
     assert runs[0]["evaluated"] is True
 
@@ -138,7 +144,7 @@ def test_import_run_serve_export_and_compare(
 
     series = _get(client, f"/api/scenes/{SCENE_ID}/predictions/{RUN_ID}/series")
     assert series.status_code == 200
-    series_outputs = cast(list[Row], series.json()["outputs"])
+    series_outputs = cast(list[Row], cast(Row, series.json())["outputs"])
     assert {(o["agent_id"], o["source"]) for o in series_outputs} >= {("vehicle", "single")}
 
     # The frame rows and the metrics.json sample row of vehicle/single agree at 100000 µs.
