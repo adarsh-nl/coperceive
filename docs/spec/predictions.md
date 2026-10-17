@@ -75,6 +75,7 @@ class_thresholds: {}                 # class -> list, same length as thresholds,
 ignore_gt_visibility_below: null     # null, or a number: GT with visibility below it is ignored; GT with null visibility is kept
 max_range_m: null                    # null, or metres from the agent body origin at that time; GT and predictions farther are ignored
 score_threshold: 0.3                 # operating point for statuses and per-sample counts
+gt_class_map: {}                     # optional: ground-truth class -> class, applied before matching, e.g. {truck: car, bus: car, motorcycle: bicycle}
 ```
 
 Unknown keys are errors. `display_threshold` not in `thresholds` is an error.
@@ -108,6 +109,7 @@ Normative values, all in metres:
 
 Done per scene, per `(agent_id, source)` pair that appears in `boxes.parquet` (an **output**), per `time_us`, per `category`. Ground truth is the agent's own `annotations` at that time.
 
+0. Ground-truth categories are renamed through `gt_class_map` (a class not in the map keeps its name). Predictions are never renamed: a model that emits `car` for trucks is evaluated against ground truth that says `car` only when the map says so. For Griffin, the Griffin toolkit does this in code: `tools/griffin_data_converter/trans_kitti2nuscenes.py`, `obj_type_mapping` (`"truck": "car"`, `"bus": "car"`, `"motorcycle": "bicycle"`), and `projects/mmdet3d_plugin/datasets/griffin_dataset.py`, `class_names_nuscenes_mappings` (`'Truck': 'car'`, `'Bus': 'car'`), commit `9c02ba4a`.
 1. Ground-truth boxes are **ignored** when `ignore_gt_visibility_below` is a number and the box's visibility is a number below it, or when `max_range_m` is a number and the box centre is farther than that from the agent body origin at that time. Predictions farther than `max_range_m` are ignored before matching.
 2. Predictions are sorted by `score` descending; equal scores keep file order.
 3. Each prediction in turn considers the ground-truth boxes of its category that are not yet matched, ignored ones included, and takes the best one under the criterion: the largest BEV IoU, or the smallest centre distance. The pair's threshold is the class's entry in `class_thresholds` or else the global `thresholds` entry, at the index of `display_threshold`.
@@ -133,7 +135,7 @@ For one output (an `(agent_id, source)` pair):
 
 - **Per sample** (`samples[]`, one row per pose time of the agent, in time order): `time_us`, `tp`, `fp`, `miss`, `ignored_gt`, `precision = tp / (tp + fp)` (null when the denominator is 0), `recall = tp / (tp + miss)` (null when 0).
 - **Totals**: the sums over samples, plus `gt` (non-ignored ground-truth boxes) and `predictions` (all rows of the output), and the same `precision` and `recall` from the sums.
-- **AP** per threshold per category, with `mean` over the categories that have an AP:
+- **AP** per threshold per category, with two means: `mean` over every category that has an AP (the union of `run.json` `categories`, the agent's ground-truth categories after `gt_class_map`, and the predicted categories), and `mean_model` over the `run.json` `categories` that have an AP. A category with ground truth and no prediction is `0.0` in both; a category with no ground truth is `null` and enters neither.
   1. Take every prediction of that category in the scene with its status at that threshold (steps 2–4 above, ignoring `score_threshold`), sorted by score descending, ties in file order.
   2. Walk the list accumulating `tp_i` and `fp_i`; `recall_i = tp_i / n_gt`, `precision_i = tp_i / (tp_i + fp_i)`; ignored predictions are skipped.
   3. Make the precision envelope monotone from the right: `p'_i = max(precision_j for j >= i)`.
@@ -239,7 +241,7 @@ The spec columns above `status_at_<i>` come first and are the same for every con
 
 Threshold keys are the shortest `repr` of the float (`"0.5"`, `"2.0"`). Numbers are plain JSON numbers; absent values are `null`, never `NaN`.
 
-`coperceive eval report <run_id>` prints, for a scenes root, two Markdown tables. The first has one row per scene and output (`scene`, `agent`, `source`, `gt`, `predictions`, `tp`, `fp`, `miss`, `precision`, `recall`, one `AP@<t>` column per threshold, `recovered`, `lost_by_fusion`), where `AP@<t>` is that scene's `ap.<t>.mean`; then one row labelled `all` per output (`all`, `agent`, `source`) and a last row `all` with empty `agent` and `source`. An `all` row sums the counts over its scenes (and, for the last row, over outputs), recomputes `precision` and `recall` from the sums, and takes each `AP@<t>` from **Pooled AP**: the pooled mAP over the pooled scenes of that output, or of every output for the last row. It is not a mean of the per-scene means. The second table, after a blank line, has `agent`, `source`, `class` and one `AP@<t>` per threshold: the pooled AP per class, per output and then for `all`; a class without pooled ground truth shows `n/a`. `coperceive eval compare <a> <b>` prints the same tables with `b − a` deltas: every row of either run, `a`'s rows first in `a`'s order and then the rows only `b` has; a row the other run lacks shows `n/a` in every cell, as does a ratio that is `null` on either side. The `all` rows and the per-class table are deltas over the shared rows only. A footer line directly under the first table counts the rows: `rows: <n> shared, <n> only in <a>, <n> only in <b>`.
+`coperceive eval report <run_id>` prints, for a scenes root, a main table with one row per scene and output (`scene`, `agent`, `source`, `gt`, `predictions`, `tp`, `fp`, `miss`, `precision`, `recall`, then per threshold `mAP@<t> all` — the pooled mean over every class with ground truth — and `mAP@<t> model` — the pooled mean over `run.json` `categories` — then `recovered`, `lost_by_fusion`), one `all` row per output pooling its scenes, and an `all` row over everything; then, after a blank line, a per-class table (`agent`, `source`, `class`, `AP@<t>` per threshold) with the pooled AP per class per output and for `all`. The pooled values are §Metrics "Pooled AP". `coperceive eval compare <a> <b>` prints the same tables with `b − a` deltas over the rows both runs share, `n/a` where a row is missing on one side, and a footer `rows: N shared, N only in <a>, N only in <b>`.
 
 ## HTTP
 

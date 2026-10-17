@@ -32,6 +32,7 @@ KEYS = (
     "ignore_gt_visibility_below",
     "max_range_m",
     "score_threshold",
+    "gt_class_map",
 )
 
 
@@ -48,6 +49,7 @@ class EvalConfig:
     ignore_gt_visibility_below: float | None
     max_range_m: float | None
     score_threshold: float  # the operating point
+    gt_class_map: Mapping[str, str] = MappingProxyType({})  # GT class -> class, before matching
 
 
 DEFAULT_CONFIG = EvalConfig(
@@ -103,6 +105,11 @@ def parse_config(payload: object) -> EvalConfig:
     if max_range is not None and max_range <= 0:
         raise ConfigError(f"max_range_m: expected a positive number of metres, got {max_range!r}")
     score = _number("score_threshold", node.get("score_threshold", DEFAULT_CONFIG.score_threshold))
+    class_map: dict[str, str] = {}
+    for name, value in sorted(_mapping("gt_class_map", node.get("gt_class_map")).items()):
+        if not isinstance(value, str) or not value:
+            raise ConfigError(f"gt_class_map.{name}: expected a class name, got {value!r}")
+        class_map[name] = value
     return EvalConfig(
         criterion=criterion,
         thresholds=thresholds,
@@ -111,6 +118,7 @@ def parse_config(payload: object) -> EvalConfig:
         ignore_gt_visibility_below=visibility,
         max_range_m=max_range,
         score_threshold=score,
+        gt_class_map=MappingProxyType(class_map),
     )
 
 
@@ -126,6 +134,7 @@ def config_json(config: EvalConfig) -> dict[str, object]:
         "ignore_gt_visibility_below": config.ignore_gt_visibility_below,
         "max_range_m": config.max_range_m,
         "score_threshold": float(config.score_threshold),
+        "gt_class_map": dict(config.gt_class_map),
     }
 
 

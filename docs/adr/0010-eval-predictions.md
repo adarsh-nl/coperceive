@@ -189,6 +189,9 @@ Where the code (`coperceive/evaluation/`, `coperceive/evalview.py`, `coperceive/
 - **The page has an Output selector.** Beside Run and Compare, an `agent · source` menu picks the output the scene card and the timeline sparklines follow; the source chips still filter what is drawn.
 - **`write_run` is `coperceive.evaluation.predictions.write_run(root, run_id, meta, rows, *, force=False)`**, not `coperceive.predictions.write_run(root, run_id, rows, run_meta)`; it returns the scene ids written.
 
+- `gt_class_map` (eval config): ground-truth classes are renamed before matching when the source toolkit does so in code. For Griffin, the Griffin toolkit does this in code: `tools/griffin_data_converter/trans_kitti2nuscenes.py`, `obj_type_mapping` (`"truck": "car"`, `"bus": "car"`, `"motorcycle": "bicycle"`), and `projects/mmdet3d_plugin/datasets/griffin_dataset.py`, `class_names_nuscenes_mappings` (`'Truck': 'car'`, `'Bus': 'car'`), commit `9c02ba4a`; the Griffin eval configs map truck/bus → car and motorcycle → bicycle. Added after the first real run (2026-10-17), when `truck`, `bus` and `motorcycle` ground truth in Town10HD pulled the union mean down.
+- Two headline means, both reported: `mAP@<t> all` (union of classes with ground truth) and `mAP@<t> model` (`run.json` categories); `metrics.json` carries `mean` and `mean_model`.
+
 ## Decisions
 
 Taken by Adarsh on 2026-10-17. Items 1, 3 and 5 are his words; the rest are the draft's recommendations, which he accepted.

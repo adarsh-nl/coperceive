@@ -263,8 +263,14 @@ def _agent_origin(scene: Scene, agent_id: str, time_us: int) -> tuple[float, flo
     return (pose.tx, pose.ty, pose.tz)
 
 
-def _place_gt(scene: Scene, agent_id: str) -> dict[int, list[_PlacedGt]]:
-    """The agent's annotations per pose time, placed in the world frame, in row order."""
+def _place_gt(
+    scene: Scene, agent_id: str, class_map: Mapping[str, str] | None = None
+) -> dict[int, list[_PlacedGt]]:
+    """The agent's annotations per pose time, placed in the world frame, in row order.
+
+    ``class_map`` renames ground-truth categories before matching (§Matching rule 0).
+    """
+    renames: Mapping[str, str] = class_map or {}
     times = scene.pose_times(agent_id)
     by_time: dict[int, list[_PlacedGt]] = {time_us: [] for time_us in times}
     origins = {time_us: _agent_origin(scene, agent_id, time_us) for time_us in times}
@@ -284,7 +290,7 @@ def _place_gt(scene: Scene, agent_id: str) -> dict[int, list[_PlacedGt]]:
                 annotation=ann,
                 box=GtBox(
                     row=row,
-                    category=ann.category,
+                    category=renames.get(ann.category, ann.category),
                     track_id=ann.track_id,
                     visibility=ann.visibility,
                     world=world,
@@ -381,7 +387,7 @@ def _ap_table(
     meta: RunMeta,
     config: EvalConfig,
 ) -> dict[str, object]:
-    """``ap`` of §``metrics.json``: per threshold key, per category, plus ``mean``.
+    """``ap`` of §``metrics.json``: per threshold key and category, plus ``mean``/``mean_model``.
 
     The categories are the run's ``categories``, the agent's ground-truth
     categories and the output's predicted categories, so a class listed in
@@ -409,6 +415,10 @@ def _ap_table(
             if ap is not None:
                 values.append(ap)
         per_category["mean"] = sum(values) / len(values) if values else None
+        model = [
+            cast(float, per_category[c]) for c in meta.categories if per_category.get(c) is not None
+        ]
+        per_category["mean_model"] = sum(model) / len(model) if model else None
         table[threshold_key(threshold)] = per_category
     return table
 
@@ -688,7 +698,7 @@ def evaluate_scene(
     gt_by_agent: dict[str, dict[int, list[_PlacedGt]]] = {}
     for output in outputs:
         if output.agent_id not in gt_by_agent:
-            gt_by_agent[output.agent_id] = _place_gt(scene, output.agent_id)
+            gt_by_agent[output.agent_id] = _place_gt(scene, output.agent_id, config.gt_class_map)
         _match_output(output, gt_by_agent[output.agent_id], config)
     cooperative_by_agent = {
         agent_id: _cooperative_columns(scene, by_key, agent_id, gt_by_time)

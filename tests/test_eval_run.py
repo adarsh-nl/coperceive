@@ -866,7 +866,7 @@ def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None
     assert report.warnings == ("b: category 'bicycle' is not in run.json categories",)
     collected = collect(root, predictions, meta.run_id)
     assert [(row.scene_id, row.run_id) for row in collected] == [("a", "pooled"), ("b", "pooled")]
-    assert [row.values["AP@0.5"] for row in collected] == [1.0, 0.5]
+    assert [row.values["mAP@0.5 all"] for row in collected] == [1.0, 0.5]
 
     per_class = pooled_ap(collected, DEFAULT_CONFIG.thresholds)
     assert per_class == {
@@ -874,13 +874,13 @@ def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None
         "0.7": {"bicycle": None, "car": pytest.approx(5 / 6), "pedestrian": None},
     }
     total = aggregate(collected, DEFAULT_CONFIG.thresholds)
-    assert total["AP@0.5"] == pytest.approx(5 / 6)
+    assert total["mAP@0.5 all"] == pytest.approx(5 / 6)
     assert total["gt"] == 2 and total["tp"] == 2 and total["fp"] == 2
 
     text = render_report(collected, DEFAULT_CONFIG.thresholds)
     main, per_class_table = _tables(text)
     header = main[0]
-    ap_column = header.index("AP@0.5")
+    ap_column = header.index("mAP@0.5 all")
     body = {tuple(line[:3]): line for line in main[2:]}
     assert body[("a", "vehicle", "single")][ap_column] == "1.000"
     assert body[("b", "vehicle", "single")][ap_column] == "0.500"
@@ -923,8 +923,10 @@ def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) ->
         "miss",
         "precision",
         "recall",
-        "AP@0.5",
-        "AP@0.7",
+        "mAP@0.5 all",
+        "mAP@0.5 model",
+        "mAP@0.7 all",
+        "mAP@0.7 model",
         "recovered",
         "lost_by_fusion",
     ]
@@ -948,7 +950,7 @@ def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) ->
     assert float(total[recall_column]) == pytest.approx(expected_recall, abs=5e-4)
     # Two copies of one scene pool to the per-scene values; the per-output rows and the
     # mean over outputs differ from a mean of means only in what they pool.
-    ap_column = header.index("AP@0.5")
+    ap_column = header.index("mAP@0.5 all")
     for line in output_lines:
         scene_line = next(s for s in scene_lines if s[1:3] == line[1:3])
         assert line[ap_column] == scene_line[ap_column]
@@ -963,10 +965,10 @@ def test_render_report_shows_a_missing_count_as_n_a() -> None:
     assert body[header.index("tp")] == "3"
     assert body[header.index("gt")] == "n/a"
     assert body[header.index("precision")] == "0.500"
-    assert body[header.index("AP@0.5")] == "n/a"
+    assert body[header.index("mAP@0.5 all")] == "n/a"
     assert total[:3] == ["all", "", ""]
     assert total[header.index("tp")] == "3"
-    assert total[header.index("AP@0.5")] == "n/a"
+    assert total[header.index("mAP@0.5 all")] == "n/a"
     compare = _table(render_compare([row], [row], (0.5,)))[2]
     assert compare[header.index("tp")] == "+0"
     assert compare[header.index("gt")] == "n/a"
@@ -995,7 +997,7 @@ def test_render_compare_lists_rows_of_either_run_and_counts_them() -> None:
     counts the shared rows and the rows only one run has."""
 
     def row(scene_id: str, run_id: str, tp: int, ap: float | None) -> Row:
-        values: dict[str, object] = {"gt": 4, "tp": tp, "fp": 1, "AP@0.5": ap}
+        values: dict[str, object] = {"gt": 4, "tp": tp, "fp": 1, "mAP@0.5 all": ap}
         return Row(scene_id, "vehicle", "single", values, run_id=run_id)
 
     rows_a = [row("s1", "det-a", 2, 0.5), row("s2", "det-a", 3, 0.75)]
@@ -1003,7 +1005,11 @@ def test_render_compare_lists_rows_of_either_run_and_counts_them() -> None:
     text = render_compare(rows_a, rows_b, (0.5,))
     main = _tables(text)[0]
     header = main[0]
-    tp_column, ap_col, gt_column = header.index("tp"), header.index("AP@0.5"), header.index("gt")
+    tp_column, ap_col, gt_column = (
+        header.index("tp"),
+        header.index("mAP@0.5 all"),
+        header.index("gt"),
+    )
     body = {line[0]: line for line in main[2:]}
     # a's rows in a's order, then b's extra rows, then the pooled rows.
     assert [line[0] for line in main[2:]] == ["s1", "s2", "s3", "all", "all"]
@@ -1023,3 +1029,84 @@ def test_render_compare_lists_rows_of_either_run_and_counts_them() -> None:
     # Rows without a run id fall back to a and b.
     plain = render_compare([row("s1", "", 2, 0.5)], [row("s2", "", 2, 0.5)], (0.5,))
     assert "rows: 0 shared, 1 only in a, 1 only in b" in plain
+
+
+def _uav_truck(scene: Scene) -> Annotation:
+    return next(a for a in scene.annotations if a.agent_id == "uav" and a.category == "truck")
+
+
+def test_gt_class_map_renames_ground_truth_before_matching() -> None:
+    """A car prediction on the uav's truck box: a miss and a false positive without the map,
+    one true positive with ``gt_class_map: {truck: car}``; the GT row then says ``car``."""
+    scene = cooperative_scene()
+    meta = synthetic_run_meta()
+    truck = _uav_truck(scene)
+    prediction = PredictionBox(
+        scene_id=scene.scene_id,
+        agent_id="uav",
+        source="single",
+        time_us=truck.time_us,
+        category="car",
+        score=0.9,
+        track_id=None,
+        center=truck.center,
+        size_lwh=truck.size_lwh,
+        box_from_rpy=truck.box_from_rpy,
+        frame=truck.frame,
+    )
+    plain = evaluate_scene(scene, meta, (prediction,), DEFAULT_CONFIG, created_utc=CREATED)
+    mapped_config = parse_config({"gt_class_map": {"truck": "car"}})
+    mapped = evaluate_scene(scene, meta, (prediction,), mapped_config, created_utc=CREATED)
+
+    def uav_totals(result: SceneEvaluation) -> dict[str, object]:
+        outputs = cast(list[dict[str, object]], result.metrics["outputs"])
+        output = next(o for o in outputs if o["agent_id"] == "uav" and o["source"] == "single")
+        return cast(dict[str, object], output["totals"])
+
+    assert uav_totals(plain)["tp"] == 0 and uav_totals(plain)["fp"] == 1
+    assert uav_totals(mapped)["tp"] == 1 and uav_totals(mapped)["fp"] == 0
+    gt_rows = [r for r in mapped.matches if r["kind"] == "gt" and r["agent_id"] == "uav"]
+    assert "truck" not in {r["category"] for r in gt_rows}
+    assert any(r["category"] == "car" and r["status"] == "tp" for r in gt_rows)
+    assert cast(dict[str, object], mapped.metrics["config"])["gt_class_map"] == {"truck": "car"}
+
+
+def test_mean_model_averages_only_run_json_categories() -> None:
+    """``ap.<t>.mean`` stays the union mean; ``mean_model`` averages the ``run.json``
+    categories that have an AP, so a GT-only class the model never emits (the fixture's
+    cone) counts in the first and not in the second."""
+    scene = cooperative_scene()
+    meta, boxes = synthetic_predictions(scene)
+    result = evaluate_scene(scene, meta, boxes, DEFAULT_CONFIG, created_utc=CREATED)
+    outputs = cast(list[dict[str, object]], result.metrics["outputs"])
+    output = next(o for o in outputs if o["agent_id"] == "vehicle" and o["source"] == "single")
+    ap = cast(dict[str, object], cast(dict[str, object], output["ap"])["0.5"])
+    per_class = {k: v for k, v in ap.items() if k not in {"mean", "mean_model"}}
+    union = [cast(float, v) for v in per_class.values() if v is not None]
+    model = [cast(float, v) for k, v in per_class.items() if k in meta.categories and v is not None]
+    assert "cone" in per_class and "cone" not in meta.categories
+    assert ap["mean"] == pytest.approx(sum(union) / len(union))
+    assert ap["mean_model"] == pytest.approx(sum(model) / len(model))
+    assert ap["mean_model"] != ap["mean"]
+
+
+def test_report_and_compare_show_union_and_model_mean_ap(tmp_path: Path) -> None:
+    root, scene = _scenes_root(tmp_path, "coop-a")
+    predictions = tmp_path / "predictions"
+    meta, _boxes = _write_fixture_run(predictions, scene, ("coop-a",))
+    evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    rows = collect(root, predictions, meta.run_id)
+    assert rows[0].model_categories == tuple(meta.categories)
+    text = render_report(rows, DEFAULT_CONFIG.thresholds)
+    main = _tables(text)[0]
+    header = main[0]
+    all_col, model_col = header.index("mAP@0.5 all"), header.index("mAP@0.5 model")
+    total = main[-1]
+    pooled = pooled_ap(rows, DEFAULT_CONFIG.thresholds)["0.5"]
+    model_values = [v for k, v in pooled.items() if k in meta.categories and v is not None]
+    union_values = [v for v in pooled.values() if v is not None]
+    assert total[all_col] == f"{sum(union_values) / len(union_values):.3f}"
+    assert total[model_col] == f"{sum(model_values) / len(model_values):.3f}"
+    assert total[all_col] != total[model_col]
+    compare = _tables(render_compare(rows, rows, DEFAULT_CONFIG.thresholds))[0]
+    assert compare[-1][compare[0].index("mAP@0.5 model")] == "+0.000"

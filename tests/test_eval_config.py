@@ -31,6 +31,7 @@ SPEC_KEYS = (
     "ignore_gt_visibility_below",
     "max_range_m",
     "score_threshold",
+    "gt_class_map",
 )
 
 
@@ -214,6 +215,7 @@ def test_config_json_has_every_spec_key() -> None:
         "ignore_gt_visibility_below": None,
         "max_range_m": None,
         "score_threshold": 0.3,
+        "gt_class_map": {},
     }
 
 
@@ -261,3 +263,19 @@ def test_load_config_names_the_file_on_bad_yaml(tmp_path: Path) -> None:
 def test_load_config_rejects_an_unknown_key_from_yaml(tmp_path: Path) -> None:
     with pytest.raises(ConfigError, match="colour"):
         load_config(_write(tmp_path, "colour: red\n"))
+
+
+def test_gt_class_map_renames_ground_truth_classes_and_round_trips() -> None:
+    """Decision (Task 12): GT truck/bus -> car and motorcycle -> bicycle, as the Griffin toolkit
+    does in code (trans_kitti2nuscenes.py obj_type_mapping; griffin_dataset.py
+    class_names_nuscenes_mappings). The map is a config key, copied into metrics.json."""
+    cfg = parse_config({"gt_class_map": {"truck": "car", "bus": "car", "motorcycle": "bicycle"}})
+    assert dict(cfg.gt_class_map) == {"truck": "car", "bus": "car", "motorcycle": "bicycle"}
+    assert dict(DEFAULT_CONFIG.gt_class_map) == {}
+    payload = config_json(cfg)
+    assert payload["gt_class_map"] == {"truck": "car", "bus": "car", "motorcycle": "bicycle"}
+    assert parse_config(payload) == cfg
+    with pytest.raises(ConfigError, match="gt_class_map"):
+        parse_config({"gt_class_map": {"truck": 3}})
+    with pytest.raises(ConfigError, match="gt_class_map"):
+        parse_config({"gt_class_map": ["truck"]})

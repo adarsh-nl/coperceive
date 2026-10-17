@@ -32,7 +32,7 @@ from coperceive.evaluation.evaluate import (
 )
 from coperceive.evaluation.matching import IGNORED
 from coperceive.evaluation.metrics import average_precision
-from coperceive.evaluation.predictions import check_run_id
+from coperceive.evaluation.predictions import check_run_id, read_run_meta
 from coperceive.viewdata import scene_directories
 
 AGGREGATE_LABEL = "all"
@@ -79,6 +79,7 @@ class Row:
     values: Mapping[str, object]
     run_id: str = ""
     pool: ApPool | None = None
+    model_categories: tuple[str, ...] = ()
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -90,12 +91,24 @@ class Row:
 
 
 def ap_column(threshold: float) -> str:
+    """Main-table column: the pooled mean AP over every class with ground truth."""
+    return f"mAP@{threshold_key(threshold)} all"
+
+
+def model_ap_column(threshold: float) -> str:
+    """Main-table column: the pooled mean AP over the run's ``run.json`` categories."""
+    return f"mAP@{threshold_key(threshold)} model"
+
+
+def class_ap_column(threshold: float) -> str:
+    """Per-class table column."""
     return f"AP@{threshold_key(threshold)}"
 
 
 def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row, ...]:
     """Rows of every scene under ``scenes_root`` that ``run_id`` has evaluated, in name order."""
     check_run_id(run_id)
+    model_categories = tuple(read_run_meta(predictions_root, run_id).categories)
     rows: list[Row] = []
     for scene_dir in scene_directories(scenes_root):
         directory = scene_output_dir(predictions_root, run_id, scene_dir.name)
@@ -116,7 +129,9 @@ def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row
             values["precision"] = totals.get("precision")
             values["recall"] = totals.get("recall")
             for threshold in thresholds:
-                values[ap_column(threshold)] = _dict(ap.get(threshold_key(threshold))).get("mean")
+                entry = _dict(ap.get(threshold_key(threshold)))
+                values[ap_column(threshold)] = entry.get("mean")
+                values[model_ap_column(threshold)] = entry.get("mean_model")
             for key in COOPERATIVE_KEYS:
                 values[key] = cooperative.get(key)
             values["thresholds"] = thresholds
@@ -126,7 +141,9 @@ def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row
             pool = None
             if partial is not None:
                 first = _dict(ap.get(threshold_key(thresholds[0]))) if thresholds else {}
-                categories = tuple(sorted(key for key in first if key != "mean"))
+                categories = tuple(
+                    sorted(key for key in first if key not in {"mean", "mean_model"})
+                )
                 pool = ApPool(
                     categories=categories,
                     n_gt=partial.n_gt,
@@ -145,6 +162,7 @@ def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row
                     values=values,
                     run_id=run_id,
                     pool=pool,
+                    model_categories=model_categories,
                 )
             )
     return tuple(rows)
@@ -192,13 +210,13 @@ def _columns(thresholds: Sequence[float]) -> list[str]:
         *COUNT_KEYS,
         "precision",
         "recall",
-        *(ap_column(t) for t in thresholds),
+        *(c for t in thresholds for c in (ap_column(t), model_ap_column(t))),
         *COOPERATIVE_KEYS,
     ]
 
 
 def _is_ratio(column: str) -> bool:
-    return column in {"precision", "recall"} or column.startswith("AP@")
+    return column in {"precision", "recall"} or "AP@" in column
 
 
 def _count(value: object) -> int | None:
@@ -262,9 +280,13 @@ def aggregate(rows: Sequence[Row], thresholds: Sequence[float]) -> dict[str, obj
     out["precision"] = None if tp + fp == 0 else tp / (tp + fp)
     out["recall"] = None if gt == 0 else tp / gt
     pooled = pooled_ap(rows, thresholds)
+    model_categories = {c for row in rows for c in row.model_categories}
     for threshold in thresholds:
-        values = [v for v in pooled[threshold_key(threshold)].values() if v is not None]
+        per_category = pooled[threshold_key(threshold)]
+        values = [v for v in per_category.values() if v is not None]
         out[ap_column(threshold)] = sum(values) / len(values) if values else None
+        model = [v for c, v in per_category.items() if c in model_categories and v is not None]
+        out[model_ap_column(threshold)] = sum(model) / len(model) if model else None
     return out
 
 
@@ -329,7 +351,7 @@ def render_report(rows: Sequence[Row], thresholds: Sequence[float]) -> str:
 
 
 def _class_header(thresholds: Sequence[float]) -> list[str]:
-    return ["agent", "source", "class", *(ap_column(t) for t in thresholds)]
+    return ["agent", "source", "class", *(class_ap_column(t) for t in thresholds)]
 
 
 def _class_lines(
