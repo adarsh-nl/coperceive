@@ -157,7 +157,7 @@ Routes, all GET, all read-only, all confined to the predictions root:
 Page:
 
 - A **Predictions** block in the layer column: run selector (and a second selector for compare), source chips (`single`, `fused`, …), status chips (TP, FP, miss, ignored), the four cooperative chips, and a score slider that starts at the run's operating point. The slider filters what is drawn and updates the frame counts; it does not recompute AP.
-- Colours, on the data layer with bloom like the GT wires. Each status gets a colour and a line style, so the state survives colour-blindness and a greyscale export: TP green `#3BAA6B` solid, FP amber `#E0A431` dashed, miss violet `#8E6CEF` dotted and thicker, ignored `#6B6B6B` thin. Red-orange `#DE3B21` stays the playhead and Play. Ground-truth wires keep their agent or class colour; a matched GT box is drawn fainter so the TP reads on top. In compare mode run B uses the same hues with a dash offset and a small "B" tag in the inspector.
+- Colours, on the data layer with bloom like the GT wires. Each status gets a colour and a line style, so the state survives colour-blindness and a greyscale export: TP teal `#1FA3A3` solid, FP amber `#E0A431` dashed, miss violet `#8E6CEF` dotted and thicker, ignored `#6B6B6B` thin. Red-orange `#DE3B21` stays the playhead and Play. Ground-truth wires keep their agent or class colour; a matched GT box is drawn fainter so the TP reads on top. In compare mode run B uses the same hues with a dash offset and a small "B" tag in the inspector.
 - **Inspector**: clicking a prediction shows run, source, score, status, category, matched GT track id, centre and yaw error, and the cooperative flags of the GT it matched. Clicking a GT box adds its status per source and the "seen by" line.
 - **Timeline**: sparklines for precision, recall and FP count per frame for the selected `(agent, source)`, in the sparkline style already in `telemetry.ts`. Compare mode draws run B as a second thinner line. A frame where recall drops below the scene median by more than 0.3 gets a range marker, the same marker the timeline already draws.
 - **Scene summary** card gains mAP, recall, and the four cooperative counts, with the A/B delta in compare mode.
@@ -196,7 +196,7 @@ Taken by Adarsh on 2026-10-17. Items 1, 3 and 5 are his words; the rest are the 
 2. **AP rule.** All-points area under the monotone precision envelope.
 3. **Fused outputs** are `source = fused` on the real agent, not a virtual agent.
 4. **Predictions root** `<scenes root>/predictions` by default, `--predictions` to override.
-5. **Colours.** Green, amber and violet for TP, FP and miss, with the dashed and dotted line styles carrying the distinction for colour-blind readers; the legend names each status in words.
+5. **Colours.** Teal, amber and violet for TP, FP and miss, with the dashed and dotted line styles carrying the distinction for colour-blind readers; the legend names each status in words.
 6. **Operating point** `score_threshold: 0.3`, overridable per run.
 7. **Visibility.** Every GT box is kept by default.
 8. **Compare UX.** Overlay plus a delta table; split viewport later if needed.

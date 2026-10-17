@@ -10,7 +10,7 @@ framework. Image bytes stay in the scene directory.
 
 The bird's-eye figure can also draw the prediction rows of one evaluated run
 (``docs/spec/predictions.md`` §Colours and styles) on top of the ground-truth
-boxes: ``tp`` solid green, ``fp`` dashed amber, ``miss`` dotted violet and
+boxes: ``tp`` solid teal, ``fp`` dashed amber, ``miss`` dotted violet and
 thicker, ``ignored`` and ``below_threshold`` thin grey at half opacity. A
 ground-truth box that was matched (a ``gt`` row with status ``tp``) is not drawn
 again; its ground-truth wire is dimmed to 40 % so the ``tp`` wire reads on top.
@@ -136,7 +136,7 @@ class _StatusStyle:
 
 # §Colours and styles. Dash lengths are in points; the page uses metres.
 _STATUS_STYLES: dict[str, _StatusStyle] = {
-    "tp": _StatusStyle("#3BAA6B", "-", 1.0, 1.0),
+    "tp": _StatusStyle("#1FA3A3", "-", 1.0, 1.0),
     "fp": _StatusStyle("#E0A431", (0, (4, 2)), 1.0, 1.0),
     "miss": _StatusStyle("#8E6CEF", (0, (1, 2)), 1.5, 1.0),
     "ignored": _StatusStyle("#6B6B6B", "-", 0.8, 0.5),

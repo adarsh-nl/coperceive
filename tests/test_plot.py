@@ -324,7 +324,7 @@ def test_bev_export_draws_predictions(tmp_path: Path) -> None:
     svg = render_bev(scene, tmp_path / "all.svg", time_us=0, predictions=rows)
     assert svg.predictions == 5
     text = svg.dest.read_text(encoding="utf-8").lower()
-    for colour in ("#3baa6b", "#e0a431", "#8e6cef", "#6b6b6b"):
+    for colour in ("#1fa3a3", "#e0a431", "#8e6cef", "#6b6b6b"):
         assert colour in text
     for word in ("tp", "fp", "miss", "ignored"):
         assert word in text

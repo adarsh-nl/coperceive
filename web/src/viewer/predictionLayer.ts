@@ -14,7 +14,7 @@ import {
  */
 
 export const STATUS_COLORS = {
-  tp: 0x3baa6b,
+  tp: 0x1fa3a3,
   fp: 0xe0a431,
   miss: 0x8e6cef,
   ignored: 0x6b6b6b,

@@ -20,7 +20,7 @@
   --viewport: #141414;
   --radius: 10px;
   /* Prediction statuses, docs/spec/predictions.md §Colours and styles. Same in both themes. */
-  --eval-tp: #3BAA6B;
+  --eval-tp: #1FA3A3;
   --eval-fp: #E0A431;
   --eval-miss: #8E6CEF;
   --eval-ignored: #6B6B6B;

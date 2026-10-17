@@ -481,7 +481,7 @@ def test_prediction_routes_list_frame_and_series(tmp_path: Path) -> None:
     saved = bev.json()
     assert saved["predictions"] > 0
     assert (scenes / saved["path"]).is_file()
-    assert "#3baa6b" in (scenes / saved["path"]).read_text(encoding="utf-8").lower()
+    assert "#1fa3a3" in (scenes / saved["path"]).read_text(encoding="utf-8").lower()
     unknown = client.post(
         "/api/scenes/coop/export/bev",
         headers=headers,

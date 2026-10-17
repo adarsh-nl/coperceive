@@ -99,7 +99,7 @@ coperceive serve --root /path/scenes --predictions /path/predictions
 coperceive export bev /path/scenes/Town03-000 --out /path/bev.svg --time-us 1118500000 --run det-v1
 ```
 
-`--run` draws the match rows of that evaluated run at the sample on top of the ground-truth boxes. `--predictions` names the root when it is not `<scene>/../predictions`. The styles are the ones in [the spec](spec/predictions.md#colours-and-styles): `tp` solid green `#3BAA6B`, `fp` dashed amber `#E0A431`, `miss` dotted violet `#8E6CEF` and thicker, `ignored` and `below_threshold` thin grey `#6B6B6B` at half opacity. The legend names each status in words, and a ground-truth box that was matched is dimmed to 40 % so the `tp` wire reads on top. The command prints the counts it drew, ending in `predictions N`. The same figure is the bird's-eye export button on the page.
+`--run` draws the match rows of that evaluated run at the sample on top of the ground-truth boxes. `--predictions` names the root when it is not `<scene>/../predictions`. The styles are the ones in [the spec](spec/predictions.md#colours-and-styles): `tp` solid teal `#1FA3A3`, `fp` dashed amber `#E0A431`, `miss` dotted violet `#8E6CEF` and thicker, `ignored` and `below_threshold` thin grey `#6B6B6B` at half opacity. The legend names each status in words, and a ground-truth box that was matched is dimmed to 40 % so the `tp` wire reads on top. The command prints the counts it drew, ending in `predictions N`. The same figure is the bird's-eye export button on the page.
 
 ## What was checked
 

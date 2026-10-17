@@ -245,7 +245,7 @@ On the data layer, with bloom, like the ground-truth wires. Style is the primary
 
 | Status | Colour | Line |
 | --- | --- | --- |
-| `tp` | `#3BAA6B` | solid |
+| `tp` | `#1FA3A3` | solid |
 | `fp` | `#E0A431` | dashed, 0.6 m dash, 0.3 m gap |
 | `miss` (a GT row) | `#8E6CEF` | dotted, 0.15 m dash, 0.3 m gap, drawn 1.5× thicker |
 | `ignored`, `below_threshold` | `#6B6B6B` | solid, thin, 50% opacity |

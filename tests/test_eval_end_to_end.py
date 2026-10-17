@@ -151,7 +151,7 @@ def test_import_run_serve_export_and_compare(
     figure = scenes / cast(str, saved["path"])
     assert figure.is_file()
     assert cast(int, saved["predictions"]) > 0
-    assert "#3baa6b" in figure.read_text(encoding="utf-8").lower()
+    assert "#1fa3a3" in figure.read_text(encoding="utf-8").lower()
 
     # eval compare of a run against itself: every delta is zero.
     main(["eval", "compare", RUN_ID, RUN_ID, "--root", str(scenes)])
