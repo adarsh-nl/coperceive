@@ -167,3 +167,44 @@ coperceive maps align --maps /path/maps --scenes /path/scenes
 ## Validation
 
 `coperceive validate /tmp/griffin-scenes` was run again on this conversion on 2026-10-15 after the warning and gate changes. Elapsed 5.737 s. The aggregate is in `docs/validate.md`. The per-frame drone-minus-vehicle height (min 16.811032561585307 m, median 26.410151720046997 m, max 29.66659187246114 m) is wider than 25±2 m. Every scene's `cruise_altitude_m` is inside that band. The toolkit band is the cruise field. The low tail is a descent on Town06-001, 38 frames. Missing frames on this tier: 0. Hard failures: 0. Instantaneous acceleration warnings: 22. Smoothed acceleration warnings over 0.5 s: 0 (max 15.712867500264949 m/s²). Shared-track centre error stays at roundoff (median 2.929642751054232e-14 m over 61,302 pairs). Computed pairs under the size-scaled gate: 11.
+
+## Staging the val scenes for the viewer
+
+`scripts/griffin/stage_viewer.py` makes the 10 Griffin-25m `val` scenes viewable with lidar points, camera images and the CARLA town maps on a compute node, without copying the dataset. It writes only under `--scratch` (`/local/$SLURM_JOB_ID/coperceive-viewer` by default) and refuses a scratch under `/home`.
+
+| Staged | How | Size for the 10 val scenes |
+| --- | --- | --- |
+| `raw/<side>/scene_infos.json` | written, val scenes only, dataset order, both sides (the rules of `scene_infos_val.py`) | 2 files |
+| `raw/<side>/{calib,pose,label}` | `rsync -a --files-from` from the release, val frames only | 13 + 2 × 2 × 1,490 files, a few MB |
+| `raw/vehicle-side/lidar/lidar_top/*.ply` | same rsync, val frames only; the converter must read them to write `points.bin` | 1,490 files, about 150 MB; `--no-lidar` skips them |
+| `scenes/<scene>/` | `coperceive convert griffin --subset 25m`, in process | 10 scenes |
+| `scenes/<scene>/<side>/camera` | one symlink per side to `<release>/<side>/camera` (absolute target) | 20 links; no PNG is copied (about 17 GB avoided) |
+| `maps/<Town>/` | `coperceive maps ingest` per town named by the staged scenes, then `coperceive maps align` | 4 towns |
+
+The adapter resolves symlinks and refuses files outside its raw root, which is why the metadata and the lidar are real copies. Images are recorded with `require_file: false` as `<side>/camera/<sensor>/<frame>.png` relative to the scene directory, so the camera links make them resolve into the release, and `coperceive serve --media-root <release>` allows that. The OpenDRIVE files are checked against the SHA-256 pins of [ADR 0008](../adr/0008-hd-map.md) before anything is staged; `--allow-unpinned-xodr` exists for the test fixture only.
+
+On the cluster, in an `srun` session (2 CPUs and 8 GB are enough; nothing runs on the login node). The `.venv`'s editable install points at `main`, so `PYTHONPATH` names the worktree, and it stays exported for the `serve` line that the script prints at the end:
+
+```bash
+srun --partition=main --cpus-per-task=2 --mem=8G --time=2:00:00 --pty bash
+hostname                                  # the node for the tunnel (HANDOVER.md, "Viewing from a laptop")
+module load python/3.13.14
+export PYTHONPATH=$HOME/coperceive-adr0010
+$HOME/coperceive-adr0010/.venv/bin/python $HOME/coperceive-adr0010/scripts/griffin/stage_viewer.py \
+    --raw /datasets/eemcs/ps/cv/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release \
+    --split $HOME/src/griffin/data/split_datas/griffin_50scenes_25m.json \
+    --xodr-dir $HOME/maps-src/carla-0.9.15 \
+    --predictions $HOME/results/627093/predictions \
+    --static $HOME/coperceive-web-dist \
+    --workers 2
+```
+
+`--static` names a web build made out of tree (`web/node_modules/.bin/vite build --outDir $HOME/coperceive-web-dist --emptyOutDir`); without it the packaged bundle is served, which may be older than `web/src` ([viewer](../viewer.md)). On 2026-10-17 a one-scene run of this script on the login node (Town06-007, `--no-lidar`, `--workers 1`) took 6.7 s: 609 files, both camera links resolving all 1,341 recorded images, Town06 ingested (847 polylines) and aligned (identity, median residual 0.0011 m over 149 poses); the full ten-scene run with lidar belongs in the allocation.
+
+Each of the five steps is timed on stdout. The summary lists the scenes with their cloud and point counts from `point_index.parquet`, the camera links with how many recorded image paths resolve through them (1,490 frames × 9 cameras = 13,410), each map with its alignment `measured` flag, chosen axis candidate and median residual, and the exact `serve` line:
+
+```text
+<venv>/bin/coperceive serve --host 127.0.0.1 --port 8731 --root <scratch>/scenes --maps <scratch>/maps --predictions <predictions> --media-root <release> --static <web build>
+```
+
+Re-running in the same scratch is incremental: rsync copies only what changed, converted scenes with a matching `COMPLETE.json` are skipped, existing links are kept, maps are rewritten and re-aligned. The scratch disappears with the allocation; `rm -rf` does not follow the camera links, so the release is never touched. The test is `tests/test_stage_viewer.py` on the synthetic release of `tests/griffin_release.py`.
