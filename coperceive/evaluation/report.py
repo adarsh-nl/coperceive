@@ -8,7 +8,8 @@ precision and recall from the sums, and take their ``AP@<t>`` from the **pooled*
 curve (§Metrics, Pooled AP): every prediction of every scene of the run, one
 precision/recall walk per class, ``n_gt`` summed over scenes, then the mean over
 the classes that have a value. A second table lists that pooled AP per class.
-``compare`` prints the same tables with ``b − a`` deltas.
+``compare`` prints the same tables with ``b − a`` deltas over every row of
+either run, ``n/a`` where a run lacks the row, and a footer with the counts.
 """
 
 from __future__ import annotations
@@ -371,19 +372,28 @@ def _class_delta_lines(
 def render_compare(
     rows_a: Sequence[Row], rows_b: Sequence[Row], thresholds: Sequence[float]
 ) -> str:
-    """The same tables with ``b − a`` deltas, over the rows both runs have, in ``a``'s order.
+    """The same tables with ``b − a`` deltas over every row of either run.
 
-    A ratio that is ``null`` on either side shows ``n/a``. The ``all`` lines are
-    the deltas of the two pooled aggregates over those shared rows.
+    ``a``'s rows come first in ``a``'s order, then the rows only ``b`` has. A row
+    the other run lacks shows ``n/a`` in every cell, as does a ratio that is
+    ``null`` on either side. The ``all`` lines (one per output, one over every
+    output) are the deltas of the two pooled aggregates over the shared rows
+    only, so an output with no shared row is ``n/a`` throughout. A footer under
+    the main table counts the rows: ``rows: <n> shared, <n> only in <a>, <n>
+    only in <b>``, naming the runs by the rows' ``run_id`` (``a`` and ``b`` when
+    the rows carry none). The per-class table follows, over the shared rows.
     """
     columns = _columns(thresholds)
-    by_key = {row.key: row for row in rows_b}
+    missing = [MISSING] * len(columns)
+    by_key_a = {row.key: row for row in rows_a}
+    by_key_b = {row.key: row for row in rows_b}
     shared_a: list[Row] = []
     shared_b: list[Row] = []
     lines: list[list[str]] = []
     for row in rows_a:
-        other = by_key.get(row.key)
+        other = by_key_b.get(row.key)
         if other is None:
+            lines.append([row.scene_id, row.agent_id, row.source, *missing])
             continue
         shared_a.append(row)
         shared_b.append(other)
@@ -391,7 +401,13 @@ def render_compare(
             [row.scene_id, row.agent_id, row.source]
             + [_delta_cell(c, row.values.get(c), other.values.get(c)) for c in columns]
         )
-    for output in outputs_of(shared_a):
+    only_b = [row for row in rows_b if row.key not in by_key_a]
+    lines.extend([row.scene_id, row.agent_id, row.source, *missing] for row in only_b)
+    shared_outputs = set(outputs_of(shared_a))
+    for output in outputs_of([*rows_a, *rows_b]):
+        if output not in shared_outputs:
+            lines.append([AGGREGATE_LABEL, *output, *missing])
+            continue
         total_a = aggregate(_of_output(shared_a, output), thresholds)
         total_b = aggregate(_of_output(shared_b, output), thresholds)
         lines.append(
@@ -405,6 +421,10 @@ def render_compare(
         + [_delta_cell(c, total_a.get(c), total_b.get(c)) for c in columns]
     )
     main = _table(["scene", "agent", "source", *columns], lines)
+    footer = (
+        f"rows: {len(shared_a)} shared, {len(rows_a) - len(shared_a)} only in "
+        f"{_run_label(rows_a, 'a')}, {len(only_b)} only in {_run_label(rows_b, 'b')}\n"
+    )
 
     class_lines: list[list[str]] = []
     for output in outputs_of(shared_a):
@@ -417,4 +437,9 @@ def render_compare(
             )
         )
     class_lines.extend(_class_delta_lines([AGGREGATE_LABEL, ""], shared_a, shared_b, thresholds))
-    return main + "\n" + _table(_class_header(thresholds), class_lines)
+    return main + footer + "\n" + _table(_class_header(thresholds), class_lines)
+
+
+def _run_label(rows: Sequence[Row], fallback: str) -> str:
+    """The ``run_id`` the rows carry, or ``fallback`` when none does."""
+    return next((row.run_id for row in rows if row.run_id), fallback)

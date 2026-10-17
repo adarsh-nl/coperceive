@@ -988,3 +988,38 @@ def test_render_compare_shows_zero_deltas_for_the_same_files(tmp_path: Path) -> 
     assert table[-1][:3] == ["all", "", ""]
     n_outputs = len({(row.agent_id, row.source) for row in rows})
     assert len(table) == len(rows) + n_outputs + 3
+
+
+def test_render_compare_lists_rows_of_either_run_and_counts_them() -> None:
+    """Decision: a row missing on one side shows ``n/a`` in every delta cell, and a footer
+    counts the shared rows and the rows only one run has."""
+
+    def row(scene_id: str, run_id: str, tp: int, ap: float | None) -> Row:
+        values: dict[str, object] = {"gt": 4, "tp": tp, "fp": 1, "AP@0.5": ap}
+        return Row(scene_id, "vehicle", "single", values, run_id=run_id)
+
+    rows_a = [row("s1", "det-a", 2, 0.5), row("s2", "det-a", 3, 0.75)]
+    rows_b = [row("s2", "det-b", 4, 1.0), row("s3", "det-b", 1, None)]
+    text = render_compare(rows_a, rows_b, (0.5,))
+    main = _tables(text)[0]
+    header = main[0]
+    tp_column, ap_col, gt_column = header.index("tp"), header.index("AP@0.5"), header.index("gt")
+    body = {line[0]: line for line in main[2:]}
+    # a's rows in a's order, then b's extra rows, then the pooled rows.
+    assert [line[0] for line in main[2:]] == ["s1", "s2", "s3", "all", "all"]
+    assert body["s2"][tp_column] == "+1" and body["s2"][ap_col] == "+0.250"
+    for scene_id in ("s1", "s3"):
+        assert all(cell == "n/a" for cell in body[scene_id][3:]), body[scene_id]
+    # The all rows compare the shared rows only: gt 4 vs 4, tp 3 vs 4.
+    assert main[-2][:3] == ["all", "vehicle", "single"]
+    assert main[-1][:3] == ["all", "", ""]
+    assert main[-1][gt_column] == "+0" and main[-1][tp_column] == "+1"
+    footer = [line for line in text.splitlines() if line.startswith("rows:")]
+    assert footer == ["rows: 1 shared, 1 only in det-a, 1 only in det-b"]
+    # The footer sits right under the main table, before the per-class table.
+    lines = text.splitlines()
+    assert lines[lines.index(footer[0]) - 1].startswith("| all |")
+    assert lines[lines.index(footer[0]) + 1] == ""
+    # Rows without a run id fall back to a and b.
+    plain = render_compare([row("s1", "", 2, 0.5)], [row("s2", "", 2, 0.5)], (0.5,))
+    assert "rows: 0 shared, 1 only in a, 1 only in b" in plain
