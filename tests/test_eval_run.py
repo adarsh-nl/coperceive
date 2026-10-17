@@ -24,6 +24,7 @@ from coperceive.evaluation.evaluate import (
     MATCH_SCHEMA,
     METRICS_FORMAT,
     METRICS_VERSION,
+    EvaluationError,
     RunReport,
     SceneEvaluation,
     evaluate_run,
@@ -357,6 +358,24 @@ def _walk(value: object, seen: list[object]) -> None:
             _walk(item, seen)
     elif isinstance(value, float):
         assert math.isfinite(value)
+
+
+def test_readers_refuse_a_symlinked_file_that_leaves_the_scene_directory(
+    evaluated: tuple[Scene, RunMeta, tuple[PredictionBox, ...], SceneEvaluation],
+    tmp_path: Path,
+) -> None:
+    """§Layout: every path a reader opens is resolved and must stay under the root."""
+    _scene, _meta, _boxes, result = evaluated
+    outside = tmp_path / "outside"
+    write_scene_evaluation(outside, result)
+    directory = tmp_path / "root" / "run" / "scene"
+    directory.mkdir(parents=True)
+    (directory / "metrics.json").symlink_to(outside / "metrics.json")
+    (directory / "matches.parquet").symlink_to(outside / "matches.parquet")
+    with pytest.raises(EvaluationError, match="leaves"):
+        read_metrics(directory)
+    with pytest.raises(EvaluationError, match="leaves"):
+        read_matches(directory)
 
 
 def test_metrics_json_has_no_nan_and_a_zero_ap_for_an_unpredicted_class(

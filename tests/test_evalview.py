@@ -15,7 +15,12 @@ from typing import cast
 
 import pytest
 from coperceive.evaluation.config import DEFAULT_CONFIG
-from coperceive.evaluation.evaluate import MATCH_SCHEMA, evaluate_run, read_matches
+from coperceive.evaluation.evaluate import (
+    MATCH_SCHEMA,
+    EvaluationError,
+    evaluate_run,
+    read_matches,
+)
 from coperceive.evaluation.predictions import write_run
 from coperceive.evalview import EvalViewError, frame_rows, runs_for_scene, series
 from coperceive.store import write_scene
@@ -238,3 +243,33 @@ def test_matches_cache_is_keyed_by_mtime(tmp_path: Path) -> None:
     os.utime(matches, ns=(stamp, stamp))
     frame_rows(predictions, meta.run_id, SCENE, TIME, compare=None)
     assert evalview.cache_keys() == ((meta.run_id, SCENE, stamp),)
+
+
+# --- confinement (§Layout) ---
+
+
+def test_a_symlinked_metrics_or_matches_file_outside_the_root_is_refused(tmp_path: Path) -> None:
+    """Every path a reader opens is resolved and must stay under the predictions root."""
+    from coperceive import evalview
+
+    scene = cooperative_scene()
+    scenes = tmp_path / "scenes"
+    write_scene(replace(scene, scene_id=SCENE), scenes / SCENE)
+    predictions = tmp_path / "predictions"
+    meta, boxes = synthetic_predictions(scene)
+    write_run(predictions, meta.run_id, meta, tuple(replace(b, scene_id=SCENE) for b in boxes))
+    evaluate_run(scenes, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    directory = predictions / meta.run_id / SCENE
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    for name in ("metrics.json", "matches.parquet"):
+        (directory / name).rename(outside / name)
+        (directory / name).symlink_to(outside / name)
+    evalview.clear_cache()
+
+    with pytest.raises(EvaluationError, match="leaves"):
+        series(predictions, meta.run_id, SCENE, compare=None)
+    with pytest.raises(EvaluationError, match="leaves"):
+        frame_rows(predictions, meta.run_id, SCENE, TIME, compare=None)
+    with pytest.raises(EvaluationError, match="leaves"):
+        runs_for_scene(predictions, SCENE)

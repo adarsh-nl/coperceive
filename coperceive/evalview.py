@@ -5,11 +5,12 @@ The three bodies the page fetches — the runs of a scene, the match rows at one
 sample and the per-sample series — built from ``run.json``, ``matches.parquet``
 and ``metrics.json`` under a predictions root. This module does not import a
 web framework; ``coperceive.app.server`` maps :class:`EvalViewError` to an HTTP
-status. Every path goes through the confine check of
+status. Every directory goes through the confine check of
 :func:`coperceive.evaluation.evaluate.scene_output_dir` after the ``run_id`` and
-``scene_id`` pass the scene-id rule. A ``run_id`` or ``scene_id`` that fails the
-rule is a 400; a run, a scene without predictions or a scene that has not been
-evaluated is a 404. Nothing here writes.
+``scene_id`` pass the scene-id rule, and every file a reader opens is resolved
+under it (:func:`coperceive.evaluation.evaluate.scene_file`). A ``run_id`` or
+``scene_id`` that fails the rule is a 400; a run, a scene without predictions or a
+scene that has not been evaluated is a 404. Nothing here writes.
 
 The match rows of one ``(run_id, scene_id)`` are kept in a small per-process
 cache keyed by the ``mtime_ns`` of ``matches.parquet``, so scrubbing through a
@@ -29,6 +30,7 @@ from coperceive.evaluation.evaluate import (
     EvaluationError,
     read_matches,
     read_metrics,
+    scene_file,
     scene_output_dir,
 )
 from coperceive.evaluation.predictions import (
@@ -138,7 +140,7 @@ def cache_keys() -> tuple[tuple[str, str, int], ...]:
 
 
 def _match_rows(run_id: str, scene_id: str, directory: Path) -> tuple[dict[str, object], ...]:
-    path = directory / MATCHES_FILE
+    path = scene_file(directory, MATCHES_FILE)
     try:
         mtime_ns = path.stat().st_mtime_ns
     except OSError as error:

@@ -706,9 +706,23 @@ def write_scene_evaluation(directory: Path, result: SceneEvaluation) -> None:
     (directory / METRICS_FILE).write_text(text + "\n", encoding="utf-8")
 
 
+def scene_file(directory: Path, name: str) -> Path:
+    """``directory / name`` resolved, refused when it leaves ``directory``.
+
+    ``directory`` is a :func:`scene_output_dir`, so a file that stays under it stays
+    under the predictions root (§Layout: every path a reader opens is resolved and
+    must stay under the root). A symlink planted in a scene directory that points
+    outside is refused rather than followed.
+    """
+    try:
+        return confine(directory, name)
+    except PathError as error:
+        raise EvaluationError(str(error)) from error
+
+
 def read_metrics(directory: Path) -> dict[str, object]:
     """The ``metrics.json`` object of one evaluated scene."""
-    path = directory / METRICS_FILE
+    path = scene_file(directory, METRICS_FILE)
     try:
         loaded: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
@@ -730,7 +744,7 @@ def read_metrics(directory: Path) -> dict[str, object]:
 
 def read_matches(directory: Path) -> pa.Table:
     """The ``matches.parquet`` table of one evaluated scene, §``matches.parquet`` columns."""
-    path = directory / MATCHES_FILE
+    path = scene_file(directory, MATCHES_FILE)
     try:
         return pq.read_table(path, columns=list(MATCH_SCHEMA.names))
     except Exception as error:  # pyarrow error types are not in the stubs
