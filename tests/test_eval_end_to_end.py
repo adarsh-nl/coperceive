@@ -18,6 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
+import httpx
 import pytest
 from coperceive.app.server import create_app
 from coperceive.cli import main
@@ -34,6 +35,20 @@ TIME_US = 100_000
 CSRF = {"X-Coperceive-Request": "1"}
 
 Row = dict[str, object]
+
+
+def _get(client: TestClient, path: str, params: dict[str, object] | None = None) -> httpx.Response:
+    """Typed GET. The CI runner has reported TestClient's httpx base as unknown; keep that
+    to one place."""
+    response: httpx.Response = client.get(path, params=params)  # pyright: ignore[reportUnknownMemberType]
+    return response
+
+
+def _post(client: TestClient, path: str, body: dict[str, object]) -> httpx.Response:
+    response: httpx.Response = client.post(  # pyright: ignore[reportUnknownMemberType]
+        path, headers=CSRF, json=body
+    )
+    return response
 
 
 def _jsonl_row(box: PredictionBox) -> Row:
@@ -106,16 +121,14 @@ def test_import_run_serve_export_and_compare(
     assert metrics["format"] == "coperceive-eval"
 
     # The three routes the page uses, with <scenes>/predictions found by default.
-    client = TestClient(create_app(root=scenes, token=None))
-    listed = client.get(f"/api/scenes/{SCENE_ID}/predictions")
+    client: TestClient = TestClient(create_app(root=scenes, token=None))
+    listed = _get(client, f"/api/scenes/{SCENE_ID}/predictions")
     assert listed.status_code == 200
     runs = cast(list[Row], listed.json()["runs"])
     assert [run["run_id"] for run in runs] == [RUN_ID]
     assert runs[0]["evaluated"] is True
 
-    frame = client.get(
-        f"/api/scenes/{SCENE_ID}/predictions/{RUN_ID}/frame", params={"time_us": TIME_US}
-    )
+    frame = _get(client, f"/api/scenes/{SCENE_ID}/predictions/{RUN_ID}/frame", {"time_us": TIME_US})
     assert frame.status_code == 200
     frame_body = cast(Row, frame.json())
     assert frame_body["time_us"] == TIME_US
@@ -123,7 +136,7 @@ def test_import_run_serve_export_and_compare(
     assert frame_rows
     assert all(len(cast(list[object], row["lines"])) == 72 for row in frame_rows)
 
-    series = client.get(f"/api/scenes/{SCENE_ID}/predictions/{RUN_ID}/series")
+    series = _get(client, f"/api/scenes/{SCENE_ID}/predictions/{RUN_ID}/series")
     assert series.status_code == 200
     series_outputs = cast(list[Row], series.json()["outputs"])
     assert {(o["agent_id"], o["source"]) for o in series_outputs} >= {("vehicle", "single")}
@@ -141,10 +154,10 @@ def test_import_run_serve_export_and_compare(
     assert tp > 0 and fp > 0 and miss > 0
 
     # The bird's-eye figure with the run's rows on it.
-    bev = client.post(
+    bev = _post(
+        client,
         f"/api/scenes/{SCENE_ID}/export/bev",
-        headers=CSRF,
-        json={"format": "svg", "time_us": TIME_US, "run_id": RUN_ID, "points": False},
+        {"format": "svg", "time_us": TIME_US, "run_id": RUN_ID, "points": False},
     )
     assert bev.status_code == 200
     saved = cast(Row, bev.json())
