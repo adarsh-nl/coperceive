@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import cast
@@ -49,7 +49,9 @@ class EvalConfig:
     ignore_gt_visibility_below: float | None
     max_range_m: float | None
     score_threshold: float  # the operating point
-    gt_class_map: Mapping[str, str] = MappingProxyType({})  # GT class -> class, before matching
+    # GT class -> class, before matching. A default_factory: Python 3.11 refuses an
+    # unhashable default such as a mappingproxy on a dataclass field.
+    gt_class_map: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
 
 
 DEFAULT_CONFIG = EvalConfig(
