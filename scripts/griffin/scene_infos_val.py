@@ -189,11 +189,12 @@ def main(argv: Sequence[str] = None) -> int:
     n_png = sum(1 for f in files if f.endswith(".png"))
     print(
         f"val scenes ({len(trimmed)}): "
-        + ", ".join(f"{old:04d}->{new}" for (old, _), new in zip(picked, new_names))
+        + ", ".join(f"{old:04d}->{new}" for (old, _), new in zip(picked, new_names, strict=True))
     )
     print(f"frames: {len(frames)}  files listed: {len(files)}  pngs: {n_png}")
     print(
-        f"estimated camera bytes: {n_png * per_png:.0f} ({n_png * per_png / 1e9:.1f} GB at {per_png / 1e6:.2f} MB/png, 20-file sample)"
+        f"estimated camera bytes: {n_png * per_png:.0f} "
+        f"({n_png * per_png / 1e9:.1f} GB at {per_png / 1e6:.2f} MB/png, 20-file sample)"
     )
     return 0
 

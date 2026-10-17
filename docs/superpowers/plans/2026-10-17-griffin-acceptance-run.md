@@ -306,3 +306,11 @@ Evaluation afterwards: `coperceive eval run <run_id> --root <scenes>` with a con
 6. Evaluate with `max_range_m: 50` to mirror the toolkit's 50 m radius cut?
 7. Is the vehicle-side single-agent run enough for this phase, or should the same job also run drone-side and cooperative (needs drone cameras, +~100 GB staging, and the drone-query extraction step)?
 8. May `run.json` `notes` carry the MIT/arXiv attribution text above as-is?
+
+## Revisions after the detailed drafts (2026-10-17, approved by Adarsh)
+
+- Files: `scripts/griffin/griffin_to_predictions.py` and `scripts/griffin/scene_infos_val.py` live in this repository; `~/scripts/griffin/download.sh`, `~/scripts/griffin/download-list.md`, `~/scripts/slurm/griffin-build.sbatch` and `~/scripts/slurm/griffin-infer.sbatch` live on the HPC.
+- Download: 2,424,168,117 bytes plus ~45 MB of git at a measured 115.5 MB/s from the login node; no step needs splitting (torch wheel ~18 s). Pins traced to `docs/Installation.md`, `requirements.txt`, mmdet3d/mmcv `runtime.txt` and the authors' `example.yaml`; `ninja` added for the op build.
+- Build: offline from `~/wheelhouse` on `--constraint="a40|a100"` (Slurm 21.08 has no `--prefer`); logs `gcc --version`, `/local` free space and `nvidia-smi` first; switches to `gnu/gcc-7` when gcc is newer than 11; `TORCH_CUDA_ARCH_LIST="8.0;8.6"`; stops at the first failed assertion.
+- Inference: val scenes only (10 scenes, 1,490 frames, ~17 GB) through a generated file list and a renumbered split file (the toolkit numbers scenes by contiguous frame blocks); fails fast under 30 GB free on `/local`; `results_nusc_det.json` is not gated at 0.4 (the coder keeps every box with score > 0; 0.4/0.35 gate track birth/death), so the 0.05 operating point is applied by the converter and the published model config is untouched; model type is "Agile", run id `griffin25m-vehicle-agile-iter33024`.
+- Evaluation: two configs, reported side by side. A: BEV IoU 0.5/0.7 within 50 m (spec defaults). B: centre distance 0.5/1/2/4 m within 50 m (written `[4.0, 2.0, 1.0, 0.5]`, statuses at 2.0 m), on a copy of the run under `<run>-centre`. 50 m is the toolkit's `class_range`; the paper (arXiv:2503.06983, §B.3) states a 102.4 m × 102.4 m perception range and no evaluation radius.
