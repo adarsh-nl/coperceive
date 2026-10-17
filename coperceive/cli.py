@@ -10,6 +10,7 @@ from typing import cast
 
 from coperceive import __version__
 from coperceive.adapters.commands import add_parser as add_adapters_parser
+from coperceive.evaluation.commands import add_parser as add_evaluation_parser
 from coperceive.hdmap.commands import add_parser
 from coperceive.model import SCHEMA_VERSION
 
@@ -50,6 +51,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     add_parser(sub)
     add_adapters_parser(sub)
+    add_evaluation_parser(sub)
 
     download = sub.add_parser("download", help="Download a dataset.")
     download_sub = download.add_subparsers(dest="dataset", required=True)
