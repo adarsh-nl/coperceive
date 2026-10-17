@@ -17,6 +17,7 @@ nav:
   - Griffin dataset: datasets/griffin.md
   - Add a dataset: datasets/add-a-dataset.md
   - Validate: validate.md
+  - Evaluate: eval.md
   - Viewer: viewer.md
   - Decisions:
       - Data model: adr/0001-data-model.md

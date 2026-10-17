@@ -54,6 +54,17 @@ coperceive adapters ingest my-dataset.yaml --raw-root /path/raw --out /path/scen
 
 A dataset is described by a YAML manifest: folders and file patterns, the sample and time source, poses, sensors, boxes, images and lidar, with units, rotation encodings and axis conventions written out. `check` validates it against the raw tree and writes nothing. `ingest` writes schema 1 scenes. Griffin is the built-in manifest. Readers and adapters that need code register under the `coperceive.adapters` and `coperceive.readers` entry points. The walkthrough is `docs/datasets/add-a-dataset.md`; the design is `docs/adr/0009-dataset-adapters.md`.
 
+## Evaluate
+
+```bash
+coperceive predictions import boxes.jsonl --run det-v1 --root /path/scenes --score-note "sigmoid"
+coperceive eval run det-v1 --root /path/scenes
+coperceive eval report det-v1 --root /path/scenes
+coperceive eval compare det-v1 det-v2 --root /path/scenes
+```
+
+Model output goes in a sidecar root, `<scenes>/predictions/<run_id>/<scene_id>/boxes.parquet` with a `run.json`, from JSON lines or Parquet, or from a training script through `coperceive.evaluation.predictions.write_run`. `eval run` matches each output to the agent's own ground truth in the world frame, BEV IoU at 0.5 and 0.7 by default or centre distance by config, and writes `matches.parquet` and `metrics.json` with the config inside. `report` and `compare` print one Markdown table. The viewer draws the match rows in the status colours, filters them, puts precision and recall on the timeline and overlays a second run; `export bev --run` draws the same on the figure. Only synthetic fixtures have been through it. The user page is `docs/eval.md`, the contract is `docs/spec/predictions.md`, the design is `docs/adr/0010-eval-predictions.md`.
+
 ## Validate
 
 ```bash

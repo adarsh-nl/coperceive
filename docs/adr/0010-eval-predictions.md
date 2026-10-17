@@ -175,6 +175,19 @@ Live models (step B), tracking metrics (MOTA/HOTA), 2D detections in image space
 - Step B writes `boxes.parquet` row groups as frames arrive and calls the same matcher per frame; nothing in this format assumes a finished run.
 - Griffin-25m has two agents and no model output in the repository. The first real run has to come from Adarsh's training code; the tests use synthetic predictions over the synthetic fixtures.
 
+## As built
+
+Where the code (`coperceive/evaluation/`, `coperceive/evalview.py`, `coperceive/app/server.py`, `coperceive/plot.py`, `web/src/viewer/predictions.tsx`) departs from the text above. The spec was updated with each of these; the text above is left as drafted.
+
+- **BEV IoU is the default criterion** and is implemented, with centre distance behind `criterion: centre`. The line under "What step A does not do" that leaves IoU criteria for later predates decision 1 and is wrong for the built code.
+- **AP categories are a union.** The categories in `ap` are the run's `categories`, the categories in the agent's ground truth, and the categories the output predicted. A class listed in `run.json` without a prediction gets `0.0` when it has ground truth; a class the model emitted outside the list is still reported.
+- **The aggregate AP in `eval report` is a mean over scene × output rows.** Each `AP@<t>` of the `all` row is the mean of the per-row means over the rows whose mean is not `null`, where a row is one scene and one `(agent, source)` output, not one scene.
+- **The range check runs before the score-threshold check.** A prediction farther than `max_range_m` is `ignored` whatever its score; only then is a prediction with `score < score_threshold` marked `below_threshold`. `below_threshold` is a fifth status in `matches.parquet`, beside `tp`, `fp`, `miss` and `ignored`.
+- **`predictions import` checks scene ids before touching the root.** `--scene` and every row's `scene_id` pass the scene-id rule before any path under the scenes root is joined or read, so `--scene ../x` never opens `<root>/../x/manifest.json`.
+- **`export bev` takes `--run <run_id>` and `--predictions <root>`.** The text says `--predictions <run>`; the built flag that names the run is `--run`, and `--predictions` is the root, as on `serve`, `eval` and `predictions import`. The bird's-eye POST takes `run_id`.
+- **The page has an Output selector.** Beside Run and Compare, an `agent · source` menu picks the output the scene card and the timeline sparklines follow; the source chips still filter what is drawn.
+- **`write_run` is `coperceive.evaluation.predictions.write_run(root, run_id, meta, rows, *, force=False)`**, not `coperceive.predictions.write_run(root, run_id, rows, run_meta)`; it returns the scene ids written.
+
 ## Decisions
 
 Taken by Adarsh on 2026-10-17. Items 1, 3 and 5 are his words; the rest are the draft's recommendations, which he accepted.
