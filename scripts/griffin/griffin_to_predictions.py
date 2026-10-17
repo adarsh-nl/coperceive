@@ -53,6 +53,8 @@ from coperceive.evaluation.predictions import (
     PredictionBox,
     PredictionError,
     RunMeta,
+    read_boxes,
+    read_run_meta,
     validate_boxes,
     write_run,
 )
@@ -260,7 +262,75 @@ def build_parser() -> argparse.ArgumentParser:
         help="run.json categories, comma-separated.",
     )
     parser.add_argument("--force", action="store_true", help="Overwrite an existing boxes.parquet.")
+    parser.add_argument(
+        "--append",
+        action="store_true",
+        help="Add these boxes to an existing run as another output (agent, source): the run's "
+        "categories, sources, model and notes are merged. An output already present is "
+        "replaced only with --force.",
+    )
     return parser
+
+
+def _join(existing: str, new: str) -> str:
+    if new == "" or new in existing:
+        return existing
+    return new if existing == "" else f"{existing} | {new}"
+
+
+def merge_into_run(
+    root: Path,
+    run_id: str,
+    meta: RunMeta,
+    by_scene: dict[str, list[PredictionBox]],
+    created_utc: str,
+    *,
+    replace: bool,
+) -> tuple[RunMeta, dict[str, list[PredictionBox]]]:
+    """Fold a new output into the run already under ``root/run_id``.
+
+    One Step A run can hold several outputs (``agent_id``, ``source`` pairs): the
+    vehicle's own boxes, the drone's, and a fused set. Categories are the union in
+    order of first appearance, sources keep their first note, model, score note and
+    notes are joined with `` | ``. Rows of an output that already exists are an error
+    unless ``replace`` is set, in which case the old rows go.
+    """
+    existing = read_run_meta(root, run_id)
+    new_outputs = {(box.agent_id, box.source) for rows in by_scene.values() for box in rows}
+    merged: dict[str, list[PredictionBox]] = {}
+    for child in sorted((root / run_id).iterdir()):
+        if not child.is_dir() or not (child / "boxes.parquet").is_file():
+            continue
+        kept: list[PredictionBox] = []
+        for box in read_boxes(root, run_id, child.name):
+            if (box.agent_id, box.source) in new_outputs:
+                if not replace:
+                    raise ConvertError(
+                        f"run {run_id} already has output {box.agent_id}/{box.source}; "
+                        "pass --force to replace it"
+                    )
+                continue
+            kept.append(box)
+        merged[child.name] = kept
+    for scene_id, rows in by_scene.items():
+        merged.setdefault(scene_id, []).extend(rows)
+    categories = existing.categories + tuple(
+        c for c in meta.categories if c not in existing.categories
+    )
+    sources = list(existing.sources)
+    for name, note in meta.sources:
+        if name not in {n for n, _ in sources}:
+            sources.append((name, note))
+    combined = RunMeta(
+        run_id=run_id,
+        model=_join(existing.model, meta.model),
+        score_note=_join(existing.score_note, meta.score_note),
+        categories=categories,
+        sources=tuple(sources),
+        created_utc=created_utc,
+        notes=_join(existing.notes or "", meta.notes or "") or None,
+    )
+    return combined, {scene_id: rows for scene_id, rows in merged.items() if rows}
 
 
 def run(args: argparse.Namespace) -> int:
@@ -289,15 +359,21 @@ def run(args: argparse.Namespace) -> int:
     if unknown:
         raise ConvertError(f"categories {unknown} are not in --categories {list(categories)}")
 
+    created = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     meta = RunMeta(
         run_id=run_id,
         model=cast(str, args.model),
         score_note=cast(str, args.score_note),
         categories=categories,
         sources=((cast(str, args.source), cast(str, args.source_note)),),
-        created_utc=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        created_utc=created,
         notes=cast("str | None", args.notes),
     )
+    if bool(cast(bool, args.append)) and (predictions_root / run_id / "run.json").is_file():
+        meta, by_scene = merge_into_run(
+            predictions_root, run_id, meta, by_scene, created, replace=bool(cast(bool, args.force))
+        )
+        args.force = True  # the merged run replaces the files it read
 
     missing = [
         scene_id
