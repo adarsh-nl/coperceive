@@ -399,3 +399,7 @@ Slurm job 627044 on `ps,main-cpu`, Python 3.13.14, the shared `.venv` linked int
 - `mkdocs build` — succeeded
 - Login node: `cd web && ./node_modules/.bin/tsc -b` exit 0 after the `schema.ts` regeneration and the teal change; `oxlint src` 0 errors.
 - Not run on the HPC: `npm run build`, gitleaks, Python 3.10–3.12, the new `web` CI job — all CI. Not seen anywhere: the page in a browser, a real model's output.
+
+### CI fix after PR #16's first run
+
+The lint job reported 16 strict-pyright errors in `tests/test_eval_end_to_end.py` (lines 110–150) that the HPC gate, on the same pyright 1.1.414, did not. Cause found while typing the responses: starlette 1.8 returns `httpx2.Response`, not `httpx.Response`; on a runner where that base does not resolve, every `TestClient` call reads as unknown (the same symptom `tests/test_hdmap.py` had last phase). Fix `388b518`: `client: TestClient`, and the four calls go through `_get`/`_post` helpers returning a `_Response` protocol (`status_code`, `json()`), one marked unknown-member access each. Gate job 627046 at `388b518`: whole-repo pyright 0 errors, 348 passed / 2 skipped; the gate now prints its pyright, fastapi, starlette and httpx versions. The HPC venv has a superset of CI's extras, so it cannot reproduce a package missing on the runner; CI on `388b518` is the check that counts and has not been seen from the HPC.
