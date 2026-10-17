@@ -44,6 +44,16 @@ coperceive convert griffin --subset 25m --raw-root /path/griffin-release --out /
 
 `--preset dev` is drone metadata, vehicle metadata, and vehicle LiDAR. Camera archives are selected only with `--components`. The download needs the `griffin` extra, checks the MIT card and toolkit licence, and writes outside the git checkout. Recordings are not committed. Conventions are in `docs/datasets/griffin.md`. Earlier measurements are in `docs/design/griffin-verification.md`.
 
+## Other datasets
+
+```bash
+coperceive adapters list
+coperceive adapters check griffin --raw-root /path/griffin-release --param subset=25m
+coperceive adapters ingest my-dataset.yaml --raw-root /path/raw --out /path/scenes
+```
+
+A dataset is described by a YAML manifest: folders and file patterns, the sample and time source, poses, sensors, boxes, images and lidar, with units, rotation encodings and axis conventions written out. `check` validates it against the raw tree and writes nothing. `ingest` writes schema 1 scenes. Griffin is the built-in manifest. Readers and adapters that need code register under the `coperceive.adapters` and `coperceive.readers` entry points. The walkthrough is `docs/datasets/add-a-dataset.md`; the design is `docs/adr/0009-dataset-adapters.md`.
+
 ## Validate
 
 ```bash

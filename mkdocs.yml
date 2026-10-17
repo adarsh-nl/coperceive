@@ -14,6 +14,7 @@ nav:
   - Griffin verification: design/griffin-verification.md
   - Viewer features: design/viewer-features.md
   - Griffin dataset: datasets/griffin.md
+  - Add a dataset: datasets/add-a-dataset.md
   - Validate: validate.md
   - Viewer: viewer.md
   - Decisions:
@@ -25,6 +26,7 @@ nav:
       - Licence: adr/0006-licence.md
       - Desktop packaging: adr/0007-desktop.md
       - Shared HD map: adr/0008-hd-map.md
+      - Dataset adapters: adr/0009-dataset-adapters.md
 markdown_extensions:
   - tables
   - toc:
