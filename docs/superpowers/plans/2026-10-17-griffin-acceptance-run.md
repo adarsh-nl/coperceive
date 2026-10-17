@@ -240,24 +240,46 @@ from coperceive.evaluation.predictions import RunMeta, PredictionBox, write_run,
 from coperceive.model import BoxFrame
 from coperceive.se3 import SE3
 from coperceive.store import read_scene
-BASE_US = int((datetime(2025,1,1,9,0,0) - datetime(1970,1,1)).total_seconds() * 1e6)
-sample_json = {s["token"]: s for s in json.load(open(nusc/"sample.json"))}
-scene_json  = {s["token"]: s["name"].split("-", 2)[2] for s in json.load(open(nusc/"scene.json"))}  # "scene-0000-Town03-000" -> "Town03-000"
+
+BASE_US = int((datetime(2025, 1, 1, 9, 0, 0) - datetime(1970, 1, 1)).total_seconds() * 1e6)
+sample_json = {s["token"]: s for s in json.load(open(nusc / "sample.json"))}
+scene_json = {
+    s["token"]: s["name"].split("-", 2)[2] for s in json.load(open(nusc / "scene.json"))
+}  # "scene-0000-Town03-000" -> "Town03-000"
 rows = []
 for token, annos in json.load(open(results_nusc_det))["results"].items():
-    ts = sample_json[token]["timestamp"]; frame_id = round((ts - BASE_US) / 100_000)
+    ts = sample_json[token]["timestamp"]
+    frame_id = round((ts - BASE_US) / 100_000)
     scene_id = scene_json[sample_json[token]["scene_token"]]
     for a in annos:
-        w, l, h = a["size"]; qw, qx, qy, qz = a["rotation"]
-        rows.append(PredictionBox(scene_id=scene_id, agent_id="vehicle", source="single",
-            time_us=frame_id * 100_000, category=a["detection_name"], score=float(a["detection_score"]),
-            track_id=None, center=tuple(a["translation"]), size_lwh=(l, w, h),
-            box_from_rpy=SE3(qw, qx, qy, qz, 0.0, 0.0, 0.0), frame=BoxFrame.WORLD))
-meta = RunMeta(run_id="griffin25m-vehicle-uniad-iter33024", model="Griffin UniAD/BEVFormer-tiny R50 vehicle-side iter_33024.pth (MIT, Wang et al. arXiv:2503.06983)",
+        w, l, h = a["size"]
+        qw, qx, qy, qz = a["rotation"]
+        rows.append(
+            PredictionBox(
+                scene_id=scene_id,
+                agent_id="vehicle",
+                source="single",
+                time_us=frame_id * 100_000,
+                category=a["detection_name"],
+                score=float(a["detection_score"]),
+                track_id=None,
+                center=tuple(a["translation"]),
+                size_lwh=(l, w, h),
+                box_from_rpy=SE3(qw, qx, qy, qz, 0.0, 0.0, 0.0),
+                frame=BoxFrame.WORLD,
+            )
+        )
+meta = RunMeta(
+    run_id="griffin25m-vehicle-uniad-iter33024",
+    model="Griffin UniAD/BEVFormer-tiny R50 vehicle-side iter_33024.pth (MIT, Wang et al. arXiv:2503.06983)",
     score_note="sigmoid class score of the UniAD track head; the model drops boxes below score_thresh=0.4 and a 50 m ego radius",
-    categories=("car","bicycle","pedestrian"), sources=(("single","vehicle-side camera-only UniAD, no fusion"),), created_utc=now_z)
-for scene_id, group in groupby(rows): validate_boxes(read_scene(scenes_root/scene_id), meta, group)
-write_run(scenes_root/"predictions", meta.run_id, meta, rows)
+    categories=("car", "bicycle", "pedestrian"),
+    sources=(("single", "vehicle-side camera-only UniAD, no fusion"),),
+    created_utc=now_z,
+)
+for scene_id, group in groupby(rows):
+    validate_boxes(read_scene(scenes_root / scene_id), meta, group)
+write_run(scenes_root / "predictions", meta.run_id, meta, rows)
 ```
 
 Evaluation afterwards: `coperceive eval run <run_id> --root <scenes>` with a config that sets `max_range_m: 50` (TODO: verify with Adarsh) so that ground truth beyond the model's 50 m radius cut is ignored rather than counted as misses, and `score_threshold` 0.4 to match the model's own operating point.
