@@ -455,12 +455,23 @@ Did not match the plan: four build attempts and three inference attempts before 
 
 With the map the union and model means coincide (every GT class is one of the model's three). Car AP at IoU 0.5 drops under the map (0.524 → 0.423) while precision and recall rise: trucks and buses now count as `car` ground truth, the model finds many of them within 2–4 m but not with 0.5 BEV IoU. The inference sbatch now writes the map into both configs for future runs. None of this is a comparison with the paper (no table quoted).
 
-Viewing from a laptop (the viewer binds to loopback; the `.venv`'s editable install points at `main`, so `PYTHONPATH` must name the worktree):
+Viewing from a laptop. The server runs on a compute node (not the login node), bound to loopback, reached through a two-hop tunnel. The `.venv`'s editable install points at `main`, so `PYTHONPATH` must name the worktree, and modules do not inherit, so load the Python module first.
+
+Terminal 1 — allocate a node and serve there:
 
 ```bash
-ssh -L 8731:127.0.0.1:8731 nanjaiyalathaa@hpc-head1.ewi.utwente.nl
+ssh nanjaiyalathaa@hpc-head1.ewi.utwente.nl
+srun --partition=main --cpus-per-task=2 --mem=8G --time=1:00:00 --pty bash
+hostname                      # e.g. hpc-node03; this is the node for the tunnel below
+module load python/3.13.14
 PYTHONPATH=$HOME/coperceive-adr0010 $HOME/coperceive-adr0010/.venv/bin/coperceive serve --host 127.0.0.1 --port 8731 \
     --root $HOME/results/627070/eval/scenes --predictions $HOME/results/627070/eval/predictions
 ```
 
-then `http://127.0.0.1:8731/#/viewer`. `627070/eval` holds all four runs (unmapped and mapped, IoU and centre); `627093/` holds the two unmapped runs under `scenes/` and `predictions/` directly. The scenes were converted from the trimmed tree: no lidar and no image files, so the page shows boxes, predictions and poses only. Checked through `TestClient` only, not in a browser.
+Terminal 2 — the tunnel from the laptop through the head node to that node (the node name is resolved on the head node):
+
+```bash
+ssh -J nanjaiyalathaa@hpc-head1.ewi.utwente.nl -L 8731:127.0.0.1:8731 nanjaiyalathaa@<node>
+```
+
+then open `http://127.0.0.1:8731/#/viewer` on the laptop. The second hop works only while the `srun` allocation holds the node. `627070/eval` holds all four runs (unmapped and mapped, IoU and centre); `627093/` holds the two unmapped runs under `scenes/` and `predictions/` directly. The scenes were converted from the trimmed tree: no lidar and no image files, so the page shows boxes, predictions and poses only. Checked through `TestClient` only, not in a browser.
