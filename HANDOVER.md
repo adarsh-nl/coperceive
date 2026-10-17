@@ -540,3 +540,7 @@ Gates job 627340 on `d449888` (hpc-node12, 3 min 48 s): ruff, format and pyright
 
 PR #16 CI on `db725a1`: only `test (3.11)` was red. `EvalConfig.gt_class_map` had `MappingProxyType({})` as a plain dataclass default; Python 3.11 rejects any unhashable default (3.10, 3.12 and 3.13 accept it), so every test module failed to import there. Now `field(default_factory=lambda: MappingProxyType({}))`. The cluster has no 3.11: `module avail python` lists 3.7.3, 3.9.9, 3.10.7, 3.13.14 and 3.14.6, so the HPC gates stay on 3.13 and only CI covers 3.10 to 3.12 (its matrix is 3.10, 3.11, 3.12, 3.13).
 Gates job 627368 on `d16bef1` (3.13, hpc-node12): clean, 372 passed, 2 skipped.
+
+### Static bundle (2026-10-17)
+
+Adarsh asked for the bundle to be rebuilt and committed before merging: `npm run build` in `web/` on the login node (7 s, node 26 from pyright's cache), committed as `build(web): rebuild static bundle`; the output is byte-identical to `~/coperceive-web-dist`. CI's `web` job now runs `npm run build` and fails when `git status --porcelain -- coperceive/app/static` is not empty, so a stale bundle cannot merge again. The earlier rule (never rebuild or commit static from the HPC) is withdrawn by this instruction.
