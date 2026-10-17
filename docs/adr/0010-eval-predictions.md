@@ -1,6 +1,6 @@
 # ADR 0010 — Evaluation engine, step A: predictions
 
-Status: proposed. Nothing in this ADR is implemented. Schema 1 (`docs/spec/format.md`) is unchanged. Predictions are a sidecar, like the HD map (ADR 0008).
+Status: accepted on 2026-10-17. Adarsh's decisions are recorded at the end; where they changed the text below, the decision wins and the normative contract is `docs/spec/predictions.md`. Schema 1 (`docs/spec/format.md`) is unchanged. Predictions are a sidecar, like the HD map (ADR 0008).
 
 ## Context
 
@@ -45,7 +45,7 @@ Step B (live models through a subprocess) is not here. It writes into the same f
 
 ## Decision
 
-Sidecar root (option 2), centre-distance matching with IoU available later behind the same config (option 1 first), offline matching (option 2), overlay comparison first (option 1).
+Sidecar root (option 2), **BEV IoU matching at 0.5 and 0.7 as the default with centre distance as a config option** (decision 1 reversed the draft's order: OPV2V, V2XSet and V2X-ViT report BEV IoU, and reviewers expect comparable numbers), offline matching (option 2), overlay comparison first (option 1).
 
 ### Predictions format: `coperceive-predictions` version 1
 
@@ -97,11 +97,10 @@ Done by `coperceive eval run <run_id>`, per scene, per `(agent_id, source)`, per
 Config is a YAML file (`--config`), validated like an adapter manifest; the defaults below are written into the report so a result is never read without them:
 
 ```yaml
-criterion: centre            # centre | iou_bev | iou_3d  (step A implements centre)
-threshold:                   # metres for centre, IoU for the others
-  default: 2.0
-  pedestrian: 0.5
-  cyclist: 1.0
+criterion: iou_bev           # iou_bev | centre
+thresholds: [0.5, 0.7]       # IoU for iou_bev, metres for centre; AP is computed at each
+display_threshold: 0.5       # the one TP/FP/miss statuses are stored at; must be in thresholds
+class_thresholds: {}         # optional per-class lists of the same length, e.g. pedestrian: [0.25, 0.5]
 ignore_gt_visibility_below: null   # null keeps every box; a number drops GT below it
 max_range_m: null            # null keeps every box; a number drops GT and predictions farther from the agent body origin
 score_threshold: 0.3         # the operating point for TP/FP/miss display and per-frame counts
@@ -110,7 +109,7 @@ score_threshold: 0.3         # the operating point for TP/FP/miss display and pe
 Rules, normative:
 
 1. Predictions are sorted by `score` descending. Ties keep file order.
-2. Each prediction in turn takes the unmatched ground-truth box of the same category with the smallest horizontal centre distance, if that distance is at most the class threshold. That pair is a true positive. A prediction with no such box is a false positive. A ground-truth box no prediction took is a miss.
+2. Each prediction in turn takes the unmatched ground-truth box of the same category that scores best under the criterion (largest BEV IoU, or smallest horizontal centre distance), if that score passes the threshold (IoU at least, distance at most). That pair is a true positive. A prediction with no such box is a false positive. A ground-truth box no prediction took is a miss. BEV IoU is the overlap of the two footprints in the world XY plane: centre, length along box x, width along box y, and the yaw of the world rotation; roll and pitch are ignored.
 3. A ground-truth box dropped by `ignore_gt_visibility_below` or `max_range_m` is ignored. A prediction whose nearest same-class box within threshold is an ignored box is ignored too, not a false positive. Ignored boxes appear in the match table with status `ignored`.
 4. Matching across categories is not attempted. A pedestrian predicted as a cyclist is one false positive and one miss.
 5. Per-frame counts (TP, FP, miss, precision, recall) use predictions with `score >= score_threshold`. AP uses every prediction.
@@ -118,7 +117,7 @@ Rules, normative:
 7. **mAP** is the mean over categories that have an AP. **Recall at the operating point** is TP / (TP + miss) over the scene.
 8. For true positives at the operating point, the report also gives the mean and median horizontal centre error, the mean absolute yaw error (yaw of `Rz(yaw) @ Ry(pitch) @ Rx(roll)`, as `validate` already does), and the mean absolute size error per axis. These are the step A analogue of nuScenes' translation, orientation and scale errors.
 
-Normative checks the test suite pins: one GT car at the origin and one prediction at 1.5 m is a TP at threshold 2.0 and a miss plus a false positive at 1.0; two predictions on one GT box give one TP (the higher score) and one FP; a prediction of the wrong class is never a TP; AP of a scene with one GT and one TP at any score is 1.0, with one FP ranked above it is 0.5.
+Normative checks the test suite pins (`docs/spec/predictions.md` has the full list): two identical boxes have IoU 1; a 4×2 m box and the same box shifted 2 m along its length have IoU 1/3; so do a 4×2 and a 2×4 box on one centre; under `centre`, one GT car at the origin and one prediction at 1.5 m is a TP at threshold 2.0 and a miss plus a false positive at 1.0; two predictions on one GT box give one TP (the higher score) and one FP; a prediction of the wrong class is never a TP; AP of a scene with one GT and one TP at any score is 1.0, with one FP ranked above it is 0.5.
 
 Outputs under `<predictions root>/<run_id>/<scene_id>/`:
 
@@ -176,15 +175,19 @@ Live models (step B), tracking metrics (MOTA/HOTA), 2D detections in image space
 - Step B writes `boxes.parquet` row groups as frames arrive and calls the same matcher per frame; nothing in this format assumes a finished run.
 - Griffin-25m has two agents and no model output in the repository. The first real run has to come from Adarsh's training code; the tests use synthetic predictions over the synthetic fixtures.
 
-## Decisions for Adarsh
+## Decisions
 
-1. **Matching default.** Centre distance, 2.0 m default with 0.5 m pedestrians and 1.0 m cyclists, IoU deferred. Recommendation: yes; it is the rule cooperative-perception papers on OPV2V and V2XSet mostly do *not* use (they use IoU 0.5/0.7), so say if IoU must be in step A for comparability with those numbers.
-2. **AP rule.** All-points area under the monotone precision envelope. The alternative is nuScenes' 101-point interpolation with recall and precision below 0.1 clipped. Recommendation: all-points; it needs no clipping constants.
-3. **Fused outputs as `source = fused` on the real agent**, not a virtual agent. Recommendation: yes; it keeps frames well defined.
-4. **Predictions root** `<scenes root>/predictions` by default, `--predictions` to override. Recommendation: yes, mirroring `--maps`.
-5. **Colours and styles** for TP/FP/miss/ignored as listed. Recommendation: as listed; say if green/amber clash with the agent colours (`#e67828`, `#2878dc`).
-6. **Operating point** default `score_threshold: 0.3`. Recommendation: 0.3, overridable per run.
-7. **Visibility.** Keep every GT box by default (`ignore_gt_visibility_below: null`). Griffin stores visibility; its semantics were not measured. Recommendation: null until a visibility histogram has been looked at.
-8. **Compare UX.** Overlay plus a delta table first; split viewport later if overlay is unreadable. Recommendation: overlay.
-9. **Import formats.** JSON lines and Parquet only in step A. Recommendation: yes; a KITTI-style text importer waits for a real need.
-10. **Where to get a first real run.** A single-agent detector on Griffin-25m vehicle lidar from Adarsh's code, written with `write_run`, so the viewer is checked on real output before step B. Recommendation: plan it as the acceptance check of this phase, run on the HPC by Adarsh.
+Taken by Adarsh on 2026-10-17. Items 1, 3 and 5 are his words; the rest are the draft's recommendations, which he accepted.
+
+1. **Matching default.** BEV IoU at 0.5 and 0.7, because that is what OPV2V, V2XSet and V2X-ViT report and reviewers expect comparable numbers. Centre distance stays a config option (`criterion: centre`).
+2. **AP rule.** All-points area under the monotone precision envelope.
+3. **Fused outputs** are `source = fused` on the real agent, not a virtual agent.
+4. **Predictions root** `<scenes root>/predictions` by default, `--predictions` to override.
+5. **Colours.** Green, amber and violet for TP, FP and miss, with the dashed and dotted line styles carrying the distinction for colour-blind readers; the legend names each status in words.
+6. **Operating point** `score_threshold: 0.3`, overridable per run.
+7. **Visibility.** Every GT box is kept by default.
+8. **Compare UX.** Overlay plus a delta table; split viewport later if needed.
+9. **Import formats.** JSON lines and Parquet.
+10. **First real run.** From a detector on Griffin; even one single-agent detector is enough. The released Griffin checkpoints (`vehicle-side.pth`, `drone-side.pth`, `cooperative.pth`, early-fusion and instance-fusion weights for every subset, under `/datasets/eemcs/ps/cv/huggingface/griffin/ckpts/` on the HPC) are the candidate source; they need the Griffin toolkit's inference code and environment, which this repository does not contain. Planned as the acceptance check, run on the HPC as a GPU job, after step A's code is in.
+
+The reference copy `tests/griffin_reference.py` stays (same session): checksums would say that something changed, the reference code says what changed, which is how the quaternion sign flip was found.
