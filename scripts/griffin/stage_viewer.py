@@ -35,6 +35,7 @@ import argparse
 import json
 import os
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -279,8 +280,32 @@ def stage_metadata(options: StageOptions, plan: ValPlan) -> int:
     return len(files)
 
 
+def prune_scenes(options: StageOptions, names: Sequence[str]) -> tuple[str, ...]:
+    """Remove staged scenes a re-run must not keep: ones outside this split, and, when
+    lidar is requested, ones converted without it (``COMPLETE.json`` would skip them).
+    ``rmtree`` does not follow the camera links, so the release is never touched."""
+    scenes_root = options.scratch / "scenes"
+    if not scenes_root.is_dir():
+        return ()
+    removed: list[str] = []
+    for child in sorted(scenes_root.iterdir()):
+        if not child.is_dir() or not (child / "manifest.json").is_file():
+            continue
+        stale = child.name not in names
+        if not stale and options.lidar:
+            index = child / "point_index.parquet"
+            stale = not index.is_file() or pq.read_table(index, columns=["count"]).num_rows == 0
+        if stale:
+            shutil.rmtree(child)
+            removed.append(child.name)
+    if removed:
+        _say(f"removed {len(removed)} staged scenes to convert afresh: {', '.join(removed)}")
+    return tuple(removed)
+
+
 def convert_scenes(options: StageOptions, names: Sequence[str]) -> ConvertReport:
     """``coperceive convert griffin --subset 25m`` on the staged raw tree, in process."""
+    prune_scenes(options, names)
     try:
         report = convert_griffin(
             options.scratch / "raw",
@@ -296,6 +321,17 @@ def convert_scenes(options: StageOptions, names: Sequence[str]) -> ConvertReport
     done = set(report.written) | set(report.skipped) | set(report.resumed)
     if done != set(names):
         raise StagingError(f"converted scenes {sorted(done)} are not the val scenes {list(names)}")
+    if options.lidar:
+        empty = [
+            name
+            for name in names
+            if pq.read_table(
+                options.scratch / "scenes" / name / "point_index.parquet", columns=["count"]
+            ).num_rows
+            == 0
+        ]
+        if empty:
+            raise StagingError(f"lidar was staged but these scenes have no clouds: {empty}")
     return report
 
 
@@ -441,7 +477,9 @@ def print_summary(report: StagingReport) -> None:
 
 def stage(options: StageOptions) -> StagingReport:
     """Run the five steps and return what was staged. Nothing is written outside ``scratch``."""
-    options = replace(options, scratch=check_scratch(options.scratch))
+    # The camera links point at the resolved release, so the serve line's --media-root
+    # must name the same path whatever the working directory is at serve time.
+    options = replace(options, scratch=check_scratch(options.scratch), raw=options.raw.resolve())
     timings: list[tuple[str, float]] = []
     _say(f"release {options.raw}")
     _say(f"split   {options.split}")

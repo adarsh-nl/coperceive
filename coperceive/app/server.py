@@ -246,7 +246,7 @@ def create_app(
 
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> FileResponse:
-        svg = _STATIC / "favicon.svg"
+        svg = static_dir / "favicon.svg"
         if not svg.is_file():
             raise HTTPException(status_code=404, detail="favicon not found")
         return FileResponse(svg, media_type="image/svg+xml")
@@ -262,7 +262,12 @@ def create_app(
             target = confine_media(scene_dir, relative, app.state.media_roots)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not target.is_file():
+        try:
+            present = target.is_file()
+        except OSError:
+            # An over-long component or an unsearchable parent: the file is not there.
+            present = False
+        if not present:
             raise HTTPException(status_code=404, detail="image not found")
         media = _IMAGE_TYPES.get(target.suffix.lower(), "application/octet-stream")
         return FileResponse(target, media_type=media)
@@ -412,17 +417,24 @@ def create_app(
 
 
 def _images_staged(app: FastAPI, scene: Scene, scene_dir: Path) -> bool | None:
-    """Whether any recorded image file is present, judged on a sample of up to eight
-    rows. ``None`` when the scene records no images at all."""
+    """Whether any recorded image file is present. ``None`` when the scene records no
+    images. The table is sensor-major, so the sample is the first, middle and last row
+    of each camera (at most 48 rows in all); a path the OS refuses to stat counts as
+    absent rather than failing the summary."""
     rows = scene.images
     if not rows:
         return None
-    step = max(1, len(rows) // 8)
-    for image in rows[::step][:8]:
+    by_camera: dict[tuple[str, str], list[int]] = {}
+    for index, image in enumerate(rows):
+        by_camera.setdefault((image.agent_id, image.sensor_id), []).append(index)
+    picks: list[int] = []
+    for indices in by_camera.values():
+        picks.extend({indices[0], indices[len(indices) // 2], indices[-1]})
+    for index in sorted(set(picks))[:48]:
         try:
-            if confine_media(scene_dir, image.path, app.state.media_roots).is_file():
+            if confine_media(scene_dir, rows[index].path, app.state.media_roots).is_file():
                 return True
-        except ValueError:
+        except (ValueError, OSError):
             continue
     return False
 

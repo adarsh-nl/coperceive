@@ -90,6 +90,7 @@ jobs:
         env:
           COPERCEIVE_WEB_DIST: /tmp/web-dist
           COPERCEIVE_E2E_SHOTS: /tmp/e2e-shots
+          COPERCEIVE_E2E_REQUIRED: "1"  # a browser or bundle problem fails here, it does not skip
       - uses: actions/upload-artifact@v4
         if: always()
         with:

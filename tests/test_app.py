@@ -593,12 +593,14 @@ def test_static_option_serves_another_bundle(tmp_path: Path) -> None:
     dist = tmp_path / "dist"
     dist.mkdir()
     (dist / "index.html").write_text("<title>fresh bundle</title>", encoding="utf-8")
+    (dist / "favicon.svg").write_text("<svg>fresh</svg>", encoding="utf-8")
     root = tmp_path / "scenes"
     root.mkdir()
     client = TestClient(create_app(root=root, token=None, static=dist))
     page = client.get("/")
     assert page.status_code == 200
     assert "fresh bundle" in page.text
+    assert client.get("/favicon.ico").text == "<svg>fresh</svg>"  # the same build's icon
     with pytest.raises(SystemExit) as exc:
         main(["serve", "--root", str(root), "--static", str(tmp_path / "missing")])
     assert exc.value.code == 2
@@ -653,3 +655,13 @@ def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
     assert (staged["point_sweeps"], staged["image_rows"], staged["images_staged"]) == (0, 1, True)
     desk = client.get("/api/scenes/desk").json()
     assert (desk["point_sweeps"], desk["image_rows"], desk["images_staged"]) == (1, 0, None)
+    # A path the OS cannot stat (over-long component) is absent, not a 500.
+    overlong = "a" * 300 + "/img.png"
+    write_scene(_camera_scene("odd", overlong), root / "odd")
+    odd = client.get("/api/scenes/odd")
+    assert odd.status_code == 200
+    assert odd.json()["images_staged"] is False
+    image = client.get(
+        "/api/scenes/odd/image", params={"time_us": 0, "agent_id": "vehicle", "sensor_id": "front"}
+    )
+    assert image.status_code == 404

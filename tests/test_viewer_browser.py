@@ -23,6 +23,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
+from typing import NoReturn
 
 import pytest
 import uvicorn
@@ -51,10 +52,22 @@ from tests.cooperative import cooperative_scene
 from tests.eval_fixture import synthetic_predictions
 from tests.test_hdmap import _straight  # pyright: ignore[reportPrivateUsage]
 
+REQUIRED = os.environ.get("COPERCEIVE_E2E_REQUIRED", "") not in {"", "0"}
+
+
+def _unavailable(reason: str) -> NoReturn:
+    """Skip, or fail where the browser tests are the point (CI's e2e job sets the flag)."""
+    if REQUIRED:
+        pytest.fail(reason)
+    pytest.skip(reason)
+
+
 try:
     from playwright.sync_api import Browser, Page, sync_playwright
     from playwright.sync_api import Error as PlaywrightError
 except ImportError:  # pragma: no cover - the dev extra installs it
+    if REQUIRED:
+        raise
     pytest.skip("playwright is not installed", allow_module_level=True)
 
 # One valid 1x1 PNG (the same bytes as tests/test_app.py), so the strip can decode it.
@@ -75,13 +88,15 @@ FILLER_SCENES = tuple(f"Town07-{index:03d}" for index in range(1, 10))  # list l
 
 
 def _bundle_dir() -> Path | None:
+    """``COPERCEIVE_WEB_DIST`` when set (and it must hold a build), else the packaged page."""
     wanted = os.environ.get("COPERCEIVE_WEB_DIST")
-    candidates = [Path(wanted)] if wanted else []
-    candidates.append(Path(__file__).resolve().parents[1] / "coperceive" / "app" / "static")
-    for candidate in candidates:
-        if (candidate / "index.html").is_file():
-            return candidate
-    return None
+    if wanted:
+        chosen = Path(wanted).expanduser()
+        if not (chosen / "index.html").is_file():
+            pytest.fail(f"COPERCEIVE_WEB_DIST={wanted} has no index.html")
+        return chosen
+    packaged = Path(__file__).resolve().parents[1] / "coperceive" / "app" / "static"
+    return packaged if (packaged / "index.html").is_file() else None
 
 
 def _bare_scene() -> Scene:
@@ -220,7 +235,7 @@ def _free_port() -> int:
 def viewer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     bundle = _bundle_dir()
     if bundle is None:
-        pytest.skip("no web bundle: set COPERCEIVE_WEB_DIST to a vite build directory")
+        _unavailable("no web bundle: set COPERCEIVE_WEB_DIST to a vite build directory")
     scenes, maps, predictions = _write_roots(tmp_path_factory.mktemp("viewer"))
     app = create_app(root=scenes, token=None, maps=maps, predictions=predictions, static=bundle)
     port = _free_port()
@@ -242,7 +257,7 @@ def browser() -> Iterator[Browser]:
         try:
             launched = playwright.chromium.launch(headless=True, args=_CHROMIUM_ARGS)
         except PlaywrightError as exc:  # no browser build or missing system libraries
-            pytest.skip(f"chromium cannot start here: {str(exc).splitlines()[0]}")
+            _unavailable(f"chromium cannot start here: {str(exc).splitlines()[0]}")
         yield launched
         launched.close()
 
@@ -326,13 +341,14 @@ def test_play_advances_the_timeline_at_the_recorded_pace(session: _Session, shot
     assert session.slider("aria-valuemax") == BARE_SAMPLES - 1
     assert session.slider("aria-valuenow") == 0
     play = session.page.locator("button[aria-label=Play]")
+    start = time.monotonic()  # before the click: the page starts its clock on the click
     play.click()
     assert session.page.locator("button[aria-label=Pause]").count() == 1
     seen: list[tuple[float, int]] = []
-    start = time.monotonic()
     for _ in range(6):
         session.page.wait_for_timeout(300)
-        seen.append((round(time.monotonic() - start, 2), session.slider("aria-valuenow")))
+        index = session.slider("aria-valuenow")
+        seen.append((round(time.monotonic() - start, 2), index))  # elapsed after the read
     session.page.screenshot(path=str(shots / "play.png"))
     values = [index for _, index in seen]
     assert values == sorted(values), seen

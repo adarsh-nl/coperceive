@@ -122,7 +122,9 @@ def test_stage_copies_val_metadata_links_cameras_and_builds_maps(
 
     # 2. scenes: exactly the val scenes, with points.
     assert report.scenes == VAL
-    assert sorted(p.name for p in (scratch / "scenes").iterdir() if not p.name.startswith("."))
+    assert sorted(
+        p.name for p in (scratch / "scenes").iterdir() if not p.name.startswith(".")
+    ) == list(VAL)
     assert (scratch / "scenes" / "Town03-000" / "manifest.json").is_file()
     assert (scratch / "scenes" / "Town03-002" / "manifest.json").is_file()
     assert not (scratch / "scenes" / "Town03-001").exists()
@@ -206,3 +208,35 @@ def test_main_needs_a_scratch_outside_slurm(
             ["--raw", str(tmp_path), "--split", str(tmp_path), "--xodr-dir", str(tmp_path)]
         )
     assert excinfo.value.code == 2
+
+
+def test_rerun_with_lidar_reconverts_scenes_staged_without_it(tmp_path: Path) -> None:
+    """``--no-lidar`` then lidar in the same scratch: the empty scenes are converted again
+    instead of being skipped on their COMPLETE.json."""
+    first = _options(tmp_path, lidar=False)
+    assert dict(stage(first).clouds_per_scene) == {"Town03-000": 0, "Town03-002": 0}
+    second = replace(first, lidar=True)
+    assert dict(stage(second).clouds_per_scene) == {"Town03-000": 3, "Town03-002": 4}
+
+
+def test_scenes_from_an_earlier_split_are_removed(tmp_path: Path) -> None:
+    options = _options(tmp_path)
+    stale = options.scratch / "scenes" / "Town03-001"
+    stale.mkdir(parents=True)
+    (stale / "manifest.json").write_text("{}", encoding="utf-8")
+    report = stage(options)
+    assert not stale.exists()
+    kept = sorted(p.name for p in (options.scratch / "scenes").iterdir() if p.name[0] != ".")
+    assert kept == list(VAL)  # the ingest's .partial/ aside
+    assert report.scenes == VAL
+
+
+def test_serve_line_names_the_resolved_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A relative --raw is resolved: the links point at the resolved release and the
+    printed --media-root has to be the same path from any working directory."""
+    options = _options(tmp_path)
+    monkeypatch.chdir(options.raw.parent)
+    report = stage(replace(options, raw=Path(options.raw.name)))
+    assert f"--media-root {options.raw.resolve()}" in report.serve_command

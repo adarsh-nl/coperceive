@@ -785,7 +785,7 @@ export default function Viewer({
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
-  const [mapInfo, setMapInfo] = useState<MapInfo | null>(null);
+  const [mapInfoFor, setMapInfoFor] = useState<{ sceneId: string; info: MapInfo | null } | null>(null);
   const [exportNote, setExportNote] = useState("");
   const [exportSource, setExportSource] = useState("view");
   const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | "png">("mp4");
@@ -1619,6 +1619,8 @@ export default function Viewer({
   }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, token, viewpoint, cameraId, summary, frameIndex, poster]);
 
   const sceneKey = summary?.scene_id ?? "";
+  // Keyed by scene like the run list, so a switch never shows the previous town's map note.
+  const mapInfo = mapInfoFor && mapInfoFor.sceneId === sceneKey ? mapInfoFor.info : null;
   const runs = runList && runList.sceneId === sceneKey ? runList.runs : null;
   const runNote = runList && runList.sceneId === sceneKey ? runList.note : "";
   const run = runs?.find((item) => item.run_id === runId) ?? null;
@@ -1884,7 +1886,6 @@ export default function Viewer({
     }
     const stage = stageRef.current;
     const controller = new AbortController();
-    setMapInfo(null);
     void (async () => {
       const base = `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}`;
       const which = await fetch(`${base}/map`, { headers: authHeaders(token), signal: controller.signal });
@@ -1892,7 +1893,7 @@ export default function Viewer({
       if (which.ok) {
         const body = (await which.json()) as unknown;
         info = isMapInfo(body) ? body : null;
-        setMapInfo(info);
+        setMapInfoFor({ sceneId: summary.scene_id, info });
       }
       if (info && !info.available) {
         replaceMap(stage, new ArrayBuffer(0));
