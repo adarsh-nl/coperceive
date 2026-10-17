@@ -175,6 +175,7 @@ adapter toy-coop
 scenes 2
 scene_0001	agents=2 boxes=8 images=4 lidar=4 poses=4 sensors=4
 scene_0002	agents=2 boxes=8 images=4 lidar=4 poses=4 sensors=4
+label_fields 9:16
 ```
 
 ## 4. Ingest it

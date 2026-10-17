@@ -39,7 +39,9 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
 
 
 def _common(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("adapter", help="A built-in name, an installed adapter, or a manifest file.")
+    parser.add_argument(
+        "adapter", help="A built-in name, an installed adapter, or a manifest file."
+    )
     parser.add_argument("--raw-root", required=True, help="The extracted dataset directory.")
     parser.add_argument(
         "--param",

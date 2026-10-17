@@ -9,6 +9,7 @@ from coperceive.adapters.build import BuildError, ManifestAdapter
 from coperceive.adapters.spec import builtin_manifest_path, load_manifest
 from coperceive.griffin.raw import load_scene
 from coperceive.model import AgentType, Modality
+
 from tests.griffin_release import write_release
 
 
@@ -54,7 +55,7 @@ def test_load_matches_the_hand_written_reader(tmp_path: Path) -> None:
     assert built.clock == expected.clock
     assert built.world_frame == expected.world_frame
     assert [a.agent_id for a in built.agents] == [a.agent_id for a in expected.agents]
-    for mine, theirs in zip(built.agents, expected.agents):
+    for mine, theirs in zip(built.agents, expected.agents, strict=True):
         assert mine.agent_type is theirs.agent_type
         assert mine.poses == theirs.poses
         assert dict(mine.platform)["map_name"] == "Carla/Maps/Town03"

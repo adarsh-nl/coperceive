@@ -88,7 +88,9 @@ def read_ply(
     if fmt == "ascii":
         columns = _ascii_columns(body.decode("utf-8"), count, names)
     elif fmt == "binary_little_endian":
-        dtype = np.dtype([(name, "<" + _ply_type(kind, path)) for name, kind in zip(names, types)])
+        dtype = np.dtype(
+            [(name, "<" + _ply_type(kind, path)) for name, kind in zip(names, types, strict=True)]
+        )
         rows = np.frombuffer(body, dtype=dtype, count=count)
         columns = {name: rows[name].astype(np.float64) for name in names}
     else:
@@ -144,7 +146,10 @@ def read_pcd(
         columns = _ascii_columns(data[offset:].decode("utf-8"), points, names)
     elif mode == "binary":
         dtype = np.dtype(
-            [(name, "<" + _pcd_type(kind, size, path)) for name, kind, size in zip(names, kinds, sizes)]
+            [
+                (name, "<" + _pcd_type(kind, size, path))
+                for name, kind, size in zip(names, kinds, sizes, strict=True)
+            ]
         )
         rows = np.frombuffer(data, dtype=dtype, count=points, offset=offset)
         columns = {name: rows[name].astype(np.float64) for name in names}

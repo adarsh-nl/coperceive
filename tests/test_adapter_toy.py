@@ -7,15 +7,15 @@ import struct
 from pathlib import Path
 
 import pytest
+import yaml
 from coperceive.adapters.build import ManifestAdapter
 from coperceive.adapters.ingest import ingest
 from coperceive.adapters.spec import parse_manifest
 from coperceive.cli import main
 from coperceive.model import Modality
 from coperceive.store import read_scene
-from tests.toy_dataset import MANIFEST, write_toy
 
-import yaml
+from tests.toy_dataset import MANIFEST, write_toy
 
 
 def _adapter() -> ManifestAdapter:
@@ -115,7 +115,19 @@ def test_cli_check_and_ingest_the_toy(tmp_path: Path, capsys: pytest.CaptureFixt
     main(["adapters", "check", str(manifest), "--raw-root", str(raw)])
     out = capsys.readouterr().out
     assert "scenes 2" in out and "scene_0002\tagents=2" in out
-    main(["adapters", "ingest", str(manifest), "--raw-root", str(raw), "--out", str(tmp_path / "out"), "--workers", "1"])
+    main(
+        [
+            "adapters",
+            "ingest",
+            str(manifest),
+            "--raw-root",
+            str(raw),
+            "--out",
+            str(tmp_path / "out"),
+            "--workers",
+            "1",
+        ]
+    )
     assert "wrote=2" in capsys.readouterr().out
     scene = read_scene(tmp_path / "out" / "scene_0002")
     assert len(scene.annotations) == 8

@@ -27,6 +27,7 @@ from coperceive.griffin.licence import LicenceError
 from coperceive.griffin.raw import load_scene
 from coperceive.model import AgentType
 from coperceive.store import read_scene
+
 from tests.griffin_release import write_release as _release
 
 _README = "---\nlicense: mit\n---\nGriffin\n"

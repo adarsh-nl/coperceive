@@ -19,6 +19,7 @@ from coperceive.adapters.ingest import ingest
 from coperceive.adapters.spec import builtin_manifest_path, load_manifest
 from coperceive.griffin.convert import convert_griffin
 from coperceive.store import read_scene
+
 from tests.griffin_release import write_release
 
 _TABLES = ("poses", "annotations", "objects", "images", "point_index")

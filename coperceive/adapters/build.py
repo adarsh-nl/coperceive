@@ -45,7 +45,6 @@ from coperceive.adapters.spec import (
     PlatformValue,
     PosesSpec,
     RotationSpec,
-    SensorsSpec,
 )
 from coperceive.diagnostics import shared_objects
 from coperceive.errors import CoperceiveError
@@ -122,15 +121,17 @@ class ManifestAdapter:
         refs: list[SceneRef] = []
         if index is not None:
             file = self._path(raw_root, index.file, values)
-            rows = _wrap(lambda: read_json_table(file), f"{index.file.text}")
+            rows = _read_table_file(file, index.file.text)
             for other in index.must_equal:
                 other_path = self._path(raw_root, Template(other, frozenset(checked)), values)
-                other_rows = _wrap(lambda: read_json_table(other_path), other)
+                other_rows = _read_table_file(other_path, other)
                 if other_rows != rows:
-                    raise BuildError(f"scenes.index.must_equal: {other} differs from {index.file.text}")
+                    raise BuildError(
+                        f"scenes.index.must_equal: {other} differs from {index.file.text}"
+                    )
             for row in rows:
-                scene_id = _scene_id(_wrap(lambda: get_field(row, index.scene_id), index.file.text))
-                raw_samples = _wrap(lambda: get_field(row, index.samples), index.file.text)
+                scene_id = _scene_id(_field(row, index.scene_id, index.file.text))
+                raw_samples = _field(row, index.samples, index.file.text)
                 samples = _samples(raw_samples, index.sample_kind, scene_id)
                 platform = self._platform(index.platform, row, checked, scene_id)
                 refs.append(SceneRef(scene_id, samples, platform, tuple(sorted(checked.items()))))
@@ -196,7 +197,9 @@ class ManifestAdapter:
                 if not path.is_file():
                     if boxes.missing == "skip":
                         continue
-                    raise BuildError(f"{ctx.agent_id}: missing label file {boxes.path.expand(values)}")
+                    raise BuildError(
+                        f"{ctx.agent_id}: missing label file {boxes.path.expand(values)}"
+                    )
                 for parts in read_text_rows(path):
                     counts[len(parts)] = counts.get(len(parts), 0) + 1
         return tuple(sorted(counts.items()))
@@ -303,17 +306,18 @@ class ManifestAdapter:
                 if not path.is_file():
                     if spec.missing == "skip":
                         continue
-                    raise BuildError(f"{ctx.agent_id}: missing pose file {spec.path.expand(values)}")
+                    raise BuildError(
+                        f"{ctx.agent_id}: missing pose file {spec.path.expand(values)}"
+                    )
                 record = self._record(spec.reader, path)
                 where = spec.path.expand(values)
             for key, expect in spec.check.items():
-                got = _wrap(lambda: get_field(record, key), where)
+                got = _field(record, key, where)
                 want: object = sample if expect == "frame" or expect == "sample" else expect
                 if str(got) != str(want) and got != want:
                     raise BuildError(f"{where}: {key} is {got!r}, expected {want!r}")
             translation = tuple(
-                _num(_wrap(lambda: get_field(record, f), where), f, where) * self._length
-                for f in spec.translation
+                _num(_field(record, f, where), f, where) * self._length for f in spec.translation
             )
             rotation = self._rotation(spec.rotation, record, where, allow_missing=False)
             pose = rotation.translation(translation[0], translation[1], translation[2])
@@ -326,7 +330,9 @@ class ManifestAdapter:
             _count(tally, "poses")
         return out, times
 
-    def _sensors(self, raw_root: Path, ctx: _AgentCtx, tally: dict[str, int] | None) -> list[Sensor]:
+    def _sensors(
+        self, raw_root: Path, ctx: _AgentCtx, tally: dict[str, int] | None
+    ) -> list[Sensor]:
         spec = self.spec.streams.sensors
         out: list[Sensor] = []
         records: list[tuple[str, dict[str, object], str]] = []
@@ -334,7 +340,7 @@ class ManifestAdapter:
         if table is not None:
             for key, record in table.items():
                 if spec.agent_field is not None:
-                    owner = _wrap(lambda: get_field(record, spec.agent_field or ""), spec.path.text)
+                    owner = _field(record, spec.agent_field or "", spec.path.text)
                     if str(owner) != ctx.agent_id:
                         continue
                 records.append((key, record, f"{spec.path.text} sensor {key}"))
@@ -343,35 +349,40 @@ class ManifestAdapter:
                 sensor_id = str(hit["sensor"])
                 values = {**ctx.values, "sensor": sensor_id}
                 path = self._path(raw_root, spec.path, values)
-                records.append((sensor_id, self._record(spec.reader, path), spec.path.expand(values)))
+                records.append(
+                    (sensor_id, self._record(spec.reader, path), spec.path.expand(values))
+                )
         for sensor_id, record, where in records:
             out.append(self._sensor(ctx.agent_id, sensor_id, record, where))
             _count(tally, "sensors")
         return out
 
-    def _sensor(self, agent_id: str, sensor_id: str, record: dict[str, object], where: str) -> Sensor:
+    def _sensor(
+        self, agent_id: str, sensor_id: str, record: dict[str, object], where: str
+    ) -> Sensor:
         spec = self.spec.streams.sensors
         ext = spec.extrinsic
         if ext.matrix is not None:
-            raw = _wrap(lambda: get_field(record, ext.matrix.field if ext.matrix else ""), where)
-            extrinsic = _wrap(
-                lambda: matrix_to_se3(
-                    raw, shape=ext.matrix.shape if ext.matrix else "4x4", column_major=bool(ext.matrix and ext.matrix.column_major)
-                ),
-                where,
-            )
+            raw = _field(record, ext.matrix.field if ext.matrix else "", where)
+            try:
+                extrinsic = matrix_to_se3(
+                    raw, shape=ext.matrix.shape, column_major=ext.matrix.column_major
+                )
+            except RotationError as exc:
+                raise BuildError(f"{where}: {exc}") from None
             extrinsic = extrinsic.translation(
-                extrinsic.tx * self._length, extrinsic.ty * self._length, extrinsic.tz * self._length
+                extrinsic.tx * self._length,
+                extrinsic.ty * self._length,
+                extrinsic.tz * self._length,
             )
         else:
             assert ext.translation is not None and ext.rotation is not None
             t = tuple(
-                _num(_wrap(lambda: get_field(record, f), where), f, where) * self._length
-                for f in ext.translation
+                _num(_field(record, f, where), f, where) * self._length for f in ext.translation
             )
-            extrinsic = self._rotation(ext.rotation, record, where, allow_missing=False).translation(
-                t[0], t[1], t[2]
-            )
+            extrinsic = self._rotation(
+                ext.rotation, record, where, allow_missing=False
+            ).translation(t[0], t[1], t[2])
         if ext.direction == "parent_to_child":
             extrinsic = extrinsic.inverse()
         fx = fy = cx = cy = None
@@ -388,7 +399,9 @@ class ManifestAdapter:
                     assert intr.fields is not None
                     values = [get_field(record, f) for f in intr.fields]
                     if all(v is not None for v in values):
-                        fx, fy, cx, cy = (_num(v, f, where) for v, f in zip(values, intr.fields))
+                        fx, fy, cx, cy = (
+                            _num(v, f, where) for v, f in zip(values, intr.fields, strict=True)
+                        )
                         has_intrinsic = True
             except (FieldError, ValueError) as exc:
                 if not intr.optional:
@@ -400,8 +413,14 @@ class ManifestAdapter:
                 assert cx is not None and cy is not None
                 width, height = int(round(cx * 2)), int(round(cy * 2))
             elif size.fields is not None:
-                width = _int(_wrap(lambda: get_field(record, size.fields[0] if size.fields else ""), where), where)
-                height = _int(_wrap(lambda: get_field(record, size.fields[1] if size.fields else ""), where), where)
+                width = _int(
+                    _field(record, size.fields[0] if size.fields else "", where),
+                    where,
+                )
+                height = _int(
+                    _field(record, size.fields[1] if size.fields else "", where),
+                    where,
+                )
         modality = Modality.CAMERA
         for rule in spec.modality:
             if rule.default:
@@ -444,7 +463,11 @@ class ManifestAdapter:
         spec = self.spec.streams.boxes
         assert spec is not None
         out: list[Annotation] = []
-        table = self._table(raw_root, spec.reader, spec.path, ctx.values, None) if spec.reader == "json_table" else None
+        table = (
+            self._table(raw_root, spec.reader, spec.path, ctx.values, None)
+            if spec.reader == "json_table"
+            else None
+        )
         for sample in samples:
             values = _with_sample(ctx.values, sample)
             where = spec.path.expand(values)
@@ -459,10 +482,12 @@ class ManifestAdapter:
                     columns = spec.variants.get(len(parts))
                     if columns is None:
                         known = ", ".join(str(k) for k in sorted(spec.variants))
-                        raise BuildError(f"{where}: a line has {len(parts)} fields, expected {known}")
+                        raise BuildError(
+                            f"{where}: a line has {len(parts)} fields, expected {known}"
+                        )
                     if variants is not None:
                         variants[len(parts)] = variants.get(len(parts), 0) + 1
-                    rows.append({c: v for c, v in zip(columns, parts) if c != "_"})
+                    rows.append({c: v for c, v in zip(columns, parts, strict=True) if c != "_"})
             else:
                 if table is not None:
                     record: dict[str, object] | None = table.get(_key(sample))
@@ -472,10 +497,12 @@ class ManifestAdapter:
                 if record is None:
                     if spec.missing == "skip":
                         continue
-                    raise BuildError(f"{ctx.agent_id}: missing boxes for sample {sample} at {where}")
+                    raise BuildError(
+                        f"{ctx.agent_id}: missing boxes for sample {sample} at {where}"
+                    )
                 items: object = record
                 if spec.records is not None:
-                    items = _wrap(lambda: get_field(record, spec.records or ""), where)
+                    items = _field(record, spec.records or "", where)
                 if not isinstance(items, list):
                     raise BuildError(f"{where}: {spec.records or 'record'} is not a list of boxes")
                 for item in items:  # type: ignore[union-attr]
@@ -518,7 +545,7 @@ class ManifestAdapter:
                 return None
             raise BuildError(f"{where}: class {category!r} is not in class_map")
         sizes = [_num(get(n), n, where) * self._length for n in ("length", "width", "height")]
-        named = dict(zip(("length", "width", "height"), sizes))
+        named = dict(zip(("length", "width", "height"), sizes, strict=True))
         centre = [_num(get(n), n, where) * self._length for n in ("cx", "cy", "cz")]
         if spec.centre_origin == "bottom":
             centre[2] += named["height"] / 2.0
@@ -620,9 +647,13 @@ class ManifestAdapter:
             if not directory.is_dir():
                 if spec.when_directory_absent == "skip":
                     return []
-                raise BuildError(f"{ctx.agent_id}: missing lidar directory {spec.directory.expand(ctx.values)}")
+                raise BuildError(
+                    f"{ctx.agent_id}: missing lidar directory {spec.directory.expand(ctx.values)}"
+                )
         if not any(s.sensor_id == spec.sensor for s in sensors):
-            raise BuildError(f"{ctx.agent_id}: lidar sensor {spec.sensor!r} is not a calibrated sensor")
+            raise BuildError(
+                f"{ctx.agent_id}: lidar sensor {spec.sensor!r} is not a calibrated sensor"
+            )
         out: list[PointCloud] = []
         for sample in samples:
             values = _with_sample(ctx.values, sample)
@@ -655,7 +686,10 @@ class ManifestAdapter:
             if spec.reader == "bin_f32":
                 assert spec.stride is not None
                 return read_bin_f32(
-                    path, stride=spec.stride, offsets=spec.offsets, intensity_fill=spec.intensity_fill
+                    path,
+                    stride=spec.stride,
+                    offsets=spec.offsets,
+                    intensity_fill=spec.intensity_fill,
                 )
             plugin = readers.plugin("lidar", spec.reader)
             if plugin is None:
@@ -706,11 +740,13 @@ class ManifestAdapter:
                 out[key] = value.const
             else:
                 assert value.field is not None
-                raw = _wrap(lambda: get_field(row, value.field or ""), scene_id)
+                raw = _field(row, value.field or "", scene_id)
                 if value.number:
                     if isinstance(raw, bool) or not isinstance(raw, (int, float)):
                         raise BuildError(f"{scene_id}: platform {key} is not a number")
-                    out[key] = format(float(raw), value.format) if value.format else repr(float(raw))
+                    out[key] = (
+                        format(float(raw), value.format) if value.format else repr(float(raw))
+                    )
                 else:
                     out[key] = str(raw)
         return tuple(sorted(out.items()))
@@ -771,7 +807,7 @@ class ManifestAdapter:
             return {str(i): row for i, row in enumerate(rows)}
         out: dict[str, dict[str, object]] = {}
         for row in rows:
-            key = _wrap(lambda: get_field(row, key_field), path.name)
+            key = _field(row, key_field, path.name)
             out[_key(key if isinstance(key, int) else str(key))] = row
         return out
 
@@ -786,7 +822,7 @@ class ManifestAdapter:
         for join in spec.joins:
             table = self._table(raw_root, "json_table", join.table, values, join.key)
             assert table is not None
-            on = _wrap(lambda: get_field(merged, join.on), join.table.text)
+            on = _field(merged, join.on, join.table.text)
             hit = table.get(_key(on if isinstance(on, int) else str(on)))
             if hit is None:
                 raise BuildError(f"{join.table.text}: no row with {join.key} == {on!r}")
@@ -806,7 +842,7 @@ class ManifestAdapter:
                 angles: list[float] = []
                 for name in spec.euler.fields:
                     if name in record or not allow_missing:
-                        angles.append(_num(_wrap(lambda: get_field(record, name), where), name, where))
+                        angles.append(_num(_field(record, name, where), name, where))
                     elif spec.missing_angles is not None:
                         angles.append(0.0)
                     else:
@@ -818,15 +854,23 @@ class ManifestAdapter:
                     degrees=self._degrees,
                 )
             if spec.quaternion is not None:
-                q = [_num(_wrap(lambda: get_field(record, n), where), n, where) for n in spec.quaternion.fields]
+                q = [_num(_field(record, n, where), n, where) for n in spec.quaternion.fields]
                 return quaternion_to_se3(q, order=spec.quaternion.order)
             if spec.matrix is not None:
                 m = spec.matrix
-                raw = _wrap(lambda: get_field(record, m.field), where)
-                return matrix_to_se3(raw, shape=m.shape, column_major=m.column_major).translation(0.0, 0.0, 0.0)
+                raw = _field(record, m.field, where)
+                return matrix_to_se3(raw, shape=m.shape, column_major=m.column_major).translation(
+                    0.0, 0.0, 0.0
+                )
             assert spec.yaw_only is not None
-            angle = _num(_wrap(lambda: get_field(record, spec.yaw_only.field if spec.yaw_only else ""), where), "yaw", where)
-            about = {"x": (angle, 0.0, 0.0), "y": (0.0, angle, 0.0), "z": (0.0, 0.0, angle)}[spec.yaw_only.axis]
+            angle = _num(
+                _field(record, spec.yaw_only.field if spec.yaw_only else "", where),
+                "yaw",
+                where,
+            )
+            about = {"x": (angle, 0.0, 0.0), "y": (0.0, angle, 0.0), "z": (0.0, 0.0, angle)}[
+                spec.yaw_only.axis
+            ]
             return euler_to_se3(about, order="zyx", intrinsic=True, degrees=self._degrees)
         except RotationError as exc:
             raise BuildError(f"{where}: {exc}") from None
@@ -839,7 +883,7 @@ class ManifestAdapter:
             assert clock.scale_us is not None
             return sample * clock.scale_us + clock.offset_us
         assert clock.field is not None
-        raw = _num(_wrap(lambda: get_field(record, clock.field or ""), where), clock.field, where)
+        raw = _num(_field(record, clock.field or "", where), clock.field, where)
         if clock.unit == "frame":
             assert clock.scale_us is not None
             value = raw * clock.scale_us
@@ -916,6 +960,20 @@ def _int(value: object, where: str) -> int:
     if number != int(number) or number <= 0:
         raise BuildError(f"{where}: image size must be a positive integer")
     return int(number)
+
+
+def _field(record: object, path: str, where: str) -> object:
+    try:
+        return get_field(record, path)
+    except FieldError as exc:
+        raise BuildError(f"{where}: {exc}") from None
+
+
+def _read_table_file(path: Path, where: str) -> list[dict[str, object]]:
+    try:
+        return read_json_table(path)
+    except (FieldError, ValueError, OSError) as exc:
+        raise BuildError(f"{where}: {exc}") from None
 
 
 def _wrap(fn: object, where: str) -> object:

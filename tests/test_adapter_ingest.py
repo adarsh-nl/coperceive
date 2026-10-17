@@ -11,6 +11,7 @@ from coperceive.adapters.build import ManifestAdapter
 from coperceive.adapters.ingest import IngestError, format_report, ingest
 from coperceive.adapters.spec import builtin_manifest_path, load_manifest
 from coperceive.store import read_scene
+
 from tests.griffin_release import write_release
 
 

@@ -400,7 +400,9 @@ class _Node:
             return None
         return _Node(self.at(key), value)
 
-    def str(self, key: str, *, optional: bool = False, choices: tuple[str, ...] | None = None) -> str:
+    def str(
+        self, key: str, *, optional: bool = False, choices: tuple[str, ...] | None = None
+    ) -> str:
         value = self.any(key, optional=optional)
         if value is None:
             return ""
@@ -445,7 +447,9 @@ class _Node:
             raise SpecError(f"{self.at(key)}: expected true or false")
         return value
 
-    def strs(self, key: str, *, optional: bool = False, count: int | None = None) -> tuple[str, ...]:
+    def strs(
+        self, key: str, *, optional: bool = False, count: int | None = None
+    ) -> tuple[str, ...]:
         value = self.any(key, optional=optional)
         if value is None:
             return ()
@@ -466,7 +470,9 @@ class _Node:
         node.done()
         return out
 
-    def template(self, key: str, extra: frozenset[str], *, optional: bool = False) -> Template | None:
+    def template(
+        self, key: str, extra: frozenset[str], *, optional: bool = False
+    ) -> Template | None:
         text = self.str(key, optional=optional)
         if text == "":
             return None
@@ -490,7 +496,9 @@ def _params(node: _Node | None) -> dict[str, ParamSpec]:
     out: dict[str, ParamSpec] = {}
     for name in list(node.payload):
         if not _NAME.match(name) or name in PLACEHOLDERS:
-            raise SpecError(f"{node.at(name)}: param name clashes with a placeholder or is not a name")
+            raise SpecError(
+                f"{node.at(name)}: param name clashes with a placeholder or is not a name"
+            )
         sub = node.sub(name, optional=True)
         allowed = sub.strs("allowed", optional=True) if sub is not None else ()
         if sub is not None:
@@ -611,7 +619,9 @@ def _agents(payload: object, extra: frozenset[str]) -> AgentsSpec:
     assert glob is not None
     if not glob.text.endswith("/") or "agent" not in glob.placeholders:
         raise SpecError(f"{discover.at('glob')}: must end in / and contain {{agent}}")
-    spec = DiscoverSpec(glob, _agent_type(discover, "type"), discover.strs("exclude", optional=True))
+    spec = DiscoverSpec(
+        glob, _agent_type(discover, "type"), discover.strs("exclude", optional=True)
+    )
     discover.done()
     node.done()
     return AgentsSpec((), spec)
@@ -663,7 +673,9 @@ def _rotation(node: _Node | None, *, allow_missing: bool) -> RotationSpec:
         matrix = _matrix(sub)
     sub = node.sub("yaw_only", optional=True)
     if sub is not None:
-        yaw_only = YawOnlySpec(sub.str("field"), sub.opt_str("axis", choices=("x", "y", "z")) or "z")
+        yaw_only = YawOnlySpec(
+            sub.str("field"), sub.opt_str("axis", choices=("x", "y", "z")) or "z"
+        )
         sub.done()
     count = sum(1 for v in (euler, quaternion, matrix, yaw_only) if v is not None)
     if count != 1:
@@ -756,7 +768,8 @@ def _sensors(node: _Node | None, extra: frozenset[str]) -> SensorsSpec:
         matrix,
         translation,
         rotation,
-        ext.opt_str("direction", choices=("child_to_parent", "parent_to_child")) or "child_to_parent",
+        ext.opt_str("direction", choices=("child_to_parent", "parent_to_child"))
+        or "child_to_parent",
     )
     ext.done()
     intrinsic = None

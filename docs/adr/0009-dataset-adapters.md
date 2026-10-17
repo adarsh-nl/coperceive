@@ -63,11 +63,13 @@ The built-in manifests ship as package data. `coperceive.griffin.download` and `
 @dataclass(frozen=True)
 class SceneRef:
     scene_id: str
-    frames: tuple[int, ...]          # or source sample keys, see "Samples"
+    frames: tuple[int, ...]  # or source sample keys, see "Samples"
     params: tuple[tuple[str, str], ...]
+
 
 class Adapter(Protocol):
     name: str
+
     def scenes(self, raw_root: Path, params: Mapping[str, str]) -> Sequence[SceneRef]: ...
     def load(self, raw_root: Path, ref: SceneRef) -> Scene: ...
     def check(self, raw_root: Path, params: Mapping[str, str]) -> CheckReport: ...

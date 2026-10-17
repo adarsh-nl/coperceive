@@ -102,7 +102,14 @@ def ingest(
         missing = [s for s in scene_ids if s not in known]
         if missing:
             raise IngestError(
-                IngestReport((), (), (), tuple(f"{s}: not a scene of {adapter.name}" for s in missing), (), ())
+                IngestReport(
+                    (),
+                    (),
+                    (),
+                    tuple(f"{s}: not a scene of {adapter.name}" for s in missing),
+                    (),
+                    (),
+                )
             )
         wanted = set(scene_ids)
         refs = [ref for ref in refs if ref.scene_id in wanted]

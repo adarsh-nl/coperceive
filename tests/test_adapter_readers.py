@@ -73,7 +73,9 @@ def test_ascii_ply_matches_struct_packing(tmp_path: Path) -> None:
         "end_header\n1.1 0 0 0.25\n0.1 0.2 0.3 0.7\n"
     )
     (tmp_path / "a.ply").write_text(text, encoding="utf-8")
-    count, blob = read_ply(tmp_path / "a.ply", fields={"x": "x", "y": "y", "z": "z", "intensity": "I"})
+    count, blob = read_ply(
+        tmp_path / "a.ply", fields={"x": "x", "y": "y", "z": "z", "intensity": "I"}
+    )
     assert count == 2
     assert blob == struct.pack("<8f", 1.1, 0, 0, 0.25, 0.1, 0.2, 0.3, 0.7)
 
@@ -114,7 +116,9 @@ def test_pcd_ascii_and_binary(tmp_path: Path) -> None:
         "# .PCD v0.7\nVERSION 0.7\nFIELDS x y z intensity\nSIZE 4 4 4 4\nTYPE F F F F\n"
         "COUNT 1 1 1 1\nWIDTH 2\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS 2\n"
     )
-    (tmp_path / "a.pcd").write_text(header + "DATA ascii\n1 2 3 0.5\n4 5 6 0.25\n", encoding="utf-8")
+    (tmp_path / "a.pcd").write_text(
+        header + "DATA ascii\n1 2 3 0.5\n4 5 6 0.25\n", encoding="utf-8"
+    )
     fields = {"x": "x", "y": "y", "z": "z", "intensity": "intensity"}
     count, blob = read_pcd(tmp_path / "a.pcd", fields=fields)
     assert _xyzi(count, blob) == [(1.0, 2.0, 3.0, 0.5), (4.0, 5.0, 6.0, 0.25)]
@@ -136,10 +140,17 @@ def test_bin_f32_with_stride_and_offsets(tmp_path: Path) -> None:
     assert _xyzi(count, blob) == [(1.0, 2.0, 3.0, 0.5), (4.0, 5.0, 6.0, 0.25)]
     (tmp_path / "bad.bin").write_bytes(b"\x00" * 18)
     with pytest.raises(LidarError, match="multiple"):
-        read_bin_f32(tmp_path / "bad.bin", stride=4, offsets={"x": 0, "y": 1, "z": 2, "intensity": 3})
+        read_bin_f32(
+            tmp_path / "bad.bin", stride=4, offsets={"x": 0, "y": 1, "z": 2, "intensity": 3}
+        )
 
 
 def test_pinhole_from_matrix() -> None:
-    assert pinhole_from_matrix([[700, 0, 960], [0, 710, 540], [0, 0, 1]]) == (700.0, 710.0, 960.0, 540.0)
+    assert pinhole_from_matrix([[700, 0, 960], [0, 710, 540], [0, 0, 1]]) == (
+        700.0,
+        710.0,
+        960.0,
+        540.0,
+    )
     with pytest.raises(ValueError, match="3x3"):
         pinhole_from_matrix([[1, 2], [3, 4]])

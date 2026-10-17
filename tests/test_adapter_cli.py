@@ -11,6 +11,7 @@ from coperceive.adapters import registry
 from coperceive.adapters.spec import builtin_manifest_path
 from coperceive.cli import main
 from coperceive.store import read_scene
+
 from tests.griffin_release import write_release
 
 
@@ -37,7 +38,9 @@ def test_check_prints_counts_and_writes_nothing(
     assert _snapshot(raw) == before
 
 
-def test_check_reports_an_error_and_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_check_reports_an_error_and_exits_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     raw = tmp_path / "raw"
     write_release(raw, {"Town03-000": [1, 2]}, drop_pose=("drone-side", "Town03-000", 2))
     with pytest.raises(SystemExit) as caught:
@@ -46,14 +49,24 @@ def test_check_reports_an_error_and_exits_1(tmp_path: Path, capsys: pytest.Captu
     assert "000002.json" in capsys.readouterr().out
 
 
-def test_ingest_by_name_and_by_manifest_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_ingest_by_name_and_by_manifest_file(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     raw = tmp_path / "raw"
     write_release(raw, {"Town03-000": [1]})
     main(
         [
-            "adapters", "ingest", "griffin",
-            "--raw-root", str(raw), "--out", str(tmp_path / "a"),
-            "--param", "subset=25m", "--workers", "1",
+            "adapters",
+            "ingest",
+            "griffin",
+            "--raw-root",
+            str(raw),
+            "--out",
+            str(tmp_path / "a"),
+            "--param",
+            "subset=25m",
+            "--workers",
+            "1",
         ]
     )
     assert "wrote=1" in capsys.readouterr().out
@@ -62,20 +75,44 @@ def test_ingest_by_name_and_by_manifest_file(tmp_path: Path, capsys: pytest.Capt
     copy.write_text(builtin_manifest_path("griffin").read_text(encoding="utf-8"), encoding="utf-8")
     main(
         [
-            "adapters", "ingest", str(copy),
-            "--raw-root", str(raw), "--out", str(tmp_path / "b"),
-            "--param", "subset=25m", "--workers", "1",
+            "adapters",
+            "ingest",
+            str(copy),
+            "--raw-root",
+            str(raw),
+            "--out",
+            str(tmp_path / "b"),
+            "--param",
+            "subset=25m",
+            "--workers",
+            "1",
         ]
     )
-    marker = json.loads((tmp_path / "b" / "Town03-000" / "COMPLETE.json").read_text(encoding="utf-8"))
+    marker = json.loads(
+        (tmp_path / "b" / "Town03-000" / "COMPLETE.json").read_text(encoding="utf-8")
+    )
     assert marker["adapter"] == "griffin"
 
 
-def test_bad_param_and_unknown_adapter_exit_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+def test_bad_param_and_unknown_adapter_exit_1(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     raw = tmp_path / "raw"
     write_release(raw, {"Town03-000": [1]})
     with pytest.raises(SystemExit) as caught:
-        main(["adapters", "ingest", "griffin", "--raw-root", str(raw), "--out", str(tmp_path / "o"), "--param", "subset=30m"])
+        main(
+            [
+                "adapters",
+                "ingest",
+                "griffin",
+                "--raw-root",
+                str(raw),
+                "--out",
+                str(tmp_path / "o"),
+                "--param",
+                "subset=30m",
+            ]
+        )
     assert caught.value.code == 1
     assert "subset" in capsys.readouterr().err
     with pytest.raises(SystemExit) as caught:
@@ -130,18 +167,34 @@ def test_entry_point_adapters_and_readers(
     )
     main(
         [
-            "adapters", "ingest", str(manifest),
-            "--raw-root", str(raw), "--out", str(tmp_path / "out"),
-            "--param", "subset=25m", "--workers", "1",
+            "adapters",
+            "ingest",
+            str(manifest),
+            "--raw-root",
+            str(raw),
+            "--out",
+            str(tmp_path / "out"),
+            "--param",
+            "subset=25m",
+            "--workers",
+            "1",
         ]
     )
     scene = read_scene(tmp_path / "out" / "Town03-000")
     assert scene.point_clouds[0].count == 2
     main(
         [
-            "adapters", "ingest", "griffin-copy",
-            "--raw-root", str(raw), "--out", str(tmp_path / "out2"),
-            "--param", "subset=25m", "--workers", "1",
+            "adapters",
+            "ingest",
+            "griffin-copy",
+            "--raw-root",
+            str(raw),
+            "--out",
+            str(tmp_path / "out2"),
+            "--param",
+            "subset=25m",
+            "--workers",
+            "1",
         ]
     )
     assert (tmp_path / "out2" / "Town03-000" / "manifest.json").is_file()
