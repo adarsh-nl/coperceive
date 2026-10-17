@@ -220,7 +220,7 @@ class ManifestAdapter:
         images: list[ImageRef] = []
         clouds: list[PointCloud] = []
         for ctx in agents_ctx:
-            poses = self._poses(raw_root, ctx, samples, tally)
+            poses, times = self._poses(raw_root, ctx, samples, tally)
             agents.append(
                 Agent(
                     agent_id=ctx.agent_id,
@@ -233,12 +233,12 @@ class ManifestAdapter:
             sensors.extend(agent_sensors)
             if self.spec.streams.boxes is not None:
                 annotations.extend(
-                    self._boxes(raw_root, ctx, samples, agent_sensors, poses, tally, variants)
+                    self._boxes(raw_root, ctx, samples, agent_sensors, times, tally, variants)
                 )
             if self.spec.streams.images is not None:
-                images.extend(self._images(raw_root, ctx, samples, agent_sensors, tally))
+                images.extend(self._images(raw_root, ctx, samples, agent_sensors, times, tally))
             if self.spec.streams.lidar is not None:
-                clouds.extend(self._lidar(raw_root, ctx, samples, agent_sensors, tally))
+                clouds.extend(self._lidar(raw_root, ctx, samples, agent_sensors, times, tally))
         try:
             return Scene(
                 schema_version=SCHEMA_VERSION,
@@ -282,9 +282,11 @@ class ManifestAdapter:
         ctx: _AgentCtx,
         samples: Sequence[Sample],
         tally: dict[str, int] | None,
-    ) -> list[StampedPose]:
+    ) -> tuple[list[StampedPose], dict[Sample, int]]:
+        """Poses in sample order, plus each sample's ``time_us`` for the other streams."""
         spec = self.spec.streams.poses
         out: list[StampedPose] = []
+        times: dict[Sample, int] = {}
         table = self._table(raw_root, spec.reader, spec.path, ctx.values, spec.sample_field)
         for sample in samples:
             values = _with_sample(ctx.values, sample)
@@ -318,9 +320,11 @@ class ManifestAdapter:
             if spec.direction == "parent_to_child":
                 pose = pose.inverse()
             pose = self._body.world_from_body(pose)
-            out.append(StampedPose(time_us=self._time_us(sample, record, where), world_from_body=pose))
+            time_us = self._time_us(sample, record, where)
+            times[sample] = time_us
+            out.append(StampedPose(time_us=time_us, world_from_body=pose))
             _count(tally, "poses")
-        return out
+        return out, times
 
     def _sensors(self, raw_root: Path, ctx: _AgentCtx, tally: dict[str, int] | None) -> list[Sensor]:
         spec = self.spec.streams.sensors
@@ -433,7 +437,7 @@ class ManifestAdapter:
         ctx: _AgentCtx,
         samples: Sequence[Sample],
         sensors: Sequence[Sensor],
-        poses: Sequence[StampedPose],
+        times: Mapping[Sample, int],
         tally: dict[str, int] | None,
         variants: dict[int, int] | None,
     ) -> list[Annotation]:
@@ -482,7 +486,7 @@ class ManifestAdapter:
                         except FieldError:
                             continue
                     rows.append(row)
-            time_us = self._time_us(sample, None, where)
+            time_us = _sample_time(times, sample, where)
             for row in rows:
                 box = self._box(spec, row, ctx.agent_id, time_us, sensors, where)
                 if box is not None:
@@ -514,12 +518,7 @@ class ManifestAdapter:
                 return None
             raise BuildError(f"{where}: class {category!r} is not in class_map")
         sizes = [_num(get(n), n, where) * self._length for n in ("length", "width", "height")]
-        order = spec.size_order
         named = dict(zip(("length", "width", "height"), sizes))
-        if order != "lwh":
-            # The manifest columns were named in source order; reassign.
-            source = dict(zip(tuple(order), sizes))
-            named = {"length": source["l"], "width": source["w"], "height": source["h"]}
         centre = [_num(get(n), n, where) * self._length for n in ("cx", "cy", "cz")]
         if spec.centre_origin == "bottom":
             centre[2] += named["height"] / 2.0
@@ -578,6 +577,7 @@ class ManifestAdapter:
         ctx: _AgentCtx,
         samples: Sequence[Sample],
         sensors: Sequence[Sensor],
+        times: Mapping[Sample, int],
         tally: dict[str, int] | None,
     ) -> list[ImageRef]:
         spec = self.spec.streams.images
@@ -595,7 +595,7 @@ class ManifestAdapter:
                     ImageRef(
                         agent_id=ctx.agent_id,
                         sensor_id=sensor.sensor_id,
-                        time_us=self._time_us(sample, None, relative),
+                        time_us=_sample_time(times, sample, relative),
                         path=relative,
                     )
                 )
@@ -608,6 +608,7 @@ class ManifestAdapter:
         ctx: _AgentCtx,
         samples: Sequence[Sample],
         sensors: Sequence[Sensor],
+        times: Mapping[Sample, int],
         tally: dict[str, int] | None,
     ) -> list[PointCloud]:
         spec = self.spec.streams.lidar
@@ -637,7 +638,7 @@ class ManifestAdapter:
                 PointCloud(
                     agent_id=ctx.agent_id,
                     sensor_id=spec.sensor,
-                    time_us=self._time_us(sample, None, relative),
+                    time_us=_sample_time(times, sample, relative),
                     count=count,
                     xyz_i_f32=blob,
                 )
@@ -830,15 +831,13 @@ class ManifestAdapter:
         except RotationError as exc:
             raise BuildError(f"{where}: {exc}") from None
 
-    def _time_us(self, sample: Sample, record: Mapping[str, object] | None, where: str) -> int:
+    def _time_us(self, sample: Sample, record: Mapping[str, object], where: str) -> int:
         clock = self.spec.clock
         if clock.source == "frame":
             if not isinstance(sample, int):
                 raise BuildError(f"{where}: clock.from is frame but the sample key is {sample!r}")
             assert clock.scale_us is not None
             return sample * clock.scale_us + clock.offset_us
-        if record is None:
-            raise BuildError(f"{where}: clock.from is field, which needs a pose record")
         assert clock.field is not None
         raw = _num(_wrap(lambda: get_field(record, clock.field or ""), where), clock.field, where)
         if clock.unit == "frame":
@@ -852,6 +851,13 @@ class ManifestAdapter:
                 raise BuildError(f"{where}: {clock.field} = {raw!r} is not a whole microsecond")
             return int(value)
         return int(round(value))
+
+
+def _sample_time(times: Mapping[Sample, int], sample: Sample, where: str) -> int:
+    try:
+        return times[sample]
+    except KeyError:
+        raise BuildError(f"{where}: sample {sample!r} has no pose, so it has no time") from None
 
 
 def _with_sample(values: Mapping[str, object], sample: Sample) -> dict[str, object]:

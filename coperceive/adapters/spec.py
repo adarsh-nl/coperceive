@@ -300,7 +300,6 @@ class BoxesSpec:
     records: str | None
     rotation: RotationSpec
     centre_origin: str  # centre | bottom
-    size_order: str  # lwh | hwl | wlh
     track_id_cast: str  # string | int_string
     class_map: Mapping[str, str]
     class_map_unknown: str  # keep | error | drop
@@ -905,7 +904,6 @@ def _boxes(node: _Node | None, extra: frozenset[str]) -> BoxesSpec | None:
         records=node.opt_str("records"),
         rotation=_rotation(node.sub("rotation"), allow_missing=True),
         centre_origin=node.opt_str("centre_origin", choices=("centre", "bottom")) or "centre",
-        size_order=node.opt_str("size_order", choices=("lwh", "hwl", "wlh")) or "lwh",
         track_id_cast=node.opt_str("track_id_cast", choices=("string", "int_string")) or "string",
         class_map=node.str_map("class_map", optional=True),
         class_map_unknown=node.opt_str("class_map_unknown", choices=("keep", "error", "drop"))

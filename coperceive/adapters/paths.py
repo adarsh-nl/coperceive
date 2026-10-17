@@ -148,6 +148,12 @@ def _render(field: _Field, value: object, text: str) -> str:
         return f"{value:0{field.width}d}" if field.zero else f"{value:{field.width}d}"
     if not isinstance(value, str):
         raise PathError(f"template {text!r}: {field.name!r} must be a string")
+    if field.name == "agent_root":
+        # The one placeholder that is a directory path, not a single name.
+        parts = re.split(r"[\\/]", value)
+        if value.startswith(("/", "\\")) or ".." in parts or value == "":
+            raise PathError(f"template {text!r}: agent_root {value!r} is not a relative directory")
+        return value
     if "/" in value or "\\" in value or value in {".", ".."}:
         raise PathError(f"template {text!r}: {field.name!r} value {value!r} is not a name")
     return value
