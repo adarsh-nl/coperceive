@@ -309,7 +309,7 @@ Where the implementation departs from the text above:
 - `adapters check` prints label-width counts whenever the boxes stream has variants. `report.variant_counts` only decides whether they go into `COMPLETE.json`.
 - `COMPLETE.json` carries `adapter`, `coperceive_version` and `manifest_sha256` (decision 4). The resume check reads only `scene_id`, `schema_version` and `frames`/`samples`.
 - Reader plugins carry a `kind` attribute (`record`, `table`, `lidar`) so the manifest validator can list them as reader choices.
-- `coperceive convert griffin` still runs the hand-written reader. It becomes an alias for the adapter after the slow regression test has passed on the real release (decision 3).
+- `coperceive convert griffin` is an alias for the adapter since the slow regression passed on the real Griffin-25m release (2026-10-17). The pre-adapter reader and converter are frozen in `tests/griffin_reference.py` so the regression test still compares two implementations. `coperceive/griffin/raw.py` is gone.
 
 ## Decisions
 

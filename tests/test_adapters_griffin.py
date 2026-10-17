@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-"""Regression: the Griffin adapter writes the same scenes as the hand-written converter.
+"""Regression: the Griffin adapter writes the same scenes as the frozen pre-adapter converter.
 
 "Identical" is defined in ADR 0009: ``manifest.json`` and ``points.bin`` byte
 for byte, every Parquet table equal when read back, equal ``read_scene``
@@ -17,9 +17,9 @@ import pytest
 from coperceive.adapters.build import ManifestAdapter
 from coperceive.adapters.ingest import ingest
 from coperceive.adapters.spec import builtin_manifest_path, load_manifest
-from coperceive.griffin.convert import convert_griffin
 from coperceive.store import read_scene
 
+from tests.griffin_reference import convert_reference
 from tests.griffin_release import write_release
 
 _TABLES = ("poses", "annotations", "objects", "images", "point_index")
@@ -49,7 +49,7 @@ def assert_identical_trees(old_root: Path, new_root: Path) -> None:
 
 
 def _run_both(raw: Path, out: Path, *, workers: int = 1) -> None:
-    convert_griffin(raw, out / "old", subset="25m", workers=workers)
+    convert_reference(raw, out / "old", subset="25m", workers=workers)
     adapter = ManifestAdapter(load_manifest(builtin_manifest_path("griffin")))
     ingest(adapter, raw, out / "new", params={"subset": "25m"}, workers=workers)
 

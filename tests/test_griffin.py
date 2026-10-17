@@ -5,8 +5,9 @@ import json
 from pathlib import Path
 
 from coperceive.griffin.download import verify_md5
-from coperceive.griffin.raw import load_scene, parse_label_line
 from coperceive.model import AgentType
+
+from tests.griffin_reference import load_scene, parse_label_line
 
 
 def test_label_line_and_one_scene(tmp_path: Path) -> None:

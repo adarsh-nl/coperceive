@@ -67,6 +67,8 @@ or `~/.local/share/coperceive/griffin-licence-accepted` when `XDG_DATA_HOME` is 
 
 ## Conversion
 
+`coperceive convert griffin` runs the built-in manifest adapter (`coperceive/adapters/builtin/griffin.yaml`, [ADR 0009](../adr/0009-dataset-adapters.md)) through the shared ingest driver. The report below is unchanged. The pre-adapter converter is frozen in `tests/griffin_reference.py`; `tests/test_adapters_griffin.py` checks the two write the same scenes, and that check passed on the real 25 m release on 2026-10-17.
+
 Scenes are converted in parallel, at most 8 processes. A scene directory with a `COMPLETE.json` whose frame list matches `scene_infos.json` is left untouched. A `.partial/<scene_id>/` directory that already has that marker is renamed into place. Any other partial or incomplete directory is removed and built again. One scene's exception does not delete scenes that already finished. The process exits non-zero, and the next run retries the unfinished scenes.
 
 `COMPLETE.json` is not part of schema 1. `read_scene` ignores it.

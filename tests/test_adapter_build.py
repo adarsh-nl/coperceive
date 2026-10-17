@@ -7,9 +7,9 @@ from pathlib import Path
 import pytest
 from coperceive.adapters.build import BuildError, ManifestAdapter
 from coperceive.adapters.spec import builtin_manifest_path, load_manifest
-from coperceive.griffin.raw import load_scene
 from coperceive.model import AgentType, Modality
 
+from tests.griffin_reference import load_scene
 from tests.griffin_release import write_release
 
 
