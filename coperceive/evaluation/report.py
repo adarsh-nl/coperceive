@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import cast
 
 from coperceive.evaluation.config import threshold_key
-from coperceive.evaluation.evaluate import METRICS_FILE, read_metrics
+from coperceive.evaluation.evaluate import METRICS_FILE, read_metrics, scene_output_dir
 from coperceive.evaluation.predictions import check_run_id
 from coperceive.viewdata import scene_directories
 
@@ -56,7 +56,7 @@ def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row
     check_run_id(run_id)
     rows: list[Row] = []
     for scene_dir in scene_directories(scenes_root):
-        directory = predictions_root / run_id / scene_dir.name
+        directory = scene_output_dir(predictions_root, run_id, scene_dir.name)
         if not (directory / METRICS_FILE).is_file():
             continue
         metrics = read_metrics(directory)
@@ -108,10 +108,14 @@ def _is_ratio(column: str) -> bool:
     return column in {"precision", "recall"} or column.startswith("AP@")
 
 
-def _int(value: object) -> int:
+def _count(value: object) -> int | None:
     if isinstance(value, bool) or not isinstance(value, int):
-        return 0
+        return None
     return value
+
+
+def _int(value: object) -> int:
+    return _count(value) or 0
 
 
 def _float(value: object) -> float | None:
@@ -121,7 +125,12 @@ def _float(value: object) -> float | None:
 
 
 def aggregate(rows: Sequence[Row], thresholds: Sequence[float]) -> dict[str, object]:
-    """Sums of the counts, precision and recall from the sums, AP means over rows that have one."""
+    """Sums of the counts, precision and recall from the sums, AP means over rows that have one.
+
+    A row is one scene and output, so each ``AP@<t>`` of the aggregate is the mean
+    of the per-row (per scene, per output) means over the rows whose mean is not
+    ``null``; a scene with two outputs weighs twice. A count a row lacks adds 0.
+    """
     out: dict[str, object] = {}
     for column in (*COUNT_KEYS, *COOPERATIVE_KEYS):
         out[column] = sum(_int(row.values.get(column)) for row in rows)
@@ -139,7 +148,8 @@ def _cell(column: str, value: object) -> str:
     if _is_ratio(column):
         number = _float(value)
         return MISSING if number is None else f"{number:.3f}"
-    return str(_int(value))
+    count = _count(value)
+    return MISSING if count is None else str(count)
 
 
 def _delta_cell(column: str, a: object, b: object) -> str:
@@ -148,7 +158,10 @@ def _delta_cell(column: str, a: object, b: object) -> str:
         if left is None or right is None:
             return MISSING
         return f"{right - left:+.3f}"
-    return f"{_int(b) - _int(a):+d}"
+    left_count, right_count = _count(a), _count(b)
+    if left_count is None or right_count is None:
+        return MISSING
+    return f"{right_count - left_count:+d}"
 
 
 def _table(header: Sequence[str], lines: Sequence[Sequence[str]]) -> str:

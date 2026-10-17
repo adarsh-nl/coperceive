@@ -40,7 +40,7 @@ from coperceive.se3 import SE3
 from coperceive.store import write_scene
 
 from tests.cooperative import cooperative_scene
-from tests.eval_fixture import synthetic_predictions
+from tests.eval_fixture import synthetic_predictions, synthetic_run_meta
 
 CREATED = "2026-10-17T01:02:03Z"
 
@@ -444,6 +444,46 @@ def test_ap_pass_ignores_the_score_threshold_and_statuses_do_not() -> None:
     }
 
 
+def _cone(time_us: int, center: tuple[float, float, float]) -> PredictionBox:
+    """A world-frame cone prediction on the vehicle ``single`` output, score 0.9."""
+    return PredictionBox(
+        scene_id="coop-fixture",
+        agent_id="vehicle",
+        source="single",
+        time_us=time_us,
+        category="cone",
+        score=0.9,
+        track_id=None,
+        center=center,
+        size_lwh=(0.3, 0.3, 0.7),
+        box_from_rpy=SE3.identity(),
+        frame=BoxFrame.WORLD,
+    )
+
+
+def test_ap_ties_follow_file_order_across_sample_times() -> None:
+    # §Metrics AP step 1: ties in file order. The fixture's only cone is the vehicle's
+    # world-frame box at (21, 2, 0) at 200000 µs. One prediction sits on it (a tp) and an
+    # equal-score cone at the earlier time 100000 µs is a fp. With the tp first in the file
+    # the walk is tp, fp: AP 1.0. With the fp first: 0.5. Pose-time order would always put
+    # the 100000 µs fp first and give 0.5 for both files.
+    scene = cooperative_scene()
+    meta = synthetic_run_meta()
+    tp = _cone(200_000, (21.0, 2.0, 0.0))
+    fp = _cone(100_000, (50.0, 50.0, 0.0))
+    tp_first = evaluate_scene(scene, meta, (tp, fp), DEFAULT_CONFIG, created_utc=CREATED)
+    fp_first = evaluate_scene(scene, meta, (fp, tp), DEFAULT_CONFIG, created_utc=CREATED)
+    ap_tp_first = cast(
+        dict[str, dict[str, object]], _output(tp_first.metrics, "vehicle", "single")["ap"]
+    )
+    ap_fp_first = cast(
+        dict[str, dict[str, object]], _output(fp_first.metrics, "vehicle", "single")["ap"]
+    )
+    for threshold in ("0.5", "0.7"):
+        assert ap_tp_first[threshold]["cone"] == 1.0
+        assert ap_fp_first[threshold]["cone"] == 0.5
+
+
 def test_ignored_gt_is_counted_and_not_missed() -> None:
     scene = cooperative_scene()
     meta, boxes = synthetic_predictions(scene)
@@ -604,6 +644,21 @@ def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) ->
     recall_column = header.index("recall")
     expected_recall = int(aggregate[tp_column]) / int(aggregate[gt_column])
     assert float(aggregate[recall_column]) == pytest.approx(expected_recall, abs=5e-4)
+
+
+def test_render_report_shows_a_missing_count_as_n_a() -> None:
+    # A truncated metrics.json leaves a count out; the table says so rather than printing 0.
+    row = Row(scene_id="s", agent_id="a", source="single", values={"tp": 3, "precision": 0.5})
+    table = _table(render_report([row], (0.5,)))
+    header, body, total = table[0], table[2], table[3]
+    assert body[header.index("tp")] == "3"
+    assert body[header.index("gt")] == "n/a"
+    assert body[header.index("precision")] == "0.500"
+    assert body[header.index("AP@0.5")] == "n/a"
+    assert total[header.index("tp")] == "3"
+    compare = _table(render_compare([row], [row], (0.5,)))[2]
+    assert compare[header.index("tp")] == "+0"
+    assert compare[header.index("gt")] == "n/a"
 
 
 def test_render_compare_shows_zero_deltas_for_the_same_files(tmp_path: Path) -> None:

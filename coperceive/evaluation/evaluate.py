@@ -183,6 +183,15 @@ class _PlacedPred:
     world: WorldBox
 
 
+@dataclass(frozen=True)
+class _ApRecord:
+    """One prediction's part in the AP walk of its category at one threshold."""
+
+    row: int
+    score: float
+    status: str
+
+
 @dataclass
 class _Output:
     """One ``(agent_id, source)`` output and everything matched for it."""
@@ -191,9 +200,10 @@ class _Output:
     source: str
     preds: dict[int, list[_PlacedPred]] = field(default_factory=dict[int, list[_PlacedPred]])
     display: dict[int, MatchResult] = field(default_factory=dict[int, MatchResult])
-    # threshold index -> category -> (score, status) records in file order
-    ap_records: dict[int, dict[str, list[tuple[float, str]]]] = field(
-        default_factory=dict[int, dict[str, list[tuple[float, str]]]]
+    # threshold index -> category -> (row, score, status) records, collected per pose
+    # time; ``_ap_records`` puts them back into file order before the AP walk.
+    ap_records: dict[int, dict[str, list[_ApRecord]]] = field(
+        default_factory=dict[int, dict[str, list[_ApRecord]]]
     )
 
     @property
@@ -312,8 +322,19 @@ def _match_output(
             records = output.ap_records.setdefault(index, {})
             for pred in preds:
                 records.setdefault(pred.category, []).append(
-                    (pred.score, result.pred_status[pred.row])
+                    _ApRecord(row=pred.row, score=pred.score, status=result.pred_status[pred.row])
                 )
+
+
+def _ap_records(records: Sequence[_ApRecord]) -> list[tuple[float, str]]:
+    """``(score, status)`` in ``boxes.parquet`` row order (§Metrics AP step 1).
+
+    The records of one category are collected per pose time, so two equal-score
+    predictions at different times would otherwise be walked in time order.
+    :func:`~coperceive.evaluation.metrics.average_precision` sorts by score with
+    a stable sort, so handing it the file order makes ties follow the file.
+    """
+    return [(item.score, item.status) for item in sorted(records, key=lambda item: item.row)]
 
 
 def _ap_table(
@@ -345,7 +366,7 @@ def _ap_table(
         per_category: dict[str, object] = {}
         values: list[float] = []
         for category in sorted(categories):
-            ap = average_precision(records.get(category, ()), n_gt.get(category, 0))
+            ap = average_precision(_ap_records(records.get(category, ())), n_gt.get(category, 0))
             per_category[category] = ap
             if ap is not None:
                 values.append(ap)
@@ -719,7 +740,8 @@ def read_matches(directory: Path) -> pa.Table:
 # --- run driver -------------------------------------------------------------------
 
 
-def _scene_output_dir(predictions_root: Path, run_id: str, scene_id: str) -> Path:
+def scene_output_dir(predictions_root: Path, run_id: str, scene_id: str) -> Path:
+    """``<predictions_root>/<run_id>/<scene_id>``, confined to the predictions root."""
     try:
         return confine(predictions_root, f"{run_id}/{scene_id}")
     except PathError as error:
@@ -759,7 +781,7 @@ def evaluate_run(
             scene_dir = directories.get(scene_id)
             if scene_dir is None:
                 raise EvaluationError(f"no scene directory under {scenes_root}")
-            output_dir = _scene_output_dir(predictions_root, run_id, scene_id)
+            output_dir = scene_output_dir(predictions_root, run_id, scene_id)
             if not (output_dir / BOXES_FILE).is_file():
                 skipped.append(scene_id)
                 continue
