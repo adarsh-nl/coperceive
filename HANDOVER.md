@@ -371,3 +371,31 @@ Slurm job 627022 on `ps,main-cpu`, Python 3.13.14, the shared `.venv` linked int
 - Login node: `cd web && ./node_modules/.bin/tsc -b` exit 0 and `oxlint src` 0 errors (13 pre-existing warnings) at the page commit `92fafe0`; the page was not rebuilt and `coperceive/app/static` is unchanged.
 - Not run on the HPC: `npm run build`, gitleaks, Python 3.10–3.12 (all CI). CI has not run yet on this branch: no PR is open. `web/src/api/schema.ts` is stale (needs `npx openapi-typescript`).
 - Not verified anywhere: the page in a browser (dash patterns, bloom, chips, legend, reduced motion, the 404 path), the bird's-eye figure by a human eye (only its SVG content was asserted), a real model's predictions (synthetic fixtures only).
+
+## Step A follow-ups after Adarsh's review of PR #16 (2026-10-17)
+
+PR #16 is a draft against `main`. Decisions and what landed on `feat/eval-step-a`:
+
+0. Robustness: a NUL byte or a 300-character `run_id`/`scene_id` now answers 400 on every scene and prediction route and on `POST /export/bev`; `export bev --run` prints one line and exits 2. Tests `test_prediction_routes_answer_400_for_nul_and_overlong_ids` and `test_cli_bev_run_with_nul_or_overlong_id_prints_one_line` (`33a5913`).
+1. Headline AP is pooled: `matches.parquet` gains `status_at_<i>` per threshold index (AP-pass status, score threshold ignored); `eval report`/`compare` pool every prediction of a run across scenes per `(agent_id, source)` and per class, with a grand `all` row pooled over outputs; per-scene AP stays in `metrics.json` and the per-scene rows. Spec §Metrics "Pooled AP", §`matches.parquet` and the report paragraph updated; ADR "As built" updated. Normative test: per-scene APs 1.0 and 0.5 pool to 5/6, not 0.75 (`e3572c7`).
+2. AP categories stay the union of `run.json`, GT and predicted classes; a class with no GT is `null`/`n/a`, never 0; `eval run` prints `warning	<scene>: category 'x' is not in run.json categories` (`RunReport.warnings`) (`ed08f7a`).
+3. `eval compare` lists every row of either run, `n/a` where one side is missing, footer `rows: N shared, N only in <a>, N only in <b>` (`5857cec`).
+4. Fixture cone moved off the IoU 0.5 boundary (0.41 now); `test_iou_exactly_at_the_threshold_is_a_match` pins `>=` with a 3×2 box shifted 1 m (IoU exactly 0.5 → tp at 0.5, fp at 0.7) (`bf894f2`).
+5. `web/src/api/schema.ts` regenerated (additive); new CI job `web`: regenerates `web/openapi.json` from `create_app` and `schema.ts` from it, fails on drift in either, then `tsc -b`. Caveat: the Python step installs the newest FastAPI/pydantic on the runner, so a dependency bump that changes `openapi()` output surfaces as drift (`338525a`).
+6. TP colour green → teal `#1FA3A3` in the page, the figure, the spec, the docs and the tests; line styles unchanged. Contrast 5.99:1 on `#141414`, 2.86:1 on `#F7F7F1` (the outgoing green was 2.73, the vehicle orange is 2.76). Caveat from the implementer: `#1FA3A3` is ~13° in hue from the pedestrian class colour `#3D9A86`; a more cyan teal is the alternative if that matters (`ee580f4`).
+
+Task 12 plan: `docs/superpowers/plans/2026-10-17-griffin-acceptance-run.md` (`39bd1e5`) and the sbatch draft `~/scripts/slurm/griffin-infer.sbatch` on the HPC. Nothing installed, cloned or submitted. Headline facts: the Griffin baselines are camera-only UniAD/BEVFormer-tiny (the four vehicle RGB cameras, ~69 GB, must be staged; lidar is not read); pins are Python 3.8, torch 1.9.1+cu111, mmcv-full 1.4.0, mmdet 2.14.0, mmseg 0.14.1, mmdet3d v0.17.1 built from source; L40/L40S (CC 8.9) are outside the wheels' sm_86 SASS, so the plan proposes `--constraint=a40`; driver 595.58.03 on L40S is new enough for any CUDA 11.x; no existing env has the mm* stack; a new `~/.conda/envs/griffin` (~6–8 GB) is proposed; the nuScenes-style conversion the toolkit needs has never been run here and must run in the job.
+
+CI on PR #16 for these commits has not been seen from the HPC (private repo, no credentials); Adarsh pastes the check list.
+
+## Gates for the step A follow-ups
+
+Slurm job 627044 on `ps,main-cpu`, Python 3.13.14, the shared `.venv` linked into the worktree with `PYTHONPATH=$REPO`, 2026-10-17, at commit `cbf9984`. Elapsed 30 s.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 139 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations (strict)
+- `pytest --override-ini addopts= --tb=short -q` — 348 passed, 2 skipped, 8 warnings in 11.21 s (skips: the two `COPERCEIVE_GRIFFIN_RAW` tests; warnings: the `fork()` deprecation from the parallel tests)
+- `mkdocs build` — succeeded
+- Login node: `cd web && ./node_modules/.bin/tsc -b` exit 0 after the `schema.ts` regeneration and the teal change; `oxlint src` 0 errors.
+- Not run on the HPC: `npm run build`, gitleaks, Python 3.10–3.12, the new `web` CI job — all CI. Not seen anywhere: the page in a browser, a real model's output.
