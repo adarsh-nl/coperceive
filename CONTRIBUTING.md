@@ -34,7 +34,13 @@ That writes `coperceive/app/static`. Regenerate the client after an API change:
 cd web && npx openapi-typescript openapi.json -o src/api/schema.ts
 ```
 
-`openapi.json` is produced by FastAPI. Refresh it from `create_app(...).openapi()` when the routes change.
+`openapi.json` is produced by FastAPI. Refresh it from `create_app(...).openapi()` when the routes change:
+
+```bash
+.venv/bin/python -c "import json,tempfile; from coperceive.app.server import create_app; print(json.dumps(create_app(root=tempfile.mkdtemp(), token=None).openapi(), indent=2))" > web/openapi.json
+```
+
+The `web` CI job fails on drift in either direction: it regenerates `openapi.json` from the app and `schema.ts` from `openapi.json` and diffs each against the committed file, so commit both whenever the routes change.
 
 ## Secrets
 

@@ -37,6 +37,34 @@ jobs:
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: pytest
 
+  web:
+    # The committed API contract and the generated client must not drift.
+    # openapi.json is regenerated from the app and diffed; schema.ts is
+    # regenerated from openapi.json and diffed. See CONTRIBUTING.md.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[app]"
+      - name: openapi.json matches the app
+        run: |
+          python -c "import json,tempfile; from coperceive.app.server import create_app; print(json.dumps(create_app(root=tempfile.mkdtemp(), token=None).openapi(), indent=2))" > /tmp/openapi.json
+          diff -u web/openapi.json /tmp/openapi.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: web
+      - name: schema.ts matches openapi.json
+        run: npx openapi-typescript openapi.json -o /tmp/schema.ts && diff -u src/api/schema.ts /tmp/schema.ts
+        working-directory: web
+      - run: npx tsc -b
+        working-directory: web
+
   gitleaks:
     runs-on: ubuntu-latest
     steps:
