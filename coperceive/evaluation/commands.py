@@ -25,6 +25,7 @@ from coperceive.evaluation.predictions import (
     PredictionError,
     RunMeta,
     check_run_id,
+    check_scene_id,
     load_rows,
     predictions_root,
     read_run_meta,
@@ -171,18 +172,26 @@ def _import(args: argparse.Namespace) -> None:
 
 
 def _rows_with_scene(rows: Sequence[PredictionBox], scene: object) -> tuple[PredictionBox, ...]:
-    """Fill ``scene_id`` from ``--scene``; a row that has neither is an error."""
-    flag = scene if isinstance(scene, str) else None
+    """Fill ``scene_id`` from ``--scene``; a row that has neither is an error.
+
+    ``--scene`` and every row's ``scene_id`` pass the scene-id rule here, before
+    anything is joined to the scenes root.
+    """
+    flag = check_scene_id(scene) if isinstance(scene, str) else None
     out: list[PredictionBox] = []
     for i, box in enumerate(rows):
         if box.scene_id is None:
             if flag is None:
                 raise PredictionError(f"row {i}: no scene_id column; pass --scene")
             out.append(replace(box, scene_id=flag))
-        elif flag is not None and box.scene_id != flag:
+            continue
+        try:
+            check_scene_id(box.scene_id)
+        except PredictionError as error:
+            raise PredictionError(f"row {i}: {error}") from None
+        if flag is not None and box.scene_id != flag:
             raise PredictionError(f"row {i}: scene_id {box.scene_id!r} is not --scene {flag!r}")
-        else:
-            out.append(box)
+        out.append(box)
     return tuple(out)
 
 
@@ -214,7 +223,12 @@ def _validate_against_scenes(root: Path, meta: RunMeta, rows: Sequence[Predictio
             scene_dir = root / scene_id
             if not (scene_dir / "manifest.json").is_file():
                 raise PredictionError(f"row {i}: scene {scene_id!r} is not a scene under {root}")
-            scene = scenes[scene_id] = read_scene(scene_dir)
+            try:
+                scene = scenes[scene_id] = read_scene(scene_dir)
+            except (KeyError, TypeError) as error:  # a malformed manifest.json
+                raise PredictionError(
+                    f"row {i}: scene {scene_id!r} under {root} is not readable: {error!r}"
+                ) from None
         try:
             validate_boxes(scene, meta, (box,))
         except PredictionError as error:

@@ -287,3 +287,51 @@ def test_eval_report_of_an_unevaluated_run_exits_1(
         main(["eval", "report", "synthetic", "--root", str(root)])
     assert caught.value.code == 1
     assert "eval run" in capsys.readouterr().err
+
+
+def test_import_refuses_a_scene_flag_that_breaks_the_scene_id_rule(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, jsonl = _prepare(tmp_path, with_scene=False)
+    outside = tmp_path / "x"
+    outside.mkdir()
+    (outside / "manifest.json").write_text("{}", encoding="utf-8")  # must never be opened
+    with pytest.raises(SystemExit) as caught:
+        _import(root, jsonl, "--scene", "../x")
+    assert caught.value.code == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "../x" in err
+    assert not (root / "predictions").exists()
+
+
+def test_import_refuses_a_scene_id_column_that_breaks_the_scene_id_rule(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, jsonl = _prepare(tmp_path)
+    outside = tmp_path / "x"
+    outside.mkdir()
+    (outside / "manifest.json").write_text("{}", encoding="utf-8")  # must never be opened
+    scene = replace(cooperative_scene(), scene_id=SCENE_ID)
+    _, boxes = synthetic_predictions(scene)
+    rows = [_jsonl_row(box, with_scene=True) for box in boxes]
+    rows[2]["scene_id"] = "../x"
+    jsonl.write_text("".join(json.dumps(row) + "\n" for row in rows), encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _import(root, jsonl)
+    assert caught.value.code == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "row 2" in err and "../x" in err
+    assert not (root / "predictions").exists()
+
+
+def test_import_reports_a_malformed_scene_manifest_in_one_line(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    root, jsonl = _prepare(tmp_path)
+    (root / SCENE_ID / "manifest.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(SystemExit) as caught:
+        _import(root, jsonl)
+    assert caught.value.code == 1
+    err = capsys.readouterr().err
+    assert err.count("\n") == 1 and "row 0" in err and SCENE_ID in err
+    assert not (root / "predictions").exists()
