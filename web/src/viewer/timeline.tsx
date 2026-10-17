@@ -1,8 +1,66 @@
 import { IconLoop, IconPlay, IconStep, Menu } from "./controls";
 import { SPEEDS, formatClock, type Speed } from "./playback";
+import type { EvalSeries } from "./predictionTypes";
 import { sparkPaths } from "./telemetry";
 
 export type Marker = { index: number; label: string };
+
+/** A sample is flagged when its recall is below the scene median by more than this. */
+const RECALL_DROP = 0.3;
+
+/** Like `sparkPaths`, with a shared ceiling so two runs or two series sit on one scale. NaN draws as 0. */
+function scaledPath(values: readonly number[], height: number, max: number): string {
+  if (values.length < 2) {
+    return "";
+  }
+  const top = height - 1;
+  const ceiling = max > 1e-6 ? max : 1e-6;
+  return values
+    .map((value, item) => {
+      const x = (item / (values.length - 1)) * 100;
+      const safe = Number.isFinite(value) ? Math.max(0, value) : 0;
+      const y = top - (safe / ceiling) * (top - 1);
+      return `${item === 0 ? "M" : "L"}${x.toFixed(2)} ${y.toFixed(2)}`;
+    })
+    .join(" ");
+}
+
+function finiteMax(...lists: readonly (readonly number[])[]): number {
+  let max = 0;
+  for (const list of lists) {
+    for (const value of list) {
+      if (Number.isFinite(value) && value > max) {
+        max = value;
+      }
+    }
+  }
+  return max;
+}
+
+/** Contiguous sample ranges where recall is below the scene median by more than RECALL_DROP. */
+function recallDropRanges(recall: readonly number[]): { start: number; end: number }[] {
+  const known = recall.filter((value) => Number.isFinite(value)).sort((a, b) => a - b);
+  if (known.length === 0) {
+    return [];
+  }
+  const middle = Math.floor(known.length / 2);
+  const low = known[middle - 1];
+  const high = known[middle];
+  const median = known.length % 2 === 1 ? (high ?? 0) : ((low ?? 0) + (high ?? 0)) / 2;
+  const ranges: { start: number; end: number }[] = [];
+  recall.forEach((value, index) => {
+    if (!Number.isFinite(value) || value >= median - RECALL_DROP) {
+      return;
+    }
+    const last = ranges[ranges.length - 1];
+    if (last && last.end === index - 1) {
+      last.end = index;
+    } else {
+      ranges.push({ start: index, end: index });
+    }
+  });
+  return ranges;
+}
 
 type TimelineProps = {
   length: number;
@@ -17,6 +75,10 @@ type TimelineProps = {
   speeds: number[];
   boxes: number[];
   markers: Marker[];
+  /** Per-sample precision, recall and FP count of the selected output of run A. */
+  evalSeries?: EvalSeries | null;
+  /** The same for run B in compare mode, drawn thinner. */
+  evalCompare?: EvalSeries | null;
   onIndex: (index: number) => void;
   onStep: (delta: number) => void;
   onToggle: () => void;
@@ -37,6 +99,8 @@ export default function Timeline({
   speeds,
   boxes,
   markers,
+  evalSeries = null,
+  evalCompare = null,
   onIndex,
   onStep,
   onToggle,
@@ -46,6 +110,9 @@ export default function Timeline({
   const last = Math.max(length - 1, 0);
   const place = length > 1 ? (Math.min(index, last) / last) * 100 : 0;
   const stamp = timeUs === null ? "0.0 s" : formatClock(timeUs);
+  const dropRanges = evalSeries ? recallDropRanges(evalSeries.recall) : [];
+  const fpMax = evalSeries ? finiteMax(evalSeries.fp, evalCompare?.fp ?? []) : 0;
+  const evalHeight = 28;
 
   function seek(clientX: number, target: HTMLElement) {
     const box = target.getBoundingClientRect();
@@ -201,6 +268,17 @@ export default function Timeline({
               title={marker.label}
             />
           ))}
+          {dropRanges.map((range) => (
+            <span
+              key={`recall-${range.start}`}
+              className="marker marker-range"
+              style={{
+                left: `${length > 1 ? (range.start / last) * 100 : 0}%`,
+                width: `${length > 1 ? ((range.end - range.start) / last) * 100 : 0}%`,
+              }}
+              title={`Recall below the scene median by more than ${RECALL_DROP}`}
+            />
+          ))}
         </div>
         <div className="sparks" aria-hidden="true">
           {charts.map(([label, values, color]) => {
@@ -222,6 +300,42 @@ export default function Timeline({
               </div>
             );
           })}
+          {evalSeries ? (
+            <div className="spark spark-eval">
+              <span>Precision · Recall</span>
+              <svg viewBox={`0 0 100 ${evalHeight}`} preserveAspectRatio="none">
+                {evalCompare ? (
+                  <>
+                    <path className="b" d={scaledPath(evalCompare.precision, evalHeight, 1)} fill="none" stroke="var(--eval-tp)" />
+                    <path className="b" d={scaledPath(evalCompare.recall, evalHeight, 1)} fill="none" stroke="var(--eval-miss)" />
+                  </>
+                ) : null}
+                <path d={scaledPath(evalSeries.precision, evalHeight, 1)} fill="none" stroke="var(--eval-tp)" />
+                <path d={scaledPath(evalSeries.recall, evalHeight, 1)} fill="none" stroke="var(--eval-miss)" />
+              </svg>
+            </div>
+          ) : null}
+          {evalSeries ? (
+            <div className="spark spark-eval">
+              <span>FP</span>
+              <svg viewBox={`0 0 100 ${evalHeight}`} preserveAspectRatio="none">
+                <defs>
+                  <linearGradient id="spark-eval-fp" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor="var(--eval-fp)" stopOpacity="0.38" />
+                    <stop offset="100%" stopColor="var(--eval-fp)" stopOpacity="0" />
+                  </linearGradient>
+                </defs>
+                <path
+                  d={`${scaledPath(evalSeries.fp, evalHeight, fpMax)} L100 ${evalHeight.toFixed(2)} L0 ${evalHeight.toFixed(2)} Z`}
+                  fill="url(#spark-eval-fp)"
+                />
+                {evalCompare ? (
+                  <path className="b" d={scaledPath(evalCompare.fp, evalHeight, fpMax)} fill="none" stroke="var(--eval-fp)" />
+                ) : null}
+                <path d={scaledPath(evalSeries.fp, evalHeight, fpMax)} fill="none" stroke="var(--eval-fp)" />
+              </svg>
+            </div>
+          ) : null}
         </div>
         <span className="playhead" style={{ left: `${place}%` }}>
           <span className={place > 84 ? "flag num end" : "flag num"}>{stamp}</span>

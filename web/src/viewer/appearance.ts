@@ -17,6 +17,8 @@ export type Appearance = {
   frustumOpacity: number;
   /** null means every camera. An array is the cameras allowed to show an image. */
   frustumImageCameras: string[] | null;
+  /** Score floor for drawn predictions; null means the run's `score_threshold`. */
+  predictionScore: number | null;
 };
 
 export const VIEW_KEY = "coperceive-view";
@@ -50,6 +52,7 @@ export function defaultAppearance(): Appearance {
     frustumImages: false,
     frustumOpacity: 0.85,
     frustumImageCameras: null,
+    predictionScore: null,
   };
 }
 
@@ -136,6 +139,7 @@ export function loadAppearance(): Appearance {
       frustumImages: "frustumImageCameras" in row ? bool(row.frustumImages, false) : false,
       frustumOpacity: opacity(row.frustumOpacity, base.frustumOpacity),
       frustumImageCameras: cameraChoice(row.frustumImageCameras),
+      predictionScore: score(row.predictionScore),
     };
   } catch {
     return base;
@@ -165,6 +169,7 @@ function writeAppearance(value: Appearance): void {
     frustumImages: value.frustumImages,
     frustumOpacity: value.frustumOpacity,
     frustumImageCameras: value.frustumImageCameras,
+    predictionScore: value.predictionScore,
   };
   localStorage.setItem(VIEW_KEY, JSON.stringify(stored));
 }
@@ -185,6 +190,13 @@ function opacity(value: unknown, fallback: number): number {
     return fallback;
   }
   return Math.min(1, Math.max(0.15, value));
+}
+
+function score(value: unknown): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return null;
+  }
+  return Math.min(1, Math.max(0, value));
 }
 
 function cameraChoice(value: unknown): string[] | null {
