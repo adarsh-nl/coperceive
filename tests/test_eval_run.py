@@ -506,6 +506,32 @@ def test_ap_pass_ignores_the_score_threshold_and_statuses_do_not() -> None:
     }
 
 
+def test_categories_outside_run_json_are_reported_and_a_class_without_gt_is_null() -> None:
+    """Decision: the AP categories stay a union; a class with no ground truth is ``null``,
+    not 0; a class absent from ``run.json`` is a warning, not an error."""
+    scene = cooperative_scene()
+    meta, boxes = synthetic_predictions(scene)
+    bicycle = replace(_cone(100_000, (50.0, 50.0, 0.0)), category="bicycle")
+    result = evaluate_scene(scene, meta, (*boxes, bicycle), DEFAULT_CONFIG, created_utc=CREATED)
+    assert result.warnings == (
+        "category 'bicycle' is not in run.json categories",
+        "category 'cone' is not in run.json categories",
+    )
+    ap = cast(dict[str, dict[str, object]], _output(result.metrics, "vehicle", "single")["ap"])
+    for threshold in ("0.5", "0.7"):
+        # Predicted only, no ground truth anywhere: null.
+        assert "bicycle" in ap[threshold] and ap[threshold]["bicycle"] is None
+        # Listed in run.json, no vehicle ground truth (the truck prediction is a wrong class).
+        assert ap[threshold]["truck"] is None
+        # Ground truth only (track 99), no single prediction: 0.0, not null.
+        assert ap[threshold]["pedestrian"] == 0.0
+        # Ground truth outside run.json, predicted as a clear fp: 0.0.
+        assert ap[threshold]["cone"] == 0.0
+    # A scene whose classes are all listed gives no warning.
+    listed = replace(meta, categories=(*meta.categories, "cone"))
+    assert evaluate_scene(scene, listed, boxes, DEFAULT_CONFIG, created_utc=CREATED).warnings == ()
+
+
 def _cone(time_us: int, center: tuple[float, float, float]) -> PredictionBox:
     """A world-frame cone prediction on the vehicle ``single`` output, score 0.9."""
     return PredictionBox(
@@ -608,7 +634,16 @@ def test_evaluate_run_evaluates_every_scene_with_boxes_and_skips_the_rest(
     predictions = tmp_path / "predictions"
     meta, boxes = _write_fixture_run(predictions, scene, ("coop-a", "coop-b"))
     report = evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
-    assert report == RunReport(evaluated=("coop-a", "coop-b"), skipped=("coop-c",), errors=())
+    # The fixture's cone is in the ground truth but not in run.json categories.
+    assert report == RunReport(
+        evaluated=("coop-a", "coop-b"),
+        skipped=("coop-c",),
+        errors=(),
+        warnings=(
+            "coop-a: category 'cone' is not in run.json categories",
+            "coop-b: category 'cone' is not in run.json categories",
+        ),
+    )
     for scene_id in ("coop-a", "coop-b"):
         directory = predictions / meta.run_id / scene_id
         metrics = read_metrics(directory)

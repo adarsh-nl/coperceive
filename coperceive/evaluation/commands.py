@@ -266,6 +266,7 @@ def _run(args: argparse.Namespace) -> None:
     )
     for error in report.errors:
         print(f"error\t{error}")
+    print("".join(f"warning\t{warning}\n" for warning in report.warnings), end="")
     if report.errors:
         raise SystemExit(1)
 

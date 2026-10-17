@@ -30,7 +30,7 @@ One UTF-8 JSON object.
 | `model` | string | Free text: name, checkpoint, commit. Not interpreted. |
 | `created_utc` | string | ISO 8601 with a `Z` or an offset. |
 | `score_note` | non-empty string | What `score` is (sigmoid, calibrated probability, logit, …). Required, like `clock.scale_note`. |
-| `categories` | list of string | Every class the model can emit, in the ground-truth vocabulary. A class listed here with no prediction still gets a row in the metrics. |
+| `categories` | list of string | Every class the model can emit, in the ground-truth vocabulary. A class listed here with no prediction still gets a row in the metrics. A class in the evaluated ground truth or in the predictions that is not listed here is still evaluated; `eval run` prints one `warning\t<scene_id>: category '<name>' is not in run.json categories` line per scene and class. |
 | `sources` | object string → string | Each `source` value the run uses, with a one-line description. `single` and `fused` are the conventional names. |
 | `notes` | string, optional | Free text. |
 
@@ -138,7 +138,7 @@ For one output (an `(agent_id, source)` pair):
   2. Walk the list accumulating `tp_i` and `fp_i`; `recall_i = tp_i / n_gt`, `precision_i = tp_i / (tp_i + fp_i)`; ignored predictions are skipped.
   3. Make the precision envelope monotone from the right: `p'_i = max(precision_j for j >= i)`.
   4. `AP = Σ_i (recall_i − recall_{i−1}) · p'_i` with `recall_0 = 0`.
-  5. A category with `n_gt = 0` in the scene has AP `null` and does not enter the mean. A category with ground truth and no prediction has AP `0.0`.
+  5. The categories of the table are the union of `run.json` `categories`, the categories of the agent's ground truth and the categories the output predicted. A category with `n_gt = 0` in the scene (listed or predicted only) has AP `null` and does not enter the mean; it is never `0`. A category with ground truth and no prediction has AP `0.0`.
 - **`tp_errors`** over the true positives at the operating point: `centre_m` (`mean`, `median`), `yaw_deg` (`mean_abs`), `size_m` (`length`, `width`, `height`, each the mean absolute error), `iou_bev` (`mean`). All null when there is no true positive.
 - **`cooperative`** counts (below).
 

@@ -151,19 +151,29 @@ def _pure_rotation(value: SE3) -> SE3:
 
 @dataclass(frozen=True)
 class SceneEvaluation:
-    """The rows of ``matches.parquet`` and the object of ``metrics.json`` for one scene."""
+    """The rows of ``matches.parquet`` and the object of ``metrics.json`` for one scene.
+
+    ``warnings`` name the categories of the evaluated agents' ground truth or of the
+    predictions that ``run.json`` ``categories`` does not list, one line each.
+    """
 
     matches: tuple[dict[str, object], ...]
     metrics: dict[str, object]
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
 class RunReport:
-    """What :func:`evaluate_run` did per scene; ``errors`` are ``"<scene_id>: <message>"``."""
+    """What :func:`evaluate_run` did per scene.
+
+    ``errors`` and ``warnings`` are ``"<scene_id>: <message>"``; a warning is a
+    scene's :attr:`SceneEvaluation.warnings` line and does not fail the run.
+    """
 
     evaluated: tuple[str, ...]
     skipped: tuple[str, ...]
     errors: tuple[str, ...]
+    warnings: tuple[str, ...] = ()
 
 
 # --- internal placement -----------------------------------------------------------
@@ -677,8 +687,26 @@ def evaluate_scene(
         "outputs": metrics_outputs,
     }
     return SceneEvaluation(
-        matches=tuple(matches), metrics=cast(dict[str, object], _json_safe(metrics))
+        matches=tuple(matches),
+        metrics=cast(dict[str, object], _json_safe(metrics)),
+        warnings=_category_warnings(outputs, gt_by_agent, meta),
     )
+
+
+def _category_warnings(
+    outputs: Sequence[_Output],
+    gt_by_agent: Mapping[str, Mapping[int, Sequence[_PlacedGt]]],
+    meta: RunMeta,
+) -> tuple[str, ...]:
+    """One line per category seen in the evaluated ground truth or predictions but not listed."""
+    seen: set[str] = set()
+    for gt_by_time in gt_by_agent.values():
+        for placed_gt in gt_by_time.values():
+            seen.update(item.box.category for item in placed_gt)
+    for output in outputs:
+        seen.update(placed.box.category for placed in output.all_preds())
+    unlisted = sorted(seen - set(meta.categories))
+    return tuple(f"category {name!r} is not in run.json categories" for name in unlisted)
 
 
 # --- files ------------------------------------------------------------------------
@@ -789,6 +817,7 @@ def evaluate_run(
     evaluated: list[str] = []
     skipped: list[str] = []
     errors: list[str] = []
+    warnings: list[str] = []
     for scene_id in selected:
         try:
             check_scene_id(scene_id)
@@ -808,4 +837,10 @@ def evaluate_run(
             errors.append(f"{scene_id}: {error}")
             continue
         evaluated.append(scene_id)
-    return RunReport(evaluated=tuple(evaluated), skipped=tuple(skipped), errors=tuple(errors))
+        warnings.extend(f"{scene_id}: {warning}" for warning in result.warnings)
+    return RunReport(
+        evaluated=tuple(evaluated),
+        skipped=tuple(skipped),
+        errors=tuple(errors),
+        warnings=tuple(warnings),
+    )

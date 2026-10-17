@@ -163,12 +163,16 @@ def test_import_without_score_note_exits_2(tmp_path: Path) -> None:
 
 def test_eval_run_report_and_compare(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root, jsonl = _prepare(tmp_path)
-    _import(root, jsonl)
+    # The fixture's run.json list: the cone in the ground truth is not on it.
+    _import(root, jsonl, "--categories", "car,truck,pedestrian,sign,pole")
     capsys.readouterr()
 
     main(["eval", "run", "synthetic", "--root", str(root)])
     out = capsys.readouterr().out
-    assert out.splitlines()[0] == "evaluated 1 skipped 0 errors 0"
+    assert out.splitlines() == [
+        "evaluated 1 skipped 0 errors 0",
+        f"warning\t{SCENE_ID}: category 'cone' is not in run.json categories",
+    ]
     scene_out = root / "predictions" / "synthetic" / SCENE_ID
     assert (scene_out / "matches.parquet").is_file()
     assert (scene_out / "metrics.json").is_file()
