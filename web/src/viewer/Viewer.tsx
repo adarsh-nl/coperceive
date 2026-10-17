@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -17,7 +17,7 @@ import {
   type Appearance,
 } from "./appearance";
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
-import CameraStrip, { loadImage } from "./cameras";
+import CameraStrip, { CameraSplit, loadImage } from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
 import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
 import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
@@ -36,6 +36,7 @@ import {
 } from "./predictionLayer";
 import PredictionsBlock, { LineSample } from "./predictions";
 import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
+import { SPLIT_MAX, SPLIT_MIN } from "./appearance";
 import {
   alignSeries,
   defaultOutput,
@@ -1299,6 +1300,10 @@ export default function Viewer({
         setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loopRef.current));
       } else if (event.key === "l" || event.key === "L") {
         setLoop((current) => !current);
+      } else if (event.key === "c" || event.key === "C") {
+        setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }));
+      } else if (event.key === "Escape") {
+        setAppearance((current) => (current.splitCamera === null ? current : { ...current, splitCamera: null }));
       } else if (event.key === "[" || event.key === "]") {
         const direction = event.key === "]" ? 1 : -1;
         setSpeed((current) => neighborSpeed(current, direction));
@@ -2351,8 +2356,6 @@ export default function Viewer({
 
   const tone =
     /could not|incomplete|refused|failed/i.test(status) ? "bad" : /holding|no frustum|no map/i.test(status) ? "wait" : "live";
-  const cameraAgent = cameraId.slice(0, cameraId.indexOf("/"));
-  const cameraPose = cameraFrame?.agents.find((agent) => agent.agent_id === cameraAgent)?.pose;
   function agentSpeed(agentId: string): number | null {
     const live = liveSpeed[agentId];
     if (typeof live === "number") {
@@ -2362,7 +2365,39 @@ export default function Viewer({
     const sample = frameIndex > 0 ? row?.[frameIndex] : row?.[1];
     return typeof sample === "number" ? sample : null;
   }
-  const cameraSpeed = agentSpeed(cameraAgent);
+  const splitCamera =
+    cameraFrame?.frustums.find((item) => cameraKey(item.agent_id, item.sensor_id) === appearance.splitCamera) ?? null;
+  const splitPose = splitCamera ? cameraFrame?.agents.find((agent) => agent.agent_id === splitCamera.agent_id)?.pose : null;
+  const splitHud = splitCamera
+    ? {
+        speed: formatSpeed(agentSpeed(splitCamera.agent_id)),
+        heading: isPose(splitPose) ? headingDeg(splitPose) : 0,
+        stamp: typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s",
+      }
+    : null;
+  function toggleSplit(key: string) {
+    cameraKeyRef.current = key;
+    setCameraId(key);
+    setAppearance((current) => ({ ...current, splitCamera: current.splitCamera === key ? null : key }));
+  }
+  function onDividerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+  function onDividerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const row = event.currentTarget.parentElement;
+    if (!row || !event.currentTarget.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+    const box = row.getBoundingClientRect();
+    if (box.width <= 0) {
+      return;
+    }
+    const next = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, (event.clientX - box.left) / box.width));
+    setAppearance((current) => ({ ...current, splitRatio: next }));
+  }
 
   const cameraChoices = useMemo(() => {
     const seen = new Set<string>();
@@ -2624,6 +2659,7 @@ export default function Viewer({
           </details>
         </aside>
         <div className="stage">
+          <div className={splitCamera ? "stage-row split" : "stage-row"} style={{ ["--split" as string]: appearance.splitRatio }}>
           <div className="viewport">
             <canvas
               ref={canvasRef}
@@ -2684,38 +2720,57 @@ export default function Viewer({
                   ))
                 : null}
             </div>
-            {cameraFrame && summary ? (
-              <CameraStrip
+          </div>
+          {splitCamera && cameraFrame && summary ? (
+            <>
+              <div
+                className="split-divider"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize the camera view"
+                aria-valuenow={Math.round(appearance.splitRatio * 100)}
+                onPointerDown={onDividerDown}
+                onPointerMove={onDividerMove}
+              />
+              <CameraSplit
                 token={token}
                 sceneId={summary.scene_id}
                 timeUs={cameraFrame.time_us}
                 nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
-                frustums={cameraFrame.frustums}
+                camera={splitCamera}
                 boxes={cameraFrame.boxes}
                 pointSensors={cameraFrame.point_sensors}
                 types={agentTypes}
                 hidden={hidden}
                 cacheRef={cacheRef}
-                focusKey={cameraId}
+                hud={splitHud}
+                onClose={() => setAppearance((current) => ({ ...current, splitCamera: null }))}
                 imagesAvailable={imageNote(summary) === null}
                 missingText={imageNote(summary) ? `No image: ${imageNote(summary)}` : "No image file for this sample."}
-                imageOn={(key) => showCameraImage(appearance, key)}
-                onToggleImage={(key) =>
-                  setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
-                }
-                onSelect={(key) => {
-                  cameraKeyRef.current = key;
-                  setCameraId(key);
-                  chooseViewpoint("camera");
-                }}
-                hud={{
-                  speed: formatSpeed(cameraSpeed),
-                  heading: isPose(cameraPose) ? headingDeg(cameraPose) : 0,
-                  stamp: typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s",
-                }}
               />
-            ) : null}
+            </>
+          ) : null}
           </div>
+          {cameraFrame && summary ? (
+            <CameraStrip
+              token={token}
+              sceneId={summary.scene_id}
+              timeUs={cameraFrame.time_us}
+              nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
+              frustums={cameraFrame.frustums}
+              types={agentTypes}
+              open={appearance.stripOpen}
+              onToggleOpen={() => setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }))}
+              splitKey={appearance.splitCamera}
+              onSplit={toggleSplit}
+              imagesAvailable={imageNote(summary) === null}
+              missingText={imageNote(summary) ? `No image: ${imageNote(summary)}` : "No image file for this sample."}
+              imageOn={(key) => showCameraImage(appearance, key)}
+              onToggleImage={(key) =>
+                setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
+              }
+            />
+          ) : null}
           <p className="status-line">{status}</p>
         </div>
         <aside className="panel panel-right" aria-label="Agent telemetry">

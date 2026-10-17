@@ -23,7 +23,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import replace
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, cast
 
 import pytest
 import uvicorn
@@ -173,6 +173,8 @@ def _full_scene() -> Scene:
         images=(
             *scene.images,
             ImageRef("vehicle", "cam_rear", 100_000, "vehicle/cam_rear/0100000.png"),
+            ImageRef("vehicle", "cam_front", 200_000, "vehicle/cam_front/0200000.png"),
+            ImageRef("vehicle", "cam_rear", 200_000, "vehicle/cam_rear/0200000.png"),
         ),
     )
 
@@ -440,8 +442,9 @@ def test_each_pane_says_what_is_missing(session: _Session, shots: Path) -> None:
         "Map: no map for Town06.",
     ]
     assert (
-        session.page.locator(".camera-missing").inner_text() == "No image: no camera images staged."
+        session.page.locator(".cam-strip-note").inner_text() == "No image: no camera images staged."
     )
+    assert session.page.locator(".cam-thumb canvas").count() == 0
     assert (
         "no prediction runs for this scene."
         in session.page.locator("details", has_text="Predictions").inner_text()
@@ -468,30 +471,161 @@ def test_scene_list_shows_every_scene_without_scrolling(session: _Session) -> No
     assert session.page.locator("#scene-id").inner_text() == FILLER_SCENES[-1]
 
 
-def test_camera_strip_requests_only_the_focused_camera(session: _Session) -> None:
-    """At the sample with two camera files, one image request (the focused camera); the
-    second camera's file is fetched when it is selected."""
+def _image_requests(session: _Session, time_us: int) -> list[str]:
+    return [
+        url.split("sensor_id=")[-1]
+        for url in session.requests
+        if "/image?" in url and f"time_us={time_us}&" in url
+    ]
+
+
+def _at_sample(session: _Session, label: str) -> None:
+    session.wait_for(lambda: label in session.page.locator(".clock").inner_text(), label)
+
+
+def _stored_view(session: _Session) -> dict[str, object]:
+    """The page's `coperceive-view` settings."""
+    raw: object = session.page.evaluate("() => JSON.parse(localStorage.getItem('coperceive-view'))")
+    assert isinstance(raw, dict)
+    rows = cast(dict[object, object], raw)
+    return {str(key): value for key, value in rows.items()}
+
+
+def _strip_open(session: _Session) -> bool:
+    return session.page.locator(".cam-strip").get_attribute("data-open") == "true"
+
+
+def test_camera_strip_fetches_visible_thumbnails_once_and_nothing_when_collapsed(
+    session: _Session,
+) -> None:
+    """Open strip at the sample with two camera files: one request per camera, shared with
+    the split pane. Collapsed (C), the next sample with files is not requested; opening the
+    strip again fetches it."""
     step = session.page.locator("button[aria-label='Step forward']")
     step.click()
     step.click()
+    _at_sample(session, "sample 3 / 7")
     session.wait_for(
-        lambda: "sample 3 / 7" in session.page.locator(".clock").inner_text(), "sample 3"
+        lambda: sorted(_image_requests(session, 100000)) == ["cam_front", "cam_rear"],
+        "both thumbnails",
+    )
+    session.wait_for(lambda: session.page.locator(".cam-thumb canvas").count() == 2, "thumbnails")
+    session.page.locator(".cam-thumb[data-camera='vehicle/cam_front']").click()
+    session.wait_for(lambda: session.page.locator(".camera-split canvas").count() == 1, "split")
+    assert sorted(_image_requests(session, 100000)) == ["cam_front", "cam_rear"]  # no refetch
+    session.page.keyboard.press("Escape")
+    session.page.keyboard.press("c")
+    session.wait_for(lambda: not _strip_open(session), "collapsed")
+    step.click()
+    step.click()
+    _at_sample(session, "sample 5 / 7")
+    session.page.wait_for_timeout(600)
+    assert _image_requests(session, 200000) == []
+    session.page.keyboard.press("c")
+    session.wait_for(
+        lambda: sorted(_image_requests(session, 200000)) == ["cam_front", "cam_rear"],
+        "thumbnails after reopening",
     )
 
-    def at_sample() -> set[str]:
-        return {
-            url.split("sensor_id=")[-1]
-            for url in session.requests
-            if "/image?" in url and "time_us=100000" in url
-        }
 
-    session.wait_for(lambda: at_sample() == {"cam_front"}, "the focused camera's image")
-    session.wait_for(lambda: session.page.locator(".pip canvas").count() == 1, "the decoded image")
-    assert at_sample() == {"cam_front"}
-    session.page.locator("button.pip-name", has_text="cam_rear").click()
-    session.wait_for(
-        lambda: at_sample() == {"cam_front", "cam_rear"}, "the selected camera's image"
+def _hit_targets(session: _Session) -> dict[str, str]:
+    """What elementFromPoint finds at the 3D canvas centre and its four corners, 14 px in
+    (the viewport's 12 px rounded corners clip the canvas itself). The non-interactive
+    HUD pills are pointer-transparent; the viewpoint switch at the top right is not."""
+    found: object = session.page.evaluate(
+        """() => {
+          const canvas = document.querySelector('.viewer-canvas');
+          const b = canvas.getBoundingClientRect();
+          const pts = {
+            centre: [b.left + b.width / 2, b.top + b.height / 2],
+            top_left: [b.left + 14, b.top + 14],
+            top_right: [b.right - 14, b.top + 14],
+            bottom_left: [b.left + 14, b.bottom - 14],
+            bottom_right: [b.right - 14, b.bottom - 14],
+          };
+          const out = {};
+          for (const [name, [x, y]] of Object.entries(pts)) {
+            const el = document.elementFromPoint(x, y);
+            const pill = el && el.closest('.view-pill');
+            out[name] = el === canvas ? 'canvas' : pill ? 'view-pill' : el ? el.tagName : 'none';
+          }
+          return out;
+        }"""
     )
+    assert isinstance(found, dict)
+    rows = cast(dict[object, object], found)
+    return {str(key): str(value) for key, value in rows.items()}
+
+
+def _assert_canvas_uncovered(session: _Session) -> None:
+    hits = _hit_targets(session)
+    expected = {
+        "centre": "canvas",
+        "top_left": "canvas",
+        "bottom_left": "canvas",
+        "bottom_right": "canvas",
+    }
+    assert {k: hits[k] for k in expected} == expected, hits
+    assert hits["top_right"] in {"canvas", "view-pill"}, hits  # the viewpoint switch lives there
+
+
+def test_the_3d_canvas_is_never_covered_and_keeps_its_height(
+    session: _Session, shots: Path
+) -> None:
+    """With the strip open, collapsed and in the split view, the canvas centre and corners
+    hit the canvas itself, and the split view takes width, not height, from the 3D view."""
+    canvas = session.page.locator(".viewer-canvas")
+    before = canvas.bounding_box()
+    assert before is not None
+    _assert_canvas_uncovered(session)
+    session.page.keyboard.press("c")
+    session.wait_for(lambda: not _strip_open(session), "collapsed")
+    _assert_canvas_uncovered(session)
+    session.page.screenshot(path=str(shots / "strip-collapsed.png"))
+    session.page.keyboard.press("c")
+    session.wait_for(lambda: session.page.locator(".cam-thumb").count() == 2, "thumbnails")
+    session.page.locator(".cam-thumb[data-camera='vehicle/cam_rear']").click()
+    session.wait_for(lambda: session.page.locator(".camera-split").count() == 1, "the split view")
+    split = canvas.bounding_box()
+    assert split is not None
+    assert split["height"] == pytest.approx(before["height"], abs=1)
+    assert split["width"] < before["width"] * 0.85
+    _assert_canvas_uncovered(session)
+    assert session.page.locator(".split-divider").count() == 1
+    session.page.screenshot(path=str(shots / "split-view.png"))
+
+
+def test_c_toggles_the_strip_and_a_thumbnail_opens_and_closes_the_split(
+    session: _Session,
+) -> None:
+    assert _strip_open(session)
+    assert session.page.locator(".cam-group").count() == 1  # one agent with cameras here
+    session.page.keyboard.press("C")
+    assert not _strip_open(session)
+    assert session.page.locator(".cam-thumb").count() == 0
+    session.page.keyboard.press("C")
+    assert _strip_open(session)
+    thumb = session.page.locator(".cam-thumb[data-camera='vehicle/cam_front']")
+    thumb.click()
+    session.wait_for(lambda: session.page.locator(".camera-split").count() == 1, "the split view")
+    assert thumb.get_attribute("aria-pressed") == "true"
+    toggles = session.page.locator(".camera-split .pip-toggle")
+    assert [toggles.nth(i).get_attribute("aria-pressed") for i in range(toggles.count())] == [
+        "true",
+        "true",
+    ]
+    thumb.click()  # the same click closes it
+    session.wait_for(lambda: session.page.locator(".camera-split").count() == 0, "closed")
+    thumb.click()
+    session.wait_for(lambda: session.page.locator(".camera-split").count() == 1, "split again")
+    stored = _stored_view(session)
+    assert stored.get("splitCamera") == "vehicle/cam_front"
+    assert stored.get("stripOpen") is True
+    session.page.keyboard.press("Escape")
+    session.wait_for(lambda: session.page.locator(".camera-split").count() == 0, "closed by Esc")
+    stored = _stored_view(session)
+    assert stored.get("splitCamera") is None
+    assert session.page.locator(".pip").count() == 0  # the floating panel is gone
 
 
 def test_choosing_a_scene_while_playing_pauses_at_once(session: _Session) -> None:

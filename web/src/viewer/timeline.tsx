@@ -209,6 +209,12 @@ export default function Timeline({
             <p>
               <kbd>3</kbd> toggles chase
             </p>
+            <p>
+              <kbd>C</kbd> camera strip
+            </p>
+            <p>
+              <kbd>Esc</kbd> closes the split camera
+            </p>
           </div>
         </details>
       </div>

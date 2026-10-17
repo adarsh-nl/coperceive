@@ -380,6 +380,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   backdrop-filter: blur(10px);
   border-radius: 999px;
 }
+.status-pill, .legend, .empty-pill { pointer-events: none; }
 .status-pill { top: 10px; left: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 0.8rem; }
 .status-pill i { width: 8px; height: 8px; border-radius: 99px; background: #8fd0b0; }
 .status-pill i.wait { background: #f58a1f; }
@@ -645,31 +646,6 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .spark svg { width: 100%; height: 28px; display: block; }
 .spark path { stroke-width: 1.4; vector-effect: non-scaling-stroke; }
 
-.pip {
-  position: absolute;
-  right: 12px;
-  bottom: 12px;
-  z-index: 3;
-  width: min(420px, calc(100% - 24px));
-  background: rgba(10, 10, 10, 0.78);
-  color: #f4f4ed;
-  border: 1px solid rgba(255, 255, 255, 0.12);
-  border-radius: 12px;
-  backdrop-filter: blur(10px);
-  overflow: hidden;
-}
-.pip-bar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  cursor: grab;
-  font-size: 12px;
-}
-.pip-bar:active { cursor: grabbing; }
-.grip { display: grid; grid-template-columns: repeat(2, 3px); gap: 2px; color: #c8c8c0; }
-.grip i { width: 3px; height: 3px; border-radius: 99px; background: currentColor; }
-.pip-drag { margin-left: auto; color: #bdbdbd; font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; }
 .pip-toggle {
   border: 1px solid rgba(255, 255, 255, 0.16);
   border-radius: 999px;
@@ -679,20 +655,147 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   font-size: 11px;
 }
 .pip-toggle[aria-pressed="true"] { background: rgba(255, 255, 255, 0.14); color: white; }
-.pip .camera-panel { width: 100%; margin: 0; }
-.pip figcaption { display: none; }
-.pip-stage { position: relative; background: #111; }
-.pip .camera-frame, .pip .camera-missing {
+
+/* The 3D view and, in the split view, the camera beside it. The 3D view keeps its height. */
+.stage-row { flex: 1; min-height: 0; display: flex; align-items: stretch; gap: 0; }
+.stage-row .viewport { flex: 1 1 auto; min-width: 0; }
+.stage-row.split .viewport { flex: 0 0 calc(var(--split, 0.58) * 100% - 4px); }
+.split-divider {
+  flex: 0 0 8px;
+  margin: 24px 0;
+  border-radius: 4px;
+  background: var(--line);
+  cursor: col-resize;
+  touch-action: none;
+}
+.split-divider:hover, .split-divider:active { background: var(--muted); }
+.camera-split {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 12px;
+  overflow: hidden;
+  background: #111;
+  color: #f4f4ed;
+  box-shadow: var(--shadow);
+}
+.camera-split-bar { display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; background: rgba(255, 255, 255, 0.04); }
+.camera-split-bar strong span { color: #bdbdbd; font-weight: 400; margin-left: 6px; }
+.camera-split-close {
+  margin-left: auto;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  color: #f4f4ed;
+  font-size: 16px;
+  line-height: 1;
+}
+.camera-split-stage { position: relative; flex: 1; min-height: 0; display: flex; }
+.camera-split .camera-panel { width: 100%; margin: 0; display: flex; }
+.camera-split figcaption { display: none; }
+.camera-split .camera-frame, .camera-split .camera-missing {
   position: relative;
   width: 100%;
-  aspect-ratio: 16 / 9;
-  height: auto;
+  height: 100%;
   margin: 0;
   border: 0;
   border-radius: 0;
   background: #111;
 }
-.pip .camera-frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.camera-split .camera-missing { display: grid; place-items: center; color: #bdbdbd; }
+.camera-split .camera-frame canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.camera-split .muted { margin: 0 10px 8px; }
+
+/* The camera strip docked between the 3D view and the timeline. */
+.cam-strip {
+  flex: none;
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+  min-height: 28px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.cam-strip[data-open="true"] { height: 96px; box-sizing: border-box; }
+.cam-strip-toggle {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 2px;
+  padding: 2px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.cam-strip-toggle .num { color: var(--muted); font-size: 12px; letter-spacing: 0; }
+.cam-strip-toggle kbd { font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; }
+.cam-strip[data-open="false"] .cam-strip-toggle { flex-direction: row; align-items: center; gap: 8px; }
+.cam-groups { display: flex; gap: 10px; min-width: 0; overflow-x: auto; overflow-y: hidden; align-items: stretch; }
+.cam-group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 3px solid var(--agent, var(--line));
+  border-radius: 2px;
+}
+.cam-group-name { font-size: 10px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); line-height: 12px; }
+.cam-thumbs { display: flex; gap: 6px; }
+.cam-thumb-wrap { position: relative; }
+.cam-thumb {
+  position: relative;
+  display: block;
+  width: 112px;
+  height: 66px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #111;
+  color: #f4f4ed;
+}
+.cam-thumb canvas { width: 100%; height: 100%; display: block; object-fit: cover; }
+.cam-thumb[aria-pressed="true"] { outline: 2px solid var(--agent, var(--text)); outline-offset: -2px; }
+.cam-thumb-empty { display: grid; place-items: center; width: 100%; height: 100%; font-size: 11px; color: #8a8a80; }
+.cam-thumb-name {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  padding: 1px 6px;
+  font-size: 10px;
+  text-align: left;
+  background: linear-gradient(transparent, rgba(0, 0, 0, 0.7));
+}
+.cam-thumb-image {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.45);
+  color: rgba(255, 255, 255, 0.5);
+  display: grid;
+  place-items: center;
+}
+.cam-thumb-image[aria-pressed="true"] { color: #f4f4ed; background: rgba(255, 255, 255, 0.22); }
+.cam-strip-note { align-self: center; margin: 0; font-size: 12px; white-space: nowrap; }
 .compass {
   position: absolute;
   left: 0;
@@ -742,72 +845,6 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   font-size: 11px;
 }
 .hud p span { white-space: nowrap; }
-.pip-thumbs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-  max-height: 78px;
-  overflow: auto;
-  padding: 6px 8px 10px;
-  mask-image: linear-gradient(#000 0, #000 calc(100% - 14px), transparent);
-}
-.pip-chip {
-  display: flex;
-  align-items: center;
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  border-radius: 999px;
-  overflow: hidden;
-}
-.pip-name {
-  background: transparent;
-  color: #f4f4ed;
-  border: 0;
-  padding: 3px 4px 3px 8px;
-  font-size: 11px;
-  display: flex;
-  flex-direction: column;
-  white-space: nowrap;
-}
-.pip-name[aria-pressed="true"] { background: rgba(255, 255, 255, 0.16); }
-.pip-name span { color: #bdbdbd; }
-.pip-image {
-  width: 22px;
-  height: 22px;
-  margin: 2px;
-  padding: 0;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: rgba(255, 255, 255, 0.4);
-  display: grid;
-  place-items: center;
-}
-.pip-image[aria-pressed="true"] {
-  color: #f4f4ed;
-  background: rgba(255, 255, 255, 0.16);
-}
-.pip .muted { margin: 0 8px 8px; }
-.pip-resize {
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  cursor: nwse-resize;
-}
-.pip-resize::after {
-  content: "";
-  position: absolute;
-  right: 4px;
-  bottom: 4px;
-  width: 8px;
-  height: 8px;
-  border-right: 1.5px solid rgba(255, 255, 255, 0.75);
-  border-bottom: 1.5px solid rgba(255, 255, 255, 0.75);
-}
 
 .dialog-back {
   position: fixed;

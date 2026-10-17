@@ -19,6 +19,12 @@ export type Appearance = {
   frustumImageCameras: string[] | null;
   /** Score floor for drawn predictions; null means the run's `score_threshold`. */
   predictionScore: number | null;
+  /** The camera strip under the 3D view is shown (C toggles it). */
+  stripOpen: boolean;
+  /** `agent/sensor` of the camera in the split view, or null when the 3D view is alone. */
+  splitCamera: string | null;
+  /** Share of the row the 3D view keeps in the split view. */
+  splitRatio: number;
 };
 
 export const VIEW_KEY = "coperceive-view";
@@ -53,6 +59,9 @@ export function defaultAppearance(): Appearance {
     frustumOpacity: 0.85,
     frustumImageCameras: null,
     predictionScore: null,
+    stripOpen: true,
+    splitCamera: null,
+    splitRatio: 0.58,
   };
 }
 
@@ -140,6 +149,9 @@ export function loadAppearance(): Appearance {
       frustumOpacity: opacity(row.frustumOpacity, base.frustumOpacity),
       frustumImageCameras: cameraChoice(row.frustumImageCameras),
       predictionScore: score(row.predictionScore),
+      stripOpen: bool(row.stripOpen, base.stripOpen),
+      splitCamera: typeof row.splitCamera === "string" && row.splitCamera.length < 160 ? row.splitCamera : null,
+      splitRatio: ratio(row.splitRatio, base.splitRatio),
     };
   } catch {
     return base;
@@ -170,6 +182,9 @@ function writeAppearance(value: Appearance): void {
     frustumOpacity: value.frustumOpacity,
     frustumImageCameras: value.frustumImageCameras,
     predictionScore: value.predictionScore,
+    stripOpen: value.stripOpen,
+    splitCamera: value.splitCamera,
+    splitRatio: value.splitRatio,
   };
   localStorage.setItem(VIEW_KEY, JSON.stringify(stored));
 }
@@ -190,6 +205,16 @@ function opacity(value: unknown, fallback: number): number {
     return fallback;
   }
   return Math.min(1, Math.max(0.15, value));
+}
+
+export const SPLIT_MIN = 0.3;
+export const SPLIT_MAX = 0.8;
+
+function ratio(value: unknown, fallback: number): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return fallback;
+  }
+  return Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, value));
 }
 
 function score(value: unknown): number | null {
