@@ -319,3 +319,55 @@ Slurm job 626744 on `ps,main-cpu`, Python 3.13.14, the repo `.venv`, 2026-10-17,
 ## Next
 
 ADR 0010, evaluation engine step A (predictions format, import, matching, viewer overlay, timeline metrics), is drafted on branch `docs/adr-0010-eval-step-a` as `docs/adr/0010-eval-predictions.md`, status proposed, no PR, nothing implemented. Adarsh reviews it before any code.
+
+## Evaluation engine, step A (2026-10-17)
+
+ADR 0010 is accepted and implemented on branch `feat/eval-step-a` (based on `main` at `d3cd349`, the #15 merge). Compare link: https://github.com/adarsh-nl/coperceive/compare/main...feat/eval-step-a?expand=1. Adarsh opens the draft PR against `main`. Nothing is merged. The normative contract is `docs/spec/predictions.md`; the plan the work followed is `docs/superpowers/plans/2026-10-17-eval-step-a.md`; the user doc is `docs/eval.md`.
+
+- `coperceive/evaluation/`: `predictions` (format 1: `run.json`, `boxes.parquet`, `write_run`, `load_rows`, `validate_boxes`, `predictions_root`), `geometry` (`WorldBox`, BEV IoU by Sutherland–Hodgman clipping, centre distance, yaw error), `config` (`EvalConfig`, YAML loader, `threshold_for`), `matching` (`match_sample`, greedy per class by score with ignore rules), `metrics` (all-points AP, `Counts`, TP errors, cooperative counts), `evaluate` (`evaluate_scene`, `matches.parquet`, `metrics.json`, `evaluate_run`), `report` (`eval report|compare` tables), `commands` (CLI).
+- `coperceive predictions import`, `coperceive eval run|report|compare`; `coperceive serve --predictions`; `coperceive export bev --run --predictions`.
+- `coperceive/evalview.py` (no FastAPI) and three GET routes: `/api/scenes/{id}/predictions`, `.../predictions/{run}/frame?time_us=&compare=`, `.../predictions/{run}/series?compare=`. `POST /export/bev` takes `run_id`. `web/openapi.json` regenerated; `web/src/api/schema.ts` was not (needs npm; CI or Adarsh).
+- Page: Predictions block (run, compare run, output, source/status/cooperative chips, score slider, legend), prediction wires per status with dashed/dotted styles, matched GT at 40%, two eval sparklines and a recall-drop marker on the timeline, inspector and scene-card fields, `run_id` on the bird's-eye export. `tsc -b` and `oxlint` clean; **not seen in a browser** (no routes existed when it was written and no server runs on the HPC). `coperceive/app/static` was not rebuilt or committed; CI builds it.
+- Defaults as decided: BEV IoU at 0.5 and 0.7, display at 0.5, `score_threshold` 0.3, every GT kept, centre distance as `criterion: centre`.
+
+Reviews caught and fixed, on the branch: AP tie order used pose-time order instead of `boxes.parquet` row order (`849d46d`); `predictions import` joined an unchecked `--scene`/`scene_id` to the scenes root before validation (`c3c5533`). Euler closed form from the adapters slice is unrelated.
+
+Known departures from the spec text, recorded in ADR 0010 "As built": AP categories are the union of `run.json` categories, GT categories and predicted categories; the aggregate AP in `eval report` is a mean over scene × output rows; the range check runs before the score-threshold check; `export bev` also takes `--predictions`; the page has an Output selector.
+
+### Adversarial review (2026-10-17)
+
+Three read-only finders over the branch at `28ee59c`, each finding then attacked by two independent refuters; a finding counted only when both refuters failed to refute it.
+
+- Numerics (BEV IoU closed forms incl. 45° rotations, containment, degenerate sizes, 1e4 m coordinates; all-points AP on eight scenarios with ties; `tp_errors`; null-not-NaN; AP at 0.7 from its own matching pass; mAP skipping null): **no finding**, 20 checks recorded.
+- Matching (ties within and across times; body vs world placement; wrong-agent timestamps at import and eval; ignored-GT rule 3; `max_range_m` from the body origin; category never crosses; `below_threshold` never matches; `matches.parquet` row order; cooperative columns; frame rows equal table rows with 72-number lines): **no finding**, 18 checks recorded.
+- Paths: four findings reproduced. One confirmed and fixed: `read_metrics`, `read_matches` and `evalview._match_rows` opened `metrics.json`/`matches.parquet` under a confined directory without resolving the file, so a symlink planted inside the run directory was followed outside the predictions root (`17a6d7c`: `evaluate.scene_file` resolves and confines the file; test added; final review approved). Three were judged not required by the spec and left as open items below: a NUL byte or a 300-character `run_id` or `scene_id` reaches `Path.resolve`/`is_file` and the routes answer HTTP 500 instead of 400 (`server._scene_dir`, `evalview`), and `coperceive export bev --run` lets the same `ValueError`/`OSError` and an `EvaluationError` from a malformed `metrics.json` escape as a traceback. No file outside a root was opened in any of these.
+
+Earlier per-task reviews caught two more defects before integration: AP tie order (pose-time order, not `boxes.parquet` row order; `849d46d`) and `predictions import` joining an unchecked `--scene` to the scenes root (`c3c5533`).
+
+### Open questions for Adarsh (step A)
+
+0. Robustness, not spec: map `ValueError`/`OSError` from path resolution to 400 in `server._scene_dir` and `server._eval_view`, and catch them in `export bev --run`, so a NUL byte or an over-long id never produces a 500 or a traceback? Small change; say yes and it goes in before the PR leaves draft.
+1. Aggregate AP: keep the mean over scene × output rows, or change to per-scene means as the spec sentence says (then a scene with `single` and `fused` outputs weighs once)?
+2. AP category set: keep the union (so a GT-only class the model never emits shows AP 0.0), or restrict to `run.json` `categories` as the spec says?
+3. `render_compare` drops rows present in only one run without a marker. Print them with `n/a` deltas instead?
+4. The fixture's 0.3 m cone shifted 0.1 m sits exactly on BEV IoU 0.5 at the display threshold; tests avoid it, but nudging the fixture would make it robust.
+5. `web/src/api/schema.ts` regeneration: in CI, or by you after `npm ci`.
+6. Colour-blindness: dashed/dotted styles are the primary cue; nothing was checked in a simulator. Say if you want the green moved towards teal.
+
+### Task 12 (not started): the real run
+
+Candidate source: the released Griffin checkpoints under `/datasets/eemcs/ps/cv/huggingface/griffin/ckpts/griffin_50scenes_25m/` (`vehicle-side.pth`, `drone-side.pth`, `cooperative.pth`, `early-fusion/`, `cooperative/instance_fusion/`). They need the Griffin toolkit's inference code and an mmdetection3d/CUDA environment, which this repository does not contain and which has not been installed. The plan: a GPU sbatch job that runs the toolkit's test script for the vehicle-side model on Griffin-25m, converts its output to `boxes.parquet` with `write_run`, then `eval run`. Stop and show Adarsh the environment setup and the sbatch before anything is installed.
+
+## Gates for step A
+
+Slurm job 627022 on `ps,main-cpu`, Python 3.13.14, the shared `.venv` linked into the worktree with `PYTHONPATH=$REPO` (the job prints `coperceive imported from /home/nanjaiyalathaa/coperceive-adr0010/coperceive/__init__.py` and exits 3 if the import resolves elsewhere), 2026-10-17, at commit `369ffa1`. Elapsed 29 s. `~/scripts/slurm/coperceive-gates.sbatch` with `REPO=`.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 138 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations (strict; `coperceive/evaluation` and `coperceive/evalview.py` are inside the strict set)
+- `pytest --override-ini addopts= --tb=short -q` — 340 passed, 2 skipped, 8 warnings in 10.77 s. The skips are the two `COPERCEIVE_GRIFFIN_RAW` tests. The warnings are the `fork()` `DeprecationWarning` from the three parallel-run tests.
+- `mkdocs build` — succeeded (`docs/eval.md` and `docs/spec/predictions.md` are in the nav)
+- Earlier gates in this slice: job 627009 at `28ee59c` (337 passed, 2 skipped, pyright 0).
+- Login node: `cd web && ./node_modules/.bin/tsc -b` exit 0 and `oxlint src` 0 errors (13 pre-existing warnings) at the page commit `92fafe0`; the page was not rebuilt and `coperceive/app/static` is unchanged.
+- Not run on the HPC: `npm run build`, gitleaks, Python 3.10–3.12 (all CI). CI has not run yet on this branch: no PR is open. `web/src/api/schema.ts` is stale (needs `npx openapi-typescript`).
+- Not verified anywhere: the page in a browser (dash patterns, bloom, chips, legend, reduced motion, the 404 path), the bird's-eye figure by a human eye (only its SVG content was asserted), a real model's predictions (synthetic fixtures only).
