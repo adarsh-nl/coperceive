@@ -275,8 +275,30 @@ Python 3.12.3, on 2026-10-16. This slice did not change Python modules. It did n
 - `pytest --override-ini addopts= --tb=line -q` — 104 passed, 1 skipped, 6 warnings in 6.77 s. The skip is `test_real_griffin_release_loads` without `COPERCEIVE_GRIFFIN_RAW`. The warnings are `DeprecationWarning` from `fork()`.
 - `npm run build` in `web/` — wrote `coperceive/app/static/assets/index-BBhIjMFy.js` and `index-CCdy_1eI.css`. `npm install` needs `--legacy-peer-deps` because `openapi-typescript` 7.13.0 declares a TypeScript 5 peer.
 
-## Dataset adapters (proposed, 2026-10-17)
+## Dataset adapters (2026-10-17)
 
-`docs/adr/0009-dataset-adapters.md` is a proposal, not code. It covers a declarative YAML manifest mapped onto schema 1, generic readers, the `coperceive.adapters` and `coperceive.readers` entry points, `coperceive adapters list|check|ingest`, a rule-by-rule mapping of `griffin/raw.py` and `griffin/convert.py` onto the manifest, and the regression test that must show the Griffin adapter writes identical scenes. Schema 1 is unchanged. Nothing is implemented. Eight decisions for Adarsh are listed at the end of the ADR. "No second dataset" still stands.
+ADR 0009 is accepted and implemented on branch `docs/adr-0009-adapters` (draft PR to open from https://github.com/adarsh-nl/coperceive/compare/main...docs/adr-0009-adapters?expand=1; `gh` is not on the HPC). Adarsh took the eight decisions recorded at the end of the ADR; the "As built" section lists where the code departs from the proposal.
 
-This session ran on the EEMCS HPC login node. The repo was cloned over SSH, because HTTPS has no credentials there. `gh` is not installed, so the draft PR has to be opened from the compare page. The section-0 gates were **not run**: the login node allows only commands under a minute, and `node`/`npm` are not on PATH or in `module avail`. An sbatch job for `ps,main-cpu` that creates `.venv`, installs as CI does (CPU torch included) and runs ruff, pyright, pytest and mkdocs is at `~/scripts/slurm/coperceive-gates.sbatch` on that machine, outside the repo. It has not been submitted. Whether compute nodes can reach PyPI is not known.
+- `coperceive/adapters/`: `paths` (templates, confinement), `rotation` (Euler/quaternion/matrix, `AxisRemap`), `readers/` (records, lidar, calib, plugin registry), `spec` (manifest dataclasses and validator, `spec_version` 1), `build` (`ManifestAdapter`, `SceneRef`, `check`), `ingest` (the shared driver, `Adapter` protocol), `registry` (built-ins, `coperceive.adapters` entry points, manifest files), `commands` (CLI), `builtin/griffin.yaml`.
+- `coperceive adapters list|check|ingest`. `check` writes nothing. `ingest` is `convert_griffin`'s driver generalised; `COMPLETE.json` gains `adapter`, `manifest_sha256`, `coperceive_version`, and old markers still skip.
+- `coperceive convert griffin` is unchanged and still runs `griffin/raw.py`. It becomes an alias for the adapter after the slow regression passes on the real release (next item). Then `raw.py` and the scene-building half of `convert.py` go.
+- Regression: `tests/test_adapters_griffin.py`. On the synthetic release (12/11/9-field label lines, a drone lidar calib with no clouds, a metadata-only tree) the adapter and the converter write byte-identical `manifest.json` and `points.bin`, equal Parquet tables (`Table.equals`, no metadata), equal `read_scene` results, and the same `COMPLETE.json` apart from the three provenance keys. **The real Griffin-25m comparison has not been run.** It is the `slow` test in that file with `COPERCEIVE_GRIFFIN_RAW` pointed at `griffin-release`; `~/scripts/slurm/coperceive-griffin-regression.sbatch` on the HPC runs it on a compute node once the raw path is filled in.
+- The toy KITTI-flavoured dataset (`tests/toy_dataset.py`, `docs/datasets/add-a-dataset.md`) exercises what Griffin does not: `scenes.glob`, `agents.discover`, a CSV pose table with an `xyzw` quaternion, `clock.from: field` in seconds, YAML calibs with translation plus Euler and explicit image sizes, bottom-centred boxes with `yaw_only` and a `class_map`, `bin_f32` lidar, and an `RFU` body remap. A test checks the doc quotes the manifest verbatim.
+- Not exercised on any real data: `pcd`, `json_table` joins, `yaw_only` on a real label file, non-identity camera remaps, `sensor:<id>` box frames, `centre_origin: bottom` beyond the toy. Nothing claims OPV2V, V2XSet, DAIR-V2X or nuScenes read correctly.
+- Schema 1 is unchanged. `docs/spec/format.md` now states the `FLU` body and `RDF` camera convention the code already assumed. `pyyaml` is a core dependency and `types-PyYAML` a dev one.
+- The web app's job allow-list is unchanged; `adapters ingest` is not reachable from the page.
+
+Pip on this HPC: the user-level pip config points `index-url` at a UTwente GitLab registry. The `.venv` install used `PIP_INDEX_URL=https://pypi.org/simple` to bypass it. Compute nodes cannot reach PyPI (job 626711 timed out), so `.venv` was installed on the login node and the gates job only runs the checks. `coperceive/app/static` is never rebuilt or committed from the HPC; CI builds the web app.
+
+## Gates for the adapters slice
+
+Slurm job 626728 on `ps,main-cpu` (hpc-node, Python 3.13.14 from `module load python/3.13.14`, the repo `.venv`), 2026-10-17, at commit `48b7129`. `~/scripts/slurm/coperceive-gates.sbatch`. Elapsed 40 s. The wheel was built separately on the login node.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 114 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations (pyright 1.1.414, strict). `coperceive/adapters` and its tests are inside the strict set; the exclusions are unchanged.
+- `pytest --override-ini addopts= --tb=short -q` — 174 passed, 2 skipped, 8 warnings in 11.00 s. The skips are `test_real_griffin_release_loads` and `test_adapter_matches_converter_on_the_real_release`, both without `COPERCEIVE_GRIFFIN_RAW`. The warnings are the `fork()` `DeprecationWarning` from the parallel tests; the two new ones come from `test_ingest_keeps_finished_scenes_when_one_fails`, which runs the driver with two workers.
+- `mkdocs build` — succeeded (MkDocs Material, with its MkDocs 2.0 notice)
+- `pip wheel . --no-build-isolation --no-deps` on the login node — `coperceive-0.0.0-py3-none-any.whl` contains `coperceive/adapters/builtin/griffin.yaml` and the committed `app/static` assets.
+- `npm run build` was not run on the HPC; `coperceive/app/static` was not touched. Python 3.10, 3.11 and 3.12 were not run here; they are the GitHub Actions matrix.
+- Not run: the slow real-release regression (needs the raw path), gitleaks (not installed on the HPC; CI runs it).
