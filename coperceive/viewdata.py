@@ -243,6 +243,9 @@ def _box_lines(
     return lines
 
 
+box_lines = _box_lines  # public name for coperceive.evalview; same 24-vertex edge list
+
+
 def _pose_json(pose: SE3) -> dict[str, object]:
     return {
         "qw": pose.qw,
