@@ -421,12 +421,15 @@ class _SceneCache:
 def _scene_dir(root: Path, scene_id: str) -> Path:
     if scene_id == "" or "/" in scene_id or "\\" in scene_id or ".." in scene_id:
         raise HTTPException(status_code=400, detail="bad scene id")
-    path = (root / scene_id).resolve()
     try:
+        # A NUL byte makes resolve() raise ValueError; an over-long name makes
+        # the stat raise OSError. Both are a bad id, not a server error.
+        path = (root / scene_id).resolve()
         path.relative_to(root)
-    except ValueError as exc:
+        present = (path / "manifest.json").is_file()
+    except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail="bad scene id") from exc
-    if not (path / "manifest.json").is_file():
+    if not present:
         raise HTTPException(status_code=404, detail="scene not found")
     return path
 
@@ -452,6 +455,9 @@ def _eval_view(read: Callable[[], dict[str, object]]) -> dict[str, object]:
         raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
     except CoperceiveError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        # An id that passed the name rule but not the OS (NUL byte, over-long).
+        raise HTTPException(status_code=400, detail=f"bad id: {exc}") from exc
 
 
 def _frame_row_list(body: dict[str, object]) -> list[dict[str, object]]:

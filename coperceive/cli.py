@@ -330,6 +330,7 @@ def _scene_dir(args: argparse.Namespace) -> Path:
 def _export_bev(args: argparse.Namespace) -> None:
     from pathlib import Path
 
+    from coperceive.errors import CoperceiveError
     from coperceive.evaluation.predictions import predictions_root
     from coperceive.evalview import EvalViewError, frame_rows
     from coperceive.hdmap.store import find_map, load_map, scene_map_name
@@ -364,8 +365,8 @@ def _export_bev(args: argparse.Namespace) -> None:
         try:
             body = frame_rows(store, run_id, scene_dir.resolve().name, when, compare=None)
             predictions = prediction_draws(cast(list[dict[str, object]], body["rows"]))
-        except (EvalViewError, PlotError) as exc:
-            print(str(exc), file=sys.stderr)
+        except (EvalViewError, PlotError, CoperceiveError, ValueError, OSError) as exc:
+            print(f"predictions: {exc}", file=sys.stderr)
             raise SystemExit(2) from exc
     try:
         result = render_bev(

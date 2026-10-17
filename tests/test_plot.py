@@ -386,3 +386,23 @@ def test_cli_bev_draws_a_run(tmp_path: Path, capsys: pytest.CaptureFixture[str])
         )
     assert exc.value.code == 2
     assert "nope" in capsys.readouterr().err
+
+
+def test_cli_bev_run_with_nul_or_overlong_id_prints_one_line(tmp_path: Path) -> None:
+    scenes = _evaluated_root(tmp_path)
+    for run_id in ("a\x00b", "a" * 300):
+        with pytest.raises(SystemExit) as caught:
+            main(
+                [
+                    "export",
+                    "bev",
+                    str(scenes / "coop"),
+                    "--out",
+                    str(tmp_path / "x.svg"),
+                    "--time-us",
+                    "100000",
+                    "--run",
+                    run_id,
+                ]
+            )
+        assert caught.value.code == 2

@@ -534,3 +534,37 @@ def test_prediction_routes_404_without_root(tmp_path: Path) -> None:
     assert not (scenes / "predictions").exists()
     client = TestClient(create_app(root=scenes, token=None, predictions=elsewhere))
     assert client.get("/api/scenes/coop/predictions").json()["runs"][0]["run_id"] == "synthetic"
+
+
+def test_prediction_routes_answer_400_for_nul_and_overlong_ids(tmp_path: Path) -> None:
+    """A run or scene id that passes the name rule but not the OS gives 400, never 500."""
+    scenes = _evaluated_root(tmp_path)
+    client = TestClient(create_app(root=scenes, token=None), raise_server_exceptions=False)
+    long_id = "a" * 300
+    for run_id in ("a%00b", long_id):
+        for path in (
+            f"/api/scenes/coop/predictions/{run_id}/frame",
+            f"/api/scenes/coop/predictions/{run_id}/series",
+        ):
+            response = client.get(path, params={"time_us": 100000})
+            assert response.status_code == 400, (path, response.status_code)
+        compare = client.get(
+            "/api/scenes/coop/predictions/synthetic/frame",
+            params={"time_us": 100000, "compare": run_id.replace("%00", "\x00")},
+        )
+        assert compare.status_code == 400, run_id
+        bev = client.post(
+            "/api/scenes/coop/export/bev",
+            headers={"X-Coperceive-Request": "1"},
+            json={"format": "svg", "time_us": 100000, "run_id": run_id.replace("%00", "\x00")},
+        )
+        assert bev.status_code == 400, run_id
+    for scene_id in ("coop%00", long_id):
+        for path in (
+            f"/api/scenes/{scene_id}/predictions",
+            f"/api/scenes/{scene_id}/predictions/synthetic/frame",
+            f"/api/scenes/{scene_id}",
+        ):
+            response = client.get(path, params={"time_us": 100000})
+            assert response.status_code in {400, 404}, (path, response.status_code)
+            assert response.status_code != 500
