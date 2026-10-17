@@ -18,6 +18,9 @@ def run(
     token: str | None,
     root_path: str,
     maps: str | None = None,
+    predictions: str | None = None,
 ) -> None:
-    app = create_app(root=Path(root), token=token, root_path=root_path, maps=maps)
+    app = create_app(
+        root=Path(root), token=token, root_path=root_path, maps=maps, predictions=predictions
+    )
     uvicorn.run(app, host=host, port=port, root_path=root_path)

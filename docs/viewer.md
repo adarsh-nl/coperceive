@@ -41,11 +41,14 @@ Lidar points are 2 CSS pixels and do not shrink with distance. A 6 pixel size fi
 | GET | `/api/scenes/{scene_id}/image?time_us=&agent_id=&sensor_id=` | the image file recorded for that sample, or 404 |
 | GET | `/api/scenes/{scene_id}/map` | whether a sidecar map is linked |
 | GET | `/api/scenes/{scene_id}/map/lines` | world-frame polylines, or 404 |
+| GET | `/api/scenes/{scene_id}/predictions` | `{runs: [{run_id, run, evaluated, config, outputs}]}`: every run under the predictions root with `boxes.parquet` for the scene |
+| GET | `/api/scenes/{scene_id}/predictions/{run_id}/frame?time_us=&compare=` | `{run_id, time_us, display_threshold, score_threshold, rows, compare}`: the `matches.parquet` rows at that sample with `center`, `size_lwh`, `pose`, `lines`; 404 until `coperceive eval run` |
+| GET | `/api/scenes/{scene_id}/predictions/{run_id}/series?compare=` | `{run_id, outputs: [{agent_id, source, times_us, tp, fp, miss, precision, recall}], compare}` from `metrics.json` |
 | GET | `/favicon.ico` | `favicon.svg` as `image/svg+xml` |
 | POST | `/api/scenes/{scene_id}/export/rerun` | `{path, samples}` |
 | POST | `/api/scenes/{scene_id}/export/sequence` | `{path, frames, width, height, fps, format}` for one camera |
 | POST | `/api/scenes/{scene_id}/export/view` | the same fields for uploaded canvas frames |
-| POST | `/api/scenes/{scene_id}/export/bev` | bird's-eye PNG or SVG: `{path, format, time_us, width, height, map_drawn, points, boxes}` |
+| POST | `/api/scenes/{scene_id}/export/bev` | bird's-eye PNG or SVG: `{path, format, time_us, width, height, map_drawn, points, boxes, predictions}`; an optional `run_id` draws that run's match rows |
 | POST | `/api/scenes/{scene_id}/export/overlay` | camera image with projected boxes and lidar, same fields |
 
 A scene id that is empty, contains a slash or backslash, or contains `..` is 400. A missing `manifest.json` is 404. Point bytes are empty when that sweep is absent. The server keeps one decoded scene in memory and replaces it when the path changes.
@@ -106,7 +109,9 @@ coperceive export overlay /path/scene --out /path/front.png \
 
 The page buttons are **Bird's-eye** and **Camera overlay**. They use the current sample and the view settings (layers, theme, colour, hidden classes, hidden agents). The file is written under `exports/` and downloaded. PNG and SVG are both offered. The 3D bird's-eye viewpoint is unchanged.
 
-`POST /api/scenes/{id}/export/bev` and `POST /api/scenes/{id}/export/overlay` return `{path, format, time_us, width, height, map_drawn, points, boxes}`. Both still require `X-Coperceive-Request: 1`.
+`POST /api/scenes/{id}/export/bev` and `POST /api/scenes/{id}/export/overlay` return `{path, format, time_us, width, height, map_drawn, points, boxes, predictions}`. Both still require `X-Coperceive-Request: 1`.
+
+`coperceive export bev --run <run_id>` and a `run_id` in the bird's-eye POST draw the match rows of that evaluated run at the sample on top of the ground-truth boxes, in the status colours and line styles of [the predictions spec](spec/predictions.md#colours-and-styles); the legend names each status and a matched ground-truth box is dimmed to 40 %. The predictions root is `<scenes root>/predictions` when it holds a run, or `--predictions` (`coperceive serve --predictions`, `coperceive export bev --predictions`). Without one, the three prediction routes and a `run_id` answer 404 `no predictions root`.
 
 ## What this phase does not do
 

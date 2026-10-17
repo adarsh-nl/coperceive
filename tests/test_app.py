@@ -3,12 +3,16 @@ from __future__ import annotations
 
 import base64
 import struct
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from coperceive.app.jobs import confine
 from coperceive.app.server import create_app
 from coperceive.cli import main
+from coperceive.evaluation.config import DEFAULT_CONFIG
+from coperceive.evaluation.evaluate import evaluate_run
+from coperceive.evaluation.predictions import write_run
 from coperceive.hdmap.opendrive import parse_opendrive
 from coperceive.hdmap.store import write_map
 from coperceive.model import (
@@ -27,6 +31,8 @@ from coperceive.se3 import SE3
 from coperceive.store import write_scene
 from fastapi.testclient import TestClient
 
+from tests.cooperative import cooperative_scene
+from tests.eval_fixture import synthetic_predictions
 from tests.test_hdmap import _scene_on_lane, _straight
 
 
@@ -388,3 +394,143 @@ def test_map_http_and_favicon(tmp_path: Path) -> None:
     assert icon.headers["content-type"].startswith("image/svg")
     missing = client.get("/api/scenes/Town03-000/map/lines")
     assert missing.status_code == 200
+
+
+def _evaluated_root(root: Path, *, predictions: Path | None = None) -> Path:
+    """``root/scenes/coop`` plus the ``synthetic`` run, written and evaluated."""
+    scene = cooperative_scene()
+    scenes = root / "scenes"
+    write_scene(replace(scene, scene_id="coop"), scenes / "coop")
+    store = scenes / "predictions" if predictions is None else predictions
+    meta, boxes = synthetic_predictions(scene)
+    rows = tuple(replace(box, scene_id="coop") for box in boxes)
+    write_run(store, "synthetic", meta, rows)
+    report = evaluate_run(
+        scenes, store, "synthetic", DEFAULT_CONFIG, created_utc="2026-10-17T00:00:00Z"
+    )
+    assert report.evaluated == ("coop",), report
+    return scenes
+
+
+def test_prediction_routes_list_frame_and_series(tmp_path: Path) -> None:
+    scenes = _evaluated_root(tmp_path)
+    client = TestClient(create_app(root=scenes, token=None))
+
+    listed = client.get("/api/scenes/coop/predictions")
+    assert listed.status_code == 200
+    runs = listed.json()["runs"]
+    assert [run["run_id"] for run in runs] == ["synthetic"]
+    assert runs[0]["evaluated"] is True
+    assert runs[0]["run"]["format"] == "coperceive-predictions"
+    assert runs[0]["config"]["display_threshold"] == 0.5
+    outputs = runs[0]["outputs"]
+    assert {(o["agent_id"], o["source"]) for o in outputs} >= {("vehicle", "single")}
+    assert set(outputs[0]) == {"agent_id", "source", "totals", "ap", "cooperative"}
+
+    frame = client.get(
+        "/api/scenes/coop/predictions/synthetic/frame",
+        params={"time_us": 100000, "compare": "synthetic"},
+    )
+    assert frame.status_code == 200
+    body = frame.json()
+    assert body["run_id"] == "synthetic"
+    assert body["time_us"] == 100000
+    assert body["display_threshold"] == 0.5
+    assert body["score_threshold"] == 0.3
+    rows = body["rows"]
+    assert rows
+    assert {row["status"] for row in rows} >= {"tp", "fp", "miss"}
+    assert all(len(row["lines"]) == 72 for row in rows)
+    assert body["compare"]["run_id"] == "synthetic"
+    assert len(body["compare"]["rows"]) == len(rows)
+    alone = client.get("/api/scenes/coop/predictions/synthetic/frame", params={"time_us": 100000})
+    assert alone.json()["compare"] is None
+
+    series = client.get(
+        "/api/scenes/coop/predictions/synthetic/series", params={"compare": "synthetic"}
+    )
+    assert series.status_code == 200
+    body = series.json()
+    assert body["run_id"] == "synthetic"
+    for output in body["outputs"]:
+        assert set(output) >= {
+            "agent_id",
+            "source",
+            "times_us",
+            "tp",
+            "fp",
+            "miss",
+            "precision",
+            "recall",
+        }
+        assert len(output["times_us"]) == len(output["tp"]) == len(output["recall"])
+    assert body["compare"]["run_id"] == "synthetic"
+
+    missing = client.get("/api/scenes/coop/predictions/nope/frame", params={"time_us": 100000})
+    assert missing.status_code == 404
+    other = client.get("/api/scenes/other/predictions")
+    assert other.status_code == 404
+
+    headers = {"X-Coperceive-Request": "1"}
+    bev = client.post(
+        "/api/scenes/coop/export/bev",
+        headers=headers,
+        json={"format": "svg", "time_us": 100000, "run_id": "synthetic", "points": False},
+    )
+    assert bev.status_code == 200
+    saved = bev.json()
+    assert saved["predictions"] > 0
+    assert (scenes / saved["path"]).is_file()
+    assert "#3baa6b" in (scenes / saved["path"]).read_text(encoding="utf-8").lower()
+    unknown = client.post(
+        "/api/scenes/coop/export/bev",
+        headers=headers,
+        json={"format": "svg", "time_us": 100000, "run_id": "nope"},
+    )
+    assert unknown.status_code == 404
+
+
+def test_prediction_routes_refuse_traversal(tmp_path: Path) -> None:
+    scenes = _evaluated_root(tmp_path)
+    client = TestClient(create_app(root=scenes, token=None))
+    for path in (
+        "/api/scenes/coop/predictions/..%2Fx/frame",
+        "/api/scenes/coop/predictions/a%2Fb/frame",
+        "/api/scenes/coop/predictions/..%2Fx/series",
+        "/api/scenes/coop/predictions/.hidden/frame",
+        "/api/scenes/..%2Fcoop/predictions",
+    ):
+        response = client.get(path, params={"time_us": 100000})
+        assert response.status_code in {400, 404}, path
+    bev = client.post(
+        "/api/scenes/coop/export/bev",
+        headers={"X-Coperceive-Request": "1"},
+        json={"format": "svg", "time_us": 100000, "run_id": "../x"},
+    )
+    assert bev.status_code in {400, 404}
+
+
+def test_prediction_routes_404_without_root(tmp_path: Path) -> None:
+    _viewer_scene(tmp_path)
+    client = TestClient(create_app(root=tmp_path, token=None))
+    for path in (
+        "/api/scenes/desk/predictions",
+        "/api/scenes/desk/predictions/synthetic/frame",
+        "/api/scenes/desk/predictions/synthetic/series",
+    ):
+        response = client.get(path, params={"time_us": 0})
+        assert response.status_code == 404, path
+        assert response.json()["detail"] == "no predictions root"
+    bev = client.post(
+        "/api/scenes/desk/export/bev",
+        headers={"X-Coperceive-Request": "1"},
+        json={"format": "svg", "time_us": 0, "run_id": "synthetic"},
+    )
+    assert bev.status_code == 404
+    assert bev.json()["detail"] == "no predictions root"
+    # An explicit --predictions root wins over the <root>/predictions default.
+    elsewhere = tmp_path / "elsewhere"
+    scenes = _evaluated_root(tmp_path / "second", predictions=elsewhere)
+    assert not (scenes / "predictions").exists()
+    client = TestClient(create_app(root=scenes, token=None, predictions=elsewhere))
+    assert client.get("/api/scenes/coop/predictions").json()["runs"][0]["run_id"] == "synthetic"

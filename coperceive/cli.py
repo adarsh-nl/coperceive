@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Shared HD-map root. Defaults to ROOT/maps when that directory exists.",
     )
+    serve.add_argument(
+        "--predictions",
+        default=None,
+        help="Predictions root. Defaults to ROOT/predictions when it holds a run.",
+    )
     serve.set_defaults(func=_serve)
 
     add_parser(sub)
@@ -188,6 +193,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     bev_export.add_argument("--theme", choices=("dark", "light"), default="dark")
     bev_export.add_argument("--color", choices=("agent", "class"), default="agent")
+    bev_export.add_argument(
+        "--run", default=None, help="Draw the match rows of this evaluated run at the sample."
+    )
+    bev_export.add_argument(
+        "--predictions",
+        default=None,
+        help="Predictions root. Defaults to <scene>/../predictions when it holds a run.",
+    )
     bev_export.set_defaults(func=_export_bev)
     overlay_export = export_sub.add_parser(
         "overlay",
@@ -317,9 +330,12 @@ def _scene_dir(args: argparse.Namespace) -> Path:
 def _export_bev(args: argparse.Namespace) -> None:
     from pathlib import Path
 
+    from coperceive.evaluation.predictions import predictions_root
+    from coperceive.evalview import EvalViewError, frame_rows
     from coperceive.hdmap.store import find_map, load_map, scene_map_name
-    from coperceive.plot import PlotError, render_bev
+    from coperceive.plot import PlotError, PredictionDraw, prediction_draws, render_bev
     from coperceive.store import read_scene
+    from coperceive.viewdata import pose_times
 
     scene_dir = _scene_dir(args)
     scene = read_scene(scene_dir)
@@ -331,15 +347,36 @@ def _export_bev(args: argparse.Namespace) -> None:
         directory = find_map(root, name)
         if directory is not None:
             hdmap = load_map(directory)
+    time_us = args.time_us if isinstance(args.time_us, int) else None
+    predictions: tuple[PredictionDraw, ...] = ()
+    run_id = args.run
+    if isinstance(run_id, str):
+        override = Path(args.predictions) if isinstance(args.predictions, str) else None
+        store = predictions_root(scene_dir.resolve().parent, override)
+        if store is None:
+            print("no predictions root", file=sys.stderr)
+            raise SystemExit(2)
+        times = pose_times(scene)
+        when = time_us if time_us is not None else (times[0] if times else None)
+        if when is None:
+            print("scene has no pose times", file=sys.stderr)
+            raise SystemExit(2)
+        try:
+            body = frame_rows(store, run_id, scene_dir.resolve().name, when, compare=None)
+            predictions = prediction_draws(cast(list[dict[str, object]], body["rows"]))
+        except (EvalViewError, PlotError) as exc:
+            print(str(exc), file=sys.stderr)
+            raise SystemExit(2) from exc
     try:
         result = render_bev(
             scene,
             Path(args.out),
-            time_us=args.time_us,
+            time_us=time_us,
             hdmap=hdmap,
             format=args.format if isinstance(args.format, str) else None,
             theme=args.theme,
             color_by=args.color,
+            predictions=predictions,
         )
     except PlotError as exc:
         print(str(exc), file=sys.stderr)
@@ -347,7 +384,8 @@ def _export_bev(args: argparse.Namespace) -> None:
     print(f"wrote {result.dest}")
     print(
         f"time_us {result.time_us} width {result.width} height {result.height} "
-        f"points {result.points} boxes {result.boxes} map {int(result.map_drawn)}"
+        f"points {result.points} boxes {result.boxes} map {int(result.map_drawn)} "
+        f"predictions {result.predictions}"
     )
 
 
@@ -432,6 +470,7 @@ def _serve(args: argparse.Namespace) -> None:
         token=args.token,
         root_path=args.root_path,
         maps=args.maps,
+        predictions=args.predictions,
     )
 
 
