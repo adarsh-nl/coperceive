@@ -9,11 +9,11 @@ parallel run, ``.partial/`` and ``COMPLETE.json``.
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 
@@ -505,7 +505,7 @@ class ManifestAdapter:
                     items = _field(record, spec.records or "", where)
                 if not isinstance(items, list):
                     raise BuildError(f"{where}: {spec.records or 'record'} is not a list of boxes")
-                for item in items:  # type: ignore[union-attr]
+                for item in cast(list[object], items):
                     row: dict[str, object] = {}
                     for column, field_path in spec.fields.items():
                         try:
@@ -703,11 +703,12 @@ class ManifestAdapter:
     def _remap_points(self, blob: bytes) -> bytes:
         if self._body.is_identity and self._length == 1.0:
             return blob
-        points = np.frombuffer(blob, dtype="<f4").reshape(-1, 4).astype(np.float64)
+        flat = np.frombuffer(blob, dtype=np.float32)  # pyright: ignore[reportUnknownMemberType]
+        points = flat.reshape(-1, 4).astype(np.float64)  # pyright: ignore[reportUnknownMemberType]
         matrix = np.asarray(self._body.rows, dtype=np.float64)
-        xyz = (points[:, :3] * self._length) @ matrix.T
+        xyz = (points[:, :3] * self._length) @ matrix.T  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         points[:, :3] = xyz
-        return points.astype("<f4").tobytes()
+        return points.astype(np.float32).tobytes()
 
     # -- helpers -------------------------------------------------------------------
 
@@ -931,7 +932,7 @@ def _samples(raw: object, kind: str, scene_id: str) -> tuple[Sample, ...]:
     if not isinstance(raw, list) or not raw:  # type: ignore[arg-type]
         raise BuildError(f"{scene_id} lists no samples")
     out: list[Sample] = []
-    for item in raw:  # type: ignore[union-attr]
+    for item in cast(list[object], raw):
         if kind == "frame":
             try:
                 out.append(int(str(item)))
@@ -973,11 +974,4 @@ def _read_table_file(path: Path, where: str) -> list[dict[str, object]]:
     try:
         return read_json_table(path)
     except (FieldError, ValueError, OSError) as exc:
-        raise BuildError(f"{where}: {exc}") from None
-
-
-def _wrap(fn: object, where: str) -> object:
-    try:
-        return fn()  # type: ignore[operator]
-    except (FieldError, PathError, ValueError, OSError, json.JSONDecodeError) as exc:
         raise BuildError(f"{where}: {exc}") from None

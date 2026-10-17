@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from typing import cast
+
 
 def pinhole_from_matrix(values: object) -> tuple[float, float, float, float]:
     """``(fx, fy, cx, cy)`` from a 3×3 intrinsic matrix, nested or flat."""
@@ -15,7 +17,7 @@ def pinhole_from_matrix(values: object) -> tuple[float, float, float, float]:
 
 def _flatten(values: object, out: list[float]) -> None:
     if isinstance(values, (list, tuple)):
-        for item in values:  # type: ignore[union-attr]
+        for item in cast("list[object] | tuple[object, ...]", values):
             _flatten(item, out)
         return
     if isinstance(values, bool) or not isinstance(values, (int, float)):

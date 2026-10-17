@@ -91,7 +91,7 @@ def read_ply(
         dtype = np.dtype(
             [(name, "<" + _ply_type(kind, path)) for name, kind in zip(names, types, strict=True)]
         )
-        rows = np.frombuffer(body, dtype=dtype, count=count)
+        rows = np.frombuffer(body, dtype=dtype, count=count)  # pyright: ignore[reportUnknownMemberType]
         columns = {name: rows[name].astype(np.float64) for name in names}
     else:
         raise LidarError(f"{path}: PLY format {fmt!r} is not supported")
@@ -151,7 +151,7 @@ def read_pcd(
                 for name, kind, size in zip(names, kinds, sizes, strict=True)
             ]
         )
-        rows = np.frombuffer(data, dtype=dtype, count=points, offset=offset)
+        rows = np.frombuffer(data, dtype=dtype, count=points, offset=offset)  # pyright: ignore[reportUnknownMemberType]
         columns = {name: rows[name].astype(np.float64) for name in names}
     else:
         raise LidarError(f"{path}: DATA {mode!r} is not supported")
@@ -173,7 +173,8 @@ def read_bin_f32(
     if len(data) % record != 0:
         raise LidarError(f"{path}: {len(data)} bytes is not a multiple of {record}")
     count = len(data) // record
-    grid = np.frombuffer(data, dtype="<f4").reshape(count, stride)
+    flat = np.frombuffer(data, dtype=np.float32)  # pyright: ignore[reportUnknownMemberType]
+    grid = flat.reshape(count, stride)  # pyright: ignore[reportUnknownMemberType]
     for name, index in offsets.items():
         if index < 0 or index >= stride:
             raise LidarError(f"{path}: offset {index} for {name!r} is outside the stride")
@@ -188,7 +189,7 @@ def _ascii_columns(text: str, count: int, names: list[str]) -> dict[str, npt.NDA
     needed = count * width
     if len(values) < needed:
         raise LidarError(f"expected {needed} values, found {len(values)}")
-    grid = np.asarray(values[:needed], dtype=np.float64).reshape(count, width)
+    grid = np.asarray(values[:needed], dtype=np.float64).reshape(count, width)  # pyright: ignore[reportUnknownMemberType]
     return {name: grid[:, index] for index, name in enumerate(names)}
 
 

@@ -18,7 +18,7 @@ from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from coperceive.adapters.build import CheckReport, SceneRef
 from coperceive.errors import CoperceiveError
@@ -286,10 +286,12 @@ def _stored_variants(directory: Path) -> tuple[tuple[int, int], ...]:
         payload = json.loads((directory / COMPLETE).read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return ()
-    raw = payload.get("label_field_counts", {}) if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        return ()
+    raw = cast(dict[str, object], payload).get("label_field_counts", {})
     if not isinstance(raw, dict):
         return ()
     rows: list[tuple[int, int]] = []
-    for key, value in raw.items():  # type: ignore[union-attr]
+    for key, value in cast(dict[str, object], raw).items():
         rows.append((int(str(key)), int(str(value))))
     return tuple(sorted(rows))

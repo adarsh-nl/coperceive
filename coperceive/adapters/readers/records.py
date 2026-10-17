@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 from pathlib import Path
+from typing import cast
 
 from coperceive.errors import CoperceiveError
 
@@ -25,13 +26,15 @@ def get_field(record: object, path: str) -> object:
         walked.append(part)
         where = ".".join(walked)
         if isinstance(current, dict):
-            if part not in current:
+            mapping = cast(dict[str, object], current)
+            if part not in mapping:
                 raise FieldError(f"field {where!r} is missing")
-            current = current[part]  # type: ignore[index]
+            current = mapping[part]
         elif isinstance(current, list):
-            if not part.isdigit() or int(part) >= len(current):  # type: ignore[arg-type]
+            items = cast(list[object], current)
+            if not part.isdigit() or int(part) >= len(items):
                 raise FieldError(f"field {where!r} is missing")
-            current = current[int(part)]  # type: ignore[index]
+            current = items[int(part)]
         else:
             raise FieldError(f"field {where!r}: cannot index into {type(current).__name__}")
     return current

@@ -36,7 +36,7 @@ class AdapterInfo:
     location: str
 
 
-_entries: dict[str, object] | None = None
+_entries: dict[str, metadata.EntryPoint] | None = None
 
 
 def clear_cache() -> None:
@@ -68,7 +68,7 @@ def resolve_adapter(spec: str) -> Adapter:
     if entry is None:
         known = ", ".join(info.name for info in list_adapters())
         raise RegistryError(f"no adapter named {spec!r}; known: {known or 'none'}")
-    loaded = entry.load()  # type: ignore[attr-defined]
+    loaded: object = entry.load()
     if isinstance(loaded, (str, Path)):
         return ManifestAdapter(load_manifest(Path(loaded)))
     if callable(loaded) and not _looks_like_adapter(loaded):
@@ -82,7 +82,7 @@ def _looks_like_adapter(value: object) -> bool:
     return all(hasattr(value, attr) for attr in ("name", "scenes", "load", "check"))
 
 
-def _entry_points() -> dict[str, object]:
+def _entry_points() -> dict[str, metadata.EntryPoint]:
     global _entries
     if _entries is None:
         _entries = {entry.name: entry for entry in metadata.entry_points(group=GROUP)}

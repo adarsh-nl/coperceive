@@ -14,6 +14,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from importlib import resources
 from pathlib import Path
+from typing import cast
 
 from coperceive.adapters.paths import PLACEHOLDERS, PathError, Template
 from coperceive.adapters.readers import registry as readers
@@ -597,7 +598,7 @@ def _agent_type(node: _Node, key: str) -> AgentType:
 def _agents(payload: object, extra: frozenset[str]) -> AgentsSpec:
     if isinstance(payload, list):
         fixed: list[AgentSpec] = []
-        for index, item in enumerate(payload):  # type: ignore[arg-type]
+        for index, item in enumerate(cast(list[object], payload)):
             node = _Node(f"agents[{index}]", item)
             root = node.str("root")
             try:
@@ -805,7 +806,7 @@ def _sensors(node: _Node | None, extra: frozenset[str]) -> SensorsSpec:
     if not isinstance(rules_raw, list):
         raise SpecError(f"{node.at('modality')}: expected a list of rules")
     rules: list[ModalityRule] = []
-    for index, item in enumerate(rules_raw):  # type: ignore[arg-type]
+    for index, item in enumerate(cast(list[object], rules_raw)):
         sub = _Node(f"{node.at('modality')}[{index}]", item)
         has_intrinsic = sub.bool("has_intrinsic", False) if sub.has("has_intrinsic") else None
         stem_prefix = sub.opt_str("stem_prefix")

@@ -17,6 +17,7 @@ from __future__ import annotations
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import cast
 
 from coperceive.errors import CoperceiveError
 from coperceive.se3 import SE3
@@ -110,7 +111,7 @@ def matrix_to_se3(values: object, *, shape: str, column_major: bool = False) -> 
 def _flatten(values: object) -> list[float]:
     if isinstance(values, (list, tuple)):
         out: list[float] = []
-        for item in values:  # type: ignore[union-attr]
+        for item in cast("list[object] | tuple[object, ...]", values):
             out.extend(_flatten(item))
         return out
     if isinstance(values, bool) or not isinstance(values, (int, float)):
