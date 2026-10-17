@@ -786,6 +786,7 @@ export default function Viewer({
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
+  const [webglError, setWebglError] = useState("");
   const [mapInfoFor, setMapInfoFor] = useState<{ sceneId: string; info: MapInfo | null } | null>(null);
   const [exportNote, setExportNote] = useState("");
   const [exportSource, setExportSource] = useState("view");
@@ -942,7 +943,17 @@ export default function Viewer({
     if (!canvas) {
       return;
     }
-    const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+    let renderer: THREE.WebGLRenderer;
+    try {
+      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+    } catch (error) {
+      // No WebGL (blocked, no GPU, remote desktop): say so in the viewport instead of
+      // throwing out of the effect, which would unmount the whole page. The state is
+      // set on the next tick so the effect itself stays free of state updates.
+      const reason = error instanceof Error ? error.message : String(error);
+      void Promise.resolve().then(() => setWebglError(reason));
+      return;
+    }
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(0x141414);
     const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 5000);
@@ -2670,6 +2681,16 @@ export default function Viewer({
             />
             <div className="label-host" />
             <div className="vignette" aria-hidden="true" />
+            {webglError ? (
+              <div className="webgl-missing" role="alert">
+                <strong>The 3D view needs WebGL, which this browser did not provide.</strong>
+                <p>
+                  Boxes, points and the map cannot be drawn. The scene list, the timeline and the tables still
+                  work. Turn on hardware acceleration or open the page in another browser.
+                </p>
+                <p className="mono">{webglError}</p>
+              </div>
+            ) : null}
             <div className="glass status-pill">
               <i className={tone} aria-hidden="true" />
               <span>

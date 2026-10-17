@@ -563,3 +563,12 @@ $HOME/coperceive/.venv/bin/python $HOME/coperceive/scripts/griffin/stage_viewer.
     --workers 2
 # then the coperceive serve line it prints (the packaged bundle is current; --static is optional)
 ```
+
+## Finishing step A (2026-10-17, branch `feat/eval-step-a-complete`)
+
+Adarsh's list: drone and cooperative runs, the Town10HD map, a ten-scene staging in one allocation with a Playwright check, a WebGL failure message, gates and a PR.
+
+- **Town10HD map.** Nothing was missing: `~/maps-src/carla-0.9.15/Town10HD.xodr` is the pinned file (SHA-256 `5d883b79…`), it ingests to 387 polylines / 15,209 vertices, and on Town10HD-012 (149 vehicle poses, staged without lidar on the login node in 7 s) `maps align` chose identity with a median residual of 0.0190 m and a median heading error of 0.29°; the next candidate, reflect_x, is at 0.50 m. The `no map for Town10HD` seen earlier came from the `627070/eval` root, which has no maps directory at all.
+- **WebGL.** `Viewer.tsx` catches the renderer's constructor error and shows a notice in the viewport (`.webgl-missing`, the reason in monospace); the page no longer unmounts. Test: `test_a_browser_without_webgl_gets_a_message_not_a_blank_page` launches Chromium with `--disable-webgl --disable-webgl2 --disable-3d-apis`.
+- **Ten-scene staging job.** `~/scripts/slurm/griffin-viewer-stage.sbatch` (CPU, `ps,main-cpu`, 4 CPUs, 16 GB, 1 h): runs `stage_viewer.py` for the published split with `--workers 4`, prints the wall time, then `scripts/griffin/check_staged_scenes.py` opens Town03-000 and Town10HD-012 in headless Chromium against a server in the job (points, map, a camera thumbnail, the split view; `report.json` and PNGs under `~/results/<job>/viewer-check/`), and keeps the aligned maps and the scenes (without the camera links) under `~/results/<job>/`. `bash -n` clean. **Not submitted: awaiting Adarsh's yes.**
+- **Drone and cooperative runs.** See the next entry once the toolkit facts are in.
