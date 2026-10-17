@@ -15,6 +15,7 @@ Chromium can start on this machine, the module is skipped with the reason.
 
 from __future__ import annotations
 
+import base64
 import os
 import socket
 import threading
@@ -56,10 +57,9 @@ try:
 except ImportError:  # pragma: no cover - the dev extra installs it
     pytest.skip("playwright is not installed", allow_module_level=True)
 
-# One tiny PNG, enough for the image route to answer 200.
-_PNG = bytes.fromhex(
-    "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000d4944415478"
-    "9c63f8cfc0f01f0004050201d59ca1a40000000049454e44ae426082"
+# One valid 1x1 PNG (the same bytes as tests/test_app.py), so the strip can decode it.
+_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
 )
 _CHROMIUM_ARGS = [
     "--use-gl=angle",
@@ -71,6 +71,7 @@ _CHROMIUM_ARGS = [
 SCENE_FULL = "Town03-000"  # lidar, an image file, a Town03 map, an evaluated run
 SCENE_BARE = "Town06-007"  # 30 samples, no lidar, image rows without files, no Town06 map
 BARE_SAMPLES = 30
+FILLER_SCENES = tuple(f"Town07-{index:03d}" for index in range(1, 10))  # list length only
 
 
 def _bundle_dir() -> Path | None:
@@ -130,12 +131,52 @@ def _bare_scene() -> Scene:
 
 
 def _full_scene() -> Scene:
+    """The cooperative fixture in Town03 with a second vehicle camera, so the strip's
+    one-camera-at-a-time loading is observable."""
     scene = cooperative_scene()
     agents = tuple(
         replace(agent, platform=(*agent.platform, ("map_name", "Carla/Maps/Town03")))
         for agent in scene.agents
     )
-    return replace(scene, scene_id=SCENE_FULL, agents=agents)
+    rear = Sensor(
+        "cam_rear",
+        "vehicle",
+        Modality.CAMERA,
+        SE3.identity(),
+        1280,
+        720,
+        1000.0,
+        1000.0,
+        640.0,
+        360.0,
+    )
+    return replace(
+        scene,
+        scene_id=SCENE_FULL,
+        agents=agents,
+        sensors=(*scene.sensors, rear),
+        images=(
+            *scene.images,
+            ImageRef("vehicle", "cam_rear", 100_000, "vehicle/cam_rear/0100000.png"),
+        ),
+    )
+
+
+def _filler_scene(scene_id: str) -> Scene:
+    poses = (
+        StampedPose(0, SE3.identity()),
+        StampedPose(100_000, SE3.identity().translation(1.0, 0.0, 0.0)),
+    )
+    return Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id=scene_id,
+        world_frame="ENU",
+        clock=Clock("us", "filler"),
+        agents=(Agent("vehicle", AgentType.VEHICLE, poses),),
+        sensors=(),
+        annotations=(),
+        objects=(),
+    )
 
 
 def _write_roots(base: Path) -> tuple[Path, Path, Path]:
@@ -148,6 +189,8 @@ def _write_roots(base: Path) -> tuple[Path, Path, Path]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(_PNG)
     write_scene(_bare_scene(), scenes / SCENE_BARE)
+    for scene_id in FILLER_SCENES:
+        write_scene(_filler_scene(scene_id), scenes / scene_id)
     xodr = base / "Town03.xodr"
     _straight(xodr)
     maps = base / "maps"
@@ -390,3 +433,63 @@ def test_each_pane_says_what_is_missing(session: _Session, shots: Path) -> None:
     assert session.status().endswith("no map for Town06.")
     assert not [url for url in session.requests if "/image?" in url], session.requests
     session.page.screenshot(path=str(shots / "empty-states.png"))
+
+
+def test_scene_list_shows_every_scene_without_scrolling(session: _Session) -> None:
+    """Eleven scenes: the last option sits inside the open list's box and is clickable.
+    (A 240 px list showed eight rows and hid the rest behind an overlay scrollbar.)"""
+    session.page.locator("#scene-id").click()
+    options = session.page.locator("[role=option]")
+    assert options.count() == 2 + len(FILLER_SCENES)
+    last = options.nth(options.count() - 1)
+    assert last.inner_text() == FILLER_SCENES[-1]
+    list_box = session.page.locator(".menu-list").bounding_box()
+    last_box = last.bounding_box()
+    assert list_box is not None and last_box is not None
+    assert last_box["y"] + last_box["height"] <= list_box["y"] + list_box["height"] + 1
+    last.click()
+    session.wait_status(FILLER_SCENES[-1])
+    assert session.page.locator("#scene-id").inner_text() == FILLER_SCENES[-1]
+
+
+def test_camera_strip_requests_only_the_focused_camera(session: _Session) -> None:
+    """At the sample with two camera files, one image request (the focused camera); the
+    second camera's file is fetched when it is selected."""
+    step = session.page.locator("button[aria-label='Step forward']")
+    step.click()
+    step.click()
+    session.wait_for(
+        lambda: "sample 3 / 7" in session.page.locator(".clock").inner_text(), "sample 3"
+    )
+
+    def at_sample() -> set[str]:
+        return {
+            url.split("sensor_id=")[-1]
+            for url in session.requests
+            if "/image?" in url and "time_us=100000" in url
+        }
+
+    session.wait_for(lambda: at_sample() == {"cam_front"}, "the focused camera's image")
+    session.wait_for(lambda: session.page.locator(".pip canvas").count() == 1, "the decoded image")
+    assert at_sample() == {"cam_front"}
+    session.page.locator("button.pip-name", has_text="cam_rear").click()
+    session.wait_for(
+        lambda: at_sample() == {"cam_front", "cam_rear"}, "the selected camera's image"
+    )
+
+
+def test_choosing_a_scene_while_playing_pauses_at_once(session: _Session) -> None:
+    """The old scene stops prefetching when another scene is chosen, so the chosen
+    scene's summary is not queued behind it."""
+    session.choose_scene(SCENE_BARE)
+    session.page.locator("button[aria-label=Play]").click()
+    session.page.wait_for_timeout(700)
+    assert session.page.locator("button[aria-label=Pause]").count() == 1
+    session.requests.clear()
+    session.page.locator("#scene-id").click()
+    session.page.locator("[role=option]", has_text=SCENE_FULL).click()
+    assert session.page.locator("button[aria-label=Play]").count() == 1
+    session.wait_status(SCENE_FULL, timeout_s=3.0)
+    old = [url for url in session.requests if f"/api/scenes/{SCENE_BARE}/" in url]
+    assert len(old) <= 10, old
+    assert session.slider("aria-valuenow") == 0

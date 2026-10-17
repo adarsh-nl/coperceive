@@ -2395,7 +2395,16 @@ export default function Viewer({
             ? [{ value: "", label: "No scenes" }]
             : scenes.map((id) => ({ value: id, label: id }))
         }
-        onChange={setSceneId}
+        onChange={(id) => {
+          if (id === sceneId) {
+            return;
+          }
+          // Pause now, not when the new summary arrives: a playing scene keeps
+          // prefetching frames, and over a slow link those queue ahead of the
+          // request for the chosen scene.
+          setPlaying(false);
+          setSceneId(id);
+        }}
       />
     </div>
   );

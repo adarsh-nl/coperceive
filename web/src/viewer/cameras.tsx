@@ -449,9 +449,14 @@ export default function CameraStrip({
     let cancelled = false;
     const sampleFrustums = frustums;
     const sampleBoxes = boxes;
+    // Only the focused camera is on screen, so only its file is requested (plus the
+    // next sample's, for the same camera). Nine cameras per sample used to queue
+    // behind each other and starve the frame and scene requests over a slow link.
+    const focusCamera =
+      sampleFrustums.find((camera) => cameraKey(camera.agent_id, camera.sensor_id) === focusKey) ?? sampleFrustums[0];
     void (async () => {
       const next: Record<string, ImageBitmap | null> = {};
-      if (!imagesAvailable) {
+      if (!imagesAvailable || !focusCamera) {
         for (const camera of sampleFrustums) {
           next[cameraKey(camera.agent_id, camera.sensor_id)] = null;
         }
@@ -461,13 +466,9 @@ export default function CameraStrip({
         }
         return;
       }
+      const key = cameraKey(focusCamera.agent_id, focusCamera.sensor_id);
       try {
-        await Promise.all(
-          sampleFrustums.map(async (camera) => {
-            const key = cameraKey(camera.agent_id, camera.sensor_id);
-            next[key] = await loadImage(sceneId, timeUs, camera.agent_id, camera.sensor_id, token);
-          }),
-        );
+        next[key] = await loadImage(sceneId, timeUs, focusCamera.agent_id, focusCamera.sensor_id, token);
       } catch (error) {
         if (!cancelled) {
           setNote(error instanceof Error ? error.message : "Could not load a camera image.");
@@ -482,14 +483,12 @@ export default function CameraStrip({
       if (nextTimeUs === null) {
         return;
       }
-      for (const camera of sampleFrustums) {
-        void loadImage(sceneId, nextTimeUs, camera.agent_id, camera.sensor_id, token).catch(() => undefined);
-      }
+      void loadImage(sceneId, nextTimeUs, focusCamera.agent_id, focusCamera.sensor_id, token).catch(() => undefined);
     })();
     return () => {
       cancelled = true;
     };
-  }, [imagesAvailable, sceneId, timeUs, nextTimeUs, token, frustums, boxes]);
+  }, [imagesAvailable, sceneId, timeUs, nextTimeUs, token, frustums, boxes, focusKey]);
 
   useEffect(() => {
     if (!showLidar) {
