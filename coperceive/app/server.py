@@ -7,7 +7,7 @@ import asyncio
 import base64
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -15,10 +15,20 @@ from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from coperceive.app.jobs import CSRF_HEADER, confine, list_jobs, open_db, run_job
+from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
+from coperceive.errors import CoperceiveError
+from coperceive.evaluation.predictions import predictions_root
+from coperceive.evalview import EvalViewError, frame_rows, runs_for_scene, series
 from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
 from coperceive.model import Scene
-from coperceive.plot import PlotError, PlotNotFound, PlotResult, render_bev, render_overlay
+from coperceive.plot import (
+    PlotError,
+    PlotNotFound,
+    PlotResult,
+    prediction_draws,
+    render_bev,
+    render_overlay,
+)
 from coperceive.rerun_export import RerunUnavailable, export_rerun
 from coperceive.sequence_export import (
     FORMATS,
@@ -76,6 +86,7 @@ class PlotRequest(BaseModel):
     box_style: str = "wire"
     hidden_classes: list[str] = Field(default_factory=list)
     agents: list[str] | None = None
+    run_id: str | None = None
 
 
 class OverlayRequest(BaseModel):
@@ -109,7 +120,19 @@ def create_app(
     token: str | None,
     root_path: str = "",
     maps: str | Path | None = None,
+    predictions: str | Path | None = None,
+    static: str | Path | None = None,
+    media_roots: Sequence[str | Path] = (),
 ) -> FastAPI:
+    """The app over ``root``.
+
+    ``predictions`` is the predictions root (``docs/spec/predictions.md`` §Layout);
+    without it, ``<root>/predictions`` is used when it holds a run, else the
+    prediction routes answer 404 ``no predictions root``. ``static`` replaces the
+    packaged page with another build directory. ``media_roots`` are directories a
+    scene's image links may resolve into (a staged scene links ``<side>/camera``
+    to the dataset copy); without them an image outside the scene is 400.
+    """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
     app = FastAPI(
@@ -124,6 +147,11 @@ def create_app(
     app.state.scene_cache = _SceneCache()
     app.state.maps = _maps_root(root_path_obj, maps)
     app.state.map_cache = {}
+    app.state.predictions = predictions_root(
+        root_path_obj, None if predictions is None else Path(predictions).resolve()
+    )
+    app.state.media_roots = tuple(Path(item).resolve() for item in media_roots)
+    static_dir = _STATIC if static is None else Path(static).resolve()
 
     @app.middleware("http")
     async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
@@ -172,7 +200,10 @@ def create_app(
 
     @app.get("/api/scenes/{scene_id}")
     def scene_summary(scene_id: str) -> dict[str, object]:
-        return summarize(_cached_scene(app, scene_id))
+        scene = _cached_scene(app, scene_id)
+        body = summarize(scene)
+        body["images_staged"] = _images_staged(app, scene, _scene_dir(app.state.root, scene_id))
+        return body
 
     @app.get("/api/scenes/{scene_id}/frame")
     def scene_frame(scene_id: str, time_us: int) -> dict[str, object]:
@@ -191,9 +222,31 @@ def create_app(
             raise HTTPException(status_code=404, detail="map not found")
         return Response(content=hdmap.lines_blob(), media_type="application/octet-stream")
 
+    @app.get("/api/scenes/{scene_id}/predictions")
+    def scene_predictions(scene_id: str) -> dict[str, object]:
+        _scene_dir(app.state.root, scene_id)
+        root = _predictions_root(app)
+        return _eval_view(lambda: runs_for_scene(root, scene_id))
+
+    @app.get("/api/scenes/{scene_id}/predictions/{run_id}/frame")
+    def scene_prediction_frame(
+        scene_id: str, run_id: str, time_us: int, compare: str | None = None
+    ) -> dict[str, object]:
+        _scene_dir(app.state.root, scene_id)
+        root = _predictions_root(app)
+        return _eval_view(lambda: frame_rows(root, run_id, scene_id, time_us, compare=compare))
+
+    @app.get("/api/scenes/{scene_id}/predictions/{run_id}/series")
+    def scene_prediction_series(
+        scene_id: str, run_id: str, compare: str | None = None
+    ) -> dict[str, object]:
+        _scene_dir(app.state.root, scene_id)
+        root = _predictions_root(app)
+        return _eval_view(lambda: series(root, run_id, scene_id, compare=compare))
+
     @app.get("/favicon.ico", include_in_schema=False)
     def favicon() -> FileResponse:
-        svg = _STATIC / "favicon.svg"
+        svg = static_dir / "favicon.svg"
         if not svg.is_file():
             raise HTTPException(status_code=404, detail="favicon not found")
         return FileResponse(svg, media_type="image/svg+xml")
@@ -206,10 +259,15 @@ def create_app(
             raise HTTPException(status_code=404, detail="image not found")
         scene_dir = _scene_dir(app.state.root, scene_id)
         try:
-            target = confine(scene_dir, relative)
+            target = confine_media(scene_dir, relative, app.state.media_roots)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
-        if not target.is_file():
+        try:
+            present = target.is_file()
+        except OSError:
+            # An over-long component or an unsearchable parent: the file is not there.
+            present = False
+        if not present:
             raise HTTPException(status_code=404, detail="image not found")
         media = _IMAGE_TYPES.get(target.suffix.lower(), "application/octet-stream")
         return FileResponse(target, media_type=media)
@@ -284,6 +342,12 @@ def create_app(
             when = _plot_time(scene, body.time_us)
             relative = _plot_relative(scene.scene_id, "bev", when, body.format)
             dest = confine(app.state.root, relative)
+            predictions = ()
+            run_id = body.run_id
+            if run_id is not None:
+                root = _predictions_root(app)
+                rows = _eval_view(lambda: frame_rows(root, run_id, scene_id, when, compare=None))
+                predictions = prediction_draws(_frame_row_list(rows))
             result = render_bev(
                 scene,
                 dest,
@@ -298,6 +362,7 @@ def create_app(
                 box_style=body.box_style,
                 hidden_classes=tuple(body.hidden_classes),
                 agents=None if body.agents is None else tuple(body.agents),
+                predictions=predictions,
             )
         except PlotNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
@@ -346,9 +411,32 @@ def create_app(
             raise HTTPException(status_code=404, detail="not a file")
         return FileResponse(target)
 
-    if (_STATIC / "index.html").is_file():
-        app.mount("/", StaticFiles(directory=_STATIC, html=True), name="static")
+    if (static_dir / "index.html").is_file():
+        app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
     return app
+
+
+def _images_staged(app: FastAPI, scene: Scene, scene_dir: Path) -> bool | None:
+    """Whether any recorded image file is present. ``None`` when the scene records no
+    images. The table is sensor-major, so the sample is the first, middle and last row
+    of each camera (at most 48 rows in all); a path the OS refuses to stat counts as
+    absent rather than failing the summary."""
+    rows = scene.images
+    if not rows:
+        return None
+    by_camera: dict[tuple[str, str], list[int]] = {}
+    for index, image in enumerate(rows):
+        by_camera.setdefault((image.agent_id, image.sensor_id), []).append(index)
+    picks: list[int] = []
+    for indices in by_camera.values():
+        picks.extend({indices[0], indices[len(indices) // 2], indices[-1]})
+    for index in sorted(set(picks))[:48]:
+        try:
+            if confine_media(scene_dir, rows[index].path, app.state.media_roots).is_file():
+                return True
+        except (ValueError, OSError):
+            continue
+    return False
 
 
 class _SceneCache:
@@ -371,12 +459,15 @@ class _SceneCache:
 def _scene_dir(root: Path, scene_id: str) -> Path:
     if scene_id == "" or "/" in scene_id or "\\" in scene_id or ".." in scene_id:
         raise HTTPException(status_code=400, detail="bad scene id")
-    path = (root / scene_id).resolve()
     try:
+        # A NUL byte makes resolve() raise ValueError; an over-long name makes
+        # the stat raise OSError. Both are a bad id, not a server error.
+        path = (root / scene_id).resolve()
         path.relative_to(root)
-    except ValueError as exc:
+        present = (path / "manifest.json").is_file()
+    except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail="bad scene id") from exc
-    if not (path / "manifest.json").is_file():
+    if not present:
         raise HTTPException(status_code=404, detail="scene not found")
     return path
 
@@ -385,6 +476,31 @@ def _cached_scene(app: FastAPI, scene_id: str) -> Scene:
     path = _scene_dir(app.state.root, scene_id)
     cache = app.state.scene_cache
     return cache.load(path)  # type: ignore[no-any-return]
+
+
+def _predictions_root(app: FastAPI) -> Path:
+    root = app.state.predictions
+    if not isinstance(root, Path):
+        raise HTTPException(status_code=404, detail="no predictions root")
+    return root
+
+
+def _eval_view(read: Callable[[], dict[str, object]]) -> dict[str, object]:
+    """Run one ``coperceive.evalview`` read; its errors become HTTP statuses."""
+    try:
+        return read()
+    except EvalViewError as exc:
+        raise HTTPException(status_code=exc.status, detail=str(exc)) from exc
+    except CoperceiveError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (ValueError, OSError) as exc:
+        # An id that passed the name rule but not the OS (NUL byte, over-long).
+        raise HTTPException(status_code=400, detail=f"bad id: {exc}") from exc
+
+
+def _frame_row_list(body: dict[str, object]) -> list[dict[str, object]]:
+    rows = body.get("rows")
+    return rows if isinstance(rows, list) else []
 
 
 def _maps_root(root: Path, maps: str | Path | None) -> Path | None:
@@ -499,6 +615,7 @@ def _plot_body(root: Path, result: PlotResult) -> dict[str, object]:
         "map_drawn": result.map_drawn,
         "points": result.points,
         "boxes": result.boxes,
+        "predictions": result.predictions,
     }
 
 

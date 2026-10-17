@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -17,21 +17,51 @@ import {
   type Appearance,
 } from "./appearance";
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
-import CameraStrip, { loadImage } from "./cameras";
+import CameraStrip, { CameraSplit, loadImage } from "./cameras";
 import { createFrameCache, type FrameCache } from "./cache";
 import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
 import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
-import type { PickRecord } from "./inspect";
+import { boxCenter, followPick, type PickRecord } from "./inspect";
 import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
 import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
 import { formatClock, indexAfter, neighborSpeed, stepIndex, type Speed } from "./playback";
+import {
+  buildPredictionObjects,
+  disposePredictionGroup,
+  STATUS_CHIPS,
+  STATUS_WORDS,
+  type LayerResult,
+  type StatusChip,
+} from "./predictionLayer";
+import PredictionsBlock, { LineSample } from "./predictions";
+import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
+import { SPLIT_MAX, SPLIT_MIN } from "./appearance";
+import {
+  alignSeries,
+  defaultOutput,
+  followEvalPick,
+  gtEvalDetail,
+  gtKey,
+  isPredictionFrame,
+  isPredictionSeries,
+  isRunList,
+  outputKey,
+  summarizeOutput,
+  type CooperativeView,
+  type EvalPick,
+  type PredictionFrame,
+  type PredictionRow,
+  type PredictionSeries,
+  type RunInfo,
+} from "./predictionTypes";
 import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
 import Timeline, { type Marker } from "./timeline";
 import {
   cameraKey,
   isPose,
   isSummary,
+  type FrameBox,
   type FrameDocument,
   type FrameFrustum,
   type Pose,
@@ -76,9 +106,86 @@ type Stage = {
   images: THREE.Group;
   imagePlanes: Map<string, THREE.Mesh>;
   highlight: THREE.Mesh;
+  /** Prediction wires per status (and per run in compare mode), ADR 0010. */
+  predictions: THREE.Group;
+  /** Invisible pick meshes for the drawn prediction rows. */
+  predictionPicks: THREE.Group;
+  /** Ground-truth wires a shown prediction matched, at 40% opacity. */
+  dimmedBoxes: THREE.LineSegments;
 };
 
 type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
+
+/** Which ground-truth wires to dim at which sample; stale for any other sample. */
+type Dimmed = { timeUs: number; keys: ReadonlySet<string> };
+
+const PREDICTION_FRAME_LIMIT = 16;
+
+type PredictionCache = {
+  clear: () => void;
+  load: (sceneId: string, runId: string, compareId: string, timeUs: number, token: string) => Promise<PredictionFrame>;
+};
+
+/** `/predictions/{run}/frame` bodies, the same small LRU and in-flight sharing as the frame cache. */
+function createPredictionCache(): PredictionCache {
+  const frames = new Map<string, PredictionFrame>();
+  const inflight = new Map<string, Promise<PredictionFrame>>();
+  return {
+    clear() {
+      frames.clear();
+    },
+    load(sceneId, runId, compareId, timeUs, token) {
+      const key = `${sceneId}|${runId}|${compareId}|${timeUs}`;
+      const cached = frames.get(key);
+      if (cached) {
+        frames.delete(key);
+        frames.set(key, cached);
+        return Promise.resolve(cached);
+      }
+      const pending = inflight.get(key);
+      if (pending) {
+        return pending;
+      }
+      const promise = (async () => {
+        const compare = compareId ? `&compare=${encodeURIComponent(compareId)}` : "";
+        const response = await fetch(
+          `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/predictions/${encodeURIComponent(runId)}/frame?time_us=${timeUs}${compare}`,
+          { headers: authHeaders(token) },
+        );
+        if (!response.ok) {
+          throw new Error(await errorDetail(response));
+        }
+        const body = (await response.json()) as unknown;
+        if (!isPredictionFrame(body)) {
+          throw new Error("The prediction frame was incomplete.");
+        }
+        frames.set(key, body);
+        while (frames.size > PREDICTION_FRAME_LIMIT) {
+          const oldest = frames.keys().next().value;
+          if (oldest === undefined) {
+            break;
+          }
+          frames.delete(oldest);
+        }
+        return body;
+      })().finally(() => {
+        inflight.delete(key);
+      });
+      inflight.set(key, promise);
+      return promise;
+    },
+  };
+}
+
+function toggleIn<T>(set: ReadonlySet<T>, item: T): Set<T> {
+  const next = new Set(set);
+  if (next.has(item)) {
+    next.delete(item);
+  } else {
+    next.add(item);
+  }
+  return next;
+}
 
 const COLORS: Record<string, number> = {
   vehicle: 0xf58a1f,
@@ -368,6 +475,84 @@ function boxColor(box: FrameDocument["boxes"][number], types: Map<string, string
   return colorFor(types.get(box.agent_id) ?? "");
 }
 
+/** The key a frame box shares with its `matches.parquet` ground-truth row: track id, else the world centre. */
+function frameGtKey(box: FrameBox): string {
+  return gtKey(box.agent_id, box.track_id, boxCenter(box));
+}
+
+function fillWire(positions: Float32Array, colors: Float32Array, cursor: number, box: FrameBox, color: THREE.Color): number {
+  positions.set(box.lines, cursor);
+  for (let index = 0; index < box.lines.length; index += 3) {
+    colors[cursor + index] = color.r;
+    colors[cursor + index + 1] = color.g;
+    colors[cursor + index + 2] = color.b;
+  }
+  return cursor + box.lines.length;
+}
+
+/** Ground-truth wires and solids. A box in `dimmed` (matched by a shown prediction) goes to the 40% layer. */
+function drawBoxes(
+  stage: Stage,
+  frame: FrameDocument,
+  types: Map<string, string>,
+  hidden: Record<string, boolean>,
+  appearance: Appearance,
+  dimmed: Dimmed | null,
+) {
+  const keys = dimmed && dimmed.timeUs === frame.time_us && dimmed.keys.size > 0 ? dimmed.keys : null;
+  const shown = frame.boxes.filter((box) => boxShown(box, hidden, appearance) && Array.isArray(box.lines));
+  const dims = shown.map((box) => keys !== null && keys.has(frameGtKey(box)));
+  let boxFloats = 0;
+  let dimFloats = 0;
+  shown.forEach((box, index) => {
+    if (dims[index]) {
+      dimFloats += box.lines.length;
+    } else {
+      boxFloats += box.lines.length;
+    }
+  });
+  const boxPositions = new Float32Array(boxFloats);
+  const boxColors = new Float32Array(boxFloats);
+  const dimPositions = new Float32Array(dimFloats);
+  const dimColors = new Float32Array(dimFloats);
+  let boxCursor = 0;
+  let dimCursor = 0;
+  shown.forEach((box, index) => {
+    const color = new THREE.Color(boxColor(box, types, appearance));
+    if (dims[index]) {
+      dimCursor = fillWire(dimPositions, dimColors, dimCursor, box, color);
+    } else {
+      boxCursor = fillWire(boxPositions, boxColors, boxCursor, box, color);
+    }
+  });
+  replaceColored(stage.boxes.geometry, boxPositions, boxColors);
+  replaceColored(stage.dimmedBoxes.geometry, dimPositions, dimColors);
+
+  clearGroup(stage.solids);
+  if (appearance.boxStyle === "solid") {
+    shown.forEach((box, index) => {
+      if (!box.pose || !isPose(box.pose) || !Array.isArray(box.size_lwh)) {
+        return;
+      }
+      const [length, width, height] = box.size_lwh;
+      if (typeof length !== "number" || typeof width !== "number" || typeof height !== "number") {
+        return;
+      }
+      const mesh = new THREE.Mesh(
+        new THREE.BoxGeometry(length, width, height),
+        new THREE.MeshBasicMaterial({
+          color: boxColor(box, types, appearance),
+          transparent: true,
+          opacity: dims[index] ? 0.28 * 0.4 : 0.28,
+          depthWrite: false,
+        }),
+      );
+      applyPose(mesh, box.pose);
+      stage.solids.add(mesh);
+    });
+  }
+}
+
 async function drawFrame(
   stage: Stage,
   frame: FrameDocument,
@@ -376,6 +561,7 @@ async function drawFrame(
   appearance: Appearance,
   token: string,
   cache: FrameCache,
+  dimmed: () => Dimmed | null,
   stale: () => boolean,
 ): Promise<Drawn | null> {
   let pointCount = 0;
@@ -414,55 +600,9 @@ async function drawFrame(
     cursor += sweep.xyz.length;
   }
   replaceColored(stage.points.geometry, positions, colors);
-
-  let boxFloats = 0;
-  for (const box of frame.boxes) {
-    if (!boxShown(box, hidden, appearance) || !Array.isArray(box.lines)) {
-      continue;
-    }
-    boxFloats += box.lines.length;
-  }
-  const boxPositions = new Float32Array(boxFloats);
-  const boxColors = new Float32Array(boxFloats);
-  let boxCursor = 0;
-  for (const box of frame.boxes) {
-    if (!boxShown(box, hidden, appearance) || !Array.isArray(box.lines)) {
-      continue;
-    }
-    boxPositions.set(box.lines, boxCursor);
-    const color = new THREE.Color(boxColor(box, types, appearance));
-    for (let index = 0; index < box.lines.length; index += 3) {
-      boxColors[boxCursor + index] = color.r;
-      boxColors[boxCursor + index + 1] = color.g;
-      boxColors[boxCursor + index + 2] = color.b;
-    }
-    boxCursor += box.lines.length;
-  }
-  replaceColored(stage.boxes.geometry, boxPositions, boxColors);
-
-  clearGroup(stage.solids);
-  if (appearance.boxStyle === "solid") {
-    for (const box of frame.boxes) {
-      if (!boxShown(box, hidden, appearance) || !box.pose || !isPose(box.pose) || !Array.isArray(box.size_lwh)) {
-        continue;
-      }
-      const [length, width, height] = box.size_lwh;
-      if (typeof length !== "number" || typeof width !== "number" || typeof height !== "number") {
-        continue;
-      }
-      const mesh = new THREE.Mesh(
-        new THREE.BoxGeometry(length, width, height),
-        new THREE.MeshBasicMaterial({
-          color: boxColor(box, types, appearance),
-          transparent: true,
-          opacity: 0.28,
-          depthWrite: false,
-        }),
-      );
-      applyPose(mesh, box.pose);
-      stage.solids.add(mesh);
-    }
-  }
+  // Read the dim set now, not at call time: the prediction frame for this sample may have arrived while
+  // the point buffers were loading.
+  drawBoxes(stage, frame, types, hidden, appearance, dimmed());
 
   clearGroup(stage.frustums);
   const pickable: { key: string; fovY: number; aspect: number; pose: Pose }[] = [];
@@ -646,6 +786,7 @@ export default function Viewer({
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
+  const [mapInfoFor, setMapInfoFor] = useState<{ sceneId: string; info: MapInfo | null } | null>(null);
   const [exportNote, setExportNote] = useState("");
   const [exportSource, setExportSource] = useState("view");
   const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | "png">("mp4");
@@ -678,6 +819,33 @@ export default function Viewer({
   const [cameraId, setCameraId] = useState("");
   const [pick, setPick] = useState<PickRecord | null>(null);
   const [cameraFrame, setCameraFrame] = useState<FrameDocument | null>(null);
+  const agentTypes = useMemo(
+    () => new Map((summary?.agents ?? []).map((agent) => [agent.agent_id, agent.agent_type])),
+    [summary],
+  );
+  // Predictions (ADR 0010). Fetched state is keyed by scene and run, so a change of either reads as "not loaded"
+  // without a reset; nothing here persists except `appearance.predictionScore`.
+  const [runList, setRunList] = useState<{ sceneId: string; runs: RunInfo[]; note: string } | null>(null);
+  const [runId, setRunId] = useState("");
+  const [compareId, setCompareId] = useState("");
+  const [outputChoice, setOutputChoice] = useState("");
+  const [hiddenSources, setHiddenSources] = useState<ReadonlySet<string>>(() => new Set());
+  const [hiddenStatuses, setHiddenStatuses] = useState<ReadonlySet<StatusChip>>(() => new Set());
+  const [cooperative, setCooperative] = useState<ReadonlySet<CooperativeView>>(() => new Set());
+  const [predFrame, setPredFrame] = useState<{ sceneId: string; runId: string; compareId: string; frame: PredictionFrame } | null>(null);
+  const [predNote, setPredNote] = useState<{ key: string; text: string } | null>(null);
+  const [predSeries, setPredSeries] = useState<{
+    sceneId: string;
+    runId: string;
+    compareId: string;
+    series: PredictionSeries | null;
+    note: string;
+  } | null>(null);
+  const [evalPick, setEvalPick] = useState<EvalPick | null>(null);
+  const predCacheRef = useRef<PredictionCache>(createPredictionCache());
+  const predGen = useRef(0);
+  const dimmedRef = useRef<Dimmed | null>(null);
+  const onEvalPickRef = useRef<(value: EvalPick | null) => void>(() => undefined);
   const framedScene = useRef("");
   const modeRef = useRef<Viewpoint>("orbit");
   const cameraKeyRef = useRef("");
@@ -694,6 +862,10 @@ export default function Viewer({
   onPickRef.current = setPick;
   const onFrustumRef = useRef<(key: string) => void>(() => undefined);
   const cameraKeysRef = useRef<string[]>([]);
+
+  useEffect(() => {
+    onEvalPickRef.current = setEvalPick;
+  }, []);
 
   useEffect(() => {
     lengthRef.current = summary?.times_us.length ?? 0;
@@ -713,6 +885,7 @@ export default function Viewer({
     }
     stage.points.visible = appearance.points;
     stage.boxes.visible = appearance.boxes;
+    stage.dimmedBoxes.visible = appearance.boxes;
     stage.frustums.visible = appearance.frustums;
     stage.mapLines.visible = appearance.map;
     stage.agents.visible = appearance.axes;
@@ -790,6 +963,15 @@ export default function Viewer({
     );
     enableBloom(points);
     enableBloom(boxes);
+    const dimmedBoxes = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.4, depthWrite: false }),
+    );
+    enableBloom(dimmedBoxes);
+    dimmedBoxes.renderOrder = 2;
+    const predictions = new THREE.Group();
+    predictions.renderOrder = 2;
+    const predictionPicks = new THREE.Group();
     const mapLines = new THREE.LineSegments(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ vertexColors: true }),
@@ -828,7 +1010,7 @@ export default function Viewer({
     const trailLines = new Map<string, THREE.Line>();
     const leaderLines = new Map<string, THREE.Line>();
     const labelNodes = new Map<string, CSS2DObject>();
-    scene.add(grid, mapLines, points, boxes, solids, frustums, images, picks, frustumPicks, highlight, agents, trails, leaders, labels);
+    scene.add(grid, mapLines, points, boxes, dimmedBoxes, predictions, solids, frustums, images, picks, predictionPicks, frustumPicks, highlight, agents, trails, leaders, labels);
     const clock = new THREE.Clock();
     let frameId = 0;
     let sizedWidth = 0;
@@ -933,9 +1115,16 @@ export default function Viewer({
         ),
         camera,
       );
-      const boxHit = raycaster.intersectObjects(picks.children, false)[0];
+      const boxHit = raycaster.intersectObjects([...picks.children, ...predictionPicks.children], false)[0];
       const frustumHit = raycaster.intersectObjects(frustumPicks.children, false)[0];
       if (boxHit && (!frustumHit || boxHit.distance <= frustumHit.distance)) {
+        const evalHit: unknown = boxHit.object.userData.evalPick;
+        if (evalHit && typeof evalHit === "object") {
+          onPickRef.current(null);
+          onEvalPickRef.current(evalHit as EvalPick);
+          return;
+        }
+        onEvalPickRef.current(null);
         onPickRef.current(pickFromObject(boxHit.object));
         return;
       }
@@ -945,6 +1134,7 @@ export default function Viewer({
         return;
       }
       onPickRef.current(null);
+      onEvalPickRef.current(null);
     };
     canvas.addEventListener("pointerdown", onPointerDown);
     canvas.addEventListener("pointerup", onPointerUp);
@@ -1026,6 +1216,9 @@ export default function Viewer({
       images,
       imagePlanes,
       highlight,
+      predictions,
+      predictionPicks,
+      dimmedBoxes,
     };
     setTheme(appearanceRef.current.theme);
     const pointsMaterial = points.material;
@@ -1062,6 +1255,9 @@ export default function Viewer({
       renderer.dispose();
       points.geometry.dispose();
       boxes.geometry.dispose();
+      dimmedBoxes.geometry.dispose();
+      disposePredictionGroup(predictions);
+      disposePredictionGroup(predictionPicks);
       mapLines.geometry.dispose();
       clearGroup(solids);
       stageRef.current = null;
@@ -1104,6 +1300,10 @@ export default function Viewer({
         setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loopRef.current));
       } else if (event.key === "l" || event.key === "L") {
         setLoop((current) => !current);
+      } else if (event.key === "c" || event.key === "C") {
+        setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }));
+      } else if (event.key === "Escape") {
+        setAppearance((current) => (current.splitCamera === null ? current : { ...current, splitCamera: null }));
       } else if (event.key === "[" || event.key === "]") {
         const direction = event.key === "]" ? 1 : -1;
         setSpeed((current) => neighborSpeed(current, direction));
@@ -1226,6 +1426,7 @@ export default function Viewer({
       return;
     }
     cacheRef.current.clear();
+    predCacheRef.current.clear();
     stageRef.current?.clearMotion();
     const controller = new AbortController();
     void (async () => {
@@ -1249,6 +1450,7 @@ export default function Viewer({
       setExportSource("view");
       setHidden({});
       setPick(null);
+      setEvalPick(null);
       setPlaying(false);
       setCameraFrame(null);
       const cameras = body.sensors.filter((sensor) => sensor.modality === "camera");
@@ -1287,7 +1489,7 @@ export default function Viewer({
         return;
       }
       latestRef.current = { frame: body, types };
-      const drawn = await drawFrame(stage, body, types, hidden, appearance, token, cacheRef.current, stale);
+      const drawn = await drawFrame(stage, body, types, hidden, appearance, token, cacheRef.current, () => dimmedRef.current, stale);
       if (!drawn || stale()) {
         return;
       }
@@ -1421,12 +1623,244 @@ export default function Viewer({
     };
   }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, token, viewpoint, cameraId, summary, frameIndex, poster]);
 
+  const sceneKey = summary?.scene_id ?? "";
+  // Keyed by scene like the run list, so a switch never shows the previous town's map note.
+  const mapInfo = mapInfoFor && mapInfoFor.sceneId === sceneKey ? mapInfoFor.info : null;
+  const runs = runList && runList.sceneId === sceneKey ? runList.runs : null;
+  const runNote = runList && runList.sceneId === sceneKey ? runList.note : "";
+  const run = runs?.find((item) => item.run_id === runId) ?? null;
+  const compareRun =
+    compareId && compareId !== runId ? (runs?.find((item) => item.run_id === compareId && item.evaluated) ?? null) : null;
+  const activeCompare = compareRun?.run_id ?? "";
+  const predKey = `${sceneKey}|${runId}|${activeCompare}`;
+  const livePred =
+    predFrame && predFrame.sceneId === sceneKey && predFrame.runId === runId && predFrame.compareId === activeCompare
+      ? predFrame.frame
+      : null;
+  const liveSeries =
+    predSeries && predSeries.sceneId === sceneKey && predSeries.runId === runId && predSeries.compareId === activeCompare
+      ? predSeries
+      : null;
+  const livePredNote = predNote && predNote.key === predKey ? predNote.text : "";
+  const scoreDefault = livePred?.score_threshold ?? run?.config?.score_threshold ?? null;
+  const minScore = appearance.predictionScore ?? scoreDefault ?? 0.3;
+  const sources = useMemo(() => {
+    const names = new Set<string>();
+    if (run) {
+      for (const name of Object.keys(run.run.sources)) {
+        names.add(name);
+      }
+      for (const output of run.outputs) {
+        names.add(output.source);
+      }
+    }
+    return [...names];
+  }, [run]);
+  const activeOutput = run
+    ? (run.outputs.find((output) => outputKey(output.agent_id, output.source) === outputChoice) ?? defaultOutput(run, agentTypes))
+    : null;
+  const evalSummary = run && activeOutput ? summarizeOutput(run, compareRun, activeOutput.agent_id, activeOutput.source) : null;
+  const evalSeries =
+    liveSeries?.series && activeOutput && summary
+      ? alignSeries(liveSeries.series, activeOutput.agent_id, activeOutput.source, summary.times_us)
+      : null;
+  const evalCompare =
+    liveSeries?.series?.compare && activeOutput && summary
+      ? alignSeries(liveSeries.series.compare, activeOutput.agent_id, activeOutput.source, summary.times_us)
+      : null;
+  const liveEvalPick = evalPick && livePred ? followEvalPick(evalPick, livePred) : null;
+  const missing = missingNotes(summary, mapInfo, runs !== null && runs.length === 0 ? runNote : "");
+  const pickedGt = cameraFrame && pick ? followPick(cameraFrame, pick) : null;
+  const gtDetail = pickedGt && livePred ? gtEvalDetail(livePred, gtKey(pickedGt.agentId, pickedGt.trackId, pickedGt.center)) : null;
+
+  useEffect(() => {
+    if (!summary) {
+      return;
+    }
+    const sceneId = summary.scene_id;
+    const controller = new AbortController();
+    void (async () => {
+      const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/predictions`, {
+        headers: authHeaders(token),
+        signal: controller.signal,
+      });
+      if (response.status === 404) {
+        const detail = await errorDetail(response);
+        setRunList({
+          sceneId,
+          runs: [],
+          note:
+            detail === "no predictions root"
+              ? "no predictions root; start the server with --predictions."
+              : "no prediction runs for this scene.",
+        });
+        return;
+      }
+      if (!response.ok) {
+        setRunList({ sceneId, runs: [], note: await errorDetail(response) });
+        return;
+      }
+      const body = (await response.json()) as unknown;
+      if (!isRunList(body)) {
+        setRunList({ sceneId, runs: [], note: "The prediction run list was incomplete." });
+        return;
+      }
+      setRunList({ sceneId, runs: body.runs, note: body.runs.length === 0 ? "no prediction runs for this scene." : "" });
+      setRunId((current) =>
+        body.runs.some((item) => item.run_id === current)
+          ? current
+          : ((body.runs.find((item) => item.evaluated) ?? body.runs[0])?.run_id ?? ""),
+      );
+      setCompareId((current) => (body.runs.some((item) => item.run_id === current && item.evaluated) ? current : ""));
+    })().catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setRunList({ sceneId, runs: [], note: error instanceof Error ? error.message : "Could not list prediction runs." });
+      }
+    });
+    return () => controller.abort();
+  }, [summary, token]);
+
+  useEffect(() => {
+    if (!summary || !run || !run.evaluated) {
+      return;
+    }
+    const sceneId = summary.scene_id;
+    const id = run.run_id;
+    const other = activeCompare;
+    const controller = new AbortController();
+    void (async () => {
+      const query = other ? `?compare=${encodeURIComponent(other)}` : "";
+      const response = await fetch(
+        `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/predictions/${encodeURIComponent(id)}/series${query}`,
+        { headers: authHeaders(token), signal: controller.signal },
+      );
+      if (!response.ok) {
+        setPredSeries({ sceneId, runId: id, compareId: other, series: null, note: await errorDetail(response) });
+        return;
+      }
+      const body = (await response.json()) as unknown;
+      if (!isPredictionSeries(body)) {
+        setPredSeries({ sceneId, runId: id, compareId: other, series: null, note: "The prediction series was incomplete." });
+        return;
+      }
+      setPredSeries({ sceneId, runId: id, compareId: other, series: body, note: "" });
+    })().catch((error: unknown) => {
+      if (!controller.signal.aborted) {
+        setPredSeries({
+          sceneId,
+          runId: id,
+          compareId: other,
+          series: null,
+          note: error instanceof Error ? error.message : "Could not read the prediction series.",
+        });
+      }
+    });
+    return () => controller.abort();
+  }, [summary, run, activeCompare, token]);
+
+  useEffect(() => {
+    if (!summary || !run || !run.evaluated) {
+      return;
+    }
+    const time = summary.times_us[frameIndex];
+    if (typeof time !== "number") {
+      return;
+    }
+    const sceneId = summary.scene_id;
+    const id = run.run_id;
+    const other = activeCompare;
+    const key = `${sceneId}|${id}|${other}`;
+    const gen = ++predGen.current;
+    const cache = predCacheRef.current;
+    void cache
+      .load(sceneId, id, other, time, token)
+      .then((frame) => {
+        if (predGen.current !== gen) {
+          return;
+        }
+        setPredFrame({ sceneId, runId: id, compareId: other, frame });
+        setPredNote({ key, text: "" });
+        for (const ahead of summary.times_us.slice(frameIndex + 1, frameIndex + 1 + PREFETCH_FRAMES)) {
+          void cache.load(sceneId, id, other, ahead, token).catch(() => undefined);
+        }
+      })
+      .catch((error: unknown) => {
+        if (predGen.current === gen) {
+          setPredNote({ key, text: error instanceof Error ? error.message : "Could not read the prediction frame." });
+        }
+      });
+  }, [summary, run, activeCompare, frameIndex, token]);
+
+  const layer = useMemo<{ a: LayerResult; b: LayerResult | null; timeUs: number } | null>(() => {
+    if (!livePred) {
+      return null;
+    }
+    const showSources = new Set(sources.filter((source) => !hiddenSources.has(source)));
+    const showStatuses = new Set(STATUS_CHIPS.filter((chip) => !hiddenStatuses.has(chip)));
+    const visible = (rows: readonly PredictionRow[]) => rows.filter((row) => !hidden[row.agent_id]);
+    const a = buildPredictionObjects(visible(livePred.rows), {
+      showSources,
+      showStatuses,
+      cooperative,
+      minScore,
+      runTag: "A",
+      runId: livePred.run_id,
+    });
+    const b = livePred.compare
+      ? buildPredictionObjects(visible(livePred.compare.rows), {
+          showSources,
+          showStatuses,
+          cooperative,
+          minScore,
+          runTag: "B",
+          runId: livePred.compare.run_id,
+        })
+      : null;
+    return { a, b, timeUs: livePred.time_us };
+  }, [livePred, sources, hiddenSources, hiddenStatuses, cooperative, minScore, hidden]);
+
+  useEffect(() => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return;
+    }
+    if (layer) {
+      stage.predictions.add(layer.a.group);
+      stage.predictionPicks.add(layer.a.picks);
+      if (layer.b) {
+        stage.predictions.add(layer.b.group);
+        stage.predictionPicks.add(layer.b.picks);
+      }
+      dimmedRef.current = { timeUs: layer.timeUs, keys: new Set([...layer.a.dimmedGtKeys, ...(layer.b?.dimmedGtKeys ?? [])]) };
+    } else {
+      dimmedRef.current = null;
+    }
+    const latest = latestRef.current;
+    if (latest) {
+      drawBoxes(stage, latest.frame, latest.types, hidden, appearanceRef.current, dimmedRef.current);
+    }
+    stage.requestRender();
+    return () => {
+      disposePredictionGroup(stage.predictions);
+      disposePredictionGroup(stage.predictionPicks);
+    };
+  }, [layer, hidden]);
+
   useEffect(() => {
     const stage = stageRef.current;
     if (!stage) {
       return;
     }
     const mesh = stage.highlight;
+    if (liveEvalPick) {
+      const row = liveEvalPick.row;
+      mesh.position.set(row.center[0] ?? 0, row.center[1] ?? 0, row.center[2] ?? 0);
+      mesh.quaternion.set(row.pose.qx, row.pose.qy, row.pose.qz, row.pose.qw);
+      mesh.scale.set(row.size_lwh[0] ?? 1, row.size_lwh[1] ?? 1, row.size_lwh[2] ?? 1).multiplyScalar(1.04);
+      mesh.visible = true;
+      stage.requestRender();
+      return;
+    }
     const match = pick
       ? stage.picks.children.find((child) => {
           const stored = pickFromObject(child);
@@ -1449,7 +1883,7 @@ export default function Viewer({
     mesh.scale.copy(match.scale).multiplyScalar(1.04);
     mesh.visible = true;
     stage.requestRender();
-  }, [pick, cameraFrame]);
+  }, [pick, cameraFrame, liveEvalPick]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
@@ -1458,14 +1892,28 @@ export default function Viewer({
     const stage = stageRef.current;
     const controller = new AbortController();
     void (async () => {
-      const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/map/lines`, {
+      const base = `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}`;
+      const which = await fetch(`${base}/map`, { headers: authHeaders(token), signal: controller.signal });
+      let info: MapInfo | null = null;
+      if (which.ok) {
+        const body = (await which.json()) as unknown;
+        info = isMapInfo(body) ? body : null;
+        setMapInfoFor({ sceneId: summary.scene_id, info });
+      }
+      if (info && !info.available) {
+        replaceMap(stage, new ArrayBuffer(0));
+        stage.requestRender();
+        setMapNote(mapNoteFor(info));
+        return;
+      }
+      const response = await fetch(`${base}/map/lines`, {
         headers: authHeaders(token),
         signal: controller.signal,
       });
       if (response.status === 404) {
         replaceMap(stage, new ArrayBuffer(0));
         stage.requestRender();
-        setMapNote("no map.");
+        setMapNote(mapNoteFor(info));
         return;
       }
       if (!response.ok) {
@@ -1712,6 +2160,7 @@ export default function Viewer({
         hidden_classes: appearance.hiddenClasses,
         agents: shown,
         ...(kind === "overlay" ? { agent_id: agentId, sensor_id: sensorId } : {}),
+        ...(kind === "bev" && run?.evaluated ? { run_id: run.run_id } : {}),
       });
       const path = typeof saved.path === "string" ? saved.path : "";
       const mapNote = saved.map_drawn === true ? ", map drawn" : "";
@@ -1894,10 +2343,6 @@ export default function Viewer({
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
   const timeUs = summary?.times_us[Math.min(frameIndex, last)];
   const cameras = (summary?.sensors ?? []).filter((sensor) => sensor.modality === "camera");
-  const agentTypes = useMemo(
-    () => new Map((summary?.agents ?? []).map((agent) => [agent.agent_id, agent.agent_type])),
-    [summary],
-  );
   const viewpointLabel = VIEWPOINTS.find((item) => item.id === viewpoint)?.label ?? "Orbit";
   const categories = useMemo(() => {
     const names = new Set<string>();
@@ -1911,8 +2356,6 @@ export default function Viewer({
 
   const tone =
     /could not|incomplete|refused|failed/i.test(status) ? "bad" : /holding|no frustum|no map/i.test(status) ? "wait" : "live";
-  const cameraAgent = cameraId.slice(0, cameraId.indexOf("/"));
-  const cameraPose = cameraFrame?.agents.find((agent) => agent.agent_id === cameraAgent)?.pose;
   function agentSpeed(agentId: string): number | null {
     const live = liveSpeed[agentId];
     if (typeof live === "number") {
@@ -1922,7 +2365,39 @@ export default function Viewer({
     const sample = frameIndex > 0 ? row?.[frameIndex] : row?.[1];
     return typeof sample === "number" ? sample : null;
   }
-  const cameraSpeed = agentSpeed(cameraAgent);
+  const splitCamera =
+    cameraFrame?.frustums.find((item) => cameraKey(item.agent_id, item.sensor_id) === appearance.splitCamera) ?? null;
+  const splitPose = splitCamera ? cameraFrame?.agents.find((agent) => agent.agent_id === splitCamera.agent_id)?.pose : null;
+  const splitHud = splitCamera
+    ? {
+        speed: formatSpeed(agentSpeed(splitCamera.agent_id)),
+        heading: isPose(splitPose) ? headingDeg(splitPose) : 0,
+        stamp: typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s",
+      }
+    : null;
+  function toggleSplit(key: string) {
+    cameraKeyRef.current = key;
+    setCameraId(key);
+    setAppearance((current) => ({ ...current, splitCamera: current.splitCamera === key ? null : key }));
+  }
+  function onDividerDown(event: ReactPointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) {
+      return;
+    }
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+  function onDividerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    const row = event.currentTarget.parentElement;
+    if (!row || !event.currentTarget.hasPointerCapture(event.pointerId)) {
+      return;
+    }
+    const box = row.getBoundingClientRect();
+    if (box.width <= 0) {
+      return;
+    }
+    const next = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, (event.clientX - box.left) / box.width));
+    setAppearance((current) => ({ ...current, splitRatio: next }));
+  }
 
   const cameraChoices = useMemo(() => {
     const seen = new Set<string>();
@@ -1956,7 +2431,16 @@ export default function Viewer({
             ? [{ value: "", label: "No scenes" }]
             : scenes.map((id) => ({ value: id, label: id }))
         }
-        onChange={setSceneId}
+        onChange={(id) => {
+          if (id === sceneId) {
+            return;
+          }
+          // Pause now, not when the new summary arrives: a playing scene keeps
+          // prefetching frames, and over a slow link those queue ahead of the
+          // request for the chosen scene.
+          setPlaying(false);
+          setSceneId(id);
+        }}
       />
     </div>
   );
@@ -2004,6 +2488,8 @@ export default function Viewer({
                   onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
                 />
               ))}
+              {lidarNote(summary) ? <p className="muted empty-state">Points: {lidarNote(summary)}</p> : null}
+              {mapInfo && !mapInfo.available ? <p className="muted empty-state">Map: {mapNoteFor(mapInfo)}</p> : null}
               <EyeToggle
                 on={appearance.frustumImages}
                 label="Frustum images"
@@ -2108,6 +2594,33 @@ export default function Viewer({
               ))}
             </div>
           </details>
+          <PredictionsBlock
+            runs={summary ? runs : []}
+            note={runs && runs.length === 0 ? runNote : livePredNote || liveSeries?.note || ""}
+            runId={runId}
+            onRun={(id) => {
+              setRunId(id);
+              setCompareId((current) => (current === id ? "" : current));
+              setOutputChoice("");
+              setEvalPick(null);
+            }}
+            compareId={activeCompare}
+            onCompare={setCompareId}
+            outputKey={activeOutput ? outputKey(activeOutput.agent_id, activeOutput.source) : ""}
+            onOutput={setOutputChoice}
+            sources={sources}
+            hiddenSources={hiddenSources}
+            onToggleSource={(source) => setHiddenSources((current) => toggleIn(current, source))}
+            hiddenStatuses={hiddenStatuses}
+            onToggleStatus={(chip) => setHiddenStatuses((current) => toggleIn(current, chip))}
+            cooperative={cooperative}
+            onToggleCooperative={(view) => setCooperative((current) => toggleIn(current, view))}
+            counts={layer ? layer.a.counts : null}
+            cooperativeCounts={evalSummary ? evalSummary.a.cooperative : null}
+            score={minScore}
+            scoreDefault={scoreDefault}
+            onScore={(value) => setAppearance((current) => ({ ...current, predictionScore: value }))}
+          />
           <details>
             <summary>Display</summary>
             <div className="stack">
@@ -2146,6 +2659,7 @@ export default function Viewer({
           </details>
         </aside>
         <div className="stage">
+          <div className={splitCamera ? "stage-row split" : "stage-row"} style={{ ["--split" as string]: appearance.splitRatio }}>
           <div className="viewport">
             <canvas
               ref={canvasRef}
@@ -2162,6 +2676,13 @@ export default function Viewer({
                 {summary ? summary.scene_id : "No scene"} · {viewpointLabel}
               </span>
             </div>
+            {missing.length > 0 ? (
+              <ul className="glass empty-pill" aria-label="Missing data">
+                {missing.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : null}
             <div
               className="glass view-pill"
               role="group"
@@ -2191,37 +2712,65 @@ export default function Viewer({
               <span>
                 <i style={{ background: "#c6f3dc" }} /> Lane
               </span>
+              {run?.evaluated
+                ? STATUS_CHIPS.map((chip) => (
+                    <span key={chip}>
+                      <LineSample chip={chip} /> {STATUS_WORDS[chip]}
+                    </span>
+                  ))
+                : null}
             </div>
-            {cameraFrame && summary ? (
-              <CameraStrip
+          </div>
+          {splitCamera && cameraFrame && summary ? (
+            <>
+              <div
+                className="split-divider"
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize the camera view"
+                aria-valuenow={Math.round(appearance.splitRatio * 100)}
+                onPointerDown={onDividerDown}
+                onPointerMove={onDividerMove}
+              />
+              <CameraSplit
                 token={token}
                 sceneId={summary.scene_id}
                 timeUs={cameraFrame.time_us}
                 nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
-                frustums={cameraFrame.frustums}
+                camera={splitCamera}
                 boxes={cameraFrame.boxes}
                 pointSensors={cameraFrame.point_sensors}
                 types={agentTypes}
                 hidden={hidden}
                 cacheRef={cacheRef}
-                focusKey={cameraId}
-                imageOn={(key) => showCameraImage(appearance, key)}
-                onToggleImage={(key) =>
-                  setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
-                }
-                onSelect={(key) => {
-                  cameraKeyRef.current = key;
-                  setCameraId(key);
-                  chooseViewpoint("camera");
-                }}
-                hud={{
-                  speed: formatSpeed(cameraSpeed),
-                  heading: isPose(cameraPose) ? headingDeg(cameraPose) : 0,
-                  stamp: typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s",
-                }}
+                hud={splitHud}
+                onClose={() => setAppearance((current) => ({ ...current, splitCamera: null }))}
+                imagesAvailable={imageNote(summary) === null}
+                missingText={imageNote(summary) ? `No image: ${imageNote(summary)}` : "No image file for this sample."}
               />
-            ) : null}
+            </>
+          ) : null}
           </div>
+          {cameraFrame && summary ? (
+            <CameraStrip
+              token={token}
+              sceneId={summary.scene_id}
+              timeUs={cameraFrame.time_us}
+              nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
+              frustums={cameraFrame.frustums}
+              types={agentTypes}
+              open={appearance.stripOpen}
+              onToggleOpen={() => setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }))}
+              splitKey={appearance.splitCamera}
+              onSplit={toggleSplit}
+              imagesAvailable={imageNote(summary) === null}
+              missingText={imageNote(summary) ? `No image: ${imageNote(summary)}` : "No image file for this sample."}
+              imageOn={(key) => showCameraImage(appearance, key)}
+              onToggleImage={(key) =>
+                setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
+              }
+            />
+          ) : null}
           <p className="status-line">{status}</p>
         </div>
         <aside className="panel panel-right" aria-label="Agent telemetry">
@@ -2270,8 +2819,16 @@ export default function Viewer({
               </article>
             );
           })}
-          <SceneCard summary={summary} frame={cameraFrame} />
-          <Inspector pick={pick} frame={cameraFrame} summary={summary} token={token} cache={cacheRef.current} />
+          <SceneCard summary={summary} frame={cameraFrame} evalSummary={evalSummary} />
+          <Inspector
+            pick={pick}
+            frame={cameraFrame}
+            summary={summary}
+            token={token}
+            cache={cacheRef.current}
+            evalPick={liveEvalPick}
+            gtDetail={gtDetail}
+          />
           <Radar frame={cameraFrame} pick={pick} types={agentTypes} />
         </aside>
       </div>
@@ -2288,6 +2845,8 @@ export default function Viewer({
         speeds={series.speeds}
         boxes={series.boxes}
         markers={series.markers}
+        evalSeries={evalSeries}
+        evalCompare={evalCompare}
         onIndex={(index) => setFrameIndex(index)}
         onStep={(delta) => {
           setPlaying(false);
@@ -2297,7 +2856,11 @@ export default function Viewer({
         onSpeed={setSpeed}
         onLoop={() => setLoop((current) => !current)}
       />
-      <ExportDialog open={exportOpen} onClose={() => setExportOpen(false)}>
+      <ExportDialog
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        detail={run?.evaluated ? `The bird's-eye figure also draws prediction run ${run.run_id}.` : undefined}
+      >
         <div className="export-bar">
           <Menu
             id="export-source"

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent, type RefObject } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import type { FrameCache } from "./cache";
 import { IconImage } from "./controls";
@@ -140,6 +140,7 @@ function clearBlobs() {
   bitmaps.clear();
   missing.clear();
   inflight.clear();
+  bytesCache.clear();
 }
 
 export async function loadImage(
@@ -173,6 +174,47 @@ export async function loadImage(
   }
 }
 
+const BYTES_LIMIT = 12;
+const bytesCache = new Map<string, { buffer: ArrayBuffer; type: string }>();
+const bytesInflight = new Map<string, Promise<{ buffer: ArrayBuffer; type: string } | null>>();
+
+/** One download per file, shared by the thumbnail and the split pane (decoded per width). */
+async function fetchBytes(url: string, token: string): Promise<{ buffer: ArrayBuffer; type: string } | null> {
+  const cached = bytesCache.get(url);
+  if (cached) {
+    bytesCache.delete(url);
+    bytesCache.set(url, cached);
+    return cached;
+  }
+  const pending = bytesInflight.get(url);
+  if (pending) {
+    return pending;
+  }
+  const request = (async () => {
+    const response = await fetch(url, { headers: authHeaders(token) });
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      throw new Error(await errorDetail(response));
+    }
+    const entry = { buffer: await response.arrayBuffer(), type: response.headers.get("content-type") ?? "image/png" };
+    bytesCache.set(url, entry);
+    while (bytesCache.size > BYTES_LIMIT) {
+      const oldest = bytesCache.keys().next().value;
+      if (oldest === undefined) {
+        break;
+      }
+      bytesCache.delete(oldest);
+    }
+    return entry;
+  })().finally(() => {
+    bytesInflight.delete(url);
+  });
+  bytesInflight.set(url, request);
+  return request;
+}
+
 async function fetchImage(
   key: string,
   sceneId: string,
@@ -182,20 +224,14 @@ async function fetchImage(
   token: string,
   width: number,
 ): Promise<ImageBitmap | null> {
-  const response = await fetch(
-    `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}`,
-    { headers: authHeaders(token) },
-  );
-  if (response.status === 404) {
+  const url = `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}`;
+  const entry = await fetchBytes(url, token);
+  if (entry === null) {
     missing.add(key);
     return null;
   }
-  if (!response.ok) {
-    throw new Error(await errorDetail(response));
-  }
-  const type = response.headers.get("content-type") ?? "image/png";
-  const buffer = await response.arrayBuffer();
-  return rememberBitmap(key, await decodeBitmap(buffer, type, width));
+  // The decoder takes ownership of the buffer it is handed; keep the cached copy.
+  return rememberBitmap(key, await decodeBitmap(entry.buffer.slice(0), entry.type, width));
 }
 
 function pinhole(camera: FrameFrustum): Pinhole | null {
@@ -330,9 +366,12 @@ function CameraPanel({
   hidden,
   showBoxes,
   showLidar,
+  missingText,
 }: {
   camera: FrameFrustum;
   bitmap: ImageBitmap | null | undefined;
+  /** Shown when there is no image for this sample: per-sample or per-scene wording. */
+  missingText: string;
   boxes: FrameBox[];
   clouds: Cloud[];
   types: Map<string, string>;
@@ -369,108 +408,314 @@ function CameraPanel({
           <canvas ref={canvasRef} role="img" aria-label={`${label} at this sample`} />
         </div>
       ) : (
-        <p className="camera-missing">{bitmap === null ? "No image file for this sample." : "Loading image…"}</p>
+        <p className="camera-missing">{bitmap === null ? missingText : "Loading image…"}</p>
       )}
     </figure>
   );
 }
 
+const THUMB_WIDTH = 160;
+const SPLIT_WIDTH = 960;
+
+export type CameraHud = { speed: string; heading: number; stamp: string };
+
+function agentOrder(frustums: readonly FrameFrustum[]): { agentId: string; cameras: FrameFrustum[] }[] {
+  const groups: { agentId: string; cameras: FrameFrustum[] }[] = [];
+  for (const camera of frustums) {
+    const group = groups.find((item) => item.agentId === camera.agent_id);
+    if (group) {
+      group.cameras.push(camera);
+    } else {
+      groups.push({ agentId: camera.agent_id, cameras: [camera] });
+    }
+  }
+  return groups;
+}
+
+/** One camera's low-resolution picture; it asks for the file only while it is on screen. */
+function Thumb({
+  camera,
+  sceneId,
+  timeUs,
+  nextTimeUs,
+  token,
+  imagesAvailable,
+  open,
+  onOpen,
+  imageOn,
+  onToggleImage,
+}: {
+  camera: FrameFrustum;
+  sceneId: string;
+  timeUs: number;
+  nextTimeUs: number | null;
+  token: string;
+  imagesAvailable: boolean;
+  open: boolean;
+  onOpen: () => void;
+  imageOn: boolean;
+  onToggleImage: () => void;
+}) {
+  const hostRef = useRef<HTMLButtonElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  // Without IntersectionObserver every thumbnail counts as visible.
+  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
+  const [bitmap, setBitmap] = useState<ImageBitmap | null | undefined>(undefined);
+  const key = cameraKey(camera.agent_id, camera.sensor_id);
+  const picture = imagesAvailable ? bitmap : null;
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host || typeof IntersectionObserver === "undefined") {
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        setVisible(entry.isIntersecting);
+      }
+    });
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!visible || !imagesAvailable) {
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const next = await loadImage(sceneId, timeUs, camera.agent_id, camera.sensor_id, token, THUMB_WIDTH);
+        if (!cancelled) {
+          setBitmap(next);
+        }
+      } catch {
+        if (!cancelled) {
+          setBitmap(null);
+        }
+      }
+      if (nextTimeUs !== null) {
+        void loadImage(sceneId, nextTimeUs, camera.agent_id, camera.sensor_id, token, THUMB_WIDTH).catch(() => undefined);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, imagesAvailable, sceneId, timeUs, nextTimeUs, token, camera.agent_id, camera.sensor_id]);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !picture) {
+      return;
+    }
+    const ctx = canvas.getContext("2d");
+    if (!ctx) {
+      return;
+    }
+    canvas.width = picture.width;
+    canvas.height = picture.height;
+    ctx.drawImage(picture, 0, 0);
+  }, [picture]);
+
+  return (
+    <div className="cam-thumb-wrap">
+      <button
+        ref={hostRef}
+        type="button"
+        className="cam-thumb"
+        aria-pressed={open}
+        aria-label={`${open ? "Close" : "Open"} ${camera.agent_id} ${camera.sensor_id}`}
+        title={`${camera.agent_id} ${camera.sensor_id}`}
+        data-camera={key}
+        onClick={onOpen}
+      >
+        {picture ? <canvas ref={canvasRef} /> : <span className="cam-thumb-empty">{picture === null ? "no image" : "…"}</span>}
+        <span className="cam-thumb-name">{camera.sensor_id}</span>
+      </button>
+      <button
+        type="button"
+        className="cam-thumb-image"
+        aria-pressed={imageOn}
+        aria-label={`${imageOn ? "Hide" : "Show"} ${camera.agent_id} ${camera.sensor_id} on its frustum`}
+        onClick={onToggleImage}
+      >
+        <IconImage />
+      </button>
+    </div>
+  );
+}
+
+/** The strip docked under the 3D view: one thumbnail per camera, grouped by agent. */
 export default function CameraStrip({
   token,
   sceneId,
   timeUs,
   nextTimeUs,
   frustums,
-  boxes,
-  pointSensors,
   types,
-  hidden,
-  cacheRef,
-  focusKey,
+  open,
+  onToggleOpen,
+  splitKey,
+  onSplit,
   imageOn,
   onToggleImage,
-  onSelect,
-  hud,
+  imagesAvailable = true,
+  missingText = "No image file for this sample.",
 }: {
   token: string;
   sceneId: string;
   timeUs: number;
   nextTimeUs: number | null;
   frustums: FrameFrustum[];
-  boxes: FrameBox[];
-  pointSensors: FrameSensor[];
   types: Map<string, string>;
-  hidden: Record<string, boolean>;
-  cacheRef: RefObject<FrameCache>;
-  focusKey: string;
+  /** Collapsed strips render no thumbnails and request nothing. */
+  open: boolean;
+  onToggleOpen: () => void;
+  /** The camera shown in the split view, or null. */
+  splitKey: string | null;
+  onSplit: (key: string) => void;
   imageOn: (key: string) => boolean;
   onToggleImage: (key: string) => void;
-  onSelect: (key: string) => void;
-  hud: { speed: string; heading: number; stamp: string } | null;
+  /** False when the scene summary says no image file is staged: nothing is requested. */
+  imagesAvailable?: boolean;
+  missingText?: string;
 }) {
-  const [showBoxes, setShowBoxes] = useState(true);
-  const [showLidar, setShowLidar] = useState(true);
-  const [shown, setShown] = useState<{
-    timeUs: number;
-    urls: Record<string, ImageBitmap | null>;
-    frustums: FrameFrustum[];
-    boxes: FrameBox[];
-  } | null>(null);
-  const [clouds, setClouds] = useState<Cloud[]>([]);
-  const [cloudTime, setCloudTime] = useState<number | null>(null);
-  const [note, setNote] = useState("");
-  const [place, setPlace] = useState<{ left: number; top: number } | null>(null);
-  const [width, setWidth] = useState(420);
-  const dragRef = useRef<{ dx: number; dy: number; hostW: number; hostH: number; width: number; height: number } | null>(null);
-  const resizeRef = useRef<{ x: number; width: number } | null>(null);
   const sceneRef = useRef(sceneId);
-
   useEffect(() => {
     if (sceneRef.current === sceneId) {
       return;
     }
     sceneRef.current = sceneId;
     clearBlobs();
-    setShown(null);
-    setClouds([]);
-    setCloudTime(null);
   }, [sceneId]);
+
+  if (frustums.length === 0) {
+    return null;
+  }
+  const groups = agentOrder(frustums);
+  return (
+    <section className="cam-strip" data-open={open ? "true" : "false"} aria-label="Cameras">
+      <button
+        type="button"
+        className="cam-strip-toggle"
+        aria-expanded={open}
+        aria-keyshortcuts="C"
+        onClick={onToggleOpen}
+        title="Cameras (C)"
+      >
+        <span>Cameras</span>
+        <span className="num">{frustums.length}</span>
+        <kbd>C</kbd>
+      </button>
+      {open ? (
+        <div className="cam-groups">
+          {groups.map((group) => (
+            <div
+              key={group.agentId}
+              className="cam-group"
+              style={{ ["--agent" as string]: colorFor(types.get(group.agentId) ?? "") }}
+            >
+              <span className="cam-group-name">{group.agentId}</span>
+              <div className="cam-thumbs">
+                {group.cameras.map((camera) => {
+                  const key = cameraKey(camera.agent_id, camera.sensor_id);
+                  return (
+                    <Thumb
+                      key={key}
+                      camera={camera}
+                      sceneId={sceneId}
+                      timeUs={timeUs}
+                      nextTimeUs={nextTimeUs}
+                      token={token}
+                      imagesAvailable={imagesAvailable}
+                      open={splitKey === key}
+                      onOpen={() => onSplit(key)}
+                      imageOn={imageOn(key)}
+                      onToggleImage={() => onToggleImage(key)}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {!imagesAvailable ? <p className="cam-strip-note muted">{missingText}</p> : null}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+/** The right half of the split view: the chosen camera with boxes and lidar drawn on it. */
+export function CameraSplit({
+  token,
+  sceneId,
+  timeUs,
+  nextTimeUs,
+  camera,
+  boxes,
+  pointSensors,
+  types,
+  hidden,
+  cacheRef,
+  hud,
+  onClose,
+  imagesAvailable = true,
+  missingText = "No image file for this sample.",
+}: {
+  token: string;
+  sceneId: string;
+  timeUs: number;
+  nextTimeUs: number | null;
+  camera: FrameFrustum;
+  boxes: FrameBox[];
+  pointSensors: FrameSensor[];
+  types: Map<string, string>;
+  hidden: Record<string, boolean>;
+  cacheRef: RefObject<FrameCache>;
+  hud: CameraHud | null;
+  onClose: () => void;
+  imagesAvailable?: boolean;
+  missingText?: string;
+}) {
+  const [showBoxes, setShowBoxes] = useState(true);
+  const [showLidar, setShowLidar] = useState(true);
+  const [shown, setShown] = useState<{ timeUs: number; bitmap: ImageBitmap | null; boxes: FrameBox[] } | null>(null);
+  const [clouds, setClouds] = useState<Cloud[]>([]);
+  const [cloudTime, setCloudTime] = useState<number | null>(null);
+  const [note, setNote] = useState("");
 
   useEffect(() => {
     let cancelled = false;
-    const sampleFrustums = frustums;
     const sampleBoxes = boxes;
     void (async () => {
-      const next: Record<string, ImageBitmap | null> = {};
+      if (!imagesAvailable) {
+        if (!cancelled) {
+          setShown({ timeUs, bitmap: null, boxes: sampleBoxes });
+        }
+        return;
+      }
+      let bitmap: ImageBitmap | null;
       try {
-        await Promise.all(
-          sampleFrustums.map(async (camera) => {
-            const key = cameraKey(camera.agent_id, camera.sensor_id);
-            next[key] = await loadImage(sceneId, timeUs, camera.agent_id, camera.sensor_id, token);
-          }),
-        );
+        bitmap = await loadImage(sceneId, timeUs, camera.agent_id, camera.sensor_id, token, SPLIT_WIDTH);
       } catch (error) {
         if (!cancelled) {
-          setNote(error instanceof Error ? error.message : "Could not load a camera image.");
+          setNote(error instanceof Error ? error.message : "Could not load the camera image.");
         }
         return;
       }
       if (cancelled) {
         return;
       }
-      setShown({ timeUs, urls: next, frustums: sampleFrustums, boxes: sampleBoxes });
+      setShown({ timeUs, bitmap, boxes: sampleBoxes });
       setNote("");
-      if (nextTimeUs === null) {
-        return;
-      }
-      for (const camera of sampleFrustums) {
-        void loadImage(sceneId, nextTimeUs, camera.agent_id, camera.sensor_id, token).catch(() => undefined);
+      if (nextTimeUs !== null) {
+        void loadImage(sceneId, nextTimeUs, camera.agent_id, camera.sensor_id, token, SPLIT_WIDTH).catch(() => undefined);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [sceneId, timeUs, nextTimeUs, token, frustums, boxes]);
+  }, [imagesAvailable, sceneId, timeUs, nextTimeUs, token, camera.agent_id, camera.sensor_id, boxes]);
 
   useEffect(() => {
     if (!showLidar) {
@@ -483,13 +728,7 @@ export default function CameraStrip({
         if (sensor.count === 0) {
           continue;
         }
-        const buffer = await cacheRef.current.loadPoints(
-          sceneId,
-          timeUs,
-          sensor.agent_id,
-          sensor.sensor_id,
-          token,
-        );
+        const buffer = await cacheRef.current.loadPoints(sceneId, timeUs, sensor.agent_id, sensor.sensor_id, token);
         if (cancelled) {
           return;
         }
@@ -509,188 +748,52 @@ export default function CameraStrip({
     };
   }, [cacheRef, sceneId, timeUs, token, pointSensors, showLidar]);
 
-  if (frustums.length === 0) {
-    return null;
-  }
-
-  const panels = shown?.frustums ?? frustums;
-  const focus = panels.find((camera) => cameraKey(camera.agent_id, camera.sensor_id) === focusKey) ?? panels[0];
   const heading = hud?.heading ?? 0;
-
-  function onDragStart(event: ReactPointerEvent<HTMLDivElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-    const shell = event.currentTarget.parentElement;
-    const host = shell?.parentElement;
-    if (!shell || !host) {
-      return;
-    }
-    const box = shell.getBoundingClientRect();
-    const hostBox = host.getBoundingClientRect();
-    dragRef.current = {
-      dx: event.clientX - box.left,
-      dy: event.clientY - box.top,
-      hostW: hostBox.width,
-      hostH: hostBox.height,
-      width: box.width,
-      height: box.height,
-    };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function onDragMove(event: ReactPointerEvent<HTMLDivElement>) {
-    const drag = dragRef.current;
-    const host = event.currentTarget.parentElement?.parentElement;
-    if (!drag || !host || !event.currentTarget.hasPointerCapture(event.pointerId)) {
-      return;
-    }
-    const hostBox = host.getBoundingClientRect();
-    const left = Math.min(Math.max(0, event.clientX - hostBox.left - drag.dx), Math.max(0, drag.hostW - drag.width));
-    const top = Math.min(Math.max(0, event.clientY - hostBox.top - drag.dy), Math.max(0, drag.hostH - drag.height));
-    setPlace({ left, top });
-  }
-
-  function onResizeStart(event: ReactPointerEvent<HTMLButtonElement>) {
-    if (event.button !== 0) {
-      return;
-    }
-    event.stopPropagation();
-    resizeRef.current = { x: event.clientX, width };
-    event.currentTarget.setPointerCapture(event.pointerId);
-  }
-
-  function onResizeMove(event: ReactPointerEvent<HTMLButtonElement>) {
-    const resize = resizeRef.current;
-    const shell = event.currentTarget.parentElement;
-    const host = shell?.parentElement;
-    if (!resize || !shell || !host || !event.currentTarget.hasPointerCapture(event.pointerId)) {
-      return;
-    }
-    const hostBox = host.getBoundingClientRect();
-    const next = Math.min(Math.max(280, resize.width + (event.clientX - resize.x)), Math.max(280, hostBox.width - 16));
-    setWidth(next);
-    setPlace((current) => {
-      if (!current) {
-        return current;
-      }
-      const box = shell.getBoundingClientRect();
-      return {
-        left: Math.min(current.left, Math.max(0, hostBox.width - next)),
-        top: Math.min(current.top, Math.max(0, hostBox.height - box.height)),
-      };
-    });
-  }
-
   return (
-    <section
-      className="pip"
-      aria-label="Agent camera"
-      style={{
-        width,
-        ...(place ? { left: place.left, top: place.top, right: "auto", bottom: "auto" } : {}),
-      }}
-    >
-      <div
-        className="pip-bar"
-        onPointerDown={onDragStart}
-        onPointerMove={onDragMove}
-        onPointerUp={() => {
-          dragRef.current = null;
-        }}
-      >
-        <span className="grip" aria-hidden="true">
-          <i /><i /><i /><i /><i /><i />
-        </span>
-        <strong>Camera</strong>
-        <button
-          type="button"
-          className="pip-toggle"
-          aria-pressed={showBoxes}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => setShowBoxes((current) => !current)}
-        >
+    <section className="camera-split" aria-label={`Camera ${camera.agent_id} ${camera.sensor_id}`}>
+      <div className="camera-split-bar">
+        <strong>
+          {camera.sensor_id} <span>{camera.agent_id}</span>
+        </strong>
+        <button type="button" className="pip-toggle" aria-pressed={showBoxes} onClick={() => setShowBoxes((current) => !current)}>
           Boxes
         </button>
-        <button
-          type="button"
-          className="pip-toggle"
-          aria-pressed={showLidar}
-          onPointerDown={(event) => event.stopPropagation()}
-          onClick={() => setShowLidar((current) => !current)}
-        >
+        <button type="button" className="pip-toggle" aria-pressed={showLidar} onClick={() => setShowLidar((current) => !current)}>
           Lidar
         </button>
-        <span className="pip-drag">Drag</span>
+        <button type="button" className="camera-split-close" aria-label="Close camera (Esc)" aria-keyshortcuts="Escape" onClick={onClose}>
+          ×
+        </button>
       </div>
-      {focus ? (
-        <div className="pip-stage">
-          <CameraPanel
-            camera={focus}
-            bitmap={shown ? shown.urls[cameraKey(focus.agent_id, focus.sensor_id)] : undefined}
-            boxes={shown?.boxes ?? []}
-            clouds={shown && cloudTime === shown.timeUs ? clouds : []}
-            types={types}
-            hidden={hidden}
-            showBoxes={showBoxes}
-            showLidar={showLidar}
-          />
-          <div className="compass" aria-hidden="true">
-            <div className="compass-tape" style={{ transform: `translateX(${(-heading / 360) * 304}px)` }}>
-              {["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N", "NE", "E", "SE", "S", "SW", "W", "NW"].map((name, item) => (
-                <span key={`${name}-${item}`}>{name}</span>
-              ))}
-            </div>
-            <i />
+      <div className="camera-split-stage">
+        <CameraPanel
+          camera={camera}
+          bitmap={shown ? shown.bitmap : undefined}
+          boxes={shown?.boxes ?? []}
+          clouds={shown && cloudTime === shown.timeUs ? clouds : []}
+          types={types}
+          hidden={hidden}
+          showBoxes={showBoxes}
+          showLidar={showLidar}
+          missingText={missingText}
+        />
+        <div className="compass" aria-hidden="true">
+          <div className="compass-tape" style={{ transform: `translateX(${(-heading / 360) * 304}px)` }}>
+            {["N", "NE", "E", "SE", "S", "SW", "W", "NW", "N", "NE", "E", "SE", "S", "SW", "W", "NW"].map((name, item) => (
+              <span key={`${name}-${item}`}>{name}</span>
+            ))}
           </div>
-          <div className="hud">
-            <p className="num">
-              <span>{hud?.speed ?? "—"}</span>
-              <span>{hud ? `${hud.heading.toFixed(0)}°` : "—"}</span>
-              <span>{hud?.stamp ?? "—"}</span>
-            </p>
-          </div>
+          <i />
         </div>
-      ) : null}
-      <div className="pip-thumbs" role="group" aria-label="Cameras">
-        {panels.map((camera) => {
-          const key = cameraKey(camera.agent_id, camera.sensor_id);
-          const shownImage = imageOn(key);
-          return (
-            <div key={key} className="pip-chip">
-              <button
-                type="button"
-                className="pip-name"
-                aria-pressed={focus ? key === cameraKey(focus.agent_id, focus.sensor_id) : false}
-                onClick={() => onSelect(key)}
-              >
-                {camera.sensor_id}
-                <span>{camera.agent_id}</span>
-              </button>
-              <button
-                type="button"
-                className="pip-image"
-                aria-pressed={shownImage}
-                aria-label={`${shownImage ? "Hide" : "Show"} ${camera.agent_id} ${camera.sensor_id} on its frustum`}
-                onClick={() => onToggleImage(key)}
-              >
-                <IconImage />
-              </button>
-            </div>
-          );
-        })}
+        <div className="hud">
+          <p className="num">
+            <span>{hud?.speed ?? "—"}</span>
+            <span>{hud ? `${hud.heading.toFixed(0)}°` : "—"}</span>
+            <span>{hud?.stamp ?? "—"}</span>
+          </p>
+        </div>
       </div>
       {note ? <p className="muted">{note}</p> : null}
-      <button
-        type="button"
-        className="pip-resize"
-        aria-label="Resize camera panel"
-        onPointerDown={onResizeStart}
-        onPointerMove={onResizeMove}
-        onPointerUp={() => {
-          resizeRef.current = null;
-        }}
-      />
     </section>
   );
 }

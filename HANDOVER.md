@@ -319,3 +319,228 @@ Slurm job 626744 on `ps,main-cpu`, Python 3.13.14, the repo `.venv`, 2026-10-17,
 ## Next
 
 ADR 0010, evaluation engine step A (predictions format, import, matching, viewer overlay, timeline metrics), is drafted on branch `docs/adr-0010-eval-step-a` as `docs/adr/0010-eval-predictions.md`, status proposed, no PR, nothing implemented. Adarsh reviews it before any code.
+
+## Evaluation engine, step A (2026-10-17)
+
+ADR 0010 is accepted and implemented on branch `feat/eval-step-a` (based on `main` at `d3cd349`, the #15 merge). Compare link: https://github.com/adarsh-nl/coperceive/compare/main...feat/eval-step-a?expand=1. Adarsh opens the draft PR against `main`. Nothing is merged. The normative contract is `docs/spec/predictions.md`; the plan the work followed is `docs/superpowers/plans/2026-10-17-eval-step-a.md`; the user doc is `docs/eval.md`.
+
+- `coperceive/evaluation/`: `predictions` (format 1: `run.json`, `boxes.parquet`, `write_run`, `load_rows`, `validate_boxes`, `predictions_root`), `geometry` (`WorldBox`, BEV IoU by Sutherland–Hodgman clipping, centre distance, yaw error), `config` (`EvalConfig`, YAML loader, `threshold_for`), `matching` (`match_sample`, greedy per class by score with ignore rules), `metrics` (all-points AP, `Counts`, TP errors, cooperative counts), `evaluate` (`evaluate_scene`, `matches.parquet`, `metrics.json`, `evaluate_run`), `report` (`eval report|compare` tables), `commands` (CLI).
+- `coperceive predictions import`, `coperceive eval run|report|compare`; `coperceive serve --predictions`; `coperceive export bev --run --predictions`.
+- `coperceive/evalview.py` (no FastAPI) and three GET routes: `/api/scenes/{id}/predictions`, `.../predictions/{run}/frame?time_us=&compare=`, `.../predictions/{run}/series?compare=`. `POST /export/bev` takes `run_id`. `web/openapi.json` regenerated; `web/src/api/schema.ts` was not (needs npm; CI or Adarsh).
+- Page: Predictions block (run, compare run, output, source/status/cooperative chips, score slider, legend), prediction wires per status with dashed/dotted styles, matched GT at 40%, two eval sparklines and a recall-drop marker on the timeline, inspector and scene-card fields, `run_id` on the bird's-eye export. `tsc -b` and `oxlint` clean; **not seen in a browser** (no routes existed when it was written and no server runs on the HPC). `coperceive/app/static` was not rebuilt or committed; CI builds it.
+- Defaults as decided: BEV IoU at 0.5 and 0.7, display at 0.5, `score_threshold` 0.3, every GT kept, centre distance as `criterion: centre`.
+
+Reviews caught and fixed, on the branch: AP tie order used pose-time order instead of `boxes.parquet` row order (`849d46d`); `predictions import` joined an unchecked `--scene`/`scene_id` to the scenes root before validation (`c3c5533`). Euler closed form from the adapters slice is unrelated.
+
+Known departures from the spec text, recorded in ADR 0010 "As built": AP categories are the union of `run.json` categories, GT categories and predicted categories; the aggregate AP in `eval report` is a mean over scene × output rows; the range check runs before the score-threshold check; `export bev` also takes `--predictions`; the page has an Output selector.
+
+### Adversarial review (2026-10-17)
+
+Three read-only finders over the branch at `28ee59c`, each finding then attacked by two independent refuters; a finding counted only when both refuters failed to refute it.
+
+- Numerics (BEV IoU closed forms incl. 45° rotations, containment, degenerate sizes, 1e4 m coordinates; all-points AP on eight scenarios with ties; `tp_errors`; null-not-NaN; AP at 0.7 from its own matching pass; mAP skipping null): **no finding**, 20 checks recorded.
+- Matching (ties within and across times; body vs world placement; wrong-agent timestamps at import and eval; ignored-GT rule 3; `max_range_m` from the body origin; category never crosses; `below_threshold` never matches; `matches.parquet` row order; cooperative columns; frame rows equal table rows with 72-number lines): **no finding**, 18 checks recorded.
+- Paths: four findings reproduced. One confirmed and fixed: `read_metrics`, `read_matches` and `evalview._match_rows` opened `metrics.json`/`matches.parquet` under a confined directory without resolving the file, so a symlink planted inside the run directory was followed outside the predictions root (`17a6d7c`: `evaluate.scene_file` resolves and confines the file; test added; final review approved). Three were judged not required by the spec and left as open items below: a NUL byte or a 300-character `run_id` or `scene_id` reaches `Path.resolve`/`is_file` and the routes answer HTTP 500 instead of 400 (`server._scene_dir`, `evalview`), and `coperceive export bev --run` lets the same `ValueError`/`OSError` and an `EvaluationError` from a malformed `metrics.json` escape as a traceback. No file outside a root was opened in any of these.
+
+Earlier per-task reviews caught two more defects before integration: AP tie order (pose-time order, not `boxes.parquet` row order; `849d46d`) and `predictions import` joining an unchecked `--scene` to the scenes root (`c3c5533`).
+
+### Open questions for Adarsh (step A)
+
+0. Robustness, not spec: map `ValueError`/`OSError` from path resolution to 400 in `server._scene_dir` and `server._eval_view`, and catch them in `export bev --run`, so a NUL byte or an over-long id never produces a 500 or a traceback? Small change; say yes and it goes in before the PR leaves draft.
+1. Aggregate AP: keep the mean over scene × output rows, or change to per-scene means as the spec sentence says (then a scene with `single` and `fused` outputs weighs once)?
+2. AP category set: keep the union (so a GT-only class the model never emits shows AP 0.0), or restrict to `run.json` `categories` as the spec says?
+3. `render_compare` drops rows present in only one run without a marker. Print them with `n/a` deltas instead?
+4. The fixture's 0.3 m cone shifted 0.1 m sits exactly on BEV IoU 0.5 at the display threshold; tests avoid it, but nudging the fixture would make it robust.
+5. `web/src/api/schema.ts` regeneration: in CI, or by you after `npm ci`.
+6. Colour-blindness: dashed/dotted styles are the primary cue; nothing was checked in a simulator. Say if you want the green moved towards teal.
+
+### Task 12 (not started): the real run
+
+Candidate source: the released Griffin checkpoints under `/datasets/eemcs/ps/cv/huggingface/griffin/ckpts/griffin_50scenes_25m/` (`vehicle-side.pth`, `drone-side.pth`, `cooperative.pth`, `early-fusion/`, `cooperative/instance_fusion/`). They need the Griffin toolkit's inference code and an mmdetection3d/CUDA environment, which this repository does not contain and which has not been installed. The plan: a GPU sbatch job that runs the toolkit's test script for the vehicle-side model on Griffin-25m, converts its output to `boxes.parquet` with `write_run`, then `eval run`. Stop and show Adarsh the environment setup and the sbatch before anything is installed.
+
+## Gates for step A
+
+Slurm job 627022 on `ps,main-cpu`, Python 3.13.14, the shared `.venv` linked into the worktree with `PYTHONPATH=$REPO` (the job prints `coperceive imported from /home/nanjaiyalathaa/coperceive-adr0010/coperceive/__init__.py` and exits 3 if the import resolves elsewhere), 2026-10-17, at commit `369ffa1`. Elapsed 29 s. `~/scripts/slurm/coperceive-gates.sbatch` with `REPO=`.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 138 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations (strict; `coperceive/evaluation` and `coperceive/evalview.py` are inside the strict set)
+- `pytest --override-ini addopts= --tb=short -q` — 340 passed, 2 skipped, 8 warnings in 10.77 s. The skips are the two `COPERCEIVE_GRIFFIN_RAW` tests. The warnings are the `fork()` `DeprecationWarning` from the three parallel-run tests.
+- `mkdocs build` — succeeded (`docs/eval.md` and `docs/spec/predictions.md` are in the nav)
+- Earlier gates in this slice: job 627009 at `28ee59c` (337 passed, 2 skipped, pyright 0).
+- Login node: `cd web && ./node_modules/.bin/tsc -b` exit 0 and `oxlint src` 0 errors (13 pre-existing warnings) at the page commit `92fafe0`; the page was not rebuilt and `coperceive/app/static` is unchanged.
+- Not run on the HPC: `npm run build`, gitleaks, Python 3.10–3.12 (all CI). CI has not run yet on this branch: no PR is open. `web/src/api/schema.ts` is stale (needs `npx openapi-typescript`).
+- Not verified anywhere: the page in a browser (dash patterns, bloom, chips, legend, reduced motion, the 404 path), the bird's-eye figure by a human eye (only its SVG content was asserted), a real model's predictions (synthetic fixtures only).
+
+## Step A follow-ups after Adarsh's review of PR #16 (2026-10-17)
+
+PR #16 is a draft against `main`. Decisions and what landed on `feat/eval-step-a`:
+
+0. Robustness: a NUL byte or a 300-character `run_id`/`scene_id` now answers 400 on every scene and prediction route and on `POST /export/bev`; `export bev --run` prints one line and exits 2. Tests `test_prediction_routes_answer_400_for_nul_and_overlong_ids` and `test_cli_bev_run_with_nul_or_overlong_id_prints_one_line` (`33a5913`).
+1. Headline AP is pooled: `matches.parquet` gains `status_at_<i>` per threshold index (AP-pass status, score threshold ignored); `eval report`/`compare` pool every prediction of a run across scenes per `(agent_id, source)` and per class, with a grand `all` row pooled over outputs; per-scene AP stays in `metrics.json` and the per-scene rows. Spec §Metrics "Pooled AP", §`matches.parquet` and the report paragraph updated; ADR "As built" updated. Normative test: per-scene APs 1.0 and 0.5 pool to 5/6, not 0.75 (`e3572c7`).
+2. AP categories stay the union of `run.json`, GT and predicted classes; a class with no GT is `null`/`n/a`, never 0; `eval run` prints `warning	<scene>: category 'x' is not in run.json categories` (`RunReport.warnings`) (`ed08f7a`).
+3. `eval compare` lists every row of either run, `n/a` where one side is missing, footer `rows: N shared, N only in <a>, N only in <b>` (`5857cec`).
+4. Fixture cone moved off the IoU 0.5 boundary (0.41 now); `test_iou_exactly_at_the_threshold_is_a_match` pins `>=` with a 3×2 box shifted 1 m (IoU exactly 0.5 → tp at 0.5, fp at 0.7) (`bf894f2`).
+5. `web/src/api/schema.ts` regenerated (additive); new CI job `web`: regenerates `web/openapi.json` from `create_app` and `schema.ts` from it, fails on drift in either, then `tsc -b`. Caveat: the Python step installs the newest FastAPI/pydantic on the runner, so a dependency bump that changes `openapi()` output surfaces as drift (`338525a`).
+6. TP colour green → teal `#1FA3A3` in the page, the figure, the spec, the docs and the tests; line styles unchanged. Contrast 5.99:1 on `#141414`, 2.86:1 on `#F7F7F1` (the outgoing green was 2.73, the vehicle orange is 2.76). Caveat from the implementer: `#1FA3A3` is ~13° in hue from the pedestrian class colour `#3D9A86`; a more cyan teal is the alternative if that matters (`ee580f4`).
+
+Task 12 plan: `docs/superpowers/plans/2026-10-17-griffin-acceptance-run.md` (`39bd1e5`) and the sbatch draft `~/scripts/slurm/griffin-infer.sbatch` on the HPC. Nothing installed, cloned or submitted. Headline facts: the Griffin baselines are camera-only UniAD/BEVFormer-tiny (the four vehicle RGB cameras, ~69 GB, must be staged; lidar is not read); pins are Python 3.8, torch 1.9.1+cu111, mmcv-full 1.4.0, mmdet 2.14.0, mmseg 0.14.1, mmdet3d v0.17.1 built from source; L40/L40S (CC 8.9) are outside the wheels' sm_86 SASS, so the plan proposes `--constraint=a40`; driver 595.58.03 on L40S is new enough for any CUDA 11.x; no existing env has the mm* stack; a new `~/.conda/envs/griffin` (~6–8 GB) is proposed; the nuScenes-style conversion the toolkit needs has never been run here and must run in the job.
+
+CI on PR #16 for these commits has not been seen from the HPC (private repo, no credentials); Adarsh pastes the check list.
+
+## Gates for the step A follow-ups
+
+Slurm job 627044 on `ps,main-cpu`, Python 3.13.14, the shared `.venv` linked into the worktree with `PYTHONPATH=$REPO`, 2026-10-17, at commit `cbf9984`. Elapsed 30 s.
+
+- `ruff check .` — all checks passed (ruff 0.17.1)
+- `ruff format --check .` — 139 files already formatted
+- `pyright` — 0 errors, 0 warnings, 0 informations (strict)
+- `pytest --override-ini addopts= --tb=short -q` — 348 passed, 2 skipped, 8 warnings in 11.21 s (skips: the two `COPERCEIVE_GRIFFIN_RAW` tests; warnings: the `fork()` deprecation from the parallel tests)
+- `mkdocs build` — succeeded
+- Login node: `cd web && ./node_modules/.bin/tsc -b` exit 0 after the `schema.ts` regeneration and the teal change; `oxlint src` 0 errors.
+- Not run on the HPC: `npm run build`, gitleaks, Python 3.10–3.12, the new `web` CI job — all CI. Not seen anywhere: the page in a browser, a real model's output.
+
+### CI fix after PR #16's first run
+
+The lint job reported 16 strict-pyright errors in `tests/test_eval_end_to_end.py` (lines 110–150) that the HPC gate, on the same pyright 1.1.414, did not. Cause found while typing the responses: starlette 1.8 returns `httpx2.Response`, not `httpx.Response`; on a runner where that base does not resolve, every `TestClient` call reads as unknown (the same symptom `tests/test_hdmap.py` had last phase). Fix `388b518`: `client: TestClient`, and the four calls go through `_get`/`_post` helpers returning a `_Response` protocol (`status_code`, `json()`), one marked unknown-member access each. Gate job 627046 at `388b518`: whole-repo pyright 0 errors, 348 passed / 2 skipped; the gate now prints its pyright, fastapi, starlette and httpx versions. The HPC venv has a superset of CI's extras, so it cannot reproduce a package missing on the runner; CI on PR #16 at `388b518`: all green (lint, web, gitleaks, tests 3.10–3.13), confirmed by Adarsh. The PR stays a draft.
+
+**Rule for strict-typed tests that use `TestClient` (third occurrence):** do not annotate responses as `httpx.Response` and do not call `client.get`/`client.post` inline in a strict file. starlette's `TestClient` returns `httpx2.Response`; where `httpx2` does not resolve on the runner the whole client is unknown. Either keep such tests in `tests/test_app.py` (excluded from strict pyright) or go through typed helpers returning a protocol, as `tests/test_eval_end_to_end.py` does.
+
+## Task 12: the real Griffin run (2026-10-17)
+
+Adarsh approved the drafts with changes (two-step install with login-node downloads and an offline GPU build; A40 then A100, no L40S; val scenes only; `source=single`; operating point 0.05 with 0.4 as the viewer default; 50 m unless the paper states a range; vehicle side only; MIT + arXiv attribution in `run.json`). Files: `scripts/griffin/griffin_to_predictions.py` and `scripts/griffin/scene_infos_val.py` in this repository; on the HPC `~/scripts/griffin/download.sh`, `~/scripts/griffin/download-list.md`, `~/scripts/slurm/griffin-build.sbatch`, `~/scripts/slurm/griffin-build-verify.sbatch`, `~/scripts/slurm/griffin-infer.sbatch`. Plan: `docs/superpowers/plans/2026-10-17-griffin-acceptance-run.md`.
+
+Downloads (login node, each step under a minute; measured 115.5 MB/s): 2.4 GB into `~/wheelhouse` (torch 1.9.1+cu111 2,041,339,783 B, torchvision, mmcv-full 1.4.0, 187 PyPI wheels/sdists), conda packages for `python=3.8.20`, `~/src/mmdetection3d` at `f1107977` (v0.17.1), `~/src/griffin` at `9c02ba4a`. Three corrections on the way: `PIP_INDEX_URL=https://pypi.org/simple` (the user-level pip config points at a GitLab registry); `--python-version 3.8.20` (pip read `3.8` as 3.8.0 and refused `flake8`'s `>=3.8.1`); the hand-computed dependency closure missed transitive packages (`cycler`, `cffi`, …) and three wheels landed under manylinux2014/2010 names, so the closure was completed with a Python 3.8 `pip download` resolve (16 files added) and `SHA256SUMS` rewritten from PyPI's JSON digests. An offline `pip install --dry-run` with the Python 3.8 interpreter of `dhd_env` now resolves the whole set from the wheelhouse.
+
+Build (`~/.conda/envs/griffin`, 4.3 GB, offline from the wheelhouse): job 627052 stopped at the SHA check (renamed wheels); 627053 stopped at `cycler` (closure gap); 627056 refused because the partial env existed; 627057 (A40 node ctit092, gcc 11.4, driver 595.58.03, nvcc 11.8) installed everything and compiled mmdet3d v0.17.1's CUDA ops in 8 min 1 s, then `pip check` failed on "ninja 1.11.1.1 is not supported on this platform" (a wheel-tag quirk; ninja was only the build parallelizer). The build script now uninstalls ninja before `pip check`; `griffin-build-verify.sbatch` is the script's assertion tail run against the env 627057 left. Verify job 627059 failed on the probe's own GPU matmul assertion (`atol=1e-2` on values near 256 under torch 1.9's default TF32 matmuls); made relative. Verify job 627062 passed: `pip check` clean, torch 1.9.1+cu111 on an A40 (capability 8.6, `sm_86` in the arch list), mmcv `nms` and mmdet3d `iou3d` ops OK, Griffin plugin import OK (model type `Agile`, `score_thresh 0.4`, `filter_score_thresh 0.35`, classes car/bicycle/pedestrian). Logs: `~/logs/griffin-build-*.{out,err}`, `~/results/627062/{pip-freeze.txt,conda-explicit.txt}`.
+
+Staging check on the login node: `scene_infos_val.py` against the real release maps the 10 val scenes to `scene-0000…0009`, 1,490 frames, 11,933 files, ~17.0 GB of camera PNGs, both sides' trimmed `scene_infos.json` equal, in 3.7 s.
+
+Inference jobs (`griffin-infer.sbatch`, `--constraint="a40|a100"`, all landed on A40 node ctit092, 1,805 GB free on `/local`): 627063 failed in the trimmer (`zip(strict=True)` under the griffin env's Python 3.8 — the trimmer now runs with coperceive's 3.13 interpreter); 627064 failed on a broken line continuation I introduced; 627065 ran the whole GPU part — staging 17 GB in 11 min 51 s, toolkit conversion 1 min 08 s + 24 s, `dist_eval.sh` 9 min 23 s for 1,490 samples, checkpoint md5 OK, `results_nusc_det.json` with 402,110 boxes (top-300 per frame), 7,930 with score ≥ 0.05 and 5,401 ≥ 0.4 — then died at `conda deactivate` (conda's `qt-main` activation hook reads an unset variable under `set -u`), and the scratch trap wiped the outputs. The job now copies `$OUT` home right after the detection JSON and wraps the deactivate in `set +u`.
+
+Job 627070 (A40, ctit092, 23 min 31 s wall): staging 11 min 57 s, toolkit conversion 1 min 09 s + 24 s, `dist_eval.sh` 9 min 27 s, 1,490 samples, 402,110 boxes, 7,930 ≥ 0.05, 5,401 ≥ 0.4, checkpoint md5 OK, `coperceive convert griffin` 10 scenes in 3.5 s. The converter call then failed on a relative path (fixed in the sbatch: it reads the saved copies under `$OUT`). Because the GPU outputs were saved (`~/results/627070/{griffin_json,nusc_tables,results-*.pkl,test_*.log}`), the CPU tail was finished on the login node from them (each step under 30 s): trimmed tree without images (25 MB), `convert griffin` (10 scenes, 37,761 label lines, 3.7 s), `scripts/griffin/griffin_to_predictions.py` (7,930 boxes: car 7,268, pedestrian 451, bicycle 211; 394,180 dropped below 0.05; every scene validated), `eval run` A and B (6 s each). Artefacts: `~/results/627070/eval/{eval-config-iou.yaml,eval-config-centre.yaml,eval-run-*.txt,report-iou.md,report-centre.md,predictions/,scenes/}` (129 KB plus the scenes). Run ids `griffin25m-vehicle-agile-iter33024` (A) and `…-centre` (B, same boxes).
+
+**Numbers (10 val scenes, vehicle `single`, within 50 m, operating point for tp/fp/miss = score 0.4; AP pooled across scenes, over every prediction ≥ 0.05).** GT boxes within 50 m: 8,827; predictions: 7,930.
+
+| config | tp | fp | miss | precision | recall | AP thresholds | mAP | car AP |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- |
+| A: BEV IoU | 2,416 | 2,985 | 6,411 | 0.447 | 0.274 | 0.5 / 0.7 | 0.088 / 0.074 | 0.524 / 0.446 |
+| B: centre distance | 2,884 | 2,517 | 5,943 | 0.534 | 0.327 | 4 / 2 / 1 / 0.5 m | 0.127 / 0.117 / 0.100 / 0.081 | 0.655 / 0.599 / 0.560 / 0.483 |
+
+Per class (A at IoU 0.5; B at 2.0 m): car 0.524 / 0.599; pedestrian 0.000 / 0.087; bicycle 0.001 / 0.014; truck, bus and motorcycle 0.000 / 0.000. `eval run` warned that `truck`, `bus` and `motorcycle` appear in the ground truth of Town10HD-012/014 but not in `run.json` (the model emits car/bicycle/pedestrian only). Under decision 2 (union of classes, 0 for a class with ground truth and no prediction) those three classes pull the mean down: over the model's three classes the IoU-0.5 mean would be (0.524 + 0.001 + 0.000) / 3 = 0.175. Whether the toolkit's own evaluation maps truck/bus to car, or ignores them, was not checked; this is the first open question below.
+
+Not a comparison with the paper: no paper table was quoted. The only reference figure on this machine is the toolkit's own evaluation log beside the checkpoint (`ckpts/griffin_50scenes_25m/logs/vehicle-side-eval.log`: `mAP: 0.1682`, `NDS: 0.1991`, car AP at 2.0 m `0.5197`), which uses nuScenes' metric (recall/precision below 0.1 clipped, per-class ranges) on the full 25 m val split and is not the same computation as either config here.
+
+Did not match the plan: four build attempts and three inference attempts before a complete run (causes above, all my own: the manifest's predicted wheel names, the missing transitive closure, ninja's wheel tag under `pip check`, a TF32-tight matmul probe, `zip(strict=True)` under Python 3.8, a comment after a line continuation, `conda deactivate` under `set -u`, a relative path after `cd`); the CPU tail of the final run was done on the login node instead of inside the job; the viewer has still not been opened on these predictions.
+
+### Open questions for Adarsh (Task 12)
+
+1. Class vocabulary: map GT `truck`/`bus`/`motorcycle` onto the model's classes for the headline (as the toolkit may do), restrict the mean to `run.json` categories, or keep the union as decided? The per-class table is unaffected either way.
+2. Rerun inside one job (the fixed `griffin-infer.sbatch`, ~24 min of A40) so the whole chain is a single job log, or accept the saved-output tail?
+3. Open the viewer on `~/results/627070/eval/scenes` with `--predictions ~/results/627070/eval/predictions` (images are not staged; boxes and lidar-free scenes will show) and judge the teal by eye.
+4. Drone-side and cooperative runs (the remaining checkpoints) as the next phase?
+
+### Follow-ups after the first real run (2026-10-17)
+
+1. `mAP@<t> all` (union of classes with ground truth) and `mAP@<t> model` (`run.json` categories) are both reported by `eval report`/`compare`; `metrics.json` carries `mean` and `mean_model` (`af3d4e8`). `gt_class_map` is a new eval-config key, applied to ground truth before matching, because the Griffin toolkit maps classes in code: `tools/griffin_data_converter/trans_kitti2nuscenes.py`, `obj_type_mapping` (`"truck": "car"`, `"bus": "car"`, `"motorcycle": "bicycle"`) and `projects/mmdet3d_plugin/datasets/griffin_dataset.py`, `class_names_nuscenes_mappings` (`'Truck': 'car'`, `'Bus': 'car'`), commit `9c02ba4a`. Spec, ADR and `docs/eval.md` updated; gates job 627098 at `af3d4e8`: 352 passed / 2 skipped, pyright 0, ruff clean.
+2. Clean single-job rerun: **job 627093** (A40 ctit092, 23 min 36 s; staging 11 min 17 s, toolkit conversion 1 min 32 s, inference 9 min 37 s, coperceive convert 2.4 s), everything inside the job including both evaluations. Compared with the saved-output run 627070 scene by scene (metrics `outputs` with the new `mean_model` key stripped, and every shared `matches.parquet` column): **identical** for `griffin25m-vehicle-agile-iter33024` and `…-centre`, 10 scenes each. Results: `~/results/627093/` (`report-iou.md`, `report-centre.md`, `predictions/`, `scenes/`, `griffin_json/`, logs).
+3. Mapped evaluations (`gt_class_map: {truck: car, bus: car, motorcycle: bicycle}`), run from the saved outputs under `~/results/627070/eval/` as runs `…-mapped` and `…-centre-mapped` (same 7,930 boxes):
+
+| config | tp | fp | miss | precision | recall | mAP all = model | car AP | bicycle AP | pedestrian AP |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
+| A unmapped, IoU 0.5 / 0.7 | 2,416 | 2,985 | 6,411 | 0.447 | 0.274 | all 0.088 / 0.074 · model 0.175 / 0.149 | 0.524 / 0.446 | 0.001 / 0.000 | 0.000 / 0.000 |
+| A mapped, IoU 0.5 / 0.7 | 3,003 | 2,398 | 5,824 | 0.556 | 0.340 | 0.150 / 0.106 | 0.423 / 0.316 | 0.026 / 0.000 | 0.000 / 0.000 |
+| B unmapped, centre 4 / 2 / 1 / 0.5 m | 2,884 | 2,517 | 5,943 | 0.534 | 0.327 | all 0.127 / 0.117 / 0.100 / 0.081 · model 0.255 / 0.234 / 0.200 / 0.163 | 0.655 / 0.599 / 0.560 / 0.483 | 0.014 / 0.014 / 0.011 / 0.003 | 0.095 / 0.087 / 0.029 / 0.002 |
+| B mapped, centre 4 / 2 / 1 / 0.5 m | 3,968 | 1,433 | 4,859 | 0.735 | 0.450 | 0.345 / 0.296 / 0.228 / 0.148 | 0.696 / 0.567 / 0.458 / 0.351 | 0.244 / 0.233 / 0.197 / 0.090 | 0.095 / 0.087 / 0.029 / 0.002 |
+
+With the map the union and model means coincide (every GT class is one of the model's three). Car AP at IoU 0.5 drops under the map (0.524 → 0.423) while precision and recall rise: trucks and buses now count as `car` ground truth, the model finds many of them within 2–4 m but not with 0.5 BEV IoU. The inference sbatch now writes the map into both configs for future runs. None of this is a comparison with the paper (no table quoted).
+
+Viewing from a laptop. The server runs on a compute node (not the login node), bound to loopback, reached through a two-hop tunnel. The `.venv`'s editable install points at `main`, so `PYTHONPATH` must name the worktree, and modules do not inherit, so load the Python module first.
+
+Terminal 1 — allocate a node and serve there:
+
+```bash
+ssh nanjaiyalathaa@hpc-head1.ewi.utwente.nl
+srun --partition=main --cpus-per-task=2 --mem=8G --time=1:00:00 --pty bash
+hostname                      # e.g. hpc-node03; this is the node for the tunnel below
+module load python/3.13.14
+PYTHONPATH=$HOME/coperceive-adr0010 $HOME/coperceive-adr0010/.venv/bin/coperceive serve --host 127.0.0.1 --port 8731 \
+    --root $HOME/results/627070/eval/scenes --predictions $HOME/results/627070/eval/predictions
+```
+
+Terminal 2 — the tunnel from the laptop through the head node to that node (the node name is resolved on the head node):
+
+```bash
+ssh -J nanjaiyalathaa@hpc-head1.ewi.utwente.nl -L 8731:127.0.0.1:8731 nanjaiyalathaa@<node>
+```
+
+then open `http://127.0.0.1:8731/#/viewer` on the laptop. The second hop works only while the `srun` allocation holds the node. `627070/eval` holds all four runs (unmapped and mapped, IoU and centre); `627093/` holds the two unmapped runs under `scenes/` and `predictions/` directly. The scenes were converted from the trimmed tree: no lidar and no image files, so the page shows boxes, predictions and poses only. Checked through `TestClient` only, not in a browser.
+
+## Viewer check after Adarsh's first session (2026-10-17)
+
+Adarsh viewed `~/results/627070/eval` from his laptop (server on `hpc-head1`, single-hop tunnel) and reported: (1) Play does not advance frames, (2) the scene selector does not switch and feels hard-coded to Town03-000, (3) no Predictions block or prediction boxes even with `--predictions`, (4) points, images and map empty, (5) silent panes when data is missing.
+
+**What reproduced in headless Chromium** (Playwright 1.64, `chromium_headless_shell` 156, SwiftShader WebGL, on the login node, niced, ~25 s per run; script and JSON under the session scratchpad, screenshots sent to Adarsh): against the same root and the same committed bundle (`coperceive/app/static/assets/index-BBhIjMFy.js`), Play advanced the sample index with the clock (index 4 at 0.41 s, 49 at 4.97 s, Pause shown) and choosing Town06-007 switched: `GET /api/scenes/Town06-007`, `/frame?time_us=1752300000`, `/map/lines`, the status line, the crumb, the tick labels (1752.3 s … 1767.1 s) all followed. The server side answers correctly for every scene (`TestClient` probe: list, summary, frames, map lookup, predictions, 0.01–0.3 s each). So (1) and (2) did **not** reproduce here; the cross-engine runs (Firefox, WebKit, 250 ms latency, DPR 2, small window, real pointer events, switch while playing) are reported below. (3) reproduced exactly: the committed bundle has **zero** occurrences of "predictions". It was built at `049145c` (2026-10-16, before `92fafe0` added the predictions UI) and CI does not rebuild it (the `web` job only type-checks). (4) is the data: the eval scenes were converted from the trimmed tree without lidar or images, and no maps root existed. (5) was true: `no map.` in the status line was the only hint.
+
+**Root causes and fixes** (commits `dc93828`, `49aa354`, `560f980`, `8c7a745` on `feat/eval-step-a`):
+
+- (3) Stale packaged bundle. New `coperceive serve --static DIR` serves an out-of-tree build (`web/node_modules/.bin/vite build --outDir ~/coperceive-web-dist --emptyOutDir`, 3 s on the login node; nothing under `coperceive/app/static` was touched or committed). With it the Predictions block renders on the real run (Town06-007 sample 1: TP 1, FP 2, Miss 4, Ignored 8 at score 0.40). **Adarsh: `coperceive/app/static` still needs a rebuild and commit from a machine that may do that; the wheel ships the old page until then.**
+- (4) `scripts/griffin/stage_viewer.py` stages the 10 val scenes on a compute node without copying the dataset: val-only pose/label/calib plus the vehicle lidar (~150 MB) rsynced into `/local/$SLURM_JOB_ID/coperceive-viewer/raw`, `convert griffin` in process (so `points.bin` is written), `<scene>/<side>/camera` symlinked to the release (no PNG copied; served through the new `coperceive serve --media-root <release>`, which lets an image link resolve into an explicitly allowed directory and nothing else), the four CARLA town maps ingested and aligned. The OpenDRIVE files are at `~/maps-src/carla-0.9.15/` with `SHA256SUMS`: they came from public GitHub mirrors (autonomousvision/fail2drive and four byte-identical copies), every digest equal to the ADR 0008 pin; the 8.4 GB CARLA package was never downloaded. Section in `docs/datasets/griffin.md`. A one-scene run on the login node (Town06-007, `--no-lidar`, 1 worker) took 6.7 s; served with `--media-root` the first vehicle front image came back as a 2,831,892-byte PNG, without it 400; map lines 444,416 bytes; alignment identity, median residual 0.0011 m.
+- (5) Empty states: `GET /api/scenes/{id}` adds `point_sweeps`, `image_rows`, `images_staged`; the page shows a missing-data pill in the viewport (`Points: no lidar staged.`, `Camera: no camera images staged.`, `Map: no map for Town06.`, `Predictions: no prediction runs for this scene.` / `no predictions root; start the server with --predictions.`), repeats the points and map lines in the Layers pane, and the camera panel says `No image: …`. The map effect asks `/map` first, so the note names the scene's own town. The camera strip no longer requests images for a scene that has none staged (before: nine 404s per sample, ~90 per second during play on Griffin).
+- (1)(2) `tests/test_viewer_browser.py` pins the behaviour in a real browser: Play advances with the clock and pauses at the end; switching scenes in both directions re-reads frames, retakes the timeline and follows each town's map; the Predictions block names the run with counts; each pane names what is missing. Four tests, 26 s on the login node. CI gains an `e2e` job that builds `web/` fresh (so it tests the source, not the stale bundle) and uploads the screenshots. `playwright` joined the `dev` extra; on the HPC it is installed in the shared `.venv` with the browsers under `~/.cache/ms-playwright`.
+
+Serving the staged val scenes (replaces the block above for a full view; the old block still works for boxes-only):
+
+```bash
+ssh nanjaiyalathaa@hpc-head1.ewi.utwente.nl
+srun --partition=main --cpus-per-task=2 --mem=8G --time=2:00:00 --pty bash
+hostname                      # the node for the tunnel
+module load python/3.13.14
+export PYTHONPATH=$HOME/coperceive-adr0010
+$HOME/coperceive-adr0010/.venv/bin/python $HOME/coperceive-adr0010/scripts/griffin/stage_viewer.py \
+    --raw /datasets/eemcs/ps/cv/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release \
+    --split $HOME/src/griffin/data/split_datas/griffin_50scenes_25m.json \
+    --xodr-dir $HOME/maps-src/carla-0.9.15 \
+    --predictions $HOME/results/627093/predictions \
+    --static $HOME/coperceive-web-dist \
+    --workers 2
+# ... then run the `coperceive serve` line it prints last, in the same shell
+```
+
+Terminal 2 from the laptop: `ssh -J nanjaiyalathaa@hpc-head1.ewi.utwente.nl -L 8731:127.0.0.1:8731 nanjaiyalathaa@<node>` (the real node name, no angle brackets), then `http://127.0.0.1:8731/#/viewer`. The ten-scene run with lidar has not been timed in an allocation yet (expect a few minutes for the rsync and the convert with two workers).
+
+### Gates for the viewer check
+
+Job 627308 (`ps,main-cpu`, hpc-node12, 2 min 18 s, `REPO=~/coperceive-adr0010`, `COPERCEIVE_WEB_DIST=~/coperceive-web-dist`, `PYTEST_ADDOPTS=-rs`): ruff check and format clean, pyright 1.1.414 0 errors, **364 passed, 2 skipped** (the two Griffin-raw skips) in 62 s. The four browser tests and the five staging tests ran on the compute node, so headless Chromium starts there without extra system libraries; their screenshots are in `~/results/viewer-e2e/`. Job 627316 after the slow-link fixes (`8e9fbb5`): same checks clean, **367 passed, 2 skipped** in 74 s (seven browser tests).
+
+### Cross-engine and slow-link runs (2026-10-17, same root, Playwright on the login node)
+
+- **Chromium with 250 ms emulated latency, old bundle (three runs):** Play advanced (4 → 41 in 4.1 s) but the scene switch showed exactly Adarsh's symptom: the scene button read Town06-007 at once while the status line, slider, clock and ticks stayed on Town03-000 for 11.6 s (one run) or beyond 12 s (another). During that time 292–396 image 404s were in flight (`/api/scenes/Town03-000/image?…`, nine per sample from the camera strip) and `GET /api/scenes/Town06-007`, though issued 20 ms after the click, got no response: the browser's six connections per host were busy with image requests. That is the cause of (1) and (2) as seen through the tunnel: the 3D view and the switch starve behind the camera strip's requests; the slider still moves, the page is not stuck. **New bundle, same latency:** zero image requests for the unstaged scene, switch complete in 0.5 s, 0 404s.
+- **Switch while playing (new bundle):** 57 old-scene requests were still issued after the click (playback kept prefetching until the new summary arrived 2.1 s later). Fixed in `8e9fbb5`: choosing a scene pauses at once, and a browser test holds old-scene traffic after the click under ten requests.
+- **Camera strip:** it fetched all nine Griffin cameras per sample (2.85 MB each) although only the focused camera is shown. Now only the focused camera's file (and the next sample's for it) is requested; another camera loads when selected. A browser test counts the requests with two cameras.
+- **Scene list:** `.menu-list` was capped at 240 px, eight rows; Town10HD-012 and Town10HD-014 sat behind an overlay scrollbar that macOS hides until scrolled, so the list looked like eight scenes. Now `min(70vh, 480px)`; a browser test with eleven scenes clicks the last one without scrolling.
+- Chromium at device scale 2 (1440×820), at 1100×700, with real pointer events and with Space: Play advanced and the switch completed in about 0.5 s in every case. Clicking the canvas centre to focus it is intercepted by the camera panel (`.pip`); Space still works once the page has focus. Firefox 157 headless on this node cannot create a WebGL context (software GL exhausted) and the page then mounts nothing, old and new bundle alike; WebKit cannot start here (six missing system libraries). Neither says anything about Adarsh's laptop browsers; it does say a WebGL failure leaves a blank page rather than a message (open item). Raw JSON and screenshots: session scratchpad `engines/`.
+
+### One val scene staged with lidar (2026-10-17, login node, 6.4 s)
+
+`stage_viewer.py` on Town03-000 alone (`--workers 1`, split with one val scene, scratch under the session's `/tmp` scratchpad, deleted afterwards): 149 clouds, 437,760 points; 1,341 recorded images all resolving through the two camera links; Town03 ingested and aligned (identity, median residual 0.0293 m over 149 poses). Served with `--maps`, `--media-root` and `--static`, headless Chromium showed `2929 points, 55 boxes, 9 frustums. map drawn.` at the first sample, the vehicle back camera with projected boxes and lidar, lane centres under the sweep, no missing-data pill, and the run's chips (TP 1, FP 2, Miss 8, Ignored 3 at sample 1). Screenshots `staged-01…04` were sent to Adarsh. The ten-scene run is the same command with the published split and belongs in the allocation.
+
+### Adversarial review of the viewer fixes (2026-10-17)
+
+Four reviewers (server confinement, page, browser tests and CI, staging script) and one refuter per finding: 11 candidates, 11 confirmed, 0 refuted, all fixed in the next commit. Medium: `images_staged` let an `OSError` from `is_file()` (over-long component, unsearchable parent) turn the scene summary into a 500 (now absent; the image route answers 404), and a scratch staged with `--no-lidar` and re-run with lidar kept its empty point tables because `COMPLETE.json` skipped the scenes (now pruned and re-converted, and lidar staged without clouds is an error). Low: `/favicon.ico` ignored `--static`; the map note was not keyed by scene for one paint; the eight-row image sample could miss files in a partially staged scene (now first, middle and last row per camera); the play-pace bound measured elapsed time from the wrong side of the click; a wrong `COPERCEIVE_WEB_DIST` silently fell back to the packaged bundle (now fails naming the path); CI's `e2e` job could pass with every test skipped (`COPERCEIVE_E2E_REQUIRED=1` turns those skips into failures); scenes from an earlier split stayed in scratch (removed); a vacuous assertion in the staging test; the serve line printed `--raw` unresolved. Tests added for each. The old `scene_image` path shared the `OSError` cause before this branch. Gates job 627332 on `c7e0cb1`: ruff, format and pyright clean, **370 passed, 2 skipped**.
+
+
+## Camera strip and split view (2026-10-17)
+
+Adarsh: the floating camera panel hid the 3D view. Replaced by a strip docked between the viewport and the timeline (96 px, `C` collapses it; one thumbnail per camera grouped by agent with the agent colour on the group edge; only on-screen thumbnails fetch, at 160 px, through an IntersectionObserver; nothing when no images are staged) and a split view (click a thumbnail: 3D left at full height, camera right with Boxes and Lidar, draggable divider 30–80 %, `Esc` or the same click closes). The thumbnail and the split pane share one download per file (a small bytes cache keyed by URL, decoded per width). `stripOpen`, `splitCamera` and `splitRatio` are stored in `coperceive-view`. Per-frustum images stay off by default; their per-camera toggle sits on each thumbnail. The status pill, legend and missing-data pill are pointer-transparent now. Browser tests (`tests/test_viewer_browser.py`): the canvas centre and corners (14 px inside the rounded viewport) hit the canvas with the strip open, collapsed and split, the viewpoint switch being the one thing allowed at the top right; the split takes width, not height; `C` toggles; a thumbnail click opens and the same click or `Esc` closes; the state round-trips through `localStorage`; thumbnails fetch once each, the split pane refetches nothing, a collapsed strip fetches nothing. Nine browser tests on the login node in about 35 s.
+Gates job 627340 on `d449888` (hpc-node12, 3 min 48 s): ruff, format and pyright clean, **372 passed, 2 skipped**. Screenshots of the strip collapsed, open and the split view on staged Town03-000 were sent to Adarsh.
+
+
+### Python 3.11 (2026-10-17)
+
+PR #16 CI on `db725a1`: only `test (3.11)` was red. `EvalConfig.gt_class_map` had `MappingProxyType({})` as a plain dataclass default; Python 3.11 rejects any unhashable default (3.10, 3.12 and 3.13 accept it), so every test module failed to import there. Now `field(default_factory=lambda: MappingProxyType({}))`. The cluster has no 3.11: `module avail python` lists 3.7.3, 3.9.9, 3.10.7, 3.13.14 and 3.14.6, so the HPC gates stay on 3.13 and only CI covers 3.10 to 3.12 (its matrix is 3.10, 3.11, 3.12, 3.13).
+Gates job 627368 on `d16bef1` (3.13, hpc-node12): clean, 372 passed, 2 skipped.
+
+### Static bundle (2026-10-17)
+
+Adarsh asked for the bundle to be rebuilt and committed before merging: `npm run build` in `web/` on the login node (7 s, node 26 from pyright's cache), committed as `build(web): rebuild static bundle`; the output is byte-identical to `~/coperceive-web-dist`. CI's `web` job now runs `npm run build` and fails when `git status --porcelain -- coperceive/app/static` is not empty, so a stale bundle cannot merge again. The earlier rule (never rebuild or commit static from the HPC) is withdrawn by this instruction.

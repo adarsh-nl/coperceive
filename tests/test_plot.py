@@ -3,11 +3,15 @@ from __future__ import annotations
 
 import io
 import struct
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
 import pytest
 from coperceive.cli import main
+from coperceive.evaluation.config import DEFAULT_CONFIG
+from coperceive.evaluation.evaluate import evaluate_run
+from coperceive.evaluation.predictions import write_run
 from coperceive.hdmap.opendrive import parse_opendrive
 from coperceive.hdmap.store import load_map, write_map
 from coperceive.model import (
@@ -24,10 +28,13 @@ from coperceive.model import (
     Sensor,
     StampedPose,
 )
-from coperceive.plot import PlotError, PlotNotFound, render_bev, render_overlay
+from coperceive.plot import PlotError, PlotNotFound, PredictionDraw, render_bev, render_overlay
 from coperceive.se3 import SE3
 from coperceive.store import read_scene, write_scene
 from PIL import Image
+
+from tests.cooperative import cooperative_scene
+from tests.eval_fixture import synthetic_predictions
 
 _XODR = """<?xml version="1.0" encoding="UTF-8"?>
 <OpenDRIVE>
@@ -292,3 +299,110 @@ def test_cli_bev_and_overlay(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     with pytest.raises(SystemExit) as exc:
         main(["export", "bev", str(scene_dir), "--out", str(tmp_path / "bad.txt")])
     assert exc.value.code == 2
+
+
+def _draw(status: str, kind: str = "prediction", x: float = 1.0) -> PredictionDraw:
+    return PredictionDraw((x, 0.0, 0.0), (4.0, 2.0, 1.5), SE3.identity(), status, kind)
+
+
+def test_bev_export_draws_predictions(tmp_path: Path) -> None:
+    scene = _scene()
+    one = render_bev(scene, tmp_path / "one.png", time_us=0, predictions=(_draw("tp"),))
+    assert one.predictions == 1
+    assert one.boxes == 1
+    assert one.dest.is_file()
+    plain = render_bev(scene, tmp_path / "plain.png", time_us=0)
+    assert plain.predictions == 0
+    rows = (
+        _draw("tp"),
+        _draw("fp", x=8.0),
+        _draw("miss", kind="gt", x=16.0),
+        _draw("ignored", x=24.0),
+        _draw("below_threshold", x=32.0),
+        _draw("tp", kind="gt"),  # a matched GT row only dims the ground-truth box
+    )
+    svg = render_bev(scene, tmp_path / "all.svg", time_us=0, predictions=rows)
+    assert svg.predictions == 5
+    text = svg.dest.read_text(encoding="utf-8").lower()
+    for colour in ("#1fa3a3", "#e0a431", "#8e6cef", "#6b6b6b"):
+        assert colour in text
+    for word in ("tp", "fp", "miss", "ignored"):
+        assert word in text
+    with pytest.raises(PlotError):
+        render_bev(scene, tmp_path / "bad.png", time_us=0, predictions=(_draw("maybe"),))
+
+
+def _evaluated_root(root: Path) -> Path:
+    scene = cooperative_scene()
+    scenes = root / "scenes"
+    write_scene(replace(scene, scene_id="coop"), scenes / "coop")
+    meta, boxes = synthetic_predictions(scene)
+    rows = tuple(replace(box, scene_id="coop") for box in boxes)
+    write_run(scenes / "predictions", "synthetic", meta, rows)
+    report = evaluate_run(
+        scenes,
+        scenes / "predictions",
+        "synthetic",
+        DEFAULT_CONFIG,
+        created_utc="2026-10-17T00:00:00Z",
+    )
+    assert report.evaluated == ("coop",), report
+    return scenes
+
+
+def test_cli_bev_draws_a_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    scenes = _evaluated_root(tmp_path)
+    out = tmp_path / "run.svg"
+    main(
+        [
+            "export",
+            "bev",
+            str(scenes / "coop"),
+            "--out",
+            str(out),
+            "--time-us",
+            "100000",
+            "--run",
+            "synthetic",
+        ]
+    )
+    assert out.is_file()
+    line = capsys.readouterr().out
+    assert "predictions " in line
+    assert "predictions 0" not in line
+    with pytest.raises(SystemExit) as exc:
+        main(
+            [
+                "export",
+                "bev",
+                str(scenes / "coop"),
+                "--out",
+                str(tmp_path / "nope.svg"),
+                "--time-us",
+                "100000",
+                "--run",
+                "nope",
+            ]
+        )
+    assert exc.value.code == 2
+    assert "nope" in capsys.readouterr().err
+
+
+def test_cli_bev_run_with_nul_or_overlong_id_prints_one_line(tmp_path: Path) -> None:
+    scenes = _evaluated_root(tmp_path)
+    for run_id in ("a\x00b", "a" * 300):
+        with pytest.raises(SystemExit) as caught:
+            main(
+                [
+                    "export",
+                    "bev",
+                    str(scenes / "coop"),
+                    "--out",
+                    str(tmp_path / "x.svg"),
+                    "--time-us",
+                    "100000",
+                    "--run",
+                    run_id,
+                ]
+            )
+        assert caught.value.code == 2

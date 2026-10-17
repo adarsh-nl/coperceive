@@ -8,6 +8,7 @@ theme:
 nav:
   - Overview: index.md
   - Format: spec/format.md
+  - Predictions and evaluation: spec/predictions.md
   - Positioning: design/positioning.md
   - Name: design/naming.md
   - Earlier candidates: design/names.md
@@ -16,6 +17,7 @@ nav:
   - Griffin dataset: datasets/griffin.md
   - Add a dataset: datasets/add-a-dataset.md
   - Validate: validate.md
+  - Evaluate: eval.md
   - Viewer: viewer.md
   - Decisions:
       - Data model: adr/0001-data-model.md
@@ -27,6 +29,7 @@ nav:
       - Desktop packaging: adr/0007-desktop.md
       - Shared HD map: adr/0008-hd-map.md
       - Dataset adapters: adr/0009-dataset-adapters.md
+      - Evaluation step A: adr/0010-eval-predictions.md
 markdown_extensions:
   - tables
   - toc:

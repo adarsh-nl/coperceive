@@ -11,6 +11,7 @@ import {
   visibleAgents,
   type PickRecord,
 } from "./inspect";
+import type { EvalPick, EvalSummary, GtEvalDetail } from "./predictionTypes";
 import { formatMetres, formatSpeed } from "./telemetry";
 import type { FrameDocument, SceneSummary } from "./types";
 import { isPose } from "./types";
@@ -19,7 +20,98 @@ function cssColor(value: number): string {
   return `#${value.toString(16).padStart(6, "0")}`;
 }
 
-export function SceneCard({ summary, frame }: { summary: SceneSummary | null; frame: FrameDocument | null }) {
+function ratio(value: number | null): string {
+  return value === null ? "—" : value.toFixed(2);
+}
+
+function yesNo(value: boolean | null): string {
+  return value === null ? "—" : value ? "yes" : "no";
+}
+
+/** `b − a` beside a run A figure in compare mode; `higherIsBetter` colours the sign. */
+function Delta({ a, b, higherIsBetter = true, digits = 2 }: { a: number | null; b: number | null; higherIsBetter?: boolean; digits?: number }) {
+  if (a === null || b === null) {
+    return b === null ? null : <span className="delta">B {b.toFixed(digits)}</span>;
+  }
+  const gap = b - a;
+  const tone = Math.abs(gap) < 0.5 * 10 ** -digits ? "" : (gap > 0) === higherIsBetter ? " up" : " down";
+  return (
+    <span className={`delta num${tone}`} title="Run B minus run A">
+      {gap >= 0 ? "+" : "−"}
+      {Math.abs(gap).toFixed(digits)}
+    </span>
+  );
+}
+
+function EvalFiguresGrid({ summary }: { summary: EvalSummary }) {
+  const { a, b } = summary;
+  const views = [
+    ["recovered", "Recovered"],
+    ["lost_by_fusion", "Lost by fusion"],
+    ["only_other_agent", "Only other agent"],
+    ["nobody", "Nobody"],
+  ] as const;
+  return (
+    <>
+      <h3 className="eval-head">
+        Evaluation · {summary.agentId} {summary.source}
+        {b ? <span className="tag">A {a.runId} / B {b.runId}</span> : null}
+      </h3>
+      <dl className="stat-grid eval-grid">
+        {a.map.map((row, index) => (
+          <div key={row.threshold}>
+            <dt>mAP@{row.threshold}</dt>
+            <dd className="num">
+              {ratio(row.value)}
+              {b ? <Delta a={row.value} b={b.map[index]?.value ?? null} /> : null}
+            </dd>
+          </div>
+        ))}
+        <div>
+          <dt>Recall</dt>
+          <dd className="num">
+            {ratio(a.recall)}
+            {b ? <Delta a={a.recall} b={b.recall} /> : null}
+          </dd>
+        </div>
+        <div>
+          <dt>Precision</dt>
+          <dd className="num">
+            {ratio(a.precision)}
+            {b ? <Delta a={a.precision} b={b.precision} /> : null}
+          </dd>
+        </div>
+        {views.map(([key, label]) => (
+          <div key={key}>
+            <dt>{label}</dt>
+            <dd className="num">
+              {a.cooperative[key]}
+              {b ? <Delta a={a.cooperative[key]} b={b.cooperative[key]} higherIsBetter={key === "recovered"} digits={0} /> : null}
+            </dd>
+          </div>
+        ))}
+        <div className="span-2">
+          <dt>Recovery rate</dt>
+          <dd className="num">
+            {ratio(a.recoveryRate)}
+            {b ? <Delta a={a.recoveryRate} b={b.recoveryRate} /> : null}
+          </dd>
+        </div>
+      </dl>
+    </>
+  );
+}
+
+export function SceneCard({
+  summary,
+  frame,
+  evalSummary = null,
+}: {
+  summary: SceneSummary | null;
+  frame: FrameDocument | null;
+  /** mAP, recall and the cooperative counts of the selected prediction output, with run B deltas. */
+  evalSummary?: EvalSummary | null;
+}) {
   const duration = summary ? sceneDuration(summary) : null;
   const counts = classCounts(frame?.boxes ?? []);
   const peak = counts.reduce((max, row) => Math.max(max, row.count), 1);
@@ -44,6 +136,7 @@ export function SceneCard({ summary, frame }: { summary: SceneSummary | null; fr
           <dd className="num">{frame?.boxes.length ?? 0}</dd>
         </div>
       </dl>
+      {evalSummary ? <EvalFiguresGrid summary={evalSummary} /> : null}
       {counts.length === 0 ? <p className="muted">No boxes in this sample.</p> : null}
       <ul className="bars">
         {counts.map((row) => (
@@ -60,18 +153,151 @@ export function SceneCard({ summary, frame }: { summary: SceneSummary | null; fr
   );
 }
 
+function PredictionInspector({ pick, frame }: { pick: EvalPick; frame: FrameDocument | null }) {
+  const row = pick.row;
+  const gt = pick.gt;
+  const asPick: PickRecord = {
+    agentId: row.agent_id,
+    category: row.category,
+    trackId: row.track_id,
+    center: [row.center[0] ?? 0, row.center[1] ?? 0, row.center[2] ?? 0],
+    size: [row.size_lwh[0] ?? 1, row.size_lwh[1] ?? 1, row.size_lwh[2] ?? 1],
+    index: -1,
+  };
+  return (
+    <>
+      <dl className="stat-grid">
+        <div className="span-2">
+          <dt>Run</dt>
+          <dd>
+            {pick.runId}
+            <span className="tag">{pick.tag}</span>
+          </dd>
+        </div>
+        <div>
+          <dt>Source</dt>
+          <dd>
+            {row.agent_id} · {row.source}
+          </dd>
+        </div>
+        <div>
+          <dt>Status</dt>
+          <dd className={`eval-status-${row.status}`}>{row.status === "below_threshold" ? "below threshold" : row.status}</dd>
+        </div>
+        <div>
+          <dt>Class</dt>
+          <dd>{row.category}</dd>
+        </div>
+        <div>
+          <dt>Score</dt>
+          <dd className="num">{ratio(row.score)}</dd>
+        </div>
+        <div>
+          <dt>Matched GT</dt>
+          <dd className="num">{gt ? (gt.track_id ?? `row ${gt.row ?? "?"}`) : "—"}</dd>
+        </div>
+        <div>
+          <dt>IoU</dt>
+          <dd className="num">{ratio(row.iou_bev)}</dd>
+        </div>
+        <div>
+          <dt>Centre error</dt>
+          <dd className="num">{row.centre_error_m === null ? "—" : formatMetres(row.centre_error_m)}</dd>
+        </div>
+        <div>
+          <dt>Yaw error</dt>
+          <dd className="num">{row.yaw_error_deg === null ? "—" : `${row.yaw_error_deg.toFixed(1)}°`}</dd>
+        </div>
+        {gt ? (
+          <>
+            <div>
+              <dt>GT single</dt>
+              <dd>{gt.status_single ?? "—"}</dd>
+            </div>
+            <div>
+              <dt>GT fused</dt>
+              <dd>{gt.status_fused ?? "—"}</dd>
+            </div>
+            <div>
+              <dt>Seen by other GT</dt>
+              <dd>
+                {yesNo(gt.seen_by_other_gt)}
+                {gt.other_kind ? ` (${gt.other_kind})` : ""}
+              </dd>
+            </div>
+            <div>
+              <dt>Other agent TP</dt>
+              <dd>{yesNo(gt.other_agent_tp)}</dd>
+            </div>
+          </>
+        ) : null}
+      </dl>
+      {frame ? (
+        <ul className="distance-list">
+          {agentDistances(asPick, frame).map((item) => (
+            <li key={item.agentId}>
+              <span>{item.agentId}</span>
+              <span className="num">{item.metres === null ? "—" : formatMetres(item.metres)}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </>
+  );
+}
+
+function GtEvalRows({ detail }: { detail: GtEvalDetail }) {
+  return (
+    <>
+      <ul className="eval-rows" aria-label="Status per output">
+        {detail.statuses.map((row) => (
+          <li key={`${row.tag}-${row.source}`}>
+            <span>
+              {row.source}
+              <span className="tag">{row.tag}</span>
+            </span>
+            <span className={`num eval-status-${row.status}`}>
+              {row.status}
+              {row.score === null ? "" : ` · ${row.score.toFixed(2)}`}
+            </span>
+          </li>
+        ))}
+      </ul>
+      <dl className="stat-grid">
+        <div>
+          <dt>Seen by other GT</dt>
+          <dd>
+            {yesNo(detail.seenByOtherGt)}
+            {detail.otherKind ? ` (${detail.otherKind})` : ""}
+          </dd>
+        </div>
+        <div>
+          <dt>Other agent TP</dt>
+          <dd>{yesNo(detail.otherAgentTp)}</dd>
+        </div>
+      </dl>
+    </>
+  );
+}
+
 export function Inspector({
   pick,
   frame,
   summary,
   token,
   cache,
+  evalPick = null,
+  gtDetail = null,
 }: {
   pick: PickRecord | null;
   frame: FrameDocument | null;
   summary: SceneSummary | null;
   token: string;
   cache: FrameCache;
+  /** A clicked prediction wire; shown instead of a ground-truth box. */
+  evalPick?: EvalPick | null;
+  /** The clicked ground-truth box's status per output and who else sees it. */
+  gtDetail?: GtEvalDetail | null;
 }) {
   const current = frame && pick ? followPick(frame, pick) : null;
   const [objectSpeed, setObjectSpeed] = useState<number | null>(null);
@@ -119,8 +345,9 @@ export function Inspector({
   return (
     <section className="side-card" aria-label="Selected object" aria-live="polite">
       <h3>Selected</h3>
-      {!current || !frame ? <p className="muted">Click a box in the view.</p> : null}
-      {current && frame ? (
+      {evalPick ? <PredictionInspector pick={evalPick} frame={frame} /> : null}
+      {!evalPick && (!current || !frame) ? <p className="muted">Click a box in the view.</p> : null}
+      {!evalPick && current && frame ? (
         <>
           <dl className="stat-grid">
             <div className="span-2">
@@ -148,6 +375,7 @@ export function Inspector({
               </li>
             ))}
           </ul>
+          {gtDetail ? <GtEvalRows detail={gtDetail} /> : null}
         </>
       ) : null}
     </section>

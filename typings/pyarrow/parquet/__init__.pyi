@@ -1,7 +1,8 @@
 from collections.abc import Sequence
 from typing import Any
 
-from pyarrow import Table
+from pyarrow import Schema, Table
 
+def read_schema(where: Any) -> Schema: ...
 def read_table(source: Any, columns: Sequence[str] | None = None) -> Table: ...
 def write_table(table: Table, where: Any) -> None: ...

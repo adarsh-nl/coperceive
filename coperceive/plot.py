@@ -7,12 +7,20 @@ north is +Y and points up. That is the same axis the HD map is aligned to.
 The camera figure draws the stored image and projects boxes and lidar with
 the pinhole in :mod:`coperceive.project`. Neither figure imports a web
 framework. Image bytes stay in the scene directory.
+
+The bird's-eye figure can also draw the prediction rows of one evaluated run
+(``docs/spec/predictions.md`` §Colours and styles) on top of the ground-truth
+boxes: ``tp`` solid teal, ``fp`` dashed amber, ``miss`` dotted violet and
+thicker, ``ignored`` and ``below_threshold`` thin grey at half opacity. A
+ground-truth box that was matched (a ``gt`` row with status ``tp``) is not drawn
+again; its ground-truth wire is dimmed to 40 % so the ``tp`` wire reads on top.
 """
 
 from __future__ import annotations
 
 import array
 import sys
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -22,10 +30,13 @@ from matplotlib.axes import Axes
 from matplotlib.backends.backend_agg import FigureCanvasAgg
 from matplotlib.backends.backend_svg import FigureCanvasSVG
 from matplotlib.figure import Figure
+from matplotlib.lines import Line2D
 from matplotlib.patches import Polygon
+from matplotlib.typing import LineStyleType
 from PIL import Image
 
 from coperceive.errors import CoperceiveError
+from coperceive.evaluation.geometry import WorldBox, footprint
 from coperceive.hdmap.opendrive import LAYER_LANE_CENTRE, LAYER_ROAD_EDGE, MapPolyline
 from coperceive.hdmap.store import HdMap
 from coperceive.model import Agent, Annotation, Modality, Scene, Sensor
@@ -35,6 +46,7 @@ from coperceive.project import (
     project_box,
     project_camera_point,
 )
+from coperceive.se3 import SE3
 from coperceive.transform import lookup_pose, sensor_frame, transform, world_frame
 from coperceive.viewdata import image_path, pose_times, world_points
 
@@ -61,6 +73,8 @@ _CLASS_COLORS = {
     "traffic_cone": "#e07a72",
 }
 _FALLBACK = ("#b06a9a", "#5aa0c4", "#c4a15a", "#7dcea0")
+_MATCHED_GT_ALPHA = 0.4
+_SAME_BOX_M = 0.01
 # Bottom face, wound so the polygon does not cross. Indices into the eight
 # corners that follow the centre in box_world_points.
 _FOOTPRINT = (0, 4, 6, 2)
@@ -97,6 +111,40 @@ class _BoxDraw:
 
 
 @dataclass(frozen=True)
+class PredictionDraw:
+    """One ``matches.parquet`` row to draw: a world-frame box with its status.
+
+    ``kind`` is ``prediction`` or ``gt``; ``status`` is one of the §Matching
+    words. A ``gt`` row with status ``tp`` dims the matching ground-truth box
+    and draws nothing itself.
+    """
+
+    center: tuple[float, float, float]
+    size_lwh: tuple[float, float, float]
+    rotation: SE3
+    status: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class _StatusStyle:
+    color: str
+    linestyle: LineStyleType
+    linewidth: float
+    alpha: float
+
+
+# §Colours and styles. Dash lengths are in points; the page uses metres.
+_STATUS_STYLES: dict[str, _StatusStyle] = {
+    "tp": _StatusStyle("#1FA3A3", "-", 1.0, 1.0),
+    "fp": _StatusStyle("#E0A431", (0, (4, 2)), 1.0, 1.0),
+    "miss": _StatusStyle("#8E6CEF", (0, (1, 2)), 1.5, 1.0),
+    "ignored": _StatusStyle("#6B6B6B", "-", 0.8, 0.5),
+    "below_threshold": _StatusStyle("#6B6B6B", "-", 0.8, 0.5),
+}
+
+
+@dataclass(frozen=True)
 class PlotResult:
     dest: Path
     format: str
@@ -106,6 +154,7 @@ class PlotResult:
     map_drawn: bool
     points: int
     boxes: int
+    predictions: int = 0
 
 
 @dataclass(frozen=True)
@@ -135,8 +184,14 @@ def render_bev(
     box_style: str = "wire",
     hidden_classes: tuple[str, ...] = (),
     agents: tuple[str, ...] | None = None,
+    predictions: Sequence[PredictionDraw] = (),
 ) -> PlotResult:
-    """Write a bird's-eye PNG or SVG for one recorded sample."""
+    """Write a bird's-eye PNG or SVG for one recorded sample.
+
+    ``predictions`` are the match rows of one run at that sample; they are drawn
+    after the ground-truth boxes in the status styles and counted in
+    ``PlotResult.predictions`` (matched ``gt`` rows only dim and are not counted).
+    """
     fmt = _file_format(dest, format)
     colors = _theme(theme)
     style = _box_style(box_style)
@@ -144,12 +199,14 @@ def render_bev(
     hidden = _class_filter(hidden_classes)
     chosen = _chosen_agents(scene, agents)
     when = _sample_time(scene, time_us)
+    wires, matched = _prediction_wires(predictions)
     anchors = _anchors(chosen, when)
     trails = _trails(chosen)
     window_points: list[tuple[float, float]] = [point for point in anchors if point is not None]
     window_points.extend(point for trail in trails.values() for point in trail)
     drawn_boxes = _boxes(scene, when, chosen, hidden) if boxes else ()
     window_points.extend((item.center[0], item.center[1]) for item in drawn_boxes)
+    window_points.extend((item.center[0], item.center[1]) for item, _ring in wires)
     sweeps = _lidar(scene, when, chosen, anchors) if points else ()
     window_points.extend((point[0], point[1]) for _agent, cloud in sweeps for point in cloud)
     if not window_points:
@@ -194,6 +251,7 @@ def render_bev(
     for item in drawn_boxes:
         color = _box_color(item.agent, item.annotation, mode)
         face = color if style == "solid" else "none"
+        alpha = _MATCHED_GT_ALPHA if _is_matched(item.center, matched) else 0.95
         axes.add_patch(
             Polygon(
                 item.ring,
@@ -202,7 +260,7 @@ def render_bev(
                 facecolor=face,
                 edgecolor=color,
                 linewidth=1.1,
-                alpha=0.95,
+                alpha=alpha,
                 zorder=4,
             )
         )
@@ -215,9 +273,27 @@ def render_bev(
             [item.center[1], front[1]],
             color=color,
             linewidth=1.1,
+            alpha=alpha,
             solid_capstyle="butt",
             zorder=4,
         )
+    statuses_drawn: list[str] = []
+    for item, ring in wires:
+        status_style = _STATUS_STYLES[item.status]
+        axes.add_patch(
+            Polygon(
+                ring,
+                closed=True,
+                fill=False,
+                edgecolor=status_style.color,
+                linestyle=status_style.linestyle,
+                linewidth=status_style.linewidth,
+                alpha=status_style.alpha,
+                zorder=4.5,
+            )
+        )
+        if item.status not in statuses_drawn:
+            statuses_drawn.append(item.status)
     for agent, xy in zip(chosen, anchors, strict=True):
         if xy is None:
             continue
@@ -236,14 +312,30 @@ def render_bev(
     axes.set_xlabel("east (m)")
     axes.set_ylabel("north (m)")
     axes.set_title(f"{scene.scene_id} at {when} µs")
-    if any(trail for trail in trails.values()):
-        legend = axes.legend(loc="lower left", frameon=True, fontsize=8)
+    handles, labels = axes.get_legend_handles_labels()
+    for status in statuses_drawn:
+        status_style = _STATUS_STYLES[status]
+        handles.append(
+            Line2D(
+                [0.0, 1.0],
+                [0.0, 0.0],
+                color=status_style.color,
+                linestyle=status_style.linestyle,
+                linewidth=status_style.linewidth,
+                alpha=status_style.alpha,
+            )
+        )
+        labels.append(status)
+    if handles:
+        legend = axes.legend(handles, labels, loc="lower left", frameon=True, fontsize=8)
         legend.get_frame().set_facecolor(colors.axes)
         legend.get_frame().set_edgecolor(colors.spine)
         for text in legend.get_texts():
             text.set_color(colors.text)
     width, height = _write(figure, dest, fmt)
-    return PlotResult(dest, fmt, when, width, height, map_drawn, point_count, len(drawn_boxes))
+    return PlotResult(
+        dest, fmt, when, width, height, map_drawn, point_count, len(drawn_boxes), len(wires)
+    )
 
 
 def render_overlay(
@@ -321,6 +413,72 @@ def render_overlay(
     )
     width, height = _write(figure, dest, fmt)
     return PlotResult(dest, fmt, when, width, height, False, point_count, box_count)
+
+
+def prediction_draws(rows: Iterable[Mapping[str, object]]) -> tuple[PredictionDraw, ...]:
+    """The ``PredictionDraw`` items of the ``/frame`` rows (``coperceive.evalview``)."""
+    items: list[PredictionDraw] = []
+    for row in rows:
+        center = _triple(row.get("center"))
+        size = _triple(row.get("size_lwh"))
+        pose = row.get("pose")
+        if not isinstance(pose, Mapping):
+            raise PlotError("a prediction row has no pose")
+        quaternion = cast(Mapping[str, object], pose)
+        rotation = SE3(
+            _number(quaternion.get("qw")),
+            _number(quaternion.get("qx")),
+            _number(quaternion.get("qy")),
+            _number(quaternion.get("qz")),
+            0.0,
+            0.0,
+            0.0,
+        )
+        status = row.get("status")
+        kind = row.get("kind")
+        if not isinstance(status, str) or not isinstance(kind, str):
+            raise PlotError("a prediction row has no status")
+        items.append(PredictionDraw(center, size, rotation, status, kind))
+    return tuple(items)
+
+
+def _triple(value: object) -> tuple[float, float, float]:
+    if not isinstance(value, (list, tuple)) or len(cast(Sequence[object], value)) != 3:
+        raise PlotError("a prediction row has a bad box")
+    x, y, z = cast(Sequence[object], value)
+    return (_number(x), _number(y), _number(z))
+
+
+def _number(value: object) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise PlotError("a prediction row has a bad number")
+    return float(value)
+
+
+def _prediction_wires(
+    predictions: Sequence[PredictionDraw],
+) -> tuple[
+    tuple[tuple[PredictionDraw, tuple[tuple[float, float], ...]], ...], list[tuple[float, float]]
+]:
+    """The rows to draw with their footprints, and the centres of matched GT boxes."""
+    if len(predictions) > 20000:
+        raise PlotError("at most 20000 prediction rows")
+    wires: list[tuple[PredictionDraw, tuple[tuple[float, float], ...]]] = []
+    matched: list[tuple[float, float]] = []
+    for item in predictions:
+        if item.status not in _STATUS_STYLES:
+            raise PlotError(f"unknown prediction status {item.status!r}")
+        if item.kind == "gt" and item.status == "tp":
+            matched.append((item.center[0], item.center[1]))
+            continue
+        ring = footprint(WorldBox(item.center, item.size_lwh, item.rotation))
+        wires.append((item, ring))
+    return tuple(wires), matched
+
+
+def _is_matched(center: tuple[float, float, float], matched: list[tuple[float, float]]) -> bool:
+    limit = _SAME_BOX_M * _SAME_BOX_M
+    return any((center[0] - x) ** 2 + (center[1] - y) ** 2 <= limit for x, y in matched)
 
 
 def _file_format(dest: Path, fmt: str | None) -> str:
