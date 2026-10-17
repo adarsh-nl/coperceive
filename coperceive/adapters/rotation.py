@@ -52,6 +52,11 @@ def euler_to_se3(
     if not degrees:
         about = {axis: math.degrees(value) for axis, value in about.items()}
     sequence = order if intrinsic else order[::-1]
+    if sequence == "zyx":
+        # The closed form, so a reader that used from_rpy_deg before gets the
+        # same bytes: composing three quaternions differs in the last ulp and
+        # can land on the opposite sign of the same rotation.
+        return SE3.from_rpy_deg(about["x"], about["y"], about["z"])
     result = SE3.identity()
     for axis in sequence:
         result = result.compose(_single(axis, about[axis]))

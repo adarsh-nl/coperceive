@@ -106,3 +106,12 @@ def test_camera_remap_targets_rdf_not_flu() -> None:
     assert rub.point((0.0, 0.0, -1.0)) == pytest.approx((0.0, 0.0, 1.0))
     assert rub.point((0.0, 1.0, 0.0)) == pytest.approx((0.0, -1.0, 0.0))
     assert AxisRemap.parse("RFU").inverse().then(AxisRemap.parse("RFU")).is_identity
+
+
+def test_intrinsic_zyx_is_bit_identical_to_from_rpy_deg() -> None:
+    # The Griffin regression needs the same bytes, not just the same rotation:
+    # the old reader calls from_rpy_deg directly, so this path must too.
+    for angles in ((10.0, -20.0, 35.0), (0.3, 179.0, -91.5), (-45.0, 0.0, 0.0), (0.0, 0.0, 123.4)):
+        got = euler_to_se3(angles, order="zyx", intrinsic=True, degrees=True)
+        want = SE3.from_rpy_deg(*angles)
+        assert (got.qw, got.qx, got.qy, got.qz) == (want.qw, want.qx, want.qy, want.qz)
