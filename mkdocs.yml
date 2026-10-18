@@ -9,6 +9,7 @@ nav:
   - Overview: index.md
   - Format: spec/format.md
   - Predictions and evaluation: spec/predictions.md
+  - Model plugin (proposed): spec/model-plugin.md
   - Positioning: design/positioning.md
   - Name: design/naming.md
   - Earlier candidates: design/names.md
@@ -30,6 +31,7 @@ nav:
       - Shared HD map: adr/0008-hd-map.md
       - Dataset adapters: adr/0009-dataset-adapters.md
       - Evaluation step A: adr/0010-eval-predictions.md
+      - Live model plugin (step B, proposed): adr/0011-live-model-plugin.md
 markdown_extensions:
   - tables
   - toc:
