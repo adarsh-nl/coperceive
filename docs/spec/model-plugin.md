@@ -155,7 +155,7 @@ Every message has `type` (str) and `protocol` (int, `1`).
  "git_commit": "9c02ba4a"}
 ```
 
-`environment` is a flat map of strings. It must change whenever the child's outputs would change for the same inputs (framework versions, checkpoint digests); its `checkpoint_md5` key is required, must be 32 lowercase hexadecimal characters, and is part of the cache key (§Cache). A `hello` without it, or with any other form, is rejected as `bad_message` with the key path `message.environment.checkpoint_md5` (Adarsh, 2026-10-18). A model without weights reports the MD5 of whatever fixes its outputs, for instance its own worker source file; the fake plugin does that. `git_commit` is optional.
+`environment` is a flat map of strings. It must change whenever the child's outputs would change for the same inputs (framework versions, checkpoint digests); its `checkpoint_md5` key is required, must be 32 lowercase hexadecimal characters, and is part of the cache key (§Cache). A `hello` without it, or with any other form, is rejected as `bad_message` with the key path `message.environment.checkpoint_md5` (Adarsh, 2026-10-18). A model without weights reports the MD5 of whatever fixes its outputs, for instance its own worker source file; the fake plugin does that. `checkpoint_path` names that file (absolute): the parent hashes it itself and refuses a `hello` whose digest disagrees (a protocol violation), and on a rerun it recomputes the cache key from the file on disk, re-hashing only when the file's size or mtime differs from the record in the previous run's `provenance.checkpoint`; the digest in an old `run.json` is never trusted by itself (Adarsh, 2026-10-18). Without `checkpoint_path` the parent cannot verify a rerun and starts the child every time. `git_commit` is optional.
 
 **`configure`** (parent, once per scene):
 
@@ -255,6 +255,7 @@ The parent creates `{work_dir}` and gives it to the child in `configure.work_dir
 | `model` | str | The `models` key that ran. |
 | `manifest_sha256` | str | SHA-256 of the manifest file bytes. |
 | `environment` | map str → str | `hello.environment`. |
+| `checkpoint` | object or null | `{path, size, mtime_ns, md5}` of the file `hello.environment.checkpoint_path` names, hashed by the parent. A rerun reuses `md5` only while `size` and `mtime_ns` are unchanged. |
 | `git_commit` | str or null | `hello.git_commit`. |
 | `coperceive_version` | str | `coperceive/adapters/ingest.py` `coperceive_version()`. |
 | `host` | str | `socket.gethostname()`. |
@@ -300,7 +301,7 @@ coperceive model cache prune --out ROOT [--run-id ID] [--plugin NAME] [--model N
 coperceive serve ... --model <plugin> [--model-name NAME] [--manifest FILE] [--eval-config FILE]
 ```
 
-`list` prints `name  source  location` per plugin, as `adapters list` does. `inspect` prints the validated manifest as YAML plus the resolved interpreter path, or the reason it cannot be resolved. `run` prints one line per scene (`scene <id>: <frames> frames, <hits> cached, <boxes> boxes`), then `wrote <out>/<run_id>` and `scenes N frames M cached C boxes B`. `--slurm` prints the sbatch path and its text; `--submit` runs `sbatch` and prints the job id. `--model` is required when the plugin has more than one model. For a model with `depends_on`, the dependency model is run first and its artefacts land in the run's cache (§Cache) unless `--artifacts DIR` names an earlier run or `--no-auto-dependencies` turns the missing artefact into an error. A resumed run whose stored `provenance.manifest_sha256` differs from the current manifest is refused without `--force`.
+`list` prints `name  source  location` per plugin, as `adapters list` does. `inspect` prints the validated manifest as YAML plus the resolved interpreter path, or the reason it cannot be resolved. `run` prints one line per scene (`scene <id>: <frames> frames, <hits> cached, <boxes> boxes`), then `wrote <out>/<run_id>` and `scenes N frames M cached C boxes B`. `--slurm` prints the sbatch path and its text; `--submit` runs `sbatch` and prints the job id. `--model` is required when the plugin has more than one model, unless one of them is keyed `default`, which is then chosen (the convention of ADR 0011 decision 1; Adarsh, 2026-10-18). For a model with `depends_on`, the dependency model is run first and its artefacts land in the run's cache (§Cache) unless `--artifacts DIR` names an earlier run or `--no-auto-dependencies` turns the missing artefact into an error. A resumed run whose stored `provenance.manifest_sha256` differs from the current manifest is refused without `--force`.
 
 ## Exit codes
 

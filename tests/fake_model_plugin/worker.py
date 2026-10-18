@@ -48,7 +48,11 @@ def _hello() -> None:
             "version": VERSION,
             "models": list(MODELS),
             "capabilities": {"live": True, "cancel": True, "max_inflight": 1},
-            "environment": {"python": sys.version.split()[0], "checkpoint_md5": _own_md5()},
+            "environment": {
+                "python": sys.version.split()[0],
+                "checkpoint_md5": _own_md5(),
+                "checkpoint_path": str(Path(__file__).resolve()),
+            },
             "git_commit": None,
         }
     )

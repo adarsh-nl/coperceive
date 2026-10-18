@@ -10,6 +10,7 @@ and options equal the current ones; an entry that fails to decode is deleted.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import shutil
 from collections.abc import Mapping, Sequence
@@ -36,7 +37,44 @@ TimedResult = tuple[int, Result]
 
 
 class CacheError(CoperceiveError):
-    """A cache path is malformed."""
+    """A cache path is malformed, or the checkpoint cannot be read."""
+
+
+@dataclass(frozen=True)
+class CheckpointInfo:
+    """The file whose bytes fix a model's outputs (its weights, or its code when it has
+    none), with the digest the cache key uses. Stored in ``provenance.checkpoint``."""
+
+    path: str
+    size: int
+    mtime_ns: int
+    md5: str
+
+    def as_json(self) -> dict[str, object]:
+        return {"path": self.path, "size": self.size, "mtime_ns": self.mtime_ns, "md5": self.md5}
+
+
+def checkpoint_info(path: Path, previous: Mapping[str, object] | None) -> CheckpointInfo:
+    """Hash ``path``, reusing ``previous['md5']`` only while its size and mtime are unchanged
+    (Adarsh, 2026-10-18: never trust the digest of the old run.json by itself)."""
+    try:
+        stat = path.stat()
+    except OSError as exc:
+        raise CacheError(f"checkpoint {path} cannot be read: {exc}") from None
+    if previous is not None:
+        same = (
+            previous.get("path") == str(path)
+            and previous.get("size") == stat.st_size
+            and previous.get("mtime_ns") == stat.st_mtime_ns
+            and isinstance(previous.get("md5"), str)
+        )
+        if same:
+            return CheckpointInfo(str(path), stat.st_size, stat.st_mtime_ns, str(previous["md5"]))
+    digest = hashlib.md5()  # noqa: S324 - a fingerprint, not a security boundary
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(chunk)
+    return CheckpointInfo(str(path), stat.st_size, stat.st_mtime_ns, digest.hexdigest())
 
 
 @dataclass(frozen=True)
@@ -231,4 +269,13 @@ def prune(root: Path, *, run_id: str | None, plugin: str | None, model: str | No
     return count
 
 
-__all__ = ["CACHE_DIR", "RESULT_FILE", "CacheError", "CacheKey", "SceneCache", "prune"]
+__all__ = [
+    "CACHE_DIR",
+    "RESULT_FILE",
+    "CacheError",
+    "CacheKey",
+    "CheckpointInfo",
+    "SceneCache",
+    "checkpoint_info",
+    "prune",
+]

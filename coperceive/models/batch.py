@@ -19,7 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from coperceive.adapters.ingest import coperceive_version
 from coperceive.errors import CoperceiveError
@@ -34,7 +34,7 @@ from coperceive.evaluation.predictions import (
     write_run,
 )
 from coperceive.model import Scene
-from coperceive.models.cache import SceneCache
+from coperceive.models.cache import CacheError, CheckpointInfo, SceneCache, checkpoint_info
 from coperceive.models.inputs import InputFile, build_frame, remove_inputs, sensor_json
 from coperceive.models.protocol import (
     AgentRef,
@@ -192,9 +192,11 @@ def provenance_json(
     dependencies: Mapping[str, Mapping[str, str]],
     timings: Mapping[str, float],
     parent_env: Mapping[str, str],
+    checkpoint: CheckpointInfo | None = None,
 ) -> dict[str, object]:
     """Every key of spec §Provenance."""
     return {
+        "checkpoint": checkpoint.as_json() if checkpoint is not None else None,
         "plugin": manifest.name,
         "plugin_version": manifest.version,
         "model": spec.key,
@@ -318,8 +320,12 @@ def run_batch(
     reason: str | None = None
     child: PluginProcess | None = None
     # The environment of the run that filled this run directory lets the cache answer a
-    # scene before any child exists (its checkpoint digest is the cache key).
-    environment: Mapping[str, str] = _stored_environment(stored)
+    # scene before any child exists, but its checkpoint digest is recomputed from the file
+    # on disk (re-hashed only when size or mtime changed), never trusted from run.json.
+    checkpoint: CheckpointInfo | None = None
+    environment: Mapping[str, str] = {}
+    if cache is not None and options.cache:
+        checkpoint, environment = _verified_environment(stored)
     git_commit: str | None = None
     next_frame_id = 1
     device = "cuda:0" if env.get("CUDA_VISIBLE_DEVICES") else "cpu"
@@ -341,6 +347,7 @@ def run_batch(
             cache_hits=counters["hits"],
             frames_run=frames,
             dependencies={},
+            checkpoint=checkpoint,
             timings={
                 "staging_s": 0.0,
                 "per_sample_s": (wall / frames) if frames else 0.0,
@@ -380,6 +387,7 @@ def run_batch(
                 )
                 environment = child.hello.environment
                 git_commit = child.hello.git_commit
+                checkpoint = _check_hello_checkpoint(child, checkpoint)
                 hit = lookup(scene)
             meta = meta_now("complete", None)
             if hit is not None:
@@ -488,7 +496,7 @@ def _stored_provenance(
     return provenance
 
 
-def _stored_environment(provenance: Mapping[str, object] | None) -> Mapping[str, str]:
+def _stored_environment(provenance: Mapping[str, object] | None) -> dict[str, str]:
     if provenance is None:
         return {}
     raw = provenance.get("environment")
@@ -499,6 +507,50 @@ def _stored_environment(provenance: Mapping[str, object] | None) -> Mapping[str,
         if isinstance(key, str) and isinstance(value, str):
             out[key] = value
     return out
+
+
+def _verified_environment(
+    provenance: Mapping[str, object] | None,
+) -> tuple[CheckpointInfo | None, Mapping[str, str]]:
+    """The previous run's environment with ``checkpoint_md5`` recomputed from the file on
+    disk; empty (so the child is started) when there is no usable checkpoint record."""
+    environment = _stored_environment(provenance)
+    previous = provenance.get("checkpoint") if provenance is not None else None
+    if not isinstance(previous, Mapping):
+        return None, {}
+    record = cast(Mapping[str, object], previous)
+    path = record.get("path")
+    if not isinstance(path, str) or not path:
+        return None, {}
+    try:
+        info = checkpoint_info(Path(path), record)
+    except CacheError:
+        return None, {}
+    environment["checkpoint_md5"] = info.md5
+    environment["checkpoint_path"] = info.path
+    return info, environment
+
+
+def _check_hello_checkpoint(
+    child: PluginProcess, previous: CheckpointInfo | None
+) -> CheckpointInfo | None:
+    """The parent hashes the file the child names and refuses a digest that disagrees."""
+    path = child.hello.environment.get("checkpoint_path")
+    if not path:
+        return None
+    try:
+        info = checkpoint_info(Path(path), previous.as_json() if previous else None)
+    except CacheError as exc:
+        child.close(grace_s=1.0)
+        raise RunnerError(f"protocol violation: {exc}") from None
+    reported = child.hello.environment.get("checkpoint_md5")
+    if info.md5 != reported:
+        child.close(grace_s=1.0)
+        raise RunnerError(
+            f"protocol violation: hello reports checkpoint_md5 {reported} but {path} hashes "
+            f"to {info.md5}"
+        )
+    return info
 
 
 def _rows_of(scene: Scene, results: Sequence[TimedResult]) -> list[PredictionBox]:

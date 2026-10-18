@@ -201,3 +201,79 @@ def test_prune_counts(roots: tuple[Path, Path, Scene]) -> None:
     assert prune(out, run_id="r1", plugin=None, model=None) == 1
     assert not (out / "r1" / "cache").exists()
     assert prune(out, run_id=None, plugin=None, model=None) == 0
+
+
+def _copy_plugin(tmp_path: Path) -> Path:
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    for name in ("model.yaml", "worker.py"):
+        (plugin / name).write_bytes((FAKE.parent / name).read_bytes())
+    return plugin / "model.yaml"
+
+
+def _run_with(manifest_path: Path, scenes: Path, out: Path, **kwargs: object) -> batch.BatchReport:
+    options = RunOptions(**kwargs)  # type: ignore[arg-type]
+    manifest = load_manifest(manifest_path)
+    return run_batch(manifest, scenes, out, "r1", options, created_utc=CREATED, parent_env=_env())
+
+
+def _count_starts(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    starts: list[int] = []
+    original = batch.PluginProcess.start
+
+    def counting(*args: object, **kwargs: object) -> object:
+        starts.append(1)
+        return original(*args, **kwargs)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(batch.PluginProcess, "start", counting)
+    return starts
+
+
+def test_changed_checkpoint_bytes_miss_the_cache_and_start_the_child(
+    roots: tuple[Path, Path, Scene], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cache key is recomputed from the checkpoint on disk, never taken from the old
+    run.json: new bytes mean a new digest, a miss and a fresh child."""
+    scenes, out, _ = roots
+    manifest_path = _copy_plugin(tmp_path)
+    starts = _count_starts(monkeypatch)
+    first = _run_with(manifest_path, scenes, out)
+    assert first.frames_run > 0 and len(starts) == 1
+    provenance = batch.read_run_meta(out, "r1").provenance
+    assert provenance is not None
+    record = cast(dict[str, object], provenance["checkpoint"])
+    assert record["path"] == str((manifest_path.parent / "worker.py").resolve())
+    old_md5 = record["md5"]
+    assert len(str(old_md5)) == 32
+    # Same bytes, touched mtime: re-hashed, same digest, still a hit, no child.
+    worker = manifest_path.parent / "worker.py"
+    os.utime(worker, ns=(1, 1))
+    second = _run_with(manifest_path, scenes, out, force=True)
+    assert second.cache_hits == 1 and second.frames_run == 0 and len(starts) == 1
+    # Changed bytes: a new digest, a miss, the child runs again under a new cache directory.
+    worker.write_bytes(worker.read_bytes() + b"\n# a new checkpoint\n")
+    third = _run_with(manifest_path, scenes, out, force=True)
+    assert third.cache_hits == 0 and third.frames_run == first.frames_run and len(starts) == 2
+    provenance = batch.read_run_meta(out, "r1").provenance
+    assert provenance is not None
+    new_md5 = cast(dict[str, object], provenance["checkpoint"])["md5"]
+    assert new_md5 != old_md5
+    digests = sorted(p.name for p in (out / "r1" / "cache" / "fake" / "default").iterdir())
+    assert digests == sorted([str(old_md5), str(new_md5)])
+
+
+def test_hello_digest_that_disagrees_with_the_file_is_a_violation(
+    roots: tuple[Path, Path, Scene], tmp_path: Path
+) -> None:
+    scenes, out, _ = roots
+    manifest_path = _copy_plugin(tmp_path)
+    worker = manifest_path.parent / "worker.py"
+    worker.write_text(
+        worker.read_text(encoding="utf-8").replace(
+            '"checkpoint_md5": _own_md5()', '"checkpoint_md5": "0" * 32'
+        ),
+        encoding="utf-8",
+    )
+    report = _run_with(manifest_path, scenes, out)
+    assert report.status == "partial" and report.reason is not None
+    assert "hashes to" in report.reason
