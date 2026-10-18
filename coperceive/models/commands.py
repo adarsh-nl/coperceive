@@ -14,13 +14,17 @@ import yaml
 
 from coperceive.adapters.paths import PathError, Template
 from coperceive.evaluation.predictions import PredictionError
+from coperceive.model import Scene
 from coperceive.models.batch import BatchError, BatchReport, RunOptions, run_batch, utc_now
 from coperceive.models.cache import CacheError, prune
 from coperceive.models.check import check_plugin, render_check
 from coperceive.models.inputs import InputError
 from coperceive.models.registry import RegistryError, list_plugins, resolve_manifest
 from coperceive.models.runner import resolve_interpreter
+from coperceive.models.slurm import SlurmError, plan_sbatch, submit, write_plan
 from coperceive.models.spec import Manifest, ModelSpecError, select_model
+from coperceive.store import read_scene
+from coperceive.viewdata import scene_directories
 
 _USER_ERRORS = (
     ModelSpecError,
@@ -29,6 +33,7 @@ _USER_ERRORS = (
     PredictionError,
     InputError,
     CacheError,
+    SlurmError,
     PathError,
     OSError,
 )
@@ -74,6 +79,19 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("--hash-inputs", action="store_true")
     run.add_argument("--work", default=None)
     run.add_argument("--force", action="store_true")
+    run.add_argument(
+        "--slurm",
+        action="store_true",
+        help="Emit the sbatch for this run under <out>/.slurm/ and print it; run nothing.",
+    )
+    run.add_argument("--submit", action="store_true", help="With --slurm: also sbatch it.")
+    run.add_argument(
+        "--slurm-python", default=None, help="Interpreter on the node; default this one."
+    )
+    run.add_argument("--slurm-logs", default=None, help="Slurm log directory; default ~/logs.")
+    run.add_argument(
+        "--slurm-results", default=None, help="Per-job results root; default ~/results."
+    )
     run.set_defaults(func=run_command)
 
     cache = commands.add_parser("cache", help="The per-scene result cache of runs.")
@@ -197,6 +215,11 @@ def _run(args: argparse.Namespace) -> None:
     manifest = _manifest(args)
     options = _run_options(args)
     out = Path(args.out)
+    if args.slurm:
+        _emit_slurm(args, manifest, options, out)
+        return
+    if args.submit:
+        raise BatchError("--submit needs --slurm")
     report = run_batch(
         manifest,
         Path(args.scenes),
@@ -215,6 +238,40 @@ def _run(args: argparse.Namespace) -> None:
     if report.exit_code != 0:
         print(f"run {report.status}: {report.reason}", file=sys.stderr)
         raise SystemExit(report.exit_code)
+
+
+def _emit_slurm(
+    args: argparse.Namespace, manifest: Manifest, options: RunOptions, out: Path
+) -> None:
+    """Plan and write the sbatch; print its path and text; submit only with --submit."""
+    spec = select_model(manifest, options.model)
+    scenes_root = Path(args.scenes)
+    directories = {path.name: path for path in scene_directories(scenes_root)}
+    selected = list(directories) if options.scene_ids is None else list(options.scene_ids)
+    scenes: dict[str, Scene] = {}
+    for scene_id in selected:
+        if scene_id not in directories:
+            raise BatchError(f"no scene directory {scene_id!r} under {scenes_root}")
+        scenes[scene_id] = read_scene(directories[scene_id])
+    home = Path.home()
+    plan = plan_sbatch(
+        manifest,
+        spec,
+        scenes_root=scenes_root,
+        scenes=scenes,
+        run_id=str(args.run_id),
+        out_root=out,
+        options=options,
+        python=Path(args.slurm_python) if args.slurm_python else Path(sys.executable),
+        logs_dir=Path(args.slurm_logs) if args.slurm_logs else home / "logs",
+        results_dir=Path(args.slurm_results) if args.slurm_results else home / "results",
+    )
+    path = write_plan(plan, out, str(args.run_id))
+    print(f"wrote {path}")
+    print(f"--time from {plan.estimate_source}")
+    print(plan.script, end="")
+    if args.submit:
+        print(f"job {submit(path)}")
 
 
 def _run_options(args: argparse.Namespace) -> RunOptions:
