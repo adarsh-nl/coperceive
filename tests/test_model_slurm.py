@@ -19,6 +19,7 @@ from coperceive.model import Scene
 from coperceive.models.batch import RunOptions, run_batch
 from coperceive.models.slurm import (
     estimate_from_runs,
+    interpreter_module,
     plan_sbatch,
     staged_files,
     submit,
@@ -45,7 +46,14 @@ def roots(tmp_path: Path) -> tuple[Path, Path, Scene]:
 def _manifest(**changes: object) -> Manifest:
     payload = cast(dict[str, Any], yaml.safe_load(FAKE.read_text(encoding="utf-8")))
     resources = payload["models"]["default"]["resources"]
-    for key in ("gpu", "memory_gb", "slurm_constraint", "seconds_per_sample", "staging_seconds"):
+    for key in (
+        "gpu",
+        "cpus",
+        "memory_gb",
+        "slurm_constraint",
+        "seconds_per_sample",
+        "staging_seconds",
+    ):
         if key in changes:
             resources[key] = changes[key]
     if "modules" in changes:
@@ -73,6 +81,56 @@ def _plan(roots: tuple[Path, Path, Scene], manifest: Manifest, tmp_path: Path, *
     )
 
 
+def test_resources_default_to_one_cpu_and_two_gb() -> None:
+    payload = cast(dict[str, Any], yaml.safe_load(FAKE.read_text(encoding="utf-8")))
+    resources = payload["models"]["default"]["resources"]
+    del resources["cpus"]
+    del resources["memory_gb"]
+    spec = select_model(parse_manifest(payload, source=FAKE), "default")
+    assert spec.resources.cpus == 1 and spec.resources.memory_gb == 2
+
+
+def test_module_load_for_the_venv_interpreter(
+    roots: tuple[Path, Path, Scene], tmp_path: Path
+) -> None:
+    """The interpreter's module comes from the venv's pyvenv.cfg, not from a constant."""
+    venv = tmp_path / "venv"
+    (venv / "bin").mkdir(parents=True)
+    python = venv / "bin" / "python"
+    python.write_text("", encoding="utf-8")
+    (venv / "pyvenv.cfg").write_text(
+        "home = /software/python/3.13.14/bin\nversion = 3.13.14\n", encoding="utf-8"
+    )
+    assert interpreter_module(python) == "python/3.13.14"
+    scenes, out, scene = roots
+    manifest = _manifest(modules=["nvidia/cuda-11.8"])
+    plan = plan_sbatch(
+        manifest,
+        select_model(manifest, "default"),
+        scenes_root=scenes,
+        scenes={"coop": scene},
+        run_id="r1",
+        out_root=out,
+        options=RunOptions(),
+        python=python,
+        logs_dir=tmp_path / "logs",
+        results_dir=tmp_path / "results",
+    )
+    lines = plan.script.splitlines()
+    purge = lines.index("module purge")
+    assert lines[purge + 1].startswith("module load python/3.13.14")
+    assert lines[purge + 2] == "module load nvidia/cuda-11.8"
+    # A version line alone is enough; no pyvenv.cfg means no module line.
+    (venv / "pyvenv.cfg").write_text("version = 3.12.1\n", encoding="utf-8")
+    assert interpreter_module(python) == "python/3.12.1"
+    bare = tmp_path / "bare" / "bin" / "python"
+    bare.parent.mkdir(parents=True)
+    bare.write_text("", encoding="utf-8")
+    assert interpreter_module(bare) is None
+    plan = _plan(roots, manifest, tmp_path)  # /opt/venv/bin/python: no cfg there
+    assert "module load python/" not in plan.script
+
+
 def test_time_limit_griffin() -> None:
     assert time_limit(0.39, 700, 1490) == "01:00:00"  # 1281.1 s -> 1800 -> 3600
 
@@ -83,13 +141,14 @@ def test_time_limit_small() -> None:
 
 def test_gpu_script_lines(roots: tuple[Path, Path, Scene], tmp_path: Path) -> None:
     manifest = _manifest(
-        gpu=True, memory_gb=64, slurm_constraint="a40|a100", modules=["nvidia/cuda-11.8"]
+        gpu=True, cpus=8, memory_gb=64, slurm_constraint="a40|a100", modules=["nvidia/cuda-11.8"]
     )
     plan = _plan(roots, manifest, tmp_path)
     script = plan.script
     for needle in (
         "#SBATCH --partition=ps,main-gpu",
         "#SBATCH --gres=gpu:1",
+        "#SBATCH --cpus-per-task=8",
         "#SBATCH --mem=64G",
         '#SBATCH --constraint="a40|a100"',
         "#SBATCH --mail-type=END,FAIL",
@@ -115,6 +174,8 @@ def test_cpu_script_has_no_gres(roots: tuple[Path, Path, Scene], tmp_path: Path)
     plan = _plan(roots, load_manifest(FAKE), tmp_path)
     assert "#SBATCH --partition=ps,main-cpu" in plan.script
     assert "--gres" not in plan.script and plan.gres is None
+    assert "#SBATCH --cpus-per-task=1" in plan.script and "#SBATCH --mem=2G" in plan.script
+    assert plan.cpus == 1 and plan.mem_gb == 2
     assert "#SBATCH --time=00:20:00" in plan.script  # 7 samples x 0.01 s -> 600 -> 1200
 
 

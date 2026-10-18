@@ -101,7 +101,8 @@ Each entry of `models`:
 | Key | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
 | `gpu` | bool | yes | | Needs a GPU. |
-| `memory_gb` | int | yes | | Slurm `--mem`. |
+| `memory_gb` | int | no | `2` | Slurm `--mem`, in GB. |
+| `cpus` | int | no | `1` | Slurm `--cpus-per-task`. |
 | `seconds_per_sample` | float | yes | | Author's estimate for the Slurm `--time` formula, used until a run of this plugin and model exists under `--out`; then that run's provenance `timings` take over (§Provenance). |
 | `staging_seconds` | float | no | `0` | Same. |
 | `frame_timeout_s` | float | no | `600` | Per frame. |

@@ -33,11 +33,36 @@ from coperceive.viewdata import pose_times
 
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
 SLURM_DIR = ".slurm"
-CPUS = 8
+_SOFTWARE_PYTHON = re.compile(r"/software/python/([^/]+)/")
 
 
 class SlurmError(CoperceiveError):
     """The job could not be planned or submitted."""
+
+
+def interpreter_module(python: Path) -> str | None:
+    """The ``module load`` the interpreter needs on a compute node, from the venv's
+    ``pyvenv.cfg`` (``home = /software/python/<version>/bin`` on this cluster, else the
+    ``version`` line); None when ``python`` is not inside a venv (Adarsh, 2026-10-18)."""
+    cfg = python.resolve().parent.parent / "pyvenv.cfg"
+    if not cfg.is_file():
+        return None
+    home = version = None
+    for line in cfg.read_text(encoding="utf-8").splitlines():
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        if key.strip() == "home":
+            home = value.strip()
+        elif key.strip() == "version":
+            version = value.strip()
+    if home is not None:
+        match = _SOFTWARE_PYTHON.search(home + "/")
+        if match is not None:
+            return f"python/{match.group(1)}"
+    if version:
+        return f"python/{version}"
+    return None
 
 
 def time_limit(seconds_per_sample: float, staging_seconds: float, samples: int) -> str:
@@ -129,7 +154,9 @@ class SlurmPlan:
     job_name: str
     partition: str
     gres: str | None
+    cpus: int
     mem_gb: int
+    interpreter_module: str | None
     time: str
     constraint: str | None
     modules: tuple[str, ...]
@@ -187,7 +214,7 @@ def plan_sbatch(
     ]
     if gpu:
         lines.append("#SBATCH --gres=gpu:1")
-    lines.append(f"#SBATCH --cpus-per-task={CPUS}")
+    lines.append(f"#SBATCH --cpus-per-task={spec.resources.cpus}")
     lines.append(f"#SBATCH --mem={spec.resources.memory_gb}G")
     lines.append(f"#SBATCH --time={limit}")
     if spec.resources.slurm_constraint:
@@ -212,6 +239,9 @@ def plan_sbatch(
             "module purge",
         ]
     )
+    interpreter = interpreter_module(python)
+    if interpreter is not None:
+        lines.append(f"module load {shlex.quote(interpreter)}  # the interpreter of {python}")
     for name in manifest.environment.modules:
         lines.append(f"module load {shlex.quote(name)}")
     lines.append("")
@@ -244,7 +274,9 @@ def plan_sbatch(
         job_name=job_name,
         partition=partition,
         gres="gpu:1" if gpu else None,
+        cpus=spec.resources.cpus,
         mem_gb=spec.resources.memory_gb,
+        interpreter_module=interpreter,
         time=limit,
         constraint=spec.resources.slurm_constraint,
         modules=manifest.environment.modules,
@@ -352,6 +384,7 @@ __all__ = [
     "SlurmError",
     "SlurmPlan",
     "estimate_from_runs",
+    "interpreter_module",
     "plan_sbatch",
     "staged_files",
     "submit",

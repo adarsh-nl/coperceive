@@ -89,6 +89,7 @@ class Resources:
     grace_s: float
     slurm_constraint: str | None
     max_inflight: int
+    cpus: int = 1  # Slurm --cpus-per-task (Adarsh, 2026-10-18: default 1, --mem default 2G)
 
 
 @dataclass(frozen=True)
@@ -528,7 +529,8 @@ def _resources(node: _Node | None) -> Resources:
     assert node is not None
     resources = Resources(
         gpu=node.bool("gpu"),
-        memory_gb=node.int("memory_gb"),
+        memory_gb=node.opt_int("memory_gb", 2),
+        cpus=node.opt_int("cpus", 1),
         seconds_per_sample=node.float("seconds_per_sample"),
         staging_seconds=node.opt_float("staging_seconds", 0.0) or 0.0,
         frame_timeout_s=node.opt_float("frame_timeout_s", 600.0) or 600.0,
@@ -539,6 +541,8 @@ def _resources(node: _Node | None) -> Resources:
     )
     if resources.max_inflight < 1:
         raise ModelSpecError(f"{node.at('max_inflight')}: expected at least 1")
+    if resources.cpus < 1 or resources.memory_gb < 1:
+        raise ModelSpecError(f"{node.path}: cpus and memory_gb must be at least 1")
     node.done()
     return resources
 
