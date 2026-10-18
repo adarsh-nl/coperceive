@@ -16,7 +16,7 @@ Every rule a result depends on is in this document or in the config copied into 
       metrics.json           written by `coperceive eval run`
 ```
 
-The predictions root is `<scenes root>/predictions` when that directory contains a child with `run.json`. `--predictions` overrides it for `eval`, `predictions import`, `export bev` and `serve`. A `run_id` and a `scene_id` follow the scene-id rule: non-empty, not `.` or `..`, no slash or backslash, no leading dot. Every path a reader opens is resolved and must stay under the predictions root.
+The predictions root is `<scenes root>/predictions` when that directory contains a child with `run.json`. `--predictions` overrides it for `eval`, `predictions import`, `export bev` and `serve`. A `run_id` and a `scene_id` follow the scene-id rule: non-empty, not `.` or `..`, no slash or backslash, no leading dot. Every path a reader opens is resolved and must stay under the predictions root. `cache` is a reserved child name of a run directory (the model-plugin cache, model-plugin spec §Cache): it is never a scene id and readers skip it.
 
 ## `run.json`
 

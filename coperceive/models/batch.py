@@ -34,6 +34,7 @@ from coperceive.evaluation.predictions import (
     write_run,
 )
 from coperceive.model import Scene
+from coperceive.models.cache import SceneCache
 from coperceive.models.inputs import InputFile, build_frame, remove_inputs, sensor_json
 from coperceive.models.protocol import (
     AgentRef,
@@ -296,6 +297,8 @@ def run_batch(
     run_timeout = options.run_timeout_s or spec.resources.run_timeout_s
     deadline = time.monotonic() + run_timeout if run_timeout else None
     stored = _stored_provenance(out_root, run_id, digest, force=options.force)
+    if cache is None and options.cache:
+        cache = SceneCache(out_root / run_id, plugin=manifest.name, model=spec.key)
     directories = {path.name: path for path in scene_directories(scenes_root)}
     if options.scene_ids is None:
         selected = list(directories)

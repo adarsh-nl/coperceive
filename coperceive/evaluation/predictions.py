@@ -65,8 +65,14 @@ def check_run_id(value: str) -> str:
     return _check_name(value, "run_id")
 
 
+RESERVED_SCENE_IDS = frozenset({"cache"})  # the model-plugin cache under a run directory
+
+
 def check_scene_id(value: str) -> str:
-    return _check_name(value, "scene_id")
+    name = _check_name(value, "scene_id")
+    if name in RESERVED_SCENE_IDS:
+        raise PredictionError(f"scene_id {value!r} is a reserved name under a run directory")
+    return name
 
 
 def _check_name(value: object, what: str) -> str:
