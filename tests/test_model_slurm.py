@@ -177,7 +177,8 @@ def test_gpu_script_lines(roots: tuple[Path, Path, Scene], tmp_path: Path) -> No
         "export PYTHONPATH=",
         "set +e",
         "RC=$?",
-        "--include='artifacts/***'",
+        "--include='*/' --include='*.log' --include='artifacts/***' "
+        "--exclude='*' --prune-empty-dirs",
         'exit "$RC"',
     ):
         assert needle in script, needle
@@ -298,3 +299,52 @@ def test_time_limit_prefers_the_last_runs_timings(
     plan = _plan(roots, manifest, tmp_path)
     assert "#SBATCH --time=00:20:00" in plan.script  # 100 + 7 x 0.1 = 100.7 s -> 600 -> 1200
     assert plan.estimate_source.startswith("provenance.timings")
+
+
+def test_work_copy_filter_keeps_nested_logs_and_artifacts(tmp_path: Path) -> None:
+    """rsync with WORK_COPY_FILTER on a fake work tree: logs at any depth and artefacts come
+    home, inputs and a toolkit copy do not, empty directories are pruned."""
+    if shutil.which("rsync") is None:
+        pytest.skip("no rsync")
+    work = tmp_path / "work"
+    for relative in (
+        "parent.log",
+        "plugin.log",
+        "griffin-toolkit.log",
+        "work_dirs/vehicle-side/logs/test_0101.log",
+        "artifacts/vehicle-side/det_json",
+        "artifacts/vehicle-side/track_query/sample_1.pkl",
+        "inputs/17/vehicle-lidar_top.bin",
+        "griffin/tools/test.py",
+        "datasets/prefix/release/vehicle-side/pose/000001.json",
+    ):
+        target = work / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x", encoding="utf-8")
+    (work / "empty").mkdir()
+    dest = tmp_path / "home"
+    argv = ["rsync", "-a", *[item.strip("'") for item in _split_filter()], f"{work}/", f"{dest}/"]
+    done = subprocess.run(argv, capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    copied = sorted(str(p.relative_to(dest)) for p in dest.rglob("*") if p.is_file())
+    assert copied == [
+        "artifacts/vehicle-side/det_json",
+        "artifacts/vehicle-side/track_query/sample_1.pkl",
+        "griffin-toolkit.log",
+        "parent.log",
+        "plugin.log",
+        "work_dirs/vehicle-side/logs/test_0101.log",
+    ]
+    assert not (dest / "empty").exists() and not (dest / "inputs").exists()
+    assert not (dest / "griffin").exists() and not (dest / "datasets").exists()
+
+
+def _split_filter() -> list[str]:
+    """WORK_COPY_FILTER items are shell words with quotes; rsync gets them unquoted."""
+    from coperceive.models.slurm import WORK_COPY_FILTER
+
+    out: list[str] = []
+    for item in WORK_COPY_FILTER:
+        key, sep, value = item.partition("=")
+        out.append(f"{key}{sep}{value.strip(chr(39))}" if sep else item)
+    return out

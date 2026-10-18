@@ -176,3 +176,14 @@ def test_model_inspect_prints_raw_templates_as_text(capsys: pytest.CaptureFixtur
     assert "- vehicle-side/pose/{frame:06d}.json" in out
     assert "frozenset" not in out and "checkpoint_md5: 1201f5692e390a75e5b5ab0efa0cae19" in out
     assert out.strip().splitlines()[-1].startswith("interpreter:")
+
+
+def test_run_tolerates_progress_before_configured(
+    scenes: Path, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Through the full command, not only the conformance check (GPU job 629276)."""
+    out = tmp_path / "predictions"
+    main(_run_args(scenes, out, "r1", "--option", "misbehave=progress-first"))
+    text = capsys.readouterr().out
+    assert f"wrote {out / 'r1'}" in text and "scene coop: 7 frames" in text
+    assert read_run_meta(out, "r1").provenance is not None

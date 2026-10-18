@@ -33,6 +33,16 @@ from coperceive.viewdata import pose_times
 
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
 SLURM_DIR = ".slurm"
+# What of the work directory comes home: every *.log at any depth and the artefacts, not the
+# inputs or a toolkit copy. `--include='*/'` keeps directories traversable (an `--exclude='*'`
+# alone would drop them) and `--prune-empty-dirs` drops the ones that end up empty.
+WORK_COPY_FILTER = (
+    "--include='*/'",
+    "--include='*.log'",
+    "--include='artifacts/***'",
+    "--exclude='*'",
+    "--prune-empty-dirs",
+)
 _SOFTWARE_PYTHON = re.compile(r"/software/python/([^/]+)/")
 
 
@@ -289,7 +299,7 @@ def plan_sbatch(
             f'mkdir -p {shlex.quote(str(results))}/"$SLURM_JOB_ID"',
             f'rsync -a "$SCRATCH/out/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/',
             "# The work directory's logs and artefacts, not its inputs or any toolkit copy.",
-            "rsync -a --include='*.log' --include='artifacts/***' --exclude='*' "
+            "rsync -a " + " ".join(WORK_COPY_FILTER) + " "
             f'"$SCRATCH/work/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/work/',
             f"mkdir -p {shlex.quote(str(target))}",
             f'rsync -a "$SCRATCH/out/{run_id}/" {shlex.quote(str(target))}/',
@@ -409,6 +419,7 @@ def submit(path: Path) -> str:
 
 __all__ = [
     "SLURM_DIR",
+    "WORK_COPY_FILTER",
     "SlurmError",
     "SlurmPlan",
     "coperceive_root",
