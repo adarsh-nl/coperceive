@@ -66,7 +66,8 @@ class StageOptions:
     static: Path | None = None
     workers: int = 1
     accept_m: float = 0.5
-    margin_m: float = 2.0
+    ratio: float = 10.0
+    gap_m: float = 0.5
     port: int = 8731
     allow_unpinned_xodr: bool = False
 
@@ -226,7 +227,11 @@ def stage(options: StageOptions) -> StagingReport:
         _say(f"maps: {', '.join(ingested)}")
     with _step("3/6 identify towns", timings):
         guesses = identify_towns(
-            maps_root, poses_root, accept_m=options.accept_m, margin_m=options.margin_m
+            maps_root,
+            poses_root,
+            accept_m=options.accept_m,
+            ratio=options.ratio,
+            gap_m=options.gap_m,
         )
         table = options.scratch / f"scene_towns-{options.dataset}.yaml"
         write_town_table(guesses, table)
@@ -315,7 +320,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--static", type=Path, default=None)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--accept-m", type=float, default=0.5)
-    parser.add_argument("--margin-m", type=float, default=2.0)
+    parser.add_argument("--ratio", type=float, default=10.0)
+    parser.add_argument("--gap-m", type=float, default=0.5)
     parser.add_argument("--port", type=int, default=8731)
     parser.add_argument("--allow-unpinned-xodr", action="store_true")
     args = parser.parse_args(argv)
@@ -329,7 +335,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         static=args.static,
         workers=args.workers,
         accept_m=args.accept_m,
-        margin_m=args.margin_m,
+        ratio=args.ratio,
+        gap_m=args.gap_m,
         port=args.port,
         allow_unpinned_xodr=args.allow_unpinned_xodr,
     )

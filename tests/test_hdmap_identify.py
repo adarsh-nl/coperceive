@@ -14,15 +14,15 @@ from coperceive.hdmap.opendrive import parse_opendrive
 from coperceive.hdmap.store import load_map, write_map
 from coperceive.model import SCHEMA_VERSION, Agent, AgentType, Clock, Scene, StampedPose
 from coperceive.se3 import SE3
-from coperceive.store import write_scene
+from coperceive.store import read_scene, write_scene
 
 from tests.test_hdmap import straight_road
 
 SOURCE = {"format": "opendrive", "licence": "MIT"}
 
 
-def _maps(tmp_path: Path) -> Path:
-    """Two towns: a road along x at y = 0 (Town03) and one shifted to y = 200 (Town05)."""
+def _maps(tmp_path: Path, shift: float = 200.0) -> Path:
+    """Two towns: a road along x at y = 0 (Town03) and one shifted to y = ``shift`` (Town05)."""
     maps = tmp_path / "maps"
     xodr = tmp_path / "Town03.xodr"
     straight_road(xodr)
@@ -34,7 +34,8 @@ def _maps(tmp_path: Path) -> Path:
     )
     shifted = tmp_path / "Town05.xodr"
     shifted.write_text(
-        xodr.read_text(encoding="utf-8").replace('x="0" y="0"', 'x="0" y="200"'), encoding="utf-8"
+        xodr.read_text(encoding="utf-8").replace('x="0" y="0"', f'x="0" y="{shift:g}"'),
+        encoding="utf-8",
     )
     write_map(
         parse_opendrive(shifted, sample_step_m=5),
@@ -78,21 +79,34 @@ def test_identify_picks_the_map_the_poses_follow(tmp_path: Path) -> None:
     assert guesses[0].runner_up_m == pytest.approx(200.0, abs=0.5)
 
 
-def test_unidentified_town_leaves_map_name_empty(tmp_path: Path) -> None:
+def test_unidentified_when_the_best_is_far_or_the_runner_up_is_not_ten_times_worse(
+    tmp_path: Path,
+) -> None:
     maps = _maps(tmp_path)
     scenes = tmp_path / "scenes"
-    _scene(scenes, "far", y=50.0)  # 48 m from either road
-    _scene(scenes, "between", y=100.0)  # equidistant: no margin
-    guesses = {g.scene_id: g for g in identify_towns(maps, scenes, accept_m=100.0, margin_m=2.0)}
-    assert guesses["far"].map_name == "Carla/Maps/Town03"  # 48.25 m accepted with a 100 m threshold
-    assert guesses["between"].map_name is None
-    assert guesses["between"].status == "unidentified"
-    assert "within 2.0 m" in guesses["between"].reason
+    _scene(scenes, "near", y=5.0)  # 3.25 m from Town03's left lane, 193.25 m from Town05's
+    _scene(scenes, "between", y=100.0)  # equidistant: the runner-up is 1× the best
+    loose = {g.scene_id: g for g in identify_towns(maps, scenes, accept_m=100.0)}
+    assert loose["near"].map_name == "Carla/Maps/Town03"  # 3.25 m accepted under a 100 m threshold
+    assert loose["near"].best_m == pytest.approx(3.25, abs=0.05)
+    assert loose["between"].map_name is None
+    assert loose["between"].status == "unidentified"
+    assert "under 10×" in loose["between"].reason
     strict = identify_town(
-        __import__("coperceive.store", fromlist=["read_scene"]).read_scene(scenes / "far"),
-        [load_map(maps / "Town03"), load_map(maps / "Town05")],
+        read_scene(scenes / "near"), [load_map(maps / "Town03"), load_map(maps / "Town05")]
     )
     assert strict.map_name is None and "above 0.5 m" in strict.reason
+
+
+def test_unidentified_when_the_runner_up_is_within_the_absolute_gap(tmp_path: Path) -> None:
+    maps = _maps(tmp_path, shift=0.3)  # two towns whose roads differ by 0.3 m
+    scenes = tmp_path / "scenes"
+    _scene(scenes, "on", y=-1.75)  # exactly on Town03's lane, 0.3 m from Town05's
+    guess = identify_towns(maps, scenes)[0]
+    assert guess.best_m == pytest.approx(0.0, abs=1e-6)
+    assert guess.runner_up_m == pytest.approx(0.3, abs=0.02)
+    assert guess.map_name is None and guess.status == "unidentified"
+    assert "within 0.5 m" in guess.reason  # the ratio passes (10 × 0 m), the gap does not
 
 
 def test_table_round_trips_through_the_platform_loader(tmp_path: Path) -> None:

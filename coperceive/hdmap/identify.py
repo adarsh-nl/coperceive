@@ -4,10 +4,12 @@
 OPV2V and V2XSet files do not name their town. For every ingested map the vehicle
 poses of a scene are scored at the identity transform (every CARLA town so far aligned
 at identity); the best town is accepted only when its median lane-centre distance is at
-most ``accept_m`` and the runner-up is at least ``margin_m`` worse. Otherwise the scene
-stays map-less and the table says why. The result is a platform table that
-``coperceive adapters ingest --platform-table`` applies: ``{scene_id: {map_name: ...}}``
-plus ``_``-prefixed notes that the loader ignores.
+most ``accept_m``, the runner-up's is at least ``ratio`` times the best, and the runner-up
+is at least ``gap_m`` worse in absolute terms (Adarsh, 2026-10-18, after staging job
+629196 left a scene map-less at 0.046 m against 1.060 m under the earlier fixed 2 m
+margin). Otherwise the scene stays map-less and the table says why. The result is a
+platform table that ``coperceive adapters ingest --platform-table`` applies:
+``{scene_id: {map_name: ...}}`` plus ``_``-prefixed notes that the loader ignores.
 """
 
 from __future__ import annotations
@@ -24,7 +26,8 @@ from coperceive.model import Scene
 from coperceive.store import read_scene
 
 DEFAULT_ACCEPT_M = 0.5
-DEFAULT_MARGIN_M = 2.0
+DEFAULT_RATIO = 10.0
+DEFAULT_GAP_M = 0.5
 
 
 @dataclass(frozen=True)
@@ -61,7 +64,8 @@ def identify_town(
     maps: Sequence[HdMap],
     *,
     accept_m: float = DEFAULT_ACCEPT_M,
-    margin_m: float = DEFAULT_MARGIN_M,
+    ratio: float = DEFAULT_RATIO,
+    gap_m: float = DEFAULT_GAP_M,
 ) -> TownGuess:
     poses = vehicle_poses([scene])
     if not maps:
@@ -92,9 +96,17 @@ def identify_town(
         return _guess(
             scene.scene_id, None, "unidentified", reason, len(poses), residuals, scored[0], runner
         )
-    if runner is not None and runner[1] - best_m < margin_m:
+    if runner is not None and runner[1] < ratio * best_m:
         reason = (
-            f"runner-up {runner[0]} at {runner[1]:.3f} m is within {margin_m} m of {best_m:.3f} m"
+            f"runner-up {runner[0]} at {runner[1]:.3f} m is under {ratio:g}× "
+            f"the best {best_m:.3f} m"
+        )
+        return _guess(
+            scene.scene_id, None, "unidentified", reason, len(poses), residuals, scored[0], runner
+        )
+    if runner is not None and runner[1] - best_m < gap_m:
+        reason = (
+            f"runner-up {runner[0]} at {runner[1]:.3f} m is within {gap_m:g} m of {best_m:.3f} m"
         )
         return _guess(
             scene.scene_id, None, "unidentified", reason, len(poses), residuals, scored[0], runner
@@ -147,7 +159,8 @@ def identify_towns(
     scenes_root: Path,
     *,
     accept_m: float = DEFAULT_ACCEPT_M,
-    margin_m: float = DEFAULT_MARGIN_M,
+    ratio: float = DEFAULT_RATIO,
+    gap_m: float = DEFAULT_GAP_M,
 ) -> list[TownGuess]:
     if not scenes_root.is_dir():
         raise FileNotFoundError(scenes_root)
@@ -156,7 +169,9 @@ def identify_towns(
     for path in sorted(scenes_root.iterdir(), key=lambda item: item.name):
         if path.name.startswith(".") or not (path / "manifest.json").is_file():
             continue
-        guesses.append(identify_town(read_scene(path), maps, accept_m=accept_m, margin_m=margin_m))
+        guesses.append(
+            identify_town(read_scene(path), maps, accept_m=accept_m, ratio=ratio, gap_m=gap_m)
+        )
     return guesses
 
 

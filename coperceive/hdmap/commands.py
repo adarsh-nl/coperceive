@@ -14,7 +14,8 @@ from typing import Any
 from coperceive.hdmap.align import align_maps
 from coperceive.hdmap.identify import (
     DEFAULT_ACCEPT_M,
-    DEFAULT_MARGIN_M,
+    DEFAULT_GAP_M,
+    DEFAULT_RATIO,
     identify_towns,
     write_town_table,
 )
@@ -75,7 +76,8 @@ def add_parser(sub: Any) -> None:
     identify.add_argument("--scenes", required=True, help="Directory of schema 1 scenes.")
     identify.add_argument("--out", required=True, help="YAML platform table to write.")
     identify.add_argument("--accept-m", type=float, default=DEFAULT_ACCEPT_M)
-    identify.add_argument("--margin-m", type=float, default=DEFAULT_MARGIN_M)
+    identify.add_argument("--ratio", type=float, default=DEFAULT_RATIO)
+    identify.add_argument("--gap-m", type=float, default=DEFAULT_GAP_M)
     identify.set_defaults(func=identify_command)
 
 
@@ -172,7 +174,8 @@ def identify_command(args: argparse.Namespace) -> None:
             Path(args.maps),
             Path(args.scenes),
             accept_m=float(args.accept_m),
-            margin_m=float(args.margin_m),
+            ratio=float(args.ratio),
+            gap_m=float(args.gap_m),
         )
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
