@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import BinaryIO, cast
@@ -27,6 +28,7 @@ ERROR_CODES = frozenset(
     {"unsupported", "configure_failed", "frame_failed", "cancelled", "bad_message", "internal"}
 )
 POINT_LAYOUTS = frozenset({"xyzi_f32le"})
+_MD5 = re.compile(r"^[0-9a-f]{32}$")  # hello.environment.checkpoint_md5 (Adarsh, 2026-10-18)
 
 PoseJson = Mapping[str, object]
 SensorJson = Mapping[str, object]
@@ -429,6 +431,11 @@ def _hello(node: _Obj) -> Hello:
     environment = node.str_map("environment")
     if not environment:
         raise ProtocolError("message.environment: expected a non-empty map of strings")
+    digest = environment.get("checkpoint_md5")
+    if digest is None or not _MD5.fullmatch(digest):
+        raise ProtocolError(
+            "message.environment.checkpoint_md5: required, 32 lowercase hex characters"
+        )
     return Hello(
         plugin=node.str("plugin"),
         version=node.str("version"),

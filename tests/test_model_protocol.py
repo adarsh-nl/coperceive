@@ -52,7 +52,7 @@ MESSAGES: list[Message] = [
         version="0.0.1",
         models=("default",),
         capabilities=Capabilities(live=True, cancel=True, max_inflight=1),
-        environment={"python": "3.13.14", "checkpoint_md5": "none"},
+        environment={"python": "3.13.14", "checkpoint_md5": "d41d8cd98f00b204e9800998ecf8427e"},
         git_commit=None,
     ),
     Configure(
@@ -163,3 +163,24 @@ def test_line_reader() -> None:
     assert reader.readline() is None
     with pytest.raises(ProtocolError, match="16"):
         LineReader(io.BytesIO(b"x" * (MAX_LINE + 1) + b"\n")).readline()
+
+
+@pytest.mark.parametrize(
+    "digest", [None, "", "none", "NONE", "D41D8CD98F00B204E9800998ECF8427E", "abc"]
+)
+def test_hello_requires_a_32_hex_checkpoint_md5(digest: str | None) -> None:
+    environment: dict[str, str] = {"python": "3.13.14"}
+    if digest is not None:
+        environment["checkpoint_md5"] = digest
+    payload = {
+        "type": "hello",
+        "protocol": 1,
+        "plugin": "fake",
+        "version": "0.0.1",
+        "models": ["default"],
+        "capabilities": {"live": True, "cancel": True, "max_inflight": 1},
+        "environment": environment,
+    }
+    with pytest.raises(ProtocolError, match="environment.checkpoint_md5") as caught:
+        decode(json.dumps(payload).encode("utf-8") + b"\n")
+    assert caught.value.code == "bad_message"

@@ -155,7 +155,7 @@ Every message has `type` (str) and `protocol` (int, `1`).
  "git_commit": "9c02ba4a"}
 ```
 
-`environment` is a flat map of strings. It must change whenever the child's outputs would change for the same inputs (framework versions, checkpoint digests); its `checkpoint_md5` key is required (`none` for a model without weights) and is part of the cache key (§Cache). `git_commit` is optional.
+`environment` is a flat map of strings. It must change whenever the child's outputs would change for the same inputs (framework versions, checkpoint digests); its `checkpoint_md5` key is required, must be 32 lowercase hexadecimal characters, and is part of the cache key (§Cache). A `hello` without it, or with any other form, is rejected as `bad_message` with the key path `message.environment.checkpoint_md5` (Adarsh, 2026-10-18). A model without weights reports the MD5 of whatever fixes its outputs, for instance its own worker source file; the fake plugin does that. `git_commit` is optional.
 
 **`configure`** (parent, once per scene):
 
@@ -276,7 +276,7 @@ A run whose `provenance.status` is `partial` is evaluated on its finished scenes
 
 ## Cache
 
-Location: `<predictions root>/<run_id>/cache/<plugin>/<model>/<checkpoint_md5>/<scene_id>/`. The key is those four values: the manifest `name`, the `models` key, `hello.environment.checkpoint_md5` (required; `none` for a model without weights) and the scene id. `cache` is a reserved child name of a run directory; readers of predictions format 1 skip it when they enumerate scenes, and `check_scene_id` refuses it.
+Location: `<predictions root>/<run_id>/cache/<plugin>/<model>/<checkpoint_md5>/<scene_id>/`. The key is those four values: the manifest `name`, the `models` key, `hello.environment.checkpoint_md5` (required, 32 lowercase hex characters; a model without weights hashes its own code) and the scene id. `cache` is a reserved child name of a run directory; readers of predictions format 1 skip it when they enumerate scenes, and `check_scene_id` refuses it.
 
 Contents of a scene's directory:
 
