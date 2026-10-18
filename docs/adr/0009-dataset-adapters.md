@@ -311,6 +311,10 @@ Where the implementation departs from the text above:
 - Reader plugins carry a `kind` attribute (`record`, `table`, `lidar`) so the manifest validator can list them as reader choices.
 - `coperceive convert griffin` is an alias for the adapter since the slow regression passed on the real Griffin-25m release (2026-10-17). The pre-adapter reader and converter are frozen in `tests/griffin_reference.py` so the regression test still compares two implementations. `coperceive/griffin/raw.py` is gone.
 
+## Extensions
+
+[ADR 0012](0012-left-handed-sources.md) (2026-10-18) adds optional keys for left-handed sources (`conventions.source_handedness`), boxes given as a location plus a rotated offset with half extents and mapping records, typed discovery (`agents.discover.types`), sensors read from one per-frame record with a fixed lidar, a `licence` block and command-line platform tables. `spec_version` stays 1.
+
 ## Decisions
 
 Taken by Adarsh on 2026-10-17.
