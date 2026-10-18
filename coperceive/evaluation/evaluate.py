@@ -892,6 +892,14 @@ def evaluate_run(
     skipped: list[str] = []
     errors: list[str] = []
     warnings: list[str] = []
+    # A plugin run that stopped early (model-plugin spec §Partial runs) is evaluated on its
+    # finished scenes and says so in every metrics.json it writes.
+    partial = (meta.provenance or {}).get("status") == "partial"
+    missing = [
+        scene_id
+        for scene_id in selected
+        if not (scene_output_dir(predictions_root, run_id, scene_id) / BOXES_FILE).is_file()
+    ]
     for scene_id in selected:
         try:
             check_scene_id(scene_id)
@@ -906,6 +914,9 @@ def evaluate_run(
             boxes = read_boxes(predictions_root, run_id, scene_id)
             validate_boxes(scene, meta, boxes)
             result = evaluate_scene(scene, meta, boxes, config, created_utc=created_utc)
+            result.metrics["run_status"] = "partial" if partial else "complete"
+            if partial:
+                result.metrics["missing_scenes"] = list(missing)
             write_scene_evaluation(output_dir, result)
         except (CoperceiveError, ValueError, OSError) as error:
             errors.append(f"{scene_id}: {error}")

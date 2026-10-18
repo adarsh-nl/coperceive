@@ -235,6 +235,20 @@ def _float(value: object) -> float | None:
     return float(value)
 
 
+def partial_note(predictions_root: Path, rows: Sequence[Row]) -> str | None:
+    """``partial: N of M scenes`` when the run's metrics say it stopped early, else None."""
+    if not rows:
+        return None
+    first = rows[0]
+    metrics = read_metrics(scene_output_dir(predictions_root, first.run_id, first.scene_id))
+    if metrics.get("run_status") != "partial":
+        return None
+    missing = metrics.get("missing_scenes")
+    count = len(cast(Sequence[object], missing)) if isinstance(missing, Sequence) else 0
+    evaluated = len({row.scene_id for row in rows})
+    return f"partial: {evaluated} of {evaluated + count} scenes"
+
+
 def outputs_of(rows: Sequence[Row]) -> list[OutputKey]:
     """The ``(agent_id, source)`` outputs of ``rows`` in first-appearance order."""
     return list(dict.fromkeys(row.output for row in rows))

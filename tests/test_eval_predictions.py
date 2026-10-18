@@ -338,3 +338,25 @@ def test_prediction_box_frame_and_scene_id_are_kept(tmp_path: Path) -> None:
     assert back[0].track_id is None
     assert back[0].scene_id == "coop-fixture"
     assert back[1] == rows[1]
+
+
+def test_run_meta_provenance_round_trips(tmp_path: Path) -> None:
+    meta, _ = synthetic_predictions(cooperative_scene())
+    provenance = {
+        "plugin": "fake",
+        "status": "complete",
+        "environment": {"checkpoint_md5": "0" * 32},
+    }
+    named = replace(meta, provenance=provenance)
+    write_run(tmp_path, meta.run_id, named, [])
+    back = read_run_meta(tmp_path, meta.run_id)
+    assert back.provenance == provenance
+    assert back == named
+
+
+def test_run_json_without_provenance_loads(tmp_path: Path) -> None:
+    meta, _ = synthetic_predictions(cooperative_scene())
+    write_run(tmp_path, meta.run_id, meta, [])
+    payload = json.loads((tmp_path / meta.run_id / "run.json").read_text(encoding="utf-8"))
+    assert "provenance" not in payload
+    assert read_run_meta(tmp_path, meta.run_id).provenance is None

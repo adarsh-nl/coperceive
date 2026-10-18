@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 import math
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -88,6 +88,9 @@ class RunMeta:
     sources: tuple[tuple[str, str], ...]
     created_utc: str
     notes: str | None = None
+    # Optional, written by `coperceive model run` (model-plugin spec §Provenance); a JSON
+    # object that readers which do not know it ignore.
+    provenance: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         check_run_id(self.run_id)
@@ -125,6 +128,8 @@ class RunMeta:
         }
         if self.notes is not None:
             payload["notes"] = self.notes
+        if self.provenance is not None:
+            payload["provenance"] = dict(self.provenance)
         return payload
 
     @staticmethod
@@ -160,6 +165,14 @@ class RunMeta:
         notes = data.get("notes")
         if notes is not None and not isinstance(notes, str):
             raise PredictionError(f"{RUN_FILE} notes must be a string")
+        provenance_raw = data.get("provenance")
+        if provenance_raw is not None and not isinstance(provenance_raw, dict):
+            raise PredictionError(f"{RUN_FILE} provenance must be an object")
+        provenance = (
+            {str(k): v for k, v in cast(dict[object, object], provenance_raw).items()}
+            if provenance_raw is not None
+            else None
+        )
         try:
             return RunMeta(
                 run_id=run_id,
@@ -169,6 +182,7 @@ class RunMeta:
                 sources=tuple(sources),
                 created_utc=_req_str(data, "created_utc"),
                 notes=notes,
+                provenance=provenance,
             )
         except PredictionError as error:
             raise PredictionError(f"{RUN_FILE}: {error}") from error

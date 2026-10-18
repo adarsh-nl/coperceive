@@ -32,7 +32,7 @@ from coperceive.evaluation.predictions import (
     validate_boxes,
     write_run,
 )
-from coperceive.evaluation.report import Row, collect, render_compare, render_report
+from coperceive.evaluation.report import Row, collect, partial_note, render_compare, render_report
 from coperceive.model import Scene
 from coperceive.store import read_scene
 
@@ -279,6 +279,9 @@ def _report(args: argparse.Namespace) -> None:
     root = _scenes_root(args)
     predictions = _existing_predictions_root(args)
     rows = _evaluated_rows(root, predictions, args.run_id)
+    note = partial_note(predictions, rows)
+    if note:
+        print(note)
     print(render_report(rows, _thresholds(rows)), end="")
 
 
@@ -291,6 +294,10 @@ def _compare(args: argparse.Namespace) -> None:
     predictions = _existing_predictions_root(args)
     rows_a = _evaluated_rows(root, predictions, args.run_a)
     rows_b = _evaluated_rows(root, predictions, args.run_b)
+    for run_id, rows in ((args.run_a, rows_a), (args.run_b, rows_b)):
+        note = partial_note(predictions, rows)
+        if note:
+            print(f"{run_id}: {note}")
     print(render_compare(rows_a, rows_b, _thresholds(rows_a)), end="")
 
 

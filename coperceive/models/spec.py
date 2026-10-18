@@ -208,9 +208,11 @@ def select_model(manifest: Manifest, name: str | None) -> ModelSpec:
     """The one model, or the named one; an error listing the names when ambiguous."""
     names = ", ".join(manifest.models)
     if name is None:
-        if len(manifest.models) != 1:
-            raise ModelSpecError(f"--model is required; {manifest.name} has models: {names}")
-        return next(iter(manifest.models.values()))
+        if len(manifest.models) == 1:
+            return next(iter(manifest.models.values()))
+        if "default" in manifest.models:  # the convention of ADR 0011 decision 1
+            return manifest.models["default"]
+        raise ModelSpecError(f"--model is required; {manifest.name} has models: {names}")
     spec = manifest.models.get(name)
     if spec is None:
         raise ModelSpecError(f"{manifest.name} has no model {name!r}; models: {names}")

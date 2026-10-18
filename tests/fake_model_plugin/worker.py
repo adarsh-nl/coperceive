@@ -216,8 +216,6 @@ class Worker:
         if self.model == "known-answer":
             return self._known_answer(message)
         agents = [str(a.get("agent_id")) for a in self.config.get("agents", [])]
-        if self.misbehave == "bad-agent":
-            agents = ["ghost"]
         poses = message.get("poses", {})
         score = (time.time() % 1.0) if self.misbehave == "nondeterministic" else 0.9
         boxes: list[dict[str, Any]] = []
@@ -227,7 +225,10 @@ class Worker:
                 continue
             values = cast(dict[str, Any], pose)
             tx, ty, tz = float(values["tx"]), float(values["ty"]), float(values["tz"])
-            boxes.append(_box(agent_id, "car", [tx + 5.0, ty, tz], score))
+            # bad-agent: the box is placed at a real pose but attributed to an agent the
+            # frame did not request (and that the scene does not have).
+            owner = "ghost" if self.misbehave == "bad-agent" else agent_id
+            boxes.append(_box(owner, "car", [tx + 5.0, ty, tz], score))
             if self.options.get("extra") is True:
                 boxes.append(_box(agent_id, "pedestrian", [tx + 8.0, ty + 2.0, tz], score))
         return boxes

@@ -37,7 +37,7 @@ def test_fake_manifest_loads() -> None:
     assert manifest.name == "fake"
     assert manifest.version == "0.0.1"
     assert manifest.environment.kind == "current"
-    assert tuple(manifest.models) == ("default",)
+    assert tuple(manifest.models) == ("default", "known-answer")
     assert manifest.models["default"].inputs.modalities == ("camera", "lidar")
     assert manifest.models["default"].outputs.sources == (("single", "fake"),)
     assert manifest.models["default"].resources.frame_timeout_s == 600.0
@@ -113,13 +113,18 @@ def test_check_options_types_and_rejects_unknown() -> None:
 
 def test_select_model_needs_a_name_when_ambiguous() -> None:
     payload = _payload()
-    payload["models"]["second"] = payload["models"]["default"]
+    payload["models"] = {
+        "first": payload["models"]["default"],
+        "second": payload["models"]["default"],
+    }
     manifest = parse_manifest(payload, source=None)
-    with pytest.raises(ModelSpecError, match="default, second"):
+    with pytest.raises(ModelSpecError, match="first, second"):
         select_model(manifest, None)
     assert select_model(manifest, "second").key == "second"
     with pytest.raises(ModelSpecError, match="third"):
         select_model(manifest, "third")
+    # A model keyed `default` is chosen when none is named (the fake has two models).
+    assert select_model(load_manifest(FAKE), None).key == "default"
 
 
 class _FakeEntryPoint:
