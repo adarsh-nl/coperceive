@@ -16,6 +16,7 @@ nav:
   - Griffin verification: design/griffin-verification.md
   - Viewer features: design/viewer-features.md
   - Griffin dataset: datasets/griffin.md
+  - OPV2V and V2XSet: datasets/opencood.md
   - Add a dataset: datasets/add-a-dataset.md
   - Validate: validate.md
   - Evaluate: eval.md
