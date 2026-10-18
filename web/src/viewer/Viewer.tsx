@@ -66,6 +66,7 @@ import {
   type FrameFrustum,
   type Pose,
   type SceneSummary,
+  agentLabels,
 } from "./types";
 import {
   applyGoal,
@@ -824,6 +825,8 @@ export default function Viewer({
     () => new Map((summary?.agents ?? []).map((agent) => [agent.agent_id, agent.agent_type])),
     [summary],
   );
+  // People-facing labels ("Vehicle 1"); the raw agent_id stays the key and the tooltip.
+  const agentNames = useMemo(() => agentLabels(summary), [summary]);
   // Predictions (ADR 0010). Fetched state is keyed by scene and run, so a change of either reads as "not loaded"
   // without a reset; nothing here persists except `appearance.predictionScore`.
   const [runList, setRunList] = useState<{ sceneId: string; runs: RunInfo[]; note: string } | null>(null);
@@ -2535,7 +2538,7 @@ export default function Viewer({
                     <EyeToggle
                       key={row.key}
                       on={showCameraImage(appearance, row.key)}
-                      label={`${row.agent} ${row.sensor}`}
+                      label={`${agentNames.get(row.agent) ?? row.agent} ${row.sensor}`}
                       onChange={() =>
                         setAppearance((current) =>
                           toggleOneFrustumImage(current, row.key, cameraChoices.map((item) => item.key)),
@@ -2560,7 +2563,8 @@ export default function Viewer({
                   <li key={agent.agent_id}>
                     <SwatchToggle
                       on={!hidden[agent.agent_id]}
-                      label={agent.agent_id}
+                      label={agentNames.get(agent.agent_id) ?? agent.agent_id}
+                      title={agent.agent_id}
                       color={AGENT_INK[agent.agent_type] ?? "#b7b1a6"}
                       meta={
                         <>
@@ -2762,6 +2766,7 @@ export default function Viewer({
                 boxes={cameraFrame.boxes}
                 pointSensors={cameraFrame.point_sensors}
                 types={agentTypes}
+                names={agentNames}
                 hidden={hidden}
                 cacheRef={cacheRef}
                 hud={splitHud}
@@ -2780,6 +2785,7 @@ export default function Viewer({
               nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
               frustums={cameraFrame.frustums}
               types={agentTypes}
+              names={agentNames}
               open={appearance.stripOpen}
               onToggleOpen={() => setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }))}
               splitKey={appearance.splitCamera}
@@ -2810,7 +2816,7 @@ export default function Viewer({
               <article key={agent.agent_id} className="tele">
                 <header>
                   <i style={{ background: ink }} aria-hidden="true" />
-                  <strong>{agent.agent_id}</strong>
+                  <strong title={agent.agent_id}>{agentNames.get(agent.agent_id) ?? agent.agent_id}</strong>
                   <span>{agent.agent_type}</span>
                 </header>
                 <dl>

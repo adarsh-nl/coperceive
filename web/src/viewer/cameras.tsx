@@ -359,6 +359,7 @@ function drawOverlay(
 
 function CameraPanel({
   camera,
+  agentLabel,
   bitmap,
   boxes,
   clouds,
@@ -369,6 +370,8 @@ function CameraPanel({
   missingText,
 }: {
   camera: FrameFrustum;
+  /** The agent's display name, or its raw id when the scene has none. */
+  agentLabel: string;
   bitmap: ImageBitmap | null | undefined;
   /** Shown when there is no image for this sample: per-sample or per-scene wording. */
   missingText: string;
@@ -399,10 +402,10 @@ function CameraPanel({
     };
   }, [camera, boxes, clouds, types, hidden, showBoxes, showLidar, bitmap, model]);
 
-  const label = `${camera.sensor_id} · ${camera.agent_id}`;
+  const label = `${camera.sensor_id} · ${agentLabel}`;
   return (
     <figure className="camera-panel">
-      <figcaption>{label}</figcaption>
+      <figcaption title={camera.agent_id}>{label}</figcaption>
       {bitmap ? (
         <div className="camera-frame">
           <canvas ref={canvasRef} role="img" aria-label={`${label} at this sample`} />
@@ -435,6 +438,7 @@ function agentOrder(frustums: readonly FrameFrustum[]): { agentId: string; camer
 /** One camera's low-resolution picture; it asks for the file only while it is on screen. */
 function Thumb({
   camera,
+  agentLabel,
   sceneId,
   timeUs,
   nextTimeUs,
@@ -446,6 +450,7 @@ function Thumb({
   onToggleImage,
 }: {
   camera: FrameFrustum;
+  agentLabel: string;
   sceneId: string;
   timeUs: number;
   nextTimeUs: number | null;
@@ -524,8 +529,8 @@ function Thumb({
         type="button"
         className="cam-thumb"
         aria-pressed={open}
-        aria-label={`${open ? "Close" : "Open"} ${camera.agent_id} ${camera.sensor_id}`}
-        title={`${camera.agent_id} ${camera.sensor_id}`}
+        aria-label={`${open ? "Close" : "Open"} ${agentLabel} ${camera.sensor_id}`}
+        title={`${agentLabel} ${camera.sensor_id} (${camera.agent_id})`}
         data-camera={key}
         onClick={onOpen}
       >
@@ -553,6 +558,7 @@ export default function CameraStrip({
   nextTimeUs,
   frustums,
   types,
+  names,
   open,
   onToggleOpen,
   splitKey,
@@ -568,6 +574,8 @@ export default function CameraStrip({
   nextTimeUs: number | null;
   frustums: FrameFrustum[];
   types: Map<string, string>;
+  /** `agent_id -> display name`; an agent missing here is labelled by its id. */
+  names: Map<string, string>;
   /** Collapsed strips render no thumbnails and request nothing. */
   open: boolean;
   onToggleOpen: () => void;
@@ -615,7 +623,9 @@ export default function CameraStrip({
               className="cam-group"
               style={{ ["--agent" as string]: colorFor(types.get(group.agentId) ?? "") }}
             >
-              <span className="cam-group-name">{group.agentId}</span>
+              <span className="cam-group-name" title={group.agentId}>
+                {names.get(group.agentId) ?? group.agentId}
+              </span>
               <div className="cam-thumbs">
                 {group.cameras.map((camera) => {
                   const key = cameraKey(camera.agent_id, camera.sensor_id);
@@ -623,6 +633,7 @@ export default function CameraStrip({
                     <Thumb
                       key={key}
                       camera={camera}
+                      agentLabel={names.get(camera.agent_id) ?? camera.agent_id}
                       sceneId={sceneId}
                       timeUs={timeUs}
                       nextTimeUs={nextTimeUs}
@@ -655,6 +666,7 @@ export function CameraSplit({
   boxes,
   pointSensors,
   types,
+  names,
   hidden,
   cacheRef,
   hud,
@@ -670,6 +682,7 @@ export function CameraSplit({
   boxes: FrameBox[];
   pointSensors: FrameSensor[];
   types: Map<string, string>;
+  names: Map<string, string>;
   hidden: Record<string, boolean>;
   cacheRef: RefObject<FrameCache>;
   hud: CameraHud | null;
@@ -750,10 +763,10 @@ export function CameraSplit({
 
   const heading = hud?.heading ?? 0;
   return (
-    <section className="camera-split" aria-label={`Camera ${camera.agent_id} ${camera.sensor_id}`}>
+    <section className="camera-split" aria-label={`Camera ${names.get(camera.agent_id) ?? camera.agent_id} ${camera.sensor_id}`}>
       <div className="camera-split-bar">
         <strong>
-          {camera.sensor_id} <span>{camera.agent_id}</span>
+          {camera.sensor_id} <span title={camera.agent_id}>{names.get(camera.agent_id) ?? camera.agent_id}</span>
         </strong>
         <button type="button" className="pip-toggle" aria-pressed={showBoxes} onClick={() => setShowBoxes((current) => !current)}>
           Boxes
@@ -768,6 +781,7 @@ export function CameraSplit({
       <div className="camera-split-stage">
         <CameraPanel
           camera={camera}
+          agentLabel={names.get(camera.agent_id) ?? camera.agent_id}
           bitmap={shown ? shown.bitmap : undefined}
           boxes={shown?.boxes ?? []}
           clouds={shown && cloudTime === shown.timeUs ? clouds : []}

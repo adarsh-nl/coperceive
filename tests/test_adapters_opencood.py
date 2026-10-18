@@ -397,3 +397,23 @@ def test_platform_table_value_is_read_per_scene(tmp_path: Path) -> None:
     b = read_scene(tmp_path / "out" / "b_scene")
     assert dict(a.agents[0].platform) == {"map_name": "Carla/Maps/Town03", "split": "train"}
     assert dict(b.agents[0].platform) == {"split": "train"}
+
+
+# --- display names (generated at ingest) --------------------------------------------------
+
+
+def test_display_names_number_agents_within_type_by_raw_id(tmp_path: Path) -> None:
+    """Vehicle 1, 2 in ascending raw-id order (numeric, so 999 before 1000); RSU 1 for ``-1``."""
+    poses = [((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))]
+    spec = SceneSpec(
+        "2021_08_20_20_39_00",
+        [AgentTrack("1000", poses), AgentTrack("999", poses), AgentTrack("-1", poses)],
+        stems=(69,),
+    )
+    scene = _ingested(tmp_path, spec, name="v2xset")
+    assert {a.agent_id: a.display_name for a in scene.agents} == {
+        "999": "Vehicle 1",
+        "1000": "Vehicle 2",
+        "-1": "RSU 1",
+    }
+    assert scene.agent("-1").agent_type is AgentType.INFRASTRUCTURE

@@ -17,6 +17,7 @@ from typing import cast
 
 import numpy as np
 
+from coperceive.adapters.naming import display_names
 from coperceive.adapters.paths import PathError, Template, confine
 from coperceive.adapters.readers import registry as readers
 from coperceive.adapters.readers.calib import pinhole_from_matrix
@@ -253,7 +254,7 @@ class ManifestAdapter:
                 scene_id=ref.scene_id,
                 world_frame=self.spec.world_frame,
                 clock=Clock(unit="us", scale_note=self.spec.clock.scale_note),
-                agents=tuple(agents),
+                agents=display_names(agents),
                 sensors=tuple(sensors),
                 annotations=tuple(annotations),
                 objects=shared_objects(annotations),

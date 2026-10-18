@@ -17,7 +17,9 @@ export type SensorRow = {
 export type SceneSummary = {
   scene_id: string;
   world_frame: string;
-  agents: { agent_id: string; agent_type: string }[];
+  /** `display_name` is the people-facing label ("Vehicle 1"); absent or null on an older
+   *  server or an unnamed scene, in which case the page shows `agent_id`. */
+  agents: { agent_id: string; agent_type: string; display_name?: string | null }[];
   sensors: SensorRow[];
   times_us: number[];
   /** Lidar sweeps and camera rows the scene carries. `images_staged` says whether the
@@ -97,9 +99,22 @@ export function isSummary(value: unknown): value is SceneSummary {
         !!item &&
         typeof item === "object" &&
         typeof (item as { agent_id?: unknown }).agent_id === "string" &&
-        typeof (item as { agent_type?: unknown }).agent_type === "string",
+        typeof (item as { agent_type?: unknown }).agent_type === "string" &&
+        (["string", "undefined"].includes(typeof (item as { display_name?: unknown }).display_name) ||
+          (item as { display_name?: unknown }).display_name === null),
     )
   );
+}
+
+/** The label for an agent: its display name when the scene has one, else the raw id. */
+export function agentLabel(summary: SceneSummary | null, agentId: string): string {
+  const row = summary?.agents.find((agent) => agent.agent_id === agentId);
+  return row?.display_name ? row.display_name : agentId;
+}
+
+/** `agent_id -> label` for every agent in the summary. */
+export function agentLabels(summary: SceneSummary | null): Map<string, string> {
+  return new Map((summary?.agents ?? []).map((agent) => [agent.agent_id, agent.display_name || agent.agent_id]));
 }
 
 export function isFrame(value: unknown): value is FrameDocument {

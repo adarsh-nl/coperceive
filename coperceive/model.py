@@ -143,9 +143,12 @@ class Agent:
     agent_type: AgentType
     poses: tuple[StampedPose, ...]
     platform: tuple[tuple[str, str], ...] = ()
+    display_name: str | None = None  # for people; ``agent_id`` stays the key everywhere
 
     def __post_init__(self) -> None:
         _nonempty(self.agent_id, "agent_id")
+        if self.display_name is not None:
+            _nonempty(self.display_name, "display_name")
         times = [pose.time_us for pose in self.poses]
         if any(times[i] >= times[i + 1] for i in range(len(times) - 1)):
             raise ValueError(f"agent {self.agent_id} poses must be strictly increasing in time")
