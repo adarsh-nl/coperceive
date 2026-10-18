@@ -137,7 +137,11 @@ def test_check_opens_the_scene_it_was_asked_for_whatever_the_page_opened_on(
         assert row["points"] == 2, row["status"]
         assert row["map_drawn"] is False
         assert row["thumbnails"] >= 1
-        assert row["http_errors"] == []
+        # No predictions root here: the page's one probe of it answers 404 and the pill
+        # names the gap. Nothing else may fail.
+        assert [url.rsplit("/", 1)[-1] for url in row["http_errors"]] == ["predictions"]
+        pills = row["missing_pill"]
+        assert any(pill.startswith("Predictions: no predictions root") for pill in pills)
         assert (out / f"{row['scene_id']}.png").is_file()
         assert (out / f"{row['scene_id']}-split.png").is_file()
     assert report["page_errors"] == []
