@@ -27,6 +27,7 @@ from typing import NoReturn, cast
 
 import pytest
 import uvicorn
+from coperceive.adapters.naming import display_names
 from coperceive.app.server import create_app
 from coperceive.evaluation.config import DEFAULT_CONFIG
 from coperceive.evaluation.evaluate import evaluate_run
@@ -149,9 +150,12 @@ def _full_scene() -> Scene:
     """The cooperative fixture in Town03 with a second vehicle camera, so the strip's
     one-camera-at-a-time loading is observable."""
     scene = cooperative_scene()
-    agents = tuple(
-        replace(agent, platform=(*agent.platform, ("map_name", "Carla/Maps/Town03")))
-        for agent in scene.agents
+    # Display names as ingest generates them (Vehicle 1, Drone 1, RSU 1); the bare scene has none.
+    agents = display_names(
+        tuple(
+            replace(agent, platform=(*agent.platform, ("map_name", "Carla/Maps/Town03")))
+            for agent in scene.agents
+        )
     )
     rear = Sensor(
         "cam_rear",
@@ -684,3 +688,59 @@ def test_a_browser_without_webgl_gets_a_message_not_a_blank_page(
     assert "sample 1 / 7" in page.locator(".clock").inner_text()
     assert errors == [], errors
     page.close()
+
+
+def test_agent_display_names_label_the_panels_and_raw_ids_stay_in_tooltips(
+    session: _Session,
+) -> None:
+    """A scene with display names shows them in the agent list, the telemetry cards, the
+    camera strip and the split view, with the raw agent id as the hover text; a scene
+    without names shows the raw id."""
+    page = session.page
+    expected = [(agent.display_name, agent.agent_id) for agent in _full_scene().agents]
+    assert [name for name, _ in expected] == ["Vehicle 1", "Drone 1", "RSU 1"]
+    swatches = page.locator(".agent-list .swatch")
+    listed = [
+        (
+            swatches.nth(i).locator("span").first.text_content(),
+            swatches.nth(i).get_attribute("title"),
+        )
+        for i in range(swatches.count())
+    ]
+    assert listed == expected
+    cards = page.locator(".tele header strong")
+    shown = [
+        (cards.nth(i).text_content(), cards.nth(i).get_attribute("title"))
+        for i in range(cards.count())
+    ]
+    assert shown == expected
+    if not _strip_open(session):
+        page.keyboard.press("C")
+    group = page.locator(".cam-group-name[title='vehicle']")
+    session.wait_for(lambda: group.count() == 1, "the vehicle's camera group")
+    assert group.text_content() == "Vehicle 1"
+    thumb = page.locator(".cam-thumb[data-camera='vehicle/cam_front']")
+    assert thumb.get_attribute("title") == "Vehicle 1 cam_front (vehicle)"
+    thumb.click()
+    session.wait_for(lambda: page.locator(".camera-split").count() == 1, "the split view")
+    bar = page.locator(".camera-split-bar strong span")
+    assert bar.text_content() == "Vehicle 1" and bar.get_attribute("title") == "vehicle"
+    assert page.locator(".camera-panel figcaption").text_content() == "cam_front · Vehicle 1"
+    page.keyboard.press("Escape")
+    session.choose_scene(SCENE_BARE)
+    assert page.locator(".tele header strong").all_text_contents() == ["vehicle"]
+    assert page.locator(".agent-list .swatch span").first.text_content() == "vehicle"
+
+
+def test_legend_names_the_agent_types_of_the_scene(session: _Session) -> None:
+    """The 3D legend lists the types present: Vehicle, Drone, RSU and Lane for the
+    cooperative scene; Vehicle and Lane for the single-vehicle scene."""
+
+    # The status chips of an evaluated run follow "Lane"; the agent types come first.
+    def through_lane() -> list[str]:
+        texts = [text.strip() for text in session.page.locator(".legend span").all_text_contents()]
+        return texts[: texts.index("Lane") + 1]
+
+    assert through_lane() == ["Vehicle", "Drone", "RSU", "Lane"]
+    session.choose_scene(SCENE_BARE)
+    assert through_lane() == ["Vehicle", "Lane"]

@@ -17,6 +17,7 @@ from typing import cast
 
 import numpy as np
 
+from coperceive.adapters.naming import display_names
 from coperceive.adapters.paths import PathError, Template, confine
 from coperceive.adapters.readers import registry as readers
 from coperceive.adapters.readers.calib import pinhole_from_matrix
@@ -32,6 +33,7 @@ from coperceive.adapters.readers.records import (
 )
 from coperceive.adapters.rotation import (
     AxisRemap,
+    Reflection,
     RotationError,
     euler_to_se3,
     matrix_to_se3,
@@ -111,6 +113,10 @@ class ManifestAdapter:
         self._camera = AxisRemap.parse_camera(spec.conventions.camera_axes)
         self._length = _LENGTH[spec.conventions.length_unit]
         self._degrees = spec.conventions.angle_unit == "deg"
+        # ADR 0012: a left-handed source is reflected once, before the axis remaps.
+        self._reflect: Reflection | None = None
+        if spec.conventions.source_handedness == "left":
+            self._reflect = Reflection.parse(spec.conventions.reflect_axis or "y")
 
     # -- discovery ---------------------------------------------------------------
 
@@ -232,7 +238,7 @@ class ManifestAdapter:
                     platform=ref.platform,
                 )
             )
-            agent_sensors = self._sensors(raw_root, ctx, tally)
+            agent_sensors = self._sensors(raw_root, ctx, samples, tally)
             sensors.extend(agent_sensors)
             if self.spec.streams.boxes is not None:
                 annotations.extend(
@@ -248,7 +254,7 @@ class ManifestAdapter:
                 scene_id=ref.scene_id,
                 world_frame=self.spec.world_frame,
                 clock=Clock(unit="us", scale_note=self.spec.clock.scale_note),
-                agents=tuple(agents),
+                agents=display_names(agents),
                 sensors=tuple(sensors),
                 annotations=tuple(annotations),
                 objects=shared_objects(annotations),
@@ -274,7 +280,8 @@ class ManifestAdapter:
                 continue
             root = spec.discover.glob.expand({**base, "agent": agent_id}).rstrip("/")
             values = {**base, "agent": agent_id, "agent_root": root}
-            out.append(_AgentCtx(agent_id, spec.discover.type, values))
+            agent_type = spec.discover.types.get(agent_id, spec.discover.type)
+            out.append(_AgentCtx(agent_id, agent_type, values))
         if not out:
             raise BuildError(f"{scene_id}: no agents matched {spec.discover.glob.text}")
         return out
@@ -323,6 +330,8 @@ class ManifestAdapter:
             pose = rotation.translation(translation[0], translation[1], translation[2])
             if spec.direction == "parent_to_child":
                 pose = pose.inverse()
+            if self._reflect is not None:
+                pose = self._reflect.se3(pose)
             pose = self._body.world_from_body(pose)
             time_us = self._time_us(sample, record, where)
             times[sample] = time_us
@@ -331,13 +340,43 @@ class ManifestAdapter:
         return out, times
 
     def _sensors(
-        self, raw_root: Path, ctx: _AgentCtx, tally: dict[str, int] | None
+        self,
+        raw_root: Path,
+        ctx: _AgentCtx,
+        samples: Sequence[Sample],
+        tally: dict[str, int] | None,
     ) -> list[Sensor]:
         spec = self.spec.streams.sensors
         out: list[Sensor] = []
         records: list[tuple[str, dict[str, object], str]] = []
-        table = self._table(raw_root, spec.reader, spec.path, ctx.values, spec.sensor_field)
-        if table is not None:
+        values = dict(ctx.values)
+        if spec.sample == "first":
+            # The calibration lives in a per-sample record: use the agent's first sample.
+            first = next(
+                (
+                    s
+                    for s in samples
+                    if self._path(raw_root, spec.path, _with_sample(ctx.values, s)).is_file()
+                ),
+                None,
+            )
+            if first is None:
+                raise BuildError(f"{ctx.agent_id}: no sample file for {spec.path.text}")
+            values = _with_sample(ctx.values, first)
+        table = self._table(raw_root, spec.reader, spec.path, values, spec.sensor_field)
+        if spec.records_prefix is not None:
+            path = self._path(raw_root, spec.path, values)
+            record = self._record(spec.reader, path)
+            where = spec.path.expand(values)
+            for key in record:
+                if key.startswith(spec.records_prefix):
+                    sub = record[key]
+                    if not isinstance(sub, dict):
+                        raise BuildError(f"{where}: {key} is not a sensor record")
+                    records.append((key, cast(dict[str, object], sub), f"{where} {key}"))
+            if not records:
+                raise BuildError(f"{where}: no key starts with {spec.records_prefix!r}")
+        elif table is not None:
             for key, record in table.items():
                 if spec.agent_field is not None:
                     owner = _field(record, spec.agent_field or "", spec.path.text)
@@ -354,6 +393,17 @@ class ManifestAdapter:
                 )
         for sensor_id, record, where in records:
             out.append(self._sensor(ctx.agent_id, sensor_id, record, where))
+            _count(tally, "sensors")
+        for fixed in spec.fixed:
+            # An identity extrinsic is the same after the reflection and the remap.
+            out.append(
+                Sensor(
+                    sensor_id=fixed.id,
+                    agent_id=ctx.agent_id,
+                    modality=fixed.modality,
+                    body_from_sensor=SE3.identity(),
+                )
+            )
             _count(tally, "sensors")
         return out
 
@@ -385,6 +435,8 @@ class ManifestAdapter:
             ).translation(t[0], t[1], t[2])
         if ext.direction == "parent_to_child":
             extrinsic = extrinsic.inverse()
+        if self._reflect is not None:
+            extrinsic = self._reflect.se3(extrinsic)
         fx = fy = cx = cy = None
         has_intrinsic = False
         if spec.intrinsic is not None:
@@ -503,15 +555,28 @@ class ManifestAdapter:
                 items: object = record
                 if spec.records is not None:
                     items = _field(record, spec.records or "", where)
-                if not isinstance(items, list):
-                    raise BuildError(f"{where}: {spec.records or 'record'} is not a list of boxes")
-                for item in cast(list[object], items):
+                keyed: list[tuple[object, object]]
+                if spec.records_mapping_key is not None:
+                    if not isinstance(items, dict):
+                        raise BuildError(f"{where}: {spec.records} is not a mapping of boxes")
+                    keyed = list(cast(dict[object, object], items).items())
+                else:
+                    if not isinstance(items, list):
+                        raise BuildError(
+                            f"{where}: {spec.records or 'record'} is not a list of boxes"
+                        )
+                    keyed = [(None, item) for item in cast(list[object], items)]
+                for key, item in keyed:
                     row: dict[str, object] = {}
+                    if spec.records_mapping_key is not None:
+                        row[spec.records_mapping_key] = key
                     for column, field_path in spec.fields.items():
                         try:
                             row[column] = get_field(item, field_path)
                         except FieldError:
                             continue
+                    for column, field_path in _derived_fields(spec).items():
+                        row[column] = _field(item, field_path, where)
                     rows.append(row)
             time_us = _sample_time(times, sample, where)
             for row in rows:
@@ -544,12 +609,23 @@ class ManifestAdapter:
             if spec.class_map_unknown == "drop":
                 return None
             raise BuildError(f"{where}: class {category!r} is not in class_map")
-        sizes = [_num(get(n), n, where) * self._length for n in ("length", "width", "height")]
+        rotation = self._rotation(spec.rotation, row, where, allow_missing=True)
+        if spec.size is not None:
+            sizes = [2.0 * _num(get(n), n, where) * self._length for n in _HALF]
+        else:
+            sizes = [_num(get(n), n, where) * self._length for n in ("length", "width", "height")]
         named = dict(zip(("length", "width", "height"), sizes, strict=True))
-        centre = [_num(get(n), n, where) * self._length for n in ("cx", "cy", "cz")]
+        if spec.centre is not None:
+            # ADR 0012: the box centre is the actor location plus the offset rotated by
+            # the box rotation, all in the source frame.
+            location = [_num(get(n), n, where) * self._length for n in _LOCATION]
+            offset = [_num(get(n), n, where) * self._length for n in _OFFSET]
+            turned = rotation.apply((offset[0], offset[1], offset[2]))
+            centre = [location[i] + turned[i] for i in range(3)]
+        else:
+            centre = [_num(get(n), n, where) * self._length for n in ("cx", "cy", "cz")]
         if spec.centre_origin == "bottom":
             centre[2] += named["height"] / 2.0
-        rotation = self._rotation(spec.rotation, row, where, allow_missing=True)
         track: str | None = None
         if "track_id" in row and row["track_id"] is not None:
             raw_track = row["track_id"]
@@ -580,6 +656,9 @@ class ManifestAdapter:
             )
             c = source_body_from_sensor.apply(c)
             rotation = source_body_from_sensor.translation(0.0, 0.0, 0.0).compose(rotation)
+        if self._reflect is not None:
+            c = self._reflect.point(c)
+            rotation = self._reflect.se3(rotation)
         if frame is BoxFrame.BODY:
             c = self._body.point(c)
             rotation = self._body.rotation(rotation)
@@ -614,6 +693,8 @@ class ManifestAdapter:
             if sensor.modality is not Modality.CAMERA:
                 continue
             for sample in samples:
+                if sample not in times and self.spec.streams.poses.missing == "skip":
+                    continue  # the pose stream skipped this sample: not this agent's sample
                 values = {**_with_sample(ctx.values, sample), "sensor": sensor.sensor_id}
                 relative = spec.path.expand(values)
                 if spec.require_file and not self._path(raw_root, spec.path, values).is_file():
@@ -656,6 +737,8 @@ class ManifestAdapter:
             )
         out: list[PointCloud] = []
         for sample in samples:
+            if sample not in times and self.spec.streams.poses.missing == "skip":
+                continue
             values = _with_sample(ctx.values, sample)
             relative = spec.path.expand(values)
             path = self._path(raw_root, spec.path, values)
@@ -701,11 +784,14 @@ class ManifestAdapter:
             raise BuildError(f"{path.name}: {exc}") from None
 
     def _remap_points(self, blob: bytes) -> bytes:
-        if self._body.is_identity and self._length == 1.0:
+        if self._body.is_identity and self._length == 1.0 and self._reflect is None:
             return blob
         flat = np.frombuffer(blob, dtype=np.float32)  # pyright: ignore[reportUnknownMemberType]
         points = flat.reshape(-1, 4).astype(np.float64)  # pyright: ignore[reportUnknownMemberType]
         matrix = np.asarray(self._body.rows, dtype=np.float64)
+        if self._reflect is not None:
+            signs = np.asarray(self._reflect.signs, dtype=np.float64)
+            matrix = matrix * signs[np.newaxis, :]  # M on the right: columns get the signs
         xyz = (points[:, :3] * self._length) @ matrix.T  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         points[:, :3] = xyz
         return points.astype(np.float32).tobytes()
@@ -896,6 +982,22 @@ class ManifestAdapter:
                 raise BuildError(f"{where}: {clock.field} = {raw!r} is not a whole microsecond")
             return int(value)
         return int(round(value))
+
+
+_LOCATION = ("_loc_x", "_loc_y", "_loc_z")
+_OFFSET = ("_off_x", "_off_y", "_off_z")
+_HALF = ("_half_x", "_half_y", "_half_z")
+
+
+def _derived_fields(spec: BoxesSpec) -> dict[str, str]:
+    """Field paths the centre and size rules read, under internal column names."""
+    out: dict[str, str] = {}
+    if spec.centre is not None:
+        out.update(zip(_LOCATION, spec.centre.location, strict=True))
+        out.update(zip(_OFFSET, spec.centre.offset, strict=True))
+    if spec.size is not None:
+        out.update(zip(_HALF, spec.size.half_extents, strict=True))
+    return out
 
 
 def _sample_time(times: Mapping[Sample, int], sample: Sample, where: str) -> int:

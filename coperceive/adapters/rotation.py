@@ -192,6 +192,47 @@ class AxisRemap:
         return self.as_se3().compose(source_rotation).compose(self.inverse_se3())
 
 
+@dataclass(frozen=True)
+class Reflection:
+    """One axis reflection for a left-handed source (ADR 0012).
+
+    ``M = diag(1, -1, 1)`` for ``axis == "y"``. Points and translations map as
+    ``p' = M p``; a rotation maps as the similarity ``R' = M R M``, which is again a
+    proper rotation (in Euler terms yaw and roll change sign, pitch keeps it). The
+    reflection is applied before the ``AxisRemap`` of the body or camera, so those
+    letters describe the axes after it.
+    """
+
+    axis: str
+
+    @staticmethod
+    def parse(axis: str) -> Reflection:
+        if axis != "y":
+            raise RotationError(f"reflect_axis must be y, got {axis!r}")
+        return Reflection(axis)
+
+    @property
+    def signs(self) -> Vec3:
+        return (1.0, -1.0, 1.0)
+
+    def point(self, p: Vec3) -> Vec3:
+        s = self.signs
+        return (s[0] * p[0], s[1] * p[1], s[2] * p[2])
+
+    def se3(self, transform: SE3) -> SE3:
+        """``M ∘ T ∘ M``: the same rigid motion seen in the reflected coordinates."""
+        rotation = transform.translation(0.0, 0.0, 0.0)
+        basis = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+        columns = [rotation.apply(axis) for axis in basis]
+        s = self.signs
+        rows: Rows3 = (
+            (s[0] * s[0] * columns[0][0], s[0] * s[1] * columns[1][0], s[0] * s[2] * columns[2][0]),
+            (s[1] * s[0] * columns[0][1], s[1] * s[1] * columns[1][1], s[1] * s[2] * columns[2][1]),
+            (s[2] * s[0] * columns[0][2], s[2] * s[1] * columns[1][2], s[2] * s[2] * columns[2][2]),
+        )
+        return SE3.from_matrix(rows, self.point((transform.tx, transform.ty, transform.tz)))
+
+
 def remap_transform(parent: AxisRemap, child: AxisRemap, parent_from_child: SE3) -> SE3:
     """Re-express ``parent ← child`` when both frames change axes."""
     return parent.as_se3().compose(parent_from_child).compose(child.inverse_se3())

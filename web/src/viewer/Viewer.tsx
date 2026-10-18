@@ -66,6 +66,7 @@ import {
   type FrameFrustum,
   type Pose,
   type SceneSummary,
+  agentLabels,
 } from "./types";
 import {
   applyGoal,
@@ -195,6 +196,16 @@ const COLORS: Record<string, number> = {
 const AGENT_INK: Record<string, string> = {
   vehicle: "#F58A1F",
   uav: "#3C8DFF",
+  infrastructure: "#b7b1a6",
+  other: "#b7b1a6",
+};
+/** Legend words per agent type, in legend order; only the types present in the scene are shown. */
+const LEGEND_ORDER = ["vehicle", "uav", "infrastructure", "other"] as const;
+const LEGEND_LABELS: Record<string, string> = {
+  vehicle: "Vehicle",
+  uav: "Drone",
+  infrastructure: "RSU",
+  other: "Agent",
 };
 
 const EXPORT_SIZES = [
@@ -822,6 +833,13 @@ export default function Viewer({
   const [cameraFrame, setCameraFrame] = useState<FrameDocument | null>(null);
   const agentTypes = useMemo(
     () => new Map((summary?.agents ?? []).map((agent) => [agent.agent_id, agent.agent_type])),
+    [summary],
+  );
+  // People-facing labels ("Vehicle 1"); the raw agent_id stays the key and the tooltip.
+  const agentNames = useMemo(() => agentLabels(summary), [summary]);
+  // The legend names the agent types this scene has (OPV2V: Vehicle; V2XSet: Vehicle, RSU; Griffin: Vehicle, Drone).
+  const legendTypes = useMemo(
+    () => LEGEND_ORDER.filter((kind) => (summary?.agents ?? []).some((agent) => agent.agent_type === kind)),
     [summary],
   );
   // Predictions (ADR 0010). Fetched state is keyed by scene and run, so a change of either reads as "not loaded"
@@ -2535,7 +2553,7 @@ export default function Viewer({
                     <EyeToggle
                       key={row.key}
                       on={showCameraImage(appearance, row.key)}
-                      label={`${row.agent} ${row.sensor}`}
+                      label={`${agentNames.get(row.agent) ?? row.agent} ${row.sensor}`}
                       onChange={() =>
                         setAppearance((current) =>
                           toggleOneFrustumImage(current, row.key, cameraChoices.map((item) => item.key)),
@@ -2560,7 +2578,8 @@ export default function Viewer({
                   <li key={agent.agent_id}>
                     <SwatchToggle
                       on={!hidden[agent.agent_id]}
-                      label={agent.agent_id}
+                      label={agentNames.get(agent.agent_id) ?? agent.agent_id}
+                      title={agent.agent_id}
                       color={AGENT_INK[agent.agent_type] ?? "#b7b1a6"}
                       meta={
                         <>
@@ -2724,12 +2743,11 @@ export default function Viewer({
               ))}
             </div>
             <div className="glass legend" aria-label="Legend">
-              <span>
-                <i style={{ background: "#F58A1F" }} /> Vehicle
-              </span>
-              <span>
-                <i style={{ background: "#3C8DFF" }} /> Drone
-              </span>
+              {legendTypes.map((kind) => (
+                <span key={kind}>
+                  <i style={{ background: AGENT_INK[kind] ?? "#b7b1a6" }} /> {LEGEND_LABELS[kind] ?? kind}
+                </span>
+              ))}
               <span>
                 <i style={{ background: "#c6f3dc" }} /> Lane
               </span>
@@ -2762,6 +2780,7 @@ export default function Viewer({
                 boxes={cameraFrame.boxes}
                 pointSensors={cameraFrame.point_sensors}
                 types={agentTypes}
+                names={agentNames}
                 hidden={hidden}
                 cacheRef={cacheRef}
                 hud={splitHud}
@@ -2780,6 +2799,7 @@ export default function Viewer({
               nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
               frustums={cameraFrame.frustums}
               types={agentTypes}
+              names={agentNames}
               open={appearance.stripOpen}
               onToggleOpen={() => setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }))}
               splitKey={appearance.splitCamera}
@@ -2810,7 +2830,7 @@ export default function Viewer({
               <article key={agent.agent_id} className="tele">
                 <header>
                   <i style={{ background: ink }} aria-hidden="true" />
-                  <strong>{agent.agent_id}</strong>
+                  <strong title={agent.agent_id}>{agentNames.get(agent.agent_id) ?? agent.agent_id}</strong>
                   <span>{agent.agent_type}</span>
                 </header>
                 <dl>

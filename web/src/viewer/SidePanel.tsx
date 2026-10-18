@@ -14,7 +14,7 @@ import {
 import type { EvalPick, EvalSummary, GtEvalDetail } from "./predictionTypes";
 import { formatMetres, formatSpeed } from "./telemetry";
 import type { FrameDocument, SceneSummary } from "./types";
-import { isPose } from "./types";
+import { agentLabel, isPose } from "./types";
 
 function cssColor(value: number): string {
   return `#${value.toString(16).padStart(6, "0")}`;
@@ -355,6 +355,15 @@ export function Inspector({
               <dd>{current.category}</dd>
             </div>
             <div className="span-2">
+              <dt>Agent</dt>
+              <dd>
+                {agentLabel(summary, current.agentId)}
+                {agentLabel(summary, current.agentId) !== current.agentId ? (
+                  <span className="muted num"> · {current.agentId}</span>
+                ) : null}
+              </dd>
+            </div>
+            <div className="span-2">
               <dt>Id</dt>
               <dd className="num">{current.trackId ?? current.agentId}</dd>
             </div>
@@ -370,7 +379,7 @@ export function Inspector({
           <ul className="distance-list">
             {agentDistances(current, frame).map((row) => (
               <li key={row.agentId}>
-                <span>{row.agentId}</span>
+                <span title={row.agentId}>{agentLabel(summary, row.agentId)}</span>
                 <span className="num">{row.metres === null ? "—" : formatMetres(row.metres)}</span>
               </li>
             ))}

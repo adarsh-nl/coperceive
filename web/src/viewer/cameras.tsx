@@ -330,12 +330,14 @@ function drawOverlay(
   }
 
   if (showLidar) {
-    const radius = 1.6 / scale;
+    // Only the camera's own agent's sweep reaches here (CameraSplit loads no other), points
+    // behind the camera (projectToImage) or closer than MIN_OVERLAY_DEPTH_M are dropped,
+    // and each point is coloured by its depth; 1.6 px squares instead of 3.2 px.
+    const radius = 0.8 / scale;
     for (const cloud of clouds) {
       if (hidden[cloud.agentId]) {
         continue;
       }
-      ctx.fillStyle = colorFor(types.get(cloud.agentId) ?? "");
       for (let index = 0; index + 2 < cloud.xyz.length; index += 3) {
         const pixel = projectToImage(
           camera,
@@ -343,7 +345,7 @@ function drawOverlay(
           cloud.xyz[index + 1] ?? 0,
           cloud.xyz[index + 2] ?? 0,
         );
-        if (!pixel) {
+        if (!pixel || pixel.depth < MIN_OVERLAY_DEPTH_M) {
           continue;
         }
         const u = pixel.u * pixelX;
@@ -351,14 +353,27 @@ function drawOverlay(
         if (u < 0 || v < 0 || u >= naturalWidth || v >= naturalHeight) {
           continue;
         }
+        ctx.fillStyle = depthColor(pixel.depth);
         ctx.fillRect(u - radius, v - radius, radius * 2, radius * 2);
       }
     }
   }
 }
 
+/** Points nearer than this are the sensor's own platform and the lens hood; not drawn. */
+export const MIN_OVERLAY_DEPTH_M = 1;
+/** Depth at and beyond which the overlay colour stops changing. */
+export const MAX_OVERLAY_DEPTH_M = 60;
+
+/** Warm near, cool far: hue 20° (orange) at 1 m to 220° (blue) at 60 m and beyond. */
+export function depthColor(depth: number): string {
+  const unit = Math.min(1, Math.max(0, (depth - MIN_OVERLAY_DEPTH_M) / (MAX_OVERLAY_DEPTH_M - MIN_OVERLAY_DEPTH_M)));
+  return `hsl(${Math.round(20 + 200 * unit)} 85% 55%)`;
+}
+
 function CameraPanel({
   camera,
+  agentLabel,
   bitmap,
   boxes,
   clouds,
@@ -369,6 +384,8 @@ function CameraPanel({
   missingText,
 }: {
   camera: FrameFrustum;
+  /** The agent's display name, or its raw id when the scene has none. */
+  agentLabel: string;
   bitmap: ImageBitmap | null | undefined;
   /** Shown when there is no image for this sample: per-sample or per-scene wording. */
   missingText: string;
@@ -399,10 +416,10 @@ function CameraPanel({
     };
   }, [camera, boxes, clouds, types, hidden, showBoxes, showLidar, bitmap, model]);
 
-  const label = `${camera.sensor_id} · ${camera.agent_id}`;
+  const label = `${camera.sensor_id} · ${agentLabel}`;
   return (
     <figure className="camera-panel">
-      <figcaption>{label}</figcaption>
+      <figcaption title={camera.agent_id}>{label}</figcaption>
       {bitmap ? (
         <div className="camera-frame">
           <canvas ref={canvasRef} role="img" aria-label={`${label} at this sample`} />
@@ -435,6 +452,7 @@ function agentOrder(frustums: readonly FrameFrustum[]): { agentId: string; camer
 /** One camera's low-resolution picture; it asks for the file only while it is on screen. */
 function Thumb({
   camera,
+  agentLabel,
   sceneId,
   timeUs,
   nextTimeUs,
@@ -446,6 +464,7 @@ function Thumb({
   onToggleImage,
 }: {
   camera: FrameFrustum;
+  agentLabel: string;
   sceneId: string;
   timeUs: number;
   nextTimeUs: number | null;
@@ -524,8 +543,8 @@ function Thumb({
         type="button"
         className="cam-thumb"
         aria-pressed={open}
-        aria-label={`${open ? "Close" : "Open"} ${camera.agent_id} ${camera.sensor_id}`}
-        title={`${camera.agent_id} ${camera.sensor_id}`}
+        aria-label={`${open ? "Close" : "Open"} ${agentLabel} ${camera.sensor_id}`}
+        title={`${agentLabel} ${camera.sensor_id} (${camera.agent_id})`}
         data-camera={key}
         onClick={onOpen}
       >
@@ -553,6 +572,7 @@ export default function CameraStrip({
   nextTimeUs,
   frustums,
   types,
+  names,
   open,
   onToggleOpen,
   splitKey,
@@ -568,6 +588,8 @@ export default function CameraStrip({
   nextTimeUs: number | null;
   frustums: FrameFrustum[];
   types: Map<string, string>;
+  /** `agent_id -> display name`; an agent missing here is labelled by its id. */
+  names: Map<string, string>;
   /** Collapsed strips render no thumbnails and request nothing. */
   open: boolean;
   onToggleOpen: () => void;
@@ -615,7 +637,9 @@ export default function CameraStrip({
               className="cam-group"
               style={{ ["--agent" as string]: colorFor(types.get(group.agentId) ?? "") }}
             >
-              <span className="cam-group-name">{group.agentId}</span>
+              <span className="cam-group-name" title={group.agentId}>
+                {names.get(group.agentId) ?? group.agentId}
+              </span>
               <div className="cam-thumbs">
                 {group.cameras.map((camera) => {
                   const key = cameraKey(camera.agent_id, camera.sensor_id);
@@ -623,6 +647,7 @@ export default function CameraStrip({
                     <Thumb
                       key={key}
                       camera={camera}
+                      agentLabel={names.get(camera.agent_id) ?? camera.agent_id}
                       sceneId={sceneId}
                       timeUs={timeUs}
                       nextTimeUs={nextTimeUs}
@@ -655,6 +680,7 @@ export function CameraSplit({
   boxes,
   pointSensors,
   types,
+  names,
   hidden,
   cacheRef,
   hud,
@@ -670,6 +696,7 @@ export function CameraSplit({
   boxes: FrameBox[];
   pointSensors: FrameSensor[];
   types: Map<string, string>;
+  names: Map<string, string>;
   hidden: Record<string, boolean>;
   cacheRef: RefObject<FrameCache>;
   hud: CameraHud | null;
@@ -725,7 +752,9 @@ export function CameraSplit({
     void (async () => {
       const loaded: Cloud[] = [];
       for (const sensor of pointSensors) {
-        if (sensor.count === 0) {
+        // The camera's own agent only: another agent's sweep, seen from here, is a wall of
+        // points below the horizon (OPV2V camera0 in job 629223: 83% of the drawn points).
+        if (sensor.count === 0 || sensor.agent_id !== camera.agent_id) {
           continue;
         }
         const buffer = await cacheRef.current.loadPoints(sceneId, timeUs, sensor.agent_id, sensor.sensor_id, token);
@@ -750,10 +779,10 @@ export function CameraSplit({
 
   const heading = hud?.heading ?? 0;
   return (
-    <section className="camera-split" aria-label={`Camera ${camera.agent_id} ${camera.sensor_id}`}>
+    <section className="camera-split" aria-label={`Camera ${names.get(camera.agent_id) ?? camera.agent_id} ${camera.sensor_id}`}>
       <div className="camera-split-bar">
         <strong>
-          {camera.sensor_id} <span>{camera.agent_id}</span>
+          {camera.sensor_id} <span title={camera.agent_id}>{names.get(camera.agent_id) ?? camera.agent_id}</span>
         </strong>
         <button type="button" className="pip-toggle" aria-pressed={showBoxes} onClick={() => setShowBoxes((current) => !current)}>
           Boxes
@@ -768,6 +797,7 @@ export function CameraSplit({
       <div className="camera-split-stage">
         <CameraPanel
           camera={camera}
+          agentLabel={names.get(camera.agent_id) ?? camera.agent_id}
           bitmap={shown ? shown.bitmap : undefined}
           boxes={shown?.boxes ?? []}
           clouds={shown && cloudTime === shown.timeUs ? clouds : []}

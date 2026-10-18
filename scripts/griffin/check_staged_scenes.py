@@ -4,7 +4,8 @@
 
 Runs inside the allocation that staged the scenes (``stage_viewer.py``): it starts
 ``coperceive serve``'s app in-process on a free loopback port with the staged roots,
-visits each scene, waits for lidar points, the town map and a camera thumbnail, opens
+selects each scene (the page opens on the first scene in name order, whatever was asked
+for first), waits for lidar points, the town map and a camera thumbnail, opens
 the split view on the first camera, and writes ``report.json`` and PNGs to ``--out``.
 Exit status 1 when a scene shows no points, no map or no camera image, so the job log
 says so. Nothing here touches the dataset: images are read through the camera links
@@ -61,7 +62,27 @@ def _points_in(status: str) -> int:
         return -1
 
 
-def check_scene(page: Page, scene_id: str, out: Path, first: bool) -> dict[str, object]:
+def _map_settled(page: Page) -> bool:
+    """The map is drawn, or the page says the scene has none."""
+    status = _status(page)
+    if "map drawn." in status:
+        return True
+    pills = " ".join(page.locator(".empty-pill li").all_inner_texts())
+    return "no map" in pills or "no map" in status
+
+
+def _select(page: Page, scene_id: str) -> None:
+    """Pick ``scene_id`` unless the page already shows it. The viewer opens on the first
+    scene in name order, which need not be the first scene asked for."""
+    if scene_id in _status(page):
+        return
+    page.locator("#scene-id").click()
+    page.locator("[role=option]", has_text=scene_id).click()
+
+
+def check_scene(
+    page: Page, scene_id: str, out: Path, *, require_map: bool = True
+) -> dict[str, object]:
     requests: list[str] = []
     bad: list[str] = []
     page.on("request", lambda req: requests.append(req.url) if "/api/" in req.url else None)
@@ -73,12 +94,13 @@ def check_scene(page: Page, scene_id: str, out: Path, first: bool) -> dict[str, 
             else None
         ),
     )
-    if not first:
-        page.locator("#scene-id").click()
-        page.locator("[role=option]", has_text=scene_id).click()
+    _select(page, scene_id)
     started = time.monotonic()
     _wait(page, lambda: scene_id in _status(page), f"{scene_id} to load")
-    _wait(page, lambda: "map drawn." in _status(page), "the map")
+    if require_map:
+        _wait(page, lambda: "map drawn." in _status(page), "the map")
+    else:
+        _wait(page, lambda: _map_settled(page), "the map or a no-map note")
     _wait(page, lambda: _points_in(_status(page)) > 0, "lidar points")
     _wait(page, lambda: page.locator(".cam-thumb canvas").count() >= 1, "a camera thumbnail")
     loaded_s = round(time.monotonic() - started, 2)
@@ -115,6 +137,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--static", type=Path, default=None)
     parser.add_argument("--scenes", nargs="+", required=True)
     parser.add_argument("--out", required=True, type=Path)
+    parser.add_argument(
+        "--allow-no-map",
+        action="store_true",
+        help="A scene without a map passes when it shows the no-map note (OpenCOOD scenes "
+        "whose town could not be identified).",
+    )
     args = parser.parse_args(argv)
     out: Path = args.out
     out.mkdir(parents=True, exist_ok=True)
@@ -143,8 +171,8 @@ def main(argv: list[str] | None = None) -> int:
         errors: list[str] = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(f"http://127.0.0.1:{port}/#/viewer", wait_until="networkidle")
-        for index, scene_id in enumerate(args.scenes):
-            reports.append(check_scene(page, scene_id, out, first=index == 0))
+        for scene_id in args.scenes:
+            reports.append(check_scene(page, scene_id, out, require_map=not args.allow_no_map))
         browser.close()
     server.should_exit = True
     thread.join(timeout=10)
@@ -156,7 +184,7 @@ def main(argv: list[str] | None = None) -> int:
         if not (
             isinstance(r["points"], int)
             and r["points"] > 0
-            and r["map_drawn"] is True
+            and (r["map_drawn"] is True or args.allow_no_map)
             and isinstance(r["thumbnails"], int)
             and r["thumbnails"] >= 1
         )
@@ -164,7 +192,11 @@ def main(argv: list[str] | None = None) -> int:
     if failed or errors:
         print(f"check failed: scenes {failed}, page errors {errors}", file=sys.stderr)
         return 1
-    print(f"ok: {len(reports)} scenes with points, map and camera images; report in {out}")
+    with_map = sum(1 for r in reports if r["map_drawn"] is True)
+    print(
+        f"ok: {len(reports)} scenes with points and camera images, {with_map} with a map; "
+        f"report in {out}"
+    )
     return 0
 
 

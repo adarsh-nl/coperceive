@@ -33,6 +33,8 @@ Time is an int64 count of microseconds. It has to fit in `[-9223372036854775808,
 
 `platform` is a JSON object of string to string. Keys are non-empty. Order is not significant. An empty object is allowed. This is free metadata (a vehicle name, a site id), not a second pose.
 
+`display_name` is an optional non-empty string for people: a manifest without it reads exactly as before, and a reader shows `agent_id` when it is absent. The adapters generate it at ingest as `<Type> <n>` (`Vehicle 1`, `Vehicle 2`, `Drone 1`, `RSU 1` for infrastructure, `Agent 1` for other), numbering the agents of each type in ascending raw-id order, numeric ids numerically first and the rest alphabetically. `agent_id` stays the key for tracks, predictions, evaluation and URLs; nothing joins on `display_name`.
+
 ## Poses
 
 Each sample is `world ← body`: it takes a point in the agent body frame into the world frame at that microsecond.
@@ -227,7 +229,7 @@ UTF-8 JSON, one object, trailing newline allowed. Unknown manifest keys are igno
   "world_frame": "ENU",
   "clock": {"unit": "us", "scale_note": "how time_us was obtained"},
   "agents": [
-    {"agent_id": "vehicle", "agent_type": "vehicle", "platform": {"name": "ground-car"}}
+    {"agent_id": "vehicle", "agent_type": "vehicle", "platform": {"name": "ground-car"}, "display_name": "Vehicle 1"}
   ],
   "sensors": [
     {

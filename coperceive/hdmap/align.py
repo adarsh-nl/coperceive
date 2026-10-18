@@ -143,6 +143,20 @@ def _align_one(hdmap: HdMap, scenes: list[Scene]) -> dict[str, object]:
     }
 
 
+def vehicle_poses(scenes: list[Scene]) -> list[tuple[float, float, float]]:
+    """``(x, y, yaw_deg)`` of every vehicle pose in the scenes."""
+    return _vehicle_poses(scenes)
+
+
+def score_identity(
+    hdmap: HdMap, poses: list[tuple[float, float, float]]
+) -> tuple[float | None, float | None, int]:
+    """Median lane-centre distance and heading error at the identity transform."""
+    lanes = tuple(item for item in hdmap.polylines if item.layer == LAYER_LANE_CENTRE)
+    identity: Matrix3 = ((1.0, 0.0, 0.0), (0.0, 1.0, 0.0), (0.0, 0.0, 1.0))
+    return _score(lanes, identity, (0.0, 0.0, 0.0), poses)
+
+
 def _vehicle_poses(scenes: list[Scene]) -> list[tuple[float, float, float]]:
     poses: list[tuple[float, float, float]] = []
     for scene in scenes:

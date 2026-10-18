@@ -107,15 +107,18 @@ export function SwatchToggle({
   color,
   meta,
   onChange,
+  title,
 }: {
   on: boolean;
   label: string;
   color: string;
   meta?: ReactNode;
   onChange: () => void;
+  /** Hover text, e.g. the raw agent id behind a display name. */
+  title?: string;
 }) {
   return (
-    <button type="button" className={on ? "swatch on" : "swatch"} aria-pressed={on} onClick={onChange}>
+    <button type="button" className={on ? "swatch on" : "swatch"} aria-pressed={on} onClick={onChange} title={title}>
       <i style={{ background: color }} aria-hidden="true" />
       <span>{label}</span>
       {meta}

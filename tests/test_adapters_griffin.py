@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 from pathlib import Path
 
 import pyarrow.parquet as pq
@@ -26,15 +27,34 @@ _TABLES = ("poses", "annotations", "objects", "images", "point_index")
 _PROVENANCE = {"adapter", "manifest_sha256", "coperceive_version"}
 
 
+_DISPLAY_NAMES = {"vehicle": "Vehicle 1", "drone": "Drone 1"}
+
+
+def _without_display_names(path: Path) -> bytes:
+    """The new manifest minus the one field the reference converter never wrote."""
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    for row in manifest["agents"]:
+        assert row.pop("display_name") == _DISPLAY_NAMES[row["agent_id"]], row
+    return (json.dumps(manifest, indent=2) + "\n").encode("utf-8")
+
+
 def assert_identical_scene_dirs(old: Path, new: Path) -> None:
-    assert (old / "manifest.json").read_bytes() == (new / "manifest.json").read_bytes()
+    # Byte-identical apart from ``display_name``, which is generated at ingest (2026-10-18).
+    assert (old / "manifest.json").read_bytes() == _without_display_names(new / "manifest.json")
     assert (old / "points.bin").read_bytes() == (new / "points.bin").read_bytes()
     for name in _TABLES:
         a = pq.read_table(old / f"{name}.parquet")
         b = pq.read_table(new / f"{name}.parquet")
         assert a.schema.equals(b.schema, check_metadata=False), name
         assert a.equals(b, check_metadata=False), name
-    assert read_scene(old) == read_scene(new)
+    new_scene = read_scene(new)
+    assert {a.agent_id: a.display_name for a in new_scene.agents} == {
+        a.agent_id: _DISPLAY_NAMES[a.agent_id] for a in new_scene.agents
+    }
+    unnamed = replace(
+        new_scene, agents=tuple(replace(a, display_name=None) for a in new_scene.agents)
+    )
+    assert read_scene(old) == unnamed
     old_marker = json.loads((old / "COMPLETE.json").read_text(encoding="utf-8"))
     new_marker = json.loads((new / "COMPLETE.json").read_text(encoding="utf-8"))
     assert {k: v for k, v in new_marker.items() if k not in _PROVENANCE} == old_marker

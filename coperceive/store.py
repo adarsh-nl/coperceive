@@ -99,6 +99,17 @@ POINT_INDEX_SCHEMA = pa.schema(
 )
 
 
+def _agent_row(agent: Agent) -> dict[str, object]:
+    row: dict[str, object] = {
+        "agent_id": agent.agent_id,
+        "agent_type": agent.agent_type.value,
+        "platform": {key: value for key, value in agent.platform},
+    }
+    if agent.display_name is not None:  # optional; a manifest without it reads as before
+        row["display_name"] = agent.display_name
+    return row
+
+
 def write_scene(scene: Scene, path: Path) -> None:
     if scene.schema_version != SCHEMA_VERSION:
         raise SchemaVersionError(
@@ -111,14 +122,7 @@ def write_scene(scene: Scene, path: Path) -> None:
         "scene_id": scene.scene_id,
         "world_frame": scene.world_frame,
         "clock": {"unit": scene.clock.unit, "scale_note": scene.clock.scale_note},
-        "agents": [
-            {
-                "agent_id": agent.agent_id,
-                "agent_type": agent.agent_type.value,
-                "platform": {key: value for key, value in agent.platform},
-            }
-            for agent in scene.agents
-        ],
+        "agents": [_agent_row(agent) for agent in scene.agents],
         "sensors": [_sensor_row(sensor) for sensor in scene.sensors],
     }
     (path / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -155,12 +159,16 @@ def read_scene(path: Path) -> Scene:
             if not isinstance(value, str):
                 raise ValueError(f"platform[{key}] must be a string")
             platform.append((key, value))
+        display_name = row.get("display_name")
+        if display_name is not None and not isinstance(display_name, str):
+            raise ValueError(f"agent {agent_id} display_name must be a string")
         agents.append(
             Agent(
                 agent_id=agent_id,
                 agent_type=AgentType.parse(row.get("agent_type")),
                 poses=(),
                 platform=tuple(platform),
+                display_name=display_name,
             )
         )
     for row in poses:
@@ -179,6 +187,7 @@ def read_scene(path: Path) -> Scene:
             agent_type=agent.agent_type,
             poses=tuple(sorted(by_agent[agent.agent_id], key=lambda pose: pose.time_us)),
             platform=agent.platform,
+            display_name=agent.display_name,
         )
         for agent in agents
     )

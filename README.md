@@ -35,6 +35,10 @@ coperceive export sequence /path/scene --out /path/front.mp4 --agent vehicle --s
 
 The page talks to the server only over HTTP. `coperceive.viewdata` does not import FastAPI or Rerun. Lane centres and road edges are drawn under the lidar when `--maps` resolves the scene's `map_name`. A later desktop package is described in `docs/adr/0007-desktop.md` and is not built.
 
+## OPV2V and V2XSet
+
+Builtin manifests `opv2v` and `v2xset` read the OpenCOOD layout (left-handed CARLA frame through one declared reflection, ADR 0012). Licence unknown: see `docs/datasets/opencood.md` before using the data anywhere but locally.
+
 ## Griffin
 
 ```bash

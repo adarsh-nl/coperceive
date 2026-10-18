@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from multiprocessing import get_context
 from pathlib import Path
@@ -79,3 +80,21 @@ def test_reader_rejects_an_object_id_that_is_not_shared(tmp_path: Path) -> None:
     pq.write_table(pa.Table.from_pylist(rows, schema=OBJECT_SCHEMA), root / "objects.parquet")
     with pytest.raises(ValueError, match="scene objects"):
         read_scene(root)
+
+
+def test_display_name_round_trips_and_is_optional(tmp_path: Path) -> None:
+    """``display_name`` is an optional manifest field per agent; absent reads as None."""
+    scene = sample_scene()
+    first, *rest = scene.agents
+    named = replace(scene, agents=(replace(first, display_name="Vehicle 1"), *rest))
+    write_scene(named, tmp_path / "named")
+    manifest = json.loads((tmp_path / "named" / "manifest.json").read_text(encoding="utf-8"))
+    rows = {row["agent_id"]: row for row in manifest["agents"]}
+    assert rows[first.agent_id]["display_name"] == "Vehicle 1"
+    assert all("display_name" not in rows[agent.agent_id] for agent in rest)
+    back = read_scene(tmp_path / "named")
+    assert back == named
+    assert back.agent(first.agent_id).display_name == "Vehicle 1"
+    assert all(back.agent(agent.agent_id).display_name is None for agent in rest)
+    with pytest.raises(ValueError, match="display_name"):
+        replace(first, display_name="")

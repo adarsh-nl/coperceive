@@ -67,7 +67,11 @@ def summarize(scene: Scene) -> dict[str, object]:
         "world_frame": scene.world_frame,
         "clock_unit": scene.clock.unit,
         "agents": [
-            {"agent_id": agent.agent_id, "agent_type": agent.agent_type.value}
+            {
+                "agent_id": agent.agent_id,
+                "agent_type": agent.agent_type.value,
+                "display_name": agent.display_name,
+            }
             for agent in scene.agents
         ],
         "sensors": [

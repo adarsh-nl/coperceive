@@ -16,6 +16,7 @@ nav:
   - Griffin verification: design/griffin-verification.md
   - Viewer features: design/viewer-features.md
   - Griffin dataset: datasets/griffin.md
+  - OPV2V and V2XSet: datasets/opencood.md
   - Add a dataset: datasets/add-a-dataset.md
   - Validate: validate.md
   - Evaluate: eval.md
@@ -32,6 +33,7 @@ nav:
       - Dataset adapters: adr/0009-dataset-adapters.md
       - Evaluation step A: adr/0010-eval-predictions.md
       - Live model plugin (step B, proposed): adr/0011-live-model-plugin.md
+      - Left-handed sources and typed discovery: adr/0012-left-handed-sources.md
 markdown_extensions:
   - tables
   - toc:
