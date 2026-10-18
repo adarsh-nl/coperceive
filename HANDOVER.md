@@ -610,3 +610,51 @@ Adarsh asked whether the Town07 median residual, about ten times the other towns
 | Town03-000 (control) | 149 | 0.00 / 0.03 / 0.42 m | 0 | 0.5° / 4.0° | 4.9 / 9.2 m/s |
 
 The pooled 0.395 m (447 poses, heading 6.8°) is the mix of these three. The same map file gives 0.07 m and 0.6° on Town07-011, as good as Town03, so the OpenDRIVE frame is not off; a map-frame error would move all three scenes alike. The residual is scene-specific and sits in Town07-013, where the ego is stationary for more than half the scene (speed median 0) about 0.6–0.7 m from the nearest driving-lane centre and 9° off its direction, after ten frames more than 1 m from any driving lane. The vehicle's front camera at the first frame (`vehicle-side/camera/front/023574.png`) shows the ego on an unmarked paved area beside a barn, approaching a yield sign at a T-junction; the drone's bottom camera seven seconds later (`drone-side/camera/bottom/023644.png`) shows the junction with a car at the stop line. That reads as a vehicle starting off-road in a plaza and waiting at a junction, positions that the `driving` lane-centre layer does not describe, rather than wrong poses; Town07-012's 7° heading error at low speed is consistent with a winding rural road but was not looked at further. Identity stays the right choice (the next candidate, `rot270`, is at 2.77 m). **Unverified**: which car in the drone image is the ego, whether junction or parking lanes should join the lane-centre layer for this measurement, and whether Town07-012's heading error has the same cause. Nothing was changed; the aligner's choice and the stored residual stand as measured.
+
+### GPU job 628386: drone-side, instance fusion and early fusion (2026-10-18, measured)
+
+`griffin-infer-25m-coop` on ctit091 (NVIDIA A40, driver 595.58.03, 46,068 MiB), COMPLETED in **1 h 08 min 05 s**; coperceive code from `~/wt/step-a-complete` at `9e92a48`. Timings: cameras rsync 26 min 51 s (on disk 15 GB vehicle + 21 GB drone; the trimmer's estimate was 41.5 GB), `trans_kitti2nuscenes.py --early_fusion` 1 min 20 s, `generate_nuscenes_pkl.py --early_fusion` 32 s, drone-side pass 11 min 27 s, instance-fusion pass 10 min 27 s, early-fusion pass 13 min 22 s; all three checkpoint md5s OK; 1,490 track-query pkls (11 GB) written by the drone pass and read by instance fusion. Detection JSONs: drone-side 351,513 boxes (12,093 ≥ 0.05, 6,453 ≥ 0.4), instance fusion 343,903 (8,294 ≥ 0.05, 6,598 ≥ 0.4), early fusion 362,512 (8,971 ≥ 0.05, 6,942 ≥ 0.4). Conversion: the coop run holds 7,930 vehicle · single + 12,093 drone · single + 8,294 vehicle · fused rows (car 26,527, bicycle 796, pedestrian 994), the early run 7,930 + 8,971 (car 15,532, bicycle 630, pedestrian 739). Every evaluation: `evaluated 10 skipped 0 errors 0`. Results: `~/results/628386/` (eight runs under `predictions/`, `report-*.md`, `compare-coop-vs-early*.md`, `griffin_json/`, `nusc_tables/`, logs).
+
+**Cross-check.** The vehicle · single rows of the new runs equal the 627093 (`report-iou.md`, `report-centre.md`) and 627070 (`report-*-mapped.md`) rows in every column but `recovered` / `lost_by_fusion`, which were 0 there because no fused output existed. Same boxes, same evaluator.
+
+**Toolkit's own metric per pass** (its nuScenes-style eval in the same job), against the authors' logs under `ckpts/griffin_50scenes_25m/logs/`: drone-side mAP **0.1119** / NDS **0.1014** (authors 0.1127 / 0.1315; GT 24,302 → 11,456 in both; predictions 351,513 against their 335,876); instance fusion mAP **0.1447** / NDS **0.2004** (authors 0.1442 / 0.1972; GT 25,145 → 11,199 in both; predictions 343,903 against their 348,652); early fusion mAP **0.2332** / NDS **0.2722** (no authors' eval log). So two of the three released checkpoints reproduce the authors' mAP to within 0.001 in this environment, while the vehicle checkpoint gave 0.1985 against 0.1682 (section above); the NDS of the drone pass differs by 0.03. No further claim.
+
+**Step A, pooled over the 10 val scenes (`| all |` rows), 50 m, operating point 0.4.** Vehicle · single is the 627093 run; drone · single is the drone-side pass; instance and early are the two fused outputs on the vehicle. GT is the ground truth within range of the emitting agent (vehicle 8,827; drone 11,456). `recovered` / `lost_by_fusion` count GT boxes the fused output matched and the single did not, and the reverse.
+
+Config A, BEV IoU, unmapped (`eval-config-iou.yaml`):
+
+| output | gt | pred | tp | fp | miss | precision | recall | mAP@0.5 all | mAP@0.5 model | mAP@0.7 all | mAP@0.7 model | recovered / lost |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| vehicle · single | 8827 | 7930 | 2416 | 2985 | 6411 | 0.447 | 0.274 | 0.088 | 0.175 | 0.074 | 0.149 | |
+| drone · single | 11456 | 12093 | 1107 | 5343 | 10349 | 0.172 | 0.097 | 0.010 | 0.020 | 0.001 | 0.002 | |
+| vehicle · fused, instance | 8827 | 8294 | 2475 | 4123 | 6352 | 0.375 | 0.280 | 0.071 | 0.141 | 0.057 | 0.114 | 234 / 175 |
+| vehicle · fused, early | 8827 | 8971 | 2852 | 4089 | 5975 | 0.411 | 0.323 | 0.081 | 0.163 | 0.062 | 0.124 | 528 / 92 |
+
+Config A, BEV IoU, mapped (`gt_class_map: {truck: car, bus: car, motorcycle: bicycle}`; `all` equals `model`):
+
+| output | gt | pred | tp | fp | miss | precision | recall | mAP@0.5 | mAP@0.7 | recovered / lost |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| vehicle · single | 8827 | 7930 | 3003 | 2398 | 5824 | 0.556 | 0.340 | 0.150 | 0.106 | |
+| drone · single | 11456 | 12093 | 2193 | 4256 | 9263 | 0.340 | 0.191 | 0.040 | 0.003 | |
+| vehicle · fused, instance | 8827 | 8294 | 3206 | 3391 | 5621 | 0.486 | 0.363 | 0.132 | 0.088 | 549 / 346 |
+| vehicle · fused, early | 8827 | 8971 | 4101 | 2839 | 4726 | 0.591 | 0.465 | 0.180 | 0.108 | 1325 / 227 |
+
+Config B, centre distance, unmapped (`eval-config-centre.yaml`, display threshold 2 m; AP `all`, with `model` in brackets):
+
+| output | gt | pred | tp | fp | miss | precision | recall | AP@4 m | AP@2 m | AP@1 m | AP@0.5 m | recovered / lost |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| vehicle · single | 8827 | 7930 | 2884 | 2517 | 5943 | 0.534 | 0.327 | 0.127 (0.255) | 0.117 (0.234) | 0.100 (0.200) | 0.081 (0.163) | |
+| drone · single | 11456 | 12093 | 2880 | 3570 | 8576 | 0.447 | 0.251 | 0.097 (0.193) | 0.069 (0.138) | 0.028 (0.055) | 0.006 (0.011) | |
+| vehicle · fused, instance | 8827 | 8294 | 3194 | 3403 | 5633 | 0.484 | 0.362 | 0.114 (0.229) | 0.102 (0.203) | 0.081 (0.162) | 0.062 (0.123) | 519 / 209 |
+| vehicle · fused, early | 8827 | 8971 | 3577 | 3360 | 5250 | 0.516 | 0.405 | 0.118 (0.236) | 0.113 (0.226) | 0.101 (0.203) | 0.077 (0.153) | 841 / 148 |
+
+Config B, centre distance, mapped:
+
+| output | gt | pred | tp | fp | miss | precision | recall | AP@4 m | AP@2 m | AP@1 m | AP@0.5 m | recovered / lost |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| vehicle · single | 8827 | 7930 | 3968 | 1433 | 4859 | 0.735 | 0.450 | 0.345 | 0.296 | 0.228 | 0.148 | |
+| drone · single | 11456 | 12093 | 4628 | 1822 | 6828 | 0.718 | 0.404 | 0.252 | 0.176 | 0.068 | 0.012 | |
+| vehicle · fused, instance | 8827 | 8294 | 4550 | 2046 | 4277 | 0.690 | 0.515 | 0.309 | 0.247 | 0.159 | 0.099 | 1033 / 451 |
+| vehicle · fused, early | 8827 | 8971 | 5630 | 1300 | 3197 | 0.812 | 0.638 | 0.378 | 0.365 | 0.302 | 0.146 | 1898 / 236 |
+
+What the numbers show, nothing more: early fusion has the highest recall of the four outputs in every config, and the highest AP at the display threshold in the three configs other than unmapped IoU, where vehicle · single is higher (0.088 against 0.081). Instance fusion has slightly higher recall than vehicle · single in every config and lower precision and lower AP in every config. The drone output has the lowest AP in every config; under centre distance its AP falls fastest as the threshold tightens (0.097 at 4 m to 0.006 at 0.5 m, unmapped). Mapping the GT classes raises every output's numbers. Per-scene deltas are in `compare-coop-vs-early*.md`.
