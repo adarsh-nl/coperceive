@@ -47,4 +47,8 @@ On the HPC the whole flow runs in `scripts/opencood/stage_viewer.py` inside a co
 - Loading five samples of three agents took 7.7 s, so the ASCII PCD parse is about 0.5 s per cloud; whole scenes are parsed in the staging job only.
 - No OPV2V scene has a `-1` directory.
 
-The staging job's numbers (wall time per step, the identified towns over the whole scenes, the browser check) are in HANDOVER.
+## What was measured (2026-10-18, staging job 629196, compute node, whole scenes)
+
+- OPV2V `test/2021_08_20_21_10_24`: staging wall time 131 s (poses pass 31.2 s, full ingest 73.8 s with 4 workers, identify 8.7 s, align 9.2 s); 16,942,800 points in 295 clouds; town identified as `Carla/Maps/Town06` at 0.020 m over 295 poses, runner-up Town05 at 50.8 m; the viewer shows `172860 points, 72 boxes, 12 frustums. map drawn.` with 7 camera thumbnails decoded and the split view open.
+- V2XSet `train/2021_08_20_20_39_00`: staging wall time 281 s (poses pass 92.3 s, full ingest 176.5 s); 29,237,703 points in 752 clouds; town unidentified: Town06 at 0.046 m against Town03 at 1.060 m over 376 poses is within the 2 m margin, so the scene is map-less and the table says so; the viewer shows `77782 points, 53 boxes, 8 frustums. no map name in this scene.` with 7 thumbnails and the split view open, agent `-1` typed `infrastructure`.
+- Both scenes in headless Chromium with no page errors; the only HTTP errors are the `/predictions` probes (no predictions root). Screenshots stay under `~/results/629196/viewer-check/`.
