@@ -63,7 +63,7 @@ def _unavailable(reason: str) -> NoReturn:
 
 
 try:
-    from playwright.sync_api import Browser, Page, sync_playwright
+    from playwright.sync_api import Browser, Page, Playwright, sync_playwright
     from playwright.sync_api import Error as PlaywrightError
 except ImportError:  # pragma: no cover - the dev extra installs it
     if REQUIRED:
@@ -253,15 +253,26 @@ def viewer_url(tmp_path_factory: pytest.TempPathFactory) -> Iterator[str]:
     thread.join(timeout=10)
 
 
+def _launch(playwright: Playwright, args: list[str]) -> Browser:
+    try:
+        return playwright.chromium.launch(headless=True, args=args)
+    except PlaywrightError as exc:  # no browser build or missing system libraries
+        _unavailable(f"chromium cannot start here: {str(exc).splitlines()[0]}")
+
+
 @pytest.fixture(scope="module")
-def browser() -> Iterator[Browser]:
-    with sync_playwright() as playwright:
-        try:
-            launched = playwright.chromium.launch(headless=True, args=_CHROMIUM_ARGS)
-        except PlaywrightError as exc:  # no browser build or missing system libraries
-            _unavailable(f"chromium cannot start here: {str(exc).splitlines()[0]}")
-        yield launched
-        launched.close()
+def playwright() -> Iterator[Playwright]:
+    """One sync Playwright per module. Its event loop runs for as long as the context is
+    open, so a second ``sync_playwright()`` (for another browser) is refused as nested."""
+    with sync_playwright() as instance:
+        yield instance
+
+
+@pytest.fixture(scope="module")
+def browser(playwright: Playwright) -> Iterator[Browser]:
+    launched = _launch(playwright, _CHROMIUM_ARGS)
+    yield launched
+    launched.close()
 
 
 @pytest.fixture
@@ -643,3 +654,33 @@ def test_choosing_a_scene_while_playing_pauses_at_once(session: _Session) -> Non
     old = [url for url in session.requests if f"/api/scenes/{SCENE_BARE}/" in url]
     assert len(old) <= 10, old
     assert session.slider("aria-valuenow") == 0
+
+
+@pytest.fixture(scope="module")
+def browser_without_webgl(playwright: Playwright) -> Iterator[Browser]:
+    """Chromium with WebGL switched off, the situation of a blocked GPU or a remote desktop.
+    Launched from the module's Playwright, next to the ordinary browser."""
+    launched = _launch(playwright, ["--disable-webgl", "--disable-webgl2", "--disable-3d-apis"])
+    yield launched
+    launched.close()
+
+
+def test_a_browser_without_webgl_gets_a_message_not_a_blank_page(
+    browser_without_webgl: Browser, viewer_url: str
+) -> None:
+    page = browser_without_webgl.new_page(viewport={"width": 1400, "height": 900})
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{viewer_url}/#/viewer", wait_until="networkidle")
+    notice = page.locator(".webgl-missing")
+    deadline = time.monotonic() + 10
+    while notice.count() == 0 and time.monotonic() < deadline:
+        page.wait_for_timeout(100)
+    assert notice.count() == 1, "no WebGL notice"
+    assert "needs WebGL" in notice.inner_text()
+    # The rest of the page is still there and usable.
+    assert page.locator("#scene-id").inner_text() == SCENE_FULL
+    assert page.locator("button[aria-label=Play]").count() == 1
+    assert "sample 1 / 7" in page.locator(".clock").inner_text()
+    assert errors == [], errors
+    page.close()

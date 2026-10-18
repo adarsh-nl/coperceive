@@ -11,7 +11,7 @@ copy under ``/datasets`` and writes ONLY into the staging tree on ``/local``:
 * ``<split-out>``: a split file with ``train: []`` and the val scenes RENUMBERED;
 * ``<files-from>``: an ``rsync --files-from`` list (paths relative to the raw root)
   with the pose/label/calib files of both sides and the four vehicle RGB cameras
-  of exactly the val frames.
+  of exactly the val frames (plus the drone cameras named by ``--drone-cams``).
 
 Why the split file is renumbered. ``tools/griffin_data_converter/trans_kitti2nuscenes.py``
 derives scenes from the sorted ``pose/`` listing, not from ``scene_infos.json``:
@@ -134,10 +134,16 @@ def main(argv: Sequence[str] = None) -> int:
         "--files-from", required=True, help="where to write the rsync --files-from list"
     )
     parser.add_argument("--cams", default=",".join(DEFAULT_CAMS), help="vehicle cameras to stage")
+    parser.add_argument(
+        "--drone-cams",
+        default="",
+        help="drone cameras to stage, comma-separated (front,back,left,right,bottom); default none",
+    )
     parser.add_argument("--no-check", action="store_true", help="skip the per-file existence check")
     args = parser.parse_args(argv)
 
     cams = [c for c in args.cams.split(",") if c]
+    drone_cams = [c for c in args.drone_cams.split(",") if c]
     infos = {
         side: load_scene_infos(os.path.join(args.raw, side, "scene_infos.json")) for side in SIDES
     }
@@ -177,6 +183,8 @@ def main(argv: Sequence[str] = None) -> int:
             files.append(f"{side}/label/{frame}.txt")
         for cam in cams:
             files.append(f"vehicle-side/camera/{cam}/{frame}.png")
+        for cam in drone_cams:
+            files.append(f"drone-side/camera/{cam}/{frame}.png")
     if not args.no_check:
         missing = [f for f in files if not os.path.exists(os.path.join(args.raw, f))]
         if missing:
@@ -184,7 +192,10 @@ def main(argv: Sequence[str] = None) -> int:
     with open(args.files_from, "w", encoding="utf-8") as handle:
         handle.write("\n".join(files) + "\n")
 
-    sample = [os.path.getsize(os.path.join(args.raw, f)) for f in files if f.endswith(".png")][:20]
+    pngs = [os.path.join(args.raw, f) for f in files if f.endswith(".png")][:20]
+    sample = [
+        os.path.getsize(path) for path in pngs if os.path.exists(path)
+    ]  # absent under --no-check
     per_png = sum(sample) / len(sample) if sample else 0.0
     n_png = sum(1 for f in files if f.endswith(".png"))
     print(

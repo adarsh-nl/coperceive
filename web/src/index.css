@@ -381,6 +381,23 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   border-radius: 999px;
 }
 .status-pill, .legend, .empty-pill { pointer-events: none; }
+.webgl-missing {
+  position: absolute;
+  z-index: 3;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  max-width: min(440px, calc(100% - 48px));
+  padding: 16px 18px;
+  border-radius: 12px;
+  background: rgba(10, 10, 10, 0.82);
+  color: #f4f4ed;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  font-size: 0.86rem;
+  line-height: 1.45;
+}
+.webgl-missing p { margin: 8px 0 0; }
+.webgl-missing .mono { font-family: "Geist Mono Variable", ui-monospace, monospace; font-size: 0.74rem; color: #bdbdbd; }
 .status-pill { top: 10px; left: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 0.8rem; }
 .status-pill i { width: 8px; height: 8px; border-radius: 99px; background: #8fd0b0; }
 .status-pill i.wait { background: #f58a1f; }
