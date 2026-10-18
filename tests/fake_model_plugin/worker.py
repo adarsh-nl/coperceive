@@ -144,6 +144,8 @@ class Worker:
                     }
                 )
                 return
+        if self.misbehave == "progress-first":
+            _emit({"type": "progress", "id": None, "fraction": 0.1, "text": "warming up"})
         _emit({"type": "configured", "scene_id": message.get("scene_id")})
 
     def _count(self) -> None:

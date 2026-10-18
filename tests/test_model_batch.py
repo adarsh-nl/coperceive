@@ -321,3 +321,11 @@ def test_known_answer_model_misses_everything_beyond_the_threshold(
         assert total["tp"] == 0 and total["fp"] == total["gt"] and total["miss"] == total["gt"], (
             total
         )
+
+
+def test_progress_before_configured_is_tolerated(roots: tuple[Path, Path, Scene]) -> None:
+    """A model may report its start-up (the Griffin toolkit run) before it says configured."""
+    _, out = _run(roots, options={"misbehave": "progress-first"})
+    report = _run.last  # type: ignore[attr-defined]
+    assert report.status == "complete" and report.completed == ("coop",)
+    assert (out / "r1" / "coop" / "boxes.parquet").is_file()

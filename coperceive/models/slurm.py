@@ -69,6 +69,14 @@ def interpreter_module(python: Path) -> str | None:
     return None
 
 
+def coperceive_root() -> Path:
+    """The repository root of the running coperceive, for the job's PYTHONPATH: the shared
+    venv's editable install points at the main checkout, not at a worktree."""
+    import coperceive
+
+    return Path(coperceive.__file__).resolve().parents[1]
+
+
 def time_limit(seconds_per_sample: float, staging_seconds: float, samples: int) -> str:
     """``staging + per_sample × samples``, rounded up to the next 600 s, doubled, ``HH:MM:SS``."""
     estimate = staging_seconds + seconds_per_sample * samples
@@ -183,6 +191,7 @@ def plan_sbatch(
     python: Path,
     logs_dir: Path,
     results_dir: Path,
+    repo_root: Path | None = None,
 ) -> SlurmPlan:
     """The sbatch of ADR 0011 decision 5 for ``coperceive model run`` over ``scenes``."""
     agent_ids = {
@@ -248,6 +257,12 @@ def plan_sbatch(
         lines.append(f"module load {shlex.quote(interpreter)}  # the interpreter of {python}")
     for name in manifest.environment.modules:
         lines.append(f"module load {shlex.quote(name)}")
+    root = coperceive_root() if repo_root is None else repo_root.resolve()
+    lines.append("")
+    lines.append(
+        f"export PYTHONPATH={shlex.quote(str(root))}  # the coperceive that emitted this job, "
+        "not the venv's editable target"
+    )
     lines.append("")
     lines.append(
         f"rsync -a --files-from={shlex.quote(str(slurm_dir / f'{run_id}.scenes.txt'))} "
@@ -260,17 +275,26 @@ def plan_sbatch(
             f'{shlex.quote(str(options.raw_root.resolve()) + "/")} "$SCRATCH/raw/"'
         )
     lines.append("")
-    lines.append(" ".join(command))
-    lines.append("")
     results = results_dir.resolve()
     target = out_root.resolve() / run_id
     lines.extend(
         [
+            "# The run's exit status is kept: a partial run (3 or 4) still comes home below.",
+            "set +e",
+            " ".join(command),
+            "RC=$?",
+            "set -e",
+            'echo "model run exit $RC"',
+            "",
             f'mkdir -p {shlex.quote(str(results))}/"$SLURM_JOB_ID"',
             f'rsync -a "$SCRATCH/out/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/',
+            "# The work directory's logs and artefacts, not its inputs or any toolkit copy.",
+            "rsync -a --include='*.log' --include='artifacts/***' --exclude='*' "
+            f'"$SCRATCH/work/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/work/',
             f"mkdir -p {shlex.quote(str(target))}",
             f'rsync -a "$SCRATCH/out/{run_id}/" {shlex.quote(str(target))}/',
-            f'echo "done: {shlex.quote(str(target))}"',
+            f'echo "done: {shlex.quote(str(target))} (exit $RC)"',
+            'exit "$RC"',
             "",
         ]
     )
@@ -387,6 +411,7 @@ __all__ = [
     "SLURM_DIR",
     "SlurmError",
     "SlurmPlan",
+    "coperceive_root",
     "estimate_from_runs",
     "interpreter_module",
     "plan_sbatch",

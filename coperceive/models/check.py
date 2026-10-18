@@ -292,6 +292,8 @@ def _pass(
         )
     )
     answer = _receive(child, timeout)
+    while isinstance(answer, Progress):
+        answer = _receive(child, timeout)
     if isinstance(answer, Error) and answer.code == "unsupported":
         rules.set(2, "skipped", f"{spec.key}: {answer.message}")
         return None

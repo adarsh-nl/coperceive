@@ -174,10 +174,17 @@ def test_gpu_script_lines(roots: tuple[Path, Path, Scene], tmp_path: Path) -> No
         '--work "$SCRATCH/work"',
         '--out "$SCRATCH/out"',
         "--model default",
+        "export PYTHONPATH=",
+        "set +e",
+        "RC=$?",
+        "--include='artifacts/***'",
+        'exit "$RC"',
     ):
         assert needle in script, needle
     assert "--slurm" not in script
     assert "pip " not in script and "pypi" not in script.lower()
+    assert script.rstrip().endswith('exit "$RC"')
+    assert "export PYTHONPATH=" + str(Path(__file__).resolve().parents[1]) in script
     assert plan.partition == "ps,main-gpu" and plan.gres == "gpu:1"
     assert plan.estimate_source.startswith("the manifest")
 

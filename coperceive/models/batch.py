@@ -597,6 +597,8 @@ def _run_scene(
     )
     child.send(configure)
     answer = _receive(child, frame_timeout, deadline)
+    while isinstance(answer, Progress):  # a model may report its start-up before configured
+        answer = _receive(child, frame_timeout, deadline)
     if isinstance(answer, Error):
         raise _SceneFailed(f"{answer.code}: {answer.message}")
     if not isinstance(answer, Configured):

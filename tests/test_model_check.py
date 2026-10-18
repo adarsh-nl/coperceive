@@ -123,3 +123,8 @@ def test_render_check_counts_add_up(tmp_path: Path) -> None:
     assert counts <= {"ok", "fail", "skipped", "not checked"}
     assert len(results) == len(RULES) == 10
     assert text.count("\n") == 11
+
+
+def test_progress_before_configured_passes(tmp_path: Path) -> None:
+    results = _check(tmp_path, misbehave="progress-first")
+    assert [r for r in results.values() if r.status == "fail"] == []
