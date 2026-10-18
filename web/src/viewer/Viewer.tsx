@@ -196,6 +196,16 @@ const COLORS: Record<string, number> = {
 const AGENT_INK: Record<string, string> = {
   vehicle: "#F58A1F",
   uav: "#3C8DFF",
+  infrastructure: "#b7b1a6",
+  other: "#b7b1a6",
+};
+/** Legend words per agent type, in legend order; only the types present in the scene are shown. */
+const LEGEND_ORDER = ["vehicle", "uav", "infrastructure", "other"] as const;
+const LEGEND_LABELS: Record<string, string> = {
+  vehicle: "Vehicle",
+  uav: "Drone",
+  infrastructure: "RSU",
+  other: "Agent",
 };
 
 const EXPORT_SIZES = [
@@ -827,6 +837,11 @@ export default function Viewer({
   );
   // People-facing labels ("Vehicle 1"); the raw agent_id stays the key and the tooltip.
   const agentNames = useMemo(() => agentLabels(summary), [summary]);
+  // The legend names the agent types this scene has (OPV2V: Vehicle; V2XSet: Vehicle, RSU; Griffin: Vehicle, Drone).
+  const legendTypes = useMemo(
+    () => LEGEND_ORDER.filter((kind) => (summary?.agents ?? []).some((agent) => agent.agent_type === kind)),
+    [summary],
+  );
   // Predictions (ADR 0010). Fetched state is keyed by scene and run, so a change of either reads as "not loaded"
   // without a reset; nothing here persists except `appearance.predictionScore`.
   const [runList, setRunList] = useState<{ sceneId: string; runs: RunInfo[]; note: string } | null>(null);
@@ -2728,12 +2743,11 @@ export default function Viewer({
               ))}
             </div>
             <div className="glass legend" aria-label="Legend">
-              <span>
-                <i style={{ background: "#F58A1F" }} /> Vehicle
-              </span>
-              <span>
-                <i style={{ background: "#3C8DFF" }} /> Drone
-              </span>
+              {legendTypes.map((kind) => (
+                <span key={kind}>
+                  <i style={{ background: AGENT_INK[kind] ?? "#b7b1a6" }} /> {LEGEND_LABELS[kind] ?? kind}
+                </span>
+              ))}
               <span>
                 <i style={{ background: "#c6f3dc" }} /> Lane
               </span>

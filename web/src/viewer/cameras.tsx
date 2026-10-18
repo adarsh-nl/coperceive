@@ -330,12 +330,14 @@ function drawOverlay(
   }
 
   if (showLidar) {
-    const radius = 1.6 / scale;
+    // Only the camera's own agent's sweep reaches here (CameraSplit loads no other), points
+    // behind the camera (projectToImage) or closer than MIN_OVERLAY_DEPTH_M are dropped,
+    // and each point is coloured by its depth; 1.6 px squares instead of 3.2 px.
+    const radius = 0.8 / scale;
     for (const cloud of clouds) {
       if (hidden[cloud.agentId]) {
         continue;
       }
-      ctx.fillStyle = colorFor(types.get(cloud.agentId) ?? "");
       for (let index = 0; index + 2 < cloud.xyz.length; index += 3) {
         const pixel = projectToImage(
           camera,
@@ -343,7 +345,7 @@ function drawOverlay(
           cloud.xyz[index + 1] ?? 0,
           cloud.xyz[index + 2] ?? 0,
         );
-        if (!pixel) {
+        if (!pixel || pixel.depth < MIN_OVERLAY_DEPTH_M) {
           continue;
         }
         const u = pixel.u * pixelX;
@@ -351,10 +353,22 @@ function drawOverlay(
         if (u < 0 || v < 0 || u >= naturalWidth || v >= naturalHeight) {
           continue;
         }
+        ctx.fillStyle = depthColor(pixel.depth);
         ctx.fillRect(u - radius, v - radius, radius * 2, radius * 2);
       }
     }
   }
+}
+
+/** Points nearer than this are the sensor's own platform and the lens hood; not drawn. */
+export const MIN_OVERLAY_DEPTH_M = 1;
+/** Depth at and beyond which the overlay colour stops changing. */
+export const MAX_OVERLAY_DEPTH_M = 60;
+
+/** Warm near, cool far: hue 20° (orange) at 1 m to 220° (blue) at 60 m and beyond. */
+export function depthColor(depth: number): string {
+  const unit = Math.min(1, Math.max(0, (depth - MIN_OVERLAY_DEPTH_M) / (MAX_OVERLAY_DEPTH_M - MIN_OVERLAY_DEPTH_M)));
+  return `hsl(${Math.round(20 + 200 * unit)} 85% 55%)`;
 }
 
 function CameraPanel({
@@ -738,7 +752,9 @@ export function CameraSplit({
     void (async () => {
       const loaded: Cloud[] = [];
       for (const sensor of pointSensors) {
-        if (sensor.count === 0) {
+        // The camera's own agent only: another agent's sweep, seen from here, is a wall of
+        // points below the horizon (OPV2V camera0 in job 629223: 83% of the drawn points).
+        if (sensor.count === 0 || sensor.agent_id !== camera.agent_id) {
           continue;
         }
         const buffer = await cacheRef.current.loadPoints(sceneId, timeUs, sensor.agent_id, sensor.sensor_id, token);

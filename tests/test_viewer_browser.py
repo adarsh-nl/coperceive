@@ -730,3 +730,17 @@ def test_agent_display_names_label_the_panels_and_raw_ids_stay_in_tooltips(
     session.choose_scene(SCENE_BARE)
     assert page.locator(".tele header strong").all_text_contents() == ["vehicle"]
     assert page.locator(".agent-list .swatch span").first.text_content() == "vehicle"
+
+
+def test_legend_names_the_agent_types_of_the_scene(session: _Session) -> None:
+    """The 3D legend lists the types present: Vehicle, Drone, RSU and Lane for the
+    cooperative scene; Vehicle and Lane for the single-vehicle scene."""
+
+    # The status chips of an evaluated run follow "Lane"; the agent types come first.
+    def through_lane() -> list[str]:
+        texts = [text.strip() for text in session.page.locator(".legend span").all_text_contents()]
+        return texts[: texts.index("Lane") + 1]
+
+    assert through_lane() == ["Vehicle", "Drone", "RSU", "Lane"]
+    session.choose_scene(SCENE_BARE)
+    assert through_lane() == ["Vehicle", "Lane"]
