@@ -1,0 +1,119 @@
+# The Griffin model plugin (ADR 0011). The worker is Python 3.8 code that runs in the
+# Griffin conda environment and drives the toolkit at commit 9c02ba4a; the released 25m
+# checkpoints are pinned by MD5 (docs/Training_and_Evaluation.md of the toolkit, checked
+# against the files by job 627093) and verified by the parent before any scene runs.
+spec_version: 1
+name: griffin
+version: "0.1.0"
+licence:
+  spdx: MIT
+  notice: "Copyright (c) [2025] [Jiahao Wang] (MIT License, LICENSE.txt of wang-jh18-SVM/Griffin; checkpoints from HF wjh-svm/Griffin, license: mit)"
+  citation: "Wang et al., Griffin: Aerial-Ground Cooperative Detection and Tracking Dataset and Benchmark, arXiv:2503.06983"
+environment:
+  conda: griffin
+  modules: [nvidia/cuda-11.8, nvidia/cuda-11.x_cudnn-8.6]
+  inherit_ld_library_path: true
+models:
+  vehicle-side:
+    description: "Agile (UniAD-style track head on BEVFormer-tiny / ResNet-50, camera-only) vehicle-side single-agent, 48 epochs, iter 33024"
+    checkpoint_md5: 1201f5692e390a75e5b5ab0efa0cae19
+    inputs:
+      modalities: [camera]
+      agents: [vehicle]
+      sensors: [front, back, left, right]
+      frames: sequence
+      raw:
+        - "vehicle-side/scene_infos.json"
+        - "drone-side/scene_infos.json"
+        - "vehicle-side/calib/front.json"
+        - "vehicle-side/calib/back.json"
+        - "vehicle-side/calib/left.json"
+        - "vehicle-side/calib/right.json"
+        - "vehicle-side/calib/lidar_top.json"
+        - "drone-side/calib/front.json"
+        - "drone-side/calib/back.json"
+        - "drone-side/calib/left.json"
+        - "drone-side/calib/right.json"
+        - "drone-side/calib/bottom.json"
+        - "drone-side/calib/lidar_front.json"
+        - "drone-side/calib/lidar_bottom.json"
+        - "drone-side/calib/lidar_virtual.json"
+        - "vehicle-side/pose/{frame:06d}.json"
+        - "vehicle-side/label/{frame:06d}.txt"
+        - "drone-side/pose/{frame:06d}.json"
+        - "drone-side/label/{frame:06d}.txt"
+        - "vehicle-side/camera/{sensor}/{frame:06d}.png"
+      raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}
+      raw_clock: {scale_us: 100000, offset_us: 0}
+    outputs:
+      categories: [car, bicycle, pedestrian]
+      score_note: "sigmoid class score (max over the 3 classes) of the Agile/UniAD track-query head, as written to results_nusc_det.json: the detector's DETRTrack3DCoder keeps the top-300 queries per frame with score > 0.0 inside post_center_range +-61.2 m, then class_range drops boxes beyond a 50 m ego radius. Rows with score < min_score (default 0.05) are dropped by the plugin, so a run's operating point is min_score; the published operating point is 0.4 (config score_thresh=0.4 / filter_score_thresh=0.35, which gate track birth/death and are left unchanged). coperceive's viewer default stays score_threshold 0.4 via the eval config."
+      sources:
+        single: "vehicle-side camera-only Agile model, no fusion"
+      artifacts: [det_json, det_pkl]
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 64
+      seconds_per_sample: 0.39     # 9 min 37 s / 1,490 samples, job 627093
+      staging_seconds: 700         # 11 min 17 s of camera PNG staging, job 627093
+      frame_timeout_s: 3600        # the whole scene set runs at the first configure
+      slurm_constraint: "a40|a100" # the env's torch 1.9.1+cu111 wheels carry sm_86 SASS, not sm_89
+    options:
+      subset: {type: str, default: "25m", choices: ["25m"], description: the released 25m checkpoints are the only ones pinned here}
+      min_score: {type: float, default: 0.05, description: rows below this detection_score are dropped}
+      det_json: {type: str, default: "", description: answer from this results_nusc_det.json instead of running the toolkit (no GPU)}
+      nusc_root: {type: str, default: "", description: directory with sample.json and scene.json for det_json}
+  drone-side:
+    description: "Agile drone-side single-agent, 24 epochs, iter 33024, with save_track_query for instance fusion"
+    checkpoint_md5: 41734b8d764d1213935a231a3419f655
+    inputs:
+      modalities: [camera]
+      agents: [uav]
+      sensors: [front, back, left, right, bottom]
+      frames: sequence
+      raw:
+        - "vehicle-side/scene_infos.json"
+        - "drone-side/scene_infos.json"
+        - "vehicle-side/calib/front.json"
+        - "vehicle-side/calib/back.json"
+        - "vehicle-side/calib/left.json"
+        - "vehicle-side/calib/right.json"
+        - "vehicle-side/calib/lidar_top.json"
+        - "drone-side/calib/front.json"
+        - "drone-side/calib/back.json"
+        - "drone-side/calib/left.json"
+        - "drone-side/calib/right.json"
+        - "drone-side/calib/bottom.json"
+        - "drone-side/calib/lidar_front.json"
+        - "drone-side/calib/lidar_bottom.json"
+        - "drone-side/calib/lidar_virtual.json"
+        - "vehicle-side/pose/{frame:06d}.json"
+        - "vehicle-side/label/{frame:06d}.txt"
+        - "drone-side/pose/{frame:06d}.json"
+        - "drone-side/label/{frame:06d}.txt"
+        - "drone-side/camera/{sensor}/{frame:06d}.png"
+      raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}
+      raw_clock: {scale_us: 100000, offset_us: 0}
+    outputs:
+      categories: [car, bicycle, pedestrian]
+      score_note: "sigmoid class score (max over the 3 classes) of the Agile/UniAD track-query head on the drone cameras, as written to results_nusc_det.json (top-300 per frame, score > 0.0, 50 m class_range); rows below min_score (default 0.05) are dropped by the plugin."
+      sources:
+        single: "drone-side camera-only Agile model, no fusion"
+      artifacts: [det_json, det_pkl, track_query]
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 64
+      seconds_per_sample: 0.5      # estimate; measured by the first run
+      staging_seconds: 1000        # estimate: about 23 GB of drone PNGs; measured by the first run
+      frame_timeout_s: 3600
+      slurm_constraint: "a40|a100"
+    options:
+      subset: {type: str, default: "25m", choices: ["25m"]}
+      min_score: {type: float, default: 0.05}
+      det_json: {type: str, default: ""}
+      nusc_root: {type: str, default: ""}
+commands:
+  batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}"]
+notes: "toolkit commit 9c02ba4a, mmdet3d v0.17.1; conversion rules of scripts/griffin/griffin_to_predictions.py"
