@@ -4,7 +4,8 @@
 
 Runs inside the allocation that staged the scenes (``stage_viewer.py``): it starts
 ``coperceive serve``'s app in-process on a free loopback port with the staged roots,
-visits each scene, waits for lidar points, the town map and a camera thumbnail, opens
+selects each scene (the page opens on the first scene in name order, whatever was asked
+for first), waits for lidar points, the town map and a camera thumbnail, opens
 the split view on the first camera, and writes ``report.json`` and PNGs to ``--out``.
 Exit status 1 when a scene shows no points, no map or no camera image, so the job log
 says so. Nothing here touches the dataset: images are read through the camera links
@@ -70,8 +71,17 @@ def _map_settled(page: Page) -> bool:
     return "no map" in pills or "no map" in status
 
 
+def _select(page: Page, scene_id: str) -> None:
+    """Pick ``scene_id`` unless the page already shows it. The viewer opens on the first
+    scene in name order, which need not be the first scene asked for."""
+    if scene_id in _status(page):
+        return
+    page.locator("#scene-id").click()
+    page.locator("[role=option]", has_text=scene_id).click()
+
+
 def check_scene(
-    page: Page, scene_id: str, out: Path, first: bool, *, require_map: bool = True
+    page: Page, scene_id: str, out: Path, *, require_map: bool = True
 ) -> dict[str, object]:
     requests: list[str] = []
     bad: list[str] = []
@@ -84,9 +94,7 @@ def check_scene(
             else None
         ),
     )
-    if not first:
-        page.locator("#scene-id").click()
-        page.locator("[role=option]", has_text=scene_id).click()
+    _select(page, scene_id)
     started = time.monotonic()
     _wait(page, lambda: scene_id in _status(page), f"{scene_id} to load")
     if require_map:
@@ -163,12 +171,8 @@ def main(argv: list[str] | None = None) -> int:
         errors: list[str] = []
         page.on("pageerror", lambda error: errors.append(str(error)))
         page.goto(f"http://127.0.0.1:{port}/#/viewer", wait_until="networkidle")
-        for index, scene_id in enumerate(args.scenes):
-            reports.append(
-                check_scene(
-                    page, scene_id, out, first=index == 0, require_map=not args.allow_no_map
-                )
-            )
+        for scene_id in args.scenes:
+            reports.append(check_scene(page, scene_id, out, require_map=not args.allow_no_map))
         browser.close()
     server.should_exit = True
     thread.join(timeout=10)
