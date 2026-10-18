@@ -72,7 +72,14 @@ class SceneSpec:
 def rotation(roll: float, yaw: float, pitch: float) -> list[list[float]]:
     """``Rz(yaw) Ry(pitch) Rx(roll)`` with degrees, the UE composition used as-is."""
     r, p, w = (math.radians(v) for v in (roll, pitch, yaw))
-    cy, sy, cp, sp, cr, sr = math.cos(w), math.sin(w), math.cos(p), math.sin(p), math.cos(r), math.sin(r)
+    cy, sy, cp, sp, cr, sr = (
+        math.cos(w),
+        math.sin(w),
+        math.cos(p),
+        math.sin(p),
+        math.cos(r),
+        math.sin(r),
+    )
     rz = [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]]
     ry = [[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]]
     rx = [[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]]
@@ -145,7 +152,8 @@ def _pcd(points: Sequence[Vec3]) -> str:
     head = (
         "# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z rgb\n"
         "SIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\n"
-        f"WIDTH {len(points)}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS {len(points)}\nDATA ascii\n"
+        f"WIDTH {len(points)}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\n"
+        f"POINTS {len(points)}\nDATA ascii\n"
     )
     body = "".join(f"{x:.6f} {y:.6f} {z:.6f} 0\n" for x, y, z in points)
     return head + body

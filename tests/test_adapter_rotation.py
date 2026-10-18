@@ -115,3 +115,20 @@ def test_intrinsic_zyx_is_bit_identical_to_from_rpy_deg() -> None:
         got = euler_to_se3(angles, order="zyx", intrinsic=True, degrees=True)
         want = SE3.from_rpy_deg(*angles)
         assert (got.qw, got.qx, got.qy, got.qz) == (want.qw, want.qx, want.qy, want.qz)
+
+
+def test_reflection_mirrors_yaw_and_roll_keeps_pitch() -> None:
+    from coperceive.adapters.rotation import Reflection
+
+    reflected = Reflection.parse("y").se3(SE3.from_rpy_deg(10.0, 20.0, 30.0).translation(1, 2, 3))
+    assert reflected.almost_equal(SE3.from_rpy_deg(-10.0, 20.0, -30.0).translation(1, -2, 3))
+
+
+def test_reflection_is_an_involution_and_refuses_other_axes() -> None:
+    from coperceive.adapters.rotation import Reflection
+
+    pose = SE3.from_rpy_deg(-7.0, 3.0, 125.0).translation(4.0, -5.0, 6.0)
+    twice = Reflection.parse("y").se3(Reflection.parse("y").se3(pose))
+    assert twice.almost_equal(pose)
+    with pytest.raises(RotationError, match="reflect_axis"):
+        Reflection.parse("x")
