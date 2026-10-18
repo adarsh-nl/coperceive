@@ -88,6 +88,7 @@ def parse_manifest(payload: object, *, source: str = "<manifest>") -> Manifest:
     streams = _streams(root.sub("streams"), extra)
     checks = _checks(root.sub("checks", optional=True), streams)
     report = _report(root.sub("report", optional=True), streams)
+    licence = _licence(root.sub("licence", optional=True))
     root.done()
     manifest = Manifest(
         adapter=adapter,
@@ -102,6 +103,7 @@ def parse_manifest(payload: object, *, source: str = "<manifest>") -> Manifest:
         streams=streams,
         checks=checks,
         report=report,
+        licence=licence,
     )
     _cross_check(manifest)
     return manifest
@@ -170,6 +172,15 @@ class DiscoverSpec:
     glob: Template
     type: AgentType
     exclude: tuple[str, ...]
+    types: Mapping[str, AgentType] = field(default_factory=lambda: {})  # id -> type (ADR 0012)
+
+
+@dataclass(frozen=True)
+class LicenceSpec:
+    status: str  # known | unknown
+    spdx: str | None
+    notice: str
+    links: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -184,6 +195,8 @@ class Conventions:
     angle_unit: str  # deg | rad
     body_axes: str
     camera_axes: str
+    source_handedness: str = "right"  # right | left (ADR 0012: one y-reflection first)
+    reflect_axis: str | None = None  # y, only with left
 
 
 @dataclass(frozen=True)
@@ -279,6 +292,12 @@ class ModalityRule:
 
 
 @dataclass(frozen=True)
+class FixedSensor:
+    id: str
+    modality: Modality
+
+
+@dataclass(frozen=True)
 class SensorsSpec:
     reader: str
     path: Template
@@ -288,6 +307,21 @@ class SensorsSpec:
     modality: tuple[ModalityRule, ...]
     sensor_field: str | None
     agent_field: str | None
+    sample: str | None = None  # first: fill {frame}/{sample} in path with the agent's first sample
+    records_prefix: str | None = None  # sensors are the record's keys with this prefix
+    fixed: tuple[FixedSensor, ...] = ()  # identity sensors no file describes
+
+
+@dataclass(frozen=True)
+class CentreSpec:
+    location: tuple[str, str, str]
+    offset: tuple[str, str, str]
+    offset_frame: str  # box
+
+
+@dataclass(frozen=True)
+class SizeSpec:
+    half_extents: tuple[str, str, str]
 
 
 @dataclass(frozen=True)
@@ -304,8 +338,11 @@ class BoxesSpec:
     track_id_cast: str  # string | int_string
     class_map: Mapping[str, str]
     class_map_unknown: str  # keep | error | drop
-    fill: Mapping[str, float]
+    fill: Mapping[str, float | str]
     fill_reason: str | None
+    records_mapping_key: str | None = None  # records is a mapping; its key lands in this column
+    centre: CentreSpec | None = None  # location + R * offset instead of cx, cy, cz
+    size: SizeSpec | None = None  # 2 * half_extents instead of length, width, height
 
 
 @dataclass(frozen=True)
@@ -364,6 +401,7 @@ class Manifest:
     streams: Streams
     checks: Checks
     report: Report = field(default_factory=lambda: Report(None))
+    licence: LicenceSpec | None = None
 
 
 # --- node walker --------------------------------------------------------------
@@ -620,8 +658,14 @@ def _agents(payload: object, extra: frozenset[str]) -> AgentsSpec:
     assert glob is not None
     if not glob.text.endswith("/") or "agent" not in glob.placeholders:
         raise SpecError(f"{discover.at('glob')}: must end in / and contain {{agent}}")
+    types: dict[str, AgentType] = {}
+    tnode = discover.sub("types", optional=True)
+    if tnode is not None:
+        for key in list(tnode.payload):
+            types[key] = _agent_type(tnode, key)
+        tnode.done()
     spec = DiscoverSpec(
-        glob, _agent_type(discover, "type"), discover.strs("exclude", optional=True)
+        glob, _agent_type(discover, "type"), discover.strs("exclude", optional=True), types
     )
     discover.done()
     node.done()
@@ -632,11 +676,19 @@ def _conventions(node: _Node | None) -> Conventions:
     assert node is not None
     from coperceive.adapters.rotation import AxisRemap, RotationError
 
+    handedness = node.opt_str("source_handedness", choices=("right", "left")) or "right"
+    reflect_axis = node.opt_str("reflect_axis", choices=("y",))
+    if handedness == "left" and reflect_axis is None:
+        raise SpecError(f"{node.at('reflect_axis')}: required with source_handedness: left")
+    if handedness == "right" and reflect_axis is not None:
+        raise SpecError(f"{node.at('reflect_axis')}: only with source_handedness: left")
     out = Conventions(
         length_unit=node.str("length_unit", choices=("m", "cm", "mm")),
         angle_unit=node.str("angle_unit", choices=("deg", "rad")),
         body_axes=node.str("body_axes"),
         camera_axes=node.str("camera_axes"),
+        source_handedness=handedness,
+        reflect_axis=reflect_axis,
     )
     for key in ("body_axes", "camera_axes"):
         try:
@@ -826,6 +878,25 @@ def _sensors(node: _Node | None, extra: frozenset[str]) -> SensorsSpec:
         sub.done()
     if not rules or not rules[-1].default:
         raise SpecError(f"{node.at('modality')}: the last rule must be default")
+    sample = node.opt_str("sample", choices=("first",))
+    records_prefix = None
+    rnode = node.sub("records", optional=True)
+    if rnode is not None:
+        records_prefix = rnode.str("prefix")
+        rnode.done()
+    fixed: list[FixedSensor] = []
+    raw_fixed = node.any("fixed", optional=True)
+    if raw_fixed is not None:
+        if not isinstance(raw_fixed, list):
+            raise SpecError(f"{node.at('fixed')}: expected a list")
+        for index, item in enumerate(cast(list[object], raw_fixed)):
+            sub = _Node(f"{node.at('fixed')}[{index}]", item)
+            try:
+                modality = Modality.parse(sub.str("modality"))
+            except ValueError as exc:
+                raise SpecError(f"{sub.at('modality')}: {exc}") from None
+            fixed.append(FixedSensor(sub.str("id"), modality))
+            sub.done()
     spec = SensorsSpec(
         reader,
         path,
@@ -835,9 +906,28 @@ def _sensors(node: _Node | None, extra: frozenset[str]) -> SensorsSpec:
         tuple(rules),
         node.opt_str("sensor_field"),
         node.opt_str("agent_field"),
+        sample,
+        records_prefix,
+        tuple(fixed),
     )
     if reader in _table_readers() and spec.sensor_field is None:
         raise SpecError(f"{node.at('sensor_field')}: required for a table reader")
+    per_sample = {"frame", "sample"} & set(path.placeholders)
+    if per_sample and sample is None:
+        raise SpecError(f"{node.at('path')}: {{frame}} or {{sample}} needs sample: first")
+    if sample is not None and not per_sample:
+        raise SpecError(f"{node.at('sample')}: the path has no {{frame}} or {{sample}}")
+    if records_prefix is not None and "sensor" in path.placeholders:
+        raise SpecError(f"{node.at('records')}: not with {{sensor}} in the path")
+    if (
+        records_prefix is None
+        and reader not in _table_readers()
+        and "sensor" not in path.placeholders
+    ):
+        raise SpecError(f"{node.at('path')}: needs {{sensor}}, or records: {{prefix: ...}}")
+    ids = [item.id for item in fixed]
+    if len(ids) != len(set(ids)):
+        raise SpecError(f"{node.at('fixed')}: duplicate sensor id")
     node.done()
     return spec
 
@@ -889,14 +979,50 @@ def _boxes(node: _Node | None, extra: frozenset[str]) -> BoxesSpec | None:
     for name in fields:
         if name not in _BOX_COLUMNS:
             raise SpecError(f"{node.at('fields')}: unknown box column {name!r}")
+    centre = None
+    cnode = node.sub("centre", optional=True)
+    if cnode is not None:
+        location = cnode.strs("location", count=3)
+        offset = cnode.strs("offset", count=3)
+        centre = CentreSpec(
+            (location[0], location[1], location[2]),
+            (offset[0], offset[1], offset[2]),
+            cnode.str("offset_frame", choices=("box",)),
+        )
+        cnode.done()
+        if {"cx", "cy", "cz"} & set(fields):
+            raise SpecError(f"{node.at('centre')}: not with cx, cy, cz in fields")
+    size = None
+    snode = node.sub("size", optional=True)
+    if snode is not None:
+        half = snode.strs("half_extents", count=3)
+        size = SizeSpec((half[0], half[1], half[2]))
+        snode.done()
+        if {"length", "width", "height"} & set(fields):
+            raise SpecError(f"{node.at('size')}: not with length, width, height in fields")
+    records: str | None = None
+    records_mapping_key: str | None = None
+    raw_records = node.any("records", optional=True)
+    if isinstance(raw_records, str):
+        records = node.str("records")
+    elif raw_records is not None:
+        rnode = node.sub("records")
+        assert rnode is not None
+        records = rnode.str("path")
+        records_mapping_key = rnode.str("mapping_key")
+        if records_mapping_key not in _BOX_COLUMNS or records_mapping_key == "_":
+            raise SpecError(f"{rnode.at('mapping_key')}: unknown box column")
+        rnode.done()
     if reader == "text_rows" and not variants:
         raise SpecError(f"{node.at('variants')}: required for text_rows")
-    if reader != "text_rows" and not fields:
+    if reader != "text_rows" and not fields and (centre is None or size is None):
         raise SpecError(f"{node.at('fields')}: required for {reader}")
+    if reader == "text_rows" and (centre is not None or size is not None):
+        raise SpecError(f"{node.path}: centre and size are for record readers")
     frame = node.opt_str("frame") or "body"
     if frame not in {"body", "world"} and not frame.startswith("sensor:"):
         raise SpecError(f"{node.at('frame')}: body, world or sensor:<id>")
-    fill: dict[str, float] = {}
+    fill: dict[str, float | str] = {}
     fnode = node.sub("fill", optional=True)
     fill_reason = None
     if fnode is not None:
@@ -906,7 +1032,7 @@ def _boxes(node: _Node | None, extra: frozenset[str]) -> BoxesSpec | None:
                 continue
             if key not in _BOX_COLUMNS:
                 raise SpecError(f"{fnode.at(key)}: unknown box column")
-            fill[key] = fnode.float(key)
+            fill[key] = fnode.str(key) if key == "category" else fnode.float(key)
         fnode.done()
     spec = BoxesSpec(
         reader=reader,
@@ -915,7 +1041,7 @@ def _boxes(node: _Node | None, extra: frozenset[str]) -> BoxesSpec | None:
         frame=frame,
         variants=variants,
         fields=fields,
-        records=node.opt_str("records"),
+        records=records,
         rotation=_rotation(node.sub("rotation"), allow_missing=True),
         centre_origin=node.opt_str("centre_origin", choices=("centre", "bottom")) or "centre",
         track_id_cast=node.opt_str("track_id_cast", choices=("string", "int_string")) or "string",
@@ -924,7 +1050,22 @@ def _boxes(node: _Node | None, extra: frozenset[str]) -> BoxesSpec | None:
         or "keep",
         fill=fill,
         fill_reason=fill_reason,
+        records_mapping_key=records_mapping_key,
+        centre=centre,
+        size=size,
     )
+    node.done()
+    return spec
+
+
+def _licence(node: _Node | None) -> LicenceSpec | None:
+    if node is None:
+        return None
+    status = node.str("status", choices=("known", "unknown"))
+    spdx = node.opt_str("spdx")
+    if status == "known" and spdx is None:
+        raise SpecError(f"{node.at('spdx')}: required with status: known")
+    spec = LicenceSpec(status, spdx, node.str("notice").strip(), node.strs("links", optional=True))
     node.done()
     return spec
 

@@ -70,6 +70,9 @@ def check_command(args: argparse.Namespace) -> None:
         print(str(exc), file=sys.stderr)
         raise SystemExit(1) from None
     print(f"adapter {adapter.name}")
+    licence = getattr(getattr(adapter, "spec", None), "licence", None)
+    if licence is not None:
+        print(f"licence {licence.status}: {licence.notice}")
     print(f"scenes {report.scenes}")
     for scene_id, counts in report.counts.items():
         rendered = " ".join(f"{name}={count}" for name, count in counts)

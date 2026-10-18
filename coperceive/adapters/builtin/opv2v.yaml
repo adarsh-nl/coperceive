@@ -1,0 +1,126 @@
+# SPDX-License-Identifier: Apache-2.0
+# OPV2V (Xu et al., ICRA 2022, arXiv:2109.07644), the OpenCOOD release layout.
+# Conventions are taken from public documentation only: the CARLA Python API page
+# (Unreal Engine axes, "a Z-up left-handed system"; pitch, yaw, roll about Y, Z, X in
+# degrees), the OpenCOOD data-annotation page (lidar_pose, camera cords / extrinsic /
+# intrinsic, vehicles with angle, center, extent, location) and the OPV2V paper.
+# The rules this manifest needs beyond Griffin's are in docs/adr/0012-left-handed-sources.md.
+adapter: opv2v
+spec_version: 1
+
+licence:
+  status: unknown
+  notice: >-
+    No licence is published. The dataset page (https://mobility-lab.seas.ucla.edu/opv2v/)
+    states 'Copyright (c) 2021 UCLA Mobility Lab. All Rights Reserved.'; the OpenCOOD
+    code (https://github.com/DerrickXuNu/OpenCOOD) is MIT and says nothing about the
+    data. Terms unknown as of 2026-10-18; cite Xu et al., OPV2V, ICRA 2022,
+    arXiv:2109.07644. Research use on the HPC only; no frames, crops, screenshots or
+    derived scene files in a public repository.
+  links:
+    - https://mobility-lab.seas.ucla.edu/opv2v/
+    - https://github.com/DerrickXuNu/OpenCOOD
+    - https://arxiv.org/abs/2109.07644
+
+params:
+  split:
+    allowed: [train, validate, test, test_culver_city]
+
+world_frame: carla-map
+
+clock:
+  from: frame
+  unit: frame
+  scale_us: 50000
+  scale_note: >-
+    time_us = stem * 50000. Every data_protocol.yaml sets world.fixed_delta_seconds: 0.05
+    and sync_mode: true; stems advance by 2 per saved frame, which matches the OPV2V
+    paper's 'streamed at 20 Hz and recorded at 10 Hz' (arXiv 2109.07644). That the file
+    stem is the simulator tick count is an assumption; the files hold no wall clock.
+
+scenes:
+  glob:
+    path: "{split}/{scene}/"
+    sample_source: poses
+    platform:
+      split: {param: split}
+
+agents:
+  discover: {glob: "{split}/{scene}/{agent}/", type: vehicle}
+
+conventions:
+  length_unit: m
+  angle_unit: deg
+  source_handedness: left
+  reflect_axis: y
+  body_axes: FLU
+  camera_axes: FLU   # CARLA camera actor axes after the reflection: x forward (depth), y left, z up
+
+streams:
+  poses:
+    reader: yaml_record
+    path: "{agent_root}/{frame:06d}.yaml"
+    missing: skip
+    translation: [lidar_pose.0, lidar_pose.1, lidar_pose.2]
+    rotation:
+      # The YAML order is roll, yaw, pitch; euler fields are (about x, about y, about z).
+      euler: {fields: [lidar_pose.3, lidar_pose.5, lidar_pose.4], order: zyx, frame: intrinsic}
+
+  sensors:
+    reader: yaml_record
+    path: "{agent_root}/{frame:06d}.yaml"
+    sample: first
+    records: {prefix: camera}
+    extrinsic:
+      # "extrinsic matrix from camera to LiDAR" (OpenCOOD data-annotation page); the pose
+      # stream is the lidar pose, so the lidar frame is the body frame.
+      matrix: {field: extrinsic, shape: 4x4}
+      direction: child_to_parent
+    intrinsic: {matrix: intrinsic}
+    image_size:
+      derive: principal_point_x2
+      reason: "800x600 PNGs; cx, cy are 400, 300 in every file checked (2026-10-18)."
+    modality:
+      - {has_intrinsic: true, modality: camera}
+      - {default: camera}
+    fixed:
+      - {id: lidar, modality: lidar}
+
+  boxes:
+    reader: yaml_record
+    path: "{agent_root}/{frame:06d}.yaml"
+    missing: skip
+    frame: world
+    records: {path: vehicles, mapping_key: track_id}
+    # angle is [roll, yaw, pitch] in degrees (OpenCOOD data-annotation page).
+    fields: {roll: angle.0, yaw: angle.1, pitch: angle.2}
+    centre:
+      location: [location.0, location.1, location.2]
+      offset: [center.0, center.1, center.2]
+      offset_frame: box
+    size:
+      half_extents: [extent.0, extent.1, extent.2]
+    rotation:
+      euler: {fields: [roll, pitch, yaw], order: zyx, frame: intrinsic}
+    track_id_cast: int_string
+    fill:
+      category: vehicle
+      reason: "The format has no class field; the OPV2V paper annotates vehicles only."
+
+  images:
+    for_each: camera
+    path: "{agent_root}/{frame:06d}_{sensor}.png"
+    require_file: false
+
+  lidar:
+    reader: pcd
+    sensor: lidar
+    path: "{agent_root}/{frame:06d}.pcd"
+    missing: skip
+    fields: {x: x, y: y, z: z}
+    intensity:
+      fill: 0.0
+      reason: "The PCD fields are x y z rgb; there is no intensity."
+
+checks:
+  required_per_sample: [poses]
