@@ -95,6 +95,10 @@ OpenDRIVE SHA-256, the files extracted on this machine:
 | Town06.xodr | `a90b613175fa837fdc128ddfaf5ddad25797b128fdbd8cd945974bc21a60496e` |
 | Town07.xodr | `be730652769e993e27f748ba5793dba9e49d299205146a7a8db0bcd17af877bf` |
 | Town10HD.xodr | `5d883b799f634030af92be1e9d79d107845540ba04338e8c60e095be1aef7be7` |
+| Town01.xodr | `97a7f6ac67812567e5c8ee0599cd823b23f80f30f3f97c502212e38b72e2b709` (added 2026-10-18 for `maps identify`; pinned to two byte-identical public mirrors, `autonomousvision/fail2drive` and `Scenic-Foundation/Scenic`, not checked against the package) |
+| Town02.xodr | `953c05f17def231239ffcadba3307628a82d0d335b67b4e29c3098f7aed1dd7d` (added 2026-10-18 for `maps identify`; pinned to two byte-identical public mirrors, `autonomousvision/fail2drive` and `Scenic-Foundation/Scenic`, not checked against the package) |
+| Town04.xodr | `4dddd1560ab7812b0e89cd4a523d8b6f2b93947eafb496d9eeb83cc772116c85` (added 2026-10-18 for `maps identify`; pinned to two byte-identical public mirrors, `autonomousvision/fail2drive` and `Scenic-Foundation/Scenic`, not checked against the package) |
+| Town05.xodr | `7edc53b0be840e177598da7a4ed9571146d7b2595ce280d154c90f92e8a48851` (added 2026-10-18 for `maps identify`; pinned to two byte-identical public mirrors, `autonomousvision/fail2drive` and `Scenic-Foundation/Scenic`, not checked against the package) |
 
 Polyline counts at 1.0 m: Town03 1,097 (42,748 vertices), Town06 847 (46,009), Town07 855 (23,231), Town10HD 387 (15,209).
 

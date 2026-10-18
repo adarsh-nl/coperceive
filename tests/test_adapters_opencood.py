@@ -3,18 +3,65 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
+from typing import Any, cast
 
+import numpy as np
 import pytest
+import yaml
 from coperceive.adapters.build import ManifestAdapter
+from coperceive.adapters.ingest import ingest
 from coperceive.adapters.registry import list_adapters, resolve_adapter
-from coperceive.adapters.spec import builtin_manifest_path, load_manifest
+from coperceive.adapters.spec import (
+    Manifest,
+    SpecError,
+    builtin_manifest_path,
+    load_manifest,
+    parse_manifest,
+)
+from coperceive.cli import main
+from coperceive.model import AgentType, Modality, Scene
+from coperceive.se3 import SE3
+from coperceive.store import read_scene
 
 from tests.opencood_release import AgentTrack, Box, SceneSpec, two_cav_scene, write_release
+
+Vec3 = tuple[float, float, float]
 
 
 def _adapter(name: str = "opv2v") -> ManifestAdapter:
     return ManifestAdapter(load_manifest(builtin_manifest_path(name)))
+
+
+def _ingested(tmp_path: Path, scene: SceneSpec | None = None, name: str = "opv2v") -> Scene:
+    scene = scene or two_cav_scene()
+    write_release(tmp_path / "raw", "train", [scene])
+    ingest(_adapter(name), tmp_path / "raw", tmp_path / "out", params={"split": "train"}, workers=1)
+    return read_scene(tmp_path / "out" / scene.name)
+
+
+def _points(scene: Scene, agent_id: str, time_us: int) -> list[Vec3]:
+    cloud = next(c for c in scene.point_clouds if c.agent_id == agent_id and c.time_us == time_us)
+    flat = np.frombuffer(cloud.xyz_i_f32, dtype=np.float32)  # pyright: ignore[reportUnknownMemberType]
+    values = [float(v) for v in cast(list[float], flat.tolist())]
+    return [(values[i], values[i + 1], values[i + 2]) for i in range(0, len(values), 4)]
+
+
+def _distance(a: Vec3, b: Vec3) -> float:
+    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b, strict=True)))
+
+
+def _opv2v_payload() -> dict[str, Any]:
+    loaded = yaml.safe_load(builtin_manifest_path("opv2v").read_text(encoding="utf-8"))
+    return cast(dict[str, Any], loaded)
+
+
+def _parse(payload: dict[str, Any]) -> Manifest:
+    return parse_manifest(payload, source="test")
+
+
+# --- Task 1: manifests, discovery, clock ---------------------------------------------------
 
 
 def test_both_manifests_load_and_list() -> None:
@@ -92,10 +139,11 @@ def test_split_param_is_required_and_checked(tmp_path: Path) -> None:
 
 def test_fixture_boxes_are_written_as_a_mapping_keyed_by_actor_id(tmp_path: Path) -> None:
     write_release(tmp_path, "train", [two_cav_scene()])
-    import yaml
-
-    record = yaml.safe_load(
-        (tmp_path / "train/2021_08_16_22_26_54/641/000069.yaml").read_text(encoding="utf-8")
+    record = cast(
+        dict[str, Any],
+        yaml.safe_load(
+            (tmp_path / "train/2021_08_16_22_26_54/641/000069.yaml").read_text(encoding="utf-8")
+        ),
     )
     assert set(record["vehicles"]) == {650, 677}
     assert record["vehicles"][677]["center"] == [1.0, 0.0, 0.75]
@@ -106,31 +154,12 @@ def test_fixture_boxes_are_written_as_a_mapping_keyed_by_actor_id(tmp_path: Path
 # --- ADR 0012 decision 1: the reflection ----------------------------------------------------
 
 
-def _ingested(tmp_path: Path, scene: SceneSpec | None = None, name: str = "opv2v"):
-    from coperceive.adapters.ingest import ingest
-    from coperceive.store import read_scene
-
-    scene = scene or two_cav_scene()
-    write_release(tmp_path / "raw", "train", [scene])
-    ingest(_adapter(name), tmp_path / "raw", tmp_path / "out", params={"split": "train"}, workers=1)
-    return read_scene(tmp_path / "out" / scene.name)
-
-
-def _points(scene, agent_id: str, time_us: int):
-    import numpy as np
-
-    cloud = next(c for c in scene.point_clouds if c.agent_id == agent_id and c.time_us == time_us)
-    return np.frombuffer(cloud.xyz_i_f32, dtype=np.float32).reshape(-1, 4)[:, :3].astype(float)
-
-
 def test_reflection_keeps_forward_along_travel(tmp_path: Path) -> None:
-    import math
-
     scene = _ingested(tmp_path)
     poses = scene.agent("641").poses
     a, b = poses[0].world_from_body, poses[1].world_from_body
-    forward = a.apply((1.0, 0.0, 0.0))
-    forward = (forward[0] - a.tx, forward[1] - a.ty, forward[2] - a.tz)
+    ahead = a.apply((1.0, 0.0, 0.0))
+    forward = (ahead[0] - a.tx, ahead[1] - a.ty, ahead[2] - a.tz)
     step = (b.tx - a.tx, b.ty - a.ty, b.tz - a.tz)
     norm = math.hypot(*step)
     dot = sum(f * s / norm for f, s in zip(forward, step, strict=True))
@@ -142,33 +171,32 @@ def test_reflection_keeps_forward_along_travel(tmp_path: Path) -> None:
 
 def test_box_centres_sit_inside_their_lidar_points(tmp_path: Path) -> None:
     """Known answer: after conversion every box still holds the points seeded inside it."""
-    import numpy as np
-
     scene = _ingested(tmp_path)
     checked = 0
     for ann in scene.annotations:
         points = _points(scene, ann.agent_id, ann.time_us)
         pose = next(p for p in scene.agent(ann.agent_id).poses if p.time_us == ann.time_us)
-        world = np.array([pose.world_from_body.apply(tuple(p)) for p in points])
-        rot = ann.box_from_rpy
-        axes = np.array([rot.apply(axis) for axis in ((1, 0, 0), (0, 1, 0), (0, 0, 1))])
-        local = (world - np.array(ann.center)) @ axes.T
-        half = np.array(ann.size_lwh) / 2.0
-        inside = np.all(np.abs(local) <= half + 1e-6, axis=1)
-        assert inside.sum() >= 9, (ann.agent_id, ann.track_id, inside.sum())
+        world = [pose.world_from_body.apply(p) for p in points]
+        box_from_world = ann.box_from_rpy.inverse()
+        half = tuple(v / 2.0 for v in ann.size_lwh)
+        inside = 0
+        for w in world:
+            d = (w[0] - ann.center[0], w[1] - ann.center[1], w[2] - ann.center[2])
+            local = box_from_world.apply(d)
+            if all(abs(local[i]) <= half[i] + 1e-6 for i in range(3)):
+                inside += 1
+        assert inside >= 9, (ann.agent_id, ann.track_id, inside)
         checked += 1
     assert checked == 5 * 3  # 2 + 3 boxes per sample, three samples
 
 
 def test_pcd_points_are_reflected_like_the_poses(tmp_path: Path) -> None:
-    import numpy as np
-
     scene = _ingested(tmp_path)
     points = _points(scene, "641", 3_450_000)
     # Box 677's centre, source world (17, 30, 0.75), seen from the lidar at (10, 20, 1.9)
     # with yaw 90: lidar-frame (10, -7, -1.15) in the source, hence (10, 7, -1.15) here.
-    assert np.min(np.linalg.norm(points - np.array([10.0, 7.0, -1.15]), axis=1)) < 1e-4
-    assert np.min(np.linalg.norm(points - np.array([10.0, -7.0, -1.15]), axis=1)) > 1.0
+    assert min(_distance(p, (10.0, 7.0, -1.15)) for p in points) < 1e-4
+    assert min(_distance(p, (10.0, -7.0, -1.15)) for p in points) > 1.0
 
 
 # --- decision 2: boxes ---------------------------------------------------------------------
@@ -200,7 +228,7 @@ def test_half_extents_are_doubled(tmp_path: Path) -> None:
 def test_track_ids_are_strings_and_the_ego_is_not_its_own_box(tmp_path: Path) -> None:
     scene = _ingested(tmp_path)
     by_agent = {
-        agent: sorted({a.track_id for a in scene.annotations if a.agent_id == agent})
+        agent: sorted({str(a.track_id) for a in scene.annotations if a.agent_id == agent})
         for agent in ("641", "650")
     }
     assert by_agent == {"641": ["650", "677"], "650": ["641", "677", "689"]}
@@ -229,8 +257,6 @@ def test_per_agent_sets_are_not_duplicated(tmp_path: Path) -> None:
 
 
 def test_rsu_folder_becomes_infrastructure(tmp_path: Path) -> None:
-    from coperceive.model import AgentType
-
     scene = _ingested(tmp_path, two_cav_scene(rsu=True), name="v2xset")
     types = {a.agent_id: a.agent_type for a in scene.agents}
     assert types == {
@@ -243,14 +269,11 @@ def test_rsu_folder_becomes_infrastructure(tmp_path: Path) -> None:
 
 def test_rsu_cameras_come_from_the_extrinsic(tmp_path: Path) -> None:
     scene = _ingested(tmp_path, two_cav_scene(rsu=True), name="v2xset")
-    cam = scene.sensor("-1", "camera0")
-    t = cam.body_from_sensor
+    t = scene.sensor("-1", "camera0").body_from_sensor
     assert (t.tx, t.ty, t.tz) == pytest.approx((-3.0, 0.0, 0.9))
 
 
 def test_four_cameras_and_one_lidar_per_agent(tmp_path: Path) -> None:
-    from coperceive.model import Modality
-
     scene = _ingested(tmp_path)
     for agent in ("641", "650"):
         sensors = [s for s in scene.sensors if s.agent_id == agent]
@@ -263,7 +286,7 @@ def test_four_cameras_and_one_lidar_per_agent(tmp_path: Path) -> None:
         ]
         lidar = scene.sensor(agent, "lidar")
         assert lidar.modality is Modality.LIDAR
-        assert lidar.body_from_sensor.almost_equal(lidar.body_from_sensor.identity())
+        assert lidar.body_from_sensor.almost_equal(SE3.identity())
         cam = scene.sensor(agent, "camera0")
         assert cam.modality is Modality.CAMERA
         assert (cam.fx, cam.cx, cam.cy) == pytest.approx((335.639852470912, 400.0, 300.0))
@@ -271,8 +294,6 @@ def test_four_cameras_and_one_lidar_per_agent(tmp_path: Path) -> None:
 
 
 def test_camera_extrinsic_is_camera_to_lidar_child_to_parent(tmp_path: Path) -> None:
-    import math
-
     scene = _ingested(tmp_path)
     front = scene.sensor("641", "camera0").body_from_sensor
     assert (front.tx, front.ty, front.tz) == pytest.approx((-3.0, 0.0, 0.9))
@@ -301,21 +322,7 @@ def test_image_refs_name_the_png_files(tmp_path: Path) -> None:
 # --- spec rules -----------------------------------------------------------------------------
 
 
-def _opv2v_payload() -> dict:
-    import yaml
-
-    return yaml.safe_load(builtin_manifest_path("opv2v").read_text(encoding="utf-8"))
-
-
-def _parse(payload: dict):
-    from coperceive.adapters.spec import parse_manifest
-
-    return parse_manifest(payload, source="test")
-
-
 def test_boxes_centre_and_cx_fields_are_exclusive() -> None:
-    from coperceive.adapters.spec import SpecError
-
     payload = _opv2v_payload()
     payload["streams"]["boxes"]["fields"]["cx"] = "location.0"
     with pytest.raises(SpecError, match=r"streams\.boxes\.centre"):
@@ -323,8 +330,6 @@ def test_boxes_centre_and_cx_fields_are_exclusive() -> None:
 
 
 def test_half_extents_and_length_are_exclusive() -> None:
-    from coperceive.adapters.spec import SpecError
-
     payload = _opv2v_payload()
     payload["streams"]["boxes"]["fields"]["length"] = "extent.0"
     with pytest.raises(SpecError, match=r"streams\.boxes\.size"):
@@ -332,8 +337,6 @@ def test_half_extents_and_length_are_exclusive() -> None:
 
 
 def test_left_handed_manifest_refuses_other_axes() -> None:
-    from coperceive.adapters.spec import SpecError
-
     payload = _opv2v_payload()
     payload["conventions"]["reflect_axis"] = "x"
     with pytest.raises(SpecError, match="reflect_axis"):
@@ -345,8 +348,6 @@ def test_left_handed_manifest_refuses_other_axes() -> None:
 
 
 def test_types_override_rejects_unknown_type() -> None:
-    from coperceive.adapters.spec import SpecError
-
     payload = _opv2v_payload()
     payload["agents"]["discover"]["types"] = {"-1": "drone"}
     with pytest.raises(SpecError, match=r"agents\.discover\.types\.-1"):
@@ -356,8 +357,6 @@ def test_types_override_rejects_unknown_type() -> None:
 def test_check_prints_the_licence_status(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from coperceive.cli import main
-
     write_release(tmp_path, "train", [two_cav_scene()])
     main(["adapters", "check", "opv2v", "--raw-root", str(tmp_path), "--param", "split=train"])
     out = capsys.readouterr().out
