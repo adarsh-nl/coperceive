@@ -9,6 +9,7 @@ import os
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
+from typing import cast
 
 import yaml
 
@@ -156,7 +157,7 @@ def inspect_command(args: argparse.Namespace) -> None:
 
 def _inspect(args: argparse.Namespace) -> None:
     manifest = _manifest(args)
-    payload = _as_plain(dataclasses.asdict(manifest))
+    payload = _as_plain(manifest)
     print(yaml.safe_dump(payload, sort_keys=False), end="")
     assert manifest.source is not None
     try:
@@ -173,10 +174,15 @@ def _as_plain(value: object) -> object:
         return [_as_plain(v) for v in value]  # pyright: ignore[reportUnknownVariableType, reportUnknownArgumentType]
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, (set, frozenset)):
+        items = cast(set[object], value)  # pyright: ignore[reportUnknownArgumentType]
+        return sorted((_as_plain(v) for v in items), key=str)
     if isinstance(value, Template):  # before the dataclass branch: a Template is one
         return value.text
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
-        return _as_plain(dataclasses.asdict(value))
+        # Field by field, not asdict(): asdict would turn a nested Template into a dict
+        # with its frozenset before this function could replace it by its text.
+        return {f.name: _as_plain(getattr(value, f.name)) for f in dataclasses.fields(value)}
     return value
 
 

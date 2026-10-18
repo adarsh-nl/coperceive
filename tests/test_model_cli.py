@@ -160,3 +160,19 @@ def test_cache_prune_prints_count(
     assert capsys.readouterr().out.strip() == "pruned 1"
     main(["model", "cache", "prune", "--out", str(out)])
     assert capsys.readouterr().out.strip() == "pruned 0"
+
+
+def test_model_inspect_prints_raw_templates_as_text(capsys: pytest.CaptureFixture[str]) -> None:
+    """A manifest with raw templates (the Griffin plugin) dumps cleanly: templates as text."""
+    griffin = (
+        Path(__file__).resolve().parents[1]
+        / "plugins"
+        / "griffin"
+        / "coperceive_griffin_model"
+        / "model.yaml"
+    )
+    main(["model", "inspect", "--manifest", str(griffin)])
+    out = capsys.readouterr().out
+    assert "- vehicle-side/pose/{frame:06d}.json" in out
+    assert "frozenset" not in out and "checkpoint_md5: 1201f5692e390a75e5b5ab0efa0cae19" in out
+    assert out.strip().splitlines()[-1].startswith("interpreter:")

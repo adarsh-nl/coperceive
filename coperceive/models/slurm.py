@@ -44,7 +44,11 @@ def interpreter_module(python: Path) -> str | None:
     """The ``module load`` the interpreter needs on a compute node, from the venv's
     ``pyvenv.cfg`` (``home = /software/python/<version>/bin`` on this cluster, else the
     ``version`` line); None when ``python`` is not inside a venv (Adarsh, 2026-10-18)."""
-    cfg = python.resolve().parent.parent / "pyvenv.cfg"
+    # The venv's bin/python is itself a symlink to the base interpreter, so resolve the
+    # directory, not the file: <venv>/bin -> <venv>/pyvenv.cfg.
+    cfg = python.parent.resolve().parent / "pyvenv.cfg"
+    if not cfg.is_file():
+        cfg = python.resolve().parent.parent / "pyvenv.cfg"
     if not cfg.is_file():
         return None
     home = version = None

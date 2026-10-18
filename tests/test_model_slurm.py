@@ -102,6 +102,18 @@ def test_module_load_for_the_venv_interpreter(
         "home = /software/python/3.13.14/bin\nversion = 3.13.14\n", encoding="utf-8"
     )
     assert interpreter_module(python) == "python/3.13.14"
+    # The venv's bin/python is a symlink to the base interpreter, and the venv itself may be
+    # reached through a symlink (the worktrees link .venv): both still find pyvenv.cfg.
+    base = tmp_path / "software" / "python" / "3.13.14" / "bin"
+    base.mkdir(parents=True)
+    (base / "python3.13").write_text("", encoding="utf-8")
+    python.unlink()
+    python.symlink_to(base / "python3.13")
+    assert interpreter_module(python) == "python/3.13.14"
+    linked = tmp_path / "wt" / ".venv"
+    linked.parent.mkdir()
+    linked.symlink_to(venv)
+    assert interpreter_module(linked / "bin" / "python") == "python/3.13.14"
     scenes, out, scene = roots
     manifest = _manifest(modules=["nvidia/cuda-11.8"])
     plan = plan_sbatch(
