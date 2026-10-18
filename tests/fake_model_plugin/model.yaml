@@ -26,4 +26,4 @@ models:
       extra: {type: bool, default: false, description: also a pedestrian per agent}
       misbehave: {type: str, default: "", description: a fault to inject (tests only)}
 commands:
-  batch: ["{python}", "-m", "tests.fake_model_plugin.worker", "--model", "{model}"]
+  batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}"]

@@ -15,7 +15,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import BinaryIO, cast
+from typing import IO, cast
 
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import PredictionBox, PredictionError
@@ -605,7 +605,7 @@ def to_prediction_box(row: BoxRow, *, scene_id: str, time_us: int) -> Prediction
 class LineReader:
     """Reads ``\\n``-terminated lines from a binary stream, refusing lines over MAX_LINE."""
 
-    def __init__(self, stream: BinaryIO) -> None:
+    def __init__(self, stream: IO[bytes]) -> None:
         self._stream = stream
 
     def readline(self) -> bytes | None:

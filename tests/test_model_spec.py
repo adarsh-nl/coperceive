@@ -90,7 +90,7 @@ def test_render_argv() -> None:
         work_dir=Path("/tmp/work"),
         model="default",
     )
-    assert argv == [sys.executable, "-m", "tests.fake_model_plugin.worker", "--model", "default"]
+    assert argv == [sys.executable, f"{FAKE.parent}/worker.py", "--model", "default"]
 
 
 def test_manifest_sha256_is_the_file_hash() -> None:
