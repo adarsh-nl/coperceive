@@ -544,3 +544,22 @@ Gates job 627368 on `d16bef1` (3.13, hpc-node12): clean, 372 passed, 2 skipped.
 ### Static bundle (2026-10-17)
 
 Adarsh asked for the bundle to be rebuilt and committed before merging: `npm run build` in `web/` on the login node (7 s, node 26 from pyright's cache), committed as `build(web): rebuild static bundle`; the output is byte-identical to `~/coperceive-web-dist`. CI's `web` job now runs `npm run build` and fails when `git status --porcelain -- coperceive/app/static` is not empty, so a stale bundle cannot merge again. The earlier rule (never rebuild or commit static from the HPC) is withdrawn by this instruction.
+
+## After the merge of PR #16 (2026-10-17)
+
+`main` is at `7546f8a` (merge of `feat/eval-step-a`). On the HPC: `~/coperceive` is on `main` and pulled; the shared `.venv`'s editable install points at `~/coperceive` (it always did, `pip install -e . --no-deps` refreshed the metadata so the `dev` extra lists `playwright`), so the `PYTHONPATH=$HOME/coperceive-adr0010` workaround in the viewer and staging commands above is no longer needed and the paths read `$HOME/coperceive/…`. The worktree `~/coperceive-adr0010` was removed; the remote `step-a/*` task branches (chain, fixes, r2-py, r2-web, task-1, -2, -3, -7, -8, -10, -11) were deleted; `feat/eval-step-a` is kept on the remote until Adarsh says otherwise. Gates jobs now run with `REPO=~/coperceive` (the default in the sbatch).
+
+Staging and serving the val scenes from `main`:
+
+```bash
+srun --partition=main --cpus-per-task=2 --mem=8G --time=2:00:00 --pty bash
+hostname
+module load python/3.13.14
+$HOME/coperceive/.venv/bin/python $HOME/coperceive/scripts/griffin/stage_viewer.py \
+    --raw /datasets/eemcs/ps/cv/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release \
+    --split $HOME/src/griffin/data/split_datas/griffin_50scenes_25m.json \
+    --xodr-dir $HOME/maps-src/carla-0.9.15 \
+    --predictions $HOME/results/627093/predictions \
+    --workers 2
+# then the coperceive serve line it prints (the packaged bundle is current; --static is optional)
+```
