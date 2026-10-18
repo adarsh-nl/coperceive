@@ -8,6 +8,17 @@ Words: the **parent** is the `coperceive` process (`model run`, `model check`, o
 
 A plugin registers one entry point in the group `coperceive.models`. The entry point's name is the plugin name. Its value, once loaded, is a `str` or a `pathlib.Path` to the manifest file. `coperceive model list` shows every entry point; `--manifest FILE` on `run`, `check`, `inspect` and `serve --model` names a manifest file directly. A plugin named by both resolves to the file. The plugin directory (`{plugin_dir}`) is the manifest file's parent.
 
+## Installation
+
+A plugin is a pip-installable package with the entry point above. On the HPC, where compute nodes have no PyPI, its wheel is built on the login node into a local wheelhouse and installed into the `.venv` from there, with no index:
+
+```text
+pip wheel plugins/griffin --no-deps -w ~/wheelhouse
+pip install --no-index --find-links ~/wheelhouse coperceive-griffin-model
+```
+
+Compute nodes install nothing. A plugin that is not installed runs with `--manifest FILE`. (Adarsh, 2026-10-18.)
+
 ## Manifest
 
 YAML, one document, loaded with `yaml.safe_load`. An unknown key anywhere is an error that names its key path. Types: `str`, `int`, `float`, `bool`, `list`, `map`.
@@ -54,6 +65,7 @@ Each entry of `models`:
 | Key | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
 | `description` | str | no | null | One line. |
+| `checkpoint_md5` | str | no | null | MD5 of the weights file the model loads. When set, a `hello.environment.checkpoint_md5` that differs is a protocol violation. |
 | `inputs` | map | yes | | §Inputs. |
 | `outputs` | map | yes | | §Outputs. |
 | `resources` | map | yes | | §Resources. |
@@ -90,7 +102,7 @@ Each entry of `models`:
 | --- | --- | --- | --- | --- |
 | `gpu` | bool | yes | | Needs a GPU. |
 | `memory_gb` | int | yes | | Slurm `--mem`. |
-| `seconds_per_sample` | float | yes | | Author's estimate for the Slurm `--time` formula. |
+| `seconds_per_sample` | float | yes | | Author's estimate for the Slurm `--time` formula, used until a run of this plugin and model exists under `--out`; then that run's provenance `timings` take over (§Provenance). |
 | `staging_seconds` | float | no | `0` | Same. |
 | `frame_timeout_s` | float | no | `600` | Per frame. |
 | `run_timeout_s` | float | no | null | Whole run; null means none. |
@@ -143,7 +155,7 @@ Every message has `type` (str) and `protocol` (int, `1`).
  "git_commit": "9c02ba4a"}
 ```
 
-`environment` is a flat map of strings. It must change whenever the child's outputs would change for the same inputs (framework versions, checkpoint digests); it is part of the cache key. `git_commit` is optional.
+`environment` is a flat map of strings. It must change whenever the child's outputs would change for the same inputs (framework versions, checkpoint digests); its `checkpoint_md5` key is required (`none` for a model without weights) and is part of the cache key (§Cache). `git_commit` is optional.
 
 **`configure`** (parent, once per scene):
 
@@ -251,28 +263,27 @@ The parent creates `{work_dir}` and gives it to the child in `configure.work_dir
 | `completed_scenes` | list str | Scene ids whose `boxes.parquet` was written by this invocation or found complete. |
 | `reason` | str or null | For `partial`: `timeout`, `cancelled`, `plugin_error`, with the message. |
 | `options` | map | The effective options after defaults. |
-| `cache_hits`, `frames_run` | int | Counts for this invocation. |
+| `cache_hits`, `frames_run` | int | Scenes served from the cache, frames the child answered, in this invocation. |
+| `timings` | map | `staging_s`, `per_sample_s`, `wall_s` measured by this invocation (`staging_s` is 0 outside a Slurm job). The Slurm emitter of the next run of the same plugin and model reads them in place of the manifest's estimates. |
 | `dependencies` | map | `{<model>: {<artifact>: <path>}}` for every `depends_on` entry that was used; `{}` otherwise. |
 | `slurm_job_id` | str or null | `$SLURM_JOB_ID` when set. |
 
 `model` in `run.json` is `"<plugin> <model> <version>"`; `notes` is the licence `notice`, then `citation`, then the manifest `notes`, joined with ` | `. `score_note`, `categories` and `sources` are the model's `outputs`.
 
+## Partial runs
+
+A run whose `provenance.status` is `partial` is evaluated on its finished scenes only. `eval run` writes `run_status: "partial"` and `missing_scenes` (the selected scene ids without `boxes.parquet`) into every `metrics.json` it writes for that run; `eval report` and `eval compare` print `partial: N of M scenes` under the title. A complete run writes `run_status: "complete"` and no `missing_scenes`. (Adarsh, 2026-10-18.)
+
 ## Cache
 
-Location: `<predictions root>/.cache/models/<plugin>/<key[:2]>/<key>.json`.
+Location: `<predictions root>/<run_id>/cache/<plugin>/<model>/<checkpoint_md5>/<scene_id>/`. The key is those four values: the manifest `name`, the `models` key, `hello.environment.checkpoint_md5` (required; `none` for a model without weights) and the scene id. `cache` is a reserved child name of a run directory; readers of predictions format 1 skip it when they enumerate scenes, and `check_scene_id` refuses it.
 
-Key: the lower-case hex SHA-256 of the canonical JSON (`sort_keys=True`, `separators=(",", ":")`, `ensure_ascii=True`) of:
+Contents of a scene's directory:
 
-```json
-{"plugin": "griffin", "version": "0.1.0", "manifest_sha256": "…", "environment": {"…": "…"},
- "model": "vehicle-side", "scene_id": "Town03-000", "agent_ids": ["vehicle"], "source": "single",
- "time_us": 1118500000, "first_time_us": 1118500000, "options": {"…": "…"},
- "inputs": [{"path": "vehicle-side/camera/front/000000.png", "size": 2831892, "mtime_ns": 1760000000000000000}]}
-```
+- `result.json`: `{"manifest_sha256": "…", "options": {…}, "environment": {…}, "inputs": [{"path": "…", "size": n, "mtime_ns": n}, …], "rows": [<result rows of every frame, in time order>], "written_utc": "…"}`. `inputs` lists every image, sweep and raw file the scene's frames referenced, sorted by path, relative to the scenes root or the raw root.
+- the artefacts the model declared in `outputs.artifacts`, copied from `<work_dir>/artifacts/` for that scene (Griffin: `track_query/`, `det_pkl`, `det_json`).
 
-`inputs` lists every image, sweep and raw file the frame request references, sorted by path, with `path` relative to the scenes root or raw root. Under `--hash-inputs` each entry carries `sha256` instead of `size` and `mtime_ns`. `first_time_us` is the scene's first sample for `frames: sequence` models and is omitted for `single`.
-
-Entry: `{"key": "…", "inputs": <the object above>, "result": <the result message>, "written_utc": "…"}`. The parent writes an entry only after the result passed validation; a stored entry that fails validation on read is deleted and the frame is run again. `--no-cache` neither reads nor writes. `coperceive model cache prune --out ROOT [--plugin NAME] [--older-than DAYS]` deletes entries and prints the count.
+Rules: the parent looks a scene up before `configure`; an entry whose `manifest_sha256` and `options` equal the current ones is written to `boxes.parquet` without running the scene and counts in `provenance.cache_hits`; an entry that differs in either is ignored and overwritten after the scene runs; an entry whose rows fail validation on read is deleted and the scene runs again. The parent writes an entry only after the scene's rows passed validation. `--no-cache` neither reads nor writes. A `depends_on` artefact is read from the dependency model's cache directory of the same run, or of the run `--artifacts DIR` names. `coperceive model cache prune --out ROOT [--run-id ID] [--plugin NAME] [--model NAME]` deletes the matching cache directories and prints the count.
 
 ## CLI
 
@@ -285,11 +296,11 @@ coperceive model run <plugin> --scenes ROOT --out PREDICTIONS --run-id ID
     [--raw-root DIR] [--media-root DIR ...] [--artifacts DIR | --no-auto-dependencies] [--option k=v ...]
     [--frame-timeout S] [--run-timeout S] [--no-cache] [--hash-inputs] [--work DIR] [--force]
     [--slurm [--submit]]
-coperceive model cache prune --out ROOT [--plugin NAME] [--older-than DAYS]
+coperceive model cache prune --out ROOT [--run-id ID] [--plugin NAME] [--model NAME]
 coperceive serve ... --model <plugin> [--model-name NAME] [--manifest FILE] [--eval-config FILE]
 ```
 
-`list` prints `name  source  location` per plugin, as `adapters list` does. `inspect` prints the validated manifest as YAML plus the resolved interpreter path, or the reason it cannot be resolved. `run` prints one line per scene (`scene <id>: <frames> frames, <hits> cached, <boxes> boxes`), then `wrote <out>/<run_id>` and `scenes N frames M cached C boxes B`. `--slurm` prints the sbatch path and its text; `--submit` runs `sbatch` and prints the job id. `--model` is required when the plugin has more than one model. For a model with `depends_on`, the dependency model is run first into `<out>/.work/<run_id>/artifacts/` unless `--artifacts DIR` names an earlier run's artefacts or `--no-auto-dependencies` turns the missing artefact into an error. A resumed run whose stored `provenance.manifest_sha256` differs from the current manifest is refused without `--force`.
+`list` prints `name  source  location` per plugin, as `adapters list` does. `inspect` prints the validated manifest as YAML plus the resolved interpreter path, or the reason it cannot be resolved. `run` prints one line per scene (`scene <id>: <frames> frames, <hits> cached, <boxes> boxes`), then `wrote <out>/<run_id>` and `scenes N frames M cached C boxes B`. `--slurm` prints the sbatch path and its text; `--submit` runs `sbatch` and prints the job id. `--model` is required when the plugin has more than one model. For a model with `depends_on`, the dependency model is run first and its artefacts land in the run's cache (§Cache) unless `--artifacts DIR` names an earlier run or `--no-auto-dependencies` turns the missing artefact into an error. A resumed run whose stored `provenance.manifest_sha256` differs from the current manifest is refused without `--force`.
 
 ## Exit codes
 
@@ -302,6 +313,8 @@ coperceive serve ... --model <plugin> [--model-name NAME] [--manifest FILE] [--e
 | 4 | Timeout or cancel; the run is `partial`. | |
 
 ## Live session
+
+Designed in this version, built after batch mode works (Adarsh, 2026-10-18: batch only now). Nothing in this section is implemented in step B; it is here so that batch mode's protocol, cache and provenance fit it.
 
 Available only when `serve` was started with `--model`. One session per server. Paths are under `/api/scenes/{scene_id}/live`; POST and DELETE need `X-Coperceive-Request: 1`; the token rule is the server's.
 
@@ -337,4 +350,4 @@ Output: one line per rule, `ok`, `fail <reason>`, `skipped <reason>` or `not che
 
 ## What this version does not define
 
-Binary payload frames, more than one live session, container execution, tracking outputs, image-space boxes, and a parent that runs on a different host than the child.
+Binary payload frames, more than one live session, container execution, tracking outputs, image-space boxes, and a parent that runs on a different host than the child. The live session is defined above and not built in step B.
