@@ -15,7 +15,7 @@ import os
 import shutil
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from importlib import metadata
 from pathlib import Path
 from typing import Protocol, cast
@@ -94,9 +94,16 @@ def ingest(
     params: Mapping[str, str],
     workers: int | None = None,
     scene_ids: Sequence[str] | None = None,
+    platform: Mapping[str, Mapping[str, str]] | None = None,
 ) -> IngestReport:
-    """Write one schema 1 directory per scene under ``out``."""
+    """Write one schema 1 directory per scene under ``out``.
+
+    ``platform`` adds per-scene platform values that are not in the data (a town name
+    from ``coperceive maps identify``); the table's values win over the manifest's.
+    """
     refs = list(adapter.scenes(raw_root, params))
+    if platform:
+        refs = [_with_platform(ref, platform.get(ref.scene_id, {})) for ref in refs]
     if scene_ids is not None:
         known = {ref.scene_id for ref in refs}
         missing = [s for s in scene_ids if s not in known]
@@ -132,6 +139,37 @@ def ingest(
     if errors:
         raise IngestError(report)
     return report
+
+
+def _with_platform(ref: SceneRef, extra: Mapping[str, str]) -> SceneRef:
+    if not extra:
+        return ref
+    merged = {**dict(ref.platform), **{k: str(v) for k, v in extra.items()}}
+    return replace(ref, platform=tuple(sorted(merged.items())))
+
+
+def read_platform_table(path: Path) -> dict[str, dict[str, str]]:
+    """``scene_id -> {key: value}`` from a YAML mapping; keys starting with ``_`` are notes."""
+    import yaml
+
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        raise ValueError(f"{path}: platform table must be a mapping of scene ids")
+    out: dict[str, dict[str, str]] = {}
+    for scene_id, values in cast(dict[object, object], payload).items():
+        if values is None:
+            out[str(scene_id)] = {}
+            continue
+        if not isinstance(values, dict):
+            raise ValueError(f"{path}: {scene_id}: expected a mapping of platform values")
+        out[str(scene_id)] = {
+            str(k): str(v)
+            for k, v in cast(dict[object, object], values).items()
+            if not str(k).startswith("_") and v is not None
+        }
+    return out
 
 
 def ingest_one(job: _Job) -> _Result:

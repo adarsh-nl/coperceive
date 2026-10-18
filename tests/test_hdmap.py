@@ -186,6 +186,9 @@ def test_unknown_geometry_is_rejected(tmp_path: Path) -> None:
         parse_opendrive(path)
 
 
+straight_road = _straight  # for tests of maps identify
+
+
 def _scene_on_lane(root: Path, *, y: float = -1.75) -> None:
     pose = StampedPose(0, SE3.identity().translation(40.0, y, 0.4))
     agent = Agent(

@@ -362,3 +362,38 @@ def test_check_prints_the_licence_status(
     out = capsys.readouterr().out
     assert "licence unknown: No licence is published." in out
     assert "scenes 1" in out
+
+
+def test_platform_table_value_is_read_per_scene(tmp_path: Path) -> None:
+    write_release(tmp_path / "raw", "train", [two_cav_scene("a_scene"), two_cav_scene("b_scene")])
+    table = tmp_path / "towns.yaml"
+    table.write_text(
+        yaml.safe_dump(
+            {
+                "a_scene": {"map_name": "Carla/Maps/Town03", "_status": "identified"},
+                "b_scene": {"_status": "unidentified"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    main(
+        [
+            "adapters",
+            "ingest",
+            "opv2v",
+            "--raw-root",
+            str(tmp_path / "raw"),
+            "--param",
+            "split=train",
+            "--out",
+            str(tmp_path / "out"),
+            "--workers",
+            "1",
+            "--platform-table",
+            str(table),
+        ]
+    )
+    a = read_scene(tmp_path / "out" / "a_scene")
+    b = read_scene(tmp_path / "out" / "b_scene")
+    assert dict(a.agents[0].platform) == {"map_name": "Carla/Maps/Town03", "split": "train"}
+    assert dict(b.agents[0].platform) == {"split": "train"}

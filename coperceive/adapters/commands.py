@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from coperceive.adapters.build import BuildError
-from coperceive.adapters.ingest import IngestError, format_report, ingest
+from coperceive.adapters.ingest import IngestError, format_report, ingest, read_platform_table
 from coperceive.adapters.paths import PathError
 from coperceive.adapters.registry import RegistryError, list_adapters, resolve_adapter
 from coperceive.adapters.spec import SpecError
@@ -34,6 +34,12 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("--out", required=True, help="One scene directory per scene is written here.")
     run.add_argument(
         "--workers", type=int, default=0, help="Parallel scenes. 0 uses up to 8 processes."
+    )
+    run.add_argument(
+        "--platform-table",
+        default=None,
+        help="YAML scene_id -> {key: value} of platform values not in the data "
+        "(for example map_name from `coperceive maps identify`).",
     )
     run.set_defaults(func=ingest_command)
 
@@ -96,6 +102,9 @@ def ingest_command(args: argparse.Namespace) -> None:
             params=_params(args.param),
             workers=None if workers == 0 else workers,
             scene_ids=_scenes(args.scenes),
+            platform=read_platform_table(Path(args.platform_table))
+            if args.platform_table
+            else None,
         )
     except IngestError as exc:
         print(format_report(exc.report), file=sys.stderr)

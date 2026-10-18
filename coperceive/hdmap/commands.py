@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Any
 
 from coperceive.hdmap.align import align_maps
+from coperceive.hdmap.identify import (
+    DEFAULT_ACCEPT_M,
+    DEFAULT_MARGIN_M,
+    identify_towns,
+    write_town_table,
+)
 from coperceive.hdmap.opendrive import parse_opendrive
 from coperceive.hdmap.store import map_slug, write_map
 
@@ -60,6 +66,17 @@ def add_parser(sub: Any) -> None:
     align.add_argument("--maps", required=True, help="Maps root written by ingest.")
     align.add_argument("--scenes", required=True, help="Directory of schema 1 scenes.")
     align.set_defaults(func=align_command)
+
+    identify = maps_sub.add_parser(
+        "identify",
+        help="Name each scene's town by the alignment residual; write a platform table.",
+    )
+    identify.add_argument("--maps", required=True, help="Maps root written by ingest.")
+    identify.add_argument("--scenes", required=True, help="Directory of schema 1 scenes.")
+    identify.add_argument("--out", required=True, help="YAML platform table to write.")
+    identify.add_argument("--accept-m", type=float, default=DEFAULT_ACCEPT_M)
+    identify.add_argument("--margin-m", type=float, default=DEFAULT_MARGIN_M)
+    identify.set_defaults(func=identify_command)
 
 
 def fetch_command(args: argparse.Namespace) -> None:
@@ -147,6 +164,28 @@ def align_command(args: argparse.Namespace) -> None:
             f"heading_deg {report.get('heading_median_deg')} "
             f"translation {report.get('translation_applied')}"
         )
+
+
+def identify_command(args: argparse.Namespace) -> None:
+    try:
+        guesses = identify_towns(
+            Path(args.maps),
+            Path(args.scenes),
+            accept_m=float(args.accept_m),
+            margin_m=float(args.margin_m),
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    if not guesses:
+        print("no scenes", file=sys.stderr)
+        raise SystemExit(2)
+    write_town_table(guesses, Path(args.out))
+    for guess in guesses:
+        town = guess.map_name or "-"
+        print(f"{guess.scene_id} {guess.status} {town} ({guess.reason}; {guess.poses} poses)")
+    identified = sum(1 for g in guesses if g.map_name is not None)
+    print(f"identified {identified} of {len(guesses)} scenes; wrote {args.out}")
 
 
 def sha256_file(path: Path) -> str:
