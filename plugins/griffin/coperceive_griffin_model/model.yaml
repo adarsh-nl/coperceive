@@ -151,6 +151,64 @@ models:
       min_score: {type: float, default: 0.05}
       det_json: {type: str, default: ""}
       nusc_root: {type: str, default: ""}
+  early-fusion:
+    description: "Early fusion (early-fusion config, 48 epochs, iter 33024): one Agile model over the vehicle's 4 and the drone's 5 cameras (num_cams = 9)"
+    checkpoint_md5: ccf39651d3e4381ec06e4d0709821949
+    inputs:
+      modalities: [camera]
+      agents: [vehicle]
+      sensors: [front, back, left, right]
+      frames: sequence
+      raw:
+        - "vehicle-side/scene_infos.json"
+        - "drone-side/scene_infos.json"
+        - "vehicle-side/calib/front.json"
+        - "vehicle-side/calib/back.json"
+        - "vehicle-side/calib/left.json"
+        - "vehicle-side/calib/right.json"
+        - "vehicle-side/calib/lidar_top.json"
+        - "drone-side/calib/front.json"
+        - "drone-side/calib/back.json"
+        - "drone-side/calib/left.json"
+        - "drone-side/calib/right.json"
+        - "drone-side/calib/bottom.json"
+        - "drone-side/calib/lidar_front.json"
+        - "drone-side/calib/lidar_bottom.json"
+        - "drone-side/calib/lidar_virtual.json"
+        - "vehicle-side/pose/{frame:06d}.json"
+        - "vehicle-side/label/{frame:06d}.txt"
+        - "drone-side/pose/{frame:06d}.json"
+        - "drone-side/label/{frame:06d}.txt"
+        - "vehicle-side/camera/{sensor}/{frame:06d}.png"
+        # The drone's cameras by name: the rows belong to the vehicle, whose sensors {sensor} lists.
+        - "drone-side/camera/front/{frame:06d}.png"
+        - "drone-side/camera/back/{frame:06d}.png"
+        - "drone-side/camera/left/{frame:06d}.png"
+        - "drone-side/camera/right/{frame:06d}.png"
+        - "drone-side/camera/bottom/{frame:06d}.png"
+      raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}
+      raw_clock: {scale_us: 100000, offset_us: 0}
+    outputs:
+      categories: [car, bicycle, pedestrian]
+      score_note: "sigmoid class score (max over the 3 classes) of the early-fusion Agile head over 9 cameras, as written to results_nusc_det.json (top-300 per frame, score > 0.0, 50 m class_range); rows below min_score (default 0.05) are dropped by the plugin."
+      sources:
+        fused: "early fusion of vehicle and drone cameras"
+      artifacts: [det_json, det_pkl]
+      agent: vehicle
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 64
+      seconds_per_sample: 0.538    # inference only: dist_eval 13 min 22 s / 1,490 samples, job 628386
+      staging_seconds: 1611        # vehicle + drone cameras: 26 min 51 s, job 628386
+      conversion_seconds: 112      # trans_kitti2nuscenes --early_fusion 80 s + generate_nuscenes_pkl 32 s, job 628386
+      frame_timeout_s: 3600
+      slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
+    options:
+      subset: {type: str, default: "25m", choices: ["25m"]}
+      min_score: {type: float, default: 0.05}
+      det_json: {type: str, default: ""}
+      nusc_root: {type: str, default: ""}
 commands:
   batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}"]
 notes: "toolkit commit 9c02ba4a, mmdet3d v0.17.1; conversion rules of scripts/griffin/griffin_to_predictions.py"

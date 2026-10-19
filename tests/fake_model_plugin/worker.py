@@ -277,17 +277,25 @@ class Worker:
         scene_dir = Path(str(self.config.get("scene_dir", "")))
         time_us = int(message.get("time_us", 0))
         offset = float(self.options.get("offset_m", 0.0))
+        scramble = self.options.get("scramble_labels") is True
+        categories = ("car", "pedestrian", "sign", "truck", "pole", "cone")
+        scrambled = {
+            cat: categories[(idx + 1) % len(categories)] for idx, cat in enumerate(categories)
+        }
         agents = {str(a.get("agent_id")) for a in self.config.get("agents", [])}
         table = pq.read_table(scene_dir / "annotations.parquet").to_pylist()
         boxes: list[dict[str, Any]] = []
         for row in table:
             if row["agent_id"] not in agents or int(row["time_us"]) != time_us:
                 continue
+            category = str(row["category"])
+            if scramble:
+                category = scrambled.get(category, "car" if category != "car" else "pedestrian")
             boxes.append(
                 {
                     "agent_id": row["agent_id"],
                     "source": "single",
-                    "category": row["category"],
+                    "category": category,
                     "score": 0.9,
                     "track_id": row["track_id"],
                     "center": [float(row["cx"]) + offset, float(row["cy"]), float(row["cz"])],

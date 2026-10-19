@@ -38,6 +38,7 @@ def _test_manifest(tmp_path: Path) -> Path:
         "vehicle-side/iter_33024.pth",
         "drone-side/iter_33024.pth",
         "cooperative/instance_fusion/iter_33024.pth",
+        "early-fusion/iter_33024.pth",
     ):
         ckpt = tmp_path / "ckpts" / "griffin_50scenes_25m" / relative
         ckpt.parent.mkdir(parents=True, exist_ok=True)
@@ -182,3 +183,36 @@ def test_instance_fusion_in_det_json_mode_needs_no_dependency_artifact(tmp_path:
         "drone-side": {"track_query": str(stand_in / "drone-side" / "track_query")}
     }
     assert meta.model == "griffin instance-fusion 0.1.0"
+
+
+def test_early_fusion_in_det_json_mode_writes_fused_vehicle_rows(tmp_path: Path) -> None:
+    manifest = load_manifest(_test_manifest(tmp_path))
+    results = check_plugin(
+        manifest,
+        model="early-fusion",
+        work_root=tmp_path / "check",
+        keep=False,
+        raw_root=None,
+        parent_env=_env(),
+        options=_options(),
+    )
+    assert [r for r in results if r.status == "fail"] == []
+    scenes = tmp_path / "scenes"
+    write_scene(synthetic_scene(), scenes / "synthetic-check")
+    out = tmp_path / "predictions"
+    report = run_batch(
+        manifest,
+        scenes,
+        out,
+        "griffin-early-fixture",
+        RunOptions(model="early-fusion", options=_options(), raw_root=tmp_path / "raw"),
+        created_utc=CREATED,
+        parent_env=_env(),
+    )
+    assert report.status == "complete", report.reason
+    rows = read_boxes(out, "griffin-early-fixture", "synthetic-check")
+    assert rows and {r.source for r in rows} == {"fused"}
+    assert {r.agent_id for r in rows} == {"vehicle"}
+    meta = read_run_meta(out, "griffin-early-fixture")
+    assert meta.model == "griffin early-fusion 0.1.0"
+    assert meta.provenance is not None and meta.provenance["dependencies"] == {}

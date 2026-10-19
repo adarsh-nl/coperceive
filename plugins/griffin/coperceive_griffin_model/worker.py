@@ -91,6 +91,19 @@ MODELS: dict[str, dict[str, Any]] = {
         "needs": {"drone-side": "track_query"},
         "early_fusion": False,
     },
+    "early-fusion": {
+        # One model over the vehicle's 4 and the drone's 5 cameras (num_cams = 9), on the
+        # tables trans_kitti2nuscenes.py writes with --early_fusion (as job 628386 did).
+        "config": "projects/configs_griffin_50scenes_{subset}/early-fusion/"
+        "tiny_track_r50_stream_bs8_48epoch_3cls.py",
+        "checkpoint": "early-fusion/iter_33024.pth",
+        "md5": "ccf39651d3e4381ec06e4d0709821949",
+        "agent": "vehicle",
+        "side": "early-fusion",
+        "nusc_side": "early-fusion",
+        "needs": {},
+        "early_fusion": True,
+    },
 }
 
 

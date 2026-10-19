@@ -19,7 +19,12 @@ MANIFEST = (
 def test_griffin_manifest_loads() -> None:
     manifest = load_manifest(MANIFEST)
     assert manifest.name == "griffin" and manifest.version == "0.1.0"
-    assert tuple(manifest.models) == ("vehicle-side", "drone-side", "instance-fusion")
+    assert tuple(manifest.models) == (
+        "vehicle-side",
+        "drone-side",
+        "instance-fusion",
+        "early-fusion",
+    )
     assert manifest.environment.kind == "conda" and manifest.environment.value == "griffin"
     assert manifest.environment.modules == ("nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6")
     assert manifest.environment.inherit_ld_library_path is True
@@ -66,3 +71,21 @@ def test_griffin_manifest_instance_fusion_depends_on_the_drone_pass() -> None:
     # No drone camera is needed by instance fusion itself: the drone pass stages its own.
     assert not any("drone-side/camera" in t.text for t in fusion.inputs.raw)
     assert any("drone-side/camera" in t.text for t in drone.inputs.raw)
+
+
+def test_griffin_manifest_early_fusion_stages_both_camera_sets() -> None:
+    manifest = load_manifest(MANIFEST)
+    early = select_model(manifest, "early-fusion")
+    assert early.checkpoint_md5 == "ccf39651d3e4381ec06e4d0709821949"
+    assert early.depends_on == ()
+    assert early.inputs.agents == ("vehicle",)
+    assert early.outputs.sources == (("fused", "early fusion of vehicle and drone cameras"),)
+    assert early.outputs.agent == "vehicle"
+    texts = [t.text for t in early.inputs.raw]
+    assert "vehicle-side/camera/{sensor}/{frame:06d}.png" in texts
+    for sensor in ("front", "back", "left", "right", "bottom"):
+        assert f"drone-side/camera/{sensor}/{{frame:06d}}.png" in texts
+    assert early.resources.seconds_per_sample == 0.538
+    assert early.resources.staging_seconds == 1611
+    assert early.resources.conversion_seconds == 112
+    assert early.resources.slurm_constraint == "a40"

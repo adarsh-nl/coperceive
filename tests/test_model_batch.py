@@ -324,6 +324,47 @@ def test_known_answer_model_misses_everything_beyond_the_threshold(
         )
 
 
+def test_scrambled_labels_collapse_ap_while_known_answer_scores_perfectly(
+    roots: tuple[Path, Path, Scene],
+) -> None:
+    """Eval catches scrambled class labels: identical boxes with rotated categories collapse
+    AP from 1.0 to 0.0 and turn every true positive into a false positive + miss."""
+    scenes, out, _ = roots
+    manifest = load_manifest(FAKE)
+    run_batch(
+        manifest,
+        scenes,
+        out,
+        "ka-exact",
+        RunOptions(model="known-answer"),
+        created_utc=CREATED,
+        parent_env=_env(),
+    )
+    run_batch(
+        manifest,
+        scenes,
+        out,
+        "ka-scrambled",
+        RunOptions(model="known-answer", options={"scramble_labels": "true"}),
+        created_utc=CREATED,
+        parent_env=_env(),
+    )
+    for run_id in ("ka-exact", "ka-scrambled"):
+        evaluate_run(scenes, out, run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    exact_metrics = read_metrics(scene_output_dir(out, "ka-exact", "coop"))
+    scrambled_metrics = read_metrics(scene_output_dir(out, "ka-scrambled", "coop"))
+    for item in cast(list[dict[str, Any]], exact_metrics["outputs"]):
+        totals = cast(dict[str, int], item["totals"])
+        assert totals["tp"] == totals["gt"] and totals["fp"] == 0 and totals["miss"] == 0
+        for thresh in cast(dict[str, dict[str, Any]], item["ap"]).values():
+            assert thresh["mean"] == pytest.approx(1.0)
+    for item in cast(list[dict[str, Any]], scrambled_metrics["outputs"]):
+        totals = cast(dict[str, int], item["totals"])
+        assert totals["tp"] == 0 and totals["fp"] == totals["gt"] and totals["miss"] == totals["gt"]
+        for thresh in cast(dict[str, dict[str, Any]], item["ap"]).values():
+            assert thresh["mean"] == pytest.approx(0.0)
+
+
 def test_progress_before_configured_is_tolerated(roots: tuple[Path, Path, Scene]) -> None:
     """A model may report its start-up (the Griffin toolkit run) before it says configured."""
     _, out = _run(roots, options={"misbehave": "progress-first"})

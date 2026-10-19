@@ -43,5 +43,6 @@ models:
       seconds_per_sample: 0.01
     options:
       offset_m: {type: float, default: 0.0, description: shift along world x in metres}
+      scramble_labels: {type: bool, default: false, description: rotate each box category to a different class}
 commands:
   batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}"]
