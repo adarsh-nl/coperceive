@@ -391,10 +391,13 @@ def test_the_emitter_covers_the_dependency_closure(
     excluded = "--exclude='artifacts/a/scratch/***'"
     assert excluded in both.script
     assert both.script.index(excluded) < both.script.index("--include='*/'")
+    # The dependency is a run of its own and comes home beside the requested run.
+    assert f'rsync -a "$SCRATCH/out/r1-a/" {out.resolve() / "r1-a"}/' in both.script
     alone = plan(artifacts_dir=tmp_path)
     assert set(alone.raw_files) == {"x/from-b.json"}
     assert "#SBATCH --time=00:20:00" in alone.script  # 50 x 7 = 350 s -> 600 -> 1,200
     assert "summed over" not in alone.script and "--exclude='artifacts/a/" not in alone.script
+    assert "out/r1-a/" not in alone.script
 
 
 def _rsync_filter_args(transient: list[tuple[str, str]]) -> list[str]:

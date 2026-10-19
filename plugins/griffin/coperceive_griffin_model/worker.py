@@ -260,14 +260,6 @@ class Worker:
         copy_toolkit(self.toolkit_dir, toolkit)
         for name in ("datasets", "ckpts", os.path.join("data", "infos")):
             os.makedirs(os.path.join(toolkit, name), exist_ok=True)
-        for needed_model, needed_name in dict(self.spec["needs"]).items():
-            given = message.get("artifacts", {}).get(needed_model, {}).get(needed_name)
-            if not given:
-                raise ToolkitError(
-                    f"{self.model} needs the artefact {needed_model}/{needed_name} in "
-                    "configure.artifacts"
-                )
-            place_track_query(str(given), toolkit, prefix)
         _progress("trimming scene_infos.json to the staged scenes", 0.05)
         infos = load_scene_infos(os.path.join(raw_root, "vehicle-side", "scene_infos.json"))
         other = load_scene_infos(os.path.join(raw_root, "drone-side", "scene_infos.json"))
@@ -295,6 +287,14 @@ class Worker:
             nusc_side=str(self.spec["nusc_side"]),
             early_fusion=bool(self.spec["early_fusion"]),
         )
+        for needed_model, needed_name in dict(self.spec["needs"]).items():
+            given = message.get("artifacts", {}).get(needed_model, {}).get(needed_name)
+            if not given:
+                raise ToolkitError(
+                    f"{self.model} needs the artefact {needed_model}/{needed_name} in "
+                    "configure.artifacts"
+                )
+            place_track_query(str(given), toolkit, prefix)  # after the conversion, as in job 628386
         config = str(self.spec["config"]).format(subset=SUBSET)
         conversion_s = time.monotonic() - run_started  # copy, staging, conversion, info pickles
         _progress("running tools/test.py over every staged scene", 0.2)

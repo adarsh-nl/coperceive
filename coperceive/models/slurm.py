@@ -384,6 +384,16 @@ def plan_sbatch(
             f'"$SCRATCH/work/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/work/',
             f"mkdir -p {shlex.quote(str(target))}",
             f'rsync -a "$SCRATCH/out/{run_id}/" {shlex.quote(str(target))}/',
+            *[
+                line
+                for member in closure
+                if member is not spec  # a dependency is a run of its own: <run_id>-<model>
+                for line in (
+                    f"mkdir -p {shlex.quote(str(out_root.resolve() / f'{run_id}-{member.key}'))}",
+                    f'rsync -a "$SCRATCH/out/{run_id}-{member.key}/" '
+                    f"{shlex.quote(str(out_root.resolve() / f'{run_id}-{member.key}'))}/",
+                )
+            ],
             f'echo "done: {shlex.quote(str(target))} (exit $RC)"',
             'exit "$RC"',
             "",
