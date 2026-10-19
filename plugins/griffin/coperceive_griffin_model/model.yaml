@@ -59,7 +59,7 @@ models:
       staging_seconds: 700         # 11 min 17 s of camera PNG staging, job 627093
       conversion_seconds: 100      # trans_kitti2nuscenes 71 s + generate_nuscenes_pkl 27 s, job 629288
       frame_timeout_s: 3600        # the whole scene set runs at the first configure
-      slurm_constraint: "a40|a100" # the env's torch 1.9.1+cu111 wheels carry sm_86 SASS, not sm_89
+      slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs (sm_86/sm_80 SASS in torch 1.9.1+cu111)
     options:
       subset: {type: str, default: "25m", choices: ["25m"], description: the released 25m checkpoints are the only ones pinned here}
       min_score: {type: float, default: 0.05, description: rows below this detection_score are dropped}
@@ -111,7 +111,7 @@ models:
       staging_seconds: 930         # the drone cameras: 26 min 51 s for 15 GB vehicle + 21 GB drone minus 677 s for the vehicle's, job 628386
       conversion_seconds: 100      # as vehicle-side
       frame_timeout_s: 3600
-      slurm_constraint: "a40|a100"
+      slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
     options:
       subset: {type: str, default: "25m", choices: ["25m"]}
       min_score: {type: float, default: 0.05}
@@ -145,7 +145,7 @@ models:
       staging_seconds: 700         # the vehicle cameras; the drone cameras are the dependency's
       conversion_seconds: 100
       frame_timeout_s: 3600
-      slurm_constraint: "a40|a100"
+      slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
     options:
       subset: {type: str, default: "25m", choices: ["25m"]}
       min_score: {type: float, default: 0.05}

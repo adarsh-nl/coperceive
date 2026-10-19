@@ -134,7 +134,7 @@ models:
              raw: ["{agent_root}/pose/{frame:06d}.json", "{agent_root}/label/{frame:06d}.txt", "{agent_root}/calib/{sensor}.json", "vehicle-side/camera/{sensor}/{frame:06d}.png"],
              raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}, raw_clock: {scale_us: 100000, offset_us: 0}}
     outputs: {categories: [car, bicycle, pedestrian], score_note: "sigmoid class score ...", sources: {single: "vehicle-side camera-only Agile model, no fusion"}}
-    resources: {gpu: true, memory_gb: 64, seconds_per_sample: 0.394, staging_seconds: 700, conversion_seconds: 100, slurm_constraint: "a40|a100"}  # inference 587 s / 1,490 samples, conversion 71 + 27 s, job 629288
+    resources: {gpu: true, memory_gb: 64, seconds_per_sample: 0.394, staging_seconds: 700, conversion_seconds: 100, slurm_constraint: "a40"}  # pinned to A40 for acceptance runs ("a40|a100" for non-acceptance); inference 587 s / 1,490 samples, conversion 71 + 27 s, job 629288
 commands:
   batch: ["{python}", "-m", "coperceive_griffin_model.worker", "--model", "{model}"]
 ```
@@ -262,6 +262,7 @@ The parent creates `{work_dir}` and gives it to the child in `configure.work_dir
 | `git_commit` | str or null | `hello.git_commit`. |
 | `coperceive_version` | str | `coperceive/adapters/ingest.py` `coperceive_version()`. |
 | `host` | str | `socket.gethostname()`. |
+| `gpu` | str or null | GPU model name (from `hello.environment.gpu`, or `nvidia-smi` when `CUDA_VISIBLE_DEVICES` is set); null on CPU (Adarsh, 2026-10-19). |
 | `started_utc`, `ended_utc` | str | ISO 8601 `Z`. |
 | `status` | str | `complete` or `partial`. |
 | `completed_scenes` | list str | Scene ids whose `boxes.parquet` was written by this invocation or found complete. |

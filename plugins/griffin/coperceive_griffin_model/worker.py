@@ -122,6 +122,17 @@ def _torch_version() -> str:
         return "absent"
 
 
+def _gpu_name() -> str:
+    try:
+        import torch  # type: ignore[import-not-found]  # noqa: PLC0415 - the env may lack it
+
+        if torch.cuda.is_available():
+            return str(torch.cuda.get_device_name(0))
+    except Exception:  # noqa: BLE001 - absent or broken torch is a fact to report
+        pass
+    return ""
+
+
 class Worker:
     def __init__(self, model: str, ckpt_root: str, toolkit_dir: str) -> None:
         self.model = model
@@ -150,6 +161,9 @@ class Worker:
             "checkpoint_path": os.path.abspath(self.checkpoint),
             "toolkit": self.toolkit_dir,
         }
+        gpu = _gpu_name()
+        if gpu:
+            environment["gpu"] = gpu
         commit = toolkit_commit(self.toolkit_dir)
         if commit:
             environment["toolkit_commit"] = commit

@@ -73,6 +73,7 @@ def test_batch_writes_a_complete_run(roots: tuple[Path, Path, Scene]) -> None:
     assert re.fullmatch(r"[0-9a-f]{32}", environment["checkpoint_md5"])
     assert provenance["completed_scenes"] == ["coop"]
     assert provenance["frames_run"] == report.frames_run and provenance["cache_hits"] == 0
+    assert provenance["gpu"] is None
     timings = cast(Mapping[str, float], provenance["timings"])
     assert timings["wall_s"] > 0 and timings["staging_s"] == 0
     assert (out / "r1" / ".." / ".work" / "r1" / "parent.log").resolve().is_file()

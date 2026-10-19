@@ -39,12 +39,13 @@ def test_griffin_manifest_loads() -> None:
         vehicle.resources.gpu and vehicle.resources.cpus == 8 and vehicle.resources.memory_gb == 64
     )
     assert vehicle.resources.conversion_seconds == 100
-    assert vehicle.resources.slurm_constraint == "a40|a100"
+    assert vehicle.resources.slurm_constraint == "a40"
     assert vehicle.resources.seconds_per_sample == 0.394
     assert vehicle.resources.staging_seconds == 700
     assert set(vehicle.options) == {"subset", "min_score", "det_json", "nusc_root"}
     drone = select_model(manifest, "drone-side")
     assert drone.inputs.agents == ("uav",) and "track_query" in drone.outputs.artifacts
+    assert drone.resources.slurm_constraint == "a40"
     assert manifest.commands.batch == ("{python}", "{plugin_dir}/worker.py", "--model", "{model}")
 
 
@@ -58,6 +59,7 @@ def test_griffin_manifest_instance_fusion_depends_on_the_drone_pass() -> None:
         ("fused", "instance fusion of vehicle queries with drone track queries"),
     )
     assert fusion.resources.seconds_per_sample == 0.421
+    assert fusion.resources.slurm_constraint == "a40"
     drone = select_model(manifest, "drone-side")
     assert drone.outputs.transient_artifacts == ("track_query",)
     assert drone.resources.seconds_per_sample == 0.461 and drone.resources.staging_seconds == 930

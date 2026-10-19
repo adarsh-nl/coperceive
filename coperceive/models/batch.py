@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import os
 import socket
+import subprocess
 import time
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -177,6 +178,30 @@ def run_meta_for(
     )
 
 
+def _gpu_model(environment: Mapping[str, str], parent_env: Mapping[str, str]) -> str | None:
+    """The GPU model name from ``hello.environment.gpu``, or ``nvidia-smi`` when
+    ``CUDA_VISIBLE_DEVICES`` is set in the parent environment; ``None`` on CPU."""
+    reported = environment.get("gpu")
+    if reported:
+        return reported
+    if not parent_env.get("CUDA_VISIBLE_DEVICES"):
+        return None
+    try:
+        done = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            capture_output=True,
+            text=True,
+            timeout=5.0,
+            check=False,
+        )
+    except OSError:
+        return None
+    if done.returncode != 0:
+        return None
+    first = done.stdout.strip().splitlines()
+    return first[0].strip() if first and first[0].strip() else None
+
+
 def provenance_json(
     manifest: Manifest,
     spec: ModelSpec,
@@ -195,6 +220,7 @@ def provenance_json(
     timings: Mapping[str, float],
     parent_env: Mapping[str, str],
     checkpoint: CheckpointInfo | None = None,
+    gpu: str | None = None,
 ) -> dict[str, object]:
     """Every key of spec §Provenance."""
     return {
@@ -207,6 +233,7 @@ def provenance_json(
         "git_commit": git_commit,
         "coperceive_version": coperceive_version(),
         "host": socket.gethostname(),
+        "gpu": gpu if gpu is not None else _gpu_model(environment, parent_env),
         "started_utc": started_utc,
         "ended_utc": ended_utc,
         "status": status,
