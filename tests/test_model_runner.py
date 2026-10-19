@@ -162,7 +162,7 @@ def process(work: Path) -> Iterator[PluginProcess]:
 
 def test_start_reads_hello(process: PluginProcess) -> None:
     assert process.hello.plugin == "fake"
-    assert process.hello.models == ("default", "known-answer")
+    assert process.hello.models == ("default", "known-answer", "a", "b")
     assert len(process.hello.environment["checkpoint_md5"]) == 32
 
 
