@@ -34,9 +34,14 @@ def _test_manifest(tmp_path: Path) -> Path:
     removed and the worker pointed at a stand-in checkpoint root."""
     plugin = tmp_path / "plugin"
     shutil.copytree(PLUGIN, plugin, ignore=shutil.ignore_patterns("__pycache__"))
-    ckpt = tmp_path / "ckpts" / "griffin_50scenes_25m" / "vehicle-side" / "iter_33024.pth"
-    ckpt.parent.mkdir(parents=True)
-    ckpt.write_bytes(b"not a real checkpoint")
+    for relative in (
+        "vehicle-side/iter_33024.pth",
+        "drone-side/iter_33024.pth",
+        "cooperative/instance_fusion/iter_33024.pth",
+    ):
+        ckpt = tmp_path / "ckpts" / "griffin_50scenes_25m" / relative
+        ckpt.parent.mkdir(parents=True, exist_ok=True)
+        ckpt.write_bytes(b"not a real checkpoint")
     payload = cast(
         dict[str, Any], yaml.safe_load((plugin / "model.yaml").read_text(encoding="utf-8"))
     )
@@ -130,3 +135,50 @@ def test_run_batch_with_det_json_reproduces_the_fixture(tmp_path: Path) -> None:
     strict = read_boxes(out, "griffin-fixture-strict", "synthetic-check")
     assert [(r.time_us, r.category) for r in strict] == [(0, "car"), (100_000, "car")]
     assert replace(rows[0], score=rows[0].score) == rows[0]
+
+
+def test_instance_fusion_in_det_json_mode_needs_no_dependency_artifact(tmp_path: Path) -> None:
+    """Through check_plugin, and through run_batch with a stand-in --artifacts directory;
+    the rows are the fused source of the vehicle."""
+    manifest = load_manifest(_test_manifest(tmp_path))
+    results = check_plugin(
+        manifest,
+        model="instance-fusion",
+        work_root=tmp_path / "check",
+        keep=False,
+        raw_root=None,
+        parent_env=_env(),
+        options=_options(),
+    )
+    assert [r for r in results if r.status == "fail"] == []
+    scenes = tmp_path / "scenes"
+    write_scene(synthetic_scene(), scenes / "synthetic-check")
+    stand_in = tmp_path / "earlier"
+    (stand_in / "drone-side" / "track_query").mkdir(parents=True)
+    (stand_in / "drone-side" / "track_query" / "sample_1.pkl").write_bytes(b"x")
+    out = tmp_path / "predictions"
+    report = run_batch(
+        manifest,
+        scenes,
+        out,
+        "griffin-instance-fixture",
+        RunOptions(
+            model="instance-fusion",
+            options=_options(),
+            raw_root=tmp_path / "raw",
+            artifacts_dir=stand_in,
+        ),
+        created_utc=CREATED,
+        parent_env=_env(),
+    )
+    assert report.status == "complete", report.reason
+    rows = read_boxes(out, "griffin-instance-fixture", "synthetic-check")
+    assert {r.source for r in rows} == {"fused"} and {r.agent_id for r in rows} == {"vehicle"}
+    meta = read_run_meta(out, "griffin-instance-fixture")
+    provenance = meta.provenance
+    assert provenance is not None
+    dependencies = cast(dict[str, dict[str, str]], provenance["dependencies"])
+    assert dependencies == {
+        "drone-side": {"track_query": str(stand_in / "drone-side" / "track_query")}
+    }
+    assert meta.model == "griffin instance-fusion 0.1.0"

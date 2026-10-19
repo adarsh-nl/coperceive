@@ -76,6 +76,9 @@ class Outputs:
     agent: str
     artifacts: tuple[str, ...]
     deterministic: bool
+    # Artefacts that only a dependent model of the same job consumes (an 11 GB set of track
+    # queries): never cached and never copied home (Adarsh, 2026-10-19).
+    transient_artifacts: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -518,8 +521,14 @@ def _outputs(node: _Node | None) -> Outputs:
         sources=tuple(sources.items()),
         agent=node.opt_str("agent") or "request",
         artifacts=node.strs("artifacts", optional=True),
+        transient_artifacts=node.strs("transient_artifacts", optional=True),
         deterministic=node.bool("deterministic", True),
     )
+    for name in outputs.transient_artifacts:
+        if name not in outputs.artifacts:
+            raise ModelSpecError(
+                f"{node.at('transient_artifacts')}: {name!r} is not in outputs.artifacts"
+            )
     if outputs.agent != "request" and outputs.agent not in AGENT_TYPES:
         raise ModelSpecError(f"{node.at('agent')}: expected request or an agent type")
     node.done()

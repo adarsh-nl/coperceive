@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 import socket
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,6 +143,7 @@ class SceneCacheLike(Protocol):
         inputs: Sequence[InputFile],
         results: Sequence[TimedResult],
         artifacts: Path | None,
+        skip_artifacts: Collection[str] = (),
     ) -> Path: ...
 
 
@@ -301,6 +302,8 @@ def run_batch(
     run_timeout = options.run_timeout_s or spec.resources.run_timeout_s
     deadline = time.monotonic() + run_timeout if run_timeout else None
     stored = _stored_provenance(out_root, run_id, digest, force=options.force)
+    # Filled when a child is first needed: a run served from the cache runs no dependency.
+    dependencies: dict[str, dict[str, str]] = {}
     if cache is None and options.cache:
         cache = SceneCache(out_root / run_id, plugin=manifest.name, model=spec.key)
     directories = {path.name: path for path in scene_directories(scenes_root)}
@@ -349,7 +352,7 @@ def run_batch(
             options=effective,
             cache_hits=counters["hits"],
             frames_run=frames,
-            dependencies={},
+            dependencies=dependencies,
             checkpoint=checkpoint,
             timings=_timings(wall, frames, reported, options.staging_seconds),
             parent_env=env,
@@ -376,6 +379,20 @@ def run_batch(
             agent_ids = select_agents(scene, spec, options.agent_ids)
             hit = lookup(scene)
             if hit is None and child is None:
+                if spec.depends_on and not dependencies:
+                    dependencies.update(
+                        _resolve_dependencies(
+                            manifest,
+                            spec,
+                            scenes_root,
+                            out_root,
+                            run_id,
+                            options,
+                            work_dir,
+                            created_utc=created_utc,
+                            parent_env=env,
+                        )
+                    )
                 child = PluginProcess.start(
                     manifest,
                     spec,
@@ -415,6 +432,7 @@ def run_batch(
                     deadline=deadline,
                     device=device,
                     first_id=next_frame_id,
+                    artifacts=dependencies,
                     out=run,
                 )
             except _SceneFailed as exc:
@@ -442,6 +460,7 @@ def run_batch(
                     inputs=tuple(run.inputs.values()),
                     results=tuple(run.results),
                     artifacts=_artifact_dir(work_dir, spec),
+                    skip_artifacts=spec.outputs.transient_artifacts,
                 )
             completed.append(scene_id)
             counters["boxes"] += len(run.rows)
@@ -489,6 +508,116 @@ def _timings(
     else:
         out["per_sample_s"] = (wall / frames) if frames else 0.0
     return out
+
+
+def _resolve_dependencies(
+    manifest: Manifest,
+    spec: ModelSpec,
+    scenes_root: Path,
+    out_root: Path,
+    run_id: str,
+    options: RunOptions,
+    work_dir: Path,
+    *,
+    created_utc: str,
+    parent_env: Mapping[str, str],
+) -> dict[str, dict[str, str]]:
+    """The directory of every ``depends_on`` artefact, ``{model: {artifact: path}}``.
+
+    ``--artifacts DIR`` names an earlier run's ``<DIR>/<model>/<artifact>``; otherwise the
+    artefact is what a run of the dependency model writes under ``<work_dir>/artifacts/``,
+    and without it the dependency model runs first (``--no-auto-dependencies`` makes that an
+    error). The dependency is its own run, ``<run_id>-<model>``, with its own boxes and
+    provenance, in the same work directory. The path reaches the child only through
+    ``configure.artifacts`` (Adarsh, 2026-10-19)."""
+    found: dict[str, dict[str, str]] = {}
+    ran: set[str] = set()
+    for dep in spec.depends_on:
+        if options.artifacts_dir is not None:
+            path = options.artifacts_dir / dep.model / dep.artifact
+            if not path.exists():
+                missing = f"{dep.model}/{dep.artifact}"
+                raise BatchError(f"--artifacts {options.artifacts_dir}: no {missing}")
+        else:
+            path = work_dir / "artifacts" / dep.model / dep.artifact
+            if not path.exists():
+                if not options.auto_dependencies:
+                    needed = f"{dep.model}/{dep.artifact}"
+                    raise BatchError(
+                        f"model {spec.key} needs {needed}: run {dep.model} first, pass "
+                        "--artifacts DIR, or drop --no-auto-dependencies"
+                    )
+                if dep.model not in ran:
+                    _run_dependency(
+                        manifest,
+                        dep.model,
+                        scenes_root,
+                        out_root,
+                        run_id,
+                        options,
+                        work_dir,
+                        created_utc=created_utc,
+                        parent_env=parent_env,
+                        fresh=False,
+                    )
+                    ran.add(dep.model)
+                if not path.exists():
+                    # Served from the cache, so no child wrote it: run it for real.
+                    _run_dependency(
+                        manifest,
+                        dep.model,
+                        scenes_root,
+                        out_root,
+                        run_id,
+                        options,
+                        work_dir,
+                        created_utc=created_utc,
+                        parent_env=parent_env,
+                        fresh=True,
+                    )
+                if not path.exists():
+                    raise BatchError(
+                        f"dependency {dep.model} ran but wrote no artifact {dep.artifact!r}"
+                    )
+        found.setdefault(dep.model, {})[dep.artifact] = str(path)
+    return found
+
+
+def _run_dependency(
+    manifest: Manifest,
+    model: str,
+    scenes_root: Path,
+    out_root: Path,
+    run_id: str,
+    options: RunOptions,
+    work_dir: Path,
+    *,
+    created_utc: str,
+    parent_env: Mapping[str, str],
+    fresh: bool,
+) -> None:
+    dep_options = RunOptions(
+        model=model,
+        scene_ids=options.scene_ids,
+        raw_root=options.raw_root,
+        media_roots=options.media_roots,
+        frame_timeout_s=options.frame_timeout_s,
+        run_timeout_s=options.run_timeout_s,
+        cache=options.cache and not fresh,
+        work_dir=work_dir,
+        force=options.force or fresh,
+    )
+    report = run_batch(
+        manifest,
+        scenes_root,
+        out_root,
+        f"{run_id}-{model}",
+        dep_options,
+        created_utc=created_utc,
+        parent_env=parent_env,
+    )
+    if report.status != "complete":
+        raise BatchError(f"dependency {model} {report.status}: {report.reason}")
 
 
 def _artifact_dir(work_dir: Path, spec: ModelSpec) -> Path | None:
@@ -595,6 +724,7 @@ def _run_scene(
     deadline: float | None,
     device: str,
     first_id: int,
+    artifacts: Mapping[str, Mapping[str, str]],
     out: _SceneRun,
 ) -> None:
     by_id = {agent.agent_id: agent for agent in scene.agents}
@@ -609,7 +739,7 @@ def _run_scene(
         work_dir=str(work_dir),
         scene_dir=str(scene_dir.resolve()),
         raw_root=str(options.raw_root.resolve()) if options.raw_root else None,
-        artifacts={},
+        artifacts={model: dict(names) for model, names in artifacts.items()},
         device=device,
         sensors=tuple(sensor_json(s) for s in scene.sensors if s.agent_id in requested),
         samples=tuple(samples),

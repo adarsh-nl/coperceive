@@ -45,6 +45,7 @@ from toolkit import (
     copy_toolkit,
     evaluate,
     place_checkpoint,
+    place_track_query,
     toolkit_commit,
 )
 
@@ -63,6 +64,9 @@ MODELS: dict[str, dict[str, Any]] = {
         "md5": "1201f5692e390a75e5b5ab0efa0cae19",
         "agent": "vehicle",
         "side": "vehicle-side",
+        "nusc_side": "vehicle-side",
+        "needs": {},
+        "early_fusion": False,
     },
     "drone-side": {
         "config": "projects/configs_griffin_50scenes_{subset}/drone-side/"
@@ -71,6 +75,21 @@ MODELS: dict[str, dict[str, Any]] = {
         "md5": "41734b8d764d1213935a231a3419f655",
         "agent": "drone",
         "side": "drone-side",
+        "nusc_side": "drone-side",
+        "needs": {},
+        "early_fusion": False,
+    },
+    "instance-fusion": {
+        "config": "projects/configs_griffin_50scenes_{subset}/cooperative/instance_fusion/"
+        "tiny_track_r50_stream_bs8_48epoch_3cls.py",
+        "checkpoint": "cooperative/instance_fusion/iter_33024.pth",
+        "md5": "7e1448188b6e99ca6303575c3466b97f",
+        "agent": "vehicle",
+        "side": "cooperative",
+        "nusc_side": "cooperative",
+        # model -> artefact: the drone-side pass's track queries, by path from configure.
+        "needs": {"drone-side": "track_query"},
+        "early_fusion": False,
     },
 }
 
@@ -231,7 +250,8 @@ class Worker:
         if not work_dir or not raw_root:
             raise ToolkitError("configure needs work_dir and raw_root for a toolkit run")
         prefix = f"griffin_50scenes_{SUBSET}"
-        toolkit = os.path.join(work_dir, "griffin")
+        # One toolkit copy per model: no tree is shared with the dependency's pass.
+        toolkit = os.path.join(work_dir, f"griffin-{self.model}")
         log_path = os.path.join(work_dir, "griffin-toolkit.log")
         env = dict(os.environ)
         env.setdefault("MASTER_PORT", str(20000 + os.getpid() % 20000))
@@ -240,6 +260,14 @@ class Worker:
         copy_toolkit(self.toolkit_dir, toolkit)
         for name in ("datasets", "ckpts", os.path.join("data", "infos")):
             os.makedirs(os.path.join(toolkit, name), exist_ok=True)
+        for needed_model, needed_name in dict(self.spec["needs"]).items():
+            given = message.get("artifacts", {}).get(needed_model, {}).get(needed_name)
+            if not given:
+                raise ToolkitError(
+                    f"{self.model} needs the artefact {needed_model}/{needed_name} in "
+                    "configure.artifacts"
+                )
+            place_track_query(str(given), toolkit, prefix)
         _progress("trimming scene_infos.json to the staged scenes", 0.05)
         infos = load_scene_infos(os.path.join(raw_root, "vehicle-side", "scene_infos.json"))
         other = load_scene_infos(os.path.join(raw_root, "drone-side", "scene_infos.json"))
@@ -264,6 +292,8 @@ class Worker:
             os.path.join("data", "split_datas", f"{prefix}.json"),
             env=env,
             log_path=log_path,
+            nusc_side=str(self.spec["nusc_side"]),
+            early_fusion=bool(self.spec["early_fusion"]),
         )
         config = str(self.spec["config"]).format(subset=SUBSET)
         conversion_s = time.monotonic() - run_started  # copy, staging, conversion, info pickles

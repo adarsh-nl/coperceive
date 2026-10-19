@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from coperceive.models.spec import load_manifest, select_model
+from coperceive.models.spec import Dependency, load_manifest, select_model
 
 MANIFEST = (
     Path(__file__).resolve().parents[1]
@@ -19,7 +19,7 @@ MANIFEST = (
 def test_griffin_manifest_loads() -> None:
     manifest = load_manifest(MANIFEST)
     assert manifest.name == "griffin" and manifest.version == "0.1.0"
-    assert tuple(manifest.models) == ("vehicle-side", "drone-side")
+    assert tuple(manifest.models) == ("vehicle-side", "drone-side", "instance-fusion")
     assert manifest.environment.kind == "conda" and manifest.environment.value == "griffin"
     assert manifest.environment.modules == ("nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6")
     assert manifest.environment.inherit_ld_library_path is True
@@ -46,3 +46,21 @@ def test_griffin_manifest_loads() -> None:
     drone = select_model(manifest, "drone-side")
     assert drone.inputs.agents == ("uav",) and "track_query" in drone.outputs.artifacts
     assert manifest.commands.batch == ("{python}", "{plugin_dir}/worker.py", "--model", "{model}")
+
+
+def test_griffin_manifest_instance_fusion_depends_on_the_drone_pass() -> None:
+    manifest = load_manifest(MANIFEST)
+    fusion = select_model(manifest, "instance-fusion")
+    assert fusion.depends_on == (Dependency("drone-side", "track_query"),)
+    assert fusion.checkpoint_md5 == "7e1448188b6e99ca6303575c3466b97f"
+    assert fusion.inputs.agents == ("vehicle",)
+    assert fusion.outputs.sources == (
+        ("fused", "instance fusion of vehicle queries with drone track queries"),
+    )
+    assert fusion.resources.seconds_per_sample == 0.421
+    drone = select_model(manifest, "drone-side")
+    assert drone.outputs.transient_artifacts == ("track_query",)
+    assert drone.resources.seconds_per_sample == 0.461 and drone.resources.staging_seconds == 930
+    # No drone camera is needed by instance fusion itself: the drone pass stages its own.
+    assert not any("drone-side/camera" in t.text for t in fusion.inputs.raw)
+    assert any("drone-side/camera" in t.text for t in drone.inputs.raw)

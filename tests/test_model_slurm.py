@@ -20,10 +20,12 @@ from coperceive.models.batch import RunOptions, run_batch
 from coperceive.models.slurm import (
     estimate_from_runs,
     interpreter_module,
+    model_closure,
     plan_sbatch,
     staged_files,
     submit,
     time_limit,
+    work_copy_filter,
     write_plan,
 )
 from coperceive.models.spec import Manifest, load_manifest, parse_manifest, select_model
@@ -332,3 +334,116 @@ def test_time_limit_prefers_the_last_runs_timings(
     assert "STAGE_START=$SECONDS" in plan.script
     assert "STAGING=$((SECONDS - STAGE_START))" in plan.script
     assert '--staging-seconds "$STAGING"' in plan.script
+
+
+def _two(seconds_a: float, seconds_b: float, raw_root: Path) -> Manifest:
+    """model-two.yaml with measurable costs and one raw file per model."""
+    payload = cast(
+        dict[str, Any],
+        yaml.safe_load(FAKE.with_name("model-two.yaml").read_text(encoding="utf-8")),
+    )
+    payload["models"]["a"]["resources"]["seconds_per_sample"] = seconds_a
+    payload["models"]["b"]["resources"]["seconds_per_sample"] = seconds_b
+    payload["models"]["a"]["inputs"]["raw"] = ["x/from-a.json"]
+    payload["models"]["b"]["inputs"]["raw"] = ["x/from-b.json"]
+    (raw_root / "x").mkdir(parents=True, exist_ok=True)
+    for name in ("from-a.json", "from-b.json"):
+        (raw_root / "x" / name).write_text("{}", encoding="utf-8")
+    return parse_manifest(payload, source=FAKE.with_name("model-two.yaml"))
+
+
+def test_the_emitter_covers_the_dependency_closure(
+    roots: tuple[Path, Path, Scene], tmp_path: Path
+) -> None:
+    """A model with depends_on stages its dependency's files, adds its time and keeps its
+    transient artefacts from going home; --artifacts or --no-auto-dependencies drop the
+    dependency from all three."""
+    scenes, out, scene = roots
+    raw = tmp_path / "raw"
+    manifest = _two(100.0, 50.0, raw)
+    spec = select_model(manifest, "b")
+    assert [m.key for m in model_closure(manifest, spec, RunOptions())] == ["a", "b"]
+    assert [m.key for m in model_closure(manifest, spec, RunOptions(artifacts_dir=tmp_path))] == [
+        "b"
+    ]
+    assert [m.key for m in model_closure(manifest, spec, RunOptions(auto_dependencies=False))] == [
+        "b"
+    ]
+
+    def plan(**kwargs: object):  # noqa: ANN202
+        return plan_sbatch(
+            manifest,
+            spec,
+            scenes_root=scenes,
+            scenes={"coop": scene},
+            run_id="r1",
+            out_root=out,
+            options=RunOptions(raw_root=raw, **kwargs),  # type: ignore[arg-type]
+            python=Path("/opt/venv/bin/python"),
+            logs_dir=tmp_path / "logs",
+            results_dir=tmp_path / "results",
+        )
+
+    both = plan()
+    assert set(both.raw_files) == {"x/from-a.json", "x/from-b.json"}
+    assert "#SBATCH --time=00:40:00" in both.script  # (100 + 50) x 7 = 1,050 s -> 1,200 -> 2,400
+    assert "summed over the models this run needs: a " in both.script
+    excluded = "--exclude='artifacts/a/scratch/***'"
+    assert excluded in both.script
+    assert both.script.index(excluded) < both.script.index("--include='*/'")
+    alone = plan(artifacts_dir=tmp_path)
+    assert set(alone.raw_files) == {"x/from-b.json"}
+    assert "#SBATCH --time=00:20:00" in alone.script  # 50 x 7 = 350 s -> 600 -> 1,200
+    assert "summed over" not in alone.script and "--exclude='artifacts/a/" not in alone.script
+
+
+def _rsync_filter_args(transient: list[tuple[str, str]]) -> list[str]:
+    """The filter items of the emitted rsync line, unquoted as the shell would."""
+    return [item.replace("'", "") for item in work_copy_filter(transient)]
+
+
+def test_work_copy_filter_keeps_nested_logs_and_artifacts(tmp_path: Path) -> None:
+    """rsync with the filter on a fake work tree: logs at any depth and artefacts come home,
+    inputs and a toolkit copy do not, empty directories are pruned, and a transient artefact
+    stays behind (it is 11 GB for Griffin's drone track queries)."""
+    if shutil.which("rsync") is None:
+        pytest.skip("no rsync")
+    work = tmp_path / "work"
+    for relative in (
+        "parent.log",
+        "plugin.log",
+        "griffin-toolkit.log",
+        "griffin-drone-side/work_dirs/drone-side/logs/test_0101.log",
+        "artifacts/drone-side/det_json",
+        "artifacts/drone-side/track_query/sample_1.pkl",
+        "artifacts/drone-side/track_query/deeper/sample_2.pkl",
+        "inputs/17/vehicle-lidar_top.bin",
+        "griffin-drone-side/tools/test.py",
+        "datasets/prefix/release/vehicle-side/pose/000001.json",
+    ):
+        target = work / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text("x", encoding="utf-8")
+    (work / "empty").mkdir()
+
+    def copied(transient: list[tuple[str, str]]) -> list[str]:
+        dest = tmp_path / f"home-{len(transient)}"
+        argv = ["rsync", "-a", *_rsync_filter_args(transient), f"{work}/", f"{dest}/"]
+        done = subprocess.run(argv, capture_output=True, text=True)
+        assert done.returncode == 0, done.stderr
+        assert not (dest / "empty").exists() and not (dest / "inputs").exists()
+        assert not (dest / "datasets").exists()
+        return sorted(str(p.relative_to(dest)) for p in dest.rglob("*") if p.is_file())
+
+    everything = copied([])
+    assert everything == [
+        "artifacts/drone-side/det_json",
+        "artifacts/drone-side/track_query/deeper/sample_2.pkl",
+        "artifacts/drone-side/track_query/sample_1.pkl",
+        "griffin-drone-side/work_dirs/drone-side/logs/test_0101.log",
+        "griffin-toolkit.log",
+        "parent.log",
+        "plugin.log",
+    ]
+    without = copied([("drone-side", "track_query")])
+    assert without == [p for p in everything if "track_query" not in p]

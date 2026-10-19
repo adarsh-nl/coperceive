@@ -22,7 +22,7 @@ from typing import Any, cast
 PROTOCOL = 1
 PLUGIN = "fake"
 VERSION = "0.0.1"
-MODELS = ("default", "known-answer")
+MODELS = ("default", "known-answer", "a", "b")
 
 
 def _emit(payload: dict[str, Any]) -> None:
@@ -145,6 +145,25 @@ class Worker:
                     }
                 )
                 return
+        if self.model == "b":  # model-two.yaml: b consumes what a wrote, by path, from configure
+            seen = message.get("artifacts", {}).get("a", {})
+            marker = Path(str(seen.get("marker", ""))) / "done.txt"
+            scratch = Path(str(seen.get("scratch", ""))) / "big.txt"
+            if not marker.is_file() or not scratch.is_file():
+                _emit(
+                    {
+                        "type": "error",
+                        "id": None,
+                        "code": "configure_failed",
+                        "message": f"missing dependency artefacts: {seen}",
+                    }
+                )
+                return
+            out = Path(str(message.get("work_dir", "."))) / "artifacts" / "b" / "seen"
+            out.mkdir(parents=True, exist_ok=True)
+            (out / "seen.txt").write_text(
+                marker.read_text() + scratch.read_text(), encoding="utf-8"
+            )
         if self.misbehave == "progress-first":
             _emit({"type": "progress", "id": None, "fraction": 0.1, "text": "warming up"})
         configured: dict[str, Any] = {"type": "configured", "scene_id": message.get("scene_id")}
@@ -192,7 +211,10 @@ class Worker:
             marker = work / "artifacts" / self.model / "marker"
             marker.mkdir(parents=True, exist_ok=True)
             (marker / "done.txt").write_text("done\n", encoding="utf-8")
-            artifacts.append("marker")
+            scratch = work / "artifacts" / self.model / "scratch"
+            scratch.mkdir(parents=True, exist_ok=True)
+            (scratch / "big.txt").write_text("big\n", encoding="utf-8")
+            artifacts.extend(["marker", "scratch"])
         answer_id = frame_id + 1 if fault == "wrong-id" and isinstance(frame_id, int) else frame_id
         _emit({"type": "result", "id": answer_id, "boxes": boxes, "artifacts": artifacts})
 

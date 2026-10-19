@@ -90,10 +90,18 @@ def _tail(path: str, lines: int = 12) -> str:
 
 
 def convert_release(
-    toolkit: str, prefix: str, split_file: str, *, env: dict[str, str], log_path: str
+    toolkit: str,
+    prefix: str,
+    split_file: str,
+    *,
+    env: dict[str, str],
+    log_path: str,
+    nusc_side: str = "vehicle-side",
+    early_fusion: bool = False,
 ) -> str:
-    """``trans_kitti2nuscenes.py`` then ``generate_nuscenes_pkl.py``; returns the nuScenes
-    ``v1.0-trainval`` root of the vehicle side (sample.json, scene.json live there)."""
+    """``trans_kitti2nuscenes.py`` then ``generate_nuscenes_pkl.py`` (both with
+    ``--early_fusion`` for the early-fusion model); returns the nuScenes ``v1.0-trainval``
+    root of ``nusc_side`` (sample.json and scene.json live there)."""
     python = sys.executable
     release = os.path.join("datasets", prefix, "griffin-release")
     nuscenes = os.path.join("datasets", prefix, "griffin-nuscenes")
@@ -107,6 +115,7 @@ def convert_release(
             nuscenes,
             "--split_file",
             split_file,
+            *(["--early_fusion"] if early_fusion else []),
         ],
         cwd=toolkit,
         env=env,
@@ -123,13 +132,14 @@ def convert_release(
             os.path.join("data", "infos", prefix),
             "--split_file",
             split_file,
+            *(["--early_fusion"] if early_fusion else []),
         ],
         cwd=toolkit,
         env=env,
         log_path=log_path,
         what="generate_nuscenes_pkl",
     )
-    return os.path.join(toolkit, nuscenes, "vehicle-side", "v1.0-trainval")
+    return os.path.join(toolkit, nuscenes, nusc_side, "v1.0-trainval")
 
 
 def work_dir_for(config: str) -> str:
@@ -202,9 +212,25 @@ def collect_artifacts(
         shutil.copyfile(pickles[-1], os.path.join(dest, "det_pkl"))
         names.append("det_pkl")
     track_query = os.path.join(toolkit, "data", "infos", prefix, side, "track_query")
-    if os.path.isdir(track_query):
+    if os.path.isdir(track_query) and not os.path.islink(track_query):
         target = os.path.join(dest, "track_query")
         if not os.path.isdir(target):
-            shutil.copytree(track_query, target)
+            shutil.move(track_query, target)  # 11 GB of pickles: moved, never copied
         names.append("track_query")
     return names
+
+
+def place_track_query(source: str, toolkit: str, prefix: str) -> str:
+    """Make a dependency's ``track_query`` directory appear where the instance-fusion config
+    reads it (``./data/infos/<prefix>/drone-side/track_query/``) as a symlink; the path came
+    through ``configure.artifacts``, never through a toolkit copy shared with another model."""
+    if not os.path.isdir(source):
+        raise ToolkitError(f"track_query artefact {source} is not a directory")
+    if not os.listdir(source):
+        raise ToolkitError(f"track_query artefact {source} is empty")
+    target = os.path.join(toolkit, "data", "infos", prefix, "drone-side", "track_query")
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    if os.path.lexists(target):
+        os.unlink(target) if os.path.islink(target) else shutil.rmtree(target)
+    os.symlink(os.path.abspath(source), target)
+    return target

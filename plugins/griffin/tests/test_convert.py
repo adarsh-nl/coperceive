@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -128,3 +129,49 @@ def test_check_against_split_refuses_a_shifted_index(tmp_path: Path) -> None:
     )
     with pytest.raises(stage.StageError, match="published index"):
         stage.check_against_split([(0, _infos()[0])], str(split))
+
+
+def test_place_track_query_links_the_artifact_where_the_config_reads_it(tmp_path: Path) -> None:
+    import toolkit
+
+    artifact = tmp_path / "artifacts" / "drone-side" / "track_query"
+    artifact.mkdir(parents=True)
+    (artifact / "sample_1.pkl").write_bytes(b"x")
+    tree = tmp_path / "griffin-instance-fusion"
+    target = toolkit.place_track_query(str(artifact), str(tree), "griffin_50scenes_25m")
+    assert target == str(tree / "data/infos/griffin_50scenes_25m/drone-side/track_query")
+    assert os.path.islink(target) and os.listdir(target) == ["sample_1.pkl"]
+    # A second call replaces the link (and a stale real directory) instead of failing.
+    toolkit.place_track_query(str(artifact), str(tree), "griffin_50scenes_25m")
+    os.unlink(target)
+    os.makedirs(target)
+    toolkit.place_track_query(str(artifact), str(tree), "griffin_50scenes_25m")
+    assert os.path.islink(target)
+    with pytest.raises(toolkit.ToolkitError, match="not a directory"):
+        toolkit.place_track_query(str(tmp_path / "nope"), str(tree), "p")
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    with pytest.raises(toolkit.ToolkitError, match="empty"):
+        toolkit.place_track_query(str(empty), str(tree), "p")
+
+
+def test_collect_artifacts_moves_the_track_queries(tmp_path: Path) -> None:
+    import toolkit
+
+    tree = tmp_path / "griffin-drone-side"
+    config = "projects/configs_x/drone-side/cfg.py"
+    queries = tree / "data/infos/p/drone-side/track_query"
+    queries.mkdir(parents=True)
+    (queries / "sample_1.pkl").write_bytes(b"x")
+    work = tree / toolkit.work_dir_for(config)
+    (work / "json_output" / "t").mkdir(parents=True)
+    detections = work / "json_output" / "t" / "results_nusc_det.json"
+    detections.write_text("{}", encoding="utf-8")
+    (work / "results-1.pkl").write_bytes(b"y")
+    dest = tmp_path / "artifacts" / "drone-side"
+    names = toolkit.collect_artifacts(
+        str(tree), config, str(detections), str(dest), "p", "drone-side"
+    )
+    assert names == ["det_json", "det_pkl", "track_query"]
+    assert (dest / "track_query" / "sample_1.pkl").is_file()
+    assert not queries.exists()  # moved, not copied: 11 GB are never held twice

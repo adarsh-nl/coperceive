@@ -87,6 +87,32 @@ def coperceive_root() -> Path:
     return Path(coperceive.__file__).resolve().parents[1]
 
 
+def model_closure(manifest: Manifest, spec: ModelSpec, options: RunOptions) -> list[ModelSpec]:
+    """``spec`` and, unless ``--artifacts`` supplies them or auto dependencies are off, the
+    models its ``depends_on`` entries need (recursively), each once, dependencies first."""
+    out: list[ModelSpec] = []
+    seen: set[str] = set()
+
+    def visit(current: ModelSpec) -> None:
+        if current.key in seen:
+            return
+        seen.add(current.key)
+        if options.artifacts_dir is None and options.auto_dependencies:
+            for dependency in current.depends_on:
+                visit(manifest.models[dependency.model])
+        out.append(current)
+
+    visit(spec)
+    return out
+
+
+def work_copy_filter(transient: Sequence[tuple[str, str]] = ()) -> tuple[str, ...]:
+    """The rsync filter for the work directory's logs and artefacts. Transient artefacts
+    (``(model, name)`` pairs) are excluded first: rsync takes the first rule that matches."""
+    excludes = tuple(f"--exclude='artifacts/{model}/{name}/***'" for model, name in transient)
+    return excludes + WORK_COPY_FILTER
+
+
 def time_limit(
     seconds_per_sample: float,
     staging_seconds: float,
@@ -219,22 +245,53 @@ def plan_sbatch(
     repo_root: Path | None = None,
 ) -> SlurmPlan:
     """The sbatch of ADR 0011 decision 5 for ``coperceive model run`` over ``scenes``."""
-    agent_ids = {
-        sid: select_agents(scene, spec, options.agent_ids) for sid, scene in scenes.items()
-    }
     samples = sum(len(pose_times(scene)) for scene in scenes.values())
-    scene_files, raw = staged_files(
-        scenes_root, scenes, spec, raw_root=options.raw_root, agent_ids=agent_ids
+    closure = model_closure(manifest, spec, options)
+    scene_set: set[str] = set()
+    raw_set: set[str] = set()
+    per_sample = staging = conversion = 0.0
+    parts: list[str] = []
+    sources: list[str] = []
+    for member in closure:
+        requested = options.agent_ids if member is spec else None
+        member_agents = {
+            sid: select_agents(scene, member, requested) for sid, scene in scenes.items()
+        }
+        scene_files_m, raw_m = staged_files(
+            scenes_root, scenes, member, raw_root=options.raw_root, agent_ids=member_agents
+        )
+        scene_set.update(scene_files_m)
+        raw_set.update(raw_m)
+        measured = estimate_from_runs(out_root, manifest.name, member.key)
+        if measured is not None:
+            m_per, m_stage, m_conv = measured
+            newest = f"{manifest.name} {member.key}"
+            sources.append(f"provenance.timings of the newest {newest} run under {out_root}")
+        else:
+            m_per = member.resources.seconds_per_sample
+            m_stage = member.resources.staging_seconds
+            m_conv = member.resources.conversion_seconds
+            sources.append(
+                "the manifest's resources (no earlier run with a timing split under --out)"
+            )
+        per_sample += m_per
+        staging += m_stage
+        conversion += m_conv
+        parts.append(
+            f"{member.key} {m_stage:g} s staging + {m_conv:g} s conversion + {m_per:g} s/sample"
+        )
+    scene_files = sorted(scene_set)
+    raw = sorted(raw_set)
+    source = (
+        sources[0]
+        if len(sources) == 1
+        else "; ".join(
+            f"{member.key}: {text}" for member, text in zip(closure, sources, strict=True)
+        )
     )
-    measured = estimate_from_runs(out_root, manifest.name, spec.key)
-    if measured is not None:
-        per_sample, staging, conversion = measured
-        source = f"provenance.timings of the newest {manifest.name} {spec.key} run under {out_root}"
-    else:
-        per_sample = spec.resources.seconds_per_sample
-        staging = spec.resources.staging_seconds
-        conversion = spec.resources.conversion_seconds
-        source = "the manifest's resources (no earlier run with a timing split under --out)"
+    transient = [
+        (member.key, name) for member in closure for name in member.outputs.transient_artifacts
+    ]
     limit = time_limit(per_sample, staging, samples, conversion)
     gpu = spec.resources.gpu
     partition = "ps,main-gpu" if gpu else "ps,main-cpu"
@@ -248,6 +305,11 @@ def plan_sbatch(
         f"# {job_name}: emitted by coperceive model run in Slurm mode; --time from {source}:",
         f"#   {staging:g} s staging + {conversion:g} s conversion + {per_sample:g} s/sample x "
         f"{samples} samples, rounded up to 10 min, doubled.",
+        *(
+            [f"#   summed over the models this run needs: {'; '.join(parts)}."]
+            if len(closure) > 1
+            else []
+        ),
         "# Compute nodes install nothing and reach no index; the plugin is already in the .venv.",
         f"#SBATCH --job-name={job_name}",
         f"#SBATCH --partition={partition}",
@@ -318,7 +380,7 @@ def plan_sbatch(
             f'mkdir -p {shlex.quote(str(results))}/"$SLURM_JOB_ID"',
             f'rsync -a "$SCRATCH/out/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/',
             "# The work directory's logs and artefacts, not its inputs or any toolkit copy.",
-            "rsync -a " + " ".join(WORK_COPY_FILTER) + " "
+            "rsync -a " + " ".join(work_copy_filter(transient)) + " "
             f'"$SCRATCH/work/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/work/',
             f"mkdir -p {shlex.quote(str(target))}",
             f'rsync -a "$SCRATCH/out/{run_id}/" {shlex.quote(str(target))}/',
@@ -441,6 +503,8 @@ def submit(path: Path) -> str:
 __all__ = [
     "SLURM_DIR",
     "WORK_COPY_FILTER",
+    "model_closure",
+    "work_copy_filter",
     "SlurmError",
     "SlurmPlan",
     "coperceive_root",

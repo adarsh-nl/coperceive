@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -142,6 +142,7 @@ class SceneCache:
         inputs: Sequence[InputFile],
         results: Sequence[TimedResult],
         artifacts: Path | None,
+        skip_artifacts: Collection[str] = (),
     ) -> Path:
         return self.put(
             self.key_for(scene, environment),
@@ -151,6 +152,7 @@ class SceneCache:
             inputs=inputs,
             results=results,
             artifacts=artifacts,
+            skip_artifacts=skip_artifacts,
         )
 
     # -- entries -------------------------------------------------------------------------
@@ -214,6 +216,7 @@ class SceneCache:
         inputs: Sequence[InputFile],
         results: Sequence[TimedResult],
         artifacts: Path | None,
+        skip_artifacts: Collection[str] = (),
     ) -> Path:
         directory = self.path_for(key)
         if directory.exists():
@@ -237,7 +240,11 @@ class SceneCache:
             json.dumps(payload, indent=2, allow_nan=False) + "\n", encoding="utf-8"
         )
         if artifacts is not None and artifacts.is_dir():
-            shutil.copytree(artifacts, directory / "artifacts")
+            shutil.copytree(
+                artifacts,
+                directory / "artifacts",
+                ignore=shutil.ignore_patterns(*skip_artifacts) if skip_artifacts else None,
+            )
         return directory
 
 

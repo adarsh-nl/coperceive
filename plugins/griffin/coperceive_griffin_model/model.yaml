@@ -22,7 +22,7 @@ models:
       agents: [vehicle]
       sensors: [front, back, left, right]
       frames: sequence
-      raw:
+      raw: &vehicle_raw
         - "vehicle-side/scene_infos.json"
         - "drone-side/scene_infos.json"
         - "vehicle-side/calib/front.json"
@@ -102,12 +102,48 @@ models:
       sources:
         single: "drone-side camera-only Agile model, no fusion"
       artifacts: [det_json, det_pkl, track_query]
+      transient_artifacts: [track_query]  # 11 GB: only instance fusion's pass in the same job reads it
     resources:
       gpu: true
       cpus: 8
       memory_gb: 64
-      seconds_per_sample: 0.5      # estimate; measured by the first run
-      staging_seconds: 1000        # estimate: about 23 GB of drone PNGs; measured by the first run
+      seconds_per_sample: 0.461    # inference only: dist_eval 11 min 27 s / 1,490 samples, job 628386
+      staging_seconds: 930         # the drone cameras: 26 min 51 s for 15 GB vehicle + 21 GB drone minus 677 s for the vehicle's, job 628386
+      conversion_seconds: 100      # as vehicle-side
+      frame_timeout_s: 3600
+      slurm_constraint: "a40|a100"
+    options:
+      subset: {type: str, default: "25m", choices: ["25m"]}
+      min_score: {type: float, default: 0.05}
+      det_json: {type: str, default: ""}
+      nusc_root: {type: str, default: ""}
+  instance-fusion:
+    description: "Instance fusion (cooperative/instance_fusion config, 48 epochs, iter 33024): the vehicle cameras' queries fused with the drone-side pass's track queries"
+    checkpoint_md5: 7e1448188b6e99ca6303575c3466b97f
+    inputs:
+      modalities: [camera]
+      agents: [vehicle]
+      sensors: [front, back, left, right]
+      frames: sequence
+      raw: *vehicle_raw
+      raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}
+      raw_clock: {scale_us: 100000, offset_us: 0}
+    depends_on:
+      - {model: drone-side, artifact: track_query}
+    outputs:
+      categories: [car, bicycle, pedestrian]
+      score_note: "sigmoid class score (max over the 3 classes) of the instance-fusion Agile head, as written to results_nusc_det.json (top-300 per frame, score > 0.0, 50 m class_range); rows below min_score (default 0.05) are dropped by the plugin. The drone-side track queries come from the drone-side pass of the same job."
+      sources:
+        fused: "instance fusion of vehicle queries with drone track queries"
+      artifacts: [det_json, det_pkl]
+      agent: vehicle
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 64
+      seconds_per_sample: 0.421    # inference only: dist_eval 10 min 27 s / 1,490 samples, job 628386
+      staging_seconds: 700         # the vehicle cameras; the drone cameras are the dependency's
+      conversion_seconds: 100
       frame_timeout_s: 3600
       slurm_constraint: "a40|a100"
     options:
