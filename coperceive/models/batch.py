@@ -87,6 +87,7 @@ class RunOptions:
     hash_inputs: bool = False
     work_dir: Path | None = None
     force: bool = False
+    staging_seconds: float | None = None  # the rsync wall time, measured by the Slurm job
 
 
 @dataclass(frozen=True)
@@ -267,6 +268,7 @@ class _SceneRun:
         self.results: list[TimedResult] = []
         self.inputs: dict[str, InputFile] = {}
         self.frames = 0
+        self.timings: dict[str, float] = {}
 
 
 def run_batch(
@@ -316,6 +318,7 @@ def run_batch(
     failed: list[str] = []
     outcomes: list[SceneOutcome] = []
     counters = {"frames": 0, "hits": 0, "boxes": 0}
+    reported: dict[str, float] = {}  # the child's own timings (conversion_s, inference_s, ...)
     status = "complete"
     reason: str | None = None
     child: PluginProcess | None = None
@@ -348,11 +351,7 @@ def run_batch(
             frames_run=frames,
             dependencies={},
             checkpoint=checkpoint,
-            timings={
-                "staging_s": 0.0,
-                "per_sample_s": (wall / frames) if frames else 0.0,
-                "wall_s": wall,
-            },
+            timings=_timings(wall, frames, reported, options.staging_seconds),
             parent_env=env,
         )
         return run_meta_for(
@@ -430,6 +429,8 @@ def run_batch(
                 continue
             counters["frames"] += run.frames
             next_frame_id += run.frames
+            for key, value in run.timings.items():
+                reported[key] = reported.get(key, 0.0) + value
             validate_boxes(scene, meta, run.rows)
             write_run(out_root, run_id, meta, run.rows, force=options.force)
             if cache is not None and options.cache:
@@ -470,6 +471,24 @@ def run_batch(
         reason=reason,
         scenes=tuple(outcomes),
     )
+
+
+def _timings(
+    wall: float, frames: int, reported: Mapping[str, float], staging: float | None
+) -> dict[str, float]:
+    """``provenance.timings``: ``staging_s`` from the Slurm job's rsync wall time (0 outside
+    one), ``conversion_s`` and ``inference_s`` as the child reported them, ``per_sample_s``
+    = ``inference_s`` over the frames the child answered (inference only; a child that
+    reports nothing gets the whole wall time over its frames, and the emitter ignores such a
+    run), ``wall_s``."""
+    out: dict[str, float] = {"staging_s": float(staging or 0.0), "wall_s": wall}
+    out.update({key: float(value) for key, value in reported.items()})
+    inference = reported.get("inference_s")
+    if inference is not None and inference > 0 and frames:
+        out["per_sample_s"] = inference / frames
+    else:
+        out["per_sample_s"] = (wall / frames) if frames else 0.0
+    return out
 
 
 def _artifact_dir(work_dir: Path, spec: ModelSpec) -> Path | None:
@@ -603,6 +622,7 @@ def _run_scene(
         raise _SceneFailed(f"{answer.code}: {answer.message}")
     if not isinstance(answer, Configured):
         raise _Stop(f"plugin_error: expected configured, got {type(answer).__name__}")
+    out.timings = dict(answer.timings)
     frame_id = first_id
     for time_us in samples:
         frame, files = build_frame(

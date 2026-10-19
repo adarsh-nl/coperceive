@@ -38,8 +38,10 @@ def test_griffin_manifest_loads() -> None:
     assert (
         vehicle.resources.gpu and vehicle.resources.cpus == 8 and vehicle.resources.memory_gb == 64
     )
+    assert vehicle.resources.conversion_seconds == 100
     assert vehicle.resources.slurm_constraint == "a40|a100"
-    assert vehicle.resources.seconds_per_sample == 0.39 and vehicle.resources.staging_seconds == 700
+    assert vehicle.resources.seconds_per_sample == 0.394
+    assert vehicle.resources.staging_seconds == 700
     assert set(vehicle.options) == {"subset", "min_score", "det_json", "nusc_root"}
     drone = select_model(manifest, "drone-side")
     assert drone.inputs.agents == ("uav",) and "track_query" in drone.outputs.artifacts

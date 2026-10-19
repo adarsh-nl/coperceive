@@ -81,6 +81,12 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("--work", default=None)
     run.add_argument("--force", action="store_true")
     run.add_argument(
+        "--staging-seconds",
+        type=float,
+        default=None,
+        help="The rsync wall time the Slurm job measured; recorded as timings.staging_s.",
+    )
+    run.add_argument(
         "--slurm",
         action="store_true",
         help="Emit the sbatch for this run under <out>/.slurm/ and print it; run nothing.",
@@ -297,6 +303,7 @@ def _run_options(args: argparse.Namespace) -> RunOptions:
         hash_inputs=bool(args.hash_inputs),
         work_dir=Path(args.work) if args.work else None,
         force=bool(args.force),
+        staging_seconds=args.staging_seconds,
     )
 
 

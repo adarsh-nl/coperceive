@@ -184,3 +184,12 @@ def test_hello_requires_a_32_hex_checkpoint_md5(digest: str | None) -> None:
     with pytest.raises(ProtocolError, match="environment.checkpoint_md5") as caught:
         decode(json.dumps(payload).encode("utf-8") + b"\n")
     assert caught.value.code == "bad_message"
+
+
+def test_configured_timings_round_trip_and_are_optional() -> None:
+    timed = Configured(scene_id="coop", timings={"conversion_s": 98.0, "inference_s": 587.0})
+    assert decode(encode(timed)) == timed
+    assert b"timings" not in encode(Configured(scene_id="coop"))
+    assert decode(encode(Configured(scene_id="coop"))) == Configured(scene_id="coop")
+    with pytest.raises(ProtocolError, match="timings"):
+        decode(b'{"type":"configured","protocol":1,"scene_id":"c","timings":{"inference_s":-1}}\n')

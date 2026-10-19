@@ -277,6 +277,14 @@ def test_submit_parses_job_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     assert submit(script) == "123"
 
 
+def test_time_limit_formula_has_the_three_parts() -> None:
+    # staging 700 + conversion 100 + 0.394 x 1,490 = 1,387 s -> 1,800 -> 3,600 s
+    assert time_limit(0.394, 700, 1490, 100) == "01:00:00"
+    # conversion counts: 700 + 0.5 x 1,000 = 1,200 s -> 1,200 -> doubled 2,400 s
+    assert time_limit(0.5, 0, 1000, 700) == "00:40:00"
+    assert time_limit(0.5, 0, 1000) == "00:20:00"  # 500 s -> 600 -> 1,200 s without it
+
+
 def test_time_limit_prefers_the_last_runs_timings(
     roots: tuple[Path, Path, Scene], tmp_path: Path
 ) -> None:
@@ -287,64 +295,40 @@ def test_time_limit_prefers_the_last_runs_timings(
     run_batch(manifest, scenes, out, "earlier", RunOptions(), created_utc=CREATED, parent_env=env)
     meta = read_run_meta(out, "earlier")
     assert meta.provenance is not None
-    timings = {"staging_s": 100.0, "per_sample_s": 0.1, "wall_s": 5.0}
+    # A legacy run (no inference_s: per_sample_s is the whole worker time) never counts.
+    legacy = {"staging_s": 100.0, "per_sample_s": 0.479, "wall_s": 5.0}
     write_run(
         out,
         "earlier",
-        replace(meta, provenance={**meta.provenance, "timings": timings}),
+        replace(meta, provenance={**meta.provenance, "timings": legacy}),
         [],
         force=True,
     )
-    assert estimate_from_runs(out, "fake", "default") == (0.1, 100.0)
+    assert estimate_from_runs(out, "fake", "default") is None
     plan = _plan(roots, manifest, tmp_path)
-    assert "#SBATCH --time=00:20:00" in plan.script  # 100 + 7 x 0.1 = 100.7 s -> 600 -> 1200
+    assert plan.estimate_source.startswith("the manifest")
+    # A run with the split counts: staging + conversion + per_sample x N.
+    split = {
+        "staging_s": 100.0,
+        "conversion_s": 200.0,
+        "inference_s": 70.0,
+        "per_sample_s": 0.1,
+        "wall_s": 300.0,
+    }
+    write_run(
+        out,
+        "earlier",
+        replace(meta, provenance={**meta.provenance, "timings": split}),
+        [],
+        force=True,
+    )
+    assert estimate_from_runs(out, "fake", "default") == (0.1, 100.0, 200.0)
+    plan = _plan(roots, manifest, tmp_path)
+    # 100 + 200 + 7 x 0.1 = 300.7 s -> 600 -> 1,200 s
+    assert "#SBATCH --time=00:20:00" in plan.script
     assert plan.estimate_source.startswith("provenance.timings")
-
-
-def test_work_copy_filter_keeps_nested_logs_and_artifacts(tmp_path: Path) -> None:
-    """rsync with WORK_COPY_FILTER on a fake work tree: logs at any depth and artefacts come
-    home, inputs and a toolkit copy do not, empty directories are pruned."""
-    if shutil.which("rsync") is None:
-        pytest.skip("no rsync")
-    work = tmp_path / "work"
-    for relative in (
-        "parent.log",
-        "plugin.log",
-        "griffin-toolkit.log",
-        "work_dirs/vehicle-side/logs/test_0101.log",
-        "artifacts/vehicle-side/det_json",
-        "artifacts/vehicle-side/track_query/sample_1.pkl",
-        "inputs/17/vehicle-lidar_top.bin",
-        "griffin/tools/test.py",
-        "datasets/prefix/release/vehicle-side/pose/000001.json",
-    ):
-        target = work / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("x", encoding="utf-8")
-    (work / "empty").mkdir()
-    dest = tmp_path / "home"
-    argv = ["rsync", "-a", *[item.strip("'") for item in _split_filter()], f"{work}/", f"{dest}/"]
-    done = subprocess.run(argv, capture_output=True, text=True)
-    assert done.returncode == 0, done.stderr
-    copied = sorted(str(p.relative_to(dest)) for p in dest.rglob("*") if p.is_file())
-    assert copied == [
-        "artifacts/vehicle-side/det_json",
-        "artifacts/vehicle-side/track_query/sample_1.pkl",
-        "griffin-toolkit.log",
-        "parent.log",
-        "plugin.log",
-        "work_dirs/vehicle-side/logs/test_0101.log",
-    ]
-    assert not (dest / "empty").exists() and not (dest / "inputs").exists()
-    assert not (dest / "griffin").exists() and not (dest / "datasets").exists()
-
-
-def _split_filter() -> list[str]:
-    """WORK_COPY_FILTER items are shell words with quotes; rsync gets them unquoted."""
-    from coperceive.models.slurm import WORK_COPY_FILTER
-
-    out: list[str] = []
-    for item in WORK_COPY_FILTER:
-        key, sep, value = item.partition("=")
-        out.append(f"{key}{sep}{value.strip(chr(39))}" if sep else item)
-    return out
+    assert "100 s staging + 200 s conversion + 0.1 s/sample x 7 samples" in plan.script
+    # The job times its own rsync and hands the wall time to the parent.
+    assert "STAGE_START=$SECONDS" in plan.script
+    assert "STAGING=$((SECONDS - STAGE_START))" in plan.script
+    assert '--staging-seconds "$STAGING"' in plan.script

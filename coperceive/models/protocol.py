@@ -14,7 +14,7 @@ import json
 import math
 import re
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import IO, cast
 
 from coperceive.errors import CoperceiveError
@@ -87,6 +87,9 @@ class Configure:
 @dataclass(frozen=True)
 class Configured:
     scene_id: str
+    # Optional (Adarsh, 2026-10-19): what the child measured while setting the scene up, in
+    # seconds, e.g. {conversion_s, inference_s}; absent when it measured nothing.
+    timings: Mapping[str, float] = field(default_factory=lambda: {})
 
 
 @dataclass(frozen=True)
@@ -223,7 +226,10 @@ def _fields(message: Message) -> dict[str, object]:
             out["artifacts"] = {k: dict(v) for k, v in message.artifacts.items()}
         return out
     if isinstance(message, Configured):
-        return {"scene_id": message.scene_id}
+        out_c: dict[str, object] = {"scene_id": message.scene_id}
+        if message.timings:
+            out_c["timings"] = dict(message.timings)
+        return out_c
     if isinstance(message, Frame):
         return {
             "id": message.id,
@@ -473,7 +479,15 @@ def _configure(node: _Obj) -> Configure:
 
 
 def _configured(node: _Obj) -> Configured:
-    return Configured(scene_id=node.str("scene_id"))
+    timings: dict[str, float] = {}
+    raw = node.obj("timings", optional=True)
+    if raw is not None:
+        for key in raw.payload:
+            value = raw.num(key)
+            if value < 0:
+                raise ProtocolError(f"{raw.at(key)}: expected a non-negative number")
+            timings[key] = value
+    return Configured(scene_id=node.str("scene_id"), timings=timings)
 
 
 def _frame(node: _Obj) -> Frame:

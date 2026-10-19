@@ -79,6 +79,7 @@ class Worker:
         self.config: dict[str, Any] = {}
         self.options: dict[str, Any] = {}
         self.no_exit = False
+        self.reported = False
 
     @property
     def misbehave(self) -> str:
@@ -146,7 +147,11 @@ class Worker:
                 return
         if self.misbehave == "progress-first":
             _emit({"type": "progress", "id": None, "fraction": 0.1, "text": "warming up"})
-        _emit({"type": "configured", "scene_id": message.get("scene_id")})
+        configured: dict[str, Any] = {"type": "configured", "scene_id": message.get("scene_id")}
+        if self.misbehave == "timings" and not self.reported:
+            configured["timings"] = {"conversion_s": 2.0, "inference_s": 7.0}
+            self.reported = True
+        _emit(configured)
 
     def _count(self) -> None:
         if self.count_file:

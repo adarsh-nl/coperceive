@@ -116,6 +116,8 @@ class Worker:
         self.artifacts: list[str] = []
         self.artifacts_reported = False
         self.config: dict[str, Any] = {}
+        # Reported once, on the configure that ran the toolkit (Adarsh, 2026-10-19).
+        self.timings: dict[str, float] = {}
         self.source = "single"
 
     # -- hello ---------------------------------------------------------------------------
@@ -203,7 +205,11 @@ class Worker:
         except (ConvertError, StageError, ToolkitError, OSError) as exc:
             _error(None, "configure_failed", f"{type(exc).__name__}: {exc}")
             return
-        _emit({"type": "configured", "scene_id": message.get("scene_id")})
+        configured: dict[str, Any] = {"type": "configured", "scene_id": message.get("scene_id")}
+        if self.timings:
+            configured["timings"] = self.timings
+            self.timings = {}  # the toolkit ran once; later scenes report nothing
+        _emit(configured)
 
     def _index_from(self, det_json: str, nusc_root: str, min_score: float) -> None:
         samples = read_samples(nusc_root)
@@ -229,6 +235,7 @@ class Worker:
         log_path = os.path.join(work_dir, "griffin-toolkit.log")
         env = dict(os.environ)
         env.setdefault("MASTER_PORT", str(20000 + os.getpid() % 20000))
+        run_started = time.monotonic()
         _progress("copying the toolkit", 0.02)
         copy_toolkit(self.toolkit_dir, toolkit)
         for name in ("datasets", "ckpts", os.path.join("data", "infos")):
@@ -259,6 +266,7 @@ class Worker:
             log_path=log_path,
         )
         config = str(self.spec["config"]).format(subset=SUBSET)
+        conversion_s = time.monotonic() - run_started  # copy, staging, conversion, info pickles
         _progress("running tools/test.py over every staged scene", 0.2)
         started = time.monotonic()
         det_json = evaluate(
@@ -269,7 +277,12 @@ class Worker:
             log_path=log_path,
             master_port=int(env["MASTER_PORT"]),
         )
-        _log(f"tools/test.py finished in {time.monotonic() - started:.0f} s: {det_json}")
+        inference_s = time.monotonic() - started
+        self.timings = {
+            "conversion_s": round(conversion_s, 3),
+            "inference_s": round(inference_s, 3),
+        }
+        _log(f"tools/test.py finished in {inference_s:.0f} s: {det_json}")
         _progress("indexing the detections", 0.95)
         self._index_from(det_json, nusc_root, min_score)
         dest = os.path.join(work_dir, "artifacts", self.model)

@@ -329,3 +329,28 @@ def test_progress_before_configured_is_tolerated(roots: tuple[Path, Path, Scene]
     report = _run.last  # type: ignore[attr-defined]
     assert report.status == "complete" and report.completed == ("coop",)
     assert (out / "r1" / "coop" / "boxes.parquet").is_file()
+
+
+def test_provenance_splits_staging_conversion_and_inference(
+    roots: tuple[Path, Path, Scene],
+) -> None:
+    """The child reports conversion_s and inference_s; per_sample_s is inference only; the
+    parent writes staging_s from the rsync wall time the Slurm job passes."""
+    _, out = _run(roots, options={"misbehave": "timings"}, staging_seconds=41.5)
+    report = _run.last  # type: ignore[attr-defined]
+    assert report.status == "complete" and report.frames_run == 7
+    provenance = read_run_meta(out, "r1").provenance
+    assert provenance is not None
+    timings = cast(Mapping[str, float], provenance["timings"])
+    assert timings["staging_s"] == 41.5
+    assert timings["conversion_s"] == 2.0 and timings["inference_s"] == 7.0
+    assert timings["per_sample_s"] == pytest.approx(7.0 / 7)  # inference over frames, not wall
+    assert timings["wall_s"] > 0
+
+
+def test_a_child_that_reports_nothing_has_no_split(roots: tuple[Path, Path, Scene]) -> None:
+    _, out = _run(roots)
+    provenance = read_run_meta(out, "r1").provenance
+    assert provenance is not None
+    timings = cast(Mapping[str, float], provenance["timings"])
+    assert "inference_s" not in timings and timings["staging_s"] == 0.0

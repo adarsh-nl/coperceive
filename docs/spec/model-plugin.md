@@ -103,8 +103,9 @@ Each entry of `models`:
 | `gpu` | bool | yes | | Needs a GPU. |
 | `memory_gb` | int | no | `2` | Slurm `--mem`, in GB. |
 | `cpus` | int | no | `1` | Slurm `--cpus-per-task`. |
-| `seconds_per_sample` | float | yes | | Author's estimate for the Slurm `--time` formula, used until a run of this plugin and model exists under `--out`; then that run's provenance `timings` take over (§Provenance). |
-| `staging_seconds` | float | no | `0` | Same. |
+| `seconds_per_sample` | float | yes | | Inference only: seconds per sample of the model itself. Author's estimate for the Slurm `--time` formula, used until a run of this plugin and model with a timing split exists under `--out`; then that run's provenance `timings` take over (§Provenance). |
+| `staging_seconds` | float | no | `0` | Copying the inputs to node-local scratch (the Slurm job's rsync). Same rule. |
+| `conversion_seconds` | float | no | `0` | One-off work before the first frame (a toolkit's data conversion). Same rule. |
 | `frame_timeout_s` | float | no | `600` | Per frame. |
 | `run_timeout_s` | float | no | null | Whole run; null means none. |
 | `grace_s` | float | no | `10` | Between `cancel`, SIGTERM and SIGKILL. |
@@ -132,7 +133,7 @@ models:
              raw: ["{agent_root}/pose/{frame:06d}.json", "{agent_root}/label/{frame:06d}.txt", "{agent_root}/calib/{sensor}.json", "vehicle-side/camera/{sensor}/{frame:06d}.png"],
              raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}, raw_clock: {scale_us: 100000, offset_us: 0}}
     outputs: {categories: [car, bicycle, pedestrian], score_note: "sigmoid class score ...", sources: {single: "vehicle-side camera-only Agile model, no fusion"}}
-    resources: {gpu: true, memory_gb: 64, seconds_per_sample: 0.39, staging_seconds: 700, slurm_constraint: "a40|a100"}  # 0.39 s = 9 min 37 s / 1,490 samples, job 627093
+    resources: {gpu: true, memory_gb: 64, seconds_per_sample: 0.394, staging_seconds: 700, conversion_seconds: 100, slurm_constraint: "a40|a100"}  # inference 587 s / 1,490 samples, conversion 71 + 27 s, job 629288
 commands:
   batch: ["{python}", "-m", "coperceive_griffin_model.worker", "--model", "{model}"]
 ```
@@ -173,7 +174,7 @@ Every message has `type` (str) and `protocol` (int, `1`).
 
 `samples` is the full ordered list of times the parent will request, so a `sequence` model can plan. `raw_root` and `artifacts` are present only when the model declares them. Ground truth is never sent.
 
-**`configured`** (child): `{"type": "configured", "protocol": 1, "scene_id": "Town03-000"}`.
+**`configured`** (child): `{"type": "configured", "protocol": 1, "scene_id": "Town03-000"}`, with an optional `timings` map of non-negative seconds the child measured while setting up, e.g. `"timings": {"conversion_s": 98.0, "inference_s": 587.0}`. `conversion_s` is one-off work before the first frame and `inference_s` the model's own time over the whole scene set; a child that sets up scene by scene reports them on the `configured` of the scene that did the work (the parent sums what it receives). A child that measures nothing omits the key (Adarsh, 2026-10-19).
 
 **`frame`** (parent):
 
@@ -266,7 +267,7 @@ The parent creates `{work_dir}` and gives it to the child in `configure.work_dir
 | `reason` | str or null | For `partial`: `timeout`, `cancelled`, `plugin_error`, with the message. |
 | `options` | map | The effective options after defaults. |
 | `cache_hits`, `frames_run` | int | Scenes served from the cache, frames the child answered, in this invocation. |
-| `timings` | map | `staging_s`, `per_sample_s`, `wall_s` measured by this invocation (`staging_s` is 0 outside a Slurm job). The Slurm emitter of the next run of the same plugin and model reads them in place of the manifest's estimates. |
+| `timings` | map | Measured by this invocation: `staging_s`, the rsync wall time the Slurm job measured and passed as `--staging-seconds` (the parent owns staging; 0 outside a Slurm job); `conversion_s` and `inference_s`, as the child reported them in `configured` (absent when it reported none); `per_sample_s`, **inference only**: `inference_s` over the frames the child answered (a child that reports nothing gets the whole wall time over its frames, and the emitter ignores such a run); `wall_s`. The Slurm emitter of the next run of the same plugin and model reads `staging_s + conversion_s + per_sample_s × samples` from the newest run that has `inference_s`, in place of the manifest's estimates, and never the whole worker time over the samples (Adarsh, 2026-10-19). |
 | `dependencies` | map | `{<model>: {<artifact>: <path>}}` for every `depends_on` entry that was used; `{}` otherwise. |
 | `slurm_job_id` | str or null | `$SLURM_JOB_ID` when set. |
 

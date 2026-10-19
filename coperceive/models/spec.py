@@ -84,6 +84,7 @@ class Resources:
     memory_gb: int
     seconds_per_sample: float
     staging_seconds: float
+    conversion_seconds: float
     frame_timeout_s: float
     run_timeout_s: float | None
     grace_s: float
@@ -533,6 +534,7 @@ def _resources(node: _Node | None) -> Resources:
         cpus=node.opt_int("cpus", 1),
         seconds_per_sample=node.float("seconds_per_sample"),
         staging_seconds=node.opt_float("staging_seconds", 0.0) or 0.0,
+        conversion_seconds=node.opt_float("conversion_seconds", 0.0) or 0.0,
         frame_timeout_s=node.opt_float("frame_timeout_s", 600.0) or 600.0,
         run_timeout_s=node.opt_float("run_timeout_s", None),
         grace_s=node.opt_float("grace_s", 10.0) or 10.0,

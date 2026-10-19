@@ -87,9 +87,15 @@ def coperceive_root() -> Path:
     return Path(coperceive.__file__).resolve().parents[1]
 
 
-def time_limit(seconds_per_sample: float, staging_seconds: float, samples: int) -> str:
-    """``staging + per_sample × samples``, rounded up to the next 600 s, doubled, ``HH:MM:SS``."""
-    estimate = staging_seconds + seconds_per_sample * samples
+def time_limit(
+    seconds_per_sample: float,
+    staging_seconds: float,
+    samples: int,
+    conversion_seconds: float = 0.0,
+) -> str:
+    """``staging + conversion + per_sample × samples``, rounded up to the next 600 s, doubled,
+    ``HH:MM:SS``. Never the whole worker time over the samples (Adarsh, 2026-10-19)."""
+    estimate = staging_seconds + conversion_seconds + seconds_per_sample * samples
     rounded = max(600, int(math.ceil(estimate / 600.0)) * 600)
     total = rounded * 2
     hours, rest = divmod(total, 3600)
@@ -97,10 +103,14 @@ def time_limit(seconds_per_sample: float, staging_seconds: float, samples: int) 
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
-def estimate_from_runs(out_root: Path, plugin: str, model: str) -> tuple[float, float] | None:
-    """``(per_sample_s, staging_s)`` of the newest run of ``plugin``/``model`` under
-    ``out_root``, by ``provenance.ended_utc``; None without one."""
-    best: tuple[str, float, float] | None = None
+def estimate_from_runs(
+    out_root: Path, plugin: str, model: str
+) -> tuple[float, float, float] | None:
+    """``(per_sample_s, staging_s, conversion_s)`` of the newest run of ``plugin``/``model``
+    under ``out_root``, by ``provenance.ended_utc``; None without one. Only a run whose child
+    reported ``inference_s`` and ``conversion_s`` counts: ``per_sample_s`` of any other run
+    is the whole worker time over its frames, which must never become an estimate."""
+    best: tuple[str, float, float, float] | None = None
     for run_id in list_runs(out_root):
         try:
             provenance = read_run_meta(out_root, run_id).provenance
@@ -116,14 +126,19 @@ def estimate_from_runs(out_root: Path, plugin: str, model: str) -> tuple[float, 
         timings = cast(Mapping[str, object], raw_timings)
         per_sample = timings.get("per_sample_s")
         staging = timings.get("staging_s")
+        conversion = timings.get("conversion_s")
+        inference = timings.get("inference_s")
         ended = str(provenance.get("ended_utc") or "")
-        if not isinstance(per_sample, (int, float)) or not isinstance(staging, (int, float)):
+        numbers = (per_sample, staging, conversion, inference)
+        if not all(isinstance(n, (int, float)) and not isinstance(n, bool) for n in numbers):
             continue
+        assert isinstance(per_sample, (int, float)) and isinstance(staging, (int, float))
+        assert isinstance(conversion, (int, float))
         if per_sample <= 0:
             continue
         if best is None or ended > best[0]:
-            best = (ended, float(per_sample), float(staging))
-    return None if best is None else (best[1], best[2])
+            best = (ended, float(per_sample), float(staging), float(conversion))
+    return None if best is None else (best[1], best[2], best[3])
 
 
 def staged_files(
@@ -213,12 +228,14 @@ def plan_sbatch(
     )
     measured = estimate_from_runs(out_root, manifest.name, spec.key)
     if measured is not None:
-        per_sample, staging = measured
+        per_sample, staging, conversion = measured
         source = f"provenance.timings of the newest {manifest.name} {spec.key} run under {out_root}"
     else:
-        per_sample, staging = spec.resources.seconds_per_sample, spec.resources.staging_seconds
-        source = "the manifest's resources (no earlier run under --out)"
-    limit = time_limit(per_sample, staging, samples)
+        per_sample = spec.resources.seconds_per_sample
+        staging = spec.resources.staging_seconds
+        conversion = spec.resources.conversion_seconds
+        source = "the manifest's resources (no earlier run with a timing split under --out)"
+    limit = time_limit(per_sample, staging, samples, conversion)
     gpu = spec.resources.gpu
     partition = "ps,main-gpu" if gpu else "ps,main-cpu"
     job_name = f"model-{manifest.name}-{run_id}"
@@ -229,8 +246,8 @@ def plan_sbatch(
     lines: list[str] = [
         "#!/bin/bash",
         f"# {job_name}: emitted by coperceive model run in Slurm mode; --time from {source}:",
-        f"#   {per_sample:g} s/sample x {samples} samples + {staging:g} s staging, "
-        "rounded up to 10 min, doubled.",
+        f"#   {staging:g} s staging + {conversion:g} s conversion + {per_sample:g} s/sample x "
+        f"{samples} samples, rounded up to 10 min, doubled.",
         "# Compute nodes install nothing and reach no index; the plugin is already in the .venv.",
         f"#SBATCH --job-name={job_name}",
         f"#SBATCH --partition={partition}",
@@ -274,6 +291,7 @@ def plan_sbatch(
         "not the venv's editable target"
     )
     lines.append("")
+    lines.append("STAGE_START=$SECONDS")
     lines.append(
         f"rsync -a --files-from={shlex.quote(str(slurm_dir / f'{run_id}.scenes.txt'))} "
         f'{shlex.quote(str(scenes_root.resolve()) + "/")} "$SCRATCH/scenes/"'
@@ -284,6 +302,7 @@ def plan_sbatch(
             f"rsync -a --files-from={shlex.quote(str(slurm_dir / f'{run_id}.raw.txt'))} "
             f'{shlex.quote(str(options.raw_root.resolve()) + "/")} "$SCRATCH/raw/"'
         )
+    lines.append("STAGING=$((SECONDS - STAGE_START))  # rsync wall time -> timings.staging_s")
     lines.append("")
     results = results_dir.resolve()
     target = out_root.resolve() / run_id
@@ -353,6 +372,8 @@ def _run_command(
         shlex.quote(run_id),
         "--work",
         '"$SCRATCH/work"',
+        "--staging-seconds",
+        '"$STAGING"',
         "--model",
         shlex.quote(spec.key),
     ]

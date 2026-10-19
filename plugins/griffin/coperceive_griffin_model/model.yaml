@@ -55,8 +55,9 @@ models:
       gpu: true
       cpus: 8
       memory_gb: 64
-      seconds_per_sample: 0.39     # 9 min 37 s / 1,490 samples, job 627093
+      seconds_per_sample: 0.394    # inference only: tools/test.py 587 s / 1,490 samples, job 629288
       staging_seconds: 700         # 11 min 17 s of camera PNG staging, job 627093
+      conversion_seconds: 100      # trans_kitti2nuscenes 71 s + generate_nuscenes_pkl 27 s, job 629288
       frame_timeout_s: 3600        # the whole scene set runs at the first configure
       slurm_constraint: "a40|a100" # the env's torch 1.9.1+cu111 wheels carry sm_86 SASS, not sm_89
     options:
