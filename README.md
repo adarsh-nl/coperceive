@@ -67,7 +67,18 @@ coperceive eval report det-v1 --root /path/scenes
 coperceive eval compare det-v1 det-v2 --root /path/scenes
 ```
 
-Model output goes in a sidecar root, `<scenes>/predictions/<run_id>/<scene_id>/boxes.parquet` with a `run.json`, from JSON lines or Parquet, or from a training script through `coperceive.evaluation.predictions.write_run`. `eval run` matches each output to the agent's own ground truth in the world frame, BEV IoU at 0.5 and 0.7 by default or centre distance by config, and writes `matches.parquet` and `metrics.json` with the config inside. `report` and `compare` print one Markdown table. The viewer draws the match rows in the status colours, filters them, puts precision and recall on the timeline and overlays a second run; `export bev --run` draws the same on the figure. Only synthetic fixtures have been through it. The user page is `docs/eval.md`, the contract is `docs/spec/predictions.md`, the design is `docs/adr/0010-eval-predictions.md`.
+Model output goes in a sidecar root, `<scenes>/predictions/<run_id>/<scene_id>/boxes.parquet` with a `run.json`, from JSON lines or Parquet, or from a training script through `coperceive.evaluation.predictions.write_run`. `eval run` matches each output to the agent's own ground truth in the world frame, BEV IoU at 0.5 and 0.7 by default or centre distance by config, and writes `matches.parquet` and `metrics.json` with the config inside. `report` and `compare` print one Markdown table. The viewer draws the match rows in the status colours, filters them, puts precision and recall on the timeline and overlays a second run; `export bev --run` draws the same on the figure. The user page is `docs/eval.md`, the contract is `docs/spec/predictions.md`, the design is `docs/adr/0010-eval-predictions.md`.
+
+## Run a model
+
+```bash
+coperceive model list
+coperceive model check griffin --model vehicle-side
+coperceive model run griffin --model vehicle-side --scenes /path/scenes --raw-root /path/raw --out /path/predictions --run-id det-v1
+coperceive model run griffin --model instance-fusion --scenes /path/scenes --raw-root /path/raw --out /path/predictions --run-id det-coop --slurm
+```
+
+A model plugin is a YAML manifest plus a worker subprocess in its own Python environment, speaking newline-delimited JSON over stdin and stdout. `model run` writes a format 1 predictions run with a `provenance` block and a per-scene `cache/` under the run directory; `--slurm` emits an sbatch script for the HPC. The user page is `docs/models.md`, the contract is `docs/spec/model-plugin.md`, the design is `docs/adr/0011-live-model-plugin.md`.
 
 ## Validate
 
