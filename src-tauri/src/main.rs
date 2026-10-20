@@ -251,12 +251,44 @@ fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(),
 }
 
 #[cfg(target_os = "macos")]
+fn handle_fatal_error(err_msg: &str) {
+    eprintln!("Fatal startup error: {err_msg}");
+    if let Some(home) = std::env::var_os("HOME") {
+        let log_dir = std::path::PathBuf::from(home).join("Library/Logs/Coperceive");
+        let _ = std::fs::create_dir_all(&log_dir);
+        let log_file = log_dir.join("startup-error.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_file) {
+            use std::io::Write;
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[{now}] Fatal startup error: {err_msg}");
+        }
+    }
+
+    let escaped = err_msg.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
+    let script = format!(
+        "display alert \"Coperceive Startup Error\" message \"{escaped}\" as critical giving up after 15"
+    );
+    let _ = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(script)
+        .status();
+}
+
+#[cfg(target_os = "macos")]
 fn main() {
+    std::panic::set_hook(Box::new(|info| {
+        let msg = format!("Panic occurred: {info}");
+        handle_fatal_error(&msg);
+    }));
+
     let app_state = Arc::new(AppState::default());
     let state_for_window = Arc::clone(&app_state);
     let state_for_exit = Arc::clone(&app_state);
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
@@ -281,23 +313,31 @@ fn main() {
                     }
                 }
             }
-        })
-        .build(tauri::generate_context!())
-        .expect("error while running tauri application")
-        .run(move |_app_handle, event| {
-            if let tauri::RunEvent::Exit = event {
-                if let Ok(mut lock) = state_for_exit.sidecar.lock() {
-                    if let Some(mut s) = lock.take() {
-                        let _ = s.stop();
-                    }
-                }
-                if let Ok(mut lock) = state_for_exit.remote.lock() {
-                    if let Some(mut r) = lock.take() {
-                        let _ = r.disconnect();
-                    }
+        });
+
+    let app = match builder.build(tauri::generate_context!()) {
+        Ok(app) => app,
+        Err(err) => {
+            let msg = format!("Failed to initialize Coperceive application: {err}");
+            handle_fatal_error(&msg);
+            std::process::exit(101);
+        }
+    };
+
+    app.run(move |_app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Ok(mut lock) = state_for_exit.sidecar.lock() {
+                if let Some(mut s) = lock.take() {
+                    let _ = s.stop();
                 }
             }
-        });
+            if let Ok(mut lock) = state_for_exit.remote.lock() {
+                if let Some(mut r) = lock.take() {
+                    let _ = r.disconnect();
+                }
+            }
+        }
+    });
 }
 
 #[cfg(not(target_os = "macos"))]

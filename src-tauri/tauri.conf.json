@@ -41,8 +41,5 @@
       "frameworks": [],
       "minimumSystemVersion": "13.0"
     }
-  },
-  "plugins": {
-    "dialog": {}
   }
 }

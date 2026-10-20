@@ -119,15 +119,25 @@ SERVE_PID=$!
 
 echo "Sidecar PID: ${SERVE_PID}"
 
-# Ensure process is killed on script exit
+# Ensure processes are killed on script exit
 cleanup_serve() {
-    if kill -0 "${SERVE_PID}" 2>/dev/null; then
+    if [ -n "${SERVE_PID:-}" ] && kill -0 "${SERVE_PID}" 2>/dev/null; then
         echo "Terminating sidecar PID ${SERVE_PID}..."
         kill "${SERVE_PID}" 2>/dev/null || true
         wait "${SERVE_PID}" 2>/dev/null || true
     fi
 }
-trap 'cleanup_serve; rm -rf "${TMPDIR}"' EXIT
+
+cleanup_all() {
+    if [ -n "${APP_PID:-}" ] && kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Terminating app process PID ${APP_PID}..."
+        kill -9 "${APP_PID}" 2>/dev/null || true
+        wait "${APP_PID}" 2>/dev/null || true
+    fi
+    cleanup_serve
+    rm -rf "${TMPDIR}"
+}
+trap cleanup_all EXIT
 
 # Wait for server to start (poll up to 30s)
 echo "Waiting for /api/health readiness..."
@@ -172,9 +182,78 @@ if ! echo "${RESP}" | grep -q '"status":"ok"'; then
 fi
 echo "Verified: authenticated request returned HTTP 200 OK with status ok"
 
-# Terminate process cleanly and verify no orphaned processes
+# Terminate sidecar process cleanly
 cleanup_serve
 echo "Verified: sidecar terminated cleanly, no orphaned processes."
+
+# Test 3: Verify no runner shebangs exist in Python bin directory
+BIN_DIR="$(dirname "${PYTHON_BIN}")"
+echo ""
+echo "--- Python Binary Sanitization Check ---"
+echo "Verifying no CI runner shebangs remain in ${BIN_DIR}..."
+RUNNER_SHEBANGS=$(grep -rnE "^#\!.*runner" "${BIN_DIR}" 2>/dev/null || true)
+if [ -n "${RUNNER_SHEBANGS}" ]; then
+    echo "Error: Found scripts with host runner shebangs in ${BIN_DIR}:" >&2
+    echo "${RUNNER_SHEBANGS}" >&2
+    exit 6
+fi
+echo "Verified: No runner shebangs found in ${BIN_DIR}."
+
+# Test 4: App Binary Launch Check
+echo ""
+echo "--- App Binary Launch Check (macOS) ---"
+APP_EXE="${APP_BUNDLE}/Contents/MacOS/coperceive-desktop"
+if [ ! -x "${APP_EXE}" ]; then
+    if [ -x "${APP_BUNDLE}/Contents/MacOS/Coperceive" ]; then
+        APP_EXE="${APP_BUNDLE}/Contents/MacOS/Coperceive"
+    else
+        APP_EXE=$(find "${APP_BUNDLE}/Contents/MacOS" -type f -perm +111 2>/dev/null | head -n 1)
+    fi
+fi
+
+if [ -z "${APP_EXE}" ] || [ ! -x "${APP_EXE}" ]; then
+    echo "Error: App executable not found or not executable in ${APP_BUNDLE}/Contents/MacOS" >&2
+    ls -la "${APP_BUNDLE}/Contents/MacOS" || true
+    exit 10
+fi
+
+echo "Starting app binary: ${APP_EXE}..."
+APP_STDOUT="${TMPDIR}/app_stdout.log"
+APP_STDERR="${TMPDIR}/app_stderr.log"
+
+"${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
+APP_PID=$!
+echo "App process spawned with PID ${APP_PID}"
+
+echo "Waiting 10 seconds to verify process stability..."
+sleep 10
+
+if ! kill -0 "${APP_PID}" 2>/dev/null; then
+    echo "Error: App process died prematurely within 10 seconds!" >&2
+    echo "=== App stderr ===" >&2
+    cat "${APP_STDERR}" >&2
+    echo "=== App stdout ===" >&2
+    cat "${APP_STDOUT}" >&2
+    exit 11
+fi
+
+if grep -q -i "panicked" "${APP_STDERR}"; then
+    echo "Error: App stderr contains 'panicked'!" >&2
+    cat "${APP_STDERR}" >&2
+    kill -9 "${APP_PID}" 2>/dev/null || true
+    exit 12
+fi
+
+echo "Verified: App process ${APP_PID} is alive after 10 s with no panics in stderr."
+echo "Terminating app process..."
+kill -TERM "${APP_PID}" 2>/dev/null || true
+sleep 1
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -9 "${APP_PID}" 2>/dev/null || true
+fi
+wait "${APP_PID}" 2>/dev/null || true
+APP_PID=""
+echo "Verified: App binary launched and terminated successfully."
 echo "=========================================================="
 echo "Smoke test PASSED successfully!"
 echo "=========================================================="

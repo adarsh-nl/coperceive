@@ -64,6 +64,14 @@ fi
 echo "Installing coperceive package into bundled Python environment..."
 "${PYTHON_BIN}" -m pip install --no-deps --no-warn-script-location .
 
+# Clean up console scripts with host-specific shebangs from bin/
+# The sidecar executes `python3 -m coperceive serve` directly.
+echo "Cleaning up console scripts with host-specific shebangs from bin/..."
+find "${PYTHON_DEST}/bin" -type f ! -name "python*" -delete
+find "${PYTHON_DEST}/bin" -type l ! -name "python*" -delete
+rm -f "${PYTHON_DEST}/bin"/python*-config || true
+chmod +x "${PYTHON_DEST}/bin"/python*
+
 # Strip caches to keep bundle compact
 find "${PYTHON_DEST}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "${PYTHON_DEST}" -name "*.pyc" -delete 2>/dev/null || true

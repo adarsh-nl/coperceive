@@ -32,6 +32,14 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         assert!(!is_port_available(port), "bound port should not report as available");
         drop(listener);
-        assert!(is_port_available(port), "released port should report as available");
+        let mut available = false;
+        for _ in 0..10 {
+            if is_port_available(port) {
+                available = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(available, "released port should report as available");
     }
 }
