@@ -145,15 +145,33 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - name: Run Rust unit tests
-        run: cargo test --verbose
+        run: cargo test --verbose 2>&1 | tee /tmp/cargo_test.log
         working-directory: src-tauri
+      - name: Report Cargo Test Failure
+        if: failure()
+        run: |
+          while IFS= read -r line; do
+            echo "::error::$line"
+          done < <(tail -n 60 /tmp/cargo_test.log)
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh
       - name: Build Tauri Desktop (.app and .dmg)
-        run: npm run tauri build -- --target aarch64-apple-darwin --verbose
+        run: npm run tauri build -- --target aarch64-apple-darwin --verbose 2>&1 | tee /tmp/tauri_build.log
         working-directory: web
+      - name: Report Tauri Build Failure
+        if: failure()
+        run: |
+          while IFS= read -r line; do
+            echo "::error::$line"
+          done < <(tail -n 60 /tmp/tauri_build.log)
       - name: Run Headless Smoke Test and Measure Sizes
-        run: bash scripts/desktop/smoke_test.sh
+        run: bash scripts/desktop/smoke_test.sh 2>&1 | tee /tmp/smoke_test.log
+      - name: Report Smoke Test Failure
+        if: failure()
+        run: |
+          while IFS= read -r line; do
+            echo "::error::$line"
+          done < <(tail -n 60 /tmp/smoke_test.log)
       - uses: actions/upload-artifact@v4
         with:
           name: coperceive-desktop-macos-arm64
