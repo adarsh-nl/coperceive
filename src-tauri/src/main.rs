@@ -73,7 +73,7 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
     use tauri_plugin_dialog::DialogExt;
 
     let folder = app.dialog().file().blocking_pick_folder();
-    Ok(folder.map(|path| path.to_string()))
+    Ok(folder.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
 }
 
 #[cfg(target_os = "macos")]

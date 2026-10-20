@@ -10,6 +10,7 @@ path = "src/lib.rs"
 [[bin]]
 name = "coperceive-desktop"
 path = "src/main.rs"
+test = false
 
 [dependencies]
 libc = "0.2"
