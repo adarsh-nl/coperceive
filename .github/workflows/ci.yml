@@ -154,14 +154,14 @@ jobs:
         run: |
           echo "### Cargo Test Failures" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -A 30 "--- stderr" /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY || true
-          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY || true
-          tail -n 60 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY
+          grep -A 30 -F -- "--- stderr" /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
+          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
+          tail -n 60 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
           echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -A 20 "--- stderr" /tmp/cargo_test.log | head -n 25 | while IFS= read -r line; do
+          (grep -A 20 -F -- "--- stderr" /tmp/cargo_test.log 2>/dev/null || true) | head -n 25 | while IFS= read -r line; do
             echo "::error title=CargoBuildError::$line"
           done
-          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 3 /tmp/cargo_test.log | head -n 30 | while IFS= read -r line; do
+          (grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked)" -A 3 /tmp/cargo_test.log 2>/dev/null || true) | head -n 30 | while IFS= read -r line; do
             echo "::error title=CargoError::$line"
           done
       - name: Build Tauri Desktop (.app and .dmg)
@@ -173,14 +173,14 @@ jobs:
           if [ -f /tmp/tauri_build.log ]; then
             echo "### Tauri Build Failures" >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -A 30 "--- stderr" /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY || true
-            grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY || true
-            tail -n 60 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY
+            grep -A 30 -F -- "--- stderr" /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            tail -n 60 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
             echo '```' >> $GITHUB_STEP_SUMMARY
-            grep -A 20 "--- stderr" /tmp/tauri_build.log | head -n 25 | while IFS= read -r line; do
+            (grep -A 20 -F -- "--- stderr" /tmp/tauri_build.log 2>/dev/null || true) | head -n 25 | while IFS= read -r line; do
               echo "::error title=TauriBuildError::$line"
             done
-            grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 3 /tmp/tauri_build.log | head -n 30 | while IFS= read -r line; do
+            (grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked)" -A 3 /tmp/tauri_build.log 2>/dev/null || true) | head -n 30 | while IFS= read -r line; do
               echo "::error title=TauriError::$line"
             done
           fi
