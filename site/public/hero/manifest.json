@@ -1,0 +1,61 @@
+{
+  "scene_id": "Town03-000",
+  "dataset_name": "Griffin: Aerial-Ground Cooperative Detection and Tracking Dataset and Benchmark",
+  "dataset_paper": "Wang et al., arXiv 2503.06983",
+  "platform": "CARLA\u2013AirSim simulation",
+  "subset": "25m",
+  "origin": [
+    -105.0,
+    -25.0,
+    0.0
+  ],
+  "scale_cm": 100.0,
+  "time_start_us": 1118500000,
+  "time_step_us": 100000,
+  "num_frames": 100,
+  "duration_s": 10.0,
+  "fps": 10,
+  "agents": {
+    "vehicle": {
+      "id": "vehicle",
+      "label": "Ground Vehicle (CAV)",
+      "type": "vehicle",
+      "color": "#22d3ee",
+      "sensors": {
+        "lidar": "16-channel top LiDAR (2,900 pts/sweep)",
+        "cameras": "4 surrounding cameras (front, back, left, right)"
+      }
+    },
+    "drone": {
+      "id": "drone",
+      "label": "Aerial Drone (UAV)",
+      "type": "uav",
+      "color": "#c084fc",
+      "altitude_m": 27.0,
+      "sensors": {
+        "cameras": "5 downward & surrounding cameras (front, back, left, right, bottom)"
+      }
+    }
+  },
+  "occlusion_event": {
+    "time_us": 1123700000,
+    "frame_index": 52,
+    "track_id": "265",
+    "category": "pedestrian",
+    "distance_m": 17.5,
+    "description": "Pedestrian in crosswalk occluded from ground vehicle LiDAR by corner wall; detected by aerial drone camera network at 17.5m from vehicle."
+  },
+  "stats": {
+    "num_polylines": 138,
+    "num_frames": 100,
+    "total_lidar_points": 150000,
+    "avg_lidar_points_per_frame": 1500.0,
+    "file_size_bytes": 1101668,
+    "gzip_size_bytes": 771256
+  },
+  "attributions": {
+    "dataset": "Griffin dataset is used under its academic research terms (Wang et al., 2025).",
+    "map": "CARLA Town03 OpenDRIVE HD Map assets are distributed under the Creative Commons Attribution (CC-BY) License (CARLA Simulator, carla.org).",
+    "software": "coperceive is open source under the MIT License."
+  }
+}

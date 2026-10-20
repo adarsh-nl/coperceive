@@ -736,3 +736,44 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
     - Run `griffin25m-early-plugin`: `scenes 10 frames 1490 cached 0 boxes 8971` (Town03-000 1,516; Town03-006 1,537; Town03-007 1,091; Town03-011 582; Town06-007 511; Town07-011 186; Town07-012 1,083; Town07-013 751; Town10HD-012 719; Town10HD-014 995). Provenance timings (`run.json`): `staging_s: 865.0` (est. `1611`), `conversion_s: 146.768` (est. `112`), `inference_s: 757.830`, `per_sample_s: 0.5086` (est. `0.538`), `wall_s: 948.415`, `gpu: "NVIDIA A40"`.
     - `scripts/griffin/compare_runs.py` against filtered 628386 (`~/results/stepb/compare-628386-early.txt`): `early-vehicle-fused` vs `griffin25m-early-plugin` (`8,971 of 8,971 rows`) pairs **100% of rows in exact file order**, `0 with another (time, agent, category)`, `|size| 0 m`, `|quaternion| 0`, `|score| 0` across all 10 scenes; `max |centre|` is `1.42109e-14 m` to `2.84217e-14 m` (1–2 float64 ULPs).
     - `coperceive eval compare` across all 4 configs (`~/results/stepb/compare-early-old-vs-plugin{,-mapped,-centre,-centre-mapped}.md`): **every single cell of every scene row and every `all` row across all 4 comparison tables is `+0` or `+0.000`** (`10 shared, 0 only in either run`).
+
+
+### 2026-10-20 — Public Landing Page with 3D Cooperative Hero Animation (`feat/landing`)
+
+- **Branch and isolation**: Built on branch `feat/landing` in worktree `/home/nanjaiyalathaa/wt/landing` (branched from `main` at `662fa84`). Completely isolated: zero touches to `src-tauri/`, `web/src/desktop/` or desktop CI jobs.
+- **Hero clip pipeline (`scripts/site/export_hero_clip.py`)**:
+  - Extracted 10.0 s (100 frames @ 10 Hz, $t = 1,118,500,000$ to $1,128,400,000\ \mu\text{s}$) from `Town03-000` (Griffin-25m preset).
+  - Subsampled 16-channel ground vehicle LiDAR sweeps (`lidar_top`) to $\le 1,500$ points/frame ($150,000$ points total).
+  - Extracted 138 OpenDRIVE map polylines (lane centres and road edges) surrounding the intersection.
+  - Stored in compact quantised format ($1\text{ cm}$ `int16` coords relative to origin $[-105.0, -25.0, 0.0]$):
+    - `site/public/hero/clip.bin`: **1,101,668 bytes** uncompressed (~1.10 MB, well under the 2.5 MB cap), **771,256 bytes** gzipped (~753 KB, under the 800 KB target).
+    - `site/public/hero/manifest.json`: 1,872 bytes with dataset citations, agent hardware specs, and full license attributions.
+- **Deterministic poster fallback (`scripts/site/render_poster.py`)**:
+  - Dark-mode 3D isometric rendering at $t = 1,123,700,000\ \mu\text{s}$ (frame 52, occlusion event).
+  - Outputs `site/public/hero/poster.png` (381 KB) and `site/public/hero/poster.webp` (109 KB).
+- **Frontend Architecture (`site/`)**:
+  - Vite 6 + React 19 + TypeScript + Tailwind CSS 3.4.
+  - Interactive Three.js canvas (`HeroScene.tsx`) with:
+    - Orbit, Chase, Drone, and Bird's-Eye (BEV) viewpoint controls.
+    - Play/Pause toggle, frame timeline scrubber, and "Jump to Occlusion" button.
+    - Ground vehicle chassis with cyan LiDAR point cloud (`#22d3ee`).
+    - Aerial drone model with spinning rotors, altitude connector, and 5-camera pyramidal ground footprint in violet (`#c084fc`).
+    - Occluded pedestrian #265 highlighted with alert beacon ring in coral red (`#f87171`).
+    - Automatic `prefers-reduced-motion` detection (pauses at frame 52 with status banner and manual toggle).
+    - WebGL context loss recovery falling back to `poster.webp`.
+  - Chunk splitting: `three` vendor chunk (527 kB / 131 kB gzip), `react` chunk (12.5 kB / 4.4 kB gzip), app chunk (269 kB / 81 kB gzip).
+- **Content and licensing accuracy**:
+  - Griffin correctly identified as **CARLA–AirSim SIMULATION** (Wang et al., arXiv 2503.06983).
+  - Sensor count strictly reported as **9 cameras** (4 CAV + 5 UAV) + LiDAR.
+  - Cooperative plugin protocol strictly reported as **newline-delimited JSON over subprocess** (ADR 0011).
+  - OPV2V and V2XSet clearly stated as **"licence not published; local research use only"** with zero derived assets shipped.
+  - CARLA OpenDRIVE HD Map assets attributed under **CC-BY License** (CARLA Simulator, carla.org).
+  - HD Map alignment reported with real Griffin-25m median lane residual: **0.0137 m**.
+  - Occlusion section features authentic case from `Town03-000`: Pedestrian track 265 at $t = 1,123,700,000\ \mu\text{s}$ at distance **17.5 m**, completely occluded by building corner from ground LiDAR (0 return points), detected by UAV from 27m altitude (visibility 0.86).
+  - Desktop section includes honest `[TODO: Native app screenshot will be published upon Phase 2 macOS verification]` placeholder.
+  - Quick Start lists exact CLI flags verified against implementation: `coperceive download griffin --subset 25m --preset dev --dest ~/data/raw --accept-griffin-terms`, `coperceive convert griffin --subset 25m --raw-root ~/data/raw/griffin_50scenes_25m/griffin-release --out ~/data/scenes`, `coperceive serve --root ~/data/scenes`.
+- **Automated Verification (`tests/test_landing_page.py`)**:
+  - `test_landing_page_e2e_and_a11y`: Loads built bundle (`site/dist`), verifies all sections and interactive elements (play/pause, jump to occlusion, viewpoint switches, copy button feedback), executes in-browser axe-core audit covering `wcag2a`, `wcag2aa`, `wcag21a`, `wcag21aa`, `best-practice`. Result: **0 accessibility violations**. Full-page screenshot saved and verified.
+  - `test_reduced_motion_behavior`: Emulates reduced motion; verifies animation automatically halts at frame 52 and displays reduced motion notification.
+  - Core unit test suite (`tests/test_store.py`, `tests/test_se3.py`, `tests/test_app.py`, `tests/test_viewdata.py`): **29 passed in 0.95 s**.
+  - Python lint and format (`ruff check`, `ruff format --check`): **0 errors, all files formatted**.
