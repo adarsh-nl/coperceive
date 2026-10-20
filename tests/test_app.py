@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from coperceive.app.jobs import confine
 from coperceive.app.server import create_app
-from coperceive.cli import main
+from coperceive.cli import build_parser, main
 from coperceive.evaluation.config import DEFAULT_CONFIG
 from coperceive.evaluation.evaluate import evaluate_run
 from coperceive.evaluation.predictions import write_run
@@ -49,6 +49,56 @@ def test_refuses_public_bind_without_token() -> None:
     with pytest.raises(SystemExit) as exc:
         main(["serve", "--host", "0.0.0.0", "--root", "/tmp"])
     assert exc.value.code == 2
+
+
+def test_serve_token_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("COPERCEIVE_TOKEN", "env-secret-token")
+    parser = build_parser()
+    args = parser.parse_args(["serve", "--root", str(tmp_path)])
+    from coperceive.cli import _resolve_token
+
+    assert _resolve_token(args) == "env-secret-token"
+
+
+def test_serve_token_from_file_strict_permissions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("file-secret-token\n", encoding="utf-8")
+    token_file.chmod(0o600)
+
+    parser = build_parser()
+    args = parser.parse_args(["serve", "--root", str(tmp_path), "--token-file", str(token_file)])
+    from coperceive.cli import _resolve_token
+
+    assert _resolve_token(args) == "file-secret-token"
+
+    # Loose permissions (0o644 or 0o660) must be rejected
+    token_file.chmod(0o644)
+    with pytest.raises(SystemExit) as exc:
+        _resolve_token(args)
+    assert exc.value.code == 2
+    assert "loose permissions" in capsys.readouterr().err
+
+    # Missing file must be rejected
+    missing = tmp_path / "missing.txt"
+    args_missing = parser.parse_args(
+        ["serve", "--root", str(tmp_path), "--token-file", str(missing)]
+    )
+    with pytest.raises(SystemExit) as exc_missing:
+        _resolve_token(args_missing)
+    assert exc_missing.value.code == 2
+    assert "not a file" in capsys.readouterr().err
+
+
+def test_serve_token_argv_warns_deprecation(tmp_path: Path) -> None:
+    parser = build_parser()
+    args = parser.parse_args(["serve", "--root", str(tmp_path), "--token", "argv-token"])
+    from coperceive.cli import _resolve_token
+
+    with pytest.deprecated_call(match="Passing --token on argv is deprecated"):
+        token = _resolve_token(args)
+    assert token == "argv-token"
 
 
 def test_path_confinement(tmp_path: Path) -> None:

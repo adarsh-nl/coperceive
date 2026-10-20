@@ -22,3 +22,5 @@ data/
 agent-tools/
 web/node_modules/
 site/
+target/
+src-tauri/target/
