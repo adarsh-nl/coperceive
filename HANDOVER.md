@@ -376,8 +376,47 @@ All four runs pair 100% of rows in exact file order against filtered 628386 with
 
 ## Open items
 
-1. **Griffin vehicle-side gap:** our vehicle toolkit mAP is 0.1985 vs authors' 0.1682, while drone and instance fusion match within 0.001 (Task 1 investigation note below).
+1. **Griffin vehicle-side gap:** our vehicle toolkit mAP is 0.1985 vs authors' 0.1682, while drone and instance fusion match within 0.001 (see detailed investigation note below).
 2. **V2V4Real adapter:** real-world cooperative dataset, left-handed/GPS conversion, NumPy-safe YAML loader, ADR 0013 plan (Task 2).
 3. **Live mode refresh:** SSE streaming without second code path, reusing batch protocol (Task 3 design).
 4. **Desktop app & landing page:** ADR 0014 (Tauri shell, `ExecutionTarget` local / SSH-HPC), static landing page in `site/` (Phases 1-3).
 5. **Town07's 0.395 m alignment residual:** ego starts off-road in a plaza and waits at a junction; unverified which car in the drone image is ego, whether junction/parking lanes should join. Identity remains the best alignment candidate.
+
+### Griffin vehicle-side evaluation gap (investigation note, Task 1)
+
+Our vehicle-side toolkit mAP on the 10 val scenes is **0.1985** (NDS 0.2566) against the authors' log of **0.1682** (NDS 0.1991), while drone-side (0.1119 vs 0.1127, delta −0.0008) and instance-fusion (0.1447 vs 0.1442, delta +0.0005) match the authors' logs within 0.001.
+
+#### 1. Checkpoint inventory (`ckpts/griffin_50scenes_25m/`)
+
+All checkpoints were downloaded from the official Hugging Face repository `wjh-svm/Griffin` (release date July 2026):
+
+| Model | Checkpoint file | MD5 hash | Size (bytes) | File modify time (HPC) | Internal checkpoint timestamp / metadata |
+| --- | --- | --- | ---: | --- | --- |
+| **vehicle-side** | `vehicle-side/iter_33024.pth` | `1201f5692e390a75e5b5ab0efa0cae19` | 219,799,203 | 2026-07-21 01:22:14 | `Thu Feb 20 02:54:09 2025`, iter 33023, 48 epochs |
+| *vehicle-side (root)* | `vehicle-side.pth` | `256d80f0a2791402ac7fa217d13f733b` | 219,799,075 | 2026-07-21 01:22:13 | `Thu Feb 20 02:54:09 2025`, iter 33023 (differs in 324/686 keys) |
+| **drone-side** | `drone-side/iter_33024.pth` | `41734b8d764d1213935a231a3419f655` | 219,802,531 | 2026-07-21 01:22:10 | `Thu Feb 20 12:26:06 2025`, iter 33023, 48 epochs |
+| *drone-side (root)* | `drone-side.pth` | `d6cb7b6e5914bf807a1faf8c5b69600b` | 219,802,339 | 2026-07-21 01:22:17 | `Thu Feb 20 12:26:06 2025`, iter 33023 (differs in 324/686 keys) |
+| **cooperative** | `cooperative/instance_fusion/iter_33024.pth` | `7e1448188b6e99ca6303575c3466b97f` | 222,769,163 | 2026-07-21 01:22:09 | `Fri Feb 21 04:48:32 2025`, iter 33023, 48 epochs |
+| *cooperative (root)* | `cooperative.pth` | `03479d564e1b4a2cf3a58ae08899ff72` | 222,768,971 | 2026-07-21 01:22:08 | `Fri Feb 21 04:48:32 2025`, iter 33023 (differs in 332/694 keys) |
+| **early-fusion** | `early-fusion/iter_33024.pth` | `ccf39651d3e4381ec06e4d0709821949` | 219,814,563 | 2026-07-21 01:22:10 | `Wed Feb 19 14:41:59 2025`, iter 33023, 48 epochs |
+
+#### 2. Documentation and authors' log cross-check
+
+- **Release Documentation (`Training_and_Evaluation.md:118-124`):** The Griffin toolkit documentation explicitly names `iter_33024.pth` for all four 25m models, with the exact MD5 hashes matching our files (`1201f569...` for vehicle, `41734b8d...` for drone, `7e144818...` for instance-fusion, `ccf39651...` for early-fusion). Neither the repository README, documentation, nor the Hugging Face model card names any other iteration or weights for the 25m split.
+- **Authors' Log Files (`ckpts/griffin_50scenes_25m/logs/`):**
+  - `vehicle-side-eval.log` (Fri Feb 21 10:36:10 2025) explicitly loaded `projects/work_dirs_agile_50scenes_25m/vehicle-side/tiny_track_r50_stream_bs8_48epoch_3cls/iter_33024.pth`.
+  - `vehicle-side-train.log` confirms that iteration 33024 was the 48th and final epoch checkpoint (688 iters/epoch × 48 = 33,024 iters, saved Thu Feb 20 02:54:09 2025). The evaluation immediately following iter 33024 in that training log scored `mAP: 0.1689` / `NDS: 0.1998`.
+- Both the authors' evaluation and ours evaluated detections for **1,490 val samples**, loaded annotations for **1,490 val samples**, and filtered from 13,459 GT boxes to identical **8,827 boxes** within the 50 m class range.
+- The difference lies in the predictions emitted: the authors' evaluation kept 402,945 predictions after range filtering, whereas our evaluation produced 402,106 predictions (839 fewer).
+
+#### 3. Remaining candidate causes (all unverified)
+
+- **(a) Streaming tracker state on differing GPU architecture and CuDNN (unverified):**
+  The authors' evaluation ran on 4× NVIDIA GeForce RTX 4090 GPUs (`sm_89`, CuDNN 8.0.5) in their local `miniforge3/envs/v2xtrack` environment. Our runs execute on an NVIDIA A40 (`sm_86`, CuDNN 8.6.0 via module `nvidia/cuda-11.x_cudnn-8.6`). Because the Agile model runs with sequential video-test streaming (`MemoryBank` carrying recurrent track queries across 149 consecutive frames per scene), small kernel-level floating-point differences in MSDeformableAttention3D or TemporalSelfAttention compound over the scene timeline.
+- **(b) nuScenes table construction: full 50 scenes vs 10 val scenes (unverified):**
+  In the authors' log, nuScenes tables were generated over all 47 scenes of the release (7,000 samples, 66,647 annotations) and the val split was filtered during evaluation. In our pipeline, `scene_infos.json` was trimmed to the 10 val scenes (1,490 samples, 13,459 annotations) before generating nuScenes pickle tables to economize node scratch space. While sample timestamps and ground truth annotations are identical, differences in sample token UUID hashing or initial memory-bank state at scene boundaries could affect tracking memory.
+- **(c) Upstream weight export divergence (unverified):**
+  The top-level `vehicle-side.pth` (219,799,075 bytes) and `vehicle-side/iter_33024.pth` (219,799,203 bytes) have identical metadata timestamps (`Thu Feb 20 02:54:09 2025`, `iter: 33023`) but differ across 324 of 686 tensor weights (max delta 0.9389). While `iter_33024.pth` is the one documented in `Training_and_Evaluation.md`, it remains unverified whether the authors' evaluation script ran on a local checkpoint file that was re-saved, stripped of optimizer state, or modified before uploading to Hugging Face.
+- **(d) Image decoding and resize interpolation (unverified):**
+  The input pipeline applies `NormalizeMultiviewImage` and `MultiScaleFlipAug3D(scales=[0.5])`. Differences in underlying JPEG/PNG decode or bilinear interpolation implementations between the authors' OpenCV 4.11.0 / TorchVision 0.10.1 stack and cluster system libraries could lead to minor differences in input feature maps.
+
