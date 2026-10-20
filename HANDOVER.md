@@ -813,3 +813,20 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
     - Run `griffin25m-early-plugin`: `scenes 10 frames 1490 cached 0 boxes 8971` (Town03-000 1,516; Town03-006 1,537; Town03-007 1,091; Town03-011 582; Town06-007 511; Town07-011 186; Town07-012 1,083; Town07-013 751; Town10HD-012 719; Town10HD-014 995). Provenance timings (`run.json`): `staging_s: 865.0` (est. `1611`), `conversion_s: 146.768` (est. `112`), `inference_s: 757.830`, `per_sample_s: 0.5086` (est. `0.538`), `wall_s: 948.415`, `gpu: "NVIDIA A40"`.
     - `scripts/griffin/compare_runs.py` against filtered 628386 (`~/results/stepb/compare-628386-early.txt`): `early-vehicle-fused` vs `griffin25m-early-plugin` (`8,971 of 8,971 rows`) pairs **100% of rows in exact file order**, `0 with another (time, agent, category)`, `|size| 0 m`, `|quaternion| 0`, `|score| 0` across all 10 scenes; `max |centre|` is `1.42109e-14 m` to `2.84217e-14 m` (1–2 float64 ULPs).
     - `coperceive eval compare` across all 4 configs (`~/results/stepb/compare-early-old-vs-plugin{,-mapped,-centre,-centre-mapped}.md`): **every single cell of every scene row and every `all` row across all 4 comparison tables is `+0` or `+0.000`** (`10 shared, 0 only in either run`).
+
+## Desktop App — Phase 2: macOS Apple Silicon Native Bundle & Verification
+- **Architecture**:
+  - Real Tauri v2 desktop application (`tauri` 2.x, `tauri-plugin-dialog`, `@tauri-apps/api`, `@tauri-apps/cli`).
+  - Bundled pinned `python-build-standalone` (`cpython-3.13.1+20250115-aarch64-apple-darwin`, SHA-256 `d00ac75b15a05da2f6bc0057fe36f6944f9d513239f1c7af12766e03f288fe65`), coperceive wheel, and locked core/app dependencies (numpy, pyarrow, pillow, matplotlib, pyyaml, fastapi, uvicorn, pydantic) in `Contents/Resources/resources/python`. Excludes PyTorch and viewer extras.
+  - Rust IPC commands: `pick_data_root`, `start_local`, `stop_local`, `health`.
+  - Process lifecycle: Allocates ephemeral loopback port and mode 0600 token file, polls `/api/health` with Bearer auth, automatically terminates child process with SIGTERM/SIGKILL on window close (`WindowEvent::Destroyed`) and app exit (`RunEvent::Exit`).
+- **Security & Conformance (ADR 0007 / ADR 0014)**:
+  - Non-loopback and loopback token enforcement: `test_non_loopback_token_auth_protects_all_api_routes`, `test_token_auth_uses_constant_time_comparison` (`hmac.compare_digest`), `test_serve_token_from_file_strict_permissions`.
+  - Token never in argv or URLs; passed strictly via `COPERCEIVE_TOKEN` or `--token-file` (mode 0600 required).
+- **CI Verification (Run 39446091812 on `macos-14`, duration 5m 31s, Conclusion: SUCCESS)**:
+  - Run URL: `https://github.com/adarsh-nl/coperceive/actions/runs/39446091812`
+  - 14 Rust unit tests in `src/lib.rs` passed.
+  - Bundled `.app` and `.dmg` built natively on Apple Silicon runner.
+  - Smoke test passed in 15s: verified bundled Python interpreter, confirmed `coperceive` imports from bundled site-packages, confirmed `Server is healthy!`, confirmed HTTP 401 on unauthenticated access, confirmed HTTP 200 on authenticated access, and clean child termination.
+  - Uploaded artifact: `coperceive-desktop-macos-arm64` (`size_in_bytes: 352864650`, SHA-256 `65abd05dce2687e87e60f23e1a67f06d2c7339cd524f8cf275c2534b14aff13e`).
+
