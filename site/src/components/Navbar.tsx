@@ -2,16 +2,16 @@ import React from "react";
 
 export const Navbar: React.FC = () => {
   return (
-    <header className="sticky top-0 z-50 w-full backdrop-blur-md bg-[#0a0d14]/85 border-b border-[#1e2638]">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+    <header className="sticky top-0 z-50 w-full bg-glass backdrop-blur-22 border-b border-hairline">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-14 flex items-center justify-between">
         {/* Brand */}
         <a
           href="#"
-          className="flex items-center gap-2.5 text-white font-semibold text-lg tracking-tight hover:opacity-90 transition"
+          className="flex items-center gap-2.5 text-primary font-semibold text-sm tracking-tight hover:opacity-90 transition"
         >
-          <span className="w-7 h-7 rounded-lg bg-gradient-to-br from-cyan-400 to-purple-500 flex items-center justify-center p-0.5">
+          <span className="w-6 h-6 rounded-md bg-gradient-to-br from-vehicle to-uav flex items-center justify-center p-0.5 text-black">
             <svg
-              className="w-5 h-5 text-[#0a0d14]"
+              className="w-4 h-4"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -24,43 +24,43 @@ export const Navbar: React.FC = () => {
               <path d="M7 12a5 5 0 0 1 10 0" />
             </svg>
           </span>
-          <span className="font-mono text-base font-bold text-zinc-100">
+          <span className="font-mono text-sm font-bold text-primary">
             coperceive
           </span>
-          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-cyan-300 border border-zinc-700">
+          <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-glass text-secondary border border-hairline">
             v0.1
           </span>
         </a>
 
         {/* Desktop Nav */}
-        <nav className="hidden md:flex items-center gap-6 text-sm text-zinc-400">
-          <a href="#occlusion" className="hover:text-zinc-100 transition">
+        <nav className="hidden md:flex items-center gap-6 text-xs text-secondary">
+          <a href="#occlusion" className="hover:text-primary transition">
             Occlusion
           </a>
-          <a href="#architecture" className="hover:text-zinc-100 transition">
+          <a href="#architecture" className="hover:text-primary transition">
             Architecture
           </a>
-          <a href="#datasets" className="hover:text-zinc-100 transition">
+          <a href="#datasets" className="hover:text-primary transition">
             Datasets
           </a>
-          <a href="#desktop" className="hover:text-zinc-100 transition">
+          <a href="#desktop" className="hover:text-primary transition">
             Desktop App
           </a>
-          <a href="#quickstart" className="hover:text-zinc-100 transition">
+          <a href="#quickstart" className="hover:text-primary transition">
             Quick Start
           </a>
         </nav>
 
         {/* Action CTAs */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2.5">
           <a
             href="https://github.com/adarsh-nl/coperceive"
             target="_blank"
             rel="noreferrer"
-            className="flex items-center gap-2 px-3 py-1.5 text-xs font-mono text-zinc-300 hover:text-white bg-[#151c2a] hover:bg-[#1b2336] border border-[#232e42] rounded-lg transition"
+            className="flex items-center gap-2 px-3 py-1.5 text-xs font-mono text-secondary hover:text-primary bg-glass hover:bg-glass/90 border border-hairline hover:border-hairline-bright rounded-full transition"
             aria-label="GitHub repository"
           >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+            <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor">
               <path
                 fillRule="evenodd"
                 clipRule="evenodd"
@@ -72,7 +72,7 @@ export const Navbar: React.FC = () => {
 
           <a
             href="#quickstart"
-            className="hidden sm:inline-flex items-center justify-center px-3.5 py-1.5 text-xs font-medium rounded-lg text-[#0a0d14] bg-cyan-400 hover:bg-cyan-300 transition shadow-[0_0_15px_rgba(34,211,238,0.25)]"
+            className="hidden sm:inline-flex items-center justify-center px-3.5 py-1.5 text-xs font-medium rounded-full text-black bg-primary hover:bg-primary/90 transition"
           >
             Install
           </a>

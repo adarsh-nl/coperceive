@@ -1,4 +1,5 @@
 import type { ClipManifest, FrameData, ParsedClip, BoxRecord } from "../types/clip";
+import { tokens } from "../tokens";
 
 export async function loadClip(
   manifestUrl: string = "/hero/manifest.json",
@@ -42,8 +43,12 @@ export async function loadClip(
   const mapPosList: number[] = [];
   const mapColList: number[] = [];
 
-  const laneR = 0x7d / 255, laneG = 0xce / 255, laneB = 0xa0 / 255; // #7dcea0
-  const edgeR = 0x4a / 255, edgeG = 0x55 / 255, edgeB = 0x68 / 255; // slate edge
+  const hexToRgb = (hex: string) => {
+    const num = parseInt(hex.replace("#", ""), 16);
+    return [(num >> 16) / 255, ((num >> 8) & 0xff) / 255, (num & 0xff) / 255];
+  };
+  const [laneR, laneG, laneB] = hexToRgb(tokens.data.lanes);
+  const [edgeR, edgeG, edgeB] = hexToRgb(tokens.data.roadEdge);
 
   for (let i = 0; i < numPolylines; i++) {
     const layerId = view.getUint8(offset); offset += 1;

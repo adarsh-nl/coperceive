@@ -5,18 +5,27 @@ from __future__ import annotations
 
 import functools
 import http.server
+import os
 import socket
 import threading
 import time
 from pathlib import Path
 
 import pytest
-from playwright.sync_api import sync_playwright
 
 DIST_DIR = Path(__file__).resolve().parent.parent / "site" / "dist"
 AXE_PATH = (
     Path(__file__).resolve().parent.parent / "site" / "node_modules" / "axe-core" / "axe.min.js"
 )
+
+REQUIRED = os.environ.get("COPERCEIVE_E2E_REQUIRED", "") not in {"", "0"}
+
+
+def _unavailable(reason: str) -> None:
+    """Skip in standard test matrix runs, but fail in CI landing/e2e jobs."""
+    if REQUIRED:
+        pytest.fail(reason)
+    pytest.skip(reason)
 
 
 def find_free_port() -> int:
@@ -32,7 +41,8 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 @pytest.fixture(scope="module")
 def site_server():
-    assert DIST_DIR.exists(), f"site/dist does not exist at {DIST_DIR}. Run 'npm run build' first."
+    if not (DIST_DIR / "index.html").is_file():
+        _unavailable(f"site/dist does not exist at {DIST_DIR}. Run 'npm run build' first.")
     port = find_free_port()
     handler = functools.partial(QuietHandler, directory=str(DIST_DIR))
     httpd = http.server.HTTPServer(("127.0.0.1", port), handler)
@@ -45,8 +55,26 @@ def site_server():
 
 
 def test_landing_page_e2e_and_a11y(site_server: str, tmp_path: Path):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        _unavailable("playwright is not installed")
+        return
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--use-gl=angle", "--use-angle=swiftshader"])
+        try:
+            browser = p.chromium.launch(
+                args=[
+                    "--use-gl=angle",
+                    "--use-angle=swiftshader",
+                    "--enable-unsafe-swiftshader",
+                    "--ignore-gpu-blocklist",
+                ]
+            )
+        except Exception as e:
+            _unavailable(f"Failed to launch chromium: {e}")
+            return
+
         page = browser.new_page(viewport={"width": 1440, "height": 900})
 
         # Navigate
@@ -75,25 +103,25 @@ def test_landing_page_e2e_and_a11y(site_server: str, tmp_path: Path):
         assert page.get_by_text("CAV (Ground)").is_visible()
         assert page.get_by_text("UAV (Aerial 27m)").is_visible()
 
-        # 4. Interactive controls: Jump to Occlusion
-        jump_btn = page.get_by_role("button", name="Jump to Occlusion")
-        assert jump_btn.is_visible()
-        jump_btn.click()
-        page.wait_for_timeout(300)
-
-        # Occlusion badge should now be visible
-        assert page.get_by_text("Occluded Pedestrian #265 Detected").is_visible()
-
-        # 5. Viewpoint switcher
-        chase_btn = page.get_by_role("button", name="CHASE")
-        assert chase_btn.is_visible()
-        chase_btn.click()
+        # 4. Interactive controls: Play/Pause button
+        play_btn = page.locator('button[aria-label="Pause 3D film"]')
+        assert play_btn.is_visible()
+        play_btn.click()
         page.wait_for_timeout(200)
+        resume_btn = page.locator('button[aria-label="Play 3D film"]')
+        assert resume_btn.is_visible()
+        resume_btn.click()
+        page.wait_for_timeout(200)
+
+        # 5. Open the viewer link
+        viewer_link = page.get_by_role("link", name="Open the viewer", exact=False).first
+        assert viewer_link.is_visible()
+        assert "docs/viewer.md" in (viewer_link.get_attribute("href") or "")
 
         # 6. Occlusion Section
         occlusion_section = page.locator("#occlusion")
         assert occlusion_section.is_visible()
-        assert page.get_by_text("Pedestrian #265 at Blind Corner").is_visible()
+        assert page.get_by_text("Pedestrian Track 265 at Blind Corner").is_visible()
         assert page.get_by_text("17.5 m").is_visible()
         assert page.get_by_text("0.0137 m").first.is_visible()
 
@@ -186,9 +214,26 @@ def test_landing_page_e2e_and_a11y(site_server: str, tmp_path: Path):
 
 
 def test_reduced_motion_behavior(site_server: str):
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        _unavailable("playwright is not installed")
+        return
+
     with sync_playwright() as p:
-        browser = p.chromium.launch(args=["--use-gl=angle", "--use-angle=swiftshader"])
-        # Emulate reduced-motion
+        try:
+            browser = p.chromium.launch(
+                args=[
+                    "--use-gl=angle",
+                    "--use-angle=swiftshader",
+                    "--enable-unsafe-swiftshader",
+                    "--ignore-gpu-blocklist",
+                ]
+            )
+        except Exception as e:
+            _unavailable(f"Failed to launch chromium: {e}")
+            return
+
         page = browser.new_page(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
         page.goto(site_server, wait_until="networkidle")
 

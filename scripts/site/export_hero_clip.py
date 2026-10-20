@@ -316,9 +316,9 @@ def export_hero(
                 "id": "vehicle",
                 "label": "Ground Vehicle (CAV)",
                 "type": "vehicle",
-                "color": "#22d3ee",
+                "color": "#e67828",
                 "sensors": {
-                    "lidar": "16-channel top LiDAR (2,900 pts/sweep)",
+                    "lidar": "Vehicle top LiDAR (1,500 pts/sweep)",
                     "cameras": "4 surrounding cameras (front, back, left, right)",
                 },
             },
@@ -326,7 +326,7 @@ def export_hero(
                 "id": "drone",
                 "label": "Aerial Drone (UAV)",
                 "type": "uav",
-                "color": "#c084fc",
+                "color": "#2878dc",
                 "altitude_m": 27.0,
                 "sensors": {
                     "cameras": (
@@ -342,8 +342,8 @@ def export_hero(
             "category": "pedestrian",
             "distance_m": 17.5,
             "description": (
-                "Pedestrian in crosswalk occluded from ground vehicle LiDAR by corner wall; "
-                "detected by aerial drone camera network at 17.5m from vehicle."
+                "0 vehicle LiDAR returns on the pedestrian at this time; "
+                "the UAV camera sees it (visibility 1.0) at 17.5m from vehicle."
             ),
         },
         "stats": {

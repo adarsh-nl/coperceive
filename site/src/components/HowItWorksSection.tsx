@@ -37,17 +37,17 @@ export const HowItWorksSection: React.FC = () => {
   ];
 
   return (
-    <section id="architecture" className="py-24 border-t border-[#1e2638] bg-[#0a0d14]">
+    <section id="architecture" className="py-24 border-t border-hairline bg-canvas">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="max-w-3xl mb-16">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-950/60 border border-cyan-500/40 text-cyan-300 text-xs font-mono mb-4">
-            <span className="w-2 h-2 rounded-full bg-cyan-400" />
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-glass border border-hairline text-secondary text-xs font-mono mb-4">
+            <span className="w-1.5 h-1.5 rounded-full bg-uav" />
             System Architecture
           </div>
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-4">
+          <h2 className="text-3xl sm:text-4xl font-semibold tracking-tight text-primary mb-4">
             Engineered for Multi-Agent Robotics
           </h2>
-          <p className="text-base sm:text-lg text-zinc-400 leading-relaxed">
+          <p className="text-base sm:text-lg text-secondary leading-relaxed">
             From sensor ingress to real-time 3D web streaming, coperceive bridges raw multi-agent telemetry and modern cooperative machine learning.
           </p>
         </div>
@@ -57,28 +57,28 @@ export const HowItWorksSection: React.FC = () => {
           {steps.map((step) => (
             <div
               key={step.num}
-              className="group bg-[#111724] hover:bg-[#151c2a] border border-[#232e42] hover:border-[#3b4a6b] rounded-xl p-8 transition flex flex-col justify-between"
+              className="group bg-glass backdrop-blur-22 hover:border-hairline-bright border border-hairline rounded-2xl p-8 transition flex flex-col justify-between"
             >
               <div>
                 <div className="flex items-center justify-between mb-4">
-                  <span className="text-xs font-mono font-bold text-cyan-400 bg-cyan-950/40 border border-cyan-800/40 px-2 py-0.5 rounded">
+                  <span className="text-xs font-mono font-medium text-secondary bg-glass border border-hairline px-2 py-0.5 rounded">
                     STEP {step.num}
                   </span>
-                  <span className="text-xs font-mono text-zinc-400">
+                  <span className="text-xs font-mono text-tertiary">
                     {step.tag}
                   </span>
                 </div>
-                <h3 className="text-xl font-semibold text-zinc-100 mb-3 group-hover:text-cyan-300 transition">
+                <h3 className="text-xl font-semibold text-primary mb-3 group-hover:text-uav transition">
                   {step.title}
                 </h3>
-                <p className="text-sm text-zinc-400 leading-relaxed mb-6">
+                <p className="text-sm text-secondary leading-relaxed mb-6">
                   {step.description}
                 </p>
               </div>
 
               {/* Code Snippet */}
-              <div className="bg-[#0a0d14] border border-[#1e2638] rounded-lg p-3 font-mono text-xs text-zinc-300 overflow-x-auto">
-                <span className="text-zinc-600 select-none">$ </span>
+              <div className="bg-canvas border border-hairline rounded-xl p-3 font-mono text-xs text-primary overflow-x-auto">
+                <span className="text-tertiary select-none">$ </span>
                 <code>{step.codeSnippet}</code>
               </div>
             </div>

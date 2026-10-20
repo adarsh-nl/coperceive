@@ -1,3 +1,6 @@
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,35 +11,35 @@
   }
 
   body {
-    background-color: #0a0d14;
-    color: #e6edf3;
+    background-color: black;
+    color: rgb(245, 245, 247);
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
 
   /* Custom scrollbar */
   ::-webkit-scrollbar {
-    width: 8px;
-    height: 8px;
+    width: 6px;
+    height: 6px;
   }
   ::-webkit-scrollbar-track {
-    background: #0a0d14;
+    background: black;
   }
   ::-webkit-scrollbar-thumb {
-    background: #232e42;
-    border-radius: 4px;
+    background: rgba(255, 255, 255, 0.14);
+    border-radius: 3px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #3b4a6b;
+    background: rgba(255, 255, 255, 0.25);
   }
 }
 
 .num {
-  font-family: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-family: "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-variant-numeric: tabular-nums;
 }
 
 /* Accessible focus styling */
 :focus-visible {
-  outline: 2px solid #22d3ee;
+  outline: 2px solid rgb(40, 120, 220);
   outline-offset: 2px;
 }

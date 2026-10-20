@@ -94,8 +94,8 @@ def render_poster() -> None:
     plt.style.use("dark_background")
     fig = plt.figure(figsize=(16, 9), dpi=120)
     ax = fig.add_subplot(111, projection="3d")
-    fig.patch.set_facecolor("#0a0d14")
-    ax.set_facecolor("#0a0d14")
+    fig.patch.set_facecolor("#000000")
+    ax.set_facecolor("#000000")
 
     # Perspective camera settings
     v_tx, v_ty, v_tz = cur_frame_data["v_pose"][:3]
@@ -105,7 +105,7 @@ def render_poster() -> None:
     for layer_id, verts in polylines:
         if len(verts) < 2:
             continue
-        color = "#7dcea0" if layer_id == 1 else "#334155"
+        color = "#7dcea0" if layer_id == 1 else "#86868b"
         alpha = 0.85 if layer_id == 1 else 0.4
         lw = 1.6 if layer_id == 1 else 1.0
         ax.plot(verts[:, 0], verts[:, 1], verts[:, 2], color=color, alpha=alpha, linewidth=lw)
@@ -115,20 +115,20 @@ def render_poster() -> None:
     if len(pts) > 0:
         dists = np.hypot(pts[:, 0] - v_tx, pts[:, 1] - v_ty)
         alphas = np.clip(1.0 - (dists / 45.0), 0.15, 0.9)
-        # Cyan color with variable alpha
+        # Vehicle orange color with variable alpha
         colors = np.zeros((len(pts), 4))
-        colors[:, 0] = 0.133  # R
-        colors[:, 1] = 0.827  # G
-        colors[:, 2] = 0.933  # B
+        colors[:, 0] = 0.902  # R
+        colors[:, 1] = 0.471  # G
+        colors[:, 2] = 0.157  # B
         colors[:, 3] = alphas
         ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], s=2.2, c=colors, depthshade=False)
 
-    # Draw Vehicle position (cyan marker + label)
+    # Draw Vehicle position (orange marker + label)
     ax.scatter(
         [v_tx],
         [v_ty],
         [v_tz + 0.8],
-        color="#22d3ee",
+        color="#e67828",
         s=180,
         marker="s",
         edgecolors="white",
@@ -140,17 +140,17 @@ def render_poster() -> None:
         v_ty - 2.5,
         v_tz + 2.0,
         "Vehicle (CAV)",
-        color="#22d3ee",
+        color="#e67828",
         fontsize=11,
         fontweight="bold",
     )
 
-    # Draw Drone position (violet marker + altitude ray)
+    # Draw Drone position (UAV blue marker + altitude ray)
     ax.scatter(
         [d_tx],
         [d_ty],
         [d_tz],
-        color="#c084fc",
+        color="#2878dc",
         s=220,
         marker="o",
         edgecolors="white",
@@ -161,7 +161,7 @@ def render_poster() -> None:
         [d_tx, d_tx],
         [d_ty, d_ty],
         [0, d_tz],
-        color="#c084fc",
+        color="#2878dc",
         linestyle="--",
         alpha=0.6,
         linewidth=1.2,
@@ -171,7 +171,7 @@ def render_poster() -> None:
         d_ty - 2.5,
         d_tz + 2.5,
         "Drone UAV (alt 27m)",
-        color="#c084fc",
+        color="#2878dc",
         fontsize=11,
         fontweight="bold",
     )
@@ -185,13 +185,13 @@ def render_poster() -> None:
         (d_tx - frustum_size, d_ty + frustum_size, 0),
     ]
     for c in corners:
-        ax.plot([d_tx, c[0]], [d_ty, c[1]], [d_tz, c[2]], color="#c084fc", alpha=0.3, linewidth=1.0)
+        ax.plot([d_tx, c[0]], [d_ty, c[1]], [d_tz, c[2]], color="#2878dc", alpha=0.3, linewidth=1.0)
     corners_arr = np.array(corners + [corners[0]])
     ax.plot(
         corners_arr[:, 0],
         corners_arr[:, 1],
         corners_arr[:, 2],
-        color="#c084fc",
+        color="#2878dc",
         alpha=0.45,
         linewidth=1.4,
     )
@@ -200,12 +200,12 @@ def render_poster() -> None:
     for b in cur_frame_data["boxes"]:
         num_tid, flag, cat_id, cx, cy, cz, length_m, width_m, height_m = b[:9]
         if num_tid == 265:
-            # Occluded pedestrian!
+            # Occluded pedestrian! Highlight in status warn / UAV color
             ax.scatter(
                 [cx],
                 [cy],
                 [cz + height_m / 2.0],
-                color="#f87171",
+                color="#f0b64a",
                 s=140,
                 marker="^",
                 edgecolors="white",
@@ -216,13 +216,13 @@ def render_poster() -> None:
                 cx + 1.5,
                 cy,
                 cz + 2.5,
-                "Pedestrian #265\n(Occluded from LiDAR, seen by UAV at 17.5m)",
-                color="#f87171",
+                "Pedestrian #265\n(0 LiDAR returns, seen by UAV at 17.5m)",
+                color="#f0b64a",
                 fontsize=10,
                 fontweight="bold",
             )
         else:
-            color = "#38bdf8" if flag == 1 else ("#c084fc" if flag == 2 else "#4ade80")
+            color = "#e67828" if flag == 1 else ("#2878dc" if flag == 2 else "#5dd39e")
             alpha = 0.5 if cat_id != 1 else 0.7
             ax.scatter([cx], [cy], [cz], color=color, s=25, alpha=alpha, depthshade=False)
 

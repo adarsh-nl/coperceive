@@ -23,4 +23,5 @@ agent-tools/
 web/node_modules/
 site/node_modules/
 site/dist/
+docs_site/
 !site/public/hero/clip.bin

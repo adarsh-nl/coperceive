@@ -25,30 +25,30 @@ export const CitationSection: React.FC = () => {
   };
 
   return (
-    <section className="py-24 border-t border-[#1e2638] bg-[#0d121c]/40">
+    <section className="py-24 border-t border-hairline bg-canvas">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="max-w-3xl mb-12">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-zinc-800 border border-zinc-700 text-zinc-300 text-xs font-mono mb-4">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-glass border border-hairline text-tertiary text-xs font-mono mb-4">
             Academic Attribution
           </div>
-          <h2 className="text-3xl font-bold tracking-tight text-white mb-3">
+          <h2 className="text-3xl font-semibold tracking-tight text-primary mb-3">
             Citation & Attribution
           </h2>
-          <p className="text-sm sm:text-base text-zinc-400">
+          <p className="text-sm sm:text-base text-secondary">
             If you use coperceive in your research, please cite the framework and the upstream benchmark datasets.
           </p>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 max-w-6xl">
           {/* Coperceive BibTeX */}
-          <div className="bg-[#111724] border border-[#232e42] rounded-xl p-5 flex flex-col justify-between">
+          <div className="bg-glass backdrop-blur-22 border border-hairline rounded-2xl p-5 flex flex-col justify-between">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-mono font-semibold text-zinc-300">
+              <span className="text-xs font-mono font-medium text-primary">
                 coperceive Framework
               </span>
               <button
                 onClick={() => handleCopy(bibtexCoperceive, "coperceive")}
-                className="px-2 py-1 text-xs font-mono rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition"
+                className="px-2.5 py-1 text-xs font-mono rounded-full bg-canvas border border-hairline hover:border-hairline-bright text-secondary hover:text-primary transition"
               >
                 {copiedKey === "coperceive" ? "Copied" : "Copy BibTeX"}
               </button>
@@ -56,21 +56,21 @@ export const CitationSection: React.FC = () => {
             <pre
               tabIndex={0}
               aria-label="coperceive BibTeX citation code"
-              className="bg-[#0a0d14] rounded-lg p-3 text-xs font-mono text-zinc-300 overflow-x-auto border border-[#1e2638] focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500"
+              className="bg-canvas rounded-xl p-3 text-xs font-mono text-primary overflow-x-auto border border-hairline focus:outline-none focus-visible:ring-1 focus-visible:ring-uav"
             >
               {bibtexCoperceive}
             </pre>
           </div>
 
           {/* Griffin BibTeX */}
-          <div className="bg-[#111724] border border-[#232e42] rounded-xl p-5 flex flex-col justify-between">
+          <div className="bg-glass backdrop-blur-22 border border-hairline rounded-2xl p-5 flex flex-col justify-between">
             <div className="flex items-center justify-between mb-3">
-              <span className="text-xs font-mono font-semibold text-zinc-300">
+              <span className="text-xs font-mono font-medium text-primary">
                 Griffin Benchmark (Wang et al., 2025)
               </span>
               <button
                 onClick={() => handleCopy(bibtexGriffin, "griffin")}
-                className="px-2 py-1 text-xs font-mono rounded bg-zinc-800 hover:bg-zinc-700 text-zinc-300 transition"
+                className="px-2.5 py-1 text-xs font-mono rounded-full bg-canvas border border-hairline hover:border-hairline-bright text-secondary hover:text-primary transition"
               >
                 {copiedKey === "griffin" ? "Copied" : "Copy BibTeX"}
               </button>
@@ -78,7 +78,7 @@ export const CitationSection: React.FC = () => {
             <pre
               tabIndex={0}
               aria-label="Griffin BibTeX citation code"
-              className="bg-[#0a0d14] rounded-lg p-3 text-xs font-mono text-zinc-300 overflow-x-auto border border-[#1e2638] focus:outline-none focus-visible:ring-1 focus-visible:ring-cyan-500"
+              className="bg-canvas rounded-xl p-3 text-xs font-mono text-primary overflow-x-auto border border-hairline focus:outline-none focus-visible:ring-1 focus-visible:ring-uav"
             >
               {bibtexGriffin}
             </pre>

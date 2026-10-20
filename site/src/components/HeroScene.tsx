@@ -2,8 +2,7 @@ import React, { useEffect, useRef, useState, useCallback } from "react";
 import * as THREE from "three";
 import { loadClip } from "../utils/clipLoader";
 import type { ParsedClip, BoxRecord } from "../types/clip";
-
-type ViewpointMode = "orbit" | "chase" | "drone" | "bev";
+import { tokens } from "../tokens";
 
 const BOX_CORNERS = [
   [-0.5, -0.5, -0.5],
@@ -29,11 +28,10 @@ export const HeroScene: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [isPlaying, setIsPlaying] = useState(true);
   const [currentFrameIdx, setCurrentFrameIdx] = useState(0);
-  const [viewpoint, setViewpoint] = useState<ViewpointMode>("orbit");
   const [webglSupported, setWebglSupported] = useState(true);
   const [reducedMotion, setReducedMotion] = useState(false);
 
-  // References for Three.js state
+  // References for Three.js objects
   const sceneRef = useRef<THREE.Scene | null>(null);
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
@@ -45,27 +43,16 @@ export const HeroScene: React.FC = () => {
   const dronePyramidRef = useRef<THREE.LineSegments | null>(null);
   const beaconMeshRef = useRef<THREE.Mesh | null>(null);
 
-  // Frame timing
+  // Scripted playback timing
   const frameIdxRef = useRef(0);
   const isPlayingRef = useRef(true);
-  const viewpointRef = useRef<ViewpointMode>("orbit");
   const animFrameIdRef = useRef<number | null>(null);
   const lastStepTimeRef = useRef<number>(0);
 
-  // Orbit drag state
-  const isDraggingRef = useRef(false);
-  const prevMouseRef = useRef({ x: 0, y: 0 });
-  const orbitAngleRef = useRef({ theta: -0.65, phi: 0.55, radius: 52 });
-  const orbitTargetRef = useRef(new THREE.Vector3(-95, -12, 0));
-
-  // Sync state to refs
+  // Sync state to ref
   useEffect(() => {
     isPlayingRef.current = isPlaying;
   }, [isPlaying]);
-
-  useEffect(() => {
-    viewpointRef.current = viewpoint;
-  }, [viewpoint]);
 
   // Reduced motion preference
   useEffect(() => {
@@ -108,16 +95,15 @@ export const HeroScene: React.FC = () => {
     return () => controller.abort();
   }, []);
 
-  // Construct 3D boxes line buffer
+  // Construct 3D boxes line buffer with strict token colors
   const buildBoxesGeometry = useCallback((boxes: BoxRecord[]) => {
     const positions: number[] = [];
     const colors: number[] = [];
 
-    // Colors
-    const colVehicle = new THREE.Color("#38bdf8"); // vehicle only
-    const colDrone = new THREE.Color("#c084fc");   // drone only
-    const colCoop = new THREE.Color("#4ade80");    // cooperative both
-    const colOccluded = new THREE.Color("#f87171"); // occluded hazard alert
+    const colVehicle = new THREE.Color(tokens.data.vehicle);
+    const colDrone = new THREE.Color(tokens.data.uav);
+    const colCoop = new THREE.Color(tokens.status.ok);
+    const colOccluded = new THREE.Color(tokens.status.warn);
 
     const tempQuat = new THREE.Quaternion();
     const tempVec = new THREE.Vector3();
@@ -243,7 +229,7 @@ export const HeroScene: React.FC = () => {
     [clipData, buildBoxesGeometry]
   );
 
-  // Initialize Three.js
+  // Initialize Three.js scripted film scene
   useEffect(() => {
     if (!containerRef.current || !clipData) return;
 
@@ -256,7 +242,7 @@ export const HeroScene: React.FC = () => {
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: "high-performance" });
       renderer.setSize(width, height);
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-      renderer.setClearColor(0x0a0d14, 1);
+      renderer.setClearColor(0x000000, 1);
     } catch {
       setWebglSupported(false);
       return;
@@ -268,19 +254,19 @@ export const HeroScene: React.FC = () => {
     const scene = new THREE.Scene();
     sceneRef.current = scene;
 
-    const camera = new THREE.PerspectiveCamera(45, width / height, 0.5, 500);
+    const camera = new THREE.PerspectiveCamera(40, width / height, 0.5, 500);
     cameraRef.current = camera;
 
-    // Subtle background ambient light
+    // Ambient light
     const ambientLight = new THREE.AmbientLight(0xffffff, 0.85);
     scene.add(ambientLight);
 
-    // Directional light for subtle 3D vehicle shadows
-    const dirLight = new THREE.DirectionalLight(0xffffff, 0.6);
-    dirLight.position.set(50, -60, 80);
+    // Subtle directional light
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.5);
+    dirLight.position.set(40, -50, 70);
     scene.add(dirLight);
 
-    // Add Map Polylines (Lane centres in #7dcea0, Road edges in #334155)
+    // Map Polylines (Lane centres and Road edges)
     const mapGeom = new THREE.BufferGeometry();
     mapGeom.setAttribute("position", new THREE.Float32BufferAttribute(clipData.mapPositions, 3));
     mapGeom.setAttribute("color", new THREE.Float32BufferAttribute(clipData.mapColors, 3));
@@ -293,20 +279,20 @@ export const HeroScene: React.FC = () => {
     const mapLines = new THREE.LineSegments(mapGeom, mapMaterial);
     scene.add(mapLines);
 
-    // Ground subtle grid
-    const gridHelper = new THREE.GridHelper(120, 24, 0x1a2436, 0x111927);
+    // Subtle ground grid
+    const gridHelper = new THREE.GridHelper(120, 24, 0x222222, 0x111111);
     gridHelper.rotation.x = Math.PI / 2;
     gridHelper.position.set(clipData.origin[0], clipData.origin[1], -0.1);
     scene.add(gridHelper);
 
-    // LiDAR Points
+    // Vehicle LiDAR points in vehicle orange
     const ptsGeom = new THREE.BufferGeometry();
     ptsGeom.setAttribute(
       "position",
       new THREE.Float32BufferAttribute(clipData.frames[0].lidarPoints, 3)
     );
     const ptsMaterial = new THREE.PointsMaterial({
-      color: 0x22d3ee,
+      color: new THREE.Color(tokens.data.vehicle),
       size: 0.55,
       transparent: true,
       opacity: 0.82,
@@ -330,10 +316,9 @@ export const HeroScene: React.FC = () => {
 
     // Vehicle 3D Model Group
     const vehicleGroup = new THREE.Group();
-    // Chassis box (4.8m x 2.0m x 1.5m)
     const chassisGeom = new THREE.BoxGeometry(4.8, 2.0, 1.4);
     const chassisMat = new THREE.MeshStandardMaterial({
-      color: 0x0f172a,
+      color: 0x1c1c1e,
       roughness: 0.3,
       metalness: 0.8,
     });
@@ -341,16 +326,18 @@ export const HeroScene: React.FC = () => {
     chassisMesh.position.z = 0.7;
     vehicleGroup.add(chassisMesh);
 
-    // Chassis wire glow
     const wireGeom = new THREE.WireframeGeometry(chassisGeom);
-    const wireMat = new THREE.LineBasicMaterial({ color: 0x22d3ee, linewidth: 1.5 });
+    const wireMat = new THREE.LineBasicMaterial({
+      color: new THREE.Color(tokens.data.vehicle),
+      linewidth: 1.5,
+    });
     const wireLine = new THREE.LineSegments(wireGeom, wireMat);
     wireLine.position.z = 0.7;
     vehicleGroup.add(wireLine);
 
     // Top LiDAR cylinder
     const lidarPodGeom = new THREE.CylinderGeometry(0.2, 0.2, 0.28, 16);
-    const lidarPodMat = new THREE.MeshBasicMaterial({ color: 0x22d3ee });
+    const lidarPodMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(tokens.data.vehicle) });
     const lidarPod = new THREE.Mesh(lidarPodGeom, lidarPodMat);
     lidarPod.rotation.x = Math.PI / 2;
     lidarPod.position.set(0, 0, 1.55);
@@ -361,15 +348,19 @@ export const HeroScene: React.FC = () => {
 
     // Drone 3D Model Group
     const droneGroup = new THREE.Group();
-    // Quadcopter body
     const droneBodyGeom = new THREE.BoxGeometry(1.2, 1.2, 0.25);
-    const droneBodyMat = new THREE.MeshStandardMaterial({ color: 0xc084fc, metalness: 0.9 });
+    const droneBodyMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color(tokens.data.uav),
+      metalness: 0.8,
+    });
     const droneBody = new THREE.Mesh(droneBodyGeom, droneBodyMat);
     droneGroup.add(droneBody);
 
-    // Drone 4 arms & rotors
-    const armMat = new THREE.MeshBasicMaterial({ color: 0xe9d5ff });
-    const rotorMat = new THREE.MeshBasicMaterial({ color: 0xc084fc, wireframe: true });
+    const armMat = new THREE.MeshBasicMaterial({ color: new THREE.Color(tokens.data.infrastructure) });
+    const rotorMat = new THREE.MeshBasicMaterial({
+      color: new THREE.Color(tokens.data.uav),
+      wireframe: true,
+    });
     const armCoords = [
       [1.1, 1.1],
       [-1.1, 1.1],
@@ -397,7 +388,7 @@ export const HeroScene: React.FC = () => {
     const lineGeom = new THREE.BufferGeometry();
     lineGeom.setAttribute("position", new THREE.Float32BufferAttribute([0, 0, 27, 0, 0, 0], 3));
     const altLineMat = new THREE.LineDashedMaterial({
-      color: 0xc084fc,
+      color: new THREE.Color(tokens.data.uav),
       dashSize: 1.0,
       gapSize: 0.6,
       linewidth: 1.2,
@@ -409,11 +400,11 @@ export const HeroScene: React.FC = () => {
     scene.add(altLine);
     droneAltitudeLineRef.current = altLine;
 
-    // Drone downward camera pyramid footprint
+    // Drone downward camera footprint pyramid
     const pyrGeom = new THREE.BufferGeometry();
     pyrGeom.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(16 * 3), 3));
     const pyrMat = new THREE.LineBasicMaterial({
-      color: 0xc084fc,
+      color: new THREE.Color(tokens.data.uav),
       transparent: true,
       opacity: 0.45,
       linewidth: 1.2,
@@ -422,10 +413,10 @@ export const HeroScene: React.FC = () => {
     scene.add(pyrLines);
     dronePyramidRef.current = pyrLines;
 
-    // Occlusion Ground Alert Beacon Ring
+    // Occlusion Ground Alert Beacon Ring (warn colour tokens.status.warn)
     const ringGeom = new THREE.RingGeometry(1.6, 2.0, 32);
     const ringMat = new THREE.MeshBasicMaterial({
-      color: 0xf87171,
+      color: new THREE.Color(tokens.status.warn),
       side: THREE.DoubleSide,
       transparent: true,
       opacity: 0.85,
@@ -447,7 +438,7 @@ export const HeroScene: React.FC = () => {
     // Initial frame apply
     applyFrame(frameIdxRef.current);
 
-    // Animation Loop
+    // Scripted Cinematic Animation Loop
     const renderLoop = (timestamp: number) => {
       animFrameIdRef.current = requestAnimationFrame(renderLoop);
 
@@ -467,40 +458,28 @@ export const HeroScene: React.FC = () => {
         beaconMeshRef.current.scale.set(pulse, pulse, 1);
       }
 
-      // Camera position based on viewpoint mode
+      // Scripted Cinematic Camera Trajectory:
+      // The camera glides along a smooth spline as the scenario unfolds:
+      // Phase 1 (frames 0-40): Elevated follow-approach along vehicle trajectory.
+      // Phase 2 (frames 40-75): Moves into focal view of the blind intersection where pedestrian (track 265) appears.
+      // Phase 3 (frames 75-99): Broadens into bird's-eye cooperative synthesis.
+      const currentProgress = frameIdxRef.current / (clipData.frames.length - 1);
       const activeFrame = clipData.frames[frameIdxRef.current];
-      const vpMode = viewpointRef.current;
+      const vp = activeFrame.vehiclePose.position;
 
-      if (vpMode === "orbit") {
-        // Smooth orbit camera
-        const { theta, phi, radius } = orbitAngleRef.current;
-        const target = orbitTargetRef.current;
-        const cx = target.x + radius * Math.sin(phi) * Math.sin(theta);
-        const cy = target.y - radius * Math.sin(phi) * Math.cos(theta);
-        const cz = target.z + radius * Math.cos(phi);
-        camera.position.set(cx, cy, cz);
-        camera.up.set(0, 0, 1);
-        camera.lookAt(target);
-      } else if (vpMode === "chase") {
-        // Chase ground vehicle
-        const vPos = activeFrame.vehiclePose.position;
-        const vQuat = new THREE.Quaternion(...activeFrame.vehiclePose.quaternion);
-        const offset = new THREE.Vector3(-14, 0, 6.5).applyQuaternion(vQuat);
-        camera.position.set(vPos[0] + offset.x, vPos[1] + offset.y, vPos[2] + offset.z);
-        camera.up.set(0, 0, 1);
-        camera.lookAt(vPos[0] + 10, vPos[1], vPos[2] + 1.2);
-      } else if (vpMode === "drone") {
-        // UAV top-angle downward view
-        const dPos = activeFrame.dronePose.position;
-        camera.position.set(dPos[0] - 2, dPos[1] - 8, dPos[2] + 5);
-        camera.up.set(0, 0, 1);
-        camera.lookAt(dPos[0], dPos[1] + 15, 0);
-      } else if (vpMode === "bev") {
-        // Top-down bird's-eye view
-        camera.position.set(-95, -12, 75);
-        camera.up.set(0, 1, 0);
-        camera.lookAt(-95, -12, 0);
-      }
+      // Smooth camera position progression
+      const camX = vp[0] - 22 + Math.sin(currentProgress * Math.PI) * 12;
+      const camY = vp[1] - 32 + Math.cos(currentProgress * Math.PI * 0.7) * 8;
+      const camZ = 28 - Math.sin(currentProgress * Math.PI * 0.8) * 10;
+
+      camera.position.set(camX, camY, camZ);
+      camera.up.set(0, 0, 1);
+
+      // Look at intersection area around vehicle and occluded hazard
+      const lookX = vp[0] + 6;
+      const lookY = vp[1] + 8;
+      const lookZ = 1.5;
+      camera.lookAt(lookX, lookY, lookZ);
 
       renderer.render(scene, camera);
     };
@@ -526,100 +505,29 @@ export const HeroScene: React.FC = () => {
     };
   }, [clipData, buildBoxesGeometry, applyFrame]);
 
-  // Pointer drag for Orbit controls
-  const handlePointerDown = (e: React.PointerEvent) => {
-    if (viewpoint !== "orbit") return;
-    isDraggingRef.current = true;
-    prevMouseRef.current = { x: e.clientX, y: e.clientY };
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  };
-
-  const handlePointerMove = (e: React.PointerEvent) => {
-    if (!isDraggingRef.current || viewpoint !== "orbit") return;
-    const dx = e.clientX - prevMouseRef.current.x;
-    const dy = e.clientY - prevMouseRef.current.y;
-    prevMouseRef.current = { x: e.clientX, y: e.clientY };
-
-    orbitAngleRef.current.theta -= dx * 0.008;
-    orbitAngleRef.current.phi = Math.max(
-      0.15,
-      Math.min(Math.PI / 2.1, orbitAngleRef.current.phi - dy * 0.008)
-    );
-  };
-
-  const handlePointerUp = (e: React.PointerEvent) => {
-    isDraggingRef.current = false;
-    try {
-      (e.target as HTMLElement).releasePointerCapture(e.pointerId);
-    } catch {
-      // ignore
-    }
-  };
-
-  const handleWheel = (e: React.WheelEvent) => {
-    if (viewpoint !== "orbit") return;
-    orbitAngleRef.current.radius = Math.max(
-      20,
-      Math.min(100, orbitAngleRef.current.radius + e.deltaY * 0.05)
-    );
-  };
-
-  // Keyboard navigation
+  // Keyboard navigation: Spacebar toggles playback
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === " ") {
       e.preventDefault();
       setIsPlaying((prev) => !prev);
-    } else if (e.key === "1") {
-      setViewpoint("orbit");
-    } else if (e.key === "2") {
-      setViewpoint("chase");
-    } else if (e.key === "3") {
-      setViewpoint("drone");
-    } else if (e.key === "4") {
-      setViewpoint("bev");
-    } else if (e.key === "ArrowLeft") {
-      e.preventDefault();
-      if (clipData) {
-        const next = Math.max(0, frameIdxRef.current - 1);
-        frameIdxRef.current = next;
-        setCurrentFrameIdx(next);
-        applyFrame(next);
-      }
-    } else if (e.key === "ArrowRight") {
-      e.preventDefault();
-      if (clipData) {
-        const next = Math.min(clipData.frames.length - 1, frameIdxRef.current + 1);
-        frameIdxRef.current = next;
-        setCurrentFrameIdx(next);
-        applyFrame(next);
-      }
     }
-  };
-
-  const jumpToOcclusion = () => {
-    if (!clipData) return;
-    const target = 52;
-    frameIdxRef.current = target;
-    setCurrentFrameIdx(target);
-    applyFrame(target);
-    setIsPlaying(false);
   };
 
   if (error || !webglSupported) {
     return (
-      <div className="relative w-full aspect-[16/9] md:aspect-[21/9] bg-[#0a0d14] rounded-xl overflow-hidden border border-[#232e42] flex items-center justify-center">
+      <div className="relative w-full aspect-[16/9] md:aspect-[21/9] bg-canvas rounded-2xl overflow-hidden border border-hairline flex items-center justify-center">
         <img
           src="/hero/poster.webp"
           alt="3D Visualization fallback: Town03 cooperative intersection with ground vehicle and aerial drone"
           className="w-full h-full object-cover"
         />
-        <div className="absolute inset-0 bg-gradient-to-t from-[#0a0d14]/90 via-[#0a0d14]/40 to-transparent flex flex-col justify-end p-6">
-          <div className="inline-flex items-center gap-2 px-3 py-1 bg-zinc-900/80 backdrop-blur border border-zinc-700/60 rounded-full text-xs text-zinc-300 w-max mb-2">
-            <span className="w-2 h-2 rounded-full bg-cyan-400"></span>
+        <div className="absolute inset-0 bg-gradient-to-t from-canvas via-canvas/40 to-transparent flex flex-col justify-end p-8">
+          <div className="inline-flex items-center gap-2 px-3 py-1 bg-glass backdrop-blur-22 border border-hairline rounded-full text-xs text-secondary w-max mb-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-warn"></span>
             Static High-Fidelity Poster (WebGL Fallback)
           </div>
-          <p className="text-sm text-zinc-300 max-w-xl">
-            Town03-000 cooperative scenario (Griffin-25m dataset): Ground CAV LiDAR (cyan) sweeping while Drone UAV (violet, 27m) detects occluded pedestrian #265 around the corner.
+          <p className="text-sm text-secondary max-w-xl">
+            Town03-000 cooperative scenario (Griffin-25m): Ground CAV LiDAR (orange) sweeping while Drone UAV (blue, 27m) detects occluded pedestrian (track 265).
           </p>
         </div>
       </div>
@@ -631,155 +539,117 @@ export const HeroScene: React.FC = () => {
 
   return (
     <div
-      className="relative w-full aspect-[16/10] md:aspect-[21/10] lg:aspect-[2.2/1] bg-[#0a0d14] rounded-xl overflow-hidden border border-[#232e42] shadow-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-cyan-500"
+      className="relative w-full aspect-[16/10] md:aspect-[21/10] lg:aspect-[2.2/1] bg-canvas rounded-2xl overflow-hidden border border-hairline shadow-2xl focus:outline-none focus-visible:ring-1 focus-visible:ring-uav"
       tabIndex={0}
       onKeyDown={handleKeyDown}
       role="region"
-      aria-label="Interactive 3D Cooperative Scene. Use Space to toggle playback, 1-4 for viewpoints, Left/Right arrows to scrub frames."
+      aria-label="Scripted 3D Cooperative Perception Film. Press Space to pause or play."
     >
       {/* 3D Canvas */}
       <div
         ref={containerRef}
-        className="w-full h-full cursor-grab active:cursor-grabbing select-none"
-        onPointerDown={handlePointerDown}
-        onPointerMove={handlePointerMove}
-        onPointerUp={handlePointerUp}
-        onWheel={handleWheel}
+        className="w-full h-full select-none"
       />
 
       {/* Loading overlay */}
       {loading && (
-        <div className="absolute inset-0 bg-[#0a0d14]/80 backdrop-blur-sm flex flex-col items-center justify-center gap-3 z-30">
-          <div className="w-8 h-8 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs font-mono text-zinc-400">Streaming cooperative sensor sweeps...</p>
+        <div className="absolute inset-0 bg-canvas/80 backdrop-blur-22 flex flex-col items-center justify-center gap-3 z-30">
+          <div className="w-6 h-6 border-2 border-uav border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs font-mono text-tertiary">Streaming sensor sweeps...</p>
         </div>
       )}
 
-      {/* Top HUD: Real-time telemetry */}
+      {/* Top Telemetry Overlay */}
       <div className="absolute top-4 left-4 right-4 flex flex-wrap items-center justify-between gap-3 pointer-events-none z-20">
         <div className="flex items-center gap-2 pointer-events-auto">
           {/* Agent indicators */}
-          <div className="flex items-center gap-2 bg-[#0e131d]/85 backdrop-blur border border-[#232e42] px-3 py-1.5 rounded-lg text-xs font-mono">
-            <span className="flex items-center gap-1.5 text-cyan-300 font-medium">
-              <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
+          <div className="flex items-center gap-2.5 bg-glass backdrop-blur-22 border border-hairline px-3 py-1.5 rounded-full text-xs font-mono">
+            <span className="flex items-center gap-1.5 text-vehicle font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-vehicle animate-pulse" />
               CAV (Ground)
             </span>
-            <span className="text-zinc-600">|</span>
-            <span className="flex items-center gap-1.5 text-purple-300 font-medium">
-              <span className="w-2 h-2 rounded-full bg-purple-400" />
+            <span className="text-tertiary">|</span>
+            <span className="flex items-center gap-1.5 text-uav font-medium">
+              <span className="w-1.5 h-1.5 rounded-full bg-uav" />
               UAV (Aerial 27m)
             </span>
           </div>
 
-          {/* Occlusion badge */}
+          {/* Real-time Occlusion Alert Badge */}
           {isOcclusionActive && (
-            <div className="flex items-center gap-1.5 bg-red-950/80 backdrop-blur border border-red-500/50 px-2.5 py-1.5 rounded-lg text-xs font-mono text-red-200 animate-pulse">
-              <span className="w-2 h-2 rounded-full bg-red-400" />
-              Occluded Pedestrian #265 Detected (17.5m)
+            <div className="flex items-center gap-1.5 bg-glass backdrop-blur-22 border border-warn/40 px-3 py-1.5 rounded-full text-xs font-mono text-warn animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-warn" />
+              Occluded Pedestrian (Track 265) Detected (17.5m)
             </div>
           )}
         </div>
 
-        {/* Viewpoint selector buttons */}
-        <div className="flex items-center gap-1 bg-[#0e131d]/85 backdrop-blur border border-[#232e42] p-1 rounded-lg pointer-events-auto text-xs font-mono">
-          {(["orbit", "chase", "drone", "bev"] as ViewpointMode[]).map((mode) => (
-            <button
-              key={mode}
-              onClick={() => setViewpoint(mode)}
-              className={`px-2.5 py-1 rounded transition-colors ${
-                viewpoint === mode
-                  ? "bg-cyan-500/20 text-cyan-300 border border-cyan-500/40"
-                  : "text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60"
-              }`}
-              title={`Switch viewpoint: ${mode}`}
-              aria-label={`Viewpoint: ${mode}`}
-            >
-              {mode.toUpperCase()}
-            </button>
-          ))}
+        {/* Link to docs viewer */}
+        <div className="pointer-events-auto">
+          <a
+            href="https://github.com/adarsh-nl/coperceive/blob/main/docs/viewer.md"
+            target="_blank"
+            rel="noreferrer"
+            className="flex items-center gap-1.5 bg-glass hover:bg-glass/90 backdrop-blur-22 border border-hairline hover:border-hairline-bright px-3 py-1.5 rounded-full text-xs text-secondary hover:text-primary transition"
+          >
+            <span>Open the viewer</span>
+            <svg className="w-3.5 h-3.5 text-tertiary" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
         </div>
       </div>
 
       {/* Reduced motion banner if active */}
       {reducedMotion && (
         <div className="absolute top-16 left-4 pointer-events-auto z-20">
-          <div className="bg-zinc-900/90 border border-zinc-700/60 rounded-md px-3 py-1 text-xs text-zinc-300 flex items-center gap-2">
+          <div className="bg-glass backdrop-blur-22 border border-hairline rounded-full px-3.5 py-1.5 text-xs text-secondary flex items-center gap-3">
             <span>Reduced motion active (paused at frame 52)</span>
             <button
               onClick={() => setIsPlaying((p) => !p)}
-              className="text-cyan-400 hover:underline font-mono"
+              className="text-uav hover:underline font-mono"
             >
-              {isPlaying ? "Pause" : "Play"}
+              {isPlaying ? "Pause" : "Play film"}
             </button>
           </div>
         </div>
       )}
 
-      {/* Bottom Scrubber & Controls */}
-      <div className="absolute bottom-4 left-4 right-4 bg-[#0e131d]/90 backdrop-blur-md border border-[#232e42] p-3 rounded-xl flex flex-col gap-2 z-20">
-        <div className="flex items-center justify-between text-xs font-mono text-zinc-400">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsPlaying((prev) => !prev)}
-              className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 transition focus-visible:ring-1 focus-visible:ring-cyan-400"
-              aria-label={isPlaying ? "Pause 3D playback" : "Play 3D playback"}
-            >
-              {isPlaying ? (
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+      {/* Bottom Minimal Film Controls */}
+      <div className="absolute bottom-4 left-4 right-4 flex items-center justify-between pointer-events-none z-20">
+        <div className="pointer-events-auto">
+          <button
+            onClick={() => setIsPlaying((prev) => !prev)}
+            className="flex items-center gap-2 bg-glass hover:bg-glass/90 backdrop-blur-22 border border-hairline hover:border-hairline-bright px-3.5 py-1.5 rounded-full text-xs font-mono text-secondary hover:text-primary transition focus-visible:ring-1 focus-visible:ring-uav"
+            aria-label={isPlaying ? "Pause 3D film" : "Play 3D film"}
+          >
+            {isPlaying ? (
+              <>
+                <svg className="w-3.5 h-3.5 text-primary" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M6 4h4v16H6V4zm8 0h4v16h-4V4z" />
                 </svg>
-              ) : (
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <span>Pause</span>
+              </>
+            ) : (
+              <>
+                <svg className="w-3.5 h-3.5 text-primary" fill="currentColor" viewBox="0 0 24 24">
                   <path d="M8 5v14l11-7z" />
                 </svg>
-              )}
-            </button>
-
-            <button
-              onClick={jumpToOcclusion}
-              className="px-2.5 py-1 rounded bg-red-950/60 hover:bg-red-900/60 border border-red-700/50 text-red-300 text-xs transition"
-              title="Jump to the frame where pedestrian #265 is occluded from ground vehicle"
-            >
-              Jump to Occlusion (t=1123.7s)
-            </button>
-          </div>
-
-          {/* Telemetry counters */}
-          <div className="flex items-center gap-4">
-            <span>
-              Frame: <span className="text-zinc-200 num">{currentFrameIdx + 1}</span>/100
-            </span>
-            <span>
-              Time: <span className="text-zinc-200 num">{activeFrame ? (activeFrame.timeUs / 1e6).toFixed(2) : "0.00"}</span> s
-            </span>
-            <span className="hidden sm:inline">
-              LiDAR: <span className="text-cyan-300 num">{activeFrame ? (activeFrame.lidarPoints.length / 3).toLocaleString() : 0}</span> pts
-            </span>
-          </div>
+                <span>Play</span>
+              </>
+            )}
+          </button>
         </div>
 
-        {/* Timeline Slider */}
-        <div className="relative flex items-center w-full">
-          <input
-            type="range"
-            min={0}
-            max={clipData ? clipData.frames.length - 1 : 99}
-            value={currentFrameIdx}
-            onChange={(e) => {
-              const val = parseInt(e.target.value, 10);
-              setCurrentFrameIdx(val);
-              frameIdxRef.current = val;
-              applyFrame(val);
-            }}
-            className="w-full h-1.5 bg-[#1b2436] rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none"
-            aria-label="Timeline scrubber"
-          />
-          {/* Key event marker for occlusion at frame 52 */}
-          <div
-            className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 bg-red-500 rounded-full border border-white pointer-events-none"
-            style={{ left: "52%" }}
-            title="Occlusion moment (frame 52)"
-          />
+        {/* Telemetry frame timestamp */}
+        <div className="bg-glass backdrop-blur-22 border border-hairline px-3 py-1.5 rounded-full text-xs font-mono text-secondary flex items-center gap-3">
+          <span>
+            t = <span className="text-primary num">{activeFrame ? (activeFrame.timeUs / 1e6).toFixed(2) : "0.00"}</span> s
+          </span>
+          <span className="text-tertiary">|</span>
+          <span>
+            Frame <span className="text-primary num">{currentFrameIdx + 1}</span>/100
+          </span>
         </div>
       </div>
     </div>

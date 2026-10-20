@@ -7,32 +7,29 @@ export default {
   theme: {
     extend: {
       colors: {
-        canvas: {
-          DEFAULT: "#0a0d14",
-          subtle: "#0e131d",
-          muted: "#131926",
+        canvas: "#000000",
+        glass: "rgb(28 28 30 / 0.78)",
+        hairline: {
+          DEFAULT: "rgba(255, 255, 255, 0.08)",
+          bright: "rgba(255, 255, 255, 0.14)",
         },
-        surface: {
-          DEFAULT: "#151c2a",
-          hover: "#1b2336",
-          active: "#212b42",
-        },
-        border: {
-          DEFAULT: "#232e42",
-          muted: "#1a2233",
-          bright: "#3b4a6b",
-        },
-        agent: {
-          vehicle: "#22d3ee", // cyan
-          drone: "#c084fc",   // violet
-          lane: "#7dcea0",    // mint green
-          road: "#c5d0d8",    // silver slate
-          alert: "#f87171",   // coral red
-        },
+        primary: "#f5f5f7",
+        secondary: "#a1a1a6",
+        tertiary: "#86868b",
+        vehicle: "#e67828",
+        uav: "#2878dc",
+        infrastructure: "#b7b1a6",
+        lanes: "#7dcea0",
+        ok: "#5dd39e",
+        warn: "#f0b64a",
+        bad: "#ff6259",
       },
       fontFamily: {
-        sans: ['-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'Helvetica', 'Arial', 'sans-serif'],
-        mono: ['"IBM Plex Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+        sans: ['"Geist Variable"', '-apple-system', 'BlinkMacSystemFont', '"Segoe UI"', 'Roboto', 'sans-serif'],
+        mono: ['"Geist Mono Variable"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'Monaco', 'Consolas', 'monospace'],
+      },
+      backdropBlur: {
+        '22': '22px',
       },
     },
   },

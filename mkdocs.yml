@@ -1,5 +1,6 @@
 site_name: coperceive
 site_description: Cooperative multi-agent perception data.
+site_dir: docs_site
 theme:
   name: material
   palette:

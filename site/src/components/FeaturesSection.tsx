@@ -35,17 +35,17 @@ export const FeaturesSection: React.FC = () => {
   ];
 
   return (
-    <section className="py-24 border-t border-[#1e2638] bg-[#0d121c]/40">
+    <section className="py-24 border-t border-hairline bg-canvas">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="max-w-3xl mb-16">
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-purple-950/60 border border-purple-500/40 text-purple-300 text-xs font-mono mb-4">
-            <span className="w-2 h-2 rounded-full bg-purple-400" />
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-glass border border-hairline text-secondary text-xs font-mono mb-4">
+            <span className="w-1.5 h-1.5 rounded-full bg-lanes" />
             Capabilities
           </div>
-          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-white mb-4">
+          <h2 className="text-3xl sm:text-4xl font-semibold tracking-tight text-primary mb-4">
             Built for Cooperative Robotics Research
           </h2>
-          <p className="text-base sm:text-lg text-zinc-400 leading-relaxed">
+          <p className="text-base sm:text-lg text-secondary leading-relaxed">
             From single-command dataset conversion to interactive multi-agent evaluation at scale.
           </p>
         </div>
@@ -55,16 +55,16 @@ export const FeaturesSection: React.FC = () => {
           {features.map((f, i) => (
             <div
               key={i}
-              className="bg-[#111724] border border-[#232e42] hover:border-[#3b4a6b] rounded-xl p-6 transition flex flex-col justify-between"
+              className="bg-glass backdrop-blur-22 border border-hairline hover:border-hairline-bright rounded-2xl p-6 transition flex flex-col justify-between"
             >
               <div>
-                <div className="inline-block px-2 py-0.5 rounded text-[11px] font-mono bg-zinc-800 text-cyan-300 border border-zinc-700 mb-3">
+                <div className="inline-block px-2.5 py-0.5 rounded-full text-[11px] font-mono bg-canvas border border-hairline text-secondary mb-3">
                   {f.badge}
                 </div>
-                <h3 className="text-lg font-semibold text-zinc-100 mb-2">
+                <h3 className="text-lg font-semibold text-primary mb-2">
                   {f.title}
                 </h3>
-                <p className="text-xs text-zinc-400 leading-relaxed">
+                <p className="text-xs text-secondary leading-relaxed">
                   {f.desc}
                 </p>
               </div>
