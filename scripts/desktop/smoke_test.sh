@@ -13,12 +13,13 @@ echo "Coperceive Desktop Artifact Verification & Smoke Test"
 echo "=========================================================="
 
 if [ ! -d "${APP_BUNDLE}" ]; then
-    echo "Searching for built .app bundle..."
-    FOUND_APP=$(find src-tauri/target/ -name "Coperceive.app" -type d | head -n 1 || true)
+    echo "Searching for built .app bundle across repository..."
+    FOUND_APP=$(find . -iname "*.app" -type d | head -n 1 || true)
     if [ -n "${FOUND_APP}" ]; then
         APP_BUNDLE="${FOUND_APP}"
     else
-        echo "Error: Coperceive.app not found!" >&2
+        echo "Error: .app bundle not found! Listing targets:" >&2
+        find . -maxdepth 6 -type d 2>/dev/null | grep -E "target|bundle|dist|release" || true
         exit 1
     fi
 fi
@@ -56,7 +57,7 @@ FOUND_DMG=""
 if [ -f "${DMG_FILE}" ]; then
     FOUND_DMG="${DMG_FILE}"
 else
-    FOUND_DMG=$(find src-tauri/target/ -name "*.dmg" -type f | head -n 1 || true)
+    FOUND_DMG=$(find . -iname "*.dmg" -type f | head -n 1 || true)
 fi
 
 if [ -n "${FOUND_DMG}" ]; then

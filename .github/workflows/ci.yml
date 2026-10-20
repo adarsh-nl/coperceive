@@ -169,8 +169,8 @@ jobs:
         with:
           name: coperceive-desktop-macos-arm64
           path: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Coperceive.app
-            src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/Coperceive.app
+            src-tauri/target/**/*.dmg
+            src-tauri/target/**/*.app
+            target/**/*.dmg
+            target/**/*.app
           if-no-files-found: warn
