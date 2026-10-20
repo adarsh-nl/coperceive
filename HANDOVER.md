@@ -1,6 +1,31 @@
 # Handover
 
-The web viewer is a light control shell around a dark viewport, with a dark theme on the same layout. Phase 6 (playback, cameras, sequence export, view settings, and the bird's-eye and overlay figures) is on main. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+The desktop application is now the top priority per Adarsh's instructions (pausing V2V4Real, release work, and small fixes until the desktop app works end-to-end).
+
+## Desktop App Status (feat/desktop)
+
+- **ADR 0014**: Committed to `main` at `662fa84` and `feat/desktop` at `c423630`.
+- **Phase 1: Complete**
+  - **Token Security**: Tokens are never passed on argv. `coperceive serve` now supports `COPERCEIVE_TOKEN` and `--token-file` (strictly enforcing file mode `0600` or `0400`, refusing on loose permissions). `--token` is deprecated with a warning.
+  - **Rust Tauri Core (`src-tauri/`)**:
+    - `token.rs`: Cryptographic 128-bit hex token generation and mode 0600 file read/write verification.
+    - `port.rs`: Dynamic ephemeral loopback port discovery (`127.0.0.1:0`).
+    - `ssh.rs`: System SSH wrapper enforcing `BatchMode=yes`, `ControlMaster=auto`, `ControlPersist=10m`, `ConnectTimeout=8`. Classifies stderr into `PublicKeyAuthRequired` (advises `ssh-add`), `EduVpnOrNetworkUnreachable` (advises eduVPN check), or host key mismatch.
+    - `slurm.rs`: Slurm session generator (`coperceive-desktop-<uuid>`, 2h walltime on `ps,main-cpu`), `squeue` output parser for PENDING queue reasons and elapsed time, walltime expiry monitor (warn 10 min before end), orphaned job scanner, and 0600 credentials parser.
+    - 13 Rust unit tests passing.
+  - **TypeScript Bindings**: `web/src/desktop/types.ts` defining `ExecutionTarget`, `ConnectionSession`, `TargetStatus`, `SlurmJobInfo`.
+  - **Gates**: Job `631229` green on `hpc-node12` (`gates rc=0`, 572 passed, 2 skipped, 8 warnings in 165.76s).
+  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop`.
+
+## Cluster Empirical Findings (UTwente HPC)
+
+- **Login-Node Policy**: "Login-node commands stay under 1 minute. Heavy work goes through sbatch" (source: user handover rules & UTwente EEMCS HPC documentation at `https://hpc.wiki.utwente.nl/eemcs-hpc`). Persistent server daemons serving point cloud queries on `hpc-head1` are prohibited.
+- **Partitions**: `ps,main-cpu` verified via `sinfo -p ps,main-cpu` (yielding `hpc-node[11-12]` on `ps` and `spark-head[1-4],caserta,ctit087` on `main-cpu`).
+- **Remote Bind Architecture & Evidence**:
+  - Direct SSH from login node to compute nodes (`ssh -o BatchMode=yes hpc-node11`) returns `Permission denied (publickey,password,keyboard-interactive)`.
+  - `/etc/pam.d/slurm` contains only `pam_localuser.so, pam_unix.so, pam_limits.so`; `pam_slurm_adopt` is not installed.
+  - Direct user SSH to compute nodes (and SSH `ProxyJump`) is blocked.
+  - **Architecture**: `coperceive serve` binds to compute node IP (`10.20.240.x`) inside the Slurm job with `--token-file` (mode 0600), and an SSH local port forward tunnels from macOS loopback through the login node (`hpc-head1`): `ssh -L 127.0.0.1:<local_port>:<node_ip>:<port> <hpc_alias> -N`.
 
 ## Goal
 
