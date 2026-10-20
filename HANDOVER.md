@@ -15,7 +15,39 @@ The desktop application is now the top priority per Adarsh's instructions (pausi
     - 13 Rust unit tests passing.
   - **TypeScript Bindings**: `web/src/desktop/types.ts` defining `ExecutionTarget`, `ConnectionSession`, `TargetStatus`, `SlurmJobInfo`.
   - **Gates**: Job `631229` green on `hpc-node12` (`gates rc=0`, 572 passed, 2 skipped, 8 warnings in 165.76s).
-  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop`.
+
+- **Phase 2: Complete**
+  - **Constant-Time Token Comparison**: Updated `coperceive/app/server.py` auth middleware to enforce constant-time verification using `hmac.compare_digest(header[len(prefix):], expected)`.
+  - **Cluster Node-IP Binding**: Updated `src-tauri/src/slurm.rs` sbatch template to bind `--host "$NODE_IP"` (derived from `hostname -I`) instead of `0.0.0.0`.
+  - **Local Execution Target**:
+    - `src-tauri/src/sidecar.rs`: Implements `SidecarSession` managing child process lifecycle, dynamic port binding, mode 0600 token file creation/cleanup, and graceful SIGTERM termination.
+    - `src-tauri/src/main.rs`: Entrypoint with sidecar spawn/stop commands and runtime initialization.
+    - `web/src/desktop/local.ts`: `LocalExecutionTarget` implementing `connect()`, health probe, `sessionStorage` token injection, and `disconnect()`.
+    - 14 Rust unit tests passing.
+  - **New Unit Tests**:
+    - `test_non_loopback_token_auth_protects_all_api_routes`: Asserts every `/api` route (`/api/health`, `/api/scenes`, `/api/scenes/desk`, `/api/scenes/desk/frame`, `/api/scenes/desk/points`, `/api/scenes/desk/image`, `/api/scenes/desk/map/lines`, `/api/jobs`, `/api/scenes/desk/predictions`) returns 401 without Bearer token.
+    - `test_token_auth_uses_constant_time_comparison`: Verifies `hmac.compare_digest` is called to authenticate tokens.
+  - **macOS CI Workflow**: Added `desktop-macos` job to `.github/workflows/ci.yml` running on `macos-14` (Apple Silicon arm64). Builds web static assets, runs cargo unit tests, compiles release binary, and packages unsigned `Coperceive.app` and `Coperceive-macos-arm64.dmg`.
+  - **Gates**: Job `631300` green on `hpc-node12` (`gates rc=0`, 574 passed, 2 skipped, 8 warnings in 157.85s).
+  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop` (commit `a5fd591`).
+
+## Phase 2 Mac Acceptance Instructions
+
+- **Scene to copy**: `Town03-000` (6.9 MB, 149 frames, vehicle + drone with bounding boxes and annotations).
+- **SCP Command from Mac**:
+  ```bash
+  mkdir -p ~/coperceive-data
+  scp -r nanjaiyalathaa@hpc-head1.ewi.utwente.nl:~/results/reference-stepb-20261020/staged-scenes/Town03-000 ~/coperceive-data/
+  ```
+- **Opening Unsigned App on macOS**:
+  1. Download `coperceive-desktop-macos-arm64` artifact from GitHub Actions run on `feat/desktop`.
+  2. Open the `.dmg` and drag `Coperceive.app` into `/Applications` (or Desktop).
+  3. Bypass Apple Gatekeeper for the unsigned build:
+     ```bash
+     xattr -cr /Applications/Coperceive.app
+     ```
+     *(Alternatively: Right-click `Coperceive.app` in Finder -> select **Open** -> click **Open** in the security dialog).*
+  4. Launch the app, select **Local**, choose folder `~/coperceive-data`, and confirm `Town03-000` loads and plays.
 
 ## Cluster Empirical Findings (UTwente HPC)
 
