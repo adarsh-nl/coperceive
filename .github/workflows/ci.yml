@@ -127,6 +127,9 @@ jobs:
 
   desktop-macos:
     runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -142,43 +145,25 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - name: Run Rust unit tests
-        run: |
-          cargo test --verbose 2>&1 | tee /tmp/cargo_test.log || {
-            echo "## Cargo Test Error" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            tail -n 80 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit 1
-          }
+        run: cargo test --verbose
         working-directory: src-tauri
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh
       - name: Build Tauri Desktop (.app and .dmg)
-        run: |
-          npm run tauri build -- --target aarch64-apple-darwin --verbose 2>&1 | tee /tmp/tauri_build.log || {
-            echo "## Tauri Build Error" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            tail -n 100 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit 1
-          }
+        run: npm run tauri build -- --target aarch64-apple-darwin --verbose
         working-directory: web
       - name: Run Headless Smoke Test and Measure Sizes
-        run: |
-          bash scripts/desktop/smoke_test.sh 2>&1 | tee /tmp/smoke_test.log || {
-            echo "## Smoke Test Failure" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat /tmp/smoke_test.log >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            exit 1
-          }
+        run: bash scripts/desktop/smoke_test.sh
       - uses: actions/upload-artifact@v4
-        if: always()
         with:
           name: coperceive-desktop-macos-arm64
           path: |
-            src-tauri/target/**/*.dmg
-            src-tauri/target/**/*.app
-            target/**/*.dmg
-            target/**/*.app
-          if-no-files-found: warn
+            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Coperceive.app
+            src-tauri/target/release/bundle/dmg/*.dmg
+            src-tauri/target/release/bundle/macos/Coperceive.app
+            web/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
+            web/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Coperceive.app
+            web/src-tauri/target/release/bundle/dmg/*.dmg
+            web/src-tauri/target/release/bundle/macos/Coperceive.app
+          if-no-files-found: error

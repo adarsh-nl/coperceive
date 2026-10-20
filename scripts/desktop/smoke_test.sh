@@ -3,8 +3,7 @@
 # Smoke test verifying the bundled Python environment, coperceive serve sidecar,
 # constant-time token verification, and measuring artifact sizes.
 
-set -e
-set -u
+set -euo pipefail
 
 APP_BUNDLE="${1:-src-tauri/target/release/bundle/macos/Coperceive.app}"
 DMG_FILE="${2:-src-tauri/target/release/bundle/dmg/Coperceive_0.0.0_aarch64.dmg}"
