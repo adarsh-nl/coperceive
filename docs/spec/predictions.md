@@ -16,7 +16,7 @@ Every rule a result depends on is in this document or in the config copied into 
       metrics.json           written by `coperceive eval run`
 ```
 
-The predictions root is `<scenes root>/predictions` when that directory contains a child with `run.json`. `--predictions` overrides it for `eval`, `predictions import`, `export bev` and `serve`. A `run_id` and a `scene_id` follow the scene-id rule: non-empty, not `.` or `..`, no slash or backslash, no leading dot. Every path a reader opens is resolved and must stay under the predictions root.
+The predictions root is `<scenes root>/predictions` when that directory contains a child with `run.json`. `--predictions` overrides it for `eval`, `predictions import`, `export bev` and `serve`. A `run_id` and a `scene_id` follow the scene-id rule: non-empty, not `.` or `..`, no slash or backslash, no leading dot. Every path a reader opens is resolved and must stay under the predictions root. `cache` is a reserved child name of a run directory (the model-plugin cache, model-plugin spec §Cache): it is never a scene id and readers skip it.
 
 ## `run.json`
 
@@ -33,6 +33,7 @@ One UTF-8 JSON object.
 | `categories` | list of string | Every class the model can emit, in the ground-truth vocabulary. A class listed here with no prediction still gets a row in the metrics. A class in the evaluated ground truth or in the predictions that is not listed here is still evaluated; `eval run` prints one `warning\t<scene_id>: category '<name>' is not in run.json categories` line per scene and class. |
 | `sources` | object string → string | Each `source` value the run uses, with a one-line description. `single` and `fused` are the conventional names. |
 | `notes` | string, optional | Free text. |
+| `provenance` | object, optional | Written by `coperceive model run` (model-plugin spec §Provenance): plugin, model, manifest digest, environment, status `complete` or `partial`, timings. Readers that do not know it ignore it. |
 
 Unknown keys are ignored. A missing required key, a different `format` or `format_version`, or a `run_id` that does not match the directory is an error.
 

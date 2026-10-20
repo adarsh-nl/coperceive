@@ -1,0 +1,22 @@
+[
+ {
+  "token": "sample_1735722000000000",
+  "scene_token": "scene-token-0",
+  "timestamp": 1735722000000000
+ },
+ {
+  "token": "sample_1735722000100000",
+  "scene_token": "scene-token-0",
+  "timestamp": 1735722000100000
+ },
+ {
+  "token": "sample_1735722000200000",
+  "scene_token": "scene-token-0",
+  "timestamp": 1735722000200000
+ },
+ {
+  "token": "sample_1735722000300000",
+  "scene_token": "scene-token-0",
+  "timestamp": 1735722000300000
+ }
+]

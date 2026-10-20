@@ -1,0 +1,115 @@
+{
+ "meta": {
+  "use_camera": true
+ },
+ "results": {
+  "sample_1735722000000000": [
+   {
+    "sample_token": "sample_1735722000000000",
+    "translation": [
+     10.0,
+     0.0,
+     0.8
+    ],
+    "size": [
+     1.9,
+     4.0,
+     1.6
+    ],
+    "rotation": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "velocity": [
+     0.0,
+     0.0
+    ],
+    "detection_name": "car",
+    "detection_score": 0.9,
+    "attribute_name": ""
+   },
+   {
+    "sample_token": "sample_1735722000000000",
+    "translation": [
+     6.0,
+     3.0,
+     0.9
+    ],
+    "size": [
+     0.6,
+     0.6,
+     1.8
+    ],
+    "rotation": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "velocity": [
+     0.0,
+     0.0
+    ],
+    "detection_name": "pedestrian",
+    "detection_score": 0.3,
+    "attribute_name": ""
+   }
+  ],
+  "sample_1735722000100000": [
+   {
+    "sample_token": "sample_1735722000100000",
+    "translation": [
+     11.0,
+     0.0,
+     0.8
+    ],
+    "size": [
+     1.9,
+     4.0,
+     1.6
+    ],
+    "rotation": [
+     0.70710678,
+     0.0,
+     0.0,
+     0.70710678
+    ],
+    "velocity": [
+     0.0,
+     0.0
+    ],
+    "detection_name": "car",
+    "detection_score": 0.8,
+    "attribute_name": ""
+   },
+   {
+    "sample_token": "sample_1735722000100000",
+    "translation": [
+     0.0,
+     0.0,
+     0.0
+    ],
+    "size": [
+     1.0,
+     1.0,
+     1.0
+    ],
+    "rotation": [
+     1.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "velocity": [
+     0.0,
+     0.0
+    ],
+    "detection_name": "car",
+    "detection_score": 0.01,
+    "attribute_name": ""
+   }
+  ]
+ }
+}

@@ -643,20 +643,32 @@ def test_c_toggles_the_strip_and_a_thumbnail_opens_and_closes_the_split(
     assert session.page.locator(".pip").count() == 0  # the floating panel is gone
 
 
-def test_choosing_a_scene_while_playing_pauses_at_once(session: _Session) -> None:
+REPEAT = int(os.environ.get("COPERCEIVE_E2E_REPEAT", "1"))  # the gates job can run a test N times
+
+
+@pytest.mark.parametrize("_repeat", range(REPEAT))
+def test_choosing_a_scene_while_playing_pauses_at_once(session: _Session, _repeat: int) -> None:
     """The old scene stops prefetching when another scene is chosen, so the chosen
-    scene's summary is not queued behind it."""
+    scene's summary is not queued behind it. Every wait is on a state or an event, not
+    on wall time: playing with a sample advanced, the option present, paused, the new
+    status, network idle. Adarsh's bound: at most 10 old-scene requests after the choice."""
+    page = session.page
     session.choose_scene(SCENE_BARE)
-    session.page.locator("button[aria-label=Play]").click()
-    session.page.wait_for_timeout(700)
-    assert session.page.locator("button[aria-label=Pause]").count() == 1
+    page.locator("button[aria-label=Play]").click()
+    session.wait_for(lambda: page.locator("button[aria-label=Pause]").count() == 1, "playing")
+    session.wait_for(lambda: session.slider("aria-valuenow") >= 1, "a sample advanced")
+    page.locator("#scene-id").click()
+    option = page.locator("[role=option]", has_text=SCENE_FULL)
+    session.wait_for(lambda: option.count() == 1, "the scene option")
     session.requests.clear()
-    session.page.locator("#scene-id").click()
-    session.page.locator("[role=option]", has_text=SCENE_FULL).click()
-    assert session.page.locator("button[aria-label=Play]").count() == 1
-    session.wait_status(SCENE_FULL, timeout_s=3.0)
+    option.click()
+    session.wait_for(lambda: page.locator("button[aria-label=Play]").count() == 1, "paused")
+    session.wait_status(SCENE_FULL)
     old = [url for url in session.requests if f"/api/scenes/{SCENE_BARE}/" in url]
     assert len(old) <= 10, old
+    page.wait_for_load_state("networkidle")
+    settled = [url for url in session.requests if f"/api/scenes/{SCENE_BARE}/" in url]
+    assert settled == old, settled[len(old) :]  # nothing more for the old scene once shown
     assert session.slider("aria-valuenow") == 0
 
 

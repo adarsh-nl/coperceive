@@ -1,0 +1,48 @@
+# The fake model plugin of the tests and of `coperceive model check` (ADR 0011).
+# It runs in coperceive's own interpreter and invents one car per requested agent.
+spec_version: 1
+name: fake
+version: "0.0.1"
+licence:
+  notice: "fixture, no licence"
+environment:
+  current: true
+models:
+  default:
+    description: one car five metres ahead of every requested agent
+    inputs:
+      modalities: [camera, lidar]
+      frames: single
+    outputs:
+      categories: [car, pedestrian]
+      score_note: constant 0.9
+      sources:
+        single: fake
+    resources:
+      gpu: false
+      cpus: 1
+      memory_gb: 2
+      seconds_per_sample: 0.01
+    options:
+      extra: {type: bool, default: false, description: also a pedestrian per agent}
+      misbehave: {type: str, default: "", description: a fault to inject (tests only)}
+  known-answer:
+    description: the ground truth of every requested agent, shifted by offset_m along x (tests only)
+    inputs:
+      modalities: [camera]
+      frames: single
+    outputs:
+      categories: [car, pedestrian, sign, truck, pole, cone]
+      score_note: constant 0.9
+      sources:
+        single: ground truth shifted by offset_m
+    resources:
+      gpu: false
+      cpus: 1
+      memory_gb: 2
+      seconds_per_sample: 0.01
+    options:
+      offset_m: {type: float, default: 0.0, description: shift along world x in metres}
+      scramble_labels: {type: bool, default: false, description: rotate each box category to a different class}
+commands:
+  batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}"]

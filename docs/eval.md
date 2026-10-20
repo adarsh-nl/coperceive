@@ -111,8 +111,9 @@ Everything on this page has run on synthetic fixtures only. There is no real mod
 - `tests/test_eval_predictions.py` covers the format, validation (including a time that is a pose of a different agent), `write_run` and the scene-id rule.
 - `tests/test_eval_run.py`, `tests/test_eval_cli.py`, `tests/test_evalview.py` and the prediction tests in `tests/test_app.py` cover `eval run|report|compare`, `predictions import`, the three routes, path traversal and the case of a run that was imported but not evaluated.
 - `tests/test_eval_end_to_end.py` runs the whole chain on the cooperative fixture: scene, JSON lines, `predictions import`, `eval run`, the three routes, the bird's-eye export with a run, `eval compare`, and checks that the frame rows at 100000 µs count the same `tp`, `fp` and `miss` as the `metrics.json` sample row.
+- `tests/test_model_end_to_end.py` runs the model plugin chain (`coperceive model list|inspect|check|run`, cache hit, `eval run|report|compare`, `model cache prune`, and `model run --slurm`) on the cooperative fixture.
 
-The first real run is planned as an acceptance check: a `single` run on Griffin-25m from the released vehicle-side checkpoint through the Griffin toolkit's inference, written with `write_run`, evaluated with `eval run` and opened in the viewer. That needs the toolkit environment and a GPU job and has not been done. Until it has, the page has only been seen with synthetic predictions.
+Real detector runs on the ten Griffin-25m validation scenes (`vehicle-side`, `drone-side`, `instance-fusion`, and `early-fusion`) are produced through `coperceive model run griffin` and evaluated under BEV IoU and centre-distance configs; see [Run a model](models.md) and [ADR 0011](adr/0011-live-model-plugin.md).
 
 ## Class vocabulary
 

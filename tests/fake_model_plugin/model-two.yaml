@@ -1,0 +1,36 @@
+# Two models for the dependency tests: `a` writes a small artefact and a transient one,
+# `b` depends on both and records that it received their paths through configure.artifacts.
+spec_version: 1
+name: fake
+version: "0.0.1"
+licence:
+  notice: "fixture, no licence"
+environment:
+  current: true
+models:
+  a:
+    inputs: {modalities: [camera], frames: single}
+    outputs:
+      categories: [car]
+      score_note: constant 0.9
+      sources: {single: fake a}
+      artifacts: [marker, scratch]
+      transient_artifacts: [scratch]
+    resources: {gpu: false, cpus: 1, memory_gb: 2, seconds_per_sample: 0.01}
+    options:
+      misbehave: {type: str, default: marker}
+  b:
+    inputs: {modalities: [camera], frames: single}
+    outputs:
+      categories: [car]
+      score_note: constant 0.9
+      sources: {single: fake b}
+      artifacts: [seen]
+    resources: {gpu: false, cpus: 1, memory_gb: 2, seconds_per_sample: 0.01}
+    depends_on:
+      - {model: a, artifact: marker}
+      - {model: a, artifact: scratch}
+    options:
+      misbehave: {type: str, default: ""}
+commands:
+  batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}"]

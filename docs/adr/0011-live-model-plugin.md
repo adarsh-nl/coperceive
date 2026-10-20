@@ -1,6 +1,6 @@
 # ADR 0011 — Live model plugin (evaluation step B)
 
-Status: proposed on 2026-10-17; reviewed by Adarsh on 2026-10-18, whose answers to the eleven open questions are folded in (section "Review of 2026-10-18"). Awaiting his review of this revision. Nothing here is built. The normative text is `docs/spec/model-plugin.md`; the implementation plan is `docs/superpowers/plans/2026-10-17-eval-step-b.md`. Predictions format 1 (`docs/spec/predictions.md`) is unchanged except for one optional key, `provenance`, in `run.json`. Schema 1 is untouched.
+Status: accepted on 2026-10-18 and implemented in batch mode on branch `feat/eval-step-b` (live mode, Tasks 9 and 10 of the plan, stays deferred). The normative text is `docs/spec/model-plugin.md`; the user guide is `docs/models.md`; the implementation plan is `docs/superpowers/plans/2026-10-17-eval-step-b.md`. Predictions format 1 (`docs/spec/predictions.md`) is unchanged except for the optional `provenance` key in `run.json` and the reserved `cache` child directory. Schema 1 is untouched.
 
 ## Context
 
@@ -170,7 +170,7 @@ In the Predictions block the session appears in the run list as `run_id: "live:<
 `--slurm` writes `<out>/.slurm/<run_id>.sbatch` and prints it; `--submit` additionally runs `sbatch <file>` as an argv list. The default is emit only, because the HPC rule is to show the script before submitting. The emitted script:
 
 - `--partition=ps,main-gpu` and `--gres=gpu:1` when `resources.gpu` is true, else `ps,main-cpu`; `--mem` from `memory_gb`; `--constraint` from `slurm_constraint`; `--mail-type=END,FAIL`; logs under `~/logs/%x-%j.{out,err}`;
-- `--time` = `staging_seconds + seconds_per_sample × samples`, rounded up to the next ten minutes, doubled; the two numbers come from the manifest for the first run, and after that from the newest run of the same plugin and model under `--out`, whose `provenance.timings` hold the measured `staging_s` and `per_sample_s` (Adarsh, 2026-10-18: estimates from the manifest, then updated from the last run's provenance);
+- `--time` = `staging_seconds + conversion_seconds + seconds_per_sample × samples`, rounded up to the next ten minutes, doubled; the three numbers come from the manifest for the first run, and after that from the newest run of the same plugin and model under `--out` whose `provenance.timings` hold `inference_s`: `staging_s` (the rsync wall time the job measures and passes as `--staging-seconds`), `conversion_s` and `per_sample_s`, which is inference only (Adarsh, 2026-10-18: estimates from the manifest, then updated from the last run's provenance; 2026-10-19: the child reports `conversion_s` and `inference_s` in `configured`, the parent owns staging, never the whole worker time over the samples);
 - `set -euo pipefail`; `module purge` then `module load` of `environment.modules`; `SCRATCH=/local/$SLURM_JOB_ID` with the `trap` of the `CLAUDE.md` template;
 - staging with `rsync -a --files-from` of exactly the scene files and the `inputs.raw` files the selected scenes need, listed the way `scripts/griffin/stage_viewer.py` `staged_files` lists them;
 - the same `coperceive model run` without `--slurm` against the staged copy, `--work "$SCRATCH/work"`;
@@ -273,4 +273,11 @@ Adarsh answered the eleven open questions of the first draft; each answer is fol
 | 10 | Labels staged for the toolkit | Scrambled labels plus one known-answer fixture plugin. | Decision 9 acceptance; plan Task 4. |
 | 11 | Resource estimates | From the manifest, then updated from the last run's provenance. | Decision 5; spec §Provenance `timings`. |
 
-No step B code exists. The next step is Adarsh's review of this revision.
+## As built (batch mode)
+
+- **`checkpoint_md5` and `checkpoint_path` in `hello.environment`**: `none` was dropped; every model reports a 32-character lowercase hex MD5 (`checkpoint_md5`) and the file path on disk (`checkpoint_path`, the weights or the worker's own source for a model without weights). The parent hashes `checkpoint_path` itself and refuses a mismatch as a protocol violation (`provenance.checkpoint` stores `path`, `size`, `mtime_ns`, and `md5`).
+- **GPU model in `provenance`**: `provenance.gpu` records the GPU model string from `hello.environment.gpu` or `nvidia-smi` when `CUDA_VISIBLE_DEVICES` is set, else `null`. Acceptance runs pin `slurm_constraint: "a40"` (`"a40|a100"` remains an option for non-acceptance runs).
+- **Split timings**: `configured` carries an optional `timings` map with `conversion_s` and `inference_s`; the parent records `staging_s` (from `--staging-seconds`), `conversion_s`, `inference_s`, `wall_s`, and `per_sample_s` (`inference_s / frames_run`). The Slurm emitter computes `--time` from `staging_s + conversion_s + per_sample_s × samples` using only prior runs whose `provenance.timings` include `inference_s`.
+- **Dependencies and transient artefacts**: a dependency declared in `depends_on` runs first as `<run_id>-<model>` in the same work directory (or is read from `--artifacts DIR/<model>/<artifact>`) and reaches the child only through `configure.artifacts`. `outputs.transient_artifacts` (a subset of `outputs.artifacts`, such as the 11 GB `track_query` directory of Griffin's `drone-side` model) is excluded from the run's `cache/` and from the Slurm job's copy home; if a cached dependency's transient artefact is missing on disk, the dependency runs again with the cache bypassed.
+- **Progress before `configured`**: the batch driver and `model check` accept `progress` messages while waiting for `configured`.
+- **Live mode**: Tasks 9 and 10 (`coperceive/models/live.py`, `/api/scenes/{id}/live/*`, and the Live controls in the viewer) remain deferred.

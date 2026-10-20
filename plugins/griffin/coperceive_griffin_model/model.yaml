@@ -1,0 +1,214 @@
+# The Griffin model plugin (ADR 0011). The worker is Python 3.8 code that runs in the
+# Griffin conda environment and drives the toolkit at commit 9c02ba4a; the released 25m
+# checkpoints are pinned by MD5 (docs/Training_and_Evaluation.md of the toolkit, checked
+# against the files by job 627093) and verified by the parent before any scene runs.
+spec_version: 1
+name: griffin
+version: "0.1.0"
+licence:
+  spdx: MIT
+  notice: "Copyright (c) [2025] [Jiahao Wang] (MIT License, LICENSE.txt of wang-jh18-SVM/Griffin; checkpoints from HF wjh-svm/Griffin, license: mit)"
+  citation: "Wang et al., Griffin: Aerial-Ground Cooperative Detection and Tracking Dataset and Benchmark, arXiv:2503.06983"
+environment:
+  conda: griffin
+  modules: [nvidia/cuda-11.8, nvidia/cuda-11.x_cudnn-8.6]
+  inherit_ld_library_path: true
+models:
+  vehicle-side:
+    description: "Agile (UniAD-style track head on BEVFormer-tiny / ResNet-50, camera-only) vehicle-side single-agent, 48 epochs, iter 33024"
+    checkpoint_md5: 1201f5692e390a75e5b5ab0efa0cae19
+    inputs:
+      modalities: [camera]
+      agents: [vehicle]
+      sensors: [front, back, left, right]
+      frames: sequence
+      raw: &vehicle_raw
+        - "vehicle-side/scene_infos.json"
+        - "drone-side/scene_infos.json"
+        - "vehicle-side/calib/front.json"
+        - "vehicle-side/calib/back.json"
+        - "vehicle-side/calib/left.json"
+        - "vehicle-side/calib/right.json"
+        - "vehicle-side/calib/lidar_top.json"
+        - "drone-side/calib/front.json"
+        - "drone-side/calib/back.json"
+        - "drone-side/calib/left.json"
+        - "drone-side/calib/right.json"
+        - "drone-side/calib/bottom.json"
+        - "drone-side/calib/lidar_front.json"
+        - "drone-side/calib/lidar_bottom.json"
+        - "drone-side/calib/lidar_virtual.json"
+        - "vehicle-side/pose/{frame:06d}.json"
+        - "vehicle-side/label/{frame:06d}.txt"
+        - "drone-side/pose/{frame:06d}.json"
+        - "drone-side/label/{frame:06d}.txt"
+        - "vehicle-side/camera/{sensor}/{frame:06d}.png"
+      raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}
+      raw_clock: {scale_us: 100000, offset_us: 0}
+    outputs:
+      categories: [car, bicycle, pedestrian]
+      score_note: "sigmoid class score (max over the 3 classes) of the Agile/UniAD track-query head, as written to results_nusc_det.json: the detector's DETRTrack3DCoder keeps the top-300 queries per frame with score > 0.0 inside post_center_range +-61.2 m, then class_range drops boxes beyond a 50 m ego radius. Rows with score < min_score (default 0.05) are dropped by the plugin, so a run's operating point is min_score; the published operating point is 0.4 (config score_thresh=0.4 / filter_score_thresh=0.35, which gate track birth/death and are left unchanged). coperceive's viewer default stays score_threshold 0.4 via the eval config."
+      sources:
+        single: "vehicle-side camera-only Agile model, no fusion"
+      artifacts: [det_json, det_pkl]
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 64
+      seconds_per_sample: 0.394    # inference only: tools/test.py 587 s / 1,490 samples, job 629288
+      staging_seconds: 700         # 11 min 17 s of camera PNG staging, job 627093
+      conversion_seconds: 100      # trans_kitti2nuscenes 71 s + generate_nuscenes_pkl 27 s, job 629288
+      frame_timeout_s: 3600        # the whole scene set runs at the first configure
+      slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs (sm_86/sm_80 SASS in torch 1.9.1+cu111)
+    options:
+      subset: {type: str, default: "25m", choices: ["25m"], description: the released 25m checkpoints are the only ones pinned here}
+      min_score: {type: float, default: 0.05, description: rows below this detection_score are dropped}
+      det_json: {type: str, default: "", description: answer from this results_nusc_det.json instead of running the toolkit (no GPU)}
+      nusc_root: {type: str, default: "", description: directory with sample.json and scene.json for det_json}
+  drone-side:
+    description: "Agile drone-side single-agent, 24 epochs, iter 33024, with save_track_query for instance fusion"
+    checkpoint_md5: 41734b8d764d1213935a231a3419f655
+    inputs:
+      modalities: [camera]
+      agents: [uav]
+      sensors: [front, back, left, right, bottom]
+      frames: sequence
+      raw:
+        - "vehicle-side/scene_infos.json"
+        - "drone-side/scene_infos.json"
+        - "vehicle-side/calib/front.json"
+        - "vehicle-side/calib/back.json"
+        - "vehicle-side/calib/left.json"
+        - "vehicle-side/calib/right.json"
+        - "vehicle-side/calib/lidar_top.json"
+        - "drone-side/calib/front.json"
+        - "drone-side/calib/back.json"
+        - "drone-side/calib/left.json"
+        - "drone-side/calib/right.json"
+        - "drone-side/calib/bottom.json"
+        - "drone-side/calib/lidar_front.json"
+        - "drone-side/calib/lidar_bottom.json"
+        - "drone-side/calib/lidar_virtual.json"
+        - "vehicle-side/pose/{frame:06d}.json"
+        - "vehicle-side/label/{frame:06d}.txt"
+        - "drone-side/pose/{frame:06d}.json"
+        - "drone-side/label/{frame:06d}.txt"
+        - "drone-side/camera/{sensor}/{frame:06d}.png"
+      raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}
+      raw_clock: {scale_us: 100000, offset_us: 0}
+    outputs:
+      categories: [car, bicycle, pedestrian]
+      score_note: "sigmoid class score (max over the 3 classes) of the Agile/UniAD track-query head on the drone cameras, as written to results_nusc_det.json (top-300 per frame, score > 0.0, 50 m class_range); rows below min_score (default 0.05) are dropped by the plugin."
+      sources:
+        single: "drone-side camera-only Agile model, no fusion"
+      artifacts: [det_json, det_pkl, track_query]
+      transient_artifacts: [track_query]  # 11 GB: only instance fusion's pass in the same job reads it
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 64
+      seconds_per_sample: 0.461    # inference only: dist_eval 11 min 27 s / 1,490 samples, job 628386
+      staging_seconds: 930         # the drone cameras: 26 min 51 s for 15 GB vehicle + 21 GB drone minus 677 s for the vehicle's, job 628386
+      conversion_seconds: 100      # as vehicle-side
+      frame_timeout_s: 3600
+      slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
+    options:
+      subset: {type: str, default: "25m", choices: ["25m"]}
+      min_score: {type: float, default: 0.05}
+      det_json: {type: str, default: ""}
+      nusc_root: {type: str, default: ""}
+  instance-fusion:
+    description: "Instance fusion (cooperative/instance_fusion config, 48 epochs, iter 33024): the vehicle cameras' queries fused with the drone-side pass's track queries"
+    checkpoint_md5: 7e1448188b6e99ca6303575c3466b97f
+    inputs:
+      modalities: [camera]
+      agents: [vehicle]
+      sensors: [front, back, left, right]
+      frames: sequence
+      raw: *vehicle_raw
+      raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}
+      raw_clock: {scale_us: 100000, offset_us: 0}
+    depends_on:
+      - {model: drone-side, artifact: track_query}
+    outputs:
+      categories: [car, bicycle, pedestrian]
+      score_note: "sigmoid class score (max over the 3 classes) of the instance-fusion Agile head, as written to results_nusc_det.json (top-300 per frame, score > 0.0, 50 m class_range); rows below min_score (default 0.05) are dropped by the plugin. The drone-side track queries come from the drone-side pass of the same job."
+      sources:
+        fused: "instance fusion of vehicle queries with drone track queries"
+      artifacts: [det_json, det_pkl]
+      agent: vehicle
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 64
+      seconds_per_sample: 0.421    # inference only: dist_eval 10 min 27 s / 1,490 samples, job 628386
+      staging_seconds: 700         # the vehicle cameras; the drone cameras are the dependency's
+      conversion_seconds: 100
+      frame_timeout_s: 3600
+      slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
+    options:
+      subset: {type: str, default: "25m", choices: ["25m"]}
+      min_score: {type: float, default: 0.05}
+      det_json: {type: str, default: ""}
+      nusc_root: {type: str, default: ""}
+  early-fusion:
+    description: "Early fusion (early-fusion config, 48 epochs, iter 33024): one Agile model over the vehicle's 4 and the drone's 5 cameras (num_cams = 9)"
+    checkpoint_md5: ccf39651d3e4381ec06e4d0709821949
+    inputs:
+      modalities: [camera]
+      agents: [vehicle]
+      sensors: [front, back, left, right]
+      frames: sequence
+      raw:
+        - "vehicle-side/scene_infos.json"
+        - "drone-side/scene_infos.json"
+        - "vehicle-side/calib/front.json"
+        - "vehicle-side/calib/back.json"
+        - "vehicle-side/calib/left.json"
+        - "vehicle-side/calib/right.json"
+        - "vehicle-side/calib/lidar_top.json"
+        - "drone-side/calib/front.json"
+        - "drone-side/calib/back.json"
+        - "drone-side/calib/left.json"
+        - "drone-side/calib/right.json"
+        - "drone-side/calib/bottom.json"
+        - "drone-side/calib/lidar_front.json"
+        - "drone-side/calib/lidar_bottom.json"
+        - "drone-side/calib/lidar_virtual.json"
+        - "vehicle-side/pose/{frame:06d}.json"
+        - "vehicle-side/label/{frame:06d}.txt"
+        - "drone-side/pose/{frame:06d}.json"
+        - "drone-side/label/{frame:06d}.txt"
+        - "vehicle-side/camera/{sensor}/{frame:06d}.png"
+        # The drone's cameras by name: the rows belong to the vehicle, whose sensors {sensor} lists.
+        - "drone-side/camera/front/{frame:06d}.png"
+        - "drone-side/camera/back/{frame:06d}.png"
+        - "drone-side/camera/left/{frame:06d}.png"
+        - "drone-side/camera/right/{frame:06d}.png"
+        - "drone-side/camera/bottom/{frame:06d}.png"
+      raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}
+      raw_clock: {scale_us: 100000, offset_us: 0}
+    outputs:
+      categories: [car, bicycle, pedestrian]
+      score_note: "sigmoid class score (max over the 3 classes) of the early-fusion Agile head over 9 cameras, as written to results_nusc_det.json (top-300 per frame, score > 0.0, 50 m class_range); rows below min_score (default 0.05) are dropped by the plugin."
+      sources:
+        fused: "early fusion of vehicle and drone cameras"
+      artifacts: [det_json, det_pkl]
+      agent: vehicle
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 64
+      seconds_per_sample: 0.538    # inference only: dist_eval 13 min 22 s / 1,490 samples, job 628386
+      staging_seconds: 1611        # vehicle + drone cameras: 26 min 51 s, job 628386
+      conversion_seconds: 112      # trans_kitti2nuscenes --early_fusion 80 s + generate_nuscenes_pkl 32 s, job 628386
+      frame_timeout_s: 3600
+      slurm_constraint: "a40"      # pinned to A40 for acceptance runs; "a40|a100" is valid for non-acceptance runs
+    options:
+      subset: {type: str, default: "25m", choices: ["25m"]}
+      min_score: {type: float, default: 0.05}
+      det_json: {type: str, default: ""}
+      nusc_root: {type: str, default: ""}
+commands:
+  batch: ["{python}", "{plugin_dir}/worker.py", "--model", "{model}"]
+notes: "toolkit commit 9c02ba4a, mmdet3d v0.17.1; conversion rules of scripts/griffin/griffin_to_predictions.py"
