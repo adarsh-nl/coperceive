@@ -159,9 +159,9 @@ echo "{token}" > "$TOKEN_FILE"
 # Clean up credentials on exit
 trap 'rm -f "$CREDS_FILE" "$TOKEN_FILE"' EXIT
 
-# Start server: token read from 0600 file (never on argv)
+# Start server: token read from 0600 file (never on argv), bound to cluster node IP
 exec "{python_bin}" -m coperceive.app.serve \
-    --host 0.0.0.0 \
+    --host "$NODE_IP" \
     --port "$PORT" \
     --token-file "$TOKEN_FILE" \
     --root "{data_root}"
@@ -246,6 +246,8 @@ JOBID|NAME|STATE|REASON|TIME|TIME_LIMIT|NODELIST
         assert!(script.contains("#SBATCH --partition=ps,main-cpu"));
         assert!(script.contains("chmod 0600"));
         assert!(script.contains("--token-file"));
+        assert!(script.contains("--host \"$NODE_IP\"")); // Bound to cluster node IP, not 0.0.0.0
+        assert!(!script.contains("--host 0.0.0.0"));
         assert!(!script.contains("--token secrettokenhex")); // Token never on argv
     }
 }

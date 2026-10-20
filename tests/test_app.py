@@ -715,3 +715,79 @@ def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
         "/api/scenes/odd/image", params={"time_us": 0, "agent_id": "vehicle", "sensor_id": "front"}
     )
     assert image.status_code == 404
+
+
+def test_non_loopback_token_auth_protects_all_api_routes(tmp_path: Path) -> None:
+    """When a token is configured (e.g. binding non-loopback on a cluster node), every /api
+    route (GET included: scenes, frames, points, images, map lines, jobs, predictions)
+    strictly requires the Bearer token and returns 401 if missing or invalid."""
+    root = tmp_path / "scenes"
+    _viewer_scene(root)  # creates scene "desk"
+    token = "secret-session-token-xyz"
+    app = create_app(root=root, token=token)
+    client = TestClient(app)
+
+    routes = [
+        "/api/health",
+        "/api/scenes",
+        "/api/scenes/desk",
+        "/api/scenes/desk/frame",
+        "/api/scenes/desk/points",
+        "/api/scenes/desk/image",
+        "/api/scenes/desk/map/lines",
+        "/api/jobs",
+        "/api/scenes/desk/predictions",
+    ]
+
+    for route in routes:
+        # Request with no Authorization header
+        resp_no_auth = client.get(route)
+        assert resp_no_auth.status_code == 401, (
+            f"{route} without auth returned {resp_no_auth.status_code}"
+        )
+        assert resp_no_auth.json() == {"detail": "bearer token required"}
+
+        # Request with invalid token
+        resp_bad_auth = client.get(route, headers={"Authorization": "Bearer wrong-token"})
+        assert resp_bad_auth.status_code == 401, (
+            f"{route} with bad auth returned {resp_bad_auth.status_code}"
+        )
+        assert resp_bad_auth.json() == {"detail": "bearer token required"}
+
+        # Request with valid token should not be rejected with 401
+        resp_good = client.get(route, headers={"Authorization": f"Bearer {token}"})
+        assert resp_good.status_code != 401, (
+            f"{route} with valid auth returned {resp_good.status_code}"
+        )
+
+
+def test_token_auth_uses_constant_time_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Token authentication uses constant-time comparison (hmac.compare_digest)
+    to prevent timing attacks."""
+    import hmac
+
+    called = []
+    original_compare = hmac.compare_digest
+
+    def spy_compare(a: str, b: str) -> bool:
+        called.append((a, b))
+        return original_compare(a, b)
+
+    monkeypatch.setattr(hmac, "compare_digest", spy_compare)
+
+    token = "super-secret-token-123"
+    app = create_app(root=tmp_path, token=token)
+    client = TestClient(app)
+
+    resp = client.get("/api/health", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert len(called) >= 1
+    assert called[-1] == (token, token)
+
+    called.clear()
+    resp_bad = client.get("/api/health", headers={"Authorization": "Bearer bad-token"})
+    assert resp_bad.status_code == 401
+    assert len(called) >= 1
+    assert called[-1] == ("bad-token", token)

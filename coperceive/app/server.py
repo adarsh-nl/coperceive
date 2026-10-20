@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import json
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -159,7 +160,11 @@ def create_app(
             expected = request.app.state.token
             if expected:
                 header = request.headers.get("authorization", "")
-                if header != f"Bearer {expected}":
+                prefix = "Bearer "
+                if not (
+                    header.startswith(prefix)
+                    and hmac.compare_digest(header[len(prefix) :], expected)
+                ):
                     return _json_error(401, "bearer token required")
             if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
                 if request.headers.get(CSRF_HEADER) != "1":

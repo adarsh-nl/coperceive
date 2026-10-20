@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/dev/tooling/cli/schema.json",
+  "productName": "Coperceive",
+  "version": "0.0.0",
+  "identifier": "nl.adarsh.coperceive",
+  "build": {
+    "beforeDevCommand": "npm run build --prefix ../web",
+    "beforeBuildCommand": "npm run build --prefix ../web",
+    "frontendDist": "../coperceive/app/static"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Coperceive",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["app", "dmg"],
+    "macOS": {
+      "frameworks": [],
+      "minimumSystemVersion": "13.0"
+    }
+  }
+}

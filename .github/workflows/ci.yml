@@ -115,3 +115,60 @@ jobs:
             https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
           tar -xzf gitleaks.tar.gz
           ./gitleaks detect --source . --redact --no-banner --exit-code 1
+
+  desktop-macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Run Rust unit tests
+        run: cargo test
+        working-directory: src-tauri
+      - name: Build macOS Application Bundle
+        run: |
+          cargo build --release
+          mkdir -p dist/Coperceive.app/Contents/MacOS
+          mkdir -p dist/Coperceive.app/Contents/Resources
+          cp target/release/coperceive-desktop dist/Coperceive.app/Contents/MacOS/coperceive
+          cp -r ../coperceive/app/static dist/Coperceive.app/Contents/Resources/
+          cat << 'EOF' > dist/Coperceive.app/Contents/Info.plist
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleExecutable</key>
+            <string>coperceive</string>
+            <key>CFBundleIdentifier</key>
+            <string>nl.adarsh.coperceive</string>
+            <key>CFBundleName</key>
+            <string>Coperceive</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>0.0.0</string>
+            <key>LSMinimumSystemVersion</key>
+            <string>13.0</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+          </dict>
+          </plist>
+          EOF
+          hdiutil create -volname "Coperceive" -srcfolder dist/Coperceive.app -ov -format UDZO dist/Coperceive-macos-arm64.dmg
+        working-directory: src-tauri
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coperceive-desktop-macos-arm64
+          path: |
+            src-tauri/dist/Coperceive-macos-arm64.dmg
+            src-tauri/dist/Coperceive.app
