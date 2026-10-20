@@ -109,12 +109,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: gitleaks
         run: |
           curl -sSL -o gitleaks.tar.gz \
             https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
           tar -xzf gitleaks.tar.gz
-          ./gitleaks detect --source . --redact --no-banner --exit-code 1
+          ./gitleaks detect --source . --config .gitleaks.toml --redact --no-banner --exit-code 1 || {
+            echo "## Gitleaks Findings" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            ./gitleaks detect --source . --config .gitleaks.toml --no-banner --report-path /tmp/gitleaks.json || true
+            cat /tmp/gitleaks.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
 
   desktop-macos:
     runs-on: macos-14
@@ -133,7 +142,14 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - name: Run Rust unit tests
-        run: cargo test --verbose
+        run: |
+          cargo test --verbose 2>&1 | tee /tmp/cargo_test.log || {
+            echo "## Cargo Test Error" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 80 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
         working-directory: src-tauri
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh
