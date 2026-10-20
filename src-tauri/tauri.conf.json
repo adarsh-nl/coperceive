@@ -11,6 +11,7 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Coperceive",
         "width": 1280,
         "height": 800,

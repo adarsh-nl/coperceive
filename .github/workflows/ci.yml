@@ -150,7 +150,12 @@ jobs:
       - name: Report Cargo Test Failure
         if: failure()
         run: |
-          tail -n 45 /tmp/cargo_test.log | while IFS= read -r line; do
+          echo "### Cargo Test Failures" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY || true
+          tail -n 60 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 3 /tmp/cargo_test.log | head -n 30 | while IFS= read -r line; do
             echo "::error title=CargoError::$line"
           done
       - name: Bundle Python Standalone Runtime
@@ -161,9 +166,14 @@ jobs:
       - name: Report Tauri Build Failure
         if: failure()
         run: |
-          while IFS= read -r line; do
-            echo "::error::$line"
-          done < <(tail -n 60 /tmp/tauri_build.log)
+          echo "### Tauri Build Failures" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY || true
+          tail -n 60 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 3 /tmp/tauri_build.log | head -n 30 | while IFS= read -r line; do
+            echo "::error title=TauriBuildError::$line"
+          done
       - name: Run Headless Smoke Test and Measure Sizes
         run: bash scripts/desktop/smoke_test.sh 2>&1 | tee /tmp/smoke_test.log
       - name: Report Smoke Test Failure
