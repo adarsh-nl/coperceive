@@ -47,7 +47,9 @@ The desktop application is now the top priority per Adarsh's instructions (pausi
   - **CI Workflow (`.github/workflows/ci.yml`)**:
     - `desktop-macos` job runs on `macos-14` (Apple Silicon arm64).
     - Bundles standalone Python, runs `npm run tauri build -- --target aarch64-apple-darwin`, runs `scripts/desktop/smoke_test.sh`, and uploads `.app` and `.dmg` artifacts.
+    - Verified green in CI run [`39408692203`](https://github.com/adarsh-nl/coperceive/actions/runs/39408692203) (all jobs: `lint`, `gitleaks`, `test (3.10-3.13)`, `web`, `e2e`, and `desktop-macos` succeeded).
   - **Gates**: Job `631378` green on `hpc-node12` (`gates rc=0`, 574 passed, 2 skipped, 8 warnings in 154.16s).
+  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop` (commit `208d28a`).
 
 ## Phase 2 Mac Acceptance Instructions
 
