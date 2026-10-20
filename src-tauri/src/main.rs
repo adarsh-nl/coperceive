@@ -6,7 +6,7 @@
 #[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
@@ -80,7 +80,7 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
 #[tauri::command]
 async fn start_local(
     app: tauri::AppHandle,
-    state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, Arc<AppState>>,
     data_root: String,
 ) -> Result<SessionPayload, String> {
     let root_path = PathBuf::from(&data_root);
@@ -123,7 +123,7 @@ async fn start_local(
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-async fn stop_local(state: tauri::State<'_, AppState>) -> Result<(), String> {
+async fn stop_local(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
     if let Some(mut session) = lock.take() {
         session.stop().map_err(|e| format!("Failed to stop sidecar: {}", e))?;
@@ -133,7 +133,7 @@ async fn stop_local(state: tauri::State<'_, AppState>) -> Result<(), String> {
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-async fn health(state: tauri::State<'_, AppState>) -> Result<HealthPayload, String> {
+async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload, String> {
     let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
     if let Some(session) = lock.as_mut() {
         if session.is_alive() {
@@ -186,20 +186,22 @@ fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(),
 
 #[cfg(target_os = "macos")]
 fn main() {
+    let app_state = Arc::new(AppState::default());
+    let state_for_window = Arc::clone(&app_state);
+    let state_for_exit = Arc::clone(&app_state);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
-        .manage(AppState::default())
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             pick_data_root,
             start_local,
             stop_local,
             health,
         ])
-        .on_window_event(|window, event| {
+        .on_window_event(move |_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                use tauri::Manager;
-                let state = window.state::<AppState>();
-                if let Ok(mut lock) = state.sidecar.lock() {
+                if let Ok(mut lock) = state_for_window.sidecar.lock() {
                     if let Some(mut s) = lock.take() {
                         let _ = s.stop();
                     }
@@ -208,11 +210,9 @@ fn main() {
         })
         .build(tauri::generate_context!())
         .expect("error while running tauri application")
-        .run(|app_handle, event| {
+        .run(move |_app_handle, event| {
             if let tauri::RunEvent::Exit = event {
-                use tauri::Manager;
-                let state = app_handle.state::<AppState>();
-                if let Ok(mut lock) = state.sidecar.lock() {
+                if let Ok(mut lock) = state_for_exit.sidecar.lock() {
                     if let Some(mut s) = lock.take() {
                         let _ = s.stop();
                     }
