@@ -63,7 +63,14 @@ if [ -n "${FOUND_DMG}" ]; then
     DMG_SIZE=$(ls -lh "${FOUND_DMG}" | awk '{print $5}')
     echo "Coperceive .dmg size: ${DMG_SIZE} (${FOUND_DMG})"
 else
+    DMG_SIZE="unknown"
     echo "Warning: .dmg file not located for measurement"
+fi
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    echo "### Artifact Measured Sizes" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Coperceive.app size**: ${APP_SIZE}" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Coperceive .dmg size**: ${DMG_SIZE} (\`${FOUND_DMG}\`)" >> "${GITHUB_STEP_SUMMARY}"
 fi
 
 # Headless smoke test: launch serve with token-file and verify loopback authentication
@@ -85,7 +92,7 @@ mkdir -p "${DATA_ROOT}"
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
 echo "Launching coperceive serve on port ${PORT} with token-file ${TOKEN_FILE}..."
 
-"${PYTHON_BIN}" -m coperceive.app.serve \
+"${PYTHON_BIN}" -m coperceive serve \
     --host 127.0.0.1 \
     --port "${PORT}" \
     --token-file "${TOKEN_FILE}" \

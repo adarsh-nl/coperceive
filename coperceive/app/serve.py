@@ -32,3 +32,9 @@ def run(
         media_roots=media_roots,
     )
     uvicorn.run(app, host=host, port=port, root_path=root_path)
+
+
+if __name__ == "__main__":
+    from coperceive.cli import main
+
+    main()

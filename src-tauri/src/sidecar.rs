@@ -32,7 +32,8 @@ impl SidecarSession {
 
         let child = Command::new(python_bin)
             .arg("-m")
-            .arg("coperceive.app.serve")
+            .arg("coperceive")
+            .arg("serve")
             .arg("--host")
             .arg("127.0.0.1")
             .arg("--port")
