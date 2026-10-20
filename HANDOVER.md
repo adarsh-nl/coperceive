@@ -16,20 +16,38 @@ The desktop application is now the top priority per Adarsh's instructions (pausi
   - **TypeScript Bindings**: `web/src/desktop/types.ts` defining `ExecutionTarget`, `ConnectionSession`, `TargetStatus`, `SlurmJobInfo`.
   - **Gates**: Job `631229` green on `hpc-node12` (`gates rc=0`, 572 passed, 2 skipped, 8 warnings in 165.76s).
 
-- **Phase 2: Complete**
+- **Phase 2: Complete (Full Tauri v2 Implementation & Bundled Python)**
   - **Constant-Time Token Comparison**: Updated `coperceive/app/server.py` auth middleware to enforce constant-time verification using `hmac.compare_digest(header[len(prefix):], expected)`.
   - **Cluster Node-IP Binding**: Updated `src-tauri/src/slurm.rs` sbatch template to bind `--host "$NODE_IP"` (derived from `hostname -I`) instead of `0.0.0.0`.
-  - **Local Execution Target**:
-    - `src-tauri/src/sidecar.rs`: Implements `SidecarSession` managing child process lifecycle, dynamic port binding, mode 0600 token file creation/cleanup, and graceful SIGTERM termination.
-    - `src-tauri/src/main.rs`: Entrypoint with sidecar spawn/stop commands and runtime initialization.
-    - `web/src/desktop/local.ts`: `LocalExecutionTarget` implementing `connect()`, health probe, `sessionStorage` token injection, and `disconnect()`.
-    - 14 Rust unit tests passing.
-  - **New Unit Tests**:
-    - `test_non_loopback_token_auth_protects_all_api_routes`: Asserts every `/api` route (`/api/health`, `/api/scenes`, `/api/scenes/desk`, `/api/scenes/desk/frame`, `/api/scenes/desk/points`, `/api/scenes/desk/image`, `/api/scenes/desk/map/lines`, `/api/jobs`, `/api/scenes/desk/predictions`) returns 401 without Bearer token.
-    - `test_token_auth_uses_constant_time_comparison`: Verifies `hmac.compare_digest` is called to authenticate tokens.
-  - **macOS CI Workflow**: Added `desktop-macos` job to `.github/workflows/ci.yml` running on `macos-14` (Apple Silicon arm64). Builds web static assets, runs cargo unit tests, compiles release binary, and packages unsigned `Coperceive.app` and `Coperceive-macos-arm64.dmg`.
-  - **Gates**: Job `631300` green on `hpc-node12` (`gates rc=0`, 574 passed, 2 skipped, 8 warnings in 157.85s).
-  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop` (commit `a5fd591`).
+  - **Tauri v2 Application (`src-tauri/` & `web/`)**:
+    - `web/package.json`: Upgraded with `@tauri-apps/api@^2.12.4`, `@tauri-apps/plugin-dialog@^2.8.3`, and `@tauri-apps/cli@^2.0.0`.
+    - `src-tauri/Cargo.toml`: Added `tauri = { version = "2.2.5", ... }` and `tauri-plugin-dialog = "2.2.0"` under macOS target dependencies, and `tauri-build = "2.0.5"` build dependency. Non-macOS target retains standard Rust unit tests without GTK3/WebKitGTK dependencies.
+    - `src-tauri/capabilities/default.json`: Grants `core:default` and `dialog:default`.
+    - `src-tauri/tauri.conf.json`: Configures Tauri v2 bundle targets `["app", "dmg"]` with `resources: ["resources/**/*"]`.
+    - `src-tauri/src/main.rs`: Full Tauri application runtime with `#[tauri::command]` handlers:
+      - `pick_data_root`: Invokes `tauri_plugin_dialog::DialogExt::file().blocking_pick_folder()`.
+      - `start_local`: Spawns bundled Python running `coperceive serve` on ephemeral port with mode 0600 token-file; polls `/api/health` with Bearer auth; returns `LocalServeResult { origin, token, port }`.
+      - `stop_local`: Sends SIGTERM, waits up to 3s, then SIGKILL to child process; cleans up token file.
+      - `health`: Probes `/api/health` with Bearer token.
+      - Application lifecycle hooks (`WindowEvent::Destroyed` and `RunEvent::Exit`) terminate any active child process cleanly.
+  - **UI Connection Flow (`web/src/desktop/ConnectScreen.tsx`, `web/src/App.tsx`, `web/src/desktop/local.ts`)**:
+    - Detects Tauri environment via `window.__TAURI_INTERNALS__`.
+    - Shows `ConnectScreen` with Local and Remote options.
+    - Folder picker -> calls `start_local` -> stores token in `sessionStorage` -> transitions into full viewer UI -> plays scenes.
+  - **Bundled Python Standalone (`scripts/desktop/bundle_python.sh`)**:
+    - Packages `python-build-standalone` (`cpython-3.13.1+20250115-aarch64-apple-darwin-install_only.tar.gz`, pinned SHA-256 `d00ac75b15a05da2f6bc0057fe36f6944f9d513239f1c7af12766e03f288fe65`).
+    - Builds `coperceive` wheel and installs into bundled python without torch or viewer extras.
+    - Runtime resolver in `src-tauri/src/main.rs` locates `Contents/Resources/python/bin/python3` via `tauri::path::PathResolver::resource_dir()`, with fallback to `which python3` for development.
+  - **Smoke Test & Verification (`scripts/desktop/smoke_test.sh`)**:
+    - Validates bundled interpreter and `coperceive --help`.
+    - Spawns `coperceive serve` on dynamic port with mode 0600 `--token-file`.
+    - Asserts `/api/health` returns HTTP 401 without token and HTTP 200 with Bearer auth.
+    - Asserts server terminates cleanly on SIGTERM.
+    - Records measured `.app` and `.dmg` bundle sizes.
+  - **CI Workflow (`.github/workflows/ci.yml`)**:
+    - `desktop-macos` job runs on `macos-14` (Apple Silicon arm64).
+    - Bundles standalone Python, runs `npm run tauri build -- --target aarch64-apple-darwin`, runs `scripts/desktop/smoke_test.sh`, and uploads `.app` and `.dmg` artifacts.
+  - **Gates**: Job `631378` green on `hpc-node12` (`gates rc=0`, 574 passed, 2 skipped, 8 warnings in 154.16s).
 
 ## Phase 2 Mac Acceptance Instructions
 

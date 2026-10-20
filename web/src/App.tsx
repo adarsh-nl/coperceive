@@ -2,6 +2,8 @@ import { Label } from "@radix-ui/react-label";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
+import ConnectScreen from "./desktop/ConnectScreen";
+import { isTauriEnvironment } from "./desktop/local";
 import Landing, { readTheme, writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
 import type { ThemeName } from "./viewer/appearance";
@@ -28,6 +30,8 @@ function storedToken(): string {
 export default function App() {
   const queryClient = useQueryClient();
   const route = useHashRoute();
+  const [isTauri] = useState(isTauriEnvironment);
+  const [connected, setConnected] = useState(!isTauriEnvironment());
   const [token, setToken] = useState(storedToken);
   const [theme, setTheme] = useState<ThemeName>(readTheme);
   const [argument, setArgument] = useState("hello from the data desk");
@@ -141,6 +145,17 @@ export default function App() {
   }
 
   const jobRows: Job[] = jobs.data ?? [];
+
+  if (isTauri && !connected) {
+    return (
+      <ConnectScreen
+        onConnected={(session) => {
+          setToken(session.token);
+          setConnected(true);
+        }}
+      />
+    );
+  }
 
   if (route === "home") {
     return (

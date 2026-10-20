@@ -7,10 +7,36 @@ import type {
   TargetStatus,
 } from "./types";
 
+interface SessionPayload {
+  origin: string;
+  token: string;
+  server_version: string;
+  data_root: string;
+  target_type: string;
+}
+
+interface HealthPayload {
+  healthy: boolean;
+  latency_ms: number;
+  server_version?: string;
+}
+
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
   }
+}
+
+export function isTauriEnvironment(): boolean {
+  return typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
+}
+
+export async function pickDataRoot(): Promise<string | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string | null>("pick_data_root");
+  }
+  return prompt("Enter local dataset folder path:", "/tmp/scenes");
 }
 
 export class LocalExecutionTarget implements ExecutionTarget {
@@ -26,16 +52,22 @@ export class LocalExecutionTarget implements ExecutionTarget {
   async connect(options: LocalConnectOptions): Promise<ConnectionSession> {
     this.updateStatus({ state: "connecting", message: "Starting local data server..." });
 
-    // In a Tauri environment, invoke native sidecar start command
     let session: ConnectionSession;
-    if (typeof window !== "undefined" && window.__TAURI_INTERNALS__) {
+    if (isTauriEnvironment()) {
       const { invoke } = await import("@tauri-apps/api/core");
-      session = await invoke<ConnectionSession>("start_local_sidecar", {
+      const payload = await invoke<SessionPayload>("start_local", {
         dataRoot: options.dataRoot,
         pythonBinary: options.pythonBinary,
       });
+      session = {
+        origin: payload.origin,
+        token: payload.token,
+        serverVersion: payload.server_version,
+        dataRoot: payload.data_root,
+        targetType: "local",
+      };
     } else {
-      // Direct browser fallback for development/testing
+      // Browser fallback (direct serve)
       const origin = new URL(".", document.baseURI).href.replace(/\/$/, "");
       session = {
         origin,
@@ -51,15 +83,25 @@ export class LocalExecutionTarget implements ExecutionTarget {
       sessionStorage.setItem("coperceive-token", session.token);
     }
 
-    // Await healthy backend response
-    await this.pollUntilHealthy(session.origin, session.token, 10000);
-
     this.activeSession = session;
-    this.updateStatus({ state: "connected", message: `Connected to local server at ${session.origin}` });
+    this.updateStatus({
+      state: "connected",
+      message: `Connected to local server at ${session.origin}`,
+    });
     return session;
   }
 
   async checkHealth(): Promise<HealthStatus> {
+    if (isTauriEnvironment()) {
+      const { invoke } = await import("@tauri-apps/api/core");
+      const payload = await invoke<HealthPayload>("health");
+      return {
+        healthy: payload.healthy,
+        latencyMs: payload.latency_ms,
+        serverVersion: payload.server_version,
+      };
+    }
+
     if (!this.activeSession) {
       return { healthy: false, latencyMs: 0 };
     }
@@ -82,9 +124,12 @@ export class LocalExecutionTarget implements ExecutionTarget {
   }
 
   async disconnect(): Promise<void> {
-    if (this.activeSession && typeof window !== "undefined" && window.__TAURI_INTERNALS__) {
+    if (isTauriEnvironment()) {
       const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("stop_local_sidecar");
+      await invoke("stop_local");
+    }
+    if (typeof window !== "undefined") {
+      sessionStorage.removeItem("coperceive-token");
     }
     this.activeSession = null;
     this.updateStatus({ state: "disconnected" });
@@ -106,23 +151,5 @@ export class LocalExecutionTarget implements ExecutionTarget {
     for (const listener of this.statusListeners) {
       listener(status);
     }
-  }
-
-  private async pollUntilHealthy(origin: string, token: string, timeoutMs: number): Promise<void> {
-    const deadline = performance.now() + timeoutMs;
-    while (performance.now() < deadline) {
-      try {
-        const res = await fetch(`${origin}/api/health`, {
-          headers: { Authorization: `Bearer ${token}` },
-        });
-        if (res.ok) {
-          return;
-        }
-      } catch {
-        // Retry
-      }
-      await new Promise((r) => setTimeout(r, 150));
-    }
-    throw new Error(`Timeout waiting for local server at ${origin} to become healthy.`);
   }
 }
