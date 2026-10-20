@@ -3,7 +3,8 @@
 # Smoke test verifying the bundled Python environment, coperceive serve sidecar,
 # constant-time token verification, and measuring artifact sizes.
 
-set -euo pipefail
+set -e
+set -u
 
 APP_BUNDLE="${1:-src-tauri/target/release/bundle/macos/Coperceive.app}"
 DMG_FILE="${2:-src-tauri/target/release/bundle/dmg/Coperceive_0.0.0_aarch64.dmg}"
@@ -14,7 +15,14 @@ echo "=========================================================="
 
 if [ ! -d "${APP_BUNDLE}" ]; then
     echo "Searching for built .app bundle across repository..."
-    FOUND_APP=$(find . -iname "*.app" -type d | head -n 1 || true)
+    FOUND_APP=""
+    for candidate in $(find . -iname "*.app" -type d 2>/dev/null); do
+        if [ -d "${candidate}" ]; then
+            FOUND_APP="${candidate}"
+            break
+        fi
+    done
+
     if [ -n "${FOUND_APP}" ]; then
         APP_BUNDLE="${FOUND_APP}"
     else
@@ -57,7 +65,12 @@ FOUND_DMG=""
 if [ -f "${DMG_FILE}" ]; then
     FOUND_DMG="${DMG_FILE}"
 else
-    FOUND_DMG=$(find . -iname "*.dmg" -type f | head -n 1 || true)
+    for candidate in $(find . -iname "*.dmg" -type f 2>/dev/null); do
+        if [ -f "${candidate}" ]; then
+            FOUND_DMG="${candidate}"
+            break
+        fi
+    done
 fi
 
 if [ -n "${FOUND_DMG}" ]; then

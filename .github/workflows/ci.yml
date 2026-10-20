@@ -164,8 +164,16 @@ jobs:
           }
         working-directory: web
       - name: Run Headless Smoke Test and Measure Sizes
-        run: bash scripts/desktop/smoke_test.sh
+        run: |
+          bash scripts/desktop/smoke_test.sh 2>&1 | tee /tmp/smoke_test.log || {
+            echo "## Smoke Test Failure" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/smoke_test.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: coperceive-desktop-macos-arm64
           path: |
