@@ -31,6 +31,7 @@ if [ ! -d "${APP_BUNDLE}" ]; then
     fi
 fi
 
+APP_BUNDLE="$(cd "${APP_BUNDLE}" && pwd)"
 echo "App bundle: ${APP_BUNDLE}"
 
 # Find bundled python
@@ -40,7 +41,7 @@ for candidate in \
     "${APP_BUNDLE}/Contents/Resources/python/bin/python3" \
     "src-tauri/resources/python/bin/python3"; do
     if [ -x "${candidate}" ]; then
-        PYTHON_BIN="${candidate}"
+        PYTHON_BIN="$(cd "$(dirname "${candidate}")" && pwd)/$(basename "${candidate}")"
         break
     fi
 done
@@ -73,6 +74,7 @@ else
 fi
 
 if [ -n "${FOUND_DMG}" ]; then
+    FOUND_DMG="$(cd "$(dirname "${FOUND_DMG}")" && pwd)/$(basename "${FOUND_DMG}")"
     DMG_SIZE=$(ls -lh "${FOUND_DMG}" | awk '{print $5}')
     echo "Coperceive .dmg size: ${DMG_SIZE} (${FOUND_DMG})"
 else
