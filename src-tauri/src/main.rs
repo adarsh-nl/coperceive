@@ -103,8 +103,8 @@ async fn start_local(
     let origin = format!("http://127.0.0.1:{}", session.port);
     let token = session.token.clone();
 
-    // Poll until healthy (up to 10 seconds)
-    reqwest_like_poll(&origin, &token, Duration::from_secs(10))
+    // Poll until healthy (up to 20 seconds)
+    reqwest_like_poll(&origin, &token, Duration::from_secs(20))
         .map_err(|e| format!("Timed out waiting for local serve: {}", e))?;
 
     let payload = SessionPayload {

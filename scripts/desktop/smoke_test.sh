@@ -52,7 +52,7 @@ fi
 
 echo "Found bundled Python: ${PYTHON_BIN}"
 echo "Python version: $("${PYTHON_BIN}" --version)"
-"${PYTHON_BIN}" -c "import coperceive, fastapi, uvicorn; print('coperceive import verified from:', coperceive.__file__)"
+(cd /tmp && "${PYTHON_BIN}" -c "import coperceive, fastapi, uvicorn; print('coperceive import verified from:', coperceive.__file__)")
 
 # Measure artifact sizes
 echo ""
@@ -101,8 +101,8 @@ echo "${TOKEN}" > "${TOKEN_FILE}"
 DATA_ROOT="${TMPDIR}/data"
 mkdir -p "${DATA_ROOT}"
 
-# Ephemeral port
-PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
+# Ephemeral port on loopback
+PORT=$("${PYTHON_BIN}" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
 echo "Launching coperceive serve on port ${PORT} with token-file ${TOKEN_FILE}..."
 
 "${PYTHON_BIN}" -m coperceive serve \
@@ -124,19 +124,24 @@ cleanup_serve() {
 }
 trap 'cleanup_serve; rm -rf "${TMPDIR}"' EXIT
 
-# Wait for server to start
+# Wait for server to start (poll up to 30s)
 echo "Waiting for /api/health readiness..."
 HEALTHY=0
-for i in {1..30}; do
+for i in {1..60}; do
     if curl -s -f -H "Authorization: Bearer ${TOKEN}" "http://127.0.0.1:${PORT}/api/health" > /dev/null 2>&1; then
         HEALTHY=1
         break
     fi
-    sleep 0.2
+    if ! kill -0 "${SERVE_PID}" 2>/dev/null; then
+        echo "Error: Sidecar process died prematurely. Log output:" >&2
+        cat "${TMPDIR}/serve.log" >&2
+        exit 3
+    fi
+    sleep 0.5
 done
 
 if [ "${HEALTHY}" -ne 1 ]; then
-    echo "Error: Server failed to become healthy within 6 seconds. Log output:" >&2
+    echo "Error: Server failed to become healthy within 30 seconds. Log output:" >&2
     cat "${TMPDIR}/serve.log" >&2
     exit 3
 fi
