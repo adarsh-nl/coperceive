@@ -150,9 +150,9 @@ jobs:
       - name: Report Cargo Test Failure
         if: failure()
         run: |
-          while IFS= read -r line; do
-            echo "::error::$line"
-          done < <(grep -A 35 -B 5 "error: failed to run custom build command" /tmp/cargo_test.log || grep -A 35 -B 5 "error" /tmp/cargo_test.log || tail -n 60 /tmp/cargo_test.log)
+          tail -n 45 /tmp/cargo_test.log | while IFS= read -r line; do
+            echo "::error title=CargoError::$line"
+          done
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh
       - name: Build Tauri Desktop (.app and .dmg)
