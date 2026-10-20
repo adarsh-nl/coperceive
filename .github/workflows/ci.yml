@@ -154,7 +154,14 @@ jobs:
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh
       - name: Build Tauri Desktop (.app and .dmg)
-        run: npm run tauri build -- --target aarch64-apple-darwin
+        run: |
+          npm run tauri build -- --target aarch64-apple-darwin --verbose 2>&1 | tee /tmp/tauri_build.log || {
+            echo "## Tauri Build Error" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 100 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
         working-directory: web
       - name: Run Headless Smoke Test and Measure Sizes
         run: bash scripts/desktop/smoke_test.sh

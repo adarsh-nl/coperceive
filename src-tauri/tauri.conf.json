@@ -4,8 +4,8 @@
   "version": "0.0.0",
   "identifier": "nl.adarsh.coperceive",
   "build": {
-    "beforeDevCommand": "npm run build --prefix ../web",
-    "beforeBuildCommand": "npm run build --prefix ../web",
+    "beforeDevCommand": "",
+    "beforeBuildCommand": "",
     "frontendDist": "../coperceive/app/static"
   },
   "app": {
