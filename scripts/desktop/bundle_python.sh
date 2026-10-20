@@ -48,22 +48,20 @@ fi
 
 echo "Python runtime extracted: $("${PYTHON_BIN}" --version)"
 
-# Build and install coperceive wheel with core and app dependencies (excluding torch and viewer extras)
-echo "Installing coperceive and locked dependencies into bundled Python environment..."
+# Install coperceive and locked dependencies into bundled Python environment
+echo "Installing locked dependencies into bundled Python environment..."
 cd "${REPO_ROOT}"
 
-# Install pip dependencies inside the bundled runtime
-"${PYTHON_BIN}" -m pip install --upgrade pip
-"${PYTHON_BIN}" -m pip install --no-warn-script-location \
-    "numpy>=1.26.4" \
-    "pyarrow>=18" \
-    "pillow>=10.4" \
-    "matplotlib>=3.8" \
-    "pyyaml>=6" \
-    "fastapi>=0.115" \
-    "uvicorn>=0.30" \
-    "pydantic>=2"
+LOCK_FILE="${SCRIPT_DIR}/requirements-darwin-arm64.lock"
+if [ ! -f "${LOCK_FILE}" ]; then
+    echo "Error: Lock file not found at ${LOCK_FILE}" >&2
+    exit 3
+fi
 
+# Install dependencies inside the bundled runtime using hash-pinned lock
+"${PYTHON_BIN}" -m pip install --no-warn-script-location --require-hashes -r "${LOCK_FILE}"
+
+echo "Installing coperceive package into bundled Python environment..."
 "${PYTHON_BIN}" -m pip install --no-deps --no-warn-script-location .
 
 # Strip caches to keep bundle compact

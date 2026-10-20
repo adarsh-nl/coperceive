@@ -59,7 +59,8 @@ echo "Python version: $("${PYTHON_BIN}" --version)"
 echo ""
 echo "--- Artifact Measured Sizes ---"
 APP_SIZE=$(du -sh "${APP_BUNDLE}" | awk '{print $1}')
-echo "Coperceive.app size: ${APP_SIZE}"
+APP_SIZE_BYTES=$(du -sk "${APP_BUNDLE}" | awk '{print $1 * 1024}')
+echo "Coperceive.app size: ${APP_SIZE} (${APP_SIZE_BYTES} bytes)"
 
 FOUND_DMG=""
 if [ -f "${DMG_FILE}" ]; then
@@ -76,16 +77,18 @@ fi
 if [ -n "${FOUND_DMG}" ]; then
     FOUND_DMG="$(cd "$(dirname "${FOUND_DMG}")" && pwd)/$(basename "${FOUND_DMG}")"
     DMG_SIZE=$(ls -lh "${FOUND_DMG}" | awk '{print $5}')
-    echo "Coperceive .dmg size: ${DMG_SIZE} (${FOUND_DMG})"
+    DMG_SIZE_BYTES=$(stat -f %z "${FOUND_DMG}" 2>/dev/null || wc -c < "${FOUND_DMG}" 2>/dev/null || echo "0")
+    echo "Coperceive .dmg size: ${DMG_SIZE} (${DMG_SIZE_BYTES} bytes, ${FOUND_DMG})"
 else
     DMG_SIZE="unknown"
+    DMG_SIZE_BYTES="0"
     echo "Warning: .dmg file not located for measurement"
 fi
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "### Artifact Measured Sizes" >> "${GITHUB_STEP_SUMMARY}"
-    echo "- **Coperceive.app size**: ${APP_SIZE}" >> "${GITHUB_STEP_SUMMARY}"
-    echo "- **Coperceive .dmg size**: ${DMG_SIZE} (\`${FOUND_DMG}\`)" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Coperceive.app**: ${APP_SIZE} (${APP_SIZE_BYTES} bytes)" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Coperceive .dmg**: ${DMG_SIZE} (${DMG_SIZE_BYTES} bytes) (\`${FOUND_DMG}\`)" >> "${GITHUB_STEP_SUMMARY}"
 fi
 
 # Headless smoke test: launch serve with token-file and verify loopback authentication
