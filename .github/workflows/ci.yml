@@ -144,6 +144,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+      - name: Bundle Python Standalone Runtime
+        run: bash scripts/desktop/bundle_python.sh
       - name: Run Rust unit tests
         run: cargo test --verbose 2>&1 | tee /tmp/cargo_test.log
         working-directory: src-tauri
@@ -152,36 +154,46 @@ jobs:
         run: |
           echo "### Cargo Test Failures" >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -A 30 "--- stderr" /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY || true
           grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY || true
           tail -n 60 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -A 20 "--- stderr" /tmp/cargo_test.log | head -n 25 | while IFS= read -r line; do
+            echo "::error title=CargoBuildError::$line"
+          done
           grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 3 /tmp/cargo_test.log | head -n 30 | while IFS= read -r line; do
             echo "::error title=CargoError::$line"
           done
-      - name: Bundle Python Standalone Runtime
-        run: bash scripts/desktop/bundle_python.sh
       - name: Build Tauri Desktop (.app and .dmg)
         run: npm run tauri build -- --target aarch64-apple-darwin --verbose 2>&1 | tee /tmp/tauri_build.log
         working-directory: web
       - name: Report Tauri Build Failure
         if: failure()
         run: |
-          echo "### Tauri Build Failures" >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY || true
-          tail -n 60 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY
-          echo '```' >> $GITHUB_STEP_SUMMARY
-          grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 3 /tmp/tauri_build.log | head -n 30 | while IFS= read -r line; do
-            echo "::error title=TauriBuildError::$line"
-          done
+          if [ -f /tmp/tauri_build.log ]; then
+            echo "### Tauri Build Failures" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -A 30 "--- stderr" /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY || true
+            grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 10 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY || true
+            tail -n 60 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -A 20 "--- stderr" /tmp/tauri_build.log | head -n 25 | while IFS= read -r line; do
+              echo "::error title=TauriBuildError::$line"
+            done
+            grep -E "(^error(\[[A-Z0-9]+\])?: |thread .* panicked|Caused by:)" -A 3 /tmp/tauri_build.log | head -n 30 | while IFS= read -r line; do
+              echo "::error title=TauriError::$line"
+            done
+          fi
       - name: Run Headless Smoke Test and Measure Sizes
         run: bash scripts/desktop/smoke_test.sh 2>&1 | tee /tmp/smoke_test.log
       - name: Report Smoke Test Failure
         if: failure()
         run: |
-          while IFS= read -r line; do
-            echo "::error::$line"
-          done < <(tail -n 60 /tmp/smoke_test.log)
+          if [ -f /tmp/smoke_test.log ]; then
+            tail -n 60 /tmp/smoke_test.log | while IFS= read -r line; do
+              echo "::error title=SmokeTestError::$line"
+            done
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: coperceive-desktop-macos-arm64
