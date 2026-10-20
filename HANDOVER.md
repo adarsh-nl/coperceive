@@ -46,10 +46,42 @@ The desktop application is now the top priority per Adarsh's instructions (pausi
     - Records measured `.app` and `.dmg` bundle sizes.
   - **CI Workflow (`.github/workflows/ci.yml`)**:
     - `desktop-macos` job runs on `macos-14` (Apple Silicon arm64).
+    - Standalone Python hash-locked (`scripts/desktop/requirements-darwin-arm64.lock` generated with `uv pip compile --generate-hashes --python-platform aarch64-apple-darwin --python-version 3.13`), installed via `--require-hashes`.
     - Bundles standalone Python, runs `npm run tauri build -- --target aarch64-apple-darwin`, runs `scripts/desktop/smoke_test.sh`, and uploads `.app` and `.dmg` artifacts.
-    - Verified green in CI run [`39408692203`](https://github.com/adarsh-nl/coperceive/actions/runs/39408692203) (all jobs: `lint`, `gitleaks`, `test (3.10-3.13)`, `web`, `e2e`, and `desktop-macos` succeeded).
+    - Verified green in CI run [`39462553220`](https://github.com/adarsh-nl/coperceive/actions/runs/39462553220) (all jobs passed in 6m 40s; artifact `coperceive-desktop-macos-arm64` ID `12284290394`, 352.9 MB; measured `Coperceive.app`: 368 MB, `Coperceive .dmg`: 179 MB).
   - **Gates**: Job `631378` green on `hpc-node12` (`gates rc=0`, 574 passed, 2 skipped, 8 warnings in 154.16s).
-  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop` (commit `208d28a`).
+  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop` (commit `98c625c`).
+
+- **Phase 3: Complete (Cluster Remote Serve & CLI)**
+  - **Slurm Remote Serve Job (`scripts/desktop/remote_serve.sbatch`)**:
+    - Partition `ps` (UTwente HPC nodes `hpc-node[11-12,14]`), 2 CPUs, 8 GB memory, default walltime 2 hours (configurable).
+    - Session job name `coperceive-desktop-<uuid>`.
+    - Ephemeral cluster IP binding: discovers node IP via `hostname -I` (or `127.0.0.1`), picks an unbound port dynamically.
+    - Security: Token is never placed on argv; read strictly from `~/.coperceive/tokens/<uuid>.token` (mode `0600`). Session state `{uuid, node, ip, port, pid, started_at}` written to `~/.coperceive/sessions/<uuid>.json` (mode `0600`). Base directory enforced mode `0700`.
+    - Signal handling: Traps SIGTERM and EXIT to ensure clean server termination and credential file cleanup on job completion, scancel, or walltime expiry.
+  - **Cluster Remote CLI (`coperceive remote ...`)**:
+    - Pure machine-readable JSON output for seamless integration with Tauri Rust backend:
+      - `coperceive remote start --root <dir> [--partition ps] [--time 02:00:00] [--cpus 2] [--mem 8G] [--uuid <uuid>]`: Submits sbatch, polls until RUNNING, probes health with Bearer token, returns session JSON.
+      - `coperceive remote status [--uuid <uuid>] [--job-id <id>]`: Reports state (`RUNNING`, `PENDING`, `STOPPED`), elapsed time, time left, queue reason, and health check. Emits early warning when walltime has < 10 minutes remaining. Reconstructs state via `sacct` if session file was removed.
+      - `coperceive remote stop [--uuid <uuid>] [--job-id <id>]`: Terminates Slurm job via `scancel` and removes credentials.
+      - `coperceive remote list`: Lists active sessions from `~/.coperceive/sessions/` and Slurm jobs owned by user matching `coperceive-desktop-*`; detects and flags orphan jobs (`is_orphan: true`).
+  - **Direct / Tunnel Verification**:
+    - Direct HTTP probe to cluster IP (e.g. `10.20.240.48:52657`):
+      - Unauthenticated: HTTP 401 Unauthorized (`{"detail":"bearer token required"}`).
+      - Authenticated: HTTP 200 OK (`{"status":"ok","root_path":""}`).
+  - **Real Griffin Dataset Verification (`/home/nanjaiyalathaa/results/628385/scenes`)**:
+    - `GET /api/scenes`: 200 OK, 265 bytes (10 scenes), latency 0.0102s.
+    - `GET /api/scenes/Town03-000/frame?time_us=1118500000`: 200 OK, 101,852 bytes, latency 0.0086s.
+    - `GET /api/scenes/Town03-000/points?time_us=1118500000&sensor_id=lidar_top`: 200 OK, 35,148 bytes, latency 0.0109s.
+  - **Slurm Failure Drills**:
+    - *Drill 1 (scancel mid-serve)*: Job 632055 cancelled mid-run -> `coperceive remote status` reported `{"status":"stopped","state":"CANCELLED by 17764406"}`; session and token files deleted cleanly.
+    - *Drill 2 (walltime expiry)*: Job 632056 with 3-minute walltime -> at 2:19 remaining `status` returned warning: `"Walltime ending in less than 10 minutes (2:19 remaining)"`; after expiry `status` returned `{"status":"stopped","state":"FAILED"}`; all session files cleaned up.
+    - *Drill 3 (concurrent sessions)*: Two concurrent sessions ran on separate compute nodes (`88a9b1edafcb62f3` on `hpc-node11:56587`, `0e743ce011d0c906` on `hpc-node14:38793`) simultaneously with distinct ports, tokens, and health checks.
+    - *Drill 4 (orphan cleanup)*: Session JSON deleted while job 632057 ran; `list` flagged `is_orphan: true`; `stop` cancelled the orphan job.
+  - **Unit and Integration Tests**:
+    - 8 fast unit tests in `tests/test_remote.py` passing in ~1.2s.
+    - 1 end-to-end Slurm integration test (`test_cluster_remote_session_integration`) submitting a real temporary sbatch job passing in 46.1s.
+  - **Gates**: Job `632063` green on `hpc-node12` (`gates rc=0`, 583 passed, 2 skipped, 8 warnings in 206.15s).
 
 ## Phase 2 Mac Acceptance Instructions
 
