@@ -133,7 +133,7 @@ jobs:
         with:
           targets: aarch64-apple-darwin
       - name: Run Rust unit tests
-        run: cargo test
+        run: cargo test --verbose
         working-directory: src-tauri
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh

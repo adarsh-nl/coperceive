@@ -74,7 +74,10 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
 
     let folder = app.dialog().file().blocking_pick_folder();
     match folder {
-        Some(path) => Ok(Some(path.to_string())),
+        Some(tauri_plugin_dialog::FilePath::Path(p)) => Ok(Some(p.to_string_lossy().into_owned())),
+        Some(tauri_plugin_dialog::FilePath::Url(u)) => {
+            Ok(u.to_file_path().ok().map(|p| p.to_string_lossy().into_owned()))
+        }
         None => Ok(None),
     }
 }
@@ -92,7 +95,12 @@ async fn start_local(
     }
 
     // Stop existing session if one was running
-    let _ = stop_local(state.clone()).await;
+    {
+        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+        if let Some(mut existing) = lock.take() {
+            let _ = existing.stop();
+        }
+    }
 
     let python_bin = resolve_python_binary(&app);
     let mut session = SidecarSession::spawn(&python_bin, &root_path)
@@ -102,7 +110,7 @@ async fn start_local(
     let token = session.token.clone();
 
     // Poll until healthy (up to 10 seconds)
-    let client = reqwest_like_poll(&origin, &token, Duration::from_secs(10))
+    reqwest_like_poll(&origin, &token, Duration::from_secs(10))
         .map_err(|e| format!("Timed out waiting for local serve: {}", e))?;
 
     let payload = SessionPayload {
