@@ -15,6 +15,7 @@ pub struct SidecarSession {
     pub port: u16,
     pub token: String,
     pub token_path: PathBuf,
+    pub log_path: PathBuf,
     pub root: PathBuf,
 }
 
@@ -30,6 +31,13 @@ impl SidecarSession {
         let token_path = token_dir.join(format!("token-{}.txt", port));
         write_token_file(&token_path, &token)?;
 
+        let log_path = token_dir.join(format!("serve-{}.log", port));
+        let log_file = fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)?;
+        let err_file = log_file.try_clone()?;
+
         let child = Command::new(python_bin)
             .arg("-m")
             .arg("coperceive")
@@ -42,8 +50,8 @@ impl SidecarSession {
             .arg(&token_path)
             .arg("--root")
             .arg(data_root)
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(Stdio::from(log_file))
+            .stderr(Stdio::from(err_file))
             .spawn()?;
 
         Ok(Self {
@@ -51,6 +59,7 @@ impl SidecarSession {
             port,
             token,
             token_path,
+            log_path,
             root: data_root.to_path_buf(),
         })
     }
@@ -86,8 +95,9 @@ impl SidecarSession {
             }
         }
 
-        // Clean up token file and directory
+        // Clean up token and log files
         let _ = fs::remove_file(&self.token_path);
+        let _ = fs::remove_file(&self.log_path);
         if let Some(parent) = self.token_path.parent() {
             let _ = fs::remove_dir(parent);
         }

@@ -199,9 +199,9 @@ if [ -n "${RUNNER_SHEBANGS}" ]; then
 fi
 echo "Verified: No runner shebangs found in ${BIN_DIR}."
 
-# Test 4: App Binary Launch Check
+# Test 4: App Binary Launch & Viewer Scene Loading Check
 echo ""
-echo "--- App Binary Launch Check (macOS) ---"
+echo "--- App Binary Launch & Viewer Scene Loading Check (macOS) ---"
 APP_EXE="${APP_BUNDLE}/Contents/MacOS/coperceive-desktop"
 if [ ! -x "${APP_EXE}" ]; then
     if [ -x "${APP_BUNDLE}/Contents/MacOS/Coperceive" ]; then
@@ -217,34 +217,92 @@ if [ -z "${APP_EXE}" ] || [ ! -x "${APP_EXE}" ]; then
     exit 10
 fi
 
-echo "Starting app binary: ${APP_EXE}..."
+FIXTURE_ROOT="$(pwd)/tests/fixtures/synthetic_scene"
+if [ ! -d "${FIXTURE_ROOT}" ]; then
+    echo "Error: Synthetic scene fixture directory not found at ${FIXTURE_ROOT}!" >&2
+    exit 11
+fi
+
+MARKER_FILE="${TMPDIR}/test_marker.txt"
 APP_STDOUT="${TMPDIR}/app_stdout.log"
 APP_STDERR="${TMPDIR}/app_stderr.log"
 
+echo "Starting app binary with auto-connect fixture: ${FIXTURE_ROOT}..."
+COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
+COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
 "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
 APP_PID=$!
 echo "App process spawned with PID ${APP_PID}"
 
-echo "Waiting 10 seconds to verify process stability..."
-sleep 10
+echo "Waiting for auto-connect and viewer startup (up to 15s)..."
+for i in {1..30}; do
+    if [ -f "${MARKER_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: App process died prematurely during startup!" >&2
+        echo "=== App stderr ===" >&2
+        cat "${APP_STDERR}" >&2
+        echo "=== App stdout ===" >&2
+        cat "${APP_STDOUT}" >&2
+        exit 12
+    fi
+    sleep 0.5
+done
 
-if ! kill -0 "${APP_PID}" 2>/dev/null; then
-    echo "Error: App process died prematurely within 10 seconds!" >&2
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "Error: Auto-connect marker file was not created within timeout!" >&2
     echo "=== App stderr ===" >&2
     cat "${APP_STDERR}" >&2
     echo "=== App stdout ===" >&2
     cat "${APP_STDOUT}" >&2
-    exit 11
+    exit 13
 fi
 
-if grep -q -i "panicked" "${APP_STDERR}"; then
-    echo "Error: App stderr contains 'panicked'!" >&2
+APP_ORIGIN=$(sed -n '1p' "${MARKER_FILE}")
+APP_TOKEN=$(sed -n '2p' "${MARKER_FILE}")
+SIDECAR_LOG=$(sed -n '3p' "${MARKER_FILE}")
+
+echo "Auto-connected to origin: ${APP_ORIGIN}"
+echo "Sidecar log path: ${SIDECAR_LOG}"
+
+# Query GET /api/scenes to verify the sidecar serves the fixture scene
+echo "Checking GET ${APP_ORIGIN}/api/scenes with auth token..."
+SCENES_RESP=$(curl -s -f -H "Authorization: Bearer ${APP_TOKEN}" "${APP_ORIGIN}/api/scenes")
+echo "Scenes response: ${SCENES_RESP}"
+SCENE_COUNT=$(python3 -c "import json; data=json.loads('''${SCENES_RESP}'''); print(len(data))")
+if [ "${SCENE_COUNT}" -lt 1 ]; then
+    echo "Failure: expected >= 1 scene in response, got ${SCENE_COUNT}!" >&2
+    exit 14
+fi
+echo "Verified: /api/scenes returned ${SCENE_COUNT} scene(s) with HTTP 200 OK."
+
+# Wait up to 10 seconds to verify process stability and let the viewer webview fetch scenes
+echo "Waiting 10 seconds to verify viewer stability..."
+sleep 10
+
+if ! kill -0 "${APP_PID}" 2>/dev/null; then
+    echo "Error: App process died prematurely!" >&2
+    echo "=== App stderr ===" >&2
+    cat "${APP_STDERR}" >&2
+    echo "=== App stdout ===" >&2
+    cat "${APP_STDOUT}" >&2
+    exit 15
+fi
+
+if grep -q -E "The string did not match the expected pattern|panicked|Fatal startup error" "${APP_STDERR}"; then
+    echo "Error: App stderr contains pattern error or panic!" >&2
     cat "${APP_STDERR}" >&2
     kill -9 "${APP_PID}" 2>/dev/null || true
-    exit 12
+    exit 16
 fi
 
-echo "Verified: App process ${APP_PID} is alive after 10 s with no panics in stderr."
+if [ -f "${SIDECAR_LOG}" ]; then
+    echo "--- Sidecar Log (recent 15 lines) ---"
+    tail -n 15 "${SIDECAR_LOG}"
+fi
+
+echo "Verified: App process ${APP_PID} is alive and healthy."
 echo "Terminating app process..."
 kill -TERM "${APP_PID}" 2>/dev/null || true
 sleep 1
@@ -253,7 +311,7 @@ if kill -0 "${APP_PID}" 2>/dev/null; then
 fi
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
-echo "Verified: App binary launched and terminated successfully."
+echo "Verified: App binary launched, auto-connected to fixture, loaded scenes, and terminated successfully."
 echo "=========================================================="
 echo "Smoke test PASSED successfully!"
 echo "=========================================================="

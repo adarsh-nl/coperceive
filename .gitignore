@@ -18,6 +18,7 @@ data/
 *.parquet
 *.ply
 *.bin
+!tests/fixtures/**
 .DS_Store
 agent-tools/
 web/node_modules/

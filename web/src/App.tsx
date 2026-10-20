@@ -31,7 +31,12 @@ export default function App() {
   const queryClient = useQueryClient();
   const route = useHashRoute();
   const [isTauri] = useState(isTauriEnvironment);
-  const [connected, setConnected] = useState(!isTauriEnvironment());
+  const isRemoteOrHttp =
+    typeof window !== "undefined" &&
+    (window.location.protocol === "http:" || window.location.protocol === "https:");
+  const [connected, setConnected] = useState(
+    () => !isTauriEnvironment() || isRemoteOrHttp || Boolean(storedToken()),
+  );
   const [token, setToken] = useState(storedToken);
   const [theme, setTheme] = useState<ThemeName>(readTheme);
   const [argument, setArgument] = useState("hello from the data desk");

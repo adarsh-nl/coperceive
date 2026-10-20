@@ -78,9 +78,10 @@ export class LocalExecutionTarget implements ExecutionTarget {
       };
     }
 
-    // Set token in sessionStorage before any API calls per ADR 0007 / ADR 0014
+    // Set token and origin in sessionStorage before any API calls per ADR 0007 / ADR 0014
     if (typeof window !== "undefined") {
       sessionStorage.setItem("coperceive-token", session.token);
+      sessionStorage.setItem("coperceive-origin", session.origin);
     }
 
     this.activeSession = session;

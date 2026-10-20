@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "scene_id": "desk",
+  "world_frame": "ENU",
+  "clock": {
+    "unit": "us",
+    "scale_note": "app viewer fixture"
+  },
+  "agents": [
+    {
+      "agent_id": "vehicle",
+      "agent_type": "vehicle",
+      "platform": {}
+    }
+  ],
+  "sensors": [
+    {
+      "sensor_id": "lidar_top",
+      "agent_id": "vehicle",
+      "modality": "lidar",
+      "qw": 1.0,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": 0.0,
+      "tx": 0.0,
+      "ty": 0.0,
+      "tz": 0.0,
+      "image_width_px": null,
+      "image_height_px": null,
+      "fx": null,
+      "fy": null,
+      "cx": null,
+      "cy": null
+    }
+  ]
+}

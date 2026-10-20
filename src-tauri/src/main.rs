@@ -80,10 +80,58 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
 }
 
 #[cfg(target_os = "macos")]
-#[tauri::command]
-async fn start_local(
-    app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
+fn open_viewer_window(app: &tauri::AppHandle, origin: &str, token: &str) -> Result<(), String> {
+    use tauri::Manager;
+
+    if let Some(existing_viewer) = app.get_webview_window("viewer") {
+        let _ = existing_viewer.close();
+    }
+
+    let viewer_url_str = format!("{}/#/viewer", origin);
+    let parsed_url: tauri::Url = viewer_url_str
+        .parse()
+        .map_err(|e| format!("Failed to parse viewer URL '{}': {}", viewer_url_str, e))?;
+
+    let init_script = format!(
+        r#"
+        (function() {{
+            try {{
+                if (window.location.origin === "{}") {{
+                    sessionStorage.setItem("coperceive-token", "{}");
+                    sessionStorage.setItem("coperceive-origin", "{}");
+                }}
+            }} catch (e) {{
+                console.error("Failed to set coperceive session token in sessionStorage", e);
+            }}
+        }})();
+        "#,
+        origin, token, origin
+    );
+
+    let _viewer_window = tauri::WebviewWindowBuilder::new(
+        app,
+        "viewer",
+        tauri::WebviewUrl::External(parsed_url),
+    )
+    .title("Coperceive Viewer")
+    .inner_size(1280.0, 800.0)
+    .min_inner_size(900.0, 600.0)
+    .resizable(true)
+    .initialization_script(&init_script)
+    .build()
+    .map_err(|e| format!("Failed to create viewer window: {}", e))?;
+
+    if let Some(main_window) = app.get_webview_window("main") {
+        let _ = main_window.hide();
+    }
+
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+async fn start_local_session(
+    app: &tauri::AppHandle,
+    state: &AppState,
     data_root: String,
 ) -> Result<SessionPayload, String> {
     let root_path = PathBuf::from(&data_root);
@@ -99,7 +147,7 @@ async fn start_local(
         }
     }
 
-    let python_bin = resolve_python_binary(&app);
+    let python_bin = resolve_python_binary(app);
     let mut session = SidecarSession::spawn(&python_bin, &root_path)
         .map_err(|e| format!("Failed to spawn local sidecar: {}", e))?;
 
@@ -109,6 +157,9 @@ async fn start_local(
     // Poll until healthy (up to 20 seconds)
     reqwest_like_poll(&origin, &token, Duration::from_secs(20))
         .map_err(|e| format!("Timed out waiting for local serve: {}", e))?;
+
+    // Open viewer window at session.origin with initialization_script
+    open_viewer_window(app, &origin, &token)?;
 
     let payload = SessionPayload {
         origin,
@@ -122,6 +173,16 @@ async fn start_local(
     *lock = Some(session);
 
     Ok(payload)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn start_local(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    data_root: String,
+) -> Result<SessionPayload, String> {
+    start_local_session(&app, state.inner(), data_root).await
 }
 
 #[cfg(target_os = "macos")]
@@ -157,6 +218,7 @@ async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload,
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
+    app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     alias: String,
     data_root: String,
@@ -181,6 +243,8 @@ async fn remote_connect(
 
     let origin = mgr.origin();
     let token = mgr.token.clone();
+
+    open_viewer_window(&app, &origin, &token)?;
 
     let payload = SessionPayload {
         origin,
@@ -300,16 +364,60 @@ fn main() {
             remote_status,
             remote_disconnect,
         ])
-        .on_window_event(move |_window, event| {
+        .setup(|app| {
+            use tauri::Manager;
+            if let Ok(auto_root) = std::env::var("COPERCEIVE_AUTOCONNECT_ROOT")
+                .or_else(|_| std::env::var("COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT"))
+            {
+                let handle = app.handle().clone();
+                let state = app.state::<Arc<AppState>>().inner().clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(Duration::from_millis(400));
+                    tauri::async_runtime::block_on(async move {
+                        match start_local_session(&handle, &state, auto_root).await {
+                            Ok(payload) => {
+                                println!("[test-hook] Auto-connected successfully: origin={}", payload.origin);
+                                if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
+                                    let log_path = {
+                                        let lock = state.sidecar.lock().ok();
+                                        lock.and_then(|s| s.as_ref().map(|sess| sess.log_path.clone()))
+                                            .unwrap_or_default()
+                                    };
+                                    let content = format!(
+                                        "{}\n{}\n{}\n",
+                                        payload.origin,
+                                        payload.token,
+                                        log_path.display()
+                                    );
+                                    let _ = std::fs::write(&marker_path, content);
+                                }
+                            }
+                            Err(err) => {
+                                eprintln!("[test-hook] Auto-connect error: {err}");
+                            }
+                        }
+                    });
+                });
+            }
+            Ok(())
+        })
+        .on_window_event(move |window, event| {
             if let tauri::WindowEvent::Destroyed = event {
-                if let Ok(mut lock) = state_for_window.sidecar.lock() {
-                    if let Some(mut s) = lock.take() {
-                        let _ = s.stop();
+                use tauri::Manager;
+                let label = window.label().to_string();
+                if label == "viewer" || label == "main" {
+                    if let Ok(mut lock) = state_for_window.sidecar.lock() {
+                        if let Some(mut s) = lock.take() {
+                            let _ = s.stop();
+                        }
                     }
-                }
-                if let Ok(mut lock) = state_for_window.remote.lock() {
-                    if let Some(mut r) = lock.take() {
-                        let _ = r.disconnect();
+                    if let Ok(mut lock) = state_for_window.remote.lock() {
+                        if let Some(mut r) = lock.take() {
+                            let _ = r.disconnect();
+                        }
+                    }
+                    if label == "viewer" {
+                        window.app_handle().exit(0);
                     }
                 }
             }
