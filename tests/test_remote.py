@@ -13,7 +13,9 @@ from coperceive.remote.manager import (
     generate_secure_token,
     get_status,
     list_sessions,
+    map_stopped_reason,
     parse_slurm_time,
+    record_heartbeat,
     start_session,
     stop_session,
     write_token_file,
@@ -311,6 +313,9 @@ def test_remote_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         "coperceive.remote.manager.get_sessions_dir", lambda: coperceive_dir / "sessions"
     )
 
+    import time
+
+    now = time.time()
     # Session 1: valid running session
     s1_file = coperceive_dir / "sessions" / "uuid-1.json"
     s1_file.parent.mkdir(parents=True, exist_ok=True)
@@ -323,7 +328,8 @@ def test_remote_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
                 "ip": "10.20.240.48",
                 "port": 8731,
                 "pid": 111,
-                "started_at": 1700000000,
+                "started_at": int(now),
+                "last_heartbeat": now,
                 "data_root": "/data/1",
                 "token_file": "",
             }
@@ -376,6 +382,136 @@ def test_remote_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert by_uuid["uuid-3"]["is_orphan"] is True
     assert by_uuid["uuid-3"]["state"] == "RUNNING"
+
+
+def test_stopped_reason_mapping() -> None:
+    assert map_stopped_reason("TIMEOUT") == "timeout"
+    assert map_stopped_reason("TIME_LIMIT") == "timeout"
+    assert map_stopped_reason("CANCELLED by 17764406") == "cancelled"
+    assert map_stopped_reason("CANCELLED") == "cancelled"
+    assert map_stopped_reason("COMPLETED") == "completed"
+    assert map_stopped_reason("FAILED") == "failed"
+    assert map_stopped_reason("NODE_FAIL") == "failed"
+
+
+def test_record_heartbeat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    coperceive_dir = tmp_path / ".coperceive"
+    monkeypatch.setattr("coperceive.remote.manager.get_base_dir", lambda: coperceive_dir)
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_sessions_dir", lambda: coperceive_dir / "sessions"
+    )
+
+    sessions_dir = coperceive_dir / "sessions"
+    sessions_dir.mkdir(parents=True)
+
+    uuid_test = "hb-uuid-123"
+    session_file = sessions_dir / f"{uuid_test}.json"
+    session_file.write_text(
+        json.dumps(
+            {
+                "uuid": uuid_test,
+                "job_id": 9999,
+                "node": "hpc-node11",
+                "ip": "10.20.240.11",
+                "port": 50000,
+                "pid": 1234,
+                "started_at": 1000,
+                "last_heartbeat": 1000,
+                "data_root": "/data",
+                "token_file": "/tokens/test.token",
+            }
+        )
+    )
+
+    # Valid heartbeat
+    res = record_heartbeat(uuid_test)
+    assert res["status"] == "ok"
+    assert res["uuid"] == uuid_test
+    hb_file = sessions_dir / f"{uuid_test}.heartbeat"
+    assert hb_file.is_file()
+    assert (hb_file.stat().st_mode & 0o777) == 0o600
+
+    # Non-existent session
+    bad_res = record_heartbeat("unknown-uuid")
+    assert bad_res["status"] == "error"
+
+
+def test_remote_list_orphan_on_heartbeat_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    coperceive_dir = tmp_path / ".coperceive"
+    monkeypatch.setattr("coperceive.remote.manager.get_base_dir", lambda: coperceive_dir)
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_sessions_dir", lambda: coperceive_dir / "sessions"
+    )
+
+    sessions_dir = coperceive_dir / "sessions"
+    sessions_dir.mkdir(parents=True)
+
+    # Active session with recent heartbeat (30s ago)
+    import time
+
+    now = time.time()
+    s1_file = sessions_dir / "fresh-uuid.json"
+    s1_file.write_text(
+        json.dumps(
+            {
+                "uuid": "fresh-uuid",
+                "job_id": 2001,
+                "node": "hpc-node11",
+                "ip": "10.20.240.11",
+                "port": 50001,
+                "pid": 2001,
+                "started_at": int(now - 100),
+                "last_heartbeat": now - 30.0,
+                "data_root": "/data",
+                "token_file": "",
+            }
+        )
+    )
+
+    # Stale session with expired heartbeat (200s ago > 180s)
+    s2_file = sessions_dir / "stale-uuid.json"
+    s2_file.write_text(
+        json.dumps(
+            {
+                "uuid": "stale-uuid",
+                "job_id": 2002,
+                "node": "hpc-node12",
+                "ip": "10.20.240.12",
+                "port": 50002,
+                "pid": 2002,
+                "started_at": int(now - 300),
+                "last_heartbeat": now - 200.0,
+                "data_root": "/data",
+                "token_file": "",
+            }
+        )
+    )
+
+    slurm_output = (
+        "2001|coperceive-desktop-fresh-uuid|RUNNING|00:01:40|01:58:20|None|hpc-node11\n"
+        "2002|coperceive-desktop-stale-uuid|RUNNING|00:05:00|01:55:00|None|hpc-node12\n"
+    )
+
+    def fake_subprocess_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "squeue":
+            return subprocess.CompletedProcess(cmd, 0, stdout=slurm_output, stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+
+    res = list_sessions()
+    sessions = res["sessions"]
+    by_uuid = {s["uuid"]: s for s in sessions}
+
+    assert by_uuid["fresh-uuid"]["is_orphan"] is False
+    assert by_uuid["fresh-uuid"]["orphan_reason"] is None
+    assert by_uuid["fresh-uuid"]["last_heartbeat_age_s"] < 60.0
+
+    assert by_uuid["stale-uuid"]["is_orphan"] is True
+    assert by_uuid["stale-uuid"]["orphan_reason"] == "heartbeat_timeout"
+    assert by_uuid["stale-uuid"]["last_heartbeat_age_s"] >= 199.0
 
 
 @pytest.mark.slow

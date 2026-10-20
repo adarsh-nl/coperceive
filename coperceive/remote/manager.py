@@ -110,6 +110,23 @@ class RemoteSession:
     started_at: int
     data_root: str
     token_file: str
+    last_heartbeat: float | None = None
+
+    @property
+    def heartbeat_file(self) -> Path:
+        return get_sessions_dir() / f"{self.uuid}.heartbeat"
+
+    def get_heartbeat_age(self) -> float:
+        if self.heartbeat_file.is_file():
+            try:
+                return max(0.0, round(time.time() - self.heartbeat_file.stat().st_mtime, 1))
+            except OSError:
+                pass
+        if self.last_heartbeat is not None:
+            return max(0.0, round(time.time() - self.last_heartbeat, 1))
+        if self.started_at:
+            return max(0.0, round(time.time() - float(self.started_at), 1))
+        return 0.0
 
     @classmethod
     def from_file(cls, path: Path) -> RemoteSession | None:
@@ -117,6 +134,8 @@ class RemoteSession:
             if not path.is_file():
                 return None
             data = json.loads(path.read_text(encoding="utf-8"))
+            last_hb = data.get("last_heartbeat")
+            last_heartbeat = float(last_hb) if last_hb is not None else None
             return cls(
                 uuid=str(data.get("uuid", "")),
                 job_id=int(data.get("job_id", 0)),
@@ -127,9 +146,61 @@ class RemoteSession:
                 started_at=int(data.get("started_at", 0)),
                 data_root=str(data.get("data_root", "")),
                 token_file=str(data.get("token_file", "")),
+                last_heartbeat=last_heartbeat,
             )
         except Exception:
             return None
+
+
+def map_stopped_reason(sacct_state: str) -> str:
+    """Maps a Slurm sacct state to a standardized stopped_reason."""
+    s = sacct_state.upper()
+    if "CANCELLED" in s:
+        return "cancelled"
+    if "TIMEOUT" in s or "TIME_LIMIT" in s:
+        return "timeout"
+    if "COMPLETED" in s:
+        return "completed"
+    return "failed"
+
+
+def record_heartbeat(session_uuid: str) -> dict[str, Any]:
+    """Records a heartbeat renewal for a session."""
+    session_file = get_sessions_dir() / f"{session_uuid}.json"
+    heartbeat_file = get_sessions_dir() / f"{session_uuid}.heartbeat"
+    now_ts = time.time()
+
+    if not session_file.is_file():
+        return {
+            "status": "error",
+            "error": f"Session not found: {session_uuid}",
+            "uuid": session_uuid,
+        }
+
+    # Touch heartbeat file mode 0600
+    try:
+        heartbeat_file.touch(mode=0o600, exist_ok=True)
+        os.utime(heartbeat_file, (now_ts, now_ts))
+    except OSError as exc:
+        return {
+            "status": "error",
+            "error": f"Failed to update heartbeat file: {exc}",
+            "uuid": session_uuid,
+        }
+
+    # Update session JSON
+    try:
+        data = json.loads(session_file.read_text(encoding="utf-8"))
+        data["last_heartbeat"] = now_ts
+        session_file.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    except Exception:
+        pass
+
+    return {
+        "status": "ok",
+        "uuid": session_uuid,
+        "timestamp": now_ts,
+    }
 
 
 def start_session(
@@ -339,22 +410,28 @@ def get_status(
                 except ValueError:
                     pass
                 sacct_state = first[1] if len(first) > 1 else "COMPLETED"
-                # Clean up token file
+                stopped_reason = map_stopped_reason(sacct_state)
+                # Clean up token and heartbeat files
                 (get_tokens_dir() / f"{session_uuid}.token").unlink(missing_ok=True)
+                (get_sessions_dir() / f"{session_uuid}.heartbeat").unlink(missing_ok=True)
                 return {
                     "status": "stopped",
                     "state": sacct_state,
+                    "stopped_reason": stopped_reason,
                     "uuid": session_uuid,
                     "job_id": resolved_id,
                     "healthy": False,
+                    "last_heartbeat_age_s": None,
                     "message": f"Job ended ({sacct_state})",
                 }
             return {
                 "status": "stopped",
                 "state": "STOPPED",
+                "stopped_reason": "cancelled",
                 "uuid": session_uuid,
                 "job_id": None,
                 "healthy": False,
+                "last_heartbeat_age_s": None,
                 "message": "Session ended or not found",
             }
         return {
@@ -365,6 +442,15 @@ def get_status(
     # Query squeue for current state, elapsed, time left, reason, node
     sq_cmd = ["squeue", "-h", "-j", str(job_id), "-o", "%T|%M|%L|%r|%N"]
     sq_proc = subprocess.run(sq_cmd, capture_output=True, text=True)
+
+    last_hb_age = session.get_heartbeat_age() if session else None
+    if last_hb_age is None and session_uuid:
+        hb_file = get_sessions_dir() / f"{session_uuid}.heartbeat"
+        if hb_file.is_file():
+            try:
+                last_hb_age = max(0.0, round(time.time() - hb_file.stat().st_mtime, 1))
+            except OSError:
+                pass
 
     if sq_proc.returncode == 0 and sq_proc.stdout.strip():
         parts = [p.strip() for p in sq_proc.stdout.strip().split("|")]
@@ -404,6 +490,7 @@ def get_status(
             "time_left": time_left,
             "time_left_seconds": time_left_sec,
             "healthy": healthy,
+            "last_heartbeat_age_s": last_hb_age,
             "reason": reason if state == "PENDING" else None,
             "warning": warning,
         }
@@ -416,7 +503,7 @@ def get_status(
         first_line = sa_proc.stdout.strip().split("\n")[0].strip()
         sacct_state = first_line.split("+")[0].strip() or "COMPLETED"
 
-    # Clean up leftover session and token files if they still exist
+    # Clean up leftover session, token, and heartbeat files if they still exist
     if session_file and session_file.is_file():
         try:
             session_file.unlink()
@@ -434,13 +521,22 @@ def get_status(
                 token_path.unlink()
             except OSError:
                 pass
+        hb_path = get_sessions_dir() / f"{session_uuid}.heartbeat"
+        if hb_path.is_file():
+            try:
+                hb_path.unlink()
+            except OSError:
+                pass
 
+    stopped_reason = map_stopped_reason(sacct_state)
     return {
         "status": "stopped",
         "state": sacct_state,
+        "stopped_reason": stopped_reason,
         "uuid": session_uuid or (session.uuid if session else ""),
         "job_id": job_id,
         "healthy": False,
+        "last_heartbeat_age_s": last_hb_age,
         "message": f"Job ended ({sacct_state})",
     }
 
@@ -485,7 +581,7 @@ def stop_session(
         subprocess.run([scancel_bin, str(job_id)], capture_output=True, text=True)
         cancelled = True
 
-    # Remove session and token files
+    # Remove session, token, and heartbeat files
     if session_file and session_file.is_file():
         try:
             session_file.unlink()
@@ -497,6 +593,14 @@ def stop_session(
             token_file.unlink()
         except OSError:
             pass
+
+    if session_uuid:
+        hb_file = get_sessions_dir() / f"{session_uuid}.heartbeat"
+        if hb_file.is_file():
+            try:
+                hb_file.unlink()
+            except OSError:
+                pass
 
     return {
         "status": "stopped",
@@ -545,9 +649,11 @@ def list_sessions() -> dict[str, Any]:
             continue
         seen_uuids.add(s.uuid)
         slurm_info = slurm_jobs.get(s.uuid)
+        hb_age = s.get_heartbeat_age()
 
         if slurm_info:
             time_left_sec = parse_slurm_time(slurm_info["time_left"])
+            is_orphan = hb_age > 180.0
             sessions.append(
                 {
                     "uuid": s.uuid,
@@ -561,7 +667,9 @@ def list_sessions() -> dict[str, Any]:
                     "time_left": slurm_info["time_left"],
                     "time_left_seconds": time_left_sec,
                     "data_root": s.data_root,
-                    "is_orphan": False,
+                    "last_heartbeat_age_s": hb_age,
+                    "is_orphan": is_orphan,
+                    "orphan_reason": "heartbeat_timeout" if is_orphan else None,
                 }
             )
         else:
@@ -579,7 +687,9 @@ def list_sessions() -> dict[str, Any]:
                     "time_left": "00:00",
                     "time_left_seconds": 0,
                     "data_root": s.data_root,
+                    "last_heartbeat_age_s": hb_age,
                     "is_orphan": True,
+                    "orphan_reason": "job_not_found",
                 }
             )
 
@@ -600,7 +710,9 @@ def list_sessions() -> dict[str, Any]:
                     "time_left": slurm_info["time_left"],
                     "time_left_seconds": time_left_sec,
                     "data_root": "",
+                    "last_heartbeat_age_s": None,
                     "is_orphan": True,
+                    "orphan_reason": "missing_session_file",
                 }
             )
 

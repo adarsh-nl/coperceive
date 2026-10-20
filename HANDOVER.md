@@ -52,36 +52,36 @@ The desktop application is now the top priority per Adarsh's instructions (pausi
   - **Gates**: Job `631378` green on `hpc-node12` (`gates rc=0`, 574 passed, 2 skipped, 8 warnings in 154.16s).
   - **Branch**: `feat/desktop` pushed to `origin/feat/desktop` (commit `98c625c`).
 
-- **Phase 3: Complete (Cluster Remote Serve & CLI)**
+- **Phase 3: Complete (Cluster Remote Serve, Heartbeat Lease, and Rust SSH Target)**
   - **Slurm Remote Serve Job (`scripts/desktop/remote_serve.sbatch`)**:
     - Partition `ps` (UTwente HPC nodes `hpc-node[11-12,14]`), 2 CPUs, 8 GB memory, default walltime 2 hours (configurable).
     - Session job name `coperceive-desktop-<uuid>`.
     - Ephemeral cluster IP binding: discovers node IP via `hostname -I` (or `127.0.0.1`), picks an unbound port dynamically.
-    - Security: Token is never placed on argv; read strictly from `~/.coperceive/tokens/<uuid>.token` (mode `0600`). Session state `{uuid, node, ip, port, pid, started_at}` written to `~/.coperceive/sessions/<uuid>.json` (mode `0600`). Base directory enforced mode `0700`.
-    - Signal handling: Traps SIGTERM and EXIT to ensure clean server termination and credential file cleanup on job completion, scancel, or walltime expiry.
+    - Security: Token is never placed on argv; read strictly from `~/.coperceive/tokens/<uuid>.token` (mode `0600`). Session state `{uuid, node, ip, port, pid, started_at, last_heartbeat}` written to `~/.coperceive/sessions/<uuid>.json` (mode `0600`). Base directory enforced mode `0700`.
+    - Signal handling: Traps SIGTERM and EXIT, cleanly terminating `coperceive serve`, removing all credentials, and exiting 0.
+    - Heartbeat lease watchdog: background watchdog checks `~/.coperceive/sessions/<uuid>.heartbeat` every 5s; terminates serve and cleans up if heartbeat age >= `COPERCEIVE_HEARTBEAT_TIMEOUT` (default: 600s / 10 min, configurable via env, 0 to disable).
   - **Cluster Remote CLI (`coperceive remote ...`)**:
     - Pure machine-readable JSON output for seamless integration with Tauri Rust backend:
       - `coperceive remote start --root <dir> [--partition ps] [--time 02:00:00] [--cpus 2] [--mem 8G] [--uuid <uuid>]`: Submits sbatch, polls until RUNNING, probes health with Bearer token, returns session JSON.
-      - `coperceive remote status [--uuid <uuid>] [--job-id <id>]`: Reports state (`RUNNING`, `PENDING`, `STOPPED`), elapsed time, time left, queue reason, and health check. Emits early warning when walltime has < 10 minutes remaining. Reconstructs state via `sacct` if session file was removed.
+      - `coperceive remote status [--uuid <uuid>] [--job-id <id>]`: Reports state (`RUNNING`, `PENDING`, `STOPPED`), elapsed time, time left, queue reason, `last_heartbeat_age_s`, `stopped_reason` (mapped to `cancelled`, `timeout`, `completed`, `failed`), and health check. Emits early warning when walltime has < 10 minutes remaining. Reconstructs state via `sacct` if session file was removed.
       - `coperceive remote stop [--uuid <uuid>] [--job-id <id>]`: Terminates Slurm job via `scancel` and removes credentials.
-      - `coperceive remote list`: Lists active sessions from `~/.coperceive/sessions/` and Slurm jobs owned by user matching `coperceive-desktop-*`; detects and flags orphan jobs (`is_orphan: true`).
-  - **Direct / Tunnel Verification**:
-    - Direct HTTP probe to cluster IP (e.g. `10.20.240.48:52657`):
-      - Unauthenticated: HTTP 401 Unauthorized (`{"detail":"bearer token required"}`).
-      - Authenticated: HTTP 200 OK (`{"status":"ok","root_path":""}`).
-  - **Real Griffin Dataset Verification (`/home/nanjaiyalathaa/results/628385/scenes`)**:
-    - `GET /api/scenes`: 200 OK, 265 bytes (10 scenes), latency 0.0102s.
-    - `GET /api/scenes/Town03-000/frame?time_us=1118500000`: 200 OK, 101,852 bytes, latency 0.0086s.
-    - `GET /api/scenes/Town03-000/points?time_us=1118500000&sensor_id=lidar_top`: 200 OK, 35,148 bytes, latency 0.0109s.
-  - **Slurm Failure Drills**:
-    - *Drill 1 (scancel mid-serve)*: Job 632055 cancelled mid-run -> `coperceive remote status` reported `{"status":"stopped","state":"CANCELLED by 17764406"}`; session and token files deleted cleanly.
-    - *Drill 2 (walltime expiry)*: Job 632056 with 3-minute walltime -> at 2:19 remaining `status` returned warning: `"Walltime ending in less than 10 minutes (2:19 remaining)"`; after expiry `status` returned `{"status":"stopped","state":"FAILED"}`; all session files cleaned up.
-    - *Drill 3 (concurrent sessions)*: Two concurrent sessions ran on separate compute nodes (`88a9b1edafcb62f3` on `hpc-node11:56587`, `0e743ce011d0c906` on `hpc-node14:38793`) simultaneously with distinct ports, tokens, and health checks.
-    - *Drill 4 (orphan cleanup)*: Session JSON deleted while job 632057 ran; `list` flagged `is_orphan: true`; `stop` cancelled the orphan job.
+      - `coperceive remote heartbeat --uuid <uuid>`: Touches `<uuid>.heartbeat` (mode 0600) and updates `last_heartbeat` in session JSON; returns `{"status":"ok","uuid":...,"timestamp":...}`.
+      - `coperceive remote list`: Lists active sessions from `~/.coperceive/sessions/` and Slurm jobs owned by user matching `coperceive-desktop-*`; detects and flags orphan jobs (`is_orphan: true`), including sessions with `last_heartbeat_age_s > 180s` (`orphan_reason: "heartbeat_timeout"`).
+  - **Rust SSH Target Core (`src-tauri/src/remote.rs`, `src-tauri/src/ssh.rs`)**:
+    - `RemoteClient`: Runs `coperceive remote start|status|stop|heartbeat|list` over SSH using ControlMaster multiplexing, parsing typed JSON outputs and mapping SSH error stderr.
+    - `SshTunnel`: Manages `ssh -N -L 127.0.0.1:<lp>:<ip>:<port>` subprocess; verifies process liveness, cleanly shuts down on exit/drop.
+    - `RemoteSessionManager`: Manages connection lifecycle and seamlessly reattaches to existing sessions given a UUID.
+    - Tauri commands: `remote_connect`, `remote_status`, `remote_disconnect` under `#[cfg(target_os = "macos")]`; window event listeners ensure background tunnels terminate on close.
+    - 19 Rust unit tests passing in 0.32s (`cargo test --lib`).
+  - **Cluster Drills & Empirical Verification**:
+    - *Heartbeat Drill*: Job `632152` (`af6be217d126533c`) with 45s timeout; `status` showed age 30.7s; heartbeat renewal reduced age to 3.4s; stopping heartbeats triggered watchdog at 46s (`Heartbeat lease expired (46s >= 45s), stopping serve...`) with graceful shutdown and exit 0.
+    - *Walltime Drill*: Job `632153` with 2-minute walltime; trap exited 0 cleanly, sacct state mapped to `stopped_reason`.
+    - *Login-Node Forwarding*: `ssh -N -L localhost` is blocked: port 22 refused on loopback (sshd binds only public IP `130.89.6.42`), and SSH to `spark-head1` gives `Permission denied (publickey)` as login node has no self-referential keys in `~/.ssh/authorized_keys`.
   - **Unit and Integration Tests**:
-    - 8 fast unit tests in `tests/test_remote.py` passing in ~1.2s.
-    - 1 end-to-end Slurm integration test (`test_cluster_remote_session_integration`) submitting a real temporary sbatch job passing in 46.1s.
-  - **Gates**: Job `632063` green on `hpc-node12` (`gates rc=0`, 583 passed, 2 skipped, 8 warnings in 206.15s).
+    - 11 fast Python unit tests in `tests/test_remote.py` passing in ~1.2s.
+    - 19 Rust unit tests in `src-tauri/` passing in ~0.3s.
+    - CI Run [`39467524258`](https://github.com/adarsh-nl/coperceive/actions/runs/39467524258) green across all jobs.
+  - **Gates**: Job `632157` green on `hpc-node12` (`gates rc=0`, 586 passed, 2 skipped, 8 warnings in 203.24s).
 
 ## Phase 2 Mac Acceptance Instructions
 

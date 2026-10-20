@@ -55,8 +55,18 @@ fi
 
 echo "Starting coperceive remote serve on ${NODE_IP}:${PORT} (job ${SLURM_JOB_ID:-none}, uuid ${UUID})..."
 
+# Heartbeat lease configuration (default: 600s / 10 min, 0 to disable)
+HEARTBEAT_TIMEOUT="${COPERCEIVE_HEARTBEAT_TIMEOUT:-600}"
+HEARTBEAT_FILE="${SESSIONS_DIR}/${UUID}.heartbeat"
+touch "${HEARTBEAT_FILE}"
+chmod 0600 "${HEARTBEAT_FILE}"
+
 cleanup() {
+    trap - SIGTERM SIGINT EXIT
     echo "Caught signal, stopping remote coperceive serve (PID ${SERVE_PID:-none})..."
+    if [ -n "${WATCHDOG_PID:-}" ] && kill -0 "${WATCHDOG_PID}" 2>/dev/null; then
+        kill "${WATCHDOG_PID}" 2>/dev/null || true
+    fi
     if [ -n "${SERVE_PID:-}" ] && kill -0 "${SERVE_PID}" 2>/dev/null; then
         kill -TERM "${SERVE_PID}" 2>/dev/null || true
         for _ in {1..25}; do
@@ -73,7 +83,11 @@ cleanup() {
     if [ -f "${TOKEN_FILE}" ]; then
         rm -f "${TOKEN_FILE}"
     fi
+    if [ -f "${HEARTBEAT_FILE}" ]; then
+        rm -f "${HEARTBEAT_FILE}"
+    fi
     echo "Remote session cleaned up."
+    exit 0
 }
 trap cleanup SIGTERM SIGINT EXIT
 
@@ -90,6 +104,7 @@ SERVE_PID=$!
 # Write 0600 session file
 touch "${SESSION_FILE}"
 chmod 0600 "${SESSION_FILE}"
+NOW_TS=$(date +%s)
 cat <<EOF > "${SESSION_FILE}"
 {
   "uuid": "${UUID}",
@@ -98,13 +113,38 @@ cat <<EOF > "${SESSION_FILE}"
   "ip": "${NODE_IP}",
   "port": ${PORT},
   "pid": ${SERVE_PID},
-  "started_at": $(date +%s),
+  "started_at": ${NOW_TS},
+  "last_heartbeat": ${NOW_TS},
   "data_root": "${DATA_ROOT}",
   "token_file": "${TOKEN_FILE}"
 }
 EOF
 
 echo "Session file created: ${SESSION_FILE} (mode 0600)"
+
+# Background watchdog for heartbeat lease timeout
+if [ "${HEARTBEAT_TIMEOUT}" -gt 0 ] 2>/dev/null; then
+    (
+        while true; do
+            sleep 5
+            if [ -f "${HEARTBEAT_FILE}" ]; then
+                LAST_HB=$(stat -c %Y "${HEARTBEAT_FILE}" 2>/dev/null || stat -f %m "${HEARTBEAT_FILE}" 2>/dev/null || date +%s)
+                NOW=$(date +%s)
+                AGE=$((NOW - LAST_HB))
+                if [ "${AGE}" -ge "${HEARTBEAT_TIMEOUT}" ]; then
+                    echo "Heartbeat lease expired (${AGE}s >= ${HEARTBEAT_TIMEOUT}s), stopping serve..."
+                    cleanup
+                    exit 0
+                fi
+            else
+                echo "Heartbeat file removed, stopping serve..."
+                cleanup
+                exit 0
+            fi
+        done
+    ) &
+    WATCHDOG_PID=$!
+fi
 
 # Wait for server process
 wait "${SERVE_PID}"

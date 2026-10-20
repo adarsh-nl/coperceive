@@ -14,12 +14,15 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
+use coperceive_desktop::remote::{RemoteClient, RemoteSessionManager, RemoteStatusResponse};
+#[cfg(target_os = "macos")]
 use coperceive_desktop::sidecar::SidecarSession;
 
 #[cfg(target_os = "macos")]
 #[derive(Default)]
 pub struct AppState {
     pub sidecar: Mutex<Option<SidecarSession>>,
+    pub remote: Mutex<Option<RemoteSessionManager>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -151,6 +154,69 @@ async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload,
     })
 }
 
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn remote_connect(
+    state: tauri::State<'_, Arc<AppState>>,
+    alias: String,
+    data_root: String,
+    uuid: Option<String>,
+) -> Result<SessionPayload, String> {
+    // Disconnect existing session if one was active
+    {
+        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+        if let Some(mut existing) = lock.take() {
+            let _ = existing.stop();
+        }
+    }
+    {
+        let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
+        if let Some(mut existing) = lock.take() {
+            let _ = existing.disconnect();
+        }
+    }
+
+    let mgr = RemoteSessionManager::connect(&alias, &data_root, uuid.as_deref(), None)
+        .map_err(|e| e.to_string())?;
+
+    let origin = mgr.origin();
+    let token = mgr.token.clone();
+
+    let payload = SessionPayload {
+        origin,
+        token,
+        server_version: "0.0.0".to_string(),
+        data_root,
+        target_type: "remote".to_string(),
+    };
+
+    let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
+    *lock = Some(mgr);
+
+    Ok(payload)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn remote_status(
+    alias: String,
+    uuid: Option<String>,
+    job_id: Option<u64>,
+) -> Result<RemoteStatusResponse, String> {
+    let client = RemoteClient::new(&alias);
+    client.status(uuid.as_deref(), job_id).map_err(|e| e.to_string())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn remote_disconnect(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
+    if let Some(mut mgr) = lock.take() {
+        mgr.disconnect().map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
 /// Simple loopback HTTP polling using TcpStream without external HTTP client crate.
 #[cfg(target_os = "macos")]
 fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(), String> {
@@ -198,12 +264,20 @@ fn main() {
             start_local,
             stop_local,
             health,
+            remote_connect,
+            remote_status,
+            remote_disconnect,
         ])
         .on_window_event(move |_window, event| {
             if let tauri::WindowEvent::Destroyed = event {
                 if let Ok(mut lock) = state_for_window.sidecar.lock() {
                     if let Some(mut s) = lock.take() {
                         let _ = s.stop();
+                    }
+                }
+                if let Ok(mut lock) = state_for_window.remote.lock() {
+                    if let Some(mut r) = lock.take() {
+                        let _ = r.disconnect();
                     }
                 }
             }
@@ -215,6 +289,11 @@ fn main() {
                 if let Ok(mut lock) = state_for_exit.sidecar.lock() {
                     if let Some(mut s) = lock.take() {
                         let _ = s.stop();
+                    }
+                }
+                if let Ok(mut lock) = state_for_exit.remote.lock() {
+                    if let Some(mut r) = lock.take() {
+                        let _ = r.disconnect();
                     }
                 }
             }

@@ -14,6 +14,7 @@ from coperceive.remote.manager import (
     DEFAULT_WALLTIME,
     get_status,
     list_sessions,
+    record_heartbeat,
     start_session,
     stop_session,
 )
@@ -96,6 +97,14 @@ def add_parser(
     )
     list_parser.set_defaults(func=_remote_list)
 
+    # remote heartbeat
+    heartbeat_parser = remote_sub.add_parser(
+        "heartbeat", help="Send heartbeat lease renewal for a remote session."
+    )
+    heartbeat_parser.add_argument("uuid", nargs="?", default=None, help="Session UUID.")
+    heartbeat_parser.add_argument("--uuid", dest="opt_uuid", default=None, help="Session UUID.")
+    heartbeat_parser.set_defaults(func=_remote_heartbeat)
+
 
 def _remote_start(args: argparse.Namespace) -> None:
     extra_args: list[str] = []
@@ -144,3 +153,14 @@ def _remote_stop(args: argparse.Namespace) -> None:
 def _remote_list(args: argparse.Namespace) -> None:
     result = list_sessions()
     print(json.dumps(result, indent=2))
+
+
+def _remote_heartbeat(args: argparse.Namespace) -> None:
+    uuid_val = args.uuid or args.opt_uuid
+    if not uuid_val:
+        print(json.dumps({"status": "error", "error": "session uuid is required"}))
+        sys.exit(1)
+    result = record_heartbeat(uuid_val)
+    print(json.dumps(result, indent=2))
+    if result.get("status") == "error":
+        sys.exit(1)
