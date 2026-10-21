@@ -594,6 +594,7 @@ async function drawFrame(
       token,
     );
     if (stale()) {
+      (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "mid-sensor" };
       return null;
     }
     const xyz = new Float32Array(buffer);
@@ -601,6 +602,7 @@ async function drawFrame(
     sweeps.push({ xyz, color: new THREE.Color(colorFor(types.get(sensor.agent_id) ?? "")) });
   }
   if (stale()) {
+    (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "post-sensor" };
     return null;
   }
   const positions = new Float32Array(pointCount * 3);
@@ -617,6 +619,14 @@ async function drawFrame(
   }
   replaceColored(stage.points.geometry, positions, colors);
   stage.points.visible = positions.length > 0;
+  (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = {
+    step: "drawn",
+    pointCount,
+    positionsLength: positions.length,
+    visible: stage.points.visible,
+    timeUs: frame.time_us,
+    sceneId: frame.scene_id,
+  };
   // Read the dim set now, not at call time: the prediction frame for this sample may have arrived while
   // the point buffers were loading.
   drawBoxes(stage, frame, types, hidden, appearance, dimmed());
@@ -936,9 +946,10 @@ export default function Viewer({
         headers: {
           Authorization: `Bearer ${secret}`,
           "Content-Type": "application/json",
-          "Content-Length": "0",
         },
-      }).catch(() => {});
+      }).catch((e) => {
+        console.error("open-dialog fetch error:", e);
+      });
     }
   };
 
@@ -975,6 +986,14 @@ export default function Viewer({
       basename: string,
       root: string,
     ) => {
+      (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+        step: "started",
+        time: Date.now(),
+        newOrigin,
+        newTokenPresent: Boolean(newToken),
+        basename,
+        root,
+      };
       if (typeof sessionStorage !== "undefined") {
         sessionStorage.setItem("coperceive-origin", newOrigin);
         sessionStorage.setItem("coperceive-token", newToken);
@@ -1003,12 +1022,22 @@ export default function Viewer({
           headers: authHeaders(newToken),
         });
         if (!response.ok) {
-          setStatus(await errorDetail(response));
+          const detail = await errorDetail(response);
+          setStatus(detail);
+          (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+            step: "scenes_fetch_failed",
+            status: response.status,
+            detail,
+          };
           return;
         }
         const body = (await response.json()) as unknown;
         if (!Array.isArray(body)) {
           setStatus("The scene list was not a list.");
+          (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+            step: "scenes_not_array",
+            body,
+          };
           return;
         }
         const ids = body.flatMap((item) => {
@@ -1031,15 +1060,44 @@ export default function Viewer({
                 setFrameIndex(0);
                 setSummary(sumBody);
                 setStatus(`${sumBody.scene_id}: ${sumBody.times_us.length} samples, world ${sumBody.world_frame}.`);
+                (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+                  step: "success",
+                  ids,
+                  nextScene,
+                  samples: sumBody.times_us.length,
+                };
+              } else {
+                (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+                  step: "isSummary_false",
+                  sumBody,
+                };
               }
+            } else {
+              (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+                step: "sumResp_not_ok",
+                status: sumResp.status,
+              };
             }
-          } catch {}
+          } catch (e) {
+            (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+              step: "sumResp_exception",
+              error: String(e),
+            };
+          }
         } else {
           setSceneId("");
           setStatus("No scene directories under the server root.");
+          (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+            step: "no_scenes",
+            ids,
+          };
         }
       } catch (e) {
         setStatus(e instanceof Error ? e.message : "Could not list scenes.");
+        (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+          step: "scenes_exception",
+          error: String(e),
+        };
       }
 
       setToast({ id: Date.now(), text: `Switched dataset to ${basename}`, type: "info" });

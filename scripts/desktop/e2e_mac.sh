@@ -465,6 +465,8 @@ def eval_js(code):
         return data.get("result")
 
 print("Clicking UI dataset open button...")
+btn_res = eval_js("(() => { const b = document.querySelector('.btn-open-dataset'); return b ? 'found' : 'NOT_FOUND'; })()")
+print(f"Button presence: {btn_res}")
 eval_js("document.querySelector(\x27.btn-open-dataset\x27)?.click()")
 '
 
@@ -489,6 +491,19 @@ def eval_js(code, timeout=10):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
+# Print initial diagnostics right after sleep 3.5
+dbg_initial = eval_js("""(() => ({
+    status: document.querySelector('.status')?.textContent,
+    badge: document.querySelector('.dataset-name')?.textContent,
+    scenes: Array.from(document.querySelectorAll('#scene-id option')).map(o => o.value),
+    sceneId: document.querySelector('#scene-id')?.value,
+    errBanner: document.querySelector('.dataset-error-msg')?.textContent,
+    lastDatasetChange: window.__LAST_DATASET_CHANGE__,
+    lastDraw: window.__LAST_DRAW__,
+    counts: window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null,
+}))()""")
+print(f"DIAGNOSTICS AFTER SWITCH & SLEEP: {json.dumps(dbg_initial, indent=2)}")
+
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
     last_err = None
@@ -502,6 +517,17 @@ def wait_for_scene(timeout=30):
         except Exception as e:
             last_err = e
         time.sleep(0.5)
+    dbg_end = eval_js("""(() => ({
+        status: document.querySelector('.status')?.textContent,
+        badge: document.querySelector('.dataset-name')?.textContent,
+        scenes: Array.from(document.querySelectorAll('#scene-id option')).map(o => o.value),
+        sceneId: document.querySelector('#scene-id')?.value,
+        errBanner: document.querySelector('.dataset-error-msg')?.textContent,
+        lastDatasetChange: window.__LAST_DATASET_CHANGE__,
+        lastDraw: window.__LAST_DRAW__,
+        counts: window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null,
+    }))()""")
+    print(f"DEBUG AT TIMEOUT: {json.dumps(dbg_end, indent=2)}", file=sys.stderr)
     raise RuntimeError(f"Timed out waiting for scene to load and render after dataset switch (last_counts={last_counts}, last_err={last_err})")
 
 print("Waiting for scene to load after folder switch...")
