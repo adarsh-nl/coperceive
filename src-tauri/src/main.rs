@@ -172,9 +172,11 @@ fn open_viewer_window(
                 window.__COPERCEIVE_DATA_ROOT__ = "{escaped_root}";
                 window.__COPERCEIVE_DATA_BASENAME__ = "{escaped_base}";
                 window.__COPERCEIVE_INITIAL_STATE__ = {initial_state_json};
-                if (window.location.origin === "{escaped_origin}") {{
-                    sessionStorage.setItem("coperceive-token", "{escaped_token}");
-                    sessionStorage.setItem("coperceive-origin", "{escaped_origin}");
+                if (!window.location.origin || window.location.origin === "null" || window.location.origin === "{escaped_origin}" || window.location.href.indexOf("{escaped_origin}") === 0) {{
+                    try {{
+                        sessionStorage.setItem("coperceive-token", "{escaped_token}");
+                        sessionStorage.setItem("coperceive-origin", "{escaped_origin}");
+                    }} catch (_) {{}}
                 }}
             }} catch (e) {{
                 console.error("Failed to initialize coperceive desktop state", e);

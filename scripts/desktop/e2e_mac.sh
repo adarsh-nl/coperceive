@@ -125,7 +125,7 @@ export COPERCEIVE_TEST_ENV="1"
 export COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}"
 export COPERCEIVE_MOCK_DIALOG_FILE="${MOCK_DIALOG_FILE}"
 
-"${APP_EXE}" > >(tee "${APP_STDOUT}" | sed 's/^/[APP-OUT] /') 2> >(tee "${APP_STDERR}" | sed 's/^/[APP-ERR] /' >&2) &
+"${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
 APP_PID=$!
 echo "App launched with PID ${APP_PID}"
 
@@ -203,15 +203,18 @@ def eval_js(code, timeout=10):
 
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
+    last_err = None
+    last_counts = None
     while time.monotonic() < deadline:
         try:
             counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+            last_counts = counts
             if counts and counts.get("points", 0) > 0:
                 return counts
-        except Exception:
-            pass
+        except Exception as e:
+            last_err = e
         time.sleep(0.5)
-    raise RuntimeError("Timed out waiting for viewer scene to load and render")
+    raise RuntimeError(f"Timed out waiting for viewer scene to load and render (last_counts={last_counts}, last_err={last_err})")
 
 print("Waiting for initial viewer scene to load and render...")
 counts = wait_for_scene(30)
@@ -326,7 +329,7 @@ unset COPERCEIVE_AUTOCONNECT_ROOT
 rm -f "${MARKER_FILE}"
 
 echo "Relaunching app from persistent state.json..."
-"${APP_EXE}" > >(tee "${TMP_DIR}/relaunch_stdout.log" | sed 's/^/[RELAUNCH-OUT] /') 2> >(tee "${TMP_DIR}/relaunch_stderr.log" | sed 's/^/[RELAUNCH-ERR] /' >&2) &
+"${APP_EXE}" > "${TMP_DIR}/relaunch_stdout.log" 2> "${TMP_DIR}/relaunch_stderr.log" &
 APP_PID=$!
 echo "Relaunched app PID ${APP_PID}"
 
@@ -388,15 +391,18 @@ def eval_js(code, timeout=10):
 
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
+    last_err = None
+    last_counts = None
     while time.monotonic() < deadline:
         try:
             counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+            last_counts = counts
             if counts and counts.get("points", 0) > 0:
                 return counts
-        except Exception:
-            pass
+        except Exception as e:
+            last_err = e
         time.sleep(0.5)
-    raise RuntimeError("Timed out waiting for relaunched viewer scene to load and render")
+    raise RuntimeError(f"Timed out waiting for relaunched viewer scene to load and render (last_counts={last_counts}, last_err={last_err})")
 
 print("Waiting for relaunched viewer scene to restore...")
 wait_for_scene(30)
@@ -485,15 +491,18 @@ def eval_js(code, timeout=10):
 
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
+    last_err = None
+    last_counts = None
     while time.monotonic() < deadline:
         try:
             counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+            last_counts = counts
             if counts and counts.get("points", 0) > 0:
                 return counts
-        except Exception:
-            pass
+        except Exception as e:
+            last_err = e
         time.sleep(0.5)
-    raise RuntimeError("Timed out waiting for scene to load and render after dataset switch")
+    raise RuntimeError(f"Timed out waiting for scene to load and render after dataset switch (last_counts={last_counts}, last_err={last_err})")
 
 print("Waiting for scene to load after folder switch...")
 counts = wait_for_scene(30)

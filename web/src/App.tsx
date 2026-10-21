@@ -43,7 +43,11 @@ function useHashRoute(): "home" | "viewer" | "connect" {
 const TOKEN_KEY = "coperceive-token";
 
 function storedToken(): string {
-  return sessionStorage.getItem(TOKEN_KEY) ?? "";
+  try {
+    return (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(TOKEN_KEY) ?? "" : "");
+  } catch {
+    return "";
+  }
 }
 
 function DesktopPreferences() {
@@ -128,7 +132,22 @@ export default function App() {
   }, [isDesktop]);
 
   useEffect(() => {
-    sessionStorage.setItem(TOKEN_KEY, token);
+    if (token && typeof sessionStorage !== "undefined") {
+      try {
+        sessionStorage.setItem(TOKEN_KEY, token);
+      } catch {}
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token && typeof sessionStorage !== "undefined") {
+      try {
+        const stored = sessionStorage.getItem(TOKEN_KEY);
+        if (stored) {
+          setToken(stored);
+        }
+      } catch {}
+    }
   }, [token]);
 
   useEffect(() => {

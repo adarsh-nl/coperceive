@@ -865,10 +865,18 @@ export default function Viewer({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<Stage | null>(null);
-  const [activeToken, setActiveToken] = useState(token);
+  const [activeToken, setActiveToken] = useState(() => {
+    return token || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("coperceive-token") ?? "" : "");
+  });
   useEffect(() => {
-    setActiveToken(token);
+    if (token) {
+      setActiveToken(token);
+    } else {
+      const stored = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("coperceive-token") ?? "" : "";
+      if (stored) setActiveToken(stored);
+    }
   }, [token]);
+  const effectiveToken = activeToken || token;
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
   const [sceneId, setSceneId] = useState("");
@@ -1806,7 +1814,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [sceneId, token]);
+  }, [sceneId, effectiveToken]);
 
   useEffect(() => {
     window.__COPERCEIVE_PLAYBACK__ = (action: string, value?: number) => {
@@ -1953,12 +1961,12 @@ export default function Viewer({
     }
 
     void (async () => {
-      const body = await cacheRef.current.loadFrame(summary.scene_id, time, token);
+      const body = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
       if (stale()) {
         return;
       }
       latestRef.current = { frame: body, types };
-      const drawn = await drawFrame(stage, body, types, hidden, appearance, token, cacheRef.current, () => dimmedRef.current, stale);
+      const drawn = await drawFrame(stage, body, types, hidden, appearance, effectiveToken, cacheRef.current, () => dimmedRef.current, stale);
       if (!drawn || stale()) {
         return;
       }
@@ -1985,14 +1993,14 @@ export default function Viewer({
       setStatus(
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
-      prefetchAhead(cacheRef.current, summary, frameIndex, token);
+      prefetchAhead(cacheRef.current, summary, frameIndex, effectiveToken);
       paintWait.current?.(time);
     })().catch((error: unknown) => {
       if (!stale()) {
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
       }
     });
-  }, [summary, frameIndex, hidden, appearance, token, mapNote]);
+  }, [summary, frameIndex, hidden, appearance, effectiveToken, mapNote]);
 
   useEffect(() => {
     const latest = latestRef.current;
@@ -2041,7 +2049,7 @@ export default function Viewer({
       await Promise.all(
         wanted.map(async (frustum) => {
           const key = cameraKey(frustum.agent_id, frustum.sensor_id);
-          const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE);
+          const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, effectiveToken, FRUSTUM_TEXTURE);
           if (cancelled || !bitmap) {
             return;
           }
@@ -2082,7 +2090,7 @@ export default function Viewer({
       const nextTime = summary?.times_us[frameIndex + 1];
       if (typeof nextTime === "number") {
         for (const frustum of wanted) {
-          void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE).catch(() => undefined);
+          void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, effectiveToken, FRUSTUM_TEXTURE).catch(() => undefined);
         }
       }
       stage.requestRender();
@@ -2090,7 +2098,7 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, token, viewpoint, cameraId, summary, frameIndex, poster]);
+  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, effectiveToken, viewpoint, cameraId, summary, frameIndex, poster]);
 
   const sceneKey = summary?.scene_id ?? "";
   // Keyed by scene like the run list, so a switch never shows the previous town's map note.
@@ -2150,7 +2158,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/predictions`, {
-        headers: authHeaders(token),
+        headers: authHeaders(effectiveToken),
         signal: controller.signal,
       });
       if (response.status === 404) {
@@ -2187,7 +2195,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [summary, token]);
+  }, [summary, effectiveToken]);
 
   useEffect(() => {
     if (!summary || !run || !run.evaluated) {
@@ -2201,7 +2209,7 @@ export default function Viewer({
       const query = other ? `?compare=${encodeURIComponent(other)}` : "";
       const response = await fetch(
         `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/predictions/${encodeURIComponent(id)}/series${query}`,
-        { headers: authHeaders(token), signal: controller.signal },
+        { headers: authHeaders(effectiveToken), signal: controller.signal },
       );
       if (!response.ok) {
         setPredSeries({ sceneId, runId: id, compareId: other, series: null, note: await errorDetail(response) });
@@ -2225,7 +2233,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [summary, run, activeCompare, token]);
+  }, [summary, run, activeCompare, effectiveToken]);
 
   useEffect(() => {
     if (!summary || !run || !run.evaluated) {
@@ -2242,7 +2250,7 @@ export default function Viewer({
     const gen = ++predGen.current;
     const cache = predCacheRef.current;
     void cache
-      .load(sceneId, id, other, time, token)
+      .load(sceneId, id, other, time, effectiveToken)
       .then((frame) => {
         if (predGen.current !== gen) {
           return;
@@ -2250,7 +2258,7 @@ export default function Viewer({
         setPredFrame({ sceneId, runId: id, compareId: other, frame });
         setPredNote({ key, text: "" });
         for (const ahead of summary.times_us.slice(frameIndex + 1, frameIndex + 1 + PREFETCH_FRAMES)) {
-          void cache.load(sceneId, id, other, ahead, token).catch(() => undefined);
+          void cache.load(sceneId, id, other, ahead, effectiveToken).catch(() => undefined);
         }
       })
       .catch((error: unknown) => {
@@ -2258,7 +2266,7 @@ export default function Viewer({
           setPredNote({ key, text: error instanceof Error ? error.message : "Could not read the prediction frame." });
         }
       });
-  }, [summary, run, activeCompare, frameIndex, token]);
+  }, [summary, run, activeCompare, frameIndex, effectiveToken]);
 
   const layer = useMemo<{ a: LayerResult; b: LayerResult | null; timeUs: number } | null>(() => {
     if (!livePred) {
@@ -2362,7 +2370,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const base = `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}`;
-      const which = await fetch(`${base}/map`, { headers: authHeaders(token), signal: controller.signal });
+      const which = await fetch(`${base}/map`, { headers: authHeaders(effectiveToken), signal: controller.signal });
       let info: MapInfo | null = null;
       if (which.ok) {
         const body = (await which.json()) as unknown;
@@ -2376,7 +2384,7 @@ export default function Viewer({
         return;
       }
       const response = await fetch(`${base}/map/lines`, {
-        headers: authHeaders(token),
+        headers: authHeaders(effectiveToken),
         signal: controller.signal,
       });
       if (response.status === 404) {
@@ -2398,7 +2406,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [summary, token]);
+  }, [summary, effectiveToken]);
 
   function togglePlay() {
     canvasRef.current?.focus();
@@ -2455,7 +2463,7 @@ export default function Viewer({
     const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(scene)}${path}`, {
       method: "POST",
       headers: {
-        ...authHeaders(token),
+        ...authHeaders(effectiveToken),
         "X-Coperceive-Request": "1",
         "Content-Type": "application/json",
       },
@@ -2486,7 +2494,7 @@ export default function Viewer({
       return;
     }
     const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(relative)}`, {
-      headers: authHeaders(token),
+      headers: authHeaders(effectiveToken),
     });
     if (!response.ok) {
       return;
@@ -2580,7 +2588,7 @@ export default function Viewer({
     setExportNote("Writing the .rrd…");
     const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/export/rerun`, {
       method: "POST",
-      headers: { ...authHeaders(token), "X-Coperceive-Request": "1" },
+      headers: { ...authHeaders(effectiveToken), "X-Coperceive-Request": "1" },
     });
     if (!response.ok) {
       setExportNote(await errorDetail(response));
@@ -2638,7 +2646,7 @@ export default function Viewer({
       );
       setPlotAlt(kind === "bev" ? "Bird's-eye plot of the current sample" : "Camera overlay of the current sample");
       const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(path)}`, {
-        headers: authHeaders(token),
+        headers: authHeaders(effectiveToken),
       });
       if (!response.ok) {
         return;
@@ -2688,7 +2696,7 @@ export default function Viewer({
         if (typeof time !== "number") {
           continue;
         }
-        const frame = await cacheRef.current.loadFrame(summary.scene_id, time, token);
+        const frame = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
         if (cancelled) {
           return;
         }
@@ -2769,7 +2777,7 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [summary, token, hidden, appearance]);
+  }, [summary, effectiveToken, hidden, appearance]);
 
   useEffect(() => {
     if (!summary || !cameraFrame) {
@@ -2786,7 +2794,7 @@ export default function Viewer({
     let cancelled = false;
     const frame = cameraFrame;
     void (async () => {
-      const other = await cacheRef.current.loadFrame(summary.scene_id, neighborTime, token);
+      const other = await cacheRef.current.loadFrame(summary.scene_id, neighborTime, effectiveToken);
       if (cancelled) {
         return;
       }
@@ -2807,7 +2815,7 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [summary, cameraFrame, token]);
+  }, [summary, cameraFrame, effectiveToken]);
 
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
   const timeUs = summary?.times_us[Math.min(frameIndex, last)];
@@ -3270,7 +3278,7 @@ export default function Viewer({
                 onPointerMove={onDividerMove}
               />
               <CameraSplit
-                token={token}
+                token={effectiveToken}
                 sceneId={summary.scene_id}
                 timeUs={cameraFrame.time_us}
                 nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
@@ -3291,7 +3299,7 @@ export default function Viewer({
           </div>
           {cameraFrame && summary ? (
             <CameraStrip
-              token={token}
+              token={effectiveToken}
               sceneId={summary.scene_id}
               timeUs={cameraFrame.time_us}
               nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
@@ -3363,7 +3371,7 @@ export default function Viewer({
             pick={pick}
             frame={cameraFrame}
             summary={summary}
-            token={token}
+            token={effectiveToken}
             cache={cacheRef.current}
             evalPick={liveEvalPick}
             gtDetail={gtDetail}

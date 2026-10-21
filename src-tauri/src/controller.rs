@@ -502,11 +502,14 @@ pub fn spawn_controller<F: Fn() + Send + Sync + 'static>(
     let handle = std::thread::spawn(move || {
         for stream in listener.incoming() {
             if let Ok(s) = stream {
-                let _ = s.set_read_timeout(Some(Duration::from_millis(1500)));
-                let mut reader = s.try_clone().unwrap_or_else(|_| s.try_clone().unwrap());
-                let mut writer = s;
+                let cfg_clone = cfg.clone();
                 let cb = on_dialog.clone();
-                let _ = handle_client(&mut reader, &mut writer, &cfg, &move || cb());
+                std::thread::spawn(move || {
+                    let _ = s.set_read_timeout(Some(Duration::from_millis(5000)));
+                    let mut reader = s.try_clone().unwrap_or_else(|_| s.try_clone().unwrap());
+                    let mut writer = s;
+                    let _ = handle_client(&mut reader, &mut writer, &cfg_clone, &move || cb());
+                });
             }
         }
     });
@@ -719,5 +722,66 @@ pub mod tests {
 
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
         assert!(resp.contains("\"result\":42"));
+    }
+
+    #[test]
+    fn test_spawn_controller_eval_real_socket() {
+        use std::net::TcpStream;
+
+        let mut config = make_test_config();
+        let port_holder = Arc::new(Mutex::new(0u16));
+        let port_holder_clone = port_holder.clone();
+
+        config.eval_dispatcher = Some(Arc::new(move |script: String| {
+            let port = *port_holder_clone.lock().unwrap();
+            if let Some(pos) = script.find("req_id: ") {
+                let rest = &script[pos + 8..];
+                let end = rest.find(',').unwrap_or(rest.len());
+                let req_id: u64 = rest[..end].trim().parse().unwrap();
+
+                std::thread::spawn(move || {
+                    let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+                    let payload = format!("{{\"req_id\":{},\"result\":100,\"error\":null}}", req_id);
+                    let req = format!(
+                        "POST /eval-result HTTP/1.1\r\n\
+                         Host: 127.0.0.1:{}\r\n\
+                         Origin: http://127.0.0.1:8000\r\n\
+                         Authorization: Bearer secret-token-test-123\r\n\
+                         Content-Type: application/json\r\n\
+                         Content-Length: {}\r\n\r\n{}",
+                        port,
+                        payload.len(),
+                        payload
+                    );
+                    stream.write_all(req.as_bytes()).unwrap();
+                });
+            }
+        }));
+
+        let (port, _handle) = spawn_controller(config, || {}).unwrap();
+        *port_holder.lock().unwrap() = port;
+
+        let mut stream = TcpStream::connect(format!("127.0.0.1:{}", port)).unwrap();
+        let eval_payload = r#"{"script":"50 * 2"}"#;
+        let req = format!(
+            "POST /eval HTTP/1.1\r\n\
+             Host: 127.0.0.1:{}\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            port,
+            eval_payload.len(),
+            eval_payload
+        );
+        stream.write_all(req.as_bytes()).unwrap();
+
+        let mut resp_buf = Vec::new();
+        stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+        let _ = stream.read_to_end(&mut resp_buf);
+        let resp = String::from_utf8_lossy(&resp_buf);
+
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("\"result\":100"));
     }
 }
