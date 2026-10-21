@@ -4,7 +4,7 @@
   "world_frame": "ENU",
   "clock": {
     "unit": "us",
-    "scale_note": "synthetic scene 2 fixture"
+    "scale_note": "synthetic conformance scene, 10 Hz"
   },
   "agents": [
     {
@@ -12,6 +12,12 @@
       "agent_type": "vehicle",
       "platform": {},
       "display_name": "Vehicle 1"
+    },
+    {
+      "agent_id": "uav",
+      "agent_type": "uav",
+      "platform": {},
+      "display_name": "Drone 1"
     }
   ],
   "sensors": [
@@ -25,13 +31,49 @@
       "qz": 0.0,
       "tx": 0.0,
       "ty": 0.0,
-      "tz": 1.8,
+      "tz": 1.5,
       "image_width_px": null,
       "image_height_px": null,
       "fx": null,
       "fy": null,
       "cx": null,
       "cy": null
+    },
+    {
+      "sensor_id": "cam_front",
+      "agent_id": "vehicle",
+      "modality": "camera",
+      "qw": 1.0,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": 0.0,
+      "tx": 1.2,
+      "ty": 0.0,
+      "tz": 1.4,
+      "image_width_px": 64,
+      "image_height_px": 48,
+      "fx": 40.0,
+      "fy": 40.0,
+      "cx": 32.0,
+      "cy": 24.0
+    },
+    {
+      "sensor_id": "cam_down",
+      "agent_id": "uav",
+      "modality": "camera",
+      "qw": 1.0,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": 0.0,
+      "tx": 0.0,
+      "ty": 0.0,
+      "tz": 0.0,
+      "image_width_px": 64,
+      "image_height_px": 48,
+      "fx": 40.0,
+      "fy": 40.0,
+      "cx": 32.0,
+      "cy": 24.0
     }
   ]
 }

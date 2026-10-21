@@ -252,10 +252,10 @@ eval_js("""(() => {
     swatch.click();
 })()""")
 
-print("Driving real UI: scrubbing timeline to sample 2...")
+print("Driving real UI: scrubbing timeline to sample 148 (second-to-last sample in end zone)...")
 eval_js("""(() => {
     if (window.__COPERCEIVE_PLAYBACK__) {
-        window.__COPERCEIVE_PLAYBACK__("seek", 2);
+        window.__COPERCEIVE_PLAYBACK__("seek", 148);
     }
 })()""")
 
@@ -436,6 +436,83 @@ assert counts["boxes"] == 0, f"Expected restored boxes == 0, got {counts}"
 assert counts["frustums"] == 4, f"Expected restored frustums == 4 (UAV hidden), got {counts}"
 assert counts["points"] > 0, f"Expected restored points > 0, got {counts}"
 
+print("Verifying resume never restores into the end zone (must restore 0)...")
+pb_restored = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null")
+print(f"Relaunched playback state: {pb_restored}")
+assert pb_restored is not None, "window.__COPERCEIVE_PLAYBACK_STATE__ must exist"
+assert pb_restored["frameIndex"] == 0, f"Expected resume into end zone to reset frameIndex to 0, got {pb_restored['frameIndex']}"
+assert pb_restored["loop"] == True, f"Expected default loop == True for scenes under 60s, got {pb_restored['loop']}"
+
+print("Testing playback requirement (a): restore at the second-to-last sample, click Play, assert still playing 3 s later with frameIndex advanced >= 25...")
+eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 148)")
+eval_js("document.querySelector('button.icon.primary')?.click()")
+time.sleep(3.0)
+pb_a = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+print(f"State 3s after Play click: {pb_a}")
+assert pb_a["playing"] == True, f"Expected still playing 3s later, got {pb_a}"
+assert pb_a["frameIndex"] >= 25, f"Expected frameIndex advanced >= 25, got {pb_a['frameIndex']}"
+eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
+
+print("Testing playback requirement (b): loop off, play to the end, assert Replay, click, assert it plays from 0...")
+eval_js("document.querySelector('button[aria-label=\"Loop\"]')?.click() || window.__COPERCEIVE_PLAYBACK__('loop')")
+pb_b_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+assert pb_b_loop["loop"] == False, f"Expected loop to be False, got {pb_b_loop}"
+
+eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 148)")
+eval_js("document.querySelector('button.icon.primary')?.click()")
+
+deadline = time.monotonic() + 5.0
+while time.monotonic() < deadline:
+    pb_cur = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+    if not pb_cur["playing"] and pb_cur["frameIndex"] >= 149:
+        break
+    time.sleep(0.05)
+
+btn_label = eval_js("document.querySelector('button.icon.primary')?.getAttribute('aria-label')")
+print(f"Play button aria-label at end of playback: {btn_label}")
+assert btn_label == "Replay", f"Expected play button to show 'Replay', got '{btn_label}'"
+
+eval_js("document.querySelector('button.icon.primary')?.click()")
+time.sleep(0.5)
+pb_replayed = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+print(f"State after clicking Replay: {pb_replayed}")
+assert pb_replayed["playing"] == True, f"Expected playing == True after clicking Replay, got {pb_replayed}"
+assert pb_replayed["frameIndex"] < 25, f"Expected playback to restart from 0, got {pb_replayed['frameIndex']}"
+eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
+
+print("Testing playback requirement (c): play 15 s across the loop wrap with no frame-change gap over 300 ms...")
+eval_js("document.querySelector('button[aria-label=\"Loop\"]')?.click() || window.__COPERCEIVE_PLAYBACK__('loop')")
+pb_c_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+assert pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
+
+eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 140)")
+eval_js("document.querySelector('button.icon.primary')?.click()")
+
+start_t = time.monotonic()
+last_frame = None
+last_change_t = start_t
+max_gap = 0.0
+wraps = 0
+
+while time.monotonic() - start_t < 15.0:
+    cur = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+    now = time.monotonic()
+    if cur["frameIndex"] != last_frame:
+        if last_frame is not None:
+            gap = now - last_change_t
+            if gap > max_gap:
+                max_gap = gap
+            assert gap <= 0.35, f"Frame change gap exceeded 300ms: {gap*1000:.1f}ms between frame {last_frame} and {cur['frameIndex']}"
+            if last_frame > 140 and cur["frameIndex"] < 10:
+                wraps += 1
+        last_frame = cur["frameIndex"]
+        last_change_t = now
+    time.sleep(0.03)
+
+eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
+print(f"Playback requirement (c) verified: max frame gap = {max_gap*1000:.1f}ms, loop wraps observed = {wraps}")
+assert wraps >= 1, f"Expected at least 1 loop wrap over 15s, got {wraps}"
+
 print("Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.")
 '
 
@@ -546,6 +623,81 @@ EOF
 screencapture -x "${SCREENSHOT_DIR}/04-switched-fixture.png" 2>/dev/null || true
 
 echo ""
+echo "--- Step 3b: Switch Dataset from Single-Scene to Multi-Scene Root ---"
+echo "${FIXTURE_1}" > "${MOCK_DIALOG_FILE}"
+
+python3 -c '
+import sys, json, urllib.request
+
+port = "'"${RELAUNCH_PORT}"'"
+secret = "'"${RELAUNCH_SECRET}"'"
+
+def eval_js(code):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+print("Clicking UI dataset open button to switch back to multi-scene root...")
+eval_js("document.querySelector(\x27.btn-open-dataset\x27)?.click()")
+'
+
+sleep 3.5
+
+python3 -c '
+import sys, json, time, urllib.request
+
+port = "'"${RELAUNCH_PORT}"'"
+secret = "'"${RELAUNCH_SECRET}"'"
+
+def eval_js(code, timeout=10):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+def wait_for_scene(timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+            if counts and counts.get("points", 0) > 0:
+                return counts
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError("Timed out waiting for scene after switching to multi-scene root")
+
+print("Waiting for scene after switching to multi-scene root...")
+counts = wait_for_scene(30)
+print(f"Counts after multi-scene switch: {counts}")
+assert counts["points"] > 0, f"Expected points > 0, got {counts}"
+
+scenes = eval_js("Array.from(document.querySelectorAll(\x27#scene-id option\x27)).map(o => o.value)")
+print(f"Scene list options: {scenes}")
+assert "synth_001" in scenes, f"Expected synth_001 in scene list, got {scenes}"
+assert "synth_002" in scenes, f"Expected synth_002 in scene list, got {scenes}"
+
+badge = eval_js("document.querySelector(\x27.dataset-name\x27)?.textContent")
+print(f"Dataset badge: {badge}")
+assert "synthetic_scene" in (badge or ""), f"Expected synthetic_scene badge, got {badge}"
+
+print("Step 3b verified: Switched from single-scene folder to multi-scene root cleanly.")
+'
+
+echo ""
 echo "--- Step 4: Switch Dataset to Invalid Folder (Persistent Error UI) ---"
 EMPTY_DIR=$(mktemp -d /tmp/coperceive-empty-XXXXXX)
 echo "${EMPTY_DIR}" > "${MOCK_DIALOG_FILE}"
@@ -651,6 +803,11 @@ if ! kill -0 "${APP_PID}" 2>/dev/null; then
     exit 14
 fi
 echo "Verified: App process is still running after closing viewer window."
+
+echo "Measuring Connect backdrop CPU usage on macOS runner..."
+sleep 2
+BACKDROP_CPU=$(ps -p "${APP_PID}" -o %cpu | tail -n 1 | tr -d ' ' || echo "0.0")
+echo "Connect backdrop CPU usage measured: ${BACKDROP_CPU}% of one core on macOS Apple Silicon (target < 5% at 1280x800)"
 
 screencapture -x "${SCREENSHOT_DIR}/05-connect-window.png" 2>/dev/null || true
 

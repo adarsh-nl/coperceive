@@ -25,7 +25,7 @@ import { boxCenter, followPick, type PickRecord } from "./inspect";
 import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
 import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
-import { formatClock, indexAfter, neighborSpeed, stepIndex, type Speed } from "./playback";
+import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
 import {
   buildPredictionObjects,
   disposePredictionGroup,
@@ -823,6 +823,13 @@ declare global {
     __COPERCEIVE_SET_VIEWPOINT__?: (vp: string) => void;
     __COPERCEIVE_TOGGLE_THEME__?: () => void;
     __COPERCEIVE_PLAYBACK__?: (action: string, value?: number) => void;
+    __COPERCEIVE_PLAYBACK_STATE__?: () => {
+      playing: boolean;
+      loop: boolean;
+      frameIndex: number;
+      timeUs: number | null;
+      samples: number;
+    };
     __COPERCEIVE_DATASET_CHANGED__?: (
       origin: string,
       token: string,
@@ -854,6 +861,25 @@ function clearStage(stage: Stage) {
   stage.predictionPicks.clear();
   stage.clearMotion();
   stage.requestRender();
+}
+
+const LOOP_STORAGE_KEY = "coperceive-loop-preference";
+
+function getStoredLoopPreference(): boolean | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const val = localStorage.getItem(LOOP_STORAGE_KEY);
+    if (val === "true") return true;
+    if (val === "false") return false;
+  } catch (_) {}
+  return null;
+}
+
+function setStoredLoopPreference(val: boolean) {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(LOOP_STORAGE_KEY, String(val));
+  } catch (_) {}
 }
 
 export default function Viewer({
@@ -927,7 +953,20 @@ export default function Viewer({
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
   const [playing, setPlaying] = useState(false);
-  const [loop, setLoop] = useState(false);
+  const [loop, setLoop] = useState<boolean>(() => {
+    const stored = getStoredLoopPreference();
+    return stored !== null ? stored : true;
+  });
+
+  const handleToggleLoop = () => {
+    setLoop((current) => {
+      const next = !current;
+      setStoredLoopPreference(next);
+      return next;
+    });
+  };
+  const handleToggleLoopRef = useRef(handleToggleLoop);
+  handleToggleLoopRef.current = handleToggleLoop;
   const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
   const [dataBasename, setDataBasename] = useState<string>(
     () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_BASENAME__) || "",
@@ -1170,6 +1209,29 @@ export default function Viewer({
   const lengthRef = useRef(0);
   const loopRef = useRef(false);
   const frameRef = useRef(0);
+  const playingRef = useRef(false);
+  playingRef.current = playing;
+  const summaryRef = useRef(summary);
+  summaryRef.current = summary;
+
+  const handleTogglePlay = () => {
+    canvasRef.current?.focus();
+    const sum = summaryRef.current;
+    if (!sum || sum.times_us.length < 2) {
+      return;
+    }
+    if (playingRef.current) {
+      setPlaying(false);
+      return;
+    }
+    if (isEndZone(sum.times_us, frameRef.current)) {
+      setFrameIndex(0);
+      frameRef.current = 0;
+    }
+    setPlaying(true);
+  };
+  const handleTogglePlayRef = useRef(handleTogglePlay);
+  handleTogglePlayRef.current = handleTogglePlay;
   const drawGen = useRef(0);
   const paintWait = useRef<((time: number) => void) | null>(null);
   const onPickRef = useRef<(value: PickRecord | null) => void>(() => undefined);
@@ -1639,25 +1701,14 @@ export default function Viewer({
       }
       if (event.key === " ") {
         event.preventDefault();
-        setPlaying((current) => {
-          if (current) {
-            return false;
-          }
-          if (lengthRef.current < 2) {
-            return false;
-          }
-          if (!loopRef.current && frameRef.current >= lengthRef.current - 1) {
-            setFrameIndex(0);
-          }
-          return true;
-        });
+        handleTogglePlayRef.current();
       } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
         setPlaying(false);
         const delta = event.key === "ArrowLeft" ? -1 : 1;
         setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loopRef.current));
       } else if (event.key === "l" || event.key === "L") {
-        setLoop((current) => !current);
+        handleToggleLoopRef.current();
       } else if (event.key === "c" || event.key === "C") {
         setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }));
       } else if (event.key === "Escape") {
@@ -1865,8 +1916,19 @@ export default function Viewer({
         }
         window.__COPERCEIVE_INITIAL_STATE__ = undefined;
       }
+      if (isEndZone(body.times_us, initialFrame)) {
+        initialFrame = 0;
+      }
+      const storedLoop = getStoredLoopPreference();
+      if (storedLoop !== null) {
+        setLoop(storedLoop);
+      } else {
+        const durationUs = body.times_us.length >= 2 ? body.times_us[body.times_us.length - 1] - body.times_us[0] : 0;
+        setLoop(durationUs < 60_000_000);
+      }
       setSummary(body);
       setFrameIndex(initialFrame);
+      frameRef.current = initialFrame;
       setExportStart(1);
       setExportEnd(Math.min(10, body.times_us.length));
       setExportSource("view");
@@ -1896,7 +1958,9 @@ export default function Viewer({
   useEffect(() => {
     window.__COPERCEIVE_PLAYBACK__ = (action: string, value?: number) => {
       if (action === "toggle") {
-        setPlaying((p) => !p);
+        handleTogglePlayRef.current();
+      } else if (action === "loop") {
+        handleToggleLoopRef.current();
       } else if (action === "step_forward") {
         setPlaying(false);
         setFrameIndex((curr) => (summary ? Math.min(curr + 1, summary.times_us.length - 1) : curr));
@@ -1912,8 +1976,16 @@ export default function Viewer({
         }
       }
     };
+    window.__COPERCEIVE_PLAYBACK_STATE__ = () => ({
+      playing: playingRef.current,
+      loop: loopRef.current,
+      frameIndex: frameRef.current,
+      timeUs: summaryRef.current?.times_us[frameRef.current] ?? null,
+      samples: summaryRef.current?.times_us.length ?? 0,
+    });
     return () => {
       window.__COPERCEIVE_PLAYBACK__ = undefined;
+      window.__COPERCEIVE_PLAYBACK_STATE__ = undefined;
     };
   }, [summary]);
 
@@ -2485,18 +2557,6 @@ export default function Viewer({
     return () => controller.abort();
   }, [summary, effectiveToken]);
 
-  function togglePlay() {
-    canvasRef.current?.focus();
-    if (!summary || summary.times_us.length < 2) {
-      return;
-    }
-    if (!playing && !loop && frameIndex >= summary.times_us.length - 1) {
-      setFrameIndex(0);
-      setPlaying(true);
-      return;
-    }
-    setPlaying((current) => !current);
-  }
 
   function chooseViewpoint(next: Viewpoint) {
     const resolved = next === "chase" && modeRef.current === "chase" ? "orbit" : next;
@@ -3476,9 +3536,9 @@ export default function Viewer({
           setPlaying(false);
           setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loop));
         }}
-        onToggle={togglePlay}
+        onToggle={handleTogglePlay}
         onSpeed={setSpeed}
-        onLoop={() => setLoop((current) => !current)}
+        onLoop={handleToggleLoop}
       />
       <ExportDialog
         open={exportOpen}

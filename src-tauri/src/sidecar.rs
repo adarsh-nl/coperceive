@@ -53,7 +53,11 @@ pub struct SidecarSession {
 impl SidecarSession {
     /// Launches a local `coperceive serve` sidecar process.
     /// Allocates an ephemeral loopback port and a mode 0600 token file.
-    pub fn spawn(python_bin: &Path, data_root: &Path) -> io::Result<Self> {
+    pub fn spawn(
+        python_bin: &Path,
+        data_root: &Path,
+        allow_origin: Option<&str>,
+    ) -> io::Result<Self> {
         let port = find_free_loopback_port()?;
         let token = generate_secure_token()?;
 
@@ -69,8 +73,8 @@ impl SidecarSession {
             .open(&log_path)?;
         let err_file = log_file.try_clone()?;
 
-        let child = Command::new(python_bin)
-            .arg("-m")
+        let mut cmd = Command::new(python_bin);
+        cmd.arg("-m")
             .arg("coperceive")
             .arg("serve")
             .arg("--host")
@@ -80,7 +84,13 @@ impl SidecarSession {
             .arg("--token-file")
             .arg(&token_path)
             .arg("--root")
-            .arg(data_root)
+            .arg(data_root);
+
+        if let Some(origin) = allow_origin {
+            cmd.arg("--allow-origin").arg(origin);
+        }
+
+        let child = cmd
             .stdout(Stdio::from(log_file))
             .stderr(Stdio::from(err_file))
             .spawn()?;

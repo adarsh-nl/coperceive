@@ -222,8 +222,8 @@ pub fn add_recent_root(state: &mut AppPersistentState, root: &str) {
 /// Validates whether a directory is a valid Coperceive dataset root.
 ///
 /// A valid dataset root is an existing directory that either:
-/// 1. Directly contains `manifest.json` (single scene root), or
-/// 2. Contains at least one direct subdirectory containing `manifest.json` (multi-scene root).
+/// 1. Directly contains `manifest.json` and `COMPLETE.json` (single scene root), or
+/// 2. Contains at least one direct subdirectory containing `manifest.json` and `COMPLETE.json` (multi-scene root).
 pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("Dataset directory does not exist: {}", path.display()));
@@ -232,20 +232,23 @@ pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
         return Err(format!("Path is not a directory: {}", path.display()));
     }
 
-    if path.join("manifest.json").is_file() {
+    if path.join("manifest.json").is_file() && path.join("COMPLETE.json").is_file() {
         return Ok(());
     }
 
     let entries = fs::read_dir(path).map_err(|e| format!("Cannot read directory: {}", e))?;
     for entry in entries.flatten() {
         let child_path = entry.path();
-        if child_path.is_dir() && child_path.join("manifest.json").is_file() {
+        if child_path.is_dir()
+            && child_path.join("manifest.json").is_file()
+            && child_path.join("COMPLETE.json").is_file()
+        {
             return Ok(());
         }
     }
 
     Err(format!(
-        "No coperceive scenes in {}. A scene folder contains manifest.json.",
+        "No coperceive scenes in {}. A scene folder contains manifest.json and COMPLETE.json.",
         path.display()
     ))
 }
@@ -482,24 +485,28 @@ pub mod tests {
         // Non-existent path
         assert!(validate_dataset_root(&tmp.join("nonexistent")).is_err());
 
-        // Empty directory: invalid (missing manifest.json)
+        // Empty directory: invalid (missing manifest.json and COMPLETE.json)
         let empty_dir = tmp.join("empty");
         let _ = fs::create_dir_all(&empty_dir);
         let err = validate_dataset_root(&empty_dir).unwrap_err();
         assert!(err.contains("No coperceive scenes in"));
-        assert!(err.contains("A scene folder contains manifest.json."));
+        assert!(err.contains("A scene folder contains manifest.json and COMPLETE.json."));
 
-        // Single scene directory with manifest.json: valid
+        // Single scene directory with manifest.json only: invalid without COMPLETE.json
         let single_scene = tmp.join("single_scene");
         let _ = fs::create_dir_all(&single_scene);
         fs::write(single_scene.join("manifest.json"), "{}").expect("write manifest");
+        assert!(validate_dataset_root(&single_scene).is_err());
+        fs::write(single_scene.join("COMPLETE.json"), "{}").expect("write complete");
         assert!(validate_dataset_root(&single_scene).is_ok());
 
-        // Multi-scene root with child containing manifest.json: valid
+        // Multi-scene root with child containing manifest.json and COMPLETE.json: valid
         let multi_root = tmp.join("multi_root");
         let child_scene = multi_root.join("scene_001");
         let _ = fs::create_dir_all(&child_scene);
         fs::write(child_scene.join("manifest.json"), "{}").expect("write manifest");
+        assert!(validate_dataset_root(&multi_root).is_err());
+        fs::write(child_scene.join("COMPLETE.json"), "{}").expect("write complete");
         assert!(validate_dataset_root(&multi_root).is_ok());
 
         let _ = fs::remove_dir_all(&tmp);

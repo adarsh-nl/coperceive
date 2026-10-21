@@ -76,6 +76,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory a scene's image links may resolve into, e.g. the dataset copy a "
         "staged scene links its camera directories to. Repeatable.",
     )
+    serve.add_argument(
+        "--allow-origin",
+        default=None,
+        help="Exact origin allowed for cross-origin requests.",
+    )
     serve.set_defaults(func=_serve)
 
     add_parser(sub)
@@ -537,6 +542,7 @@ def _serve(args: argparse.Namespace) -> None:
         predictions=args.predictions,
         static=args.static,
         media_roots=tuple(args.media_root),
+        allow_origin=args.allow_origin,
     )
 
 

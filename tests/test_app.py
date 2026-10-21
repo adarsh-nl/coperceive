@@ -794,9 +794,14 @@ def test_token_auth_uses_constant_time_comparison(
 
 
 def test_cors_options_preflight_on_authenticated_server(tmp_path: Path) -> None:
-    """CORS OPTIONS preflight requests must succeed without Authorization headers so that
-    the browser can complete cross-origin requests when switching sidecar instances."""
-    app = create_app(root=tmp_path, token="preflight-secret-token")
+    """CORS OPTIONS preflight requests must succeed without Authorization headers
+    when allow_origin matches, so that the browser can complete cross-origin
+    requests when switching sidecar instances."""
+    app = create_app(
+        root=tmp_path,
+        token="preflight-secret-token",
+        allow_origin="http://127.0.0.1:49152",
+    )
     client = TestClient(app)
 
     resp = client.options(
@@ -810,3 +815,37 @@ def test_cors_options_preflight_on_authenticated_server(tmp_path: Path) -> None:
     assert resp.status_code == 200
     assert resp.headers.get("access-control-allow-origin") == "http://127.0.0.1:49152"
     assert "authorization" in resp.headers.get("access-control-allow-headers", "").lower()
+    # allow_credentials must be False
+    allow_cred = resp.headers.get("access-control-allow-credentials")
+    assert allow_cred is None or allow_cred == "false"
+
+
+def test_cors_foreign_origin_rejected(tmp_path: Path) -> None:
+    """A foreign localhost or remote origin gets no CORS allow headers."""
+    app = create_app(
+        root=tmp_path,
+        token="preflight-secret-token",
+        allow_origin="http://127.0.0.1:49152",
+    )
+    client = TestClient(app)
+
+    # Foreign localhost origin preflight
+    resp_preflight = client.options(
+        "/api/scenes",
+        headers={
+            "Origin": "http://127.0.0.1:55555",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert resp_preflight.headers.get("access-control-allow-origin") is None
+
+    # Foreign origin GET request
+    resp_get = client.get(
+        "/api/scenes",
+        headers={
+            "Origin": "http://127.0.0.1:55555",
+            "Authorization": "Bearer preflight-secret-token",
+        },
+    )
+    assert resp_get.headers.get("access-control-allow-origin") is None

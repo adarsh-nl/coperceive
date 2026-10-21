@@ -142,11 +142,21 @@ export default function Timeline({
     ["Boxes", boxes, "#6B6B6B"],
   ] as const;
 
+  const isReplay = !playing && !loop && index >= last && length > 1;
+
   return (
     <section className="timeline" aria-label="Timeline">
       <div className="timeline-tools">
-        <button type="button" className="icon primary" onClick={onToggle} disabled={disabled} aria-label={playing ? "Pause" : "Play"}>
-          <IconPlay playing={playing} />
+        <button
+          type="button"
+          className="icon primary"
+          onClick={onToggle}
+          disabled={disabled}
+          aria-label={playing ? "Pause" : isReplay ? "Replay" : "Play"}
+          title={playing ? "Pause" : isReplay ? "Replay" : "Play"}
+          data-replay={isReplay ? "true" : undefined}
+        >
+          <IconPlay playing={playing} replay={isReplay} />
         </button>
         <button
           type="button"

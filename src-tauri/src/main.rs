@@ -246,8 +246,13 @@ async fn switch_data_root(
         .unwrap_or(&new_path_str)
         .to_string();
 
+    let current_viewer_origin = {
+        let lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+        lock.as_ref().map(|s| format!("http://127.0.0.1:{}", s.port))
+    };
+
     let python_bin = resolve_python_binary(app);
-    let mut new_session = SidecarSession::spawn(&python_bin, &new_path)
+    let mut new_session = SidecarSession::spawn(&python_bin, &new_path, current_viewer_origin.as_deref())
         .map_err(|e| format!("Failed to spawn new sidecar: {}", e))?;
 
     let new_origin = format!("http://127.0.0.1:{}", new_session.port);
@@ -579,7 +584,7 @@ async fn start_local_session(
     }
 
     let python_bin = resolve_python_binary(app);
-    let mut session = SidecarSession::spawn(&python_bin, &root_path)
+    let mut session = SidecarSession::spawn(&python_bin, &root_path, None)
         .map_err(|e| format!("Failed to spawn local sidecar: {}", e))?;
 
     let origin = format!("http://127.0.0.1:{}", session.port);

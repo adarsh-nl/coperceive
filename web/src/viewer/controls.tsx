@@ -173,11 +173,21 @@ export function Segmented({
   );
 }
 
-export function IconPlay({ playing }: { playing: boolean }) {
+export function IconPlay({ playing, replay = false }: { playing: boolean; replay?: boolean }) {
   if (playing) {
     return (
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
         <path fill="currentColor" d="M4 3h3v10H4zM9 3h3v10H9z" />
+      </svg>
+    );
+  }
+  if (replay) {
+    return (
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M8 2.5a5.5 5.5 0 1 0 5.4 4.5h-1.55a4 4 0 1 1-1.2-2.7L8.5 6.5H14V1l-2.1 2.1A5.48 5.48 0 0 0 8 2.5z"
+        />
       </svg>
     );
   }

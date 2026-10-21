@@ -125,6 +125,7 @@ def create_app(
     predictions: str | Path | None = None,
     static: str | Path | None = None,
     media_roots: Sequence[str | Path] = (),
+    allow_origin: str | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -143,13 +144,14 @@ def create_app(
         root_path=root_path,
         description="Local cooperative-perception data app.",
     )
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origin_regex=r"^(http://127\.0\.0\.1(:\d+)?|http://localhost(:\d+)?|tauri://localhost|http://tauri\.localhost)$",
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
-    )
+    if allow_origin:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[allow_origin],
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "X-Coperceive-Request"],
+        )
     app.state.root = root_path_obj
     app.state.token = token
     app.state.db_path = root_path_obj / "jobs.sqlite"
