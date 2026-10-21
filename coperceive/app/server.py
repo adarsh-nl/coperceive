@@ -12,6 +12,7 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -141,6 +142,13 @@ def create_app(
         version="0.0.0",
         root_path=root_path,
         description="Local cooperative-perception data app.",
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^(http://127\.0\.0\.1(:\d+)?|http://localhost(:\d+)?|tauri://localhost|http://tauri\.localhost)$",
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
     )
     app.state.root = root_path_obj
     app.state.token = token

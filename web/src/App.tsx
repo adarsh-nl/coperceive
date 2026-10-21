@@ -160,7 +160,11 @@ export default function App() {
       } catch {}
     };
     window.addEventListener("storage", checkToken);
-    return () => window.removeEventListener("storage", checkToken);
+    window.addEventListener("coperceive-token-sync", checkToken);
+    return () => {
+      window.removeEventListener("storage", checkToken);
+      window.removeEventListener("coperceive-token-sync", checkToken);
+    };
   }, [token]);
 
   useEffect(() => {

@@ -882,6 +882,8 @@ export default function Viewer({
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
   const [sceneId, setSceneId] = useState("");
+  const sceneIdRef = useRef(sceneId);
+  sceneIdRef.current = sceneId;
   const [summary, setSummary] = useState<SceneSummary | null>(null);
   const [frameIndex, setFrameIndex] = useState(0);
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
@@ -978,6 +980,9 @@ export default function Viewer({
         sessionStorage.setItem("coperceive-token", newToken);
       }
       setActiveToken(newToken);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("coperceive-token-sync"));
+      }
       setDataBasename(basename);
       setDataRoot(root);
       setDatasetError(null);
@@ -1014,7 +1019,7 @@ export default function Viewer({
         });
         setScenes(ids);
         if (ids.length >= 1) {
-          const nextScene = ids.length === 1 ? ids[0] : (ids.includes(sceneId) ? sceneId : ids[0]);
+          const nextScene = ids.length === 1 ? ids[0] : (ids.includes(sceneIdRef.current) ? sceneIdRef.current : ids[0]);
           setSceneId(nextScene);
           try {
             const sumResp = await fetch(`${newOrigin}/api/scenes/${encodeURIComponent(nextScene)}`, {
