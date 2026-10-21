@@ -735,11 +735,11 @@ echo "--- Step 4: Switch Dataset to Invalid Folder (Persistent Error UI) ---"
 EMPTY_DIR=$(mktemp -d /tmp/coperceive-empty-XXXXXX)
 echo "${EMPTY_DIR}" > "${MOCK_DIALOG_FILE}"
 
-python3 -c '
+python3 << EOF
 import sys, json, urllib.request
 
-port = "'"${RELAUNCH_PORT}"'"
-secret = "'"${RELAUNCH_SECRET}"'"
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
 
 def eval_js(code):
     req = urllib.request.Request(
@@ -754,20 +754,20 @@ def eval_js(code):
         return data.get("result")
 
 print("Triggering Open Dataset to invalid empty directory...")
-eval_js("document.querySelector(\x27.btn-open-dataset\x27)?.click()")
-'
+eval_js("document.querySelector('.btn-open-dataset')?.click()")
+EOF
 
 sleep 1.5
 
 # Assert error UI:
-# - Message: "No coperceive scenes in <path>. A scene folder contains manifest.json."
+# - Message: "No coperceive scenes in <path>. A scene folder contains manifest.json and COMPLETE.json."
 # - Has "Choose another folder" button
 # - Stays visible after 5s (not a 4s toast)
-python3 -c '
+python3 << EOF
 import sys, json, time, urllib.request
 
-port = "'"${RELAUNCH_PORT}"'"
-secret = "'"${RELAUNCH_SECRET}"'"
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
 
 def eval_js(code):
     req = urllib.request.Request(
@@ -781,23 +781,23 @@ def eval_js(code):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
-err_msg = eval_js("document.querySelector(\x27.dataset-error-msg\x27)?.textContent")
+err_msg = eval_js("document.querySelector('.dataset-error-msg')?.textContent")
 print(f"Error banner text: {err_msg}")
-assert err_msg and "No coperceive scenes in" in err_msg, f"Expected \x27No coperceive scenes in\x27, got {err_msg}"
-assert "A scene folder contains manifest.json." in err_msg, f"Expected manifest.json notice, got {err_msg}"
+assert err_msg and "No coperceive scenes in" in err_msg, f"Expected 'No coperceive scenes in', got {err_msg}"
+assert "manifest.json and COMPLETE.json" in err_msg, f"Expected manifest.json and COMPLETE.json notice, got {err_msg}"
 
-choose_btn = eval_js("document.querySelector(\x27.dataset-error-choose-btn\x27)?.textContent")
+choose_btn = eval_js("document.querySelector('.dataset-error-choose-btn')?.textContent")
 print(f"Choose another folder button: {choose_btn}")
-assert choose_btn and "Choose another folder" in choose_btn, "Expected \x27Choose another folder\x27 button"
+assert choose_btn and "Choose another folder" in choose_btn, "Expected 'Choose another folder' button"
 
 print("Waiting 5 seconds to assert error UI stays persistent (not dismissed)...")
 time.sleep(5)
 
-err_msg_after = eval_js("document.querySelector(\x27.dataset-error-msg\x27)?.textContent")
+err_msg_after = eval_js("document.querySelector('.dataset-error-msg')?.textContent")
 assert err_msg_after and "No coperceive scenes in" in err_msg_after, "Error UI disappeared after 5s! Must stay until dismissed."
 
-print("Step 4 verified: Persistent validation error UI displayed with \x27Choose another folder\x27 button.")
-'
+print("Step 4 verified: Persistent validation error UI displayed with 'Choose another folder' button.")
+EOF
 
 echo ""
 echo "--- Step 5: Close Viewer Window (Cmd+W) -> Returns to Connect Screen with Backdrop ---"
@@ -811,11 +811,11 @@ end tell
 EOF
 
 # Ensure viewer window closes via controller loopback
-python3 -c '
+python3 << EOF
 import urllib.request
 
-port = "'"${RELAUNCH_PORT}"'"
-secret = "'"${RELAUNCH_SECRET}"'"
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
 req = urllib.request.Request(
     f"http://127.0.0.1:{port}/close-window",
     data=b"{}",
@@ -826,7 +826,7 @@ try:
         pass
 except Exception:
     pass
-'
+EOF
 
 sleep 2
 
