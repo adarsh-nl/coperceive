@@ -1117,6 +1117,34 @@ fn main() {
                         let _ = state::save_state(&persistent);
                     }
                 }
+                tauri::WindowEvent::CloseRequested { .. } => {
+                    use tauri::Manager;
+                    let label = window.label().to_string();
+                    if label == "viewer" {
+                        if let Ok(mut lock) = state_for_window.sidecar.lock() {
+                            if let Some(mut s) = lock.take() {
+                                let _ = s.stop();
+                            }
+                        }
+                        let _ = window.destroy();
+                        if let Some(main) = window.app_handle().get_webview_window("main") {
+                            let _ = main.show();
+                            let _ = main.set_focus();
+                        }
+                    } else if label == "main" {
+                        if let Ok(mut lock) = state_for_window.sidecar.lock() {
+                            if let Some(mut s) = lock.take() {
+                                let _ = s.stop();
+                            }
+                        }
+                        if let Ok(mut lock) = state_for_window.remote.lock() {
+                            if let Some(mut r) = lock.take() {
+                                let _ = r.disconnect();
+                            }
+                        }
+                        window.app_handle().exit(0);
+                    }
+                }
                 tauri::WindowEvent::Destroyed => {
                     use tauri::Manager;
                     let label = window.label().to_string();
@@ -1157,17 +1185,20 @@ fn main() {
     };
 
     app.run(move |_app_handle, event| {
-        if let tauri::RunEvent::Exit = event {
-            if let Ok(mut lock) = state_for_exit.sidecar.lock() {
-                if let Some(mut s) = lock.take() {
-                    let _ = s.stop();
+        match event {
+            tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                if let Ok(mut lock) = state_for_exit.sidecar.lock() {
+                    if let Some(mut s) = lock.take() {
+                        let _ = s.stop();
+                    }
+                }
+                if let Ok(mut lock) = state_for_exit.remote.lock() {
+                    if let Some(mut r) = lock.take() {
+                        let _ = r.disconnect();
+                    }
                 }
             }
-            if let Ok(mut lock) = state_for_exit.remote.lock() {
-                if let Some(mut r) = lock.take() {
-                    let _ = r.disconnect();
-                }
-            }
+            _ => {}
         }
     });
 }

@@ -4,10 +4,40 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
+use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
 use crate::port::find_free_loopback_port;
 use crate::token::{generate_secure_token, write_token_file};
+
+pub static ACTIVE_SIDECAR_PID: AtomicI32 = AtomicI32::new(0);
+
+extern "C" fn sidecar_exit_handler() {
+    let pid = ACTIVE_SIDECAR_PID.swap(0, Ordering::SeqCst);
+    if pid > 0 {
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+            std::thread::sleep(Duration::from_millis(50));
+            libc::kill(pid, libc::SIGKILL);
+        }
+    }
+}
+
+extern "C" fn sidecar_signal_handler(_sig: libc::c_int) {
+    sidecar_exit_handler();
+    unsafe {
+        libc::_exit(0);
+    }
+}
+
+pub fn register_process_exit_cleaner() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        libc::atexit(sidecar_exit_handler);
+        libc::signal(libc::SIGTERM, sidecar_signal_handler as *const () as usize);
+        libc::signal(libc::SIGINT, sidecar_signal_handler as *const () as usize);
+    });
+}
 
 #[derive(Debug)]
 pub struct SidecarSession {
@@ -55,6 +85,10 @@ impl SidecarSession {
             .stderr(Stdio::from(err_file))
             .spawn()?;
 
+        register_process_exit_cleaner();
+        let pid = child.id() as i32;
+        ACTIVE_SIDECAR_PID.store(pid, Ordering::SeqCst);
+
         Ok(Self {
             child,
             port,
@@ -77,6 +111,9 @@ impl SidecarSession {
     /// Stops the sidecar process gracefully with SIGTERM, falling back to SIGKILL.
     pub fn stop(&mut self) -> io::Result<()> {
         let pid = self.child.id() as i32;
+        if ACTIVE_SIDECAR_PID.load(Ordering::SeqCst) == pid {
+            ACTIVE_SIDECAR_PID.store(0, Ordering::SeqCst);
+        }
         // Send SIGTERM
         unsafe {
             libc::kill(pid, libc::SIGTERM);

@@ -380,6 +380,7 @@ echo "--- Step 5: Close Viewer Window (Cmd+W) -> Returns to Connect Screen ---"
 osascript <<EOF || true
 tell application "System Events"
     tell process "Coperceive"
+        set frontmost to true
         keystroke "w" using command down
     end tell
 end tell
@@ -401,13 +402,22 @@ echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"
 osascript <<EOF || true
 tell application "System Events"
     tell process "Coperceive"
+        set frontmost to true
         keystroke "q" using command down
     end tell
 end tell
 EOF
 
-sleep 1.5
+# Wait up to 6s for process to exit cleanly
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+
 if kill -0 "${APP_PID}" 2>/dev/null; then
+    echo "App did not exit on Cmd+Q, sending SIGTERM..."
     kill -TERM "${APP_PID}" 2>/dev/null || true
     sleep 1
     if kill -0 "${APP_PID}" 2>/dev/null; then
