@@ -810,4 +810,3 @@ def test_cors_options_preflight_on_authenticated_server(tmp_path: Path) -> None:
     assert resp.status_code == 200
     assert resp.headers.get("access-control-allow-origin") == "http://127.0.0.1:49152"
     assert "authorization" in resp.headers.get("access-control-allow-headers", "").lower()
-
