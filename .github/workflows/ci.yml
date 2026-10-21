@@ -70,8 +70,9 @@ jobs:
         # coperceive/app/static ships in the wheel; it must be what web/src builds.
         run: |
           npm run build
-          git status --porcelain -- coperceive/app/static
-          test -z "$(git status --porcelain -- coperceive/app/static)" || { git diff --stat -- coperceive/app/static; echo "coperceive/app/static is stale: run npm run build in web/ and commit it"; exit 1; }
+          git status --porcelain -- ../coperceive/app/static
+          test -z "$(git status --porcelain -- ../coperceive/app/static)" || { git diff --stat -- ../coperceive/app/static; echo "coperceive/app/static is stale: run npm run build in web/ and commit it"; exit 1; }
+          ! grep -q "__COPERCEIVE_STAGE__" ../coperceive/app/static/assets/*.js || { echo "__COPERCEIVE_STAGE__ leaked into release bundle"; exit 1; }
         working-directory: web
 
   e2e:
@@ -93,7 +94,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci --legacy-peer-deps
         working-directory: web
-      - run: npx vite build --outDir /tmp/web-dist --emptyOutDir
+      - run: npx vite build --mode test --outDir /tmp/web-dist --emptyOutDir
         working-directory: web
       - run: pytest tests/test_viewer_browser.py -q -rs
         env:
@@ -106,6 +107,15 @@ jobs:
           name: viewer-screenshots
           path: /tmp/e2e-shots
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: viewer-media
+          path: |
+            docs/media/Town03-000.png
+            docs/media/Town03-000-split.png
+            docs/media/hero_recording.mp4
+            docs/media/hero_recording.webm
+          if-no-files-found: error
 
   gitleaks:
     runs-on: ubuntu-latest

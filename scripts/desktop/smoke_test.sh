@@ -199,6 +199,18 @@ if [ -n "${RUNNER_SHEBANGS}" ]; then
 fi
 echo "Verified: No runner shebangs found in ${BIN_DIR}."
 
+# Test 3b: Verify test hooks are absent from release .app bundle
+echo ""
+echo "--- Release Bundle Hygiene Check ---"
+echo "Verifying __COPERCEIVE_STAGE__ is absent from ${APP_BUNDLE}..."
+LEAKED_HOOKS=$(grep -rn "window.__COPERCEIVE_STAGE__" "${APP_BUNDLE}" 2>/dev/null || true)
+if [ -n "${LEAKED_HOOKS}" ]; then
+    echo "Error: __COPERCEIVE_STAGE__ found in release app bundle:" >&2
+    echo "${LEAKED_HOOKS}" >&2
+    exit 7
+fi
+echo "Verified: No test hooks leaked into release app bundle."
+
 # Test 4: App Binary Launch & Viewer Scene Loading Check
 echo ""
 echo "--- App Binary Launch & Viewer Scene Loading Check (macOS) ---"

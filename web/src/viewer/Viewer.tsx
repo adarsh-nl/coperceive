@@ -1263,7 +1263,7 @@ export default function Viewer({
       predictionPicks,
       dimmedBoxes,
     };
-    if (typeof window !== "undefined") {
+    if (import.meta.env.MODE === "test" && typeof window !== "undefined") {
       (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__ = stageRef.current;
       (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__ = () => {
         const s = stageRef.current;
@@ -1285,7 +1285,7 @@ export default function Viewer({
     }
     requestRender();
     return () => {
-      if (typeof window !== "undefined") {
+      if (import.meta.env.MODE === "test" && typeof window !== "undefined") {
         delete (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__;
         delete (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__;
       }

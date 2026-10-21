@@ -764,7 +764,7 @@ def test_agent_visibility_toggles_remove_objects_from_scene_graph(session: _Sess
     session.open()
     session.wait_status(f"{SCENE_FULL} at", timeout_s=10.0)
 
-    # Advance to sample 2 (100000 µs) where vehicle has a lidar point cloud and both agents have boxes
+    # Advance to sample 2 (100000 µs) where vehicle has points and both agents have boxes
     session.page.keyboard.press("ArrowRight")
     session.page.keyboard.press("ArrowRight")
     session.wait_status("100000 µs", timeout_s=10.0)
@@ -778,11 +778,15 @@ def test_agent_visibility_toggles_remove_objects_from_scene_graph(session: _Sess
     assert initial["agents"] == 2  # vehicle and drone have poses at 100000 µs
 
     # Also verify direct stage reference
-    stage_frustums = session.page.evaluate("() => window.__COPERCEIVE_STAGE__.frustums.children.length")
+    stage_frustums = session.page.evaluate(
+        "() => window.__COPERCEIVE_STAGE__.frustums.children.length"
+    )
     assert stage_frustums == initial["frustums"]
 
     # 1. Hide Vehicle: vehicle's points and frustums must immediately disappear from scene graph
-    vehicle_item = session.page.locator(".agent-list li").filter(has_text="Vehicle 1").locator("button.swatch")
+    vehicle_item = (
+        session.page.locator(".agent-list li").filter(has_text="Vehicle 1").locator("button.swatch")
+    )
     vehicle_item.click()
 
     after_vehicle = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
@@ -792,7 +796,9 @@ def test_agent_visibility_toggles_remove_objects_from_scene_graph(session: _Sess
     assert after_vehicle["agents"] == 1  # Only Drone 1 remains visible
 
     # 2. Hide Drone: drone's annotations/boxes and axis helper removed
-    uav_item = session.page.locator(".agent-list li").filter(has_text="Drone 1").locator("button.swatch")
+    uav_item = (
+        session.page.locator(".agent-list li").filter(has_text="Drone 1").locator("button.swatch")
+    )
     uav_item.click()
 
     after_all = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
@@ -828,9 +834,11 @@ def test_playback_updates_status_line_every_frame(session: _Session) -> None:
 
     # Wait for the status line to advance beyond 0 µs while playback is running
     session.wait_for(
-        lambda: session.page.locator("button[aria-label=Pause]").count() == 1
-        and "at 0 µs" not in session.status()
-        and "µs." in session.status(),
+        lambda: (
+            session.page.locator("button[aria-label=Pause]").count() == 1
+            and "at 0 µs" not in session.status()
+            and "µs." in session.status()
+        ),
         "status line to advance beyond 0 µs during active playback",
         timeout_s=5.0,
     )
@@ -838,5 +846,3 @@ def test_playback_updates_status_line_every_frame(session: _Session) -> None:
     current_status = session.status()
     assert f"{SCENE_FULL} at " in current_status
     assert "at 0 µs" not in current_status
-
-
