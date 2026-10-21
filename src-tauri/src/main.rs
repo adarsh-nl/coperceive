@@ -34,6 +34,7 @@ pub struct AppState {
     pub ctrl_port: Mutex<Option<u16>>,
     pub ctrl_secret: Mutex<Option<String>>,
     pub controller_config: Mutex<Option<ControllerConfig>>,
+    pub viewer_origin: Mutex<Option<String>>,
     pub current_root: Mutex<Option<String>>,
     pub startup_instant: Instant,
 }
@@ -47,6 +48,7 @@ impl Default for AppState {
             ctrl_port: Mutex::new(None),
             ctrl_secret: Mutex::new(None),
             controller_config: Mutex::new(None),
+            viewer_origin: Mutex::new(None),
             current_root: Mutex::new(None),
             startup_instant: Instant::now(),
         }
@@ -132,6 +134,10 @@ fn open_viewer_window(
 
     if let Some(existing_viewer) = app.get_webview_window("viewer") {
         let _ = existing_viewer.close();
+    }
+
+    if let Ok(mut lock) = state.viewer_origin.lock() {
+        *lock = Some(origin.to_string());
     }
 
     let viewer_url_str = format!("{}/#/viewer", origin);
@@ -247,8 +253,10 @@ async fn switch_data_root(
         .to_string();
 
     let current_viewer_origin = {
-        let lock = state.sidecar.lock().map_err(|e| e.to_string())?;
-        lock.as_ref().map(|s| format!("http://127.0.0.1:{}", s.port))
+        let lock = state.viewer_origin.lock().map_err(|e| e.to_string())?;
+        lock.as_ref().cloned().or_else(|| {
+            state.sidecar.lock().ok().and_then(|s| s.as_ref().map(|sess| format!("http://127.0.0.1:{}", sess.port)))
+        })
     };
 
     let python_bin = resolve_python_binary(app);

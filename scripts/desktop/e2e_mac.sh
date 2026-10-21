@@ -691,15 +691,27 @@ def eval_js(code, timeout=10):
 
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
+    last_counts = None
+    last_err = None
     while time.monotonic() < deadline:
         try:
             counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+            last_counts = counts
             if counts and counts.get("points", 0) > 0:
                 return counts
-        except Exception:
-            pass
+        except Exception as e:
+            last_err = e
         time.sleep(0.5)
-    raise RuntimeError("Timed out waiting for scene after switching to multi-scene root")
+    dbg = eval_js("""(() => ({
+        status: document.querySelector('.status')?.textContent,
+        badge: document.querySelector('.dataset-name')?.textContent,
+        scenes: Array.from(document.querySelectorAll('#scene-id option')).map(o => o.value),
+        sceneId: document.querySelector('#scene-id')?.value,
+        errBanner: document.querySelector('.dataset-error-msg')?.textContent,
+        counts: window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null,
+    }))()""")
+    print(f"DEBUG AT 3b TIMEOUT: {json.dumps(dbg, indent=2)}", file=sys.stderr)
+    raise RuntimeError(f"Timed out waiting for scene after switching to multi-scene root (counts={last_counts}, err={last_err})")
 
 print("Waiting for scene after switching to multi-scene root...")
 counts = wait_for_scene(30)
