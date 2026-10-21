@@ -371,11 +371,11 @@ echo "Relaunched app active on ctrl port ${RELAUNCH_PORT}"
 sleep 2
 
 # Assert every restored value from DOM and scene-graph counts!
-python3 -c '
+python3 << EOF
 import sys, json, time, urllib.request
 
-port = "'"${RELAUNCH_PORT}"'"
-secret = "'"${RELAUNCH_SECRET}"'"
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
 
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
@@ -408,23 +408,23 @@ print("Waiting for relaunched viewer scene to restore...")
 wait_for_scene(30)
 
 print("Checking restored values from DOM...")
-drone_pressed = eval_js("document.querySelector(\x27button[aria-keyshortcuts=\"3\"]\x27)?.getAttribute(\x27aria-pressed\x27)")
+drone_pressed = eval_js("document.querySelector('button[aria-keyshortcuts=\"3\"]')?.getAttribute('aria-pressed')")
 assert drone_pressed == "true", f"Expected Drone viewpoint aria-pressed==true, got {drone_pressed}"
 
 boxes_checked = eval_js("""(() => {
-    const eye = Array.from(document.querySelectorAll(\x27.eye\x27)).find(b => b.textContent.includes("Boxes"));
+    const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Boxes"));
     return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
 })()""")
 assert boxes_checked == "false", f"Expected Boxes toggle aria-checked==false, got {boxes_checked}"
 
 frustum_images_checked = eval_js("""(() => {
-    const eye = Array.from(document.querySelectorAll(\x27.eye\x27)).find(b => b.textContent.includes("Frustum images"));
+    const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Frustum images"));
     return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
 })()""")
 assert frustum_images_checked == "false", f"Expected Frustum images toggle aria-checked==false, got {frustum_images_checked}"
 
 uav_checked = eval_js("""(() => {
-    const swatch = Array.from(document.querySelectorAll(\x27.swatch\x27)).find(b => b.textContent.includes("uav_01") || b.textContent.includes("Drone"));
+    const swatch = Array.from(document.querySelectorAll('.swatch')).find(b => b.textContent.includes("uav_01") || b.textContent.includes("Drone"));
     return swatch ? (swatch.getAttribute("aria-checked") || swatch.getAttribute("aria-pressed")) : null;
 })()""")
 assert uav_checked == "false", f"Expected uav_01 swatch aria-checked==false, got {uav_checked}"
@@ -454,7 +454,7 @@ assert pb_a["frameIndex"] >= 25, f"Expected frameIndex advanced >= 25, got {pb_a
 eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (b): loop off, play to the end, assert Replay, click, assert it plays from 0...")
-eval_js("document.querySelector('button[aria-label=\"Loop\"]')?.click() || window.__COPERCEIVE_PLAYBACK__('loop')")
+eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
 pb_b_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 assert pb_b_loop["loop"] == False, f"Expected loop to be False, got {pb_b_loop}"
 
@@ -481,7 +481,7 @@ assert pb_replayed["frameIndex"] < 25, f"Expected playback to restart from 0, go
 eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (c): play 15 s across the loop wrap with no frame-change gap over 300 ms...")
-eval_js("document.querySelector('button[aria-label=\"Loop\"]')?.click() || window.__COPERCEIVE_PLAYBACK__('loop')")
+eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
 pb_c_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 assert pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
 
@@ -514,7 +514,7 @@ print(f"Playback requirement (c) verified: max frame gap = {max_gap*1000:.1f}ms,
 assert wraps >= 1, f"Expected at least 1 loop wrap over 15s, got {wraps}"
 
 print("Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.")
-'
+EOF
 
 screencapture -x "${SCREENSHOT_DIR}/03-after-relaunch.png" 2>/dev/null || true
 
@@ -626,11 +626,11 @@ echo ""
 echo "--- Step 3b: Switch Dataset from Single-Scene to Multi-Scene Root ---"
 echo "${FIXTURE_1}" > "${MOCK_DIALOG_FILE}"
 
-python3 -c '
+python3 << EOF
 import sys, json, urllib.request
 
-port = "'"${RELAUNCH_PORT}"'"
-secret = "'"${RELAUNCH_SECRET}"'"
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
 
 def eval_js(code):
     req = urllib.request.Request(
@@ -645,16 +645,16 @@ def eval_js(code):
         return data.get("result")
 
 print("Clicking UI dataset open button to switch back to multi-scene root...")
-eval_js("document.querySelector(\x27.btn-open-dataset\x27)?.click()")
-'
+eval_js("document.querySelector('.btn-open-dataset')?.click()")
+EOF
 
 sleep 3.5
 
-python3 -c '
+python3 << EOF
 import sys, json, time, urllib.request
 
-port = "'"${RELAUNCH_PORT}"'"
-secret = "'"${RELAUNCH_SECRET}"'"
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
 
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
@@ -685,17 +685,17 @@ counts = wait_for_scene(30)
 print(f"Counts after multi-scene switch: {counts}")
 assert counts["points"] > 0, f"Expected points > 0, got {counts}"
 
-scenes = eval_js("Array.from(document.querySelectorAll(\x27#scene-id option\x27)).map(o => o.value)")
+scenes = eval_js("Array.from(document.querySelectorAll('#scene-id option')).map(o => o.value)")
 print(f"Scene list options: {scenes}")
 assert "synth_001" in scenes, f"Expected synth_001 in scene list, got {scenes}"
 assert "synth_002" in scenes, f"Expected synth_002 in scene list, got {scenes}"
 
-badge = eval_js("document.querySelector(\x27.dataset-name\x27)?.textContent")
+badge = eval_js("document.querySelector('.dataset-name')?.textContent")
 print(f"Dataset badge: {badge}")
 assert "synthetic_scene" in (badge or ""), f"Expected synthetic_scene badge, got {badge}"
 
 print("Step 3b verified: Switched from single-scene folder to multi-scene root cleanly.")
-'
+EOF
 
 echo ""
 echo "--- Step 4: Switch Dataset to Invalid Folder (Persistent Error UI) ---"
