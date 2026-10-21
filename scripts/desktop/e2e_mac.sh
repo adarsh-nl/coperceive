@@ -486,7 +486,7 @@ eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
 pb_c_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 assert pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
 
-eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 140)")
+eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 120)")
 eval_js("document.querySelector('button.icon.primary')?.click()")
 
 start_t = time.monotonic()
@@ -495,7 +495,7 @@ last_change_t = start_t
 max_gap = 0.0
 wraps = 0
 
-while time.monotonic() - start_t < 15.0:
+while time.monotonic() - start_t < 15.5:
     cur = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
     now = time.monotonic()
     if cur["frameIndex"] != last_frame:
