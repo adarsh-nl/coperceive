@@ -756,3 +756,87 @@ def test_legend_names_the_agent_types_of_the_scene(session: _Session) -> None:
     assert through_lane() == ["Vehicle", "Drone", "RSU", "Lane"]
     session.choose_scene(SCENE_BARE)
     assert through_lane() == ["Vehicle", "Lane"]
+
+
+def test_agent_visibility_toggles_remove_objects_from_scene_graph(session: _Session) -> None:
+    """Toggling agent visibility removes points, frustums, and bounding boxes directly
+    from the Three.js scene graph and updates object counts immediately."""
+    session.open()
+    session.wait_status(f"{SCENE_FULL} at", timeout_s=10.0)
+
+    # Advance to sample 2 (100000 µs) where vehicle has a lidar point cloud and both agents have boxes
+    session.page.keyboard.press("ArrowRight")
+    session.page.keyboard.press("ArrowRight")
+    session.wait_status("100000 µs", timeout_s=10.0)
+
+    # Initial counts from Three.js scene graph
+    initial = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert initial is not None
+    assert initial["frustums"] == 2  # cam_front and cam_rear on vehicle
+    assert initial["boxes"] == 6  # 3 vehicle boxes + 3 drone boxes
+    assert initial["points"] == 1  # 1 point in vehicle lidar sweep
+    assert initial["agents"] == 2  # vehicle and drone have poses at 100000 µs
+
+    # Also verify direct stage reference
+    stage_frustums = session.page.evaluate("() => window.__COPERCEIVE_STAGE__.frustums.children.length")
+    assert stage_frustums == initial["frustums"]
+
+    # 1. Hide Vehicle: vehicle's points and frustums must immediately disappear from scene graph
+    vehicle_item = session.page.locator(".agent-list li").filter(has_text="Vehicle 1").locator("button.swatch")
+    vehicle_item.click()
+
+    after_vehicle = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert after_vehicle["points"] == 0, "LiDAR points must be removed when vehicle is hidden"
+    assert after_vehicle["frustums"] == 0, "Camera frustums must be removed when vehicle is hidden"
+    assert after_vehicle["boxes"] == 3, "Only drone's 3 boxes should remain"
+    assert after_vehicle["agents"] == 1  # Only Drone 1 remains visible
+
+    # 2. Hide Drone: drone's annotations/boxes and axis helper removed
+    uav_item = session.page.locator(".agent-list li").filter(has_text="Drone 1").locator("button.swatch")
+    uav_item.click()
+
+    after_all = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert after_all["points"] == 0
+    assert after_all["frustums"] == 0
+    assert after_all["boxes"] == 0
+    assert after_all["agents"] == 0
+
+    # 3. Unhide Vehicle: vehicle's points, frustums, and boxes restored immediately
+    vehicle_item.click()
+    restored_veh = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert restored_veh["points"] == 1
+    assert restored_veh["frustums"] == 2
+    assert restored_veh["boxes"] == 3
+    assert restored_veh["agents"] == 1
+
+    # 4. Unhide Drone: all 6 boxes and 2 agents restored
+    uav_item.click()
+    restored_all = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert restored_all["points"] == 1
+    assert restored_all["frustums"] == 2
+    assert restored_all["boxes"] == 6
+    assert restored_all["agents"] == 2
+
+
+def test_playback_updates_status_line_every_frame(session: _Session) -> None:
+    """The status line updates its sample time on every frame while playback is running."""
+    session.open()
+    session.wait_status(f"{SCENE_FULL} at 0 µs", timeout_s=10.0)
+
+    play = session.page.locator("button[aria-label=Play]")
+    play.click()
+
+    # Wait for the status line to advance beyond 0 µs while playback is running
+    session.wait_for(
+        lambda: session.page.locator("button[aria-label=Pause]").count() == 1
+        and "at 0 µs" not in session.status()
+        and "µs." in session.status(),
+        "status line to advance beyond 0 µs during active playback",
+        timeout_s=5.0,
+    )
+
+    current_status = session.status()
+    assert f"{SCENE_FULL} at " in current_status
+    assert "at 0 µs" not in current_status
+
+

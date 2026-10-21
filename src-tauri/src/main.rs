@@ -154,12 +154,51 @@ async fn start_local_session(
     let origin = format!("http://127.0.0.1:{}", session.port);
     let token = session.token.clone();
 
-    // Poll until healthy (up to 20 seconds)
-    reqwest_like_poll(&origin, &token, Duration::from_secs(20))
-        .map_err(|e| format!("Timed out waiting for local serve: {}", e))?;
+    // Poll until healthy (up to 60 seconds)
+    let start_time = Instant::now();
+    if let Err(e) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+        // Prevent deletion of log on failed start
+        session.preserve_log = true;
+        let mut log_tail = String::new();
+        if let Ok(content) = fs::read_to_string(&session.log_path) {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(20);
+            log_tail = lines[start..].join("\n");
+        }
+        // Copy serve-<port>.log to ~/Library/Logs/Coperceive/
+        if let Some(home) = std::env::var_os("HOME") {
+            let log_dir = PathBuf::from(home).join("Library/Logs/Coperceive");
+            let _ = fs::create_dir_all(&log_dir);
+            let dest_log = log_dir.join(format!("serve-{}.log", session.port));
+            let _ = fs::copy(&session.log_path, &dest_log);
+        }
+        let tail_msg = if log_tail.trim().is_empty() {
+            format!("(Log file {} was empty or could not be read)", session.log_path.display())
+        } else {
+            format!("Last 20 lines of server log ({}):\n{}", session.log_path.display(), log_tail)
+        };
+        let _ = session.stop();
+        return Err(format!("Timed out waiting for local serve: {}\n\n{}", e, tail_msg));
+    }
+
+    let elapsed = start_time.elapsed();
+    println!("[local-serve] Local server started and became healthy in {:.2?}", elapsed);
+    if let Some(home) = std::env::var_os("HOME") {
+        let log_dir = PathBuf::from(home).join("Library/Logs/Coperceive");
+        let _ = fs::create_dir_all(&log_dir);
+        let log_file = log_dir.join("desktop.log");
+        if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log_file) {
+            use std::io::Write;
+            let _ = writeln!(f, "[startup] Local server at {} became healthy in {:.2?}", origin, elapsed);
+        }
+    }
 
     // Open viewer window at session.origin with initialization_script
-    open_viewer_window(app, &origin, &token)?;
+    if let Err(e) = open_viewer_window(app, &origin, &token) {
+        session.preserve_log = true;
+        let _ = session.stop();
+        return Err(e);
+    }
 
     let payload = SessionPayload {
         origin,
@@ -282,6 +321,7 @@ async fn remote_disconnect(state: tauri::State<'_, Arc<AppState>>) -> Result<(),
 }
 
 /// Simple loopback HTTP polling using TcpStream without external HTTP client crate.
+/// Reads until headers end (\r\n\r\n) rather than assuming a single buffer read.
 #[cfg(target_os = "macos")]
 fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(), String> {
     use std::io::{Read, Write};
@@ -293,19 +333,28 @@ fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(),
 
     while Instant::now() < deadline {
         if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let _ = stream.set_read_timeout(Some(Duration::from_millis(500)));
-            let _ = stream.set_write_timeout(Some(Duration::from_millis(500)));
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
             let req = format!(
                 "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
                 port, token
             );
             if stream.write_all(req.as_bytes()).is_ok() {
-                let mut buf = [0u8; 512];
-                if let Ok(n) = stream.read(&mut buf) {
-                    let resp = String::from_utf8_lossy(&buf[..n]);
-                    if resp.contains("200 OK") {
-                        return Ok(());
+                let mut resp_bytes = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
                     }
+                    resp_bytes.extend_from_slice(&chunk[..n]);
+                    // Check if headers have finished
+                    if resp_bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let resp = String::from_utf8_lossy(&resp_bytes);
+                if resp.contains("200 OK") || resp.contains("HTTP/1.1 200") || resp.contains("HTTP/1.0 200") {
+                    return Ok(());
                 }
             }
         }

@@ -32,7 +32,12 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     }
     setBusy(true);
     setError("");
-    setStatus("Launching local perception server...");
+    let seconds = 0;
+    setStatus(`Starting server… ${seconds} s`);
+    const timer = setInterval(() => {
+      seconds += 1;
+      setStatus(`Starting server… ${seconds} s`);
+    }, 1000);
 
     try {
       const target = new LocalExecutionTarget();
@@ -40,12 +45,15 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         type: "local",
         dataRoot,
       });
+      clearInterval(timer);
       setStatus("Connected! Initializing 3D viewer...");
       onConnected(session);
     } catch (e) {
+      clearInterval(timer);
       setError(`Failed to connect: ${e instanceof Error ? e.message : String(e)}`);
       setStatus("");
     } finally {
+      clearInterval(timer);
       setBusy(false);
     }
   };

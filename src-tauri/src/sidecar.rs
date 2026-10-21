@@ -17,6 +17,7 @@ pub struct SidecarSession {
     pub token_path: PathBuf,
     pub log_path: PathBuf,
     pub root: PathBuf,
+    pub preserve_log: bool,
 }
 
 impl SidecarSession {
@@ -61,6 +62,7 @@ impl SidecarSession {
             token_path,
             log_path,
             root: data_root.to_path_buf(),
+            preserve_log: false,
         })
     }
 
@@ -95,11 +97,14 @@ impl SidecarSession {
             }
         }
 
-        // Clean up token and log files
+        // Clean up token file
         let _ = fs::remove_file(&self.token_path);
-        let _ = fs::remove_file(&self.log_path);
-        if let Some(parent) = self.token_path.parent() {
-            let _ = fs::remove_dir(parent);
+        // Only remove log file if preserve_log is false (kept on failed startup)
+        if !self.preserve_log {
+            let _ = fs::remove_file(&self.log_path);
+            if let Some(parent) = self.token_path.parent() {
+                let _ = fs::remove_dir(parent);
+            }
         }
 
         Ok(())

@@ -90,6 +90,7 @@ type Stage = {
   controls: OrbitControls;
   solids: THREE.Group;
   requestRender: () => void;
+  renderNow: () => void;
   captureView: (width: number, height: number) => string;
   setTheme: (theme: Appearance["theme"]) => void;
   bloom: BloomRig;
@@ -409,7 +410,9 @@ function replaceColored(geometry: THREE.BufferGeometry, positions: Float32Array,
   } else {
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geometry.dispose();
   }
+  geometry.setDrawRange(0, positions.length / 3);
   geometry.computeBoundingSphere();
 }
 
@@ -538,6 +541,8 @@ function drawBoxes(
   });
   replaceColored(stage.boxes.geometry, boxPositions, boxColors);
   replaceColored(stage.dimmedBoxes.geometry, dimPositions, dimColors);
+  stage.boxes.visible = boxPositions.length > 0;
+  stage.dimmedBoxes.visible = dimPositions.length > 0;
 
   clearGroup(stage.solids);
   if (appearance.boxStyle === "solid") {
@@ -611,6 +616,7 @@ async function drawFrame(
     cursor += sweep.xyz.length;
   }
   replaceColored(stage.points.geometry, positions, colors);
+  stage.points.visible = positions.length > 0;
   // Read the dim set now, not at call time: the prediction frame for this sample may have arrived while
   // the point buffers were loading.
   drawBoxes(stage, frame, types, hidden, appearance, dimmed());
@@ -1111,6 +1117,13 @@ export default function Viewer({
       }
       frameId = window.requestAnimationFrame(draw);
     };
+    const renderNow = () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+        frameId = 0;
+      }
+      draw();
+    };
     const onStart = () => {
       dragging = true;
       requestRender();
@@ -1228,6 +1241,7 @@ export default function Viewer({
       camera,
       controls,
       requestRender,
+      renderNow,
       captureView,
       setTheme,
       bloom,
@@ -1249,6 +1263,21 @@ export default function Viewer({
       predictionPicks,
       dimmedBoxes,
     };
+    if (typeof window !== "undefined") {
+      (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__ = stageRef.current;
+      (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__ = () => {
+        const s = stageRef.current;
+        if (!s) return null;
+        const pAttr = s.points.geometry.getAttribute("position");
+        const pts = s.points.visible && pAttr ? pAttr.count : 0;
+        const bAttr = s.boxes.geometry.getAttribute("position");
+        const dimAttr = s.dimmedBoxes.geometry.getAttribute("position");
+        const bxs = ((s.boxes.visible && bAttr ? bAttr.count : 0) + (s.dimmedBoxes.visible && dimAttr ? dimAttr.count : 0)) / 24;
+        const frs = s.frustums.children.length;
+        const ags = s.agents.children.length;
+        return { points: pts, boxes: bxs, frustums: frs, agents: ags };
+      };
+    }
     setTheme(appearanceRef.current.theme);
     const pointsMaterial = points.material;
     if (pointsMaterial instanceof THREE.PointsMaterial) {
@@ -1256,6 +1285,10 @@ export default function Viewer({
     }
     requestRender();
     return () => {
+      if (typeof window !== "undefined") {
+        delete (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__;
+        delete (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__;
+      }
       resize.disconnect();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointerup", onPointerUp);
@@ -1512,6 +1545,74 @@ export default function Viewer({
     const gen = ++drawGen.current;
     const types = new Map(summary.agents.map((agent) => [agent.agent_id, agent.agent_type]));
     const stale = () => drawGen.current !== gen;
+
+    // Update status line immediately on every frame tick during playback
+    const latest = latestRef.current;
+    if (latest && latest.frame) {
+      const shown = appearance.points
+        ? latest.frame.point_sensors.reduce((sum, sensor) => (hidden[sensor.agent_id] ? sum : sum + sensor.count), 0)
+        : 0;
+      const boxes = latest.frame.boxes.filter((box) => boxShown(box, hidden, appearance)).length;
+      const frustums = latest.frame.frustums.filter((frustum) => appearance.frustums && !hidden[frustum.agent_id]).length;
+      setStatus(
+        `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, latest.frame, types, cameraKeyRef.current)}`,
+      );
+    } else {
+      setStatus(`${summary.scene_id} at ${time} µs. ${mapNote}`);
+    }
+
+    // Immediately remove hidden agents' objects and trigger immediate redraw
+    if (latestRef.current) {
+      const { frame: curFrame, types: curTypes } = latestRef.current;
+      drawBoxes(stage, curFrame, curTypes, hidden, appearance, dimmedRef.current);
+
+      clearGroup(stage.frustums);
+      const pickable: { key: string; fovY: number; aspect: number; pose: Pose }[] = [];
+      for (const frustum of curFrame.frustums) {
+        if (!appearance.frustums || hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+          continue;
+        }
+        const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(curTypes.get(frustum.agent_id) ?? ""));
+        applyPose(lines, frustum.pose);
+        stage.frustums.add(lines);
+        pickable.push({
+          key: cameraKey(frustum.agent_id, frustum.sensor_id),
+          fovY: frustum.fov_y_rad,
+          aspect: frustum.aspect,
+          pose: frustum.pose,
+        });
+      }
+      syncFrustumPicks(stage.frustumPicks, pickable);
+
+      clearGroup(stage.agents);
+      for (const agent of curFrame.agents) {
+        if (!appearance.axes || hidden[agent.agent_id] || !isPose(agent.pose)) {
+          continue;
+        }
+        const axes = new THREE.AxesHelper(2);
+        applyPose(axes, agent.pose);
+        stage.agents.add(axes);
+      }
+
+      for (const [key, mesh] of stage.imagePlanes) {
+        const agentId = key.split(":")[0];
+        if (hidden[agentId]) {
+          mesh.visible = false;
+        }
+      }
+
+      syncMotion(stage, curFrame, curTypes, hidden);
+      syncPicks(stage.picks, curFrame.boxes, (box) => boxShown(box, hidden, appearance));
+
+      const anyPointsShown = appearance.points && curFrame.point_sensors.some((sensor) => !hidden[sensor.agent_id] && sensor.count > 0);
+      if (!anyPointsShown) {
+        replaceColored(stage.points.geometry, new Float32Array(0), new Float32Array(0));
+        stage.points.visible = false;
+      }
+
+      stage.renderNow();
+    }
+
     void (async () => {
       const body = await cacheRef.current.loadFrame(summary.scene_id, time, token);
       if (stale()) {
@@ -1524,7 +1625,7 @@ export default function Viewer({
       }
       syncMotion(stage, body, types, hidden);
       syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
-      stage.requestRender();
+      stage.renderNow();
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
         orbitHomeRef.current = home;
