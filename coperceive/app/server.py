@@ -164,6 +164,8 @@ def create_app(
 
     @app.middleware("http")
     async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if request.method == "OPTIONS":
+            return await call_next(request)
         if request.url.path.startswith("/api/"):
             expected = request.app.state.token
             if expected:

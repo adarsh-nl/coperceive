@@ -791,3 +791,23 @@ def test_token_auth_uses_constant_time_comparison(
     assert resp_bad.status_code == 401
     assert len(called) >= 1
     assert called[-1] == ("bad-token", token)
+
+
+def test_cors_options_preflight_on_authenticated_server(tmp_path: Path) -> None:
+    """CORS OPTIONS preflight requests must succeed without Authorization headers so that
+    the browser can complete cross-origin requests when switching sidecar instances."""
+    app = create_app(root=tmp_path, token="preflight-secret-token")
+    client = TestClient(app)
+
+    resp = client.options(
+        "/api/scenes",
+        headers={
+            "Origin": "http://127.0.0.1:49152",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://127.0.0.1:49152"
+    assert "authorization" in resp.headers.get("access-control-allow-headers", "").lower()
+
