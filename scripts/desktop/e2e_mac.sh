@@ -487,32 +487,50 @@ pb_c_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 assert pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
 
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 120)")
+
+eval_js("""
+(() => {
+    window.__RECORD_GAPS__ = {
+        lastFrame: null,
+        lastChange: performance.now(),
+        maxGapMs: 0,
+        wraps: 0,
+        framesSeen: 0
+    };
+    if (window.__RECORD_INTERVAL__) clearInterval(window.__RECORD_INTERVAL__);
+    window.__RECORD_INTERVAL__ = setInterval(() => {
+        const st = window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null;
+        if (!st) return;
+        const now = performance.now();
+        if (st.frameIndex !== window.__RECORD_GAPS__.lastFrame) {
+            if (window.__RECORD_GAPS__.lastFrame !== null) {
+                const gap = now - window.__RECORD_GAPS__.lastChange;
+                if (gap > window.__RECORD_GAPS__.maxGapMs) {
+                    window.__RECORD_GAPS__.maxGapMs = gap;
+                }
+                if (window.__RECORD_GAPS__.lastFrame > 140 && st.frameIndex < 10) {
+                    window.__RECORD_GAPS__.wraps++;
+                }
+            }
+            window.__RECORD_GAPS__.lastFrame = st.frameIndex;
+            window.__RECORD_GAPS__.lastChange = now;
+            window.__RECORD_GAPS__.framesSeen++;
+        }
+    }, 10);
+})()
+""")
+
 eval_js("document.querySelector('button.icon.primary')?.click()")
 
-start_t = time.monotonic()
-last_frame = None
-last_change_t = start_t
-max_gap = 0.0
-wraps = 0
-
-while time.monotonic() - start_t < 15.5:
-    cur = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
-    now = time.monotonic()
-    if cur["frameIndex"] != last_frame:
-        if last_frame is not None:
-            gap = now - last_change_t
-            if gap > max_gap:
-                max_gap = gap
-            assert gap <= 0.35, f"Frame change gap exceeded 300ms: {gap*1000:.1f}ms between frame {last_frame} and {cur['frameIndex']}"
-            if last_frame > 140 and cur["frameIndex"] < 10:
-                wraps += 1
-        last_frame = cur["frameIndex"]
-        last_change_t = now
-    time.sleep(0.03)
+time.sleep(15.5)
 
 eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
-print(f"Playback requirement (c) verified: max frame gap = {max_gap*1000:.1f}ms, loop wraps observed = {wraps}")
-assert wraps >= 1, f"Expected at least 1 loop wrap over 15s, got {wraps}"
+eval_js("if (window.__RECORD_INTERVAL__) { clearInterval(window.__RECORD_INTERVAL__); window.__RECORD_INTERVAL__ = null; }")
+
+report = eval_js("window.__RECORD_GAPS__")
+print(f"Playback requirement (c) verified: max frame gap = {report['maxGapMs']:.1f}ms, loop wraps observed = {report['wraps']}, frames seen = {report['framesSeen']}")
+assert report["wraps"] >= 1, f"Expected at least 1 loop wrap over 15s, got {report['wraps']}"
+assert report["maxGapMs"] <= 300.0, f"Frame change gap exceeded 300ms: {report['maxGapMs']:.1f}ms"
 
 print("Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.")
 EOF
