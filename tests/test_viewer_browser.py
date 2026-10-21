@@ -358,6 +358,8 @@ def test_play_advances_the_timeline_at_the_recorded_pace(session: _Session, shot
     session.choose_scene(SCENE_BARE)
     assert session.slider("aria-valuemax") == BARE_SAMPLES - 1
     assert session.slider("aria-valuenow") == 0
+    # Turn loop OFF to test pausing at the last sample
+    session.page.locator("button[aria-label=Loop]").click()
     play = session.page.locator("button[aria-label=Play]")
     start = time.monotonic()  # before the click: the page starts its clock on the click
     play.click()
@@ -376,7 +378,10 @@ def test_play_advances_the_timeline_at_the_recorded_pace(session: _Session, shot
     for elapsed, index in seen:
         assert index <= int(elapsed * 10) + 2, seen
     session.wait_for(
-        lambda: session.page.locator("button[aria-label=Play]").count() == 1,
+        lambda: (
+            session.page.locator("button[aria-label=Replay]").count() == 1
+            or session.page.locator("button[aria-label=Play]").count() == 1
+        ),
         "playback to pause on the last sample",
         timeout_s=6.0,
     )
@@ -832,8 +837,9 @@ def test_playback_updates_status_line_every_frame(session: _Session) -> None:
     session.open()
     session.wait_status(f"{SCENE_FULL} at 0 µs", timeout_s=10.0)
 
-    # Enable loop so playback does not immediately end after 400ms on short clip
-    session.page.keyboard.press("l")
+    # Ensure loop is active so playback does not immediately end after 400ms on short clip
+    if session.page.locator("button[aria-label=Loop][aria-pressed=true]").count() == 0:
+        session.page.keyboard.press("l")
 
     play = session.page.locator("button[aria-label=Play]")
     play.click()
