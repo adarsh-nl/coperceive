@@ -446,11 +446,11 @@ echo "--- Step 3: Switch Dataset to Second Valid Root (Single Scene Root) ---"
 echo "${FIXTURE_2}" > "${MOCK_DIALOG_FILE}"
 
 # Trigger folder switch via the UI Open button!
-python3 -c '
+python3 << EOF
 import sys, json, urllib.request
 
-port = "'"${RELAUNCH_PORT}"'"
-secret = "'"${RELAUNCH_SECRET}"'"
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
 
 def eval_js(code):
     req = urllib.request.Request(
@@ -467,17 +467,17 @@ def eval_js(code):
 print("Clicking UI dataset open button...")
 btn_res = eval_js("(() => { const b = document.querySelector('.btn-open-dataset'); return b ? 'found' : 'NOT_FOUND'; })()")
 print(f"Button presence: {btn_res}")
-eval_js("document.querySelector(\x27.btn-open-dataset\x27)?.click()")
-'
+eval_js("document.querySelector('.btn-open-dataset')?.click()")
+EOF
 
 sleep 3.5
 
 # Assert scene list loaded and scene graph rendered for new root
-python3 -c '
+python3 << EOF
 import sys, json, time, urllib.request
 
-port = "'"${RELAUNCH_PORT}"'"
-secret = "'"${RELAUNCH_SECRET}"'"
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
 
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
@@ -536,12 +536,12 @@ print(f"Counts after folder switch: {counts}")
 assert counts is not None, "Scene counts must exist"
 assert counts["points"] > 0, f"Expected points > 0 in new scene, got {counts}"
 
-badge_text = eval_js("document.querySelector(\x27.dataset-name\x27)?.textContent")
+badge_text = eval_js("document.querySelector('.dataset-name')?.textContent")
 print(f"Dataset badge text: {badge_text}")
 assert "synth_001" in (badge_text or ""), f"Expected synth_001 badge, got {badge_text}"
 
 print("Step 3 verified: switched cleanly to second fixture, new scene rendered.")
-'
+EOF
 
 screencapture -x "${SCREENSHOT_DIR}/04-switched-fixture.png" 2>/dev/null || true
 
