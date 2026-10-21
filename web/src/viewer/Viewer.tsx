@@ -959,11 +959,10 @@ export default function Viewer({
   });
 
   const handleToggleLoop = () => {
-    setLoop((current) => {
-      const next = !current;
-      setStoredLoopPreference(next);
-      return next;
-    });
+    const next = !loopRef.current;
+    loopRef.current = next;
+    setStoredLoopPreference(next);
+    setLoop(next);
   };
   const handleToggleLoopRef = useRef(handleToggleLoop);
   handleToggleLoopRef.current = handleToggleLoop;
@@ -1207,7 +1206,8 @@ export default function Viewer({
   const settleRef = useRef(false);
   const reduceMotionRef = useRef(false);
   const lengthRef = useRef(0);
-  const loopRef = useRef(false);
+  const loopRef = useRef(loop);
+  loopRef.current = loop;
   const frameRef = useRef(0);
   const playingRef = useRef(false);
   playingRef.current = playing;

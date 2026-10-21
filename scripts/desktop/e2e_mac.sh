@@ -455,6 +455,7 @@ eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (b): loop off, play to the end, assert Replay, click, assert it plays from 0...")
 eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
+time.sleep(0.1)
 pb_b_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 assert pb_b_loop["loop"] == False, f"Expected loop to be False, got {pb_b_loop}"
 
@@ -483,6 +484,7 @@ eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (c): play 15 s across the loop wrap with no frame-change gap over 300 ms...")
 eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
+time.sleep(0.1)
 pb_c_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 assert pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
 
