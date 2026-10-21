@@ -34,6 +34,7 @@ pub struct ControllerConfig {
     pub eval_callbacks: Arc<Mutex<HashMap<u64, EvalSender>>>,
     pub eval_counter: Arc<Mutex<u64>>,
     pub eval_dispatcher: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    pub window_closer: Option<Arc<dyn Fn(&str) + Send + Sync>>,
 }
 
 impl ControllerConfig {
@@ -46,6 +47,7 @@ impl ControllerConfig {
             eval_callbacks: Arc::new(Mutex::new(HashMap::new())),
             eval_counter: Arc::new(Mutex::new(0)),
             eval_dispatcher: None,
+            window_closer: None,
         }
     }
 
@@ -263,6 +265,14 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
 
         on_open_dialog();
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/close-window" {
+        if let Some(ref closer) = config.window_closer {
+            closer("viewer");
+        }
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"closed\":true}")?;
         return Ok(());
     }
 

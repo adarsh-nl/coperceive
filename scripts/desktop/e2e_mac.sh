@@ -37,13 +37,23 @@ fi
 APP_BUNDLE="$(cd "${APP_BUNDLE}" && pwd)"
 echo "App bundle: ${APP_BUNDLE}"
 
-APP_EXE="${APP_BUNDLE}/Contents/MacOS/coperceive-desktop"
+APP_EXE="${APP_BUNDLE}/Contents/MacOS/Coperceive"
 if [ ! -x "${APP_EXE}" ]; then
-    APP_EXE=$(find "${APP_BUNDLE}/Contents/MacOS" -type f -perm +111 2>/dev/null | head -n 1)
+    if [ -x "${APP_BUNDLE}/Contents/MacOS/coperceive-desktop" ]; then
+        APP_EXE="${APP_BUNDLE}/Contents/MacOS/coperceive-desktop"
+    else
+        for cand in "${APP_BUNDLE}/Contents/MacOS/"*; do
+            if [ -f "${cand}" ] && [ -x "${cand}" ]; then
+                APP_EXE="${cand}"
+                break
+            fi
+        done
+    fi
 fi
 
 if [ -z "${APP_EXE}" ] || [ ! -x "${APP_EXE}" ]; then
-    echo "Error: App executable not found in ${APP_BUNDLE}/Contents/MacOS!" >&2
+    echo "Error: App executable not found in ${APP_BUNDLE}/Contents/MacOS! Listing contents:" >&2
+    ls -la "${APP_BUNDLE}/Contents/MacOS" || true
     exit 1
 fi
 echo "App executable: ${APP_EXE}"
@@ -492,6 +502,24 @@ tell application "System Events"
     end tell
 end tell
 EOF
+
+# Ensure viewer window closes via controller loopback
+python3 -c '
+import urllib.request
+
+port = "'"${RELAUNCH_PORT}"'"
+secret = "'"${RELAUNCH_SECRET}"'"
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+)
+try:
+    with urllib.request.urlopen(req, timeout=5) as r:
+        pass
+except Exception:
+    pass
+'
 
 sleep 2
 

@@ -449,6 +449,13 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
             let _ = w.eval(&script);
         }
     }));
+    let handle_close = app_handle.clone();
+    cfg.window_closer = Some(Arc::new(move |label: &str| {
+        use tauri::Manager;
+        if let Some(w) = handle_close.get_webview_window(label) {
+            let _ = w.close();
+        }
+    }));
     let cfg_clone = cfg.clone();
     let handle = app_handle.clone();
     let st = app_state.clone();
