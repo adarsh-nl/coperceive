@@ -59,9 +59,9 @@ fi
 echo "App executable: ${APP_EXE}"
 
 # Prepare fixtures
-FIXTURE_1="$(pwd)/tests/fixtures/synthetic_scene/synth_001"
-FIXTURE_2="$(pwd)/tests/fixtures/synthetic_scene"
-if [ ! -f "${FIXTURE_1}/manifest.json" ]; then
+FIXTURE_1="$(pwd)/tests/fixtures/synthetic_scene"
+FIXTURE_2="$(pwd)/tests/fixtures/synthetic_scene/synth_001"
+if [ ! -d "${FIXTURE_1}" ]; then
     echo "Error: Fixture 1 not found at ${FIXTURE_1}!" >&2
     exit 2
 fi
@@ -80,7 +80,26 @@ chmod 0700 "${STATE_DIR}"
 APP_PID=""
 
 cleanup() {
-    echo "Cleaning up test harness..."
+    local status=$?
+    echo "Cleaning up test harness (exit status: ${status})..."
+    if [ "${status}" -ne 0 ]; then
+        echo "=== App STDOUT on failure ==="
+        cat "${APP_STDOUT}" 2>/dev/null || true
+        echo "=== App STDERR on failure ==="
+        cat "${APP_STDERR}" 2>/dev/null || true
+        if [ -f "${TMP_DIR}/relaunch_stdout.log" ]; then
+            echo "=== Relaunch STDOUT ==="
+            cat "${TMP_DIR}/relaunch_stdout.log" 2>/dev/null || true
+        fi
+        if [ -f "${TMP_DIR}/relaunch_stderr.log" ]; then
+            echo "=== Relaunch STDERR ==="
+            cat "${TMP_DIR}/relaunch_stderr.log" 2>/dev/null || true
+        fi
+        if [ -d "${HOME}/Library/Logs/Coperceive" ]; then
+            echo "=== Coperceive logs ==="
+            cat "${HOME}/Library/Logs/Coperceive/"*.log 2>/dev/null || true
+        fi
+    fi
     if [ -n "${APP_PID:-}" ] && kill -0 "${APP_PID}" 2>/dev/null; then
         echo "Killing app process ${APP_PID}..."
         kill -9 "${APP_PID}" 2>/dev/null || true
@@ -88,20 +107,25 @@ cleanup() {
     pkill -f "coperceive serve" 2>/dev/null || true
     rm -rf "${TMP_DIR}"
 }
-trap cleanup EXIT
+trap cleanup EXIT INT TERM HUP
+
+# Ensure no leftover serve or app processes from prior steps
+pkill -f "coperceive serve" 2>/dev/null || true
+pkill -f "coperceive-desktop" 2>/dev/null || true
+pkill -f "Coperceive" 2>/dev/null || true
 
 # Clear previous state
 rm -f "${STATE_FILE}"
 rm -f "${HOME}/Library/Application Support/coperceive/state.json"
 
 echo ""
-echo "--- Step 1: Launch App with Fixture 1 (Single Scene Root) ---"
+echo "--- Step 1: Launch App with Fixture 1 (Multi-Scene Root) ---"
 export COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_1}"
 export COPERCEIVE_TEST_ENV="1"
 export COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}"
 export COPERCEIVE_MOCK_DIALOG_FILE="${MOCK_DIALOG_FILE}"
 
-"${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
+"${APP_EXE}" > >(tee "${APP_STDOUT}" | sed 's/^/[APP-OUT] /') 2> >(tee "${APP_STDERR}" | sed 's/^/[APP-ERR] /' >&2) &
 APP_PID=$!
 echo "App launched with PID ${APP_PID}"
 
@@ -109,12 +133,16 @@ echo "App launched with PID ${APP_PID}"
 echo "Waiting for app to start and auto-connect..."
 for i in {1..120}; do
     if [ -f "${MARKER_FILE}" ]; then
+        echo "Marker file created after ${i} checks ($((i/2))s)!"
         break
     fi
     if ! kill -0 "${APP_PID}" 2>/dev/null; then
-        echo "Error: App died during startup!" >&2
+        echo "Error: App died during startup (check ${i})!" >&2
         cat "${APP_STDERR}" >&2
         exit 3
+    fi
+    if [ $((i % 10)) -eq 0 ]; then
+        echo "Still waiting for marker file... ($((i/2))s elapsed)"
     fi
     sleep 0.5
 done
@@ -141,14 +169,14 @@ CTRL_SECRET=$(sed -n '5p' "${MARKER_FILE}")
 echo "Connected to origin: ${APP_ORIGIN}"
 echo "Controller listening on port: ${CTRL_PORT}"
 
-# Verify single scene root is listed by /api/scenes
+# Verify fixture scene is listed by /api/scenes
 SCENES_RESP=$(curl -s -f -H "Authorization: Bearer ${APP_TOKEN}" "${APP_ORIGIN}/api/scenes")
 echo "Scenes response: ${SCENES_RESP}"
 if ! echo "${SCENES_RESP}" | grep -q "synth_001"; then
-    echo "Error: /api/scenes did not list single scene root 'synth_001'!" >&2
+    echo "Error: /api/scenes did not list scene 'synth_001'!" >&2
     exit 5
 fi
-echo "Verified: single scene root correctly served and listed."
+echo "Verified: fixture scene correctly served and listed."
 
 # Wait 2 seconds for UI render
 sleep 2
@@ -298,19 +326,23 @@ unset COPERCEIVE_AUTOCONNECT_ROOT
 rm -f "${MARKER_FILE}"
 
 echo "Relaunching app from persistent state.json..."
-"${APP_EXE}" > "${TMP_DIR}/relaunch_stdout.log" 2> "${TMP_DIR}/relaunch_stderr.log" &
+"${APP_EXE}" > >(tee "${TMP_DIR}/relaunch_stdout.log" | sed 's/^/[RELAUNCH-OUT] /') 2> >(tee "${TMP_DIR}/relaunch_stderr.log" | sed 's/^/[RELAUNCH-ERR] /' >&2) &
 APP_PID=$!
 echo "Relaunched app PID ${APP_PID}"
 
 # Wait for marker file (up to 60s)
 for i in {1..120}; do
     if [ -f "${MARKER_FILE}" ]; then
+        echo "Relaunch marker file created after ${i} checks ($((i/2))s)!"
         break
     fi
     if ! kill -0 "${APP_PID}" 2>/dev/null; then
-        echo "Error: Relaunched app died during startup!" >&2
+        echo "Error: Relaunched app died during startup (check ${i})!" >&2
         cat "${TMP_DIR}/relaunch_stderr.log" >&2
         exit 9
+    fi
+    if [ $((i % 10)) -eq 0 ]; then
+        echo "Still waiting for relaunch marker file... ($((i/2))s elapsed)"
     fi
     sleep 0.5
 done
@@ -404,7 +436,7 @@ print("Step 2 verified: All restored values from DOM and scene-graph counts matc
 screencapture -x "${SCREENSHOT_DIR}/03-after-relaunch.png" 2>/dev/null || true
 
 echo ""
-echo "--- Step 3: Switch Dataset to Second Valid Root (Multi-Scene Root) ---"
+echo "--- Step 3: Switch Dataset to Second Valid Root (Single Scene Root) ---"
 echo "${FIXTURE_2}" > "${MOCK_DIALOG_FILE}"
 
 # Trigger folder switch via the UI Open button!
@@ -471,7 +503,7 @@ assert counts["points"] > 0, f"Expected points > 0 in new scene, got {counts}"
 
 badge_text = eval_js("document.querySelector(\x27.dataset-name\x27)?.textContent")
 print(f"Dataset badge text: {badge_text}")
-assert "synthetic_scene" in (badge_text or ""), f"Expected synthetic_scene badge, got {badge_text}"
+assert "synth_001" in (badge_text or ""), f"Expected synth_001 badge, got {badge_text}"
 
 print("Step 3 verified: switched cleanly to second fixture, new scene rendered.")
 '

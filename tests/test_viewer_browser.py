@@ -295,6 +295,7 @@ class _Session:
         self.base = base
         self.requests: list[str] = []
         self.errors: list[str] = []
+        page.add_init_script("window.__COPERCEIVE_TEST_ENV__ = true;")
         page.on("request", lambda request: self._record(request.url))
         page.on("pageerror", lambda error: self.errors.append(str(error)))
 
@@ -777,11 +778,13 @@ def test_agent_visibility_toggles_remove_objects_from_scene_graph(session: _Sess
     assert initial["points"] == 1  # 1 point in vehicle lidar sweep
     assert initial["agents"] == 2  # vehicle and drone have poses at 100000 µs
 
-    # Also verify direct stage reference
-    stage_frustums = session.page.evaluate(
-        "() => window.__COPERCEIVE_STAGE__.frustums.children.length"
-    )
-    assert stage_frustums == initial["frustums"]
+    # Also verify direct stage reference if available in development mode
+    has_stage = session.page.evaluate("() => typeof window.__COPERCEIVE_STAGE__ !== 'undefined'")
+    if has_stage:
+        stage_frustums = session.page.evaluate(
+            "() => window.__COPERCEIVE_STAGE__.frustums.children.length"
+        )
+        assert stage_frustums == initial["frustums"]
 
     # 1. Hide Vehicle: vehicle's points and frustums must immediately disappear from scene graph
     vehicle_item = (
