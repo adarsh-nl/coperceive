@@ -39,6 +39,59 @@ function storedToken(): string {
   return sessionStorage.getItem(TOKEN_KEY) ?? "";
 }
 
+function DesktopPreferences() {
+  const [reopenLast, setReopenLast] = useState<boolean>(true);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      const port = window.__COPERCEIVE_CTRL_PORT__;
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+      fetch(`http://127.0.0.1:${port}/state`, {
+        headers: { Authorization: `Bearer ${secret}` },
+      })
+        .then((r) => r.json())
+        .then((data: { reopen_last_session?: boolean }) => {
+          if (data && typeof data.reopen_last_session === "boolean") {
+            setReopenLast(data.reopen_last_session);
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  const handleToggle = (checked: boolean) => {
+    setReopenLast(checked);
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      const port = window.__COPERCEIVE_CTRL_PORT__;
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+      fetch(`http://127.0.0.1:${port}/state`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${secret}`,
+        },
+        body: JSON.stringify({ reopen_last_session: checked }),
+      }).catch(() => {});
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minWidth: "220px" }}>
+      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "13px", cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={reopenLast}
+          onChange={(e) => handleToggle(e.target.checked)}
+        />
+        <span>Reopen last session on launch</span>
+      </label>
+      <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
+        When unchecked, Coperceive starts at the Connect screen.
+      </p>
+    </div>
+  );
+}
+
 export default function App() {
   const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
   const queryClient = useQueryClient();
@@ -231,27 +284,31 @@ export default function App() {
         )}
         <div className="top-cluster top-end">
           <div className="top-actions" ref={setActions} />
-          {!isDesktop && (
-            <details className="settings">
-              <summary className="icon ghost" aria-label="Settings">
-                <IconGear />
-              </summary>
-              <div className="settings-pop">
-                <label htmlFor="token-global">
-                  Bearer token
-                  <input
-                    id="token-global"
-                    type="password"
-                    autoComplete="off"
-                    value={token}
-                    onChange={(event) => setToken(event.target.value)}
-                    placeholder="Empty when the server has no token"
-                  />
-                </label>
-                <p className="muted">Stored in this tab only. A non-loopback bind refuses to start without a token.</p>
-              </div>
-            </details>
-          )}
+          <details className="settings">
+            <summary className="icon ghost" aria-label="Settings">
+              <IconGear />
+            </summary>
+            <div className="settings-pop">
+              {!isDesktop ? (
+                <>
+                  <label htmlFor="token-global">
+                    Bearer token
+                    <input
+                      id="token-global"
+                      type="password"
+                      autoComplete="off"
+                      value={token}
+                      onChange={(event) => setToken(event.target.value)}
+                      placeholder="Empty when the server has no token"
+                    />
+                  </label>
+                  <p className="muted">Stored in this tab only. A non-loopback bind refuses to start without a token.</p>
+                </>
+              ) : (
+                <DesktopPreferences />
+              )}
+            </div>
+          </details>
         </div>
       </header>
       {tab === "viewer" || isDesktop ? (

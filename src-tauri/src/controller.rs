@@ -1,0 +1,551 @@
+// SPDX-License-Identifier: Apache-2.0
+//! Desktop Loopback HTTP Controller
+//!
+//! Provides a secure, authenticated loopback IPC bridge for the viewer webview:
+//! - Per-launch random bearer token authentication (never exposed in URL).
+//! - Strict CORS restricted exclusively to the active sidecar origin (`http://127.0.0.1:<port>`).
+//! - Host header verification (anti-DNS-rebinding: must match `127.0.0.1:<ctrl_port>`).
+//! - Enforced Content-Type `application/json` and exact Content-Length body streaming (capped at 64 KB).
+//! - Rate limiting on `/open-dialog`.
+
+use std::collections::HashMap;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
+
+use crate::state::{self, LayerToggles, PanelCollapseState, WindowState};
+
+/// Maximum allowed request body size (64 KB).
+pub const MAX_BODY_SIZE: usize = 65536;
+
+/// Rate limit window for `/open-dialog` (1 second).
+pub const OPEN_DIALOG_RATE_LIMIT: Duration = Duration::from_millis(1000);
+
+/// Configuration for the loopback controller.
+#[derive(Clone)]
+pub struct ControllerConfig {
+    pub ctrl_port: u16,
+    pub auth_secret: String,
+    pub allowed_origin: Arc<Mutex<Option<String>>>,
+    pub last_open_dialog: Arc<Mutex<Option<Instant>>>,
+}
+
+impl ControllerConfig {
+    pub fn new(ctrl_port: u16, auth_secret: String, initial_origin: Option<String>) -> Self {
+        Self {
+            ctrl_port,
+            auth_secret,
+            allowed_origin: Arc::new(Mutex::new(initial_origin)),
+            last_open_dialog: Arc::new(Mutex::new(None)),
+        }
+    }
+
+    pub fn set_allowed_origin(&self, origin: String) {
+        if let Ok(mut lock) = self.allowed_origin.lock() {
+            *lock = Some(origin);
+        }
+    }
+}
+
+/// Dispatches an incoming HTTP connection over any read/write stream.
+pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
+    reader: &mut R,
+    writer: &mut W,
+    config: &ControllerConfig,
+    on_open_dialog: &F,
+) -> Result<(), std::io::Error> {
+    // 1. Read request headers until \r\n\r\n (capped at 8192 bytes)
+    let mut header_buf = Vec::with_capacity(2048);
+    let mut temp = [0u8; 1024];
+    let mut header_end = None;
+
+    while header_buf.len() < 8192 {
+        let n = reader.read(&mut temp)?;
+        if n == 0 {
+            break;
+        }
+        header_buf.extend_from_slice(&temp[..n]);
+        if let Some(pos) = find_subsequence(&header_buf, b"\r\n\r\n") {
+            header_end = Some(pos);
+            break;
+        }
+    }
+
+    let header_pos = match header_end {
+        Some(pos) => pos,
+        None => {
+            write_response(writer, 400, "Bad Request", None, b"Malformed HTTP headers")?;
+            return Ok(());
+        }
+    };
+
+    let header_str = String::from_utf8_lossy(&header_buf[..header_pos]);
+    let mut lines = header_str.lines();
+    let request_line = match lines.next() {
+        Some(l) => l,
+        None => {
+            write_response(writer, 400, "Bad Request", None, b"Empty request line")?;
+            return Ok(());
+        }
+    };
+
+    let parts: Vec<&str> = request_line.split_whitespace().collect();
+    if parts.len() < 2 {
+        write_response(writer, 400, "Bad Request", None, b"Invalid request line")?;
+        return Ok(());
+    }
+    let method = parts[0];
+    let path = parts[1];
+
+    // Parse headers into lowercase map
+    let mut headers = HashMap::new();
+    for line in lines {
+        if let Some((k, v)) = line.split_once(':') {
+            headers.insert(k.trim().to_ascii_lowercase(), v.trim().to_string());
+        }
+    }
+
+    // 2. DNS Rebinding Protection: Host header must match 127.0.0.1:<ctrl_port>
+    let expected_host = format!("127.0.0.1:{}", config.ctrl_port);
+    let host_header = headers.get("host").cloned().unwrap_or_default();
+    if host_header != expected_host {
+        write_response(writer, 400, "Bad Request", None, b"Invalid Host header")?;
+        return Ok(());
+    }
+
+    // 3. CORS Check: Only allow requests originating from allowed_origin
+    let allowed_origin = config.allowed_origin.lock().ok().and_then(|l| l.clone());
+    let req_origin = headers.get("origin").cloned();
+    let cors_origin = match (&req_origin, &allowed_origin) {
+        (Some(origin), Some(allowed)) if origin == allowed => Some(origin.clone()),
+        _ => None,
+    };
+
+    // Handle OPTIONS preflight
+    if method == "OPTIONS" {
+        if let Some(ref origin) = cors_origin {
+            let resp = format!(
+                "HTTP/1.1 204 No Content\r\n\
+                 Access-Control-Allow-Origin: {}\r\n\
+                 Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
+                 Access-Control-Allow-Headers: Authorization, Content-Type\r\n\
+                 Content-Length: 0\r\n\r\n",
+                origin
+            );
+            writer.write_all(resp.as_bytes())?;
+            return Ok(());
+        } else {
+            // Wrong or missing origin: reject with 403 and NO CORS headers
+            write_response(writer, 403, "Forbidden", None, b"CORS origin rejected")?;
+            return Ok(());
+        }
+    }
+
+    // 4. Authenticate: Authorization: Bearer <secret>
+    let expected_auth = format!("Bearer {}", config.auth_secret);
+    let auth_header = headers.get("authorization").cloned().unwrap_or_default();
+    if auth_header != expected_auth {
+        write_response(
+            writer,
+            401,
+            "Unauthorized",
+            cors_origin.as_deref(),
+            b"Missing or invalid bearer authorization",
+        )?;
+        return Ok(());
+    }
+
+    // 5. Route handling
+    if method == "POST" && path == "/open-dialog" {
+        // Rate-limit /open-dialog
+        let mut rate_limit_lock = config.last_open_dialog.lock().unwrap();
+        let now = Instant::now();
+        if let Some(last) = *rate_limit_lock {
+            if now.duration_since(last) < OPEN_DIALOG_RATE_LIMIT {
+                write_response(
+                    writer,
+                    429,
+                    "Too Many Requests",
+                    cors_origin.as_deref(),
+                    b"Rate limit exceeded for open-dialog",
+                )?;
+                return Ok(());
+            }
+        }
+        *rate_limit_lock = Some(now);
+        drop(rate_limit_lock);
+
+        on_open_dialog();
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/state" {
+        // Require Content-Type: application/json
+        let content_type = headers.get("content-type").cloned().unwrap_or_default();
+        if !content_type.starts_with("application/json") {
+            write_response(
+                writer,
+                415,
+                "Unsupported Media Type",
+                cors_origin.as_deref(),
+                b"Content-Type must be application/json",
+            )?;
+            return Ok(());
+        }
+
+        // Parse Content-Length
+        let content_len: usize = match headers.get("content-length").and_then(|v| v.parse().ok()) {
+            Some(l) => l,
+            None => {
+                write_response(
+                    writer,
+                    411,
+                    "Length Required",
+                    cors_origin.as_deref(),
+                    b"Content-Length header required",
+                )?;
+                return Ok(());
+            }
+        };
+
+        if content_len > MAX_BODY_SIZE {
+            write_response(
+                writer,
+                413,
+                "Payload Too Large",
+                cors_origin.as_deref(),
+                b"Payload exceeds 64 KB limit",
+            )?;
+            return Ok(());
+        }
+
+        // Read remaining body from header_buf and stream
+        let body_start = header_pos + 4;
+        let mut body = Vec::with_capacity(content_len);
+        if header_buf.len() > body_start {
+            let available = &header_buf[body_start..];
+            let to_take = available.len().min(content_len);
+            body.extend_from_slice(&available[..to_take]);
+        }
+
+        while body.len() < content_len {
+            let remaining = content_len - body.len();
+            let mut chunk = vec![0u8; remaining.min(4096)];
+            let n = reader.read(&mut chunk)?;
+            if n == 0 {
+                break;
+            }
+            body.extend_from_slice(&chunk[..n]);
+        }
+
+        if body.len() != content_len {
+            write_response(
+                writer,
+                400,
+                "Bad Request",
+                cors_origin.as_deref(),
+                b"Incomplete request body",
+            )?;
+            return Ok(());
+        }
+
+        // Parse JSON and apply updates to state.json
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
+            let mut persistent = state::load_state();
+            if let Some(sc) = val.get("scene_id").and_then(|v| v.as_str()) {
+                persistent.last_scene_id = Some(sc.to_string());
+            }
+            if let Some(idx) = val.get("sample_index").and_then(|v| v.as_i64()) {
+                persistent.last_sample_index = Some(idx);
+            }
+            if let Some(ts) = val.get("timestamp_us").and_then(|v| v.as_i64()) {
+                persistent.last_timestamp_us = Some(ts);
+            } else if let Some(ts) = val.get("timestamp_ns").and_then(|v| v.as_i64()) {
+                persistent.last_timestamp_us = Some(ts / 1000);
+            }
+            if let Some(vp) = val.get("viewpoint").and_then(|v| v.as_str()) {
+                persistent.last_viewpoint = Some(vp.to_string());
+            }
+            if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
+                persistent.last_theme = Some(th.to_string());
+            }
+            if let Some(reopen) = val.get("reopen_last_session").and_then(|v| v.as_bool()) {
+                persistent.reopen_last_session = reopen;
+            }
+            if let Some(vis) = val.get("agent_visibility") {
+                if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
+                    persistent.agent_visibility = Some(map);
+                }
+            }
+            if let Some(layers) = val.get("layer_toggles") {
+                if let Ok(lt) = serde_json::from_value::<LayerToggles>(layers.clone()) {
+                    persistent.layer_toggles = Some(lt);
+                }
+            }
+            if let Some(cam) = val.get("selected_camera").and_then(|v| v.as_str()) {
+                persistent.selected_camera = Some(cam.to_string());
+            }
+            if let Some(split) = val.get("split_view").and_then(|v| v.as_bool()) {
+                persistent.split_view = Some(split);
+            }
+            if let Some(panels) = val.get("panel_collapse") {
+                if let Ok(pcs) = serde_json::from_value::<PanelCollapseState>(panels.clone()) {
+                    persistent.panel_collapse = Some(pcs);
+                }
+            }
+            if let Some(win) = val.get("window_state") {
+                if let Ok(ws) = serde_json::from_value::<WindowState>(win.clone()) {
+                    persistent.window_state = Some(ws);
+                }
+            }
+
+            let _ = state::save_state(&persistent);
+        }
+
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+        return Ok(());
+    }
+
+    if method == "GET" && path == "/state" {
+        let persistent = state::load_state();
+        let payload = serde_json::to_vec(&persistent).unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
+    write_response(writer, 404, "Not Found", cors_origin.as_deref(), b"Not Found")?;
+    Ok(())
+}
+
+fn write_response<W: Write>(
+    writer: &mut W,
+    code: u16,
+    reason: &str,
+    cors_origin: Option<&str>,
+    body: &[u8],
+) -> Result<(), std::io::Error> {
+    let mut resp = format!("HTTP/1.1 {} {}\r\n", code, reason);
+    if let Some(origin) = cors_origin {
+        resp.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", origin));
+        resp.push_str("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
+        resp.push_str("Access-Control-Allow-Headers: Authorization, Content-Type\r\n");
+    }
+    resp.push_str("Content-Type: text/plain\r\n");
+    resp.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+    writer.write_all(resp.as_bytes())?;
+    writer.write_all(body)?;
+    Ok(())
+}
+
+fn write_json_response<W: Write>(
+    writer: &mut W,
+    code: u16,
+    reason: &str,
+    cors_origin: Option<&str>,
+    body: &[u8],
+) -> Result<(), std::io::Error> {
+    let mut resp = format!("HTTP/1.1 {} {}\r\n", code, reason);
+    if let Some(origin) = cors_origin {
+        resp.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", origin));
+        resp.push_str("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
+        resp.push_str("Access-Control-Allow-Headers: Authorization, Content-Type\r\n");
+    }
+    resp.push_str("Content-Type: application/json\r\n");
+    resp.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+    writer.write_all(resp.as_bytes())?;
+    writer.write_all(body)?;
+    Ok(())
+}
+
+fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack.windows(needle.len()).position(|window| window == needle)
+}
+
+/// Spawns the loopback controller listener thread on port 127.0.0.1:0.
+pub fn spawn_controller<F: Fn() + Send + Sync + 'static>(
+    config: ControllerConfig,
+    on_open_dialog: F,
+) -> Result<(u16, std::thread::JoinHandle<()>), String> {
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .map_err(|e| format!("Failed to bind loopback controller: {}", e))?;
+    let port = listener
+        .local_addr()
+        .map_err(|e| e.to_string())?
+        .port();
+
+    let mut cfg = config;
+    cfg.ctrl_port = port;
+    let on_dialog = Arc::new(on_open_dialog);
+
+    let handle = std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            if let Ok(s) = stream {
+                let _ = s.set_read_timeout(Some(Duration::from_millis(1500)));
+                let mut reader = s.try_clone().unwrap_or_else(|_| s.try_clone().unwrap());
+                let mut writer = s;
+                let cb = on_dialog.clone();
+                let _ = handle_client(&mut reader, &mut writer, &cfg, &move || cb());
+            }
+        }
+    });
+
+    Ok((port, handle))
+}
+
+#[cfg(test)]
+pub mod tests {
+    use super::*;
+    use std::io::Cursor;
+
+    fn make_test_config() -> ControllerConfig {
+        ControllerConfig::new(
+            51234,
+            "secret-token-test-123".into(),
+            Some("http://127.0.0.1:8000".into()),
+        )
+    }
+
+    #[test]
+    fn test_missing_or_invalid_token_returns_401() {
+        let config = make_test_config();
+        let req = b"GET /state HTTP/1.1\r\nHost: 127.0.0.1:51234\r\nOrigin: http://127.0.0.1:8000\r\n\r\n";
+        let mut reader = Cursor::new(req.to_vec());
+        let mut writer = Vec::new();
+
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+
+        assert!(resp.starts_with("HTTP/1.1 401 Unauthorized"), "Expected 401, got: {}", resp);
+        assert!(resp.contains("Access-Control-Allow-Origin: http://127.0.0.1:8000"));
+    }
+
+    #[test]
+    fn test_wrong_origin_omits_cors_headers() {
+        let config = make_test_config();
+        let req = b"OPTIONS /state HTTP/1.1\r\nHost: 127.0.0.1:51234\r\nOrigin: http://evil.com\r\n\r\n";
+        let mut reader = Cursor::new(req.to_vec());
+        let mut writer = Vec::new();
+
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+
+        assert!(resp.starts_with("HTTP/1.1 403 Forbidden"), "Expected 403, got: {}", resp);
+        assert!(!resp.contains("Access-Control-Allow-Origin"), "Expected NO CORS headers, got: {}", resp);
+    }
+
+    #[test]
+    fn test_wrong_host_returns_400_dns_rebinding() {
+        let config = make_test_config();
+        // Attack attempt via DNS rebinding (Host header evil.com or rebind.local)
+        let req = b"POST /state HTTP/1.1\r\nHost: evil.attacker.com\r\nAuthorization: Bearer secret-token-test-123\r\n\r\n";
+        let mut reader = Cursor::new(req.to_vec());
+        let mut writer = Vec::new();
+
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(!resp.contains("Access-Control-Allow-Origin"));
+    }
+
+    struct ChunkedReader {
+        chunks: Vec<Vec<u8>>,
+        chunk_idx: usize,
+    }
+
+    impl Read for ChunkedReader {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            if self.chunk_idx >= self.chunks.len() {
+                return Ok(0);
+            }
+            let chunk = &self.chunks[self.chunk_idx];
+            let to_copy = chunk.len().min(buf.len());
+            buf[..to_copy].copy_from_slice(&chunk[..to_copy]);
+            self.chunk_idx += 1;
+            Ok(to_copy)
+        }
+    }
+
+    #[test]
+    fn test_body_split_across_packets_saved() {
+        let config = make_test_config();
+        let payload = r#"{"scene_id":"synth_001","sample_index":3,"timestamp_us":300000}"#;
+        let header = format!(
+            "POST /state HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n",
+            payload.len()
+        );
+
+        // Split header and body across 3 simulated TCP packet chunks
+        let p1 = header.as_bytes().to_vec();
+        let p2 = payload.as_bytes()[..20].to_vec();
+        let p3 = payload.as_bytes()[20..].to_vec();
+
+        let mut reader = ChunkedReader {
+            chunks: vec![p1, p2, p3],
+            chunk_idx: 0,
+        };
+        let mut writer = Vec::new();
+
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("Access-Control-Allow-Origin: http://127.0.0.1:8000"));
+
+        let loaded = state::load_state();
+        assert_eq!(loaded.last_scene_id, Some("synth_001".into()));
+        assert_eq!(loaded.last_sample_index, Some(3));
+        assert_eq!(loaded.last_timestamp_us, Some(300000));
+    }
+
+    #[test]
+    fn test_rate_limit_open_dialog() {
+        let config = make_test_config();
+        let req = b"POST /open-dialog HTTP/1.1\r\n\
+                    Host: 127.0.0.1:51234\r\n\
+                    Origin: http://127.0.0.1:8000\r\n\
+                    Authorization: Bearer secret-token-test-123\r\n\
+                    Content-Length: 0\r\n\r\n";
+
+        let mut r1 = Cursor::new(req.to_vec());
+        let mut w1 = Vec::new();
+        handle_client(&mut r1, &mut w1, &config, &|| {}).unwrap();
+        let resp1 = String::from_utf8(w1).unwrap();
+        assert!(resp1.starts_with("HTTP/1.1 200 OK"));
+
+        // Immediate subsequent request must be rate-limited (429)
+        let mut r2 = Cursor::new(req.to_vec());
+        let mut w2 = Vec::new();
+        handle_client(&mut r2, &mut w2, &config, &|| {}).unwrap();
+        let resp2 = String::from_utf8(w2).unwrap();
+        assert!(resp2.starts_with("HTTP/1.1 429 Too Many Requests"), "Expected 429, got: {}", resp2);
+    }
+
+    #[test]
+    fn test_payload_too_large_rejected() {
+        let config = make_test_config();
+        let req = format!(
+            "POST /state HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n",
+            MAX_BODY_SIZE + 100
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+
+        assert!(resp.starts_with("HTTP/1.1 413 Payload Too Large"), "Expected 413, got: {}", resp);
+    }
+}

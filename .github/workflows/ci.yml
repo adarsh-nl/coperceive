@@ -204,18 +204,48 @@ jobs:
               echo "::error title=SmokeTestError::$line"
             done
           fi
+      - name: Run Real-App macOS UI E2E Test
+        run: bash scripts/desktop/e2e_mac.sh 2>&1 | tee /tmp/e2e_mac.log
+      - name: Report E2E Failure
+        if: failure()
+        run: |
+          if [ -f /tmp/e2e_mac.log ]; then
+            echo "### E2E Test Log" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/e2e_mac.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 25 /tmp/e2e_mac.log | while IFS= read -r line; do
+              echo "::error title=E2ETestError::$line"
+            done
+          fi
+      - name: Locate and Measure Single Built DMG
+        run: |
+          DMG_FILE=$(find src-tauri/target -iname "*.dmg" -type f 2>/dev/null | head -n 1)
+          if [ -z "${DMG_FILE}" ]; then
+            DMG_FILE=$(find . -iname "*.dmg" -type f 2>/dev/null | head -n 1)
+          fi
+          if [ -z "${DMG_FILE}" ] || [ ! -f "${DMG_FILE}" ]; then
+            echo "Error: Could not locate built .dmg file!" >&2
+            exit 1
+          fi
+          DMG_ABS="$(cd "$(dirname "${DMG_FILE}")" && pwd)/$(basename "${DMG_FILE}")"
+          DMG_BYTES=$(stat -f %z "${DMG_ABS}" 2>/dev/null || wc -c < "${DMG_ABS}")
+          DMG_HUMAN=$(ls -lh "${DMG_ABS}" | awk '{print $5}')
+          echo "DMG_PATH=${DMG_ABS}" >> $GITHUB_ENV
+          echo "DMG_BYTES=${DMG_BYTES}" >> $GITHUB_ENV
+          echo "DMG_HUMAN=${DMG_HUMAN}" >> $GITHUB_ENV
+          echo "Located single DMG at: ${DMG_ABS} (${DMG_HUMAN}, ${DMG_BYTES} bytes)"
+          echo "### Desktop DMG Artifact" >> $GITHUB_STEP_SUMMARY
+          echo "- **File**: \`$(basename "${DMG_ABS}")\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Size**: ${DMG_HUMAN} (${DMG_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         with:
           name: coperceive-desktop-macos-arm64
-          path: |
-            src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/dmg/*.dmg
-            web/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            web/src-tauri/target/release/bundle/dmg/*.dmg
+          path: ${{ env.DMG_PATH }}
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: desktop-e2e-screenshots
-          path: /tmp/e2e-shots/desktop-app-window.png
+          path: /tmp/e2e-shots/*.png
           if-no-files-found: ignore

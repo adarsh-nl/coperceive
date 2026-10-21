@@ -19,6 +19,8 @@ use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
 #[cfg(target_os = "macos")]
+use coperceive_desktop::controller::{self, ControllerConfig};
+#[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{RemoteClient, RemoteSessionManager, RemoteStatusResponse};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::sidecar::SidecarSession;
@@ -26,12 +28,29 @@ use coperceive_desktop::sidecar::SidecarSession;
 use coperceive_desktop::state::{self, AppPersistentState};
 
 #[cfg(target_os = "macos")]
-#[derive(Default)]
 pub struct AppState {
     pub sidecar: Mutex<Option<SidecarSession>>,
     pub remote: Mutex<Option<RemoteSessionManager>>,
     pub ctrl_port: Mutex<Option<u16>>,
+    pub ctrl_secret: Mutex<Option<String>>,
+    pub controller_config: Mutex<Option<ControllerConfig>>,
     pub current_root: Mutex<Option<String>>,
+    pub startup_instant: Instant,
+}
+
+#[cfg(target_os = "macos")]
+impl Default for AppState {
+    fn default() -> Self {
+        Self {
+            sidecar: Mutex::new(None),
+            remote: Mutex::new(None),
+            ctrl_port: Mutex::new(None),
+            ctrl_secret: Mutex::new(None),
+            controller_config: Mutex::new(None),
+            current_root: Mutex::new(None),
+            startup_instant: Instant::now(),
+        }
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -107,6 +126,7 @@ fn open_viewer_window(
     token: &str,
     data_root: &str,
     ctrl_port: u16,
+    state: &AppState,
 ) -> Result<(), String> {
     use tauri::Manager;
 
@@ -119,14 +139,14 @@ fn open_viewer_window(
         .parse()
         .map_err(|e| format!("Failed to parse viewer URL '{}': {}", viewer_url_str, e))?;
 
+    let ctrl_secret = state
+        .ctrl_secret
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .unwrap_or_default();
     let persistent = state::load_state();
-    let initial_state_json = serde_json::to_string(&serde_json::json!({
-        "last_scene_id": persistent.last_scene_id,
-        "last_sample_index": persistent.last_sample_index,
-        "last_timestamp_ns": persistent.last_timestamp_ns,
-        "last_viewpoint": persistent.last_viewpoint.unwrap_or_else(|| "orbit".into()),
-        "last_theme": persistent.last_theme.unwrap_or_else(|| "dark".into()),
-    })).unwrap_or_else(|_| "{}".into());
+    let initial_state_json = serde_json::to_string(&persistent).unwrap_or_else(|_| "{}".into());
 
     let basename = Path::new(data_root)
         .file_name()
@@ -135,6 +155,7 @@ fn open_viewer_window(
 
     let escaped_origin = origin.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_token = token.replace('\\', "\\\\").replace('"', "\\\"");
+    let escaped_secret = ctrl_secret.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_root = data_root.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_base = basename.replace('\\', "\\\\").replace('"', "\\\"");
 
@@ -144,6 +165,7 @@ fn open_viewer_window(
             try {{
                 window.__COPERCEIVE_DESKTOP__ = true;
                 window.__COPERCEIVE_CTRL_PORT__ = {ctrl_port};
+                window.__COPERCEIVE_CTRL_SECRET__ = "{escaped_secret}";
                 window.__COPERCEIVE_DATA_ROOT__ = "{escaped_root}";
                 window.__COPERCEIVE_DATA_BASENAME__ = "{escaped_base}";
                 window.__COPERCEIVE_INITIAL_STATE__ = {initial_state_json};
@@ -158,18 +180,33 @@ fn open_viewer_window(
         "#
     );
 
-    let _viewer_window = tauri::WebviewWindowBuilder::new(
+    let mut win_builder = tauri::WebviewWindowBuilder::new(
         app,
         "viewer",
         tauri::WebviewUrl::External(parsed_url),
     )
     .title(format!("coperceive — {}", basename))
-    .inner_size(1280.0, 800.0)
     .min_inner_size(900.0, 600.0)
     .resizable(true)
-    .initialization_script(&init_script)
-    .build()
-    .map_err(|e| format!("Failed to create viewer window: {}", e))?;
+    .initialization_script(&init_script);
+
+    if let Some(ref ws) = persistent.window_state {
+        win_builder = win_builder
+            .inner_size(ws.width, ws.height)
+            .position(ws.x, ws.y);
+    } else {
+        win_builder = win_builder.inner_size(1400.0, 900.0);
+    }
+
+    let viewer_window = win_builder
+        .build()
+        .map_err(|e| format!("Failed to create viewer window: {}", e))?;
+
+    if let Some(ref ws) = persistent.window_state {
+        if ws.is_maximized {
+            let _ = viewer_window.maximize();
+        }
+    }
 
     if let Some(main_window) = app.get_webview_window("main") {
         let _ = main_window.hide();
@@ -234,13 +271,19 @@ async fn switch_data_root(
         *lock = Some(new_session);
     }
 
+    if let Ok(lock) = state.controller_config.lock() {
+        if let Some(ref cfg) = *lock {
+            cfg.set_allowed_origin(new_origin.clone());
+        }
+    }
+
     // Update state.json with new root and prepend to recent_roots
     {
         let mut persistent = state::load_state();
         persistent.last_data_root = Some(new_path_str.clone());
         persistent.last_scene_id = None;
         persistent.last_sample_index = None;
-        persistent.last_timestamp_ns = None;
+        persistent.last_timestamp_us = None;
         state::add_recent_root(&mut persistent, &new_path_str);
         let _ = state::save_state(&persistent);
 
@@ -283,6 +326,16 @@ async fn switch_data_root(
 
 #[cfg(target_os = "macos")]
 pub async fn trigger_open_dataset_dialog(app: &tauri::AppHandle, state: &AppState) {
+    if let Ok(mock_file) = std::env::var("COPERCEIVE_MOCK_DIALOG_FILE") {
+        if let Ok(content) = std::fs::read_to_string(&mock_file) {
+            let path_str = content.trim().to_string();
+            let _ = std::fs::remove_file(&mock_file);
+            let path = PathBuf::from(path_str);
+            let _ = switch_data_root(app, state, path).await;
+            return;
+        }
+    }
+
     use tauri_plugin_dialog::DialogExt;
     let folder = app.dialog().file().blocking_pick_folder();
     if let Some(path) = folder.and_then(|fp| fp.into_path().ok()) {
@@ -291,69 +344,119 @@ pub async fn trigger_open_dataset_dialog(app: &tauri::AppHandle, state: &AppStat
 }
 
 #[cfg(target_os = "macos")]
-fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppState>) -> Result<u16, String> {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::thread;
+fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
+    let version = env!("CARGO_PKG_VERSION");
+    let commit = option_env!("GIT_COMMIT").unwrap_or("580691a");
+    let macos_ver = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_else(|| "unknown".into());
 
-    let listener = TcpListener::bind("127.0.0.1:0")
-        .map_err(|e| format!("Failed to bind loopback controller: {}", e))?;
-    let port = listener.local_addr().map_err(|e| e.to_string())?.port();
+    let data_root = state
+        .current_root
+        .lock()
+        .ok()
+        .and_then(|r| r.clone())
+        .or_else(|| state::load_state().last_data_root)
+        .unwrap_or_else(|| "none".into());
 
-    let app = app_handle.clone();
-    let state = app_state.clone();
+    let startup_ms = Instant::now()
+        .duration_since(state.startup_instant)
+        .as_millis();
 
-    thread::spawn(move || {
-        for stream in listener.incoming() {
-            if let Ok(mut s) = stream {
-                let _ = s.set_read_timeout(Some(Duration::from_millis(600)));
-                let mut buf = [0u8; 4096];
-                if let Ok(n) = s.read(&mut buf) {
-                    let req = String::from_utf8_lossy(&buf[..n]);
-                    if req.starts_with("OPTIONS") {
-                        let resp = "HTTP/1.1 204 No Content\r\nAccess-Control-Allow-Origin: *\r\nAccess-Control-Allow-Methods: GET, POST, OPTIONS\r\nAccess-Control-Allow-Headers: *\r\n\r\n";
-                        let _ = s.write_all(resp.as_bytes());
-                    } else if req.starts_with("POST /state") {
-                        if let Some(body_idx) = req.find("\r\n\r\n") {
-                            let body = &req[body_idx + 4..];
-                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(body) {
-                                let mut persistent = state::load_state();
-                                if let Some(sc) = val.get("scene_id").and_then(|v| v.as_str()) {
-                                    persistent.last_scene_id = Some(sc.to_string());
-                                }
-                                if let Some(idx) = val.get("sample_index").and_then(|v| v.as_i64()) {
-                                    persistent.last_sample_index = Some(idx);
-                                }
-                                if let Some(ts) = val.get("timestamp_ns").and_then(|v| v.as_i64()) {
-                                    persistent.last_timestamp_ns = Some(ts);
-                                }
-                                if let Some(vp) = val.get("viewpoint").and_then(|v| v.as_str()) {
-                                    persistent.last_viewpoint = Some(vp.to_string());
-                                }
-                                if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
-                                    persistent.last_theme = Some(th.to_string());
-                                }
-                                let _ = state::save_state(&persistent);
-                            }
-                        }
-                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"status\":\"ok\"}";
-                        let _ = s.write_all(resp.as_bytes());
-                    } else if req.starts_with("POST /open-dialog") {
-                        let handle = app.clone();
-                        let st = state.clone();
-                        tauri::async_runtime::spawn(async move {
-                            trigger_open_dataset_dialog(&handle, &st).await;
-                        });
-                        let resp = "HTTP/1.1 200 OK\r\nAccess-Control-Allow-Origin: *\r\nContent-Type: application/json\r\nContent-Length: 15\r\n\r\n{\"status\":\"ok\"}";
-                        let _ = s.write_all(resp.as_bytes());
-                    } else {
-                        let resp = "HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n";
-                        let _ = s.write_all(resp.as_bytes());
-                    }
+    let log_path = {
+        let lock = state.sidecar.lock().ok();
+        lock.and_then(|s| s.as_ref().map(|sess| sess.log_path.clone()))
+    };
+
+    let mut log_lines = String::new();
+    if let Some(ref path) = log_path {
+        if let Ok(content) = std::fs::read_to_string(path) {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(200);
+            for l in &lines[start..] {
+                let mut line_str = l.to_string();
+                if let Some(idx) = line_str.find("Bearer ") {
+                    line_str.replace_range(idx + 7.., "[REDACTED]");
                 }
+                log_lines.push_str(&line_str);
+                log_lines.push('\n');
             }
         }
-    });
+    }
+
+    let diagnostics = format!(
+        "Coperceive Diagnostics\n\
+         =====================\n\
+         Version: {}\n\
+         Commit: {}\n\
+         macOS: {}\n\
+         Data Root: {}\n\
+         Startup Duration: {} ms\n\
+         Sidecar Log: {}\n\n\
+         Recent Logs (Redacted):\n\
+         {}\n",
+        version,
+        commit,
+        macos_ver,
+        data_root,
+        startup_ms,
+        log_path.map(|p| p.display().to_string()).unwrap_or_else(|| "none".into()),
+        if log_lines.is_empty() { "No logs recorded." } else { &log_lines }
+    );
+
+    let mut copied = false;
+    if let Ok(mut child) = std::process::Command::new("pbcopy")
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    {
+        if let Some(mut stdin) = child.stdin.take() {
+            let _ = std::io::Write::write_all(&mut stdin, diagnostics.as_bytes());
+            copied = true;
+        }
+        let _ = child.wait();
+    }
+
+    if let Some(viewer) = app.get_webview_window("viewer") {
+        let msg = if copied {
+            "Diagnostics copied to clipboard"
+        } else {
+            "Failed to copy diagnostics"
+        };
+        let _ = viewer.eval(&format!(
+            "if (window.__COPERCEIVE_SHOW_TOAST__) window.__COPERCEIVE_SHOW_TOAST__(\"{msg}\", \"info\");"
+        ));
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppState>) -> Result<u16, String> {
+    let secret = coperceive_desktop::token::generate_token();
+    let cfg = ControllerConfig::new(0, secret.clone(), None);
+    let cfg_clone = cfg.clone();
+    let handle = app_handle.clone();
+    let st = app_state.clone();
+
+    let (port, _) = controller::spawn_controller(cfg, move || {
+        let h = handle.clone();
+        let s = st.clone();
+        tauri::async_runtime::spawn(async move {
+            trigger_open_dataset_dialog(&h, &s).await;
+        });
+    })?;
+
+    if let Ok(mut lock) = app_state.ctrl_port.lock() {
+        *lock = Some(port);
+    }
+    if let Ok(mut lock) = app_state.ctrl_secret.lock() {
+        *lock = Some(secret);
+    }
+    if let Ok(mut lock) = app_state.controller_config.lock() {
+        *lock = Some(cfg_clone);
+    }
 
     Ok(port)
 }
@@ -367,9 +470,7 @@ fn build_app_menu(
 
     // App Submenu
     let app_submenu = SubmenuBuilder::new(app, "Coperceive")
-        .about(None)
-        .separator()
-        .item(&MenuItem::with_id(app, "check_updates", "Check for Updates…", false, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "about_coperceive", "About Coperceive", true, None::<&str>)?)
         .separator()
         .item(&MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrControl+,"))?)
         .separator()
@@ -410,15 +511,29 @@ fn build_app_menu(
         .item(&MenuItem::with_id(app, "zoom_out", "Zoom Out", true, Some("CmdOrControl+-"))?)
         .build()?;
 
+    // Playback Submenu
+    let playback_submenu = SubmenuBuilder::new(app, "Playback")
+        .item(&MenuItem::with_id(app, "playback_toggle", "Play / Pause", true, Some("Space"))?)
+        .item(&MenuItem::with_id(app, "playback_step_forward", "Step Forward", true, Some("]"))?)
+        .item(&MenuItem::with_id(app, "playback_step_backward", "Step Backward", true, Some("["))?)
+        .separator()
+        .item(&MenuItem::with_id(app, "playback_speed_05", "0.5x Speed", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "playback_speed_10", "1.0x Speed", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "playback_speed_20", "2.0x Speed", true, None::<&str>)?)
+        .build()?;
+
     // Help Submenu
     let help_submenu = SubmenuBuilder::new(app, "Help")
+        .item(&MenuItem::with_id(app, "help_logs", "Show Logs", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "help_diagnostics", "Copy Diagnostics", true, None::<&str>)?)
+        .separator()
         .item(&MenuItem::with_id(app, "help_docs", "Documentation", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "help_repo", "GitHub Repository", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "help_issue", "Report Issue", true, None::<&str>)?)
         .build()?;
 
     MenuBuilder::new(app)
-        .items(&[&app_submenu, &file_submenu, &view_submenu, &help_submenu])
+        .items(&[&app_submenu, &file_submenu, &view_submenu, &playback_submenu, &help_submenu])
         .build()
 }
 
@@ -447,6 +562,12 @@ async fn start_local_session(
 
     let origin = format!("http://127.0.0.1:{}", session.port);
     let token = session.token.clone();
+
+    if let Ok(lock) = state.controller_config.lock() {
+        if let Some(ref cfg) = *lock {
+            cfg.set_allowed_origin(origin.clone());
+        }
+    }
 
     // Poll until healthy (up to 60 seconds)
     let start_time = Instant::now();
@@ -503,7 +624,7 @@ async fn start_local_session(
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
 
     // Open viewer window at session.origin with initialization_script
-    if let Err(e) = open_viewer_window(app, &origin, &token, &data_root, ctrl_port) {
+    if let Err(e) = open_viewer_window(app, &origin, &token, &data_root, ctrl_port, state) {
         session.preserve_log = true;
         let _ = session.stop();
         return Err(e);
@@ -535,7 +656,20 @@ async fn start_local(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
     data_root: String,
+    start_fresh: Option<bool>,
 ) -> Result<SessionPayload, String> {
+    if start_fresh.unwrap_or(false) {
+        let mut persistent = state::load_state();
+        persistent.last_scene_id = None;
+        persistent.last_sample_index = None;
+        persistent.last_timestamp_us = None;
+        persistent.agent_visibility = None;
+        persistent.layer_toggles = Some(state::LayerToggles::default());
+        persistent.selected_camera = None;
+        persistent.split_view = None;
+        persistent.panel_collapse = Some(state::PanelCollapseState::default());
+        let _ = state::save_state(&persistent);
+    }
     start_local_session(&app, state.inner(), data_root).await
 }
 
@@ -757,10 +891,16 @@ fn main() {
             }
 
             // 3. Auto-connect on launch if data root exists and is valid
-            let auto_root = std::env::var("COPERCEIVE_AUTOCONNECT_ROOT")
-                .or_else(|_| std::env::var("COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT"))
-                .ok()
-                .or_else(|| persistent.last_data_root.clone());
+            let auto_root = if persistent.reopen_last_session {
+                std::env::var("COPERCEIVE_AUTOCONNECT_ROOT")
+                    .or_else(|_| std::env::var("COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT"))
+                    .ok()
+                    .or_else(|| persistent.last_data_root.clone())
+            } else {
+                std::env::var("COPERCEIVE_AUTOCONNECT_ROOT")
+                    .or_else(|_| std::env::var("COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT"))
+                    .ok()
+            };
 
             if let Some(root_str) = auto_root {
                 let root_path = PathBuf::from(&root_str);
@@ -779,11 +919,15 @@ fn main() {
                                             lock.and_then(|s| s.as_ref().map(|sess| sess.log_path.clone()))
                                                 .unwrap_or_default()
                                         };
+                                        let ctrl_port = st.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+                                        let ctrl_secret = st.ctrl_secret.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
                                         let content = format!(
-                                            "{}\n{}\n{}\n",
+                                            "{}\n{}\n{}\n{}\n{}\n",
                                             payload.origin,
                                             payload.token,
-                                            log_path.display()
+                                            log_path.display(),
+                                            ctrl_port,
+                                            ctrl_secret,
                                         );
                                         let _ = std::fs::write(&marker_path, content);
                                     }
@@ -813,6 +957,21 @@ fn main() {
         .on_menu_event(move |app, event| {
             let id = event.id().as_ref();
             match id {
+                "about_coperceive" => {
+                    let version = env!("CARGO_PKG_VERSION");
+                    let commit = option_env!("GIT_COMMIT").unwrap_or("580691a");
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval(&format!(
+                            "if (window.__COPERCEIVE_SHOW_TOAST__) window.__COPERCEIVE_SHOW_TOAST__(\"Coperceive v{} ({})\", \"info\");",
+                            version, commit
+                        ));
+                    }
+                }
+                "settings" => {
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval("const s = document.querySelector('details.settings'); if (s) s.open = !s.open;");
+                    }
+                }
                 "open_dataset" => {
                     let handle = app.clone();
                     let st = state_for_menu.clone();
@@ -858,6 +1017,46 @@ fn main() {
                         let _ = v.eval("if (window.__COPERCEIVE_TOGGLE_THEME__) window.__COPERCEIVE_TOGGLE_THEME__();");
                     }
                 }
+                "playback_toggle" => {
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval("if (window.__COPERCEIVE_PLAYBACK__) window.__COPERCEIVE_PLAYBACK__('toggle');");
+                    }
+                }
+                "playback_step_forward" => {
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval("if (window.__COPERCEIVE_PLAYBACK__) window.__COPERCEIVE_PLAYBACK__('step_forward');");
+                    }
+                }
+                "playback_step_backward" => {
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval("if (window.__COPERCEIVE_PLAYBACK__) window.__COPERCEIVE_PLAYBACK__('step_backward');");
+                    }
+                }
+                "playback_speed_05" => {
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval("if (window.__COPERCEIVE_PLAYBACK__) window.__COPERCEIVE_PLAYBACK__('speed', 0.5);");
+                    }
+                }
+                "playback_speed_10" => {
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval("if (window.__COPERCEIVE_PLAYBACK__) window.__COPERCEIVE_PLAYBACK__('speed', 1.0);");
+                    }
+                }
+                "playback_speed_20" => {
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval("if (window.__COPERCEIVE_PLAYBACK__) window.__COPERCEIVE_PLAYBACK__('speed', 2.0);");
+                    }
+                }
+                "help_logs" => {
+                    if let Some(home) = std::env::var_os("HOME") {
+                        let log_dir = PathBuf::from(home).join("Library").join("Logs").join("Coperceive");
+                        let _ = std::fs::create_dir_all(&log_dir);
+                        let _ = std::process::Command::new("open").arg(&log_dir).spawn();
+                    }
+                }
+                "help_diagnostics" => {
+                    copy_diagnostics_to_clipboard(app, &state_for_menu);
+                }
                 "help_docs" => {
                     let _ = std::process::Command::new("open")
                         .arg("https://github.com/adarsh-nl/coperceive#readme")
@@ -888,10 +1087,50 @@ fn main() {
                         });
                     }
                 }
+                tauri::WindowEvent::Resized(size) => {
+                    if window.label() == "viewer" {
+                        let mut persistent = state::load_state();
+                        let ws = persistent.window_state.get_or_insert_with(|| state::WindowState {
+                            width: size.width as f64,
+                            height: size.height as f64,
+                            x: 0.0,
+                            y: 0.0,
+                            is_maximized: false,
+                        });
+                        ws.width = size.width as f64;
+                        ws.height = size.height as f64;
+                        let _ = state::save_state(&persistent);
+                    }
+                }
+                tauri::WindowEvent::Moved(pos) => {
+                    if window.label() == "viewer" {
+                        let mut persistent = state::load_state();
+                        let ws = persistent.window_state.get_or_insert_with(|| state::WindowState {
+                            width: 1400.0,
+                            height: 900.0,
+                            x: pos.x as f64,
+                            y: pos.y as f64,
+                            is_maximized: false,
+                        });
+                        ws.x = pos.x as f64;
+                        ws.y = pos.y as f64;
+                        let _ = state::save_state(&persistent);
+                    }
+                }
                 tauri::WindowEvent::Destroyed => {
                     use tauri::Manager;
                     let label = window.label().to_string();
-                    if label == "viewer" || label == "main" {
+                    if label == "viewer" {
+                        if let Ok(mut lock) = state_for_window.sidecar.lock() {
+                            if let Some(mut s) = lock.take() {
+                                let _ = s.stop();
+                            }
+                        }
+                        if let Some(main) = window.app_handle().get_webview_window("main") {
+                            let _ = main.show();
+                            let _ = main.set_focus();
+                        }
+                    } else if label == "main" {
                         if let Ok(mut lock) = state_for_window.sidecar.lock() {
                             if let Some(mut s) = lock.take() {
                                 let _ = s.stop();
@@ -901,9 +1140,6 @@ fn main() {
                             if let Some(mut r) = lock.take() {
                                 let _ = r.disconnect();
                             }
-                        }
-                        if label == "viewer" {
-                            window.app_handle().exit(0);
                         }
                     }
                 }

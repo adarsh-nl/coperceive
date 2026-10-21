@@ -42,7 +42,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     }
   };
 
-  const handleConnectLocal = async (targetRoot?: string) => {
+  const handleConnectLocal = async (targetRoot?: string, startFresh = false) => {
     const rootToUse = targetRoot || dataRoot;
     if (!rootToUse) {
       setError("Please select a dataset folder first.");
@@ -62,6 +62,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       const session = await target.connect({
         type: "local",
         dataRoot: rootToUse,
+        startFresh,
       });
       clearInterval(timer);
       setStatus("Connected! Initializing 3D viewer...");
@@ -148,24 +149,45 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => handleConnectLocal()}
-              disabled={busy || !dataRoot}
-              style={{
-                width: "100%",
-                padding: "0.6rem 1rem",
-                fontSize: "0.9rem",
-                fontWeight: 500,
-                borderRadius: "6px",
-                cursor: busy || !dataRoot ? "not-allowed" : "pointer",
-                border: "none",
-                backgroundColor: busy || !dataRoot ? "#444" : "#2563eb",
-                color: "#fff",
-              }}
-            >
-              {busy ? "Connecting..." : "Open Local Viewer"}
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                onClick={() => handleConnectLocal()}
+                disabled={busy || !dataRoot}
+                style={{
+                  flex: 1,
+                  padding: "0.6rem 1rem",
+                  fontSize: "0.9rem",
+                  fontWeight: 500,
+                  borderRadius: "6px",
+                  cursor: busy || !dataRoot ? "not-allowed" : "pointer",
+                  border: "none",
+                  backgroundColor: busy || !dataRoot ? "#444" : "#2563eb",
+                  color: "#fff",
+                }}
+              >
+                {busy ? "Connecting..." : "Open Local Viewer"}
+              </button>
+              <button
+                type="button"
+                onClick={() => handleConnectLocal(undefined, true)}
+                disabled={busy || !dataRoot}
+                title="Connect without restoring saved session state"
+                style={{
+                  padding: "0.6rem 0.85rem",
+                  fontSize: "0.85rem",
+                  fontWeight: 500,
+                  borderRadius: "6px",
+                  cursor: busy || !dataRoot ? "not-allowed" : "pointer",
+                  border: "1px solid #444",
+                  backgroundColor: "#222",
+                  color: "#ccc",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                Start fresh
+              </button>
+            </div>
 
             {recentRoots.length > 0 && (
               <div style={{ marginTop: "1rem", borderTop: "1px solid #333", paddingTop: "0.75rem" }}>

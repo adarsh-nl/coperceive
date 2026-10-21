@@ -780,19 +780,36 @@ declare global {
   interface Window {
     __COPERCEIVE_DESKTOP__?: boolean;
     __COPERCEIVE_CTRL_PORT__?: number;
+    __COPERCEIVE_CTRL_SECRET__?: string;
     __COPERCEIVE_DATA_ROOT__?: string;
     __COPERCEIVE_DATA_BASENAME__?: string;
     __COPERCEIVE_INITIAL_STATE__?: {
       last_scene_id?: string;
       last_sample_index?: number;
+      last_timestamp_us?: number;
       last_timestamp_ns?: number;
       last_viewpoint?: string;
       last_theme?: string;
+      reopen_last_session?: boolean;
+      agent_visibility?: Record<string, boolean>;
+      layer_toggles?: {
+        points?: boolean;
+        boxes?: boolean;
+        frustums?: boolean;
+        map?: boolean;
+        axes?: boolean;
+      };
+      selected_camera?: string;
+      split_view?: boolean;
+      panel_collapse?: {
+        camera_strip_open?: boolean;
+      };
     };
     __COPERCEIVE_VIEWER_STATE__?: unknown;
     __COPERCEIVE_SHOW_TOAST__?: (text: string, type?: "error" | "info") => void;
     __COPERCEIVE_SET_VIEWPOINT__?: (vp: string) => void;
     __COPERCEIVE_TOGGLE_THEME__?: () => void;
+    __COPERCEIVE_PLAYBACK__?: (action: string, value?: number) => void;
     __COPERCEIVE_DATASET_CHANGED__?: (
       origin: string,
       token: string,
@@ -869,8 +886,14 @@ export default function Viewer({
 
   const triggerOpenFolder = () => {
     if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
       fetch(`http://127.0.0.1:${window.__COPERCEIVE_CTRL_PORT__}/open-dialog`, {
         method: "POST",
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          "Content-Type": "application/json",
+          "Content-Length": "0",
+        },
       }).catch(() => {});
     }
   };
@@ -1609,10 +1632,14 @@ export default function Viewer({
         return;
       }
       let initialFrame = 0;
+      let initialHidden: Record<string, boolean> = {};
       if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__) {
         const init = window.__COPERCEIVE_INITIAL_STATE__;
         if (typeof init.last_sample_index === "number" && init.last_sample_index < body.times_us.length) {
           initialFrame = init.last_sample_index;
+        } else if (typeof init.last_timestamp_us === "number") {
+          const found = body.times_us.findIndex((t) => t >= init.last_timestamp_us!);
+          if (found >= 0) initialFrame = found;
         } else if (typeof init.last_timestamp_ns === "number") {
           const targetUs = Math.round(init.last_timestamp_ns / 1000);
           const found = body.times_us.findIndex((t) => t >= targetUs);
@@ -1628,6 +1655,34 @@ export default function Viewer({
           onTheme?.(init.last_theme);
           setAppearance((curr) => ({ ...curr, theme: init.last_theme as "dark" | "light" }));
         }
+        if (init.agent_visibility) {
+          initialHidden = init.agent_visibility;
+        }
+        if (init.layer_toggles) {
+          setAppearance((curr) => ({
+            ...curr,
+            points: init.layer_toggles?.points ?? curr.points,
+            boxes: init.layer_toggles?.boxes ?? curr.boxes,
+            frustums: init.layer_toggles?.frustums ?? curr.frustums,
+            map: init.layer_toggles?.map ?? curr.map,
+            axes: init.layer_toggles?.axes ?? curr.axes,
+          }));
+        }
+        if (init.panel_collapse) {
+          setAppearance((curr) => ({
+            ...curr,
+            stripOpen: init.panel_collapse?.camera_strip_open ?? curr.stripOpen,
+          }));
+        }
+        if (init.selected_camera) {
+          setCameraId(init.selected_camera);
+        }
+        if (init.split_view !== undefined) {
+          setAppearance((curr) => ({
+            ...curr,
+            splitCamera: init.split_view ? (init.selected_camera ?? curr.splitCamera) : null,
+          }));
+        }
         window.__COPERCEIVE_INITIAL_STATE__ = undefined;
       }
       setSummary(body);
@@ -1635,7 +1690,7 @@ export default function Viewer({
       setExportStart(1);
       setExportEnd(Math.min(10, body.times_us.length));
       setExportSource("view");
-      setHidden({});
+      setHidden(initialHidden);
       setPick(null);
       setEvalPick(null);
       setPlaying(false);
@@ -1659,24 +1714,62 @@ export default function Viewer({
   }, [sceneId, token]);
 
   useEffect(() => {
+    window.__COPERCEIVE_PLAYBACK__ = (action: string, value?: number) => {
+      if (action === "toggle") {
+        setPlaying((p) => !p);
+      } else if (action === "step_forward") {
+        setPlaying(false);
+        setFrameIndex((curr) => (summary ? Math.min(curr + 1, summary.times_us.length - 1) : curr));
+      } else if (action === "step_backward") {
+        setPlaying(false);
+        setFrameIndex((curr) => Math.max(0, curr - 1));
+      } else if (action === "speed" && typeof value === "number") {
+        if (value === 0.25 || value === 0.5 || value === 1 || value === 2 || value === 4) {
+          setSpeed(value);
+        }
+      }
+    };
+    return () => {
+      window.__COPERCEIVE_PLAYBACK__ = undefined;
+    };
+  }, [summary]);
+
+  useEffect(() => {
     if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return;
     const timer = setTimeout(() => {
       const port = window.__COPERCEIVE_CTRL_PORT__;
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
       const timeUs = summary?.times_us?.[frameIndex];
       fetch(`http://127.0.0.1:${port}/state`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${secret}`,
+        },
         body: JSON.stringify({
           scene_id: sceneId || undefined,
           sample_index: frameIndex,
-          timestamp_ns: typeof timeUs === "number" ? timeUs * 1000 : undefined,
+          timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
           viewpoint,
           theme: appearance.theme,
+          agent_visibility: hidden,
+          layer_toggles: {
+            points: appearance.points,
+            boxes: appearance.boxes,
+            frustums: appearance.frustums,
+            map: appearance.map,
+            axes: appearance.axes,
+          },
+          selected_camera: appearance.splitCamera || cameraId || undefined,
+          split_view: Boolean(appearance.splitCamera),
+          panel_collapse: {
+            camera_strip_open: appearance.stripOpen,
+          },
         }),
       }).catch(() => {});
     }, 500);
     return () => clearTimeout(timer);
-  }, [sceneId, frameIndex, viewpoint, appearance.theme, summary]);
+  }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {

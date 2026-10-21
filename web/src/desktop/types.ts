@@ -49,6 +49,7 @@ export interface LocalConnectOptions {
   readonly type: "local";
   readonly dataRoot: string;
   readonly pythonBinary?: string;
+  readonly startFresh?: boolean;
 }
 
 export interface SshConnectOptions {

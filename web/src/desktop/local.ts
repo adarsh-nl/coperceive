@@ -92,6 +92,7 @@ export class LocalExecutionTarget implements ExecutionTarget {
       const payload = await invoke<SessionPayload>("start_local", {
         dataRoot: options.dataRoot,
         pythonBinary: options.pythonBinary,
+        startFresh: options.startFresh ?? false,
       });
       session = {
         origin: payload.origin,

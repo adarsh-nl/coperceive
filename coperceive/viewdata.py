@@ -51,6 +51,8 @@ def scene_directories(root: Path) -> list[Path]:
     """Scene directories directly under ``root``, in name order."""
     if not root.is_dir():
         raise FileNotFoundError(root)
+    if (root / "manifest.json").is_file():
+        return [root]
     found: list[Path] = []
     for child in sorted(root.iterdir(), key=lambda path: path.name):
         if child.name.startswith(".") or not child.is_dir():

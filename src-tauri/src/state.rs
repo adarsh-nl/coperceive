@@ -5,6 +5,7 @@
 //! and recent dataset roots in `~/Library/Application Support/nl.adarsh.coperceive/state.json`
 //! with strict permissions (directory 0700, file 0600).
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
@@ -17,8 +18,71 @@ use std::os::unix::fs::PermissionsExt;
 /// Maximum number of recent dataset roots remembered.
 pub const MAX_RECENT_ROOTS: usize = 5;
 
-/// Persistent desktop application state.
+fn default_true() -> bool {
+    true
+}
+
+/// Window dimensions and positioning on screen.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct WindowState {
+    pub width: f64,
+    pub height: f64,
+    pub x: f64,
+    pub y: f64,
+    #[serde(default)]
+    pub is_maximized: bool,
+}
+
+/// Toggles for sensor, prediction, map, and reference layers.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayerToggles {
+    #[serde(default = "default_true")]
+    pub points: bool,
+    #[serde(default = "default_true")]
+    pub boxes: bool,
+    #[serde(default = "default_true")]
+    pub frustums: bool,
+    #[serde(default = "default_true")]
+    pub map: bool,
+    #[serde(default = "default_true")]
+    pub axes: bool,
+}
+
+impl Default for LayerToggles {
+    fn default() -> Self {
+        Self {
+            points: true,
+            boxes: true,
+            frustums: true,
+            map: true,
+            axes: true,
+        }
+    }
+}
+
+/// Side panel and camera strip collapse state.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PanelCollapseState {
+    #[serde(default)]
+    pub left_collapsed: bool,
+    #[serde(default)]
+    pub right_collapsed: bool,
+    #[serde(default = "default_true")]
+    pub camera_strip_open: bool,
+}
+
+impl Default for PanelCollapseState {
+    fn default() -> Self {
+        Self {
+            left_collapsed: false,
+            right_collapsed: false,
+            camera_strip_open: true,
+        }
+    }
+}
+
+/// Persistent desktop application state.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_data_root: Option<String>,
@@ -29,14 +93,47 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_sample_index: Option<i64>,
 
+    /// Timestamp of current frame in microseconds (µs).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_timestamp_ns: Option<i64>,
+    pub last_timestamp_us: Option<i64>,
+
+    /// Legacy field for backwards compatibility with earlier state versions.
+    #[serde(default, skip_serializing_if = "Option::is_none", rename = "last_timestamp_ns")]
+    pub _legacy_timestamp_ns: Option<i64>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_viewpoint: Option<String>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_theme: Option<String>,
+
+    /// Reopen last session on launch (default true).
+    #[serde(default = "default_true")]
+    pub reopen_last_session: bool,
+
+    /// Agent visibility mapping (agent_id -> is_visible).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_visibility: Option<HashMap<String, bool>>,
+
+    /// Layer visibility toggles.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layer_toggles: Option<LayerToggles>,
+
+    /// Selected camera sensor ID (e.g. "vehicle1/cam_front").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub selected_camera: Option<String>,
+
+    /// Split view enabled state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub split_view: Option<bool>,
+
+    /// Panel collapse state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel_collapse: Option<PanelCollapseState>,
+
+    /// Window geometry and state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_state: Option<WindowState>,
 
     #[serde(default)]
     pub recent_roots: Vec<String>,
@@ -48,9 +145,17 @@ impl Default for AppPersistentState {
             last_data_root: None,
             last_scene_id: None,
             last_sample_index: None,
-            last_timestamp_ns: None,
+            last_timestamp_us: None,
+            _legacy_timestamp_ns: None,
             last_viewpoint: Some("orbit".into()),
             last_theme: Some("dark".into()),
+            reopen_last_session: true,
+            agent_visibility: None,
+            layer_toggles: Some(LayerToggles::default()),
+            selected_camera: None,
+            split_view: None,
+            panel_collapse: Some(PanelCollapseState::default()),
+            window_state: None,
             recent_roots: Vec::new(),
         }
     }
@@ -153,7 +258,12 @@ pub fn load_state_from_path(path: &Path) -> AppPersistentState {
     };
 
     match serde_json::from_str::<AppPersistentState>(&contents) {
-        Ok(s) => s,
+        Ok(mut s) => {
+            if s.last_timestamp_us.is_none() && s._legacy_timestamp_ns.is_some() {
+                s.last_timestamp_us = s._legacy_timestamp_ns.map(|ns| ns / 1000);
+            }
+            s
+        }
         Err(e) => {
             eprintln!(
                 "[state] Warning: corrupt state file {}: {}. Falling back to default state.",
@@ -223,19 +333,63 @@ pub mod tests {
 
     #[test]
     fn test_state_serialize_deserialize() {
+        let mut visibility = HashMap::new();
+        visibility.insert("vehicle1".into(), true);
+        visibility.insert("drone1".into(), false);
+
         let state = AppPersistentState {
             last_data_root: Some("/path/to/data".into()),
             last_scene_id: Some("Town03-000".into()),
             last_sample_index: Some(42),
-            last_timestamp_ns: Some(4200000000),
+            last_timestamp_us: Some(4200000),
+            _legacy_timestamp_ns: None,
             last_viewpoint: Some("chase".into()),
             last_theme: Some("light".into()),
+            reopen_last_session: true,
+            agent_visibility: Some(visibility),
+            layer_toggles: Some(LayerToggles {
+                points: true,
+                boxes: false,
+                frustums: true,
+                map: true,
+                axes: false,
+            }),
+            selected_camera: Some("vehicle1/cam_front".into()),
+            split_view: Some(true),
+            panel_collapse: Some(PanelCollapseState {
+                left_collapsed: true,
+                right_collapsed: false,
+                camera_strip_open: false,
+            }),
+            window_state: Some(WindowState {
+                width: 1400.0,
+                height: 900.0,
+                x: 100.0,
+                y: 50.0,
+                is_maximized: false,
+            }),
             recent_roots: vec!["/path/to/data".into(), "/path/to/prev".into()],
         };
 
         let json = serde_json::to_string(&state).expect("serialize");
         let deserialized: AppPersistentState = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(state, deserialized);
+    }
+
+    #[test]
+    fn test_legacy_timestamp_ns_migration() {
+        let legacy_json = r#"{
+            "last_data_root": "/path/to/data",
+            "last_timestamp_ns": 5500000000
+        }"#;
+        let tmp = std::env::temp_dir().join(format!("coperceive-test-state-legacy-{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+        fs::write(&state_path, legacy_json).expect("write legacy");
+
+        let loaded = load_state_from_path(&state_path);
+        assert_eq!(loaded.last_timestamp_us, Some(5500000));
+        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]

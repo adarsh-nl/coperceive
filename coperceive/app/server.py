@@ -464,6 +464,15 @@ class _SceneCache:
 def _scene_dir(root: Path, scene_id: str) -> Path:
     if scene_id == "" or "/" in scene_id or "\\" in scene_id or ".." in scene_id:
         raise HTTPException(status_code=400, detail="bad scene id")
+    if (root / "manifest.json").is_file():
+        if scene_id in (root.name, ".", ""):
+            return root
+        try:
+            loaded = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and loaded.get("scene_id") == scene_id:
+                return root
+        except Exception:
+            pass
     try:
         # A NUL byte makes resolve() raise ValueError; an over-long name makes
         # the stat raise OSError. Both are a bad id, not a server error.
