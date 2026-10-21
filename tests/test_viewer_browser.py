@@ -908,4 +908,3 @@ def test_connect_backdrop_animation_and_reduced_motion(session: _Session) -> Non
         """)
         violations = results.get("violations", [])
         assert len(violations) == 0, f"Connect backdrop axe violations: {violations}"
-
