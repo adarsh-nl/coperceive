@@ -22,6 +22,8 @@ pub const MAX_BODY_SIZE: usize = 65536;
 /// Rate limit window for `/open-dialog` (1 second).
 pub const OPEN_DIALOG_RATE_LIMIT: Duration = Duration::from_millis(1000);
 
+pub type EvalSender = std::sync::mpsc::Sender<serde_json::Value>;
+
 /// Configuration for the loopback controller.
 #[derive(Clone)]
 pub struct ControllerConfig {
@@ -29,6 +31,9 @@ pub struct ControllerConfig {
     pub auth_secret: String,
     pub allowed_origin: Arc<Mutex<Option<String>>>,
     pub last_open_dialog: Arc<Mutex<Option<Instant>>>,
+    pub eval_callbacks: Arc<Mutex<HashMap<u64, EvalSender>>>,
+    pub eval_counter: Arc<Mutex<u64>>,
+    pub eval_dispatcher: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 impl ControllerConfig {
@@ -38,6 +43,9 @@ impl ControllerConfig {
             auth_secret,
             allowed_origin: Arc::new(Mutex::new(initial_origin)),
             last_open_dialog: Arc::new(Mutex::new(None)),
+            eval_callbacks: Arc::new(Mutex::new(HashMap::new())),
+            eval_counter: Arc::new(Mutex::new(0)),
+            eval_dispatcher: None,
         }
     }
 
@@ -46,6 +54,83 @@ impl ControllerConfig {
             *lock = Some(origin);
         }
     }
+}
+
+fn read_request_body<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    headers: &HashMap<String, String>,
+    header_buf: &[u8],
+    header_pos: usize,
+    cors_origin: Option<&str>,
+) -> Result<Option<Vec<u8>>, std::io::Error> {
+    let content_type = headers.get("content-type").cloned().unwrap_or_default();
+    if !content_type.starts_with("application/json") {
+        write_response(
+            writer,
+            415,
+            "Unsupported Media Type",
+            cors_origin,
+            b"Content-Type must be application/json",
+        )?;
+        return Ok(None);
+    }
+
+    let content_len: usize = match headers.get("content-length").and_then(|v| v.parse().ok()) {
+        Some(l) => l,
+        None => {
+            write_response(
+                writer,
+                411,
+                "Length Required",
+                cors_origin,
+                b"Content-Length header required",
+            )?;
+            return Ok(None);
+        }
+    };
+
+    if content_len > MAX_BODY_SIZE {
+        write_response(
+            writer,
+            413,
+            "Payload Too Large",
+            cors_origin,
+            b"Payload exceeds 64 KB limit",
+        )?;
+        return Ok(None);
+    }
+
+    let body_start = header_pos + 4;
+    let mut body = Vec::with_capacity(content_len);
+    if header_buf.len() > body_start {
+        let available = &header_buf[body_start..];
+        let to_take = available.len().min(content_len);
+        body.extend_from_slice(&available[..to_take]);
+    }
+
+    while body.len() < content_len {
+        let remaining = content_len - body.len();
+        let mut chunk = vec![0u8; remaining.min(4096)];
+        let n = reader.read(&mut chunk)?;
+        if n == 0 {
+            break;
+        }
+        body.extend_from_slice(&chunk[..n]);
+    }
+
+    if body.len() != content_len {
+        write_response(
+            writer,
+            400,
+            "Bad Request",
+            cors_origin,
+            b"Incomplete request body",
+        )?;
+        return Ok(None);
+    }
+
+    Ok(Some(body))
 }
 
 /// Dispatches an incoming HTTP connection over any read/write stream.
@@ -181,75 +266,92 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         return Ok(());
     }
 
-    if method == "POST" && path == "/state" {
-        // Require Content-Type: application/json
-        let content_type = headers.get("content-type").cloned().unwrap_or_default();
-        if !content_type.starts_with("application/json") {
-            write_response(
-                writer,
-                415,
-                "Unsupported Media Type",
-                cors_origin.as_deref(),
-                b"Content-Type must be application/json",
-            )?;
-            return Ok(());
+    if method == "POST" && path == "/eval-result" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
+            if let Some(req_id) = val.get("req_id").and_then(|v| v.as_u64()) {
+                if let Some(tx) = config.eval_callbacks.lock().unwrap().remove(&req_id) {
+                    let _ = tx.send(val);
+                }
+            }
         }
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+        return Ok(());
+    }
 
-        // Parse Content-Length
-        let content_len: usize = match headers.get("content-length").and_then(|v| v.parse().ok()) {
-            Some(l) => l,
-            None => {
-                write_response(
-                    writer,
-                    411,
-                    "Length Required",
-                    cors_origin.as_deref(),
-                    b"Content-Length header required",
-                )?;
+    if method == "POST" && path == "/eval" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let val: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => {
+                write_response(writer, 400, "Bad Request", cors_origin.as_deref(), b"Invalid JSON")?;
                 return Ok(());
             }
         };
+        let script = val.get("script").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(ref dispatcher) = config.eval_dispatcher {
+            let req_id = {
+                let mut c = config.eval_counter.lock().unwrap();
+                *c += 1;
+                *c
+            };
+            let (tx, rx) = std::sync::mpsc::channel();
+            config.eval_callbacks.lock().unwrap().insert(req_id, tx);
 
-        if content_len > MAX_BODY_SIZE {
-            write_response(
-                writer,
-                413,
-                "Payload Too Large",
-                cors_origin.as_deref(),
-                b"Payload exceeds 64 KB limit",
-            )?;
-            return Ok(());
-        }
+            let escaped_secret = config.auth_secret.replace('\\', "\\\\").replace('"', "\\\"");
+            let wrapper = format!(
+                r#"(async function() {{
+                    let res = null;
+                    let err = null;
+                    try {{
+                        res = await (async function() {{ return {}; }})();
+                    }} catch(e) {{
+                        err = String(e);
+                    }}
+                    try {{
+                        fetch("http://127.0.0.1:{}/eval-result", {{
+                            method: "POST",
+                            headers: {{
+                                "Authorization": "Bearer {}",
+                                "Content-Type": "application/json"
+                            }},
+                            body: JSON.stringify({{ req_id: {}, result: res, error: err }})
+                        }}).catch(function(){{}});
+                    }} catch(_) {{}}
+                }})();"#,
+                script, config.ctrl_port, escaped_secret, req_id
+            );
 
-        // Read remaining body from header_buf and stream
-        let body_start = header_pos + 4;
-        let mut body = Vec::with_capacity(content_len);
-        if header_buf.len() > body_start {
-            let available = &header_buf[body_start..];
-            let to_take = available.len().min(content_len);
-            body.extend_from_slice(&available[..to_take]);
-        }
+            dispatcher(wrapper);
 
-        while body.len() < content_len {
-            let remaining = content_len - body.len();
-            let mut chunk = vec![0u8; remaining.min(4096)];
-            let n = reader.read(&mut chunk)?;
-            if n == 0 {
-                break;
+            match rx.recv_timeout(Duration::from_secs(10)) {
+                Ok(result_val) => {
+                    let payload = serde_json::to_vec(&result_val).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+                }
+                Err(_) => {
+                    config.eval_callbacks.lock().unwrap().remove(&req_id);
+                    write_json_response(writer, 504, "Gateway Timeout", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"Evaluation timed out\"}")?;
+                }
             }
-            body.extend_from_slice(&chunk[..n]);
-        }
-
-        if body.len() != content_len {
-            write_response(
-                writer,
-                400,
-                "Bad Request",
-                cors_origin.as_deref(),
-                b"Incomplete request body",
-            )?;
+            return Ok(());
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No evaluation dispatcher registered\"}")?;
             return Ok(());
         }
+    }
+
+    if method == "POST" && path == "/state" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
 
         // Parse JSON and apply updates to state.json
         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
@@ -547,5 +649,57 @@ pub mod tests {
         let resp = String::from_utf8(writer).unwrap();
 
         assert!(resp.starts_with("HTTP/1.1 413 Payload Too Large"), "Expected 413, got: {}", resp);
+    }
+
+    #[test]
+    fn test_eval_and_eval_result_flow() {
+        let mut config = make_test_config();
+        let config_for_dispatcher = config.clone();
+
+        config.eval_dispatcher = Some(Arc::new(move |script: String| {
+            if let Some(pos) = script.find("req_id: ") {
+                let rest = &script[pos + 8..];
+                let end = rest.find(',').unwrap_or(rest.len());
+                let req_id: u64 = rest[..end].trim().parse().unwrap();
+
+                let cfg = config_for_dispatcher.clone();
+                std::thread::spawn(move || {
+                    let payload = format!("{{\"req_id\":{},\"result\":42,\"error\":null}}", req_id);
+                    let req = format!(
+                        "POST /eval-result HTTP/1.1\r\n\
+                         Host: 127.0.0.1:51234\r\n\
+                         Origin: http://127.0.0.1:8000\r\n\
+                         Authorization: Bearer secret-token-test-123\r\n\
+                         Content-Type: application/json\r\n\
+                         Content-Length: {}\r\n\r\n{}",
+                        payload.len(),
+                        payload
+                    );
+                    let mut reader = Cursor::new(req.into_bytes());
+                    let mut writer = Vec::new();
+                    let _ = handle_client(&mut reader, &mut writer, &cfg, &|| {});
+                });
+            }
+        }));
+
+        let eval_payload = r#"{"script":"21 * 2"}"#;
+        let req = format!(
+            "POST /eval HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            eval_payload.len(),
+            eval_payload
+        );
+
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("\"result\":42"));
     }
 }

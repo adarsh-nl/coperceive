@@ -33,8 +33,12 @@ pub struct WindowState {
     pub is_maximized: bool,
 }
 
+fn default_frustum_opacity() -> f64 {
+    0.85
+}
+
 /// Toggles for sensor, prediction, map, and reference layers.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LayerToggles {
     #[serde(default = "default_true")]
     pub points: bool,
@@ -46,6 +50,12 @@ pub struct LayerToggles {
     pub map: bool,
     #[serde(default = "default_true")]
     pub axes: bool,
+    #[serde(default)]
+    pub frustum_images: bool,
+    #[serde(default = "default_frustum_opacity")]
+    pub frustum_opacity: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frustum_image_cameras: Option<Vec<String>>,
 }
 
 impl Default for LayerToggles {
@@ -56,6 +66,9 @@ impl Default for LayerToggles {
             frustums: true,
             map: true,
             axes: true,
+            frustum_images: false,
+            frustum_opacity: 0.85,
+            frustum_image_cameras: None,
         }
     }
 }
@@ -231,7 +244,10 @@ pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
         }
     }
 
-    Err("Not a valid coperceive dataset: missing manifest.json".into())
+    Err(format!(
+        "No coperceive scenes in {}. A scene folder contains manifest.json.",
+        path.display()
+    ))
 }
 
 /// Loads persistent application state from the default state path.
@@ -353,6 +369,9 @@ pub mod tests {
                 frustums: true,
                 map: true,
                 axes: false,
+                frustum_images: false,
+                frustum_opacity: 0.75,
+                frustum_image_cameras: Some(vec!["veh_01/cam_front".into()]),
             }),
             selected_camera: Some("vehicle1/cam_front".into()),
             split_view: Some(true),
@@ -467,7 +486,8 @@ pub mod tests {
         let empty_dir = tmp.join("empty");
         let _ = fs::create_dir_all(&empty_dir);
         let err = validate_dataset_root(&empty_dir).unwrap_err();
-        assert!(err.contains("missing manifest.json"));
+        assert!(err.contains("No coperceive scenes in"));
+        assert!(err.contains("A scene folder contains manifest.json."));
 
         // Single scene directory with manifest.json: valid
         let single_scene = tmp.join("single_scene");
@@ -483,5 +503,29 @@ pub mod tests {
         assert!(validate_dataset_root(&multi_root).is_ok());
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_frustum_images_layer_toggle_persistence() {
+        let json = r#"{
+            "layer_toggles": {
+                "points": true,
+                "boxes": true,
+                "frustums": true,
+                "map": true,
+                "axes": true,
+                "frustum_images": false,
+                "frustum_opacity": 0.65,
+                "frustum_image_cameras": ["veh_01/cam_front", "uav_01/cam_down"]
+            }
+        }"#;
+        let parsed: AppPersistentState = serde_json::from_str(json).expect("parse layer toggles");
+        let toggles = parsed.layer_toggles.expect("layer toggles present");
+        assert_eq!(toggles.frustum_images, false);
+        assert_eq!(toggles.frustum_opacity, 0.65);
+        assert_eq!(
+            toggles.frustum_image_cameras,
+            Some(vec!["veh_01/cam_front".into(), "uav_01/cam_down".into()])
+        );
     }
 }

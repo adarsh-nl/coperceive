@@ -158,12 +158,15 @@ fn open_viewer_window(
     let escaped_secret = ctrl_secret.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_root = data_root.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_base = basename.replace('\\', "\\\\").replace('"', "\\\"");
+    let test_env = std::env::var("COPERCEIVE_TEST_ENV").is_ok()
+        || std::env::var("COPERCEIVE_TEST_MARKER_FILE").is_ok();
 
     let init_script = format!(
         r#"
         (function() {{
             try {{
                 window.__COPERCEIVE_DESKTOP__ = true;
+                window.__COPERCEIVE_TEST_ENV__ = {test_env};
                 window.__COPERCEIVE_CTRL_PORT__ = {ctrl_port};
                 window.__COPERCEIVE_CTRL_SECRET__ = "{escaped_secret}";
                 window.__COPERCEIVE_DATA_ROOT__ = "{escaped_root}";
@@ -228,7 +231,7 @@ async fn switch_data_root(
         if let Some(viewer) = app.get_webview_window("viewer") {
             let escaped = msg.replace('\\', "\\\\").replace('"', "\\\"");
             let _ = viewer.eval(&format!(
-                "if (window.__COPERCEIVE_SHOW_TOAST__) window.__COPERCEIVE_SHOW_TOAST__(\"{escaped}\", \"error\");"
+                "if (window.__COPERCEIVE_DATASET_ERROR__) window.__COPERCEIVE_DATASET_ERROR__(\"{escaped}\"); else if (window.__COPERCEIVE_SHOW_TOAST__) window.__COPERCEIVE_SHOW_TOAST__(\"{escaped}\", \"error\");"
             ));
         }
         return Err(msg);
@@ -435,7 +438,17 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
 #[cfg(target_os = "macos")]
 fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppState>) -> Result<u16, String> {
     let secret = coperceive_desktop::token::generate_secure_token().map_err(|e| e.to_string())?;
-    let cfg = ControllerConfig::new(0, secret.clone(), None);
+    let mut cfg = ControllerConfig::new(0, secret.clone(), None);
+    let handle_eval = app_handle.clone();
+    cfg.eval_dispatcher = Some(Arc::new(move |script: String| {
+        use tauri::Manager;
+        if let Some(w) = handle_eval
+            .get_webview_window("viewer")
+            .or_else(|| handle_eval.get_webview_window("main"))
+        {
+            let _ = w.eval(&script);
+        }
+    }));
     let cfg_clone = cfg.clone();
     let handle = app_handle.clone();
     let st = app_state.clone();
@@ -544,8 +557,8 @@ async fn start_local_session(
     data_root: String,
 ) -> Result<SessionPayload, String> {
     let root_path = PathBuf::from(&data_root);
-    if !root_path.is_dir() {
-        return Err(format!("Data root directory does not exist: {}", data_root));
+    if let Err(msg) = state::validate_dataset_root(&root_path) {
+        return Err(msg);
     }
 
     // Stop existing session if one was running
@@ -959,13 +972,19 @@ fn main() {
             match id {
                 "about_coperceive" => {
                     let version = env!("CARGO_PKG_VERSION");
-                    let commit = option_env!("GIT_COMMIT").unwrap_or("580691a");
-                    if let Some(v) = app.get_webview_window("viewer") {
-                        let _ = v.eval(&format!(
-                            "if (window.__COPERCEIVE_SHOW_TOAST__) window.__COPERCEIVE_SHOW_TOAST__(\"Coperceive v{} ({})\", \"info\");",
-                            version, commit
-                        ));
-                    }
+                    let commit = option_env!("GIT_DESCRIBE")
+                        .or(option_env!("GIT_COMMIT"))
+                        .unwrap_or("580691a");
+                    let build_date = option_env!("BUILD_DATE").unwrap_or("2026-10-21");
+                    let about_text = format!(
+                        "Coperceive v{}\n\nCommit: {}\nBuild Date: {}\nLicence: Apache-2.0\n\nCooperative perception evaluation and dataset workbench.",
+                        version, commit, build_date
+                    );
+                    use tauri_plugin_dialog::DialogExt;
+                    app.dialog()
+                        .message(&about_text)
+                        .title("About Coperceive")
+                        .show(|_| {});
                 }
                 "settings" => {
                     if let Some(v) = app.get_webview_window("viewer") {

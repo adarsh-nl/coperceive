@@ -1,0 +1,544 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300..800&amp;family=Geist+Mono:wght@400..600&amp;display=swap" rel="stylesheet">
+<script src="viewer-engine.js"></script>
+<style>
+body { margin: 0; background: #e6e6de; font-family: "Geist", "Segoe UI", sans-serif; color: #1c1c1c; -webkit-font-smoothing: antialiased; }
+a { color: #de3b21; text-decoration: none; } a:hover { text-decoration: underline; }
+button { font: inherit; color: inherit; cursor: pointer; }
+@keyframes riseIn { from { opacity: 0; filter: blur(8px); transform: translateY(12px); } to { opacity: 1; filter: blur(0); transform: none; } }
+@keyframes pulseDot { 0%,100% { opacity: 1; } 50% { opacity: .35; } }
+</style>
+</helmet>
+<section id="turn1" style="padding: 72px 64px 24px; display: flex; flex-direction: column; gap: 28px;">
+  <div style="display: flex; flex-direction: column; gap: 10px; max-width: 900px;">
+    <span style="font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: #6b6b6b; font-weight: 650;">coperceive · Viewer + evaluation · Turn 1</span>
+    <h1 style="margin: 0; font-size: 48px; line-height: 1; letter-spacing: -0.045em; font-weight: 560;">Three ways to make cooperative perception legible.</h1>
+    <p style="margin: 0; font-size: 16px; color: #6b6b6b; line-height: 1.5; text-wrap: pretty;"><a href="#1a">1a</a> Stage tells the scene as a story. <a href="#1b">1b</a> Ledger is an analyst's desk where every object has a history. <a href="#1c">1c</a> Two Perspectives puts what each agent sees side by side. All share one live synthetic Griffin scene — press play, scrub, toggle themes. Current UI is <a href="#0">0</a>, below.</p>
+  </div>
+  <div style="display: flex; flex-wrap: wrap; gap: 64px; align-items: flex-start;">
+    <div id="1a" style="display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: flex; align-items: baseline; gap: 12px;"><span style="font: 600 12px 'Geist Mono', monospace; padding: 3px 8px; border-radius: 6px; background: #1c1c1c; color: #f4f4ed;">1a</span><span style="font-size: 20px; font-weight: 560; letter-spacing: -0.03em;">Stage</span><span style="font-size: 13px; color: #6b6b6b;">Cinematic, narrated. For reviewers, demos and first-time viewers.</span></div>
+      <div style="width: 1440px; height: 900px; border-radius: 14px; overflow: hidden; box-shadow: 0 30px 80px rgba(28,28,28,.22);">
+      <div style="{{ themeA }}">
+      <div style="position: relative; width: 1440px; height: 900px; background: var(--vp, #0b0b0a); color: var(--text, #f4f4ed); overflow: hidden; transition: background 500ms, color 500ms;">
+        <canvas ref="{{ cvA }}" style="position: absolute; inset: 0; width: 100%; height: 100%; display: block;"></canvas>
+        <div style="position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse 70% 60% at 62% 45%, transparent 40%, var(--vp, #0b0b0a) 100%); opacity: .85;"></div>
+        <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 620px; pointer-events: none; background: linear-gradient(90deg, var(--vp, #0b0b0a) 0%, transparent 100%); opacity: .9;"></div>
+        <header style="position: absolute; left: 40px; right: 40px; top: 28px; display: flex; align-items: center; justify-content: space-between;">
+          <div style="display: flex; align-items: center; gap: 14px;">
+            <span style="display: inline-flex; align-items: center; gap: 8px; font-weight: 620; letter-spacing: -0.03em; font-size: 15px;"><span style="width: 10px; height: 10px; border-radius: 99px; background: currentColor;"></span>coperceive</span>
+            <span style="font-size: 13px; color: var(--muted);">Town03-000 · det-v1</span>
+          </div>
+          <div style="position: relative; display: flex; width: 300px; padding: 4px; border-radius: 999px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(16px);">
+            <span style="{{ modePill }}"></span>
+            <button onClick="{{ single }}" style="{{ modeS }}">Vehicle alone</button>
+            <button onClick="{{ together }}" style="{{ modeF }}">Together</button>
+          </div>
+          <div style="display: flex; gap: 8px; align-items: center;">
+            <button onClick="{{ toggleThemeA }}" style="height: 34px; padding: 0 14px; border-radius: 999px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(16px); font-size: 13px; font-weight: 560;">{{ themeLabel.a }}</button>
+            <span style="height: 34px; padding: 0 14px; display: inline-flex; align-items: center; border-radius: 999px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(16px); font-size: 13px; font-weight: 560;">Explore freely</span>
+          </div>
+        </header>
+        <div style="position: absolute; left: 56px; top: 220px; width: 520px;">{{ caption }}</div>
+        <div style="position: absolute; right: 40px; top: 120px; width: 280px; display: flex; flex-direction: column; gap: 10px;">
+          <div style="padding: 20px; border-radius: 18px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(18px); display: flex; flex-direction: column; gap: 10px;">
+            <span style="font-size: 12px; color: var(--muted);">Found right now · {{ A.who }}</span>
+            <div style="display: flex; align-items: baseline; gap: 8px;"><span style="font-size: 64px; line-height: .9; font-weight: 520; letter-spacing: -0.05em; font-variant-numeric: tabular-nums;">{{ A.seen }}</span><span style="font-size: 22px; color: var(--muted); letter-spacing: -0.03em;">of {{ A.gt }} objects</span></div>
+            <div style="height: 4px; border-radius: 99px; background: var(--line); overflow: hidden;"><div style="{{ A.bar }}"></div></div>
+          </div>
+          <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+            <div style="padding: 16px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(18px);"><div style="font-size: 12px; color: var(--muted);">Recovered by drone</div><div style="font-size: 30px; font-weight: 520; letter-spacing: -0.04em; color: #1FA3A3; font-variant-numeric: tabular-nums;">{{ A.rec }}</div></div>
+            <div style="padding: 16px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(18px);"><div style="font-size: 12px; color: var(--muted);">Still missed</div><div style="font-size: 30px; font-weight: 520; letter-spacing: -0.04em; color: #8E6CEF; font-variant-numeric: tabular-nums;">{{ A.miss }}</div></div>
+            <div style="padding: 16px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(18px);"><div style="font-size: 12px; color: var(--muted);">Scene recall</div><div style="font-size: 30px; font-weight: 520; letter-spacing: -0.04em; font-variant-numeric: tabular-nums;">{{ A.recallScene }}</div></div>
+            <div style="padding: 16px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(18px);"><div style="font-size: 12px; color: var(--muted);">Precision</div><div style="font-size: 30px; font-weight: 520; letter-spacing: -0.04em; font-variant-numeric: tabular-nums;">{{ A.prec }}</div></div>
+          </div>
+          <div style="padding: 14px 16px; border-radius: 16px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(18px); display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; font-size: 12px;">
+            <span style="display: flex; align-items: center; gap: 8px;"><i style="width: 16px; height: 2px; background: #1FA3A3;"></i>Found</span>
+            <span style="display: flex; align-items: center; gap: 8px;"><i style="width: 16px; border-top: 2px dashed #8E6CEF;"></i>Missed</span>
+            <span style="display: flex; align-items: center; gap: 8px;"><i style="width: 16px; border-top: 2px dotted #E0A431;"></i>Not really there</span>
+            <span style="display: flex; align-items: center; gap: 8px;"><i style="width: 8px; height: 8px; border-radius: 99px; background: #3C8DFF;"></i>Drone</span>
+          </div>
+        </div>
+        <footer style="position: absolute; left: 40px; right: 40px; bottom: 32px; display: flex; align-items: flex-end; gap: 20px;">
+          <button onClick="{{ togglePlay }}" style="flex: none; width: 52px; height: 52px; border-radius: 999px; border: 1px solid var(--glassLine); background: var(--glass); backdrop-filter: blur(16px); display: grid; place-items: center;"><sc-if value="{{ playing }}" hint-placeholder-val="{{ true }}"><svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M4 3h3v10H4zM9 3h3v10H9z"></path></svg></sc-if><sc-if value="{{ paused }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 16 16" width="16" height="16"><path fill="currentColor" d="M5 3.2v9.6L13 8z"></path></svg></sc-if></button>
+          <div style="flex: 1; display: flex; flex-direction: column; gap: 10px; padding: 14px 18px; border-radius: 18px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(16px);">
+            <div style="display: flex; gap: 10px;">
+              <sc-for list="{{ chList }}" as="c" hint-placeholder-count="4">
+                <button onClick="{{ c.onClick }}" style="{{ c.wrap }}"><span style="{{ c.label }}">{{ c.name }}</span><span style="position: relative; display: block; width: 100%; height: 3px; border-radius: 99px; background: var(--line);"><span style="{{ c.fill }}"></span></span></button>
+              </sc-for>
+            </div>
+            <div onPointerDown="{{ scrubDown }}" onPointerMove="{{ scrubMove }}" style="position: relative; height: 40px; cursor: pointer; touch-action: none;"><svg viewBox="0 0 100 40" preserveAspectRatio="none" style="width: 100%; height: 40px; display: block;"><path d="{{ P.gap40 }}" fill="rgba(31,163,163,.25)"></path><path d="{{ P.recV40 }}" fill="none" stroke="var(--muted)" stroke-width="1.2" vector-effect="non-scaling-stroke"></path><path d="{{ P.recF40 }}" fill="none" stroke="#1FA3A3" stroke-width="1.6" vector-effect="non-scaling-stroke"></path></svg><span style="{{ playheadC }}"></span></div>
+            <div style="display: flex; justify-content: space-between; font-size: 12px; color: var(--muted);"><span style="font-family: 'Geist Mono', monospace;">{{ clock }}</span><span>Recall — grey: vehicle alone · teal: together · shaded: what the drone adds</span><span style="font-family: 'Geist Mono', monospace;">19.9 s</span></div>
+          </div>
+        </footer>
+      </div>
+      </div>
+      </div>
+    </div>
+    <div id="1b" style="display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: flex; align-items: baseline; gap: 12px;"><span style="font: 600 12px 'Geist Mono', monospace; padding: 3px 8px; border-radius: 6px; background: #1c1c1c; color: #f4f4ed;">1b</span><span style="font-size: 20px; font-weight: 560; letter-spacing: -0.03em;">Ledger</span><span style="font-size: 13px; color: #6b6b6b;">Every object has a history. For ML researchers and dataset engineers.</span></div>
+      <div style="width: 1440px; height: 900px; border-radius: 14px; overflow: hidden; box-shadow: 0 30px 80px rgba(28,28,28,.18);">
+      <div style="{{ themeB }}">
+      <div style="width: 1440px; height: 900px; display: flex; flex-direction: column; background: var(--bg, #f5f4ee); color: var(--text, #191918); font-size: 13px; transition: background 500ms, color 500ms;">
+        <header style="height: 56px; flex: none; display: flex; align-items: center; gap: 18px; padding: 0 24px; border-bottom: 1px solid var(--line);">
+          <span style="display: inline-flex; align-items: center; gap: 8px; font-weight: 620; letter-spacing: -0.03em; font-size: 15px;"><span style="width: 10px; height: 10px; border-radius: 99px; background: currentColor;"></span>coperceive</span>
+          <span style="color: var(--muted);">Town03-000</span>
+          <span style="display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border-radius: 999px; background: var(--sunken); font-size: 12px;"><b style="font-weight: 600;">det-v1</b><span style="color: var(--muted);">vehicle · single vs fused</span></span>
+          <div style="margin-left: auto; display: flex; align-items: center; gap: 10px;">
+            <button onClick="{{ togglePlay }}" style="width: 32px; height: 32px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); display: grid; place-items: center;"><sc-if value="{{ playing }}" hint-placeholder-val="{{ true }}"><svg viewBox="0 0 16 16" width="13" height="13"><path fill="currentColor" d="M4 3h3v10H4zM9 3h3v10H9z"></path></svg></sc-if><sc-if value="{{ paused }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 16 16" width="13" height="13"><path fill="currentColor" d="M5 3.2v9.6L13 8z"></path></svg></sc-if></button>
+            <span style="font-family: 'Geist Mono', monospace; font-variant-numeric: tabular-nums; min-width: 120px;">{{ clock }} <span style="color: var(--muted);">· {{ sampleNo }}/200</span></span>
+            <button onClick="{{ toggleThemeB }}" style="height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); font-size: 12px; font-weight: 560;">{{ themeLabel.b }}</button>
+          </div>
+        </header>
+        <div style="flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0,1fr) 392px; gap: 16px; padding: 16px 24px 20px;">
+          <div style="display: flex; flex-direction: column; gap: 16px; min-height: 0;">
+            <div style="position: relative; flex: 1; min-height: 0; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); overflow: hidden;">
+              <canvas ref="{{ cvB }}" style="position: absolute; inset: 0; width: 100%; height: 100%; display: block;"></canvas>
+              <div style="position: absolute; left: 16px; top: 14px; display: flex; flex-direction: column; gap: 2px;"><span style="font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">Bird's-eye · north up</span><span style="font-size: 12px; color: var(--muted);">Rings show each agent's range. Violet dotted lines are blocked sight lines.</span></div>
+              <div style="position: absolute; right: 14px; top: 14px; display: flex; gap: 12px; padding: 6px 12px; border-radius: 999px; background: var(--glass); border: 1px solid var(--glassLine); backdrop-filter: blur(12px); font-size: 12px;">
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><i style="width: 8px; height: 8px; border-radius: 99px; background: #F58A1F;"></i>Vehicle</span>
+                <span style="display: inline-flex; align-items: center; gap: 6px;"><i style="width: 8px; height: 8px; border-radius: 99px; background: #3C8DFF;"></i>Drone</span>
+              </div>
+            </div>
+            <div style="flex: none; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 10px;">
+              <div style="display: flex; align-items: center; gap: 18px;">
+                <span style="font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">Object ledger</span>
+                <span style="font-size: 12px; color: var(--muted);">Who saw each object, sample by sample. Click a row.</span>
+                <div style="margin-left: auto; display: flex; gap: 14px; font-size: 12px;">
+                  <span style="display: inline-flex; align-items: center; gap: 6px;"><i style="width: 12px; height: 6px; border-radius: 2px; background: #1FA3A3;"></i>Both</span>
+                  <span style="display: inline-flex; align-items: center; gap: 6px;"><i style="width: 12px; height: 6px; border-radius: 2px; background: #3C8DFF;"></i>Only drone</span>
+                  <span style="display: inline-flex; align-items: center; gap: 6px;"><i style="width: 12px; height: 6px; border-radius: 2px; background: #F58A1F;"></i>Only vehicle</span>
+                  <span style="display: inline-flex; align-items: center; gap: 6px;"><i style="width: 12px; height: 6px; border-radius: 2px; background: #8E6CEF;"></i>Nobody</span>
+                </div>
+              </div>
+              <div style="display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 8px;">
+                <div style="display: flex; flex-direction: column;">
+                  <sc-for list="{{ tracks }}" as="tr" hint-placeholder-count="13">
+                    <button onClick="{{ tr.onClick }}" style="{{ tr.style }}"><i style="{{ tr.dot }}"></i><span>{{ tr.name }}</span></button>
+                  </sc-for>
+                </div>
+                <div onPointerDown="{{ scrubDown }}" onPointerMove="{{ scrubMove }}" style="position: relative; height: 338px; cursor: pointer; touch-action: none;"><canvas ref="{{ cvRib }}" style="width: 100%; height: 100%; display: block;"></canvas></div>
+              </div>
+              <div style="display: grid; grid-template-columns: 170px minmax(0,1fr); gap: 8px; font-size: 11px; color: var(--muted); font-family: 'Geist Mono', monospace;"><span></span><div style="display: flex; justify-content: space-between;"><span>0.0 s</span><span>5.0</span><span>10.0</span><span>15.0</span><span>19.9 s</span></div></div>
+            </div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 12px; min-height: 0;">
+            <div style="border-radius: 16px; background: var(--panel); border: 1px solid var(--line); padding: 20px; display: flex; flex-direction: column; gap: 12px;">
+              <span style="font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">At {{ clock }}</span>
+              <p style="margin: 0; font-size: 24px; line-height: 1.2; letter-spacing: -0.03em; font-weight: 520; text-wrap: pretty;">The vehicle finds <span style="color: #F58A1F;">{{ vSees }} of {{ gtNow }}</span> objects. With the drone, <span style="color: #1FA3A3;">{{ fSees }} of {{ gtNow }}</span>.</p>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding-top: 4px;">
+                <div style="display: flex; flex-direction: column; gap: 2px;"><span style="font-size: 12px; color: var(--muted);">Recall, vehicle</span><span style="font-size: 22px; font-weight: 560; letter-spacing: -0.03em; font-variant-numeric: tabular-nums;">{{ recNowV }}</span></div>
+                <div style="display: flex; flex-direction: column; gap: 2px;"><span style="font-size: 12px; color: var(--muted);">Recall, together</span><span style="font-size: 22px; font-weight: 560; letter-spacing: -0.03em; color: #1FA3A3; font-variant-numeric: tabular-nums;">{{ recNowF }}</span></div>
+              </div>
+            </div>
+            <div style="border-radius: 16px; background: var(--panel); border: 1px solid var(--line); padding: 20px; display: flex; flex-direction: column; gap: 10px;">
+              <span style="font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">Selected object</span>
+              <span style="font-size: 20px; font-weight: 560; letter-spacing: -0.03em;">{{ story.title }}</span>
+              <p style="margin: 0; font-size: 14px; line-height: 1.5; color: var(--muted); text-wrap: pretty;">{{ story.body }}</p>
+              <p style="margin: 0; font-size: 14px; line-height: 1.5; text-wrap: pretty;">{{ nowWord }}</p>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; padding-top: 6px; border-top: 1px solid var(--line);">
+                <div style="display: flex; flex-direction: column; gap: 2px; padding-top: 8px;"><span style="font-size: 12px; color: var(--muted);">Seen by vehicle</span><span style="font-size: 18px; font-weight: 560; color: #F58A1F; font-variant-numeric: tabular-nums;">{{ story.v }}</span></div>
+                <div style="display: flex; flex-direction: column; gap: 2px; padding-top: 8px;"><span style="font-size: 12px; color: var(--muted);">Seen by drone</span><span style="font-size: 18px; font-weight: 560; color: #3C8DFF; font-variant-numeric: tabular-nums;">{{ story.d }}</span></div>
+              </div>
+            </div>
+            <div style="flex: 1; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); padding: 20px; display: flex; flex-direction: column; gap: 12px;">
+              <span style="font-size: 12px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">Whole scene · det-v1</span>
+              <div style="display: grid; grid-template-columns: 1fr 64px 64px 64px; gap: 10px 8px; align-items: baseline; font-variant-numeric: tabular-nums;">
+                <span style="font-size: 12px; color: var(--muted);"></span><span style="font-size: 12px; color: var(--muted); text-align: right;">Vehicle</span><span style="font-size: 12px; color: var(--muted); text-align: right;">Together</span><span style="font-size: 12px; color: var(--muted); text-align: right;">Change</span>
+                <span>mAP@0.5</span><span style="text-align: right; font-family: 'Geist Mono', monospace;">{{ M.map5V }}</span><span style="text-align: right; font-family: 'Geist Mono', monospace; font-weight: 600;">{{ M.map5F }}</span><span style="text-align: right; color: #1d6b52; font-size: 12px;">▲</span>
+                <span>mAP@0.7</span><span style="text-align: right; font-family: 'Geist Mono', monospace;">{{ M.map7V }}</span><span style="text-align: right; font-family: 'Geist Mono', monospace; font-weight: 600;">{{ M.map7F }}</span><span style="text-align: right; color: #1d6b52; font-size: 12px;">▲</span>
+                <span>Recall</span><span style="text-align: right; font-family: 'Geist Mono', monospace;">{{ M.recallV }}</span><span style="text-align: right; font-family: 'Geist Mono', monospace; font-weight: 600;">{{ M.recallF }}</span><span style="text-align: right; color: #1d6b52; font-size: 12px;">{{ lift }}</span>
+                <span>Precision</span><span style="text-align: right; font-family: 'Geist Mono', monospace;">{{ M.precV }}</span><span style="text-align: right; font-family: 'Geist Mono', monospace; font-weight: 600;">{{ M.precF }}</span><span style="text-align: right; color: #1d6b52; font-size: 12px;">▲</span>
+              </div>
+              <div style="margin-top: auto; display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: var(--muted); line-height: 1.45;">
+                <span><b style="color: var(--text); font-weight: 600;">Recall</b> — of the objects really there, how many were found.</span>
+                <span><b style="color: var(--text); font-weight: 600;">Precision</b> — of the boxes drawn, how many were real.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      </div>
+      </div>
+    </div>
+    <div id="1c" style="display: flex; flex-direction: column; gap: 14px;">
+      <div style="display: flex; align-items: baseline; gap: 12px;"><span style="font: 600 12px 'Geist Mono', monospace; padding: 3px 8px; border-radius: 6px; background: #1c1c1c; color: #f4f4ed;">1c</span><span style="font-size: 20px; font-weight: 560; letter-spacing: -0.03em;">Two Perspectives</span><span style="font-size: 13px; color: #6b6b6b;">Vehicle, drone and the union, side by side. For talks and model comparisons.</span></div>
+      <div style="width: 1440px; height: 900px; border-radius: 14px; overflow: hidden; box-shadow: 0 30px 80px rgba(28,28,28,.18);">
+      <div style="{{ themeC }}">
+      <div style="width: 1440px; height: 900px; display: flex; flex-direction: column; gap: 18px; padding: 24px 28px; box-sizing: border-box; background: var(--bg, #f5f4ee); color: var(--text, #191918); font-size: 13px; transition: background 500ms, color 500ms;">
+        <header style="display: flex; align-items: center; gap: 16px;">
+          <span style="display: inline-flex; align-items: center; gap: 8px; font-weight: 620; letter-spacing: -0.03em; font-size: 15px;"><span style="width: 10px; height: 10px; border-radius: 99px; background: currentColor;"></span>coperceive</span>
+          <span style="color: var(--muted);">Town03-000 · det-v1</span>
+          <div style="margin-left: auto; display: flex; gap: 10px; align-items: center;">
+            <span style="font-family: 'Geist Mono', monospace; font-variant-numeric: tabular-nums;">{{ clock }}</span>
+            <button onClick="{{ togglePlay }}" style="height: 32px; padding: 0 14px; border-radius: 999px; border: 0; background: var(--text); color: var(--bg); font-size: 12px; font-weight: 560; display: inline-flex; align-items: center; gap: 8px;"><sc-if value="{{ playing }}" hint-placeholder-val="{{ true }}">Pause</sc-if><sc-if value="{{ paused }}" hint-placeholder-val="{{ false }}">Play</sc-if></button>
+            <button onClick="{{ toggleThemeC }}" style="height: 32px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); font-size: 12px; font-weight: 560;">{{ themeLabel.c }}</button>
+          </div>
+        </header>
+        <div style="display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 14px; flex: 1; min-height: 0;">
+          <div style="display: flex; flex-direction: column; gap: 10px; min-height: 0;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between;"><span style="display: inline-flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 560; letter-spacing: -0.03em;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #F58A1F;"></i>The vehicle sees</span><span style="font-size: 28px; font-weight: 520; letter-spacing: -0.04em; font-variant-numeric: tabular-nums;">{{ vSees }}<span style="font-size: 15px; color: var(--muted);"> / {{ gtNow }}</span></span></div>
+            <div style="position: relative; flex: 1; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); overflow: hidden;"><canvas ref="{{ cvC1 }}" style="position: absolute; inset: 0; width: 100%; height: 100%;"></canvas></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 10px; min-height: 0;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between;"><span style="display: inline-flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 560; letter-spacing: -0.03em;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #1FA3A3;"></i>Together they see</span><span style="font-size: 28px; font-weight: 520; letter-spacing: -0.04em; color: #1FA3A3; font-variant-numeric: tabular-nums;">{{ fSees }}<span style="font-size: 15px; color: var(--muted);"> / {{ gtNow }}</span></span></div>
+            <div style="position: relative; flex: 1; border-radius: 16px; background: var(--panel); border: 2px solid #1FA3A3; overflow: hidden;"><canvas ref="{{ cvC2 }}" style="position: absolute; inset: 0; width: 100%; height: 100%;"></canvas></div>
+          </div>
+          <div style="display: flex; flex-direction: column; gap: 10px; min-height: 0;">
+            <div style="display: flex; align-items: baseline; justify-content: space-between;"><span style="display: inline-flex; align-items: center; gap: 8px; font-size: 18px; font-weight: 560; letter-spacing: -0.03em;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #3C8DFF;"></i>The drone sees</span><span style="font-size: 28px; font-weight: 520; letter-spacing: -0.04em; font-variant-numeric: tabular-nums;">{{ dSees }}<span style="font-size: 15px; color: var(--muted);"> / {{ gtNow }}</span></span></div>
+            <div style="position: relative; flex: 1; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); overflow: hidden;"><canvas ref="{{ cvC3 }}" style="position: absolute; inset: 0; width: 100%; height: 100%;"></canvas></div>
+          </div>
+        </div>
+        <div style="flex: none; border-radius: 16px; background: var(--panel); border: 1px solid var(--line); padding: 18px 20px; display: flex; flex-direction: column; gap: 14px;">
+          <div style="display: flex; align-items: baseline; gap: 10px;"><span style="font-size: 16px; font-weight: 560; letter-spacing: -0.02em;">Of the {{ gtNow }} objects within 45 m right now</span><span style="font-size: 13px; color: var(--muted);">— who found them</span></div>
+          <div style="display: flex; height: 14px; border-radius: 99px; overflow: hidden; gap: 2px; background: var(--sunken);"><div style="{{ seg.both }}"></div><div style="{{ seg.drone }}"></div><div style="{{ seg.vehicle }}"></div><div style="{{ seg.nobody }}"></div></div>
+          <div style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px;">
+            <div style="{{ segL.both }}"><span style="font-size: 26px; font-weight: 520; letter-spacing: -0.04em; color: #1FA3A3; font-variant-numeric: tabular-nums;">{{ cnt.both }}</span><span style="font-size: 12px; color: var(--muted);">Both agents</span></div>
+            <div style="{{ segL.drone }}"><span style="font-size: 26px; font-weight: 520; letter-spacing: -0.04em; color: #3C8DFF; font-variant-numeric: tabular-nums;">{{ cnt.drone }}</span><span style="font-size: 12px; color: var(--muted);">Only the drone — recovered by cooperation</span></div>
+            <div style="{{ segL.vehicle }}"><span style="font-size: 26px; font-weight: 520; letter-spacing: -0.04em; color: #F58A1F; font-variant-numeric: tabular-nums;">{{ cnt.vehicle }}</span><span style="font-size: 12px; color: var(--muted);">Only the vehicle</span></div>
+            <div style="{{ segL.nobody }}"><span style="font-size: 26px; font-weight: 520; letter-spacing: -0.04em; color: #8E6CEF; font-variant-numeric: tabular-nums;">{{ cnt.nobody }}</span><span style="font-size: 12px; color: var(--muted);">Nobody</span></div>
+          </div>
+        </div>
+        <div style="flex: none; display: grid; grid-template-columns: 220px minmax(0,1fr); gap: 20px; align-items: center;">
+          <div style="display: flex; flex-direction: column; gap: 4px;"><span style="font-size: 16px; font-weight: 560; letter-spacing: -0.02em;">Recall over time</span><span style="font-size: 12px; color: var(--muted); line-height: 1.45;">The teal band is what the drone adds: <b style="color: #1FA3A3; font-weight: 600;">{{ lift }}</b> across the scene.</span></div>
+          <div onPointerDown="{{ scrubDown }}" onPointerMove="{{ scrubMove }}" style="position: relative; height: 64px; cursor: pointer; touch-action: none;">
+            <svg viewBox="0 0 100 64" preserveAspectRatio="none" style="width: 100%; height: 64px; display: block; overflow: visible;"><path d="{{ P.gap64 }}" fill="rgba(31,163,163,.22)"></path><path d="{{ P.recV64 }}" fill="none" stroke="#F58A1F" stroke-width="1.5" vector-effect="non-scaling-stroke"></path><path d="{{ P.recF64 }}" fill="none" stroke="#1FA3A3" stroke-width="2" vector-effect="non-scaling-stroke"></path></svg>
+            <span style="{{ playheadC }}"></span>
+          </div>
+        </div>
+      </div>
+      </div>
+      </div>
+    </div>
+    <div id="row-end" style="display: none;"></div>
+  </div>
+</section>
+<section id="ref" style="padding: 56px 64px 96px; display: flex; flex-direction: column; gap: 20px;">
+  <div style="display: flex; align-items: baseline; gap: 14px;">
+    <span style="font: 600 12px 'Geist Mono', monospace; padding: 3px 8px; border-radius: 6px; background: #1c1c1c; color: #f4f4ed;">0</span>
+    <h2 style="margin: 0; font-size: 22px; font-weight: 560; letter-spacing: -0.03em;">Current viewer, recreated</h2>
+    <span style="font-size: 13px; color: #6b6b6b;">Reference from web/src — three.js view stood in by a synthetic scene</span>
+  </div>
+  <div id="0" style="width: 1440px; height: 900px; border-radius: 14px; overflow: hidden; box-shadow: 0 30px 80px rgba(28,28,28,.18);">
+    <div style="{{ themeCur }}">
+    <div style="width: 1440px; height: 900px; display: flex; flex-direction: column; background: var(--bg); color: var(--text); font-size: 13px; line-height: 1.45;">
+      <header style="display: grid; grid-template-columns: minmax(0,1fr) auto minmax(0,1fr); align-items: center; gap: 8px; min-height: 48px; padding: 8px 12px; border-bottom: 1px solid var(--line); background: var(--panel); box-shadow: var(--shadow); box-sizing: border-box; flex: none;">
+        <div style="display: flex; align-items: center; gap: 8px; height: 32px;">
+          <span style="display: inline-flex; align-items: center; gap: 8px; font-weight: 620; letter-spacing: -0.03em; font-size: 14px;"><span style="width: 10px; height: 10px; border-radius: 99px; background: currentColor;"></span>coperceive</span>
+          <span style="font-size: 13px; color: var(--muted);">griffin-25m</span>
+          <span style="font-size: 13px; color: var(--muted);">/</span>
+          <span style="display: inline-flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 7.5rem; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); font-weight: 520; height: 32px; box-sizing: border-box;">Town03-000<svg viewBox="0 0 12 12" width="10" height="10"><path fill="currentColor" d="M2.2 4.2 6 8l3.8-3.8-1-1L6 6 3.2 3.2z"></path></svg></span>
+        </div>
+        <div style="display: flex; gap: 2px; padding: 3px; border: 1px solid var(--line); border-radius: 999px; background: var(--sunken); height: 32px; box-sizing: border-box; align-items: center;">
+          <span style="border-radius: 999px; padding: 0 12px; height: 24px; display: inline-flex; align-items: center; background: var(--panel); box-shadow: 0 1px 2px rgba(28,28,28,.08); font-weight: 560;">Viewer</span>
+          <span style="border-radius: 999px; padding: 0 12px; height: 24px; display: inline-flex; align-items: center; font-weight: 560;">Desk</span>
+        </div>
+        <div style="display: flex; align-items: center; justify-content: flex-end; gap: 8px; height: 32px;">
+          <span style="height: 32px; padding: 0 10px; display: inline-flex; align-items: center; border: 1px solid var(--line); border-radius: 8px; font-weight: 560;">Export</span>
+          <span style="width: 32px; height: 32px; display: inline-grid; place-items: center; border: 1px solid var(--line); border-radius: 8px;"><svg viewBox="0 0 16 16" width="15" height="15"><circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" stroke-width="1.4"></circle><path stroke="currentColor" stroke-width="1.4" d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M12.8 3.2 11.4 4.6M4.6 11.4 3.2 12.8"></path></svg></span>
+        </div>
+      </header>
+      <div style="flex: 1; min-height: 0; display: grid; grid-template-columns: 248px minmax(0,1fr) 268px; gap: 8px; padding: 8px;">
+        <aside style="background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 8px 10px; overflow: hidden; display: flex; flex-direction: column;">
+          <div style="padding: 8px 0;">
+            <div style="font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650; margin-bottom: 8px;">Layers</div>
+            <div style="display: flex; flex-direction: column; gap: 2px;">
+              <sc-for list="{{ layers }}" as="ly" hint-placeholder-count="5">
+                <div style="display: grid; grid-template-columns: 16px 1fr; gap: 8px; align-items: center; padding: 4px 2px; font-weight: 520;"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="none" stroke="currentColor" stroke-width="1.4" d="M1.5 8S4 4 8 4s6.5 4 6.5 4-2.5 4-6.5 4S1.5 8 1.5 8z"></path><circle cx="8" cy="8" r="2" fill="currentColor"></circle></svg><span>{{ ly }}</span></div>
+              </sc-for>
+            </div>
+          </div>
+          <div style="border-top: 1px solid var(--line); padding: 8px 0;">
+            <div style="font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650; margin-bottom: 8px;">Agents</div>
+            <div style="display: grid; grid-template-columns: 9px 1fr auto; gap: 8px; align-items: center; padding: 4px 2px; font-weight: 520;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #f58a1f;"></i><span>vehicle</span><span style="font-family: 'Geist Mono', monospace; color: var(--muted); font-size: 12px;">{{ tele.vPoints }}</span></div>
+            <div style="display: grid; grid-template-columns: 9px 1fr auto; gap: 8px; align-items: center; padding: 4px 2px; font-weight: 520;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #3c8dff;"></i><span>uav</span><span style="font-family: 'Geist Mono', monospace; color: var(--muted); font-size: 12px;">{{ tele.uPoints }}</span></div>
+          </div>
+          <div style="border-top: 1px solid var(--line); padding: 8px 0;">
+            <div style="font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650; margin-bottom: 8px;">Display</div>
+            <div style="display: flex; flex-direction: column; gap: 8px;">
+              <div style="display: flex; flex-direction: column; gap: 4px;"><span style="font-size: 11px; font-weight: 620; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);">Color</span><div style="display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken);"><span style="flex: 1; text-align: center; padding: 5px; border-radius: 6px; background: var(--panel); box-shadow: 0 1px 2px rgba(28,28,28,.06); font-weight: 520;">Agent</span><span style="flex: 1; text-align: center; padding: 5px; font-weight: 520;">Class</span></div></div>
+              <div style="display: flex; flex-direction: column; gap: 4px;"><span style="font-size: 11px; font-weight: 620; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);">Theme</span><div style="display: flex; gap: 2px; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken);"><button onClick="{{ curLight }}" style="{{ segCur.light }}">Light</button><button onClick="{{ curDark }}" style="{{ segCur.dark }}">Dark</button></div></div>
+            </div>
+          </div>
+          <div style="border-top: 1px solid var(--line); padding: 8px 0; display: flex; flex-direction: column; gap: 8px;">
+            <div style="font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">Predictions</div>
+            <div style="display: flex; flex-direction: column; gap: 4px;"><span style="font-size: 11px; font-weight: 620; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);">Run</span><span style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); font-weight: 520;">det-v1<svg viewBox="0 0 12 12" width="10" height="10"><path fill="currentColor" d="M2.2 4.2 6 8l3.8-3.8-1-1L6 6 3.2 3.2z"></path></svg></span></div>
+            <div style="display: flex; flex-direction: column; gap: 4px;"><span style="font-size: 11px; font-weight: 620; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);">Output</span><span style="display: flex; justify-content: space-between; align-items: center; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); font-weight: 520;">vehicle · single<svg viewBox="0 0 12 12" width="10" height="10"><path fill="currentColor" d="M2.2 4.2 6 8l3.8-3.8-1-1L6 6 3.2 3.2z"></path></svg></span></div>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+              <button onClick="{{ tog.tp }}" style="{{ chip.tp }}">TP <span style="font-family: 'Geist Mono', monospace; font-size: 11px;">{{ n.tp }}</span></button>
+              <button onClick="{{ tog.fp }}" style="{{ chip.fp }}">FP <span style="font-family: 'Geist Mono', monospace; font-size: 11px;">{{ n.fp }}</span></button>
+              <button onClick="{{ tog.miss }}" style="{{ chip.miss }}">Miss <span style="font-family: 'Geist Mono', monospace; font-size: 11px;">{{ n.miss }}</span></button>
+            </div>
+            <div style="display: flex; flex-wrap: wrap; gap: 4px;">
+              <span style="display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px; font-weight: 560;">Recovered <span style="font-family: 'Geist Mono', monospace; font-size: 11px;">{{ M.coop.drone }}</span></span>
+              <span style="display: inline-flex; align-items: center; gap: 6px; height: 24px; padding: 0 9px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 12px; font-weight: 560;">Nobody <span style="font-family: 'Geist Mono', monospace; font-size: 11px;">{{ M.coop.nobody }}</span></span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 4px;"><span style="font-size: 11px; font-weight: 620; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);">Score ≥ 0.30</span><div style="position: relative; height: 18px; display: flex; align-items: center;"><div style="position: absolute; left: 0; right: 0; height: 1px; background: var(--line);"></div><div style="position: absolute; left: 0; width: 30%; height: 1px; background: var(--text);"></div><div style="position: absolute; left: 30%; width: 10px; height: 10px; border-radius: 99px; background: var(--text); transform: translateX(-50%);"></div></div></div>
+            <p style="margin: 0; font-size: 12px; color: var(--muted);">pointpillars · score: sigmoid</p>
+          </div>
+        </aside>
+        <div style="min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 6px;">
+          <div style="position: relative; flex: 1; min-height: 0; border-radius: 12px; overflow: hidden; background: linear-gradient(180deg,#111 0%,#1a1a1a 100%); box-shadow: var(--shadow);">
+            <canvas ref="{{ cvCur }}" style="width: 100%; height: 100%; display: block;"></canvas>
+            <div style="position: absolute; inset: 0; pointer-events: none; background: radial-gradient(ellipse at center, transparent 42%, rgba(0,0,0,.42) 100%);"></div>
+            <div style="position: absolute; top: 10px; left: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 12px; background: rgba(10,10,10,.6); color: #f4f4ed; border: 1px solid rgba(255,255,255,.1); backdrop-filter: blur(10px); border-radius: 999px;"><i style="width: 8px; height: 8px; border-radius: 99px; background: #8fd0b0;"></i>2 agents · {{ tele.vPoints }} points · {{ n.gt }} boxes</div>
+            <div style="position: absolute; top: 10px; right: 10px; display: flex; padding: 3px; background: rgba(10,10,10,.6); border: 1px solid rgba(255,255,255,.1); backdrop-filter: blur(10px); border-radius: 999px;">
+              <span style="border-radius: 999px; padding: 6px 10px; font-size: 12px; color: white; background: rgba(255,255,255,.16);">Orbit</span>
+              <span style="border-radius: 999px; padding: 6px 10px; font-size: 12px; color: #d9d9d0;">Bird's-eye</span>
+              <span style="border-radius: 999px; padding: 6px 10px; font-size: 12px; color: #d9d9d0;">Chase</span>
+              <span style="border-radius: 999px; padding: 6px 10px; font-size: 12px; color: #d9d9d0;">Drone</span>
+              <span style="border-radius: 999px; padding: 6px 10px; font-size: 12px; color: #d9d9d0;">Camera</span>
+            </div>
+            <div style="position: absolute; left: 10px; bottom: 10px; display: flex; gap: 10px; padding: 6px 10px; font-size: 12px; background: rgba(10,10,10,.6); color: #f4f4ed; border: 1px solid rgba(255,255,255,.1); backdrop-filter: blur(10px); border-radius: 999px;">
+              <span style="display: inline-flex; align-items: center; gap: 5px;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #f58a1f;"></i>vehicle</span>
+              <span style="display: inline-flex; align-items: center; gap: 5px;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #3c8dff;"></i>uav</span>
+              <span style="display: inline-flex; align-items: center; gap: 5px;"><i style="width: 18px; height: 2px; background: #1FA3A3;"></i>TP</span>
+              <span style="display: inline-flex; align-items: center; gap: 5px;"><i style="width: 18px; height: 0; border-top: 2px dotted #E0A431;"></i>FP</span>
+              <span style="display: inline-flex; align-items: center; gap: 5px;"><i style="width: 18px; height: 0; border-top: 2px dashed #8E6CEF;"></i>Miss</span>
+            </div>
+          </div>
+          <div style="flex: none; height: 96px; box-sizing: border-box; display: flex; gap: 8px; padding: 4px 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--panel); box-shadow: var(--shadow);">
+            <div style="display: flex; flex-direction: column; justify-content: center; gap: 2px; padding: 2px 8px; font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Cameras<span style="font-family: 'Geist Mono', monospace; color: var(--muted); font-size: 12px; letter-spacing: 0;">5</span><span style="font-size: 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; align-self: flex-start;">C</span></div>
+            <div style="display: flex; gap: 2px; flex-direction: column; padding-left: 8px; border-left: 3px solid #f58a1f;"><span style="font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); line-height: 12px;">vehicle</span><div style="display: flex; gap: 6px;">
+              <sc-for list="{{ vCams }}" as="cam" hint-placeholder-count="3"><div style="position: relative; width: 112px; height: 66px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: repeating-linear-gradient(135deg,#151515 0 6px,#1b1b1b 6px 12px);"><span style="position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 6px; font-size: 10px; color: #f4f4ed; background: linear-gradient(transparent, rgba(0,0,0,.7));">{{ cam }}</span></div></sc-for>
+            </div></div>
+            <div style="display: flex; gap: 2px; flex-direction: column; padding-left: 8px; border-left: 3px solid #3c8dff;"><span style="font-size: 10px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); line-height: 12px;">uav</span><div style="display: flex; gap: 6px;">
+              <sc-for list="{{ uCams }}" as="cam" hint-placeholder-count="2"><div style="position: relative; width: 112px; height: 66px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; background: repeating-linear-gradient(135deg,#151515 0 6px,#1b1b1b 6px 12px);"><span style="position: absolute; left: 0; right: 0; bottom: 0; padding: 1px 6px; font-size: 10px; color: #f4f4ed; background: linear-gradient(transparent, rgba(0,0,0,.7));">{{ cam }}</span></div></sc-for>
+            </div></div>
+          </div>
+        </div>
+        <aside style="background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 8px 10px; overflow: hidden; display: flex; flex-direction: column;">
+          <div style="font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650; margin: 8px 0;">Telemetry</div>
+          <div style="border-top: 1px solid var(--line); padding: 8px 0;">
+            <div style="display: flex; align-items: center; gap: 8px;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #f58a1f;"></i>vehicle<span style="margin-left: auto; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">vehicle</span></div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Speed</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ tele.vSpeed }}</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Heading</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ tele.vHead }}</div></div>
+            </div>
+          </div>
+          <div style="border-top: 1px solid var(--line); padding: 8px 0;">
+            <div style="display: flex; align-items: center; gap: 8px;"><i style="width: 9px; height: 9px; border-radius: 99px; background: #3c8dff;"></i>uav<span style="margin-left: auto; color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">uav</span></div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 8px;">
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Height</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">24.0 m</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">To vehicle</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ tele.sep }}</div></div>
+            </div>
+          </div>
+          <div style="border-top: 1px solid var(--line); padding: 8px 0 4px;">
+            <div style="margin: 0 0 8px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">Scene</div>
+            <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px;">
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Duration</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">19.9 s</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Samples</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">200</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">mAP@0.5</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ M.map5V }}</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">mAP@0.7</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ M.map7V }}</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Recall</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ M.recallV }}</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Precision</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ M.precV }}</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Recovered</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ M.coop.drone }}</div></div>
+              <div><div style="color: var(--muted); font-size: 11px; letter-spacing: .08em; text-transform: uppercase;">Nobody</div><div style="font-weight: 620; font-family: 'Geist Mono', monospace;">{{ M.coop.nobody }}</div></div>
+            </div>
+          </div>
+          <div style="border-top: 1px solid var(--line); padding: 8px 0 4px;">
+            <div style="margin: 0 0 8px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">Selected</div>
+            <p style="margin: 0; color: var(--muted);">Click a box in the view.</p>
+          </div>
+          <div style="border-top: 1px solid var(--line); padding: 8px 0 4px; flex: 1; display: flex; flex-direction: column;">
+            <div style="margin: 0 0 8px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 650;">Radar</div>
+            <canvas ref="{{ cvRadar }}" style="width: 100%; aspect-ratio: 1; display: block;"></canvas>
+            <p style="margin: 6px 0 0; color: var(--muted); font-size: 12px;">80 m around the first posed agent. North is up.</p>
+          </div>
+        </aside>
+      </div>
+      <section style="flex: none; margin: 0 8px 8px; padding: 8px 10px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow);">
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <button onClick="{{ togglePlay }}" style="width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; background: #de3b21; color: #fffdf8; border: 0; border-radius: 8px;"><sc-if value="{{ playing }}" hint-placeholder-val="{{ true }}"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M4 3h3v10H4zM9 3h3v10H9z"></path></svg></sc-if><sc-if value="{{ paused }}" hint-placeholder-val="{{ false }}"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M5 3.2v9.6L13 8z"></path></svg></sc-if></button>
+          <button onClick="{{ stepBack }}" style="width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; border: 1px solid var(--line); background: transparent; border-radius: 8px;"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M10 3L4 8l6 5V3zM11 3h2v10h-2z"></path></svg></button>
+          <button onClick="{{ stepFwd }}" style="width: 32px; height: 32px; padding: 0; display: inline-grid; place-items: center; border: 1px solid var(--line); background: transparent; border-radius: 8px;"><svg viewBox="0 0 16 16" width="14" height="14"><path fill="currentColor" d="M6 3l6 5-6 5V3zM3 3h2v10H3z"></path></svg></button>
+          <span style="font-size: 11px; font-weight: 620; letter-spacing: .08em; text-transform: uppercase; color: var(--muted);">Speed</span>
+          <span style="display: inline-flex; align-items: center; gap: 8px; min-width: 4rem; justify-content: space-between; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--sunken); font-weight: 520;">1×<svg viewBox="0 0 12 12" width="10" height="10"><path fill="currentColor" d="M2.2 4.2 6 8l3.8-3.8-1-1L6 6 3.2 3.2z"></path></svg></span>
+          <p style="margin: 0 0 0 auto; font-family: 'Geist Mono', monospace; font-variant-numeric: tabular-nums;">{{ clock }}<span style="color: var(--muted);"> · sample {{ sampleNo }} / 200</span></p>
+          <span style="border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-weight: 560;">Keys</span>
+        </div>
+        <div style="position: relative; margin-top: 30px;">
+          <div style="position: absolute; left: 0; right: 0; top: -26px; height: 14px; font-size: 11px; color: var(--muted); font-family: 'Geist Mono', monospace;"><span style="position: absolute; left: 0;">0.0 s</span><span style="position: absolute; left: 50%; transform: translateX(-50%);">10.0 s</span><span style="position: absolute; right: 0;">19.9 s</span></div>
+          <div onPointerDown="{{ scrubDown }}" onPointerMove="{{ scrubMove }}" style="position: relative; height: 16px; cursor: pointer; touch-action: none;"><div style="position: absolute; left: 0; right: 0; top: 7px; height: 1px; background: var(--line);"></div><span style="{{ occMarker }}"></span></div>
+          <div style="display: grid; gap: 2px; pointer-events: none;">
+            <div style="position: relative; height: 28px;"><span style="position: absolute; left: 0; top: 0; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);">Points</span><svg viewBox="0 0 100 28" preserveAspectRatio="none" style="width: 100%; height: 28px; display: block;"><path d="{{ P.pointsA }}" fill="rgba(245,138,31,.18)"></path><path d="{{ P.points }}" fill="none" stroke="#F58A1F" stroke-width="1.4" vector-effect="non-scaling-stroke"></path></svg></div>
+            <div style="position: relative; height: 28px;"><span style="position: absolute; left: 0; top: 0; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);">Boxes</span><svg viewBox="0 0 100 28" preserveAspectRatio="none" style="width: 100%; height: 28px; display: block;"><path d="{{ P.boxesA }}" fill="rgba(107,107,107,.18)"></path><path d="{{ P.boxes }}" fill="none" stroke="#6B6B6B" stroke-width="1.4" vector-effect="non-scaling-stroke"></path></svg></div>
+            <div style="position: relative; height: 28px;"><span style="position: absolute; left: 0; top: 0; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);">Precision · Recall</span><svg viewBox="0 0 100 28" preserveAspectRatio="none" style="width: 100%; height: 28px; display: block;"><path d="{{ P.precV }}" fill="none" stroke="#1FA3A3" stroke-width="1.4" vector-effect="non-scaling-stroke"></path><path d="{{ P.recallV }}" fill="none" stroke="#8E6CEF" stroke-width="1.4" vector-effect="non-scaling-stroke"></path></svg></div>
+            <div style="position: relative; height: 28px;"><span style="position: absolute; left: 0; top: 0; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: var(--muted);">FP</span><svg viewBox="0 0 100 28" preserveAspectRatio="none" style="width: 100%; height: 28px; display: block;"><path d="{{ P.fpA }}" fill="rgba(224,164,49,.2)"></path><path d="{{ P.fp }}" fill="none" stroke="#E0A431" stroke-width="1.4" vector-effect="non-scaling-stroke"></path></svg></div>
+          </div>
+          <span style="{{ playhead }}"><span style="position: absolute; left: 6px; top: -14px; padding: 1px 5px; border-radius: 4px; background: #1c1c1c; color: #f4f4ed; font-size: 11px; white-space: nowrap; font-family: 'Geist Mono', monospace;">{{ clock }}</span></span>
+        </div>
+      </section>
+    </div>
+    </div>
+  </div>
+</section>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;autoplay&quot;: {&quot;editor&quot;: &quot;boolean&quot;, &quot;default&quot;: true, &quot;tsType&quot;: &quot;boolean&quot;}, &quot;speed&quot;: {&quot;editor&quot;: &quot;enum&quot;, &quot;options&quot;: [&quot;0.5&quot;, &quot;1&quot;, &quot;2&quot;], &quot;default&quot;: &quot;1&quot;, &quot;tsType&quot;: &quot;string&quot;}}">
+const LIGHT0 = { display: 'contents', '--bg': '#f4f4ed', '--panel': '#f7f7f1', '--sunken': '#ecece3', '--line': '#d8d8c7', '--text': '#1c1c1c', '--muted': '#6b6b6b', '--shadow': '0 1px 2px rgba(28,28,28,.06), 0 10px 28px rgba(28,28,28,.05)' };
+const DARK0 = { display: 'contents', '--bg': '#101010', '--panel': '#1a1a1a', '--sunken': '#141414', '--line': '#2e2e2e', '--text': '#f4f4ed', '--muted': '#a3a3a3', '--shadow': '0 1px 2px rgba(0,0,0,.35)' };
+const LIGHT = { display: 'contents', '--bg': '#f5f4ee', '--panel': '#fbfaf6', '--sunken': '#eeede5', '--line': '#e0dfd3', '--text': '#191918', '--muted': '#6b6b66', '--faint': '#9a9a92', '--glass': 'rgba(251,250,246,.74)', '--glassLine': 'rgba(25,25,24,.08)', '--vp': '#efeee7', '--shadow': '0 1px 2px rgba(28,28,28,.05), 0 12px 32px rgba(28,28,28,.06)' };
+const DARK = { display: 'contents', '--bg': '#0b0b0a', '--panel': '#151514', '--sunken': '#10100f', '--line': '#272725', '--text': '#f4f4ed', '--muted': '#a3a39c', '--faint': '#6e6e68', '--glass': 'rgba(22,22,21,.62)', '--glassLine': 'rgba(255,255,255,.09)', '--vp': '#0b0b0a', '--shadow': '0 1px 2px rgba(0,0,0,.4), 0 12px 32px rgba(0,0,0,.3)' };
+const f2 = (v) => (v == null || isNaN(v) ? '—' : v.toFixed(2));
+
+class Component extends DCLogic {
+  state = { k: 0, playing: true, themes: { cur: 'light', a: 'dark', b: 'light', c: 'light' }, hidden: { tp: false, fp: false, miss: false }, modeA: 'single', sel: 5 };
+  t = 0; blendA = 0; cvRefs = {};
+  ref(name) { return this.cvRefs[name] || (this.cvRefs[name] = React.createRef()); }
+  componentDidMount() {
+    this.state.playing = this.props.autoplay ?? true;
+    const tick = (ts) => {
+      const E = window.CPEngine;
+      if (E) {
+        const dt = this.last ? Math.min(0.1, (ts - this.last) / 1000) : 0;
+        if (this.state.playing) { this.t += dt * Number(this.props.speed ?? 1); if (this.t > E.T_END) this.t = 0; }
+        const target = this.state.modeA === 'fused' ? 1 : 0; this.blendA += (target - this.blendA) * Math.min(1, dt * 5);
+        this.drawAll(E);
+        const k = Math.min(E.N - 1, Math.floor(this.t * 10));
+        if (k !== this.state.k || !this.ready) { this.ready = true; this.setState({ k }); }
+      }
+      this.last = ts; this.raf = requestAnimationFrame(tick);
+    };
+    this.raf = requestAnimationFrame(tick);
+  }
+  componentWillUnmount() { cancelAnimationFrame(this.raf); }
+  drawAll(E) {
+    const th = this.state.themes, R = (n) => this.cvRefs[n] && this.cvRefs[n].current, t = this.t;
+    if (R('cvCur')) E.draw(R('cvCur'), t, { view: 'persp', dark: true, mode: 'vehicle', hidden: this.state.hidden, yaw: 0.55, dist: 34, height: 19 });
+    if (R('cvRadar')) E.drawRadar(R('cvRadar'), t);
+    if (R('cvA')) E.draw(R('cvA'), t, { view: 'persp', dark: th.a === 'dark', mode: this.blendA > 0.02 ? 'fused' : 'vehicle', blend: this.blendA, glow: true, labels: true, sway: 0.35, yaw: 0.25, dist: 27, height: 12, ahead: 20, focal: 1.05 });
+    if (R('cvB')) E.draw(R('cvB'), t, { view: 'bev', dark: th.b === 'dark', mode: 'fused', center: 'mid', scale: 6.2, rays: true, selected: this.state.sel, glow: true });
+    if (R('cvRib')) E.drawRibbon(R('cvRib'), t, this.state.sel, th.b === 'dark');
+    const cd = th.c === 'dark';
+    if (R('cvC1')) E.draw(R('cvC1'), t, { view: 'bev', dark: cd, mode: 'vehicle', scale: 4.4, offset: 14, rays: true });
+    if (R('cvC2')) E.draw(R('cvC2'), t, { view: 'bev', dark: cd, mode: 'fused', scale: 4.4, offset: 14, glow: true });
+    if (R('cvC3')) E.draw(R('cvC3'), t, { view: 'bev', dark: cd, mode: 'drone', scale: 4.4, offset: 14 });
+  }
+  seek(e) { const E = window.CPEngine, r = e.currentTarget.getBoundingClientRect(); this.t = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * E.T_END; this.setState({ k: Math.floor(this.t * 10) }); }
+  extra(E, f, s) {
+    const M = E.M, k = s.k, fused = s.modeA === 'fused';
+    const chapters = [
+      { id: 0, from: 0, to: 30, name: 'Two agents', title: 'One car. One drone. One clock.', body: 'The vehicle scans 45 m around itself. The drone flies 24 m above, a little ahead, and sees 55 m around.' },
+      { id: 1, from: 30, to: M.occA, name: 'Traffic', title: 'Up ahead, both agents agree.', body: 'Most objects in range are found by both. Teal boxes are hits; amber dotted boxes are things the model saw that aren\u2019t there.' },
+      { id: 2, from: M.occA, to: M.occB + 1, name: 'Occlusion', title: fused ? 'Together, nothing hides behind the bus.' : 'A parked bus hides the pedestrians.', body: fused ? 'The drone sees over the bus. Every dashed violet miss turns into a teal hit \u2014 that\u2019s what cooperation recovers.' : 'From the vehicle\u2019s seat, the bus blocks the line of sight. Violet dashed boxes are objects it missed.' },
+      { id: 3, from: M.occB + 1, to: 200, name: 'Clear road', title: 'Past the bus, the gap closes.', body: 'With a clear view again, the vehicle catches up. Recall rejoins the fused line on the timeline below.' },
+    ];
+    const ch = chapters.find((c) => k >= c.from && k < c.to) || chapters[0];
+    const key = ch.id + (ch.id === 2 ? s.modeA : '');
+    const cap = React.createElement('div', { key, style: { display: 'flex', flexDirection: 'column', gap: '14px' } },
+      React.createElement('div', { style: { fontSize: '12px', letterSpacing: '.14em', textTransform: 'uppercase', color: 'var(--muted)', fontWeight: 650, animation: 'riseIn 600ms cubic-bezier(.2,.7,.2,1) both' } }, `Chapter ${ch.id + 1} \u00b7 ${ch.name}`),
+      React.createElement('div', { style: { fontSize: '44px', lineHeight: 1.02, letterSpacing: '-0.045em', fontWeight: 560, textWrap: 'balance', animation: 'riseIn 800ms 60ms cubic-bezier(.2,.7,.2,1) both' } }, ch.title),
+      React.createElement('div', { style: { fontSize: '16px', lineHeight: 1.5, color: 'var(--muted)', maxWidth: '30rem', textWrap: 'pretty', animation: 'riseIn 800ms 160ms cubic-bezier(.2,.7,.2,1) both' } }, ch.body));
+    const chList = chapters.map((c) => ({ name: c.name, onClick: () => { this.t = c.from / 10 + 0.01; this.setState({ k: c.from }); },
+      wrap: { flex: `${c.to - c.from} 1 0`, display: 'flex', flexDirection: 'column', gap: '8px', cursor: 'pointer', border: 0, background: 'transparent', padding: 0, textAlign: 'left', color: 'var(--text)' },
+      label: { fontSize: '12px', fontWeight: 560, color: c.id === ch.id ? 'var(--text)' : 'var(--muted)', transition: 'color 300ms' },
+      fill: { position: 'absolute', left: 0, top: 0, bottom: 0, borderRadius: '99px', background: c.id === ch.id ? 'var(--text)' : 'var(--muted)', opacity: k >= c.from ? 1 : 0, width: Math.max(0, Math.min(1, (k - c.from) / (c.to - c.from))) * 100 + '%', transition: 'width 100ms linear' } }));
+    const seen = fused ? f.tpF : f.tpV, recNow = f.objs.filter((r) => r.coop === 'drone').length;
+    const modePill = { position: 'absolute', top: '4px', bottom: '4px', left: fused ? 'calc(50% + 0px)' : '4px', width: 'calc(50% - 4px)', borderRadius: '999px', background: 'var(--text)', transition: 'left 520ms cubic-bezier(.3,1.4,.4,1)' };
+    const modeTxt = (on) => ({ position: 'relative', zIndex: 1, border: 0, background: 'transparent', padding: '0 18px', height: '36px', fontSize: '14px', fontWeight: 560, color: on ? 'var(--bg)' : 'var(--muted)', transition: 'color 300ms', width: '50%' });
+    const recallNow = fused ? E.S.recallF[k] : E.S.recallV[k];
+    // 1b track list
+    const tracks = E.OBJ.map((o, i) => {
+      const rows = E.frames.map((fr) => fr.objs[i]), inR = rows.filter((r) => r.inRange).length;
+      return { id: o.id, name: `${o.cat} ${o.id}`, sub: inR ? `${(inR / 10).toFixed(1)} s in range` : 'out of range', onClick: () => this.setState({ sel: o.id }),
+        style: { height: '26px', display: 'flex', alignItems: 'center', gap: '8px', padding: '0 10px', border: 0, borderRadius: '6px', textAlign: 'left', background: s.sel === o.id ? 'var(--sunken)' : 'transparent', color: s.sel === o.id ? 'var(--text)' : 'var(--muted)', fontSize: '12px', fontWeight: s.sel === o.id ? 600 : 500, width: '100%', transition: 'background 200ms' },
+        dot: { width: '7px', height: '7px', borderRadius: '99px', background: E.CLS[o.cat] || '#999', flex: 'none' } };
+    });
+    const story = this.trackStory(E, s.sel);
+    const nowSel = f.objs.find((r) => r.o.id === s.sel);
+    const nowWord = !nowSel || !nowSel.inRange ? 'Out of the vehicle\u2019s 45 m range right now.' : nowSel.coop === 'both' ? 'Right now both agents see it.' : nowSel.coop === 'drone' ? `Right now only the drone sees it${nowSel.occ ? ' \u2014 the ' + nowSel.occ.cat + ' is in the way' : ''}.` : nowSel.coop === 'vehicle' ? 'Right now only the vehicle sees it.' : 'Right now nobody detects it.';
+    // 1c bar
+    const gt = f.gt || 1, cnt = { both: 0, vehicle: 0, drone: 0, nobody: 0 }; f.objs.forEach((r) => { if (r.coop) cnt[r.coop]++; });
+    const segS = (c, col) => ({ width: (cnt[c] / gt) * 100 + '%', background: col, height: '100%', transition: 'width 380ms cubic-bezier(.2,.7,.2,1)', overflow: 'hidden' });
+    const segL = (c) => ({ display: 'flex', flexDirection: 'column', gap: '2px', opacity: cnt[c] ? 1 : 0.4, transition: 'opacity 300ms' });
+    const playheadC = { position: 'absolute', top: 0, bottom: 0, left: (k / 199) * 100 + '%', width: '2px', background: '#de3b21', pointerEvents: 'none', transition: 'left 100ms linear' };
+    return {
+      caption: cap, chList, modePill, single: () => this.setState({ modeA: 'single' }), together: () => this.setState({ modeA: 'fused' }),
+      modeS: modeTxt(!fused), modeF: modeTxt(fused),
+      A: { seen, gt: f.gt, recall: f2(recallNow), recallScene: fused ? f2(E.M.recallF) : f2(E.M.recallV), prec: fused ? f2(E.M.precF) : f2(E.M.precV), fp: fused ? f.fpF : f.fpV, rec: fused ? recNow : 0, miss: fused ? f.mF : f.mV, who: fused ? 'vehicle + drone' : 'vehicle alone', bar: { height: '100%', width: recallNow * 100 + '%', background: fused ? '#1FA3A3' : 'var(--text)', borderRadius: '99px', transition: 'width 300ms cubic-bezier(.2,.7,.2,1), background 400ms' } },
+      tracks, story, nowWord, cnt, gtNow: f.gt,
+      seg: { both: segS('both', '#1FA3A3'), vehicle: segS('vehicle', '#F58A1F'), drone: segS('drone', '#3C8DFF'), nobody: segS('nobody', '#8E6CEF') },
+      segL: { both: segL('both'), vehicle: segL('vehicle'), drone: segL('drone'), nobody: segL('nobody') },
+      playheadC, recNowV: f2(E.S.recallV[k]), recNowF: f2(E.S.recallF[k]), lift: '+' + Math.round((E.M.recallF - E.M.recallV) * 100) + ' pts',
+      vSees: f.tpV, fSees: f.tpF, dSees: f.objs.filter((r) => r.inRange && r.dDet).length,
+    };
+  }
+  trackStory(E, id) {
+    const i = E.OBJ.findIndex((o) => o.id === id); if (i < 0) return { title: '', body: '' };
+    const o = E.OBJ[i], rows = E.frames.map((fr) => fr.objs[i]);
+    const inR = rows.filter((r) => r.inRange), vSeen = inR.filter((r) => r.vDet).length, dSeen = inR.filter((r) => r.dDet).length;
+    let best = null, cur = null;
+    rows.forEach((r, k) => { if (r.inRange && !r.vDet) { cur = cur || { a: k, b: k, occ: 0 }; cur.b = k; if (r.occ) cur.occ++; } else if (cur) { if (!best || cur.b - cur.a > best.b - best.a) best = cur; cur = null; } });
+    if (cur && (!best || cur.b - cur.a > best.b - best.a)) best = cur;
+    const name = o.cat.charAt(0).toUpperCase() + o.cat.slice(1) + ' ' + o.id;
+    if (!inR.length) return { title: name, body: 'Never comes within the vehicle\u2019s 45 m evaluation range in this scene.', v: '—', d: '—' };
+    let body = `In range for ${(inR.length / 10).toFixed(1)} s. `;
+    if (best && best.b - best.a >= 3) body += `The vehicle lost it for ${((best.b - best.a + 1) / 10).toFixed(1)} s (${(best.a / 10).toFixed(1)}\u2013${(best.b / 10).toFixed(1)} s)${best.occ > (best.b - best.a) / 2 ? ' while the bus blocked its line of sight' : ', at the edge of its range'}. `;
+    else body += 'The vehicle tracked it almost the whole time. ';
+    body += dSeen / inR.length > 0.85 ? 'The drone kept it in view throughout.' : `The drone saw it ${Math.round((dSeen / inR.length) * 100)}% of the time.`;
+    return { title: name, body, v: Math.round((vSeen / inR.length) * 100) + '%', d: Math.round((dSeen / inR.length) * 100) + '%' };
+  }
+  setTheme(key, v) { this.setState((s) => ({ themes: Object.assign({}, s.themes, { [key]: v }) })); }
+  renderVals() {
+    const E = window.CPEngine, s = this.state;
+    const base = { cvCur: this.ref('cvCur'), cvRadar: this.ref('cvRadar'), cvA: this.ref('cvA'), cvB: this.ref('cvB'), cvRib: this.ref('cvRib'), cvC1: this.ref('cvC1'), cvC2: this.ref('cvC2'), cvC3: this.ref('cvC3') };
+    const th = (k, l, d) => (s.themes[k] === 'dark' ? d : l);
+    const seg = (on) => ({ flex: 1, padding: '5px', border: 0, borderRadius: '6px', fontWeight: 520, background: on ? 'var(--panel)' : 'transparent', boxShadow: on ? '0 1px 2px rgba(28,28,28,.06)' : 'none' });
+    const chipC = { tp: '#1FA3A3', fp: '#E0A431', miss: '#8E6CEF' };
+    const chip = {}, tog = {};
+    ['tp', 'fp', 'miss'].forEach((c) => {
+      const on = !s.hidden[c];
+      chip[c] = { display: 'inline-flex', alignItems: 'center', gap: '6px', height: '24px', padding: '0 9px', border: '1px solid ' + (on ? chipC[c] : 'var(--line)'), borderRadius: '999px', background: on ? 'var(--sunken)' : 'transparent', color: on ? 'var(--text)' : 'var(--muted)', fontSize: '12px', fontWeight: 560, boxShadow: on ? `inset 3px 0 0 ${chipC[c]}` : 'none', transition: 'all 160ms ease' };
+      tog[c] = () => this.setState((st) => ({ hidden: Object.assign({}, st.hidden, { [c]: !st.hidden[c] }) }));
+    });
+    const out = Object.assign(base, {
+      themeCur: th('cur', LIGHT0, DARK0), themeA: th('a', LIGHT, DARK), themeB: th('b', LIGHT, DARK), themeC: th('c', LIGHT, DARK),
+      segCur: { light: seg(s.themes.cur === 'light'), dark: seg(s.themes.cur === 'dark') },
+      curLight: () => this.setTheme('cur', 'light'), curDark: () => this.setTheme('cur', 'dark'),
+      toggleThemeA: () => this.setTheme('a', s.themes.a === 'dark' ? 'light' : 'dark'),
+      toggleThemeB: () => this.setTheme('b', s.themes.b === 'dark' ? 'light' : 'dark'),
+      toggleThemeC: () => this.setTheme('c', s.themes.c === 'dark' ? 'light' : 'dark'),
+      themeLabel: { a: s.themes.a === 'dark' ? 'Light' : 'Dark', b: s.themes.b === 'dark' ? 'Light' : 'Dark', c: s.themes.c === 'dark' ? 'Light' : 'Dark' },
+      chip, tog, playing: s.playing, paused: !s.playing,
+      togglePlay: () => this.setState((st) => ({ playing: !st.playing })),
+      stepBack: () => { this.t = Math.max(0, this.t - 0.1); this.setState({ playing: false, k: Math.floor(this.t * 10) }); },
+      stepFwd: () => { this.t = Math.min(19.9, this.t + 0.1); this.setState({ playing: false, k: Math.floor(this.t * 10) }); },
+      scrubDown: (e) => { e.currentTarget.setPointerCapture(e.pointerId); this.seek(e); },
+      scrubMove: (e) => { if (e.currentTarget.hasPointerCapture(e.pointerId)) this.seek(e); },
+      layers: ['Points', 'Boxes', 'Frustums', 'Map', 'Axes'], vCams: ['front', 'left', 'right'], uCams: ['down', 'front'],
+    });
+    if (!E) return out;
+    const f = E.frames[s.k], pct = (s.k / (E.N - 1)) * 100;
+    out.clock = (s.k / 10).toFixed(1) + ' s'; out.sampleNo = s.k + 1; out.pct = pct;
+    out.playhead = { position: 'absolute', top: '-2px', bottom: 0, left: pct + '%', width: '2px', background: '#de3b21', pointerEvents: 'none', transition: 'left 100ms linear' };
+    out.occMarker = { position: 'absolute', top: '6px', height: '3px', borderRadius: '2px', background: '#8E6CEF', left: (E.M.occA / 199) * 100 + '%', width: ((E.M.occB - E.M.occA) / 199) * 100 + '%' };
+    out.n = { tp: f.tpV, fp: f.fpV, miss: f.mV, gt: f.gt, tpF: f.tpF, missF: f.mF, fpF: f.fpF };
+    const sep = Math.hypot(f.V.x - f.U.x, f.V.y - f.U.y, 24);
+    out.tele = { vPoints: Math.round(E.S.points[s.k]).toLocaleString('en-US'), uPoints: Math.round(E.S.points[s.k] * 0.62).toLocaleString('en-US'), vSpeed: E.S.speed[s.k].toFixed(1) + ' m/s', vHead: ((f.V.h * 180) / Math.PI).toFixed(0) + '°', sep: sep.toFixed(1) + ' m' };
+    const M = E.M;
+    out.M = { map5V: f2(M.map5V), map7V: f2(M.map7V), map5F: f2(M.map5F), map7F: f2(M.map7F), recallV: f2(M.recallV), recallF: f2(M.recallF), precV: f2(M.precV), precF: f2(M.precF), coop: M.coop };
+    if (!this.paths) {
+      const S = E.S, np = E.norm(S.points), mb = Math.max(...S.boxes), mf = Math.max(...S.fpV, 1);
+      this.paths = { points: E.path(np, 28, 1), pointsA: E.area(np, 28, 1), boxes: E.path(S.boxes, 28, mb), boxesA: E.area(S.boxes, 28, mb), precV: E.path(S.precV, 28, 1), recallV: E.path(S.recallV, 28, 1), fp: E.path(S.fpV, 28, mf), fpA: E.area(S.fpV, 28, mf),
+        recV64: E.path(S.recallV, 64, 1), recF64: E.path(S.recallF, 64, 1), gap64: E.band(S.recallF, S.recallV, 64), recF40: E.path(S.recallF, 40, 1), recV40: E.path(S.recallV, 40, 1), gap40: E.band(S.recallF, S.recallV, 40) };
+    }
+    out.P = this.paths;
+    return this.extra ? Object.assign(out, this.extra(E, f, s)) : out;
+  }
+}
+
+</script>
+</body>
+</html>

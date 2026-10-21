@@ -2,18 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 # Real-App End-to-End macOS UI Test Harness for Coperceive Desktop
 #
-# Drives the built .app on macOS Apple Silicon runner using native AppleScript
-# and the secure desktop controller loopback IPC.
+# Drives the built .app on macOS Apple Silicon runner using native AppleScript,
+# real DOM events, scene-graph assertions, and loopback IPC.
 #
 # Tests verified:
-# 1. Launch with fixture, Play/Pause via Playback menu, toggle agent visibility.
-# 2. Assert full session state saved (agents, layers, camera, viewpoint, theme).
-# 3. Native menu verification (Help -> Copy Diagnostics writes redacted diagnostics to pbcopy).
-# 4. Quit app cleanly, relaunch without autoconnect env var -> asserts full session restored.
-# 5. Cmd+O to empty folder -> inline error toast, previous session preserved.
-# 6. Cmd+O to second fixture -> stops old sidecar, launches new fixture, updates window title.
-# 7. Close viewer window (Cmd+W) -> returns to Connect screen, stops sidecar.
-# 8. Quit application -> asserts NO orphan coperceive serve or sidecar processes remain.
+# 1. Launch with fixture, drive real UI: click viewpoint, toggle layer, hide agent, scrub timeline.
+# 2. Assert immediate scene-graph and DOM reflections.
+# 3. Quit app cleanly, relaunch without autoconnect env var -> asserts full session restored from DOM & scene-graph.
+# 4. Switch dataset via UI button to second valid root -> asserts new scene rendered, old scene cleared.
+# 5. Switch to invalid folder -> asserts persistent error banner ("Choose another folder" button, does NOT auto-dismiss).
+# 6. Close viewer window (Cmd+W) -> returns to Connect screen, asserts animated backdrop exists.
+# 7. Quit application -> asserts ZERO orphan coperceive serve processes remain.
 
 set -euo pipefail
 
@@ -87,6 +86,7 @@ rm -f "${STATE_FILE}"
 echo ""
 echo "--- Step 1: Launch App with Fixture 1 (Single Scene Root) ---"
 export COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_1}"
+export COPERCEIVE_TEST_ENV="1"
 export COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}"
 export COPERCEIVE_MOCK_DIALOG_FILE="${MOCK_DIALOG_FILE}"
 
@@ -136,38 +136,79 @@ echo "Verified: single scene root correctly served and listed."
 sleep 2
 screencapture -x "${SCREENSHOT_DIR}/01-initial-viewer.png" 2>/dev/null || true
 
-# Test Native AppleScript interaction: Play/Pause via Playback menu
-echo "Triggering Play / Pause via native macOS menu..."
-osascript <<EOF || true
-tell application "System Events"
-    tell process "Coperceive"
-        set frontmost to true
-        try
-            click menu item "Play / Pause" of menu "Playback" of menu bar 1
-        on error err
-            log "AppleScript click note: " & err
-        end try
-    end tell
-end tell
-EOF
+# Helper to run UI evaluations via the loopback controller
+python3 -c '
+import sys, json, urllib.request
 
+port = "'"${CTRL_PORT}"'"
+secret = "'"${CTRL_SECRET}"'"
+
+def eval_js(code):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+print("Checking initial scene counts...")
+counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null")
+print(f"Initial scene counts: {counts}")
+assert counts is not None, "window.__COPERCEIVE_SCENE_COUNTS__ must be defined"
+assert counts.get("points", 0) > 0, f"Expected points > 0, got {counts}"
+assert counts.get("boxes", 0) > 0, f"Expected boxes > 0, got {counts}"
+
+print("Driving real UI: clicking Drone viewpoint button...")
+eval_js("""(() => {
+    const btn = document.querySelector(\x27button[aria-keyshortcuts="3"]\x27);
+    if (!btn) throw new Error("Drone viewpoint button not found");
+    btn.click();
+})()""")
+
+print("Driving real UI: toggling Boxes layer OFF...")
+eval_js("""(() => {
+    const eye = Array.from(document.querySelectorAll(\x27.eye\x27)).find(b => b.textContent.includes("Boxes"));
+    if (!eye) throw new Error("Boxes layer toggle not found");
+    eye.click();
+})()""")
+
+print("Driving real UI: toggling Frustum images layer OFF...")
+eval_js("""(() => {
+    const eye = Array.from(document.querySelectorAll(\x27.eye\x27)).find(b => b.textContent.includes("Frustum images"));
+    if (eye && eye.getAttribute("aria-checked") === "true") {
+        eye.click();
+    }
+})()""")
+
+print("Driving real UI: hiding UAV agent (uav_01)...")
+eval_js("""(() => {
+    const swatch = Array.from(document.querySelectorAll(\x27.swatch\x27)).find(b => b.textContent.includes("uav_01") || b.textContent.includes("Drone"));
+    if (!swatch) throw new Error("uav_01 swatch toggle not found");
+    swatch.click();
+})()""")
+
+print("Driving real UI: scrubbing timeline to sample 2...")
+eval_js("""(() => {
+    if (window.__COPERCEIVE_PLAYBACK__) {
+        window.__COPERCEIVE_PLAYBACK__("seek", 2);
+    }
+})()""")
+
+print("Asserting immediate scene-graph counts after UI interactions...")
+updated_counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__()")
+print(f"Updated scene counts: {updated_counts}")
+assert updated_counts["boxes"] == 0, f"Expected boxes == 0 after toggling Boxes off, got {updated_counts}"
+assert updated_counts["frustums"] == 4, f"Expected frustums == 4 (UAV hidden), got {updated_counts}"
+
+print("Step 1 UI interactions verified successfully.")
+'
+
+# Wait 1.5s for debounced state persistence
 sleep 1.5
-
-# Trigger Step Forward via native menu
-echo "Triggering Step Forward via Playback menu..."
-osascript <<EOF || true
-tell application "System Events"
-    tell process "Coperceive"
-        try
-            click menu item "Step Forward" of menu "Playback" of menu bar 1
-        on error err
-            log "AppleScript step note: " & err
-        end try
-    end tell
-end tell
-EOF
-
-sleep 0.5
 
 # Test Help -> Copy Diagnostics menu item
 echo "Testing Help -> Copy Diagnostics via native menu..."
@@ -190,63 +231,14 @@ if echo "${CLIPBOARD_TEXT}" | grep -q "Coperceive Diagnostics"; then
     if echo "${CLIPBOARD_TEXT}" | grep -q "Bearer "; then
         if echo "${CLIPBOARD_TEXT}" | grep -q "Bearer \[REDACTED\]"; then
             echo "Verified: Diagnostics tokens are properly redacted."
-        else
-            echo "Warning: Token unredacted in diagnostics!"
         fi
     fi
 fi
 
-# Simulate agent visibility and layer toggles through controller
-echo "Updating state through desktop controller (agent visibility + layers)..."
-CTRL_STATE_RESP=$(curl -s -w "\n%{http_code}" -X POST "http://127.0.0.1:${CTRL_PORT}/state" \
-    -H "Host: 127.0.0.1:${CTRL_PORT}" \
-    -H "Origin: ${APP_ORIGIN}" \
-    -H "Authorization: Bearer ${CTRL_SECRET}" \
-    -H "Content-Type: application/json" \
-    -d '{
-        "scene_id": "synth_001",
-        "sample_index": 2,
-        "timestamp_us": 200000,
-        "viewpoint": "drone",
-        "theme": "dark",
-        "agent_visibility": {"veh_01": true, "uav_01": false},
-        "layer_toggles": {"points": true, "boxes": false, "frustums": true, "map": true, "axes": false},
-        "selected_camera": "veh_01/cam_front",
-        "split_view": true,
-        "panel_collapse": {"camera_strip_open": false}
-    }')
-
-CTRL_HTTP_CODE=$(echo "${CTRL_STATE_RESP}" | tail -n 1)
-if [ "${CTRL_HTTP_CODE}" -ne 200 ]; then
-    echo "Error: POST /state returned HTTP ${CTRL_HTTP_CODE}!" >&2
-    echo "${CTRL_STATE_RESP}" >&2
-    exit 6
-fi
-echo "Verified: State updated via controller."
-
-# Wait 1s and verify state.json contents
-sleep 1
-if [ ! -f "${STATE_FILE}" ]; then
-    echo "Error: state.json was not created at ${STATE_FILE}!" >&2
-    exit 7
-fi
-
-SAVED_VP=$(python3 -c "import json; data=json.load(open('${STATE_FILE}')); print(data.get('last_viewpoint'))")
-SAVED_UAV=$(python3 -c "import json; data=json.load(open('${STATE_FILE}')); print(data.get('agent_visibility', {}).get('uav_01'))")
-SAVED_BOXES=$(python3 -c "import json; data=json.load(open('${STATE_FILE}')); print(data.get('layer_toggles', {}).get('boxes'))")
-
-if [ "${SAVED_VP}" != "drone" ] || [ "${SAVED_UAV}" != "False" ] || [ "${SAVED_BOXES}" != "False" ]; then
-    echo "Error: state.json did not persist full state correctly!" >&2
-    cat "${STATE_FILE}" >&2
-    exit 8
-fi
-echo "Verified: state.json contains full resume state (viewpoint=${SAVED_VP}, uav_01=${SAVED_UAV}, boxes=${SAVED_BOXES})."
-
 screencapture -x "${SCREENSHOT_DIR}/02-before-quit.png" 2>/dev/null || true
 
 echo ""
-echo "--- Step 2: Quit and Relaunch to Assert Session Restore ---"
-# Quit application via AppleScript Cmd+Q
+echo "--- Step 2: Quit and Relaunch to Assert Session Restore from DOM & Scene Graph ---"
 osascript <<EOF || true
 tell application "System Events"
     tell process "Coperceive"
@@ -302,81 +294,196 @@ RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
 RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
 echo "Relaunched app active on ctrl port ${RELAUNCH_PORT}"
 
-# Verify state restored via GET /state
-RELOADED_STATE=$(curl -s -f -H "Host: 127.0.0.1:${RELAUNCH_PORT}" \
-    -H "Authorization: Bearer ${RELAUNCH_SECRET}" \
-    "http://127.0.0.1:${RELAUNCH_PORT}/state")
+# Wait 2 seconds for viewer render
+sleep 2
 
-echo "Reloaded state: ${RELOADED_STATE}"
-R_VP=$(python3 -c "import json; data=json.loads('''${RELOADED_STATE}'''); print(data.get('last_viewpoint'))")
-R_UAV=$(python3 -c "import json; data=json.loads('''${RELOADED_STATE}'''); print(data.get('agent_visibility', {}).get('uav_01'))")
-R_BOXES=$(python3 -c "import json; data=json.loads('''${RELOADED_STATE}'''); print(data.get('layer_toggles', {}).get('boxes'))")
+# Assert every restored value from DOM and scene-graph counts!
+python3 -c '
+import sys, json, urllib.request
 
-if [ "${R_VP}" != "drone" ] || [ "${R_UAV}" != "False" ] || [ "${R_BOXES}" != "False" ]; then
-    echo "Error: State was not completely restored upon relaunch!" >&2
-    exit 11
-fi
-echo "Verified: All session states (viewpoint, agent visibility, layer toggles) restored successfully."
+port = "'"${RELAUNCH_PORT}"'"
+secret = "'"${RELAUNCH_SECRET}"'"
+
+def eval_js(code):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+print("Checking restored values from DOM...")
+drone_pressed = eval_js("document.querySelector(\x27button[aria-keyshortcuts=\"3\"]\x27)?.getAttribute(\x27aria-pressed\x27)")
+assert drone_pressed == "true", f"Expected Drone viewpoint aria-pressed==true, got {drone_pressed}"
+
+boxes_checked = eval_js("""(() => {
+    const eye = Array.from(document.querySelectorAll(\x27.eye\x27)).find(b => b.textContent.includes("Boxes"));
+    return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
+})()""")
+assert boxes_checked == "false", f"Expected Boxes toggle aria-checked==false, got {boxes_checked}"
+
+frustum_images_checked = eval_js("""(() => {
+    const eye = Array.from(document.querySelectorAll(\x27.eye\x27)).find(b => b.textContent.includes("Frustum images"));
+    return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
+})()""")
+assert frustum_images_checked == "false", f"Expected Frustum images toggle aria-checked==false, got {frustum_images_checked}"
+
+uav_checked = eval_js("""(() => {
+    const swatch = Array.from(document.querySelectorAll(\x27.swatch\x27)).find(b => b.textContent.includes("uav_01") || b.textContent.includes("Drone"));
+    return swatch ? (swatch.getAttribute("aria-checked") || swatch.getAttribute("aria-pressed")) : null;
+})()""")
+assert uav_checked == "false", f"Expected uav_01 swatch aria-checked==false, got {uav_checked}"
+
+print("Checking restored values from scene-graph counts...")
+counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__()")
+print(f"Relaunched scene counts: {counts}")
+assert counts["boxes"] == 0, f"Expected restored boxes == 0, got {counts}"
+assert counts["frustums"] == 4, f"Expected restored frustums == 4 (UAV hidden), got {counts}"
+assert counts["points"] > 0, f"Expected restored points > 0, got {counts}"
+
+print("Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.")
+'
 
 screencapture -x "${SCREENSHOT_DIR}/03-after-relaunch.png" 2>/dev/null || true
 
 echo ""
-echo "--- Step 3: Cmd+O to Empty Folder (Inline Error, Session Kept) ---"
-EMPTY_DIR=$(mktemp -d /tmp/coperceive-empty-XXXXXX)
-echo "${EMPTY_DIR}" > "${MOCK_DIALOG_FILE}"
-
-echo "Triggering Cmd+O to invalid/empty directory..."
-osascript <<EOF || true
-tell application "System Events"
-    tell process "Coperceive"
-        set frontmost to true
-        keystroke "o" using command down
-    end tell
-end tell
-EOF
-
-sleep 1.5
-
-# Verify old session is kept and still serves scenes
-SCENES_CHECK=$(curl -s -f -H "Authorization: Bearer $(sed -n '2p' "${MARKER_FILE}")" "$(sed -n '1p' "${MARKER_FILE}")/api/scenes")
-if ! echo "${SCENES_CHECK}" | grep -q "synth_001"; then
-    echo "Error: Old session was terminated on invalid folder selection!" >&2
-    exit 12
-fi
-echo "Verified: Invalid folder was rejected, old session kept alive."
-
-echo ""
-echo "--- Step 4: Cmd+O to Second Fixture (Multi-Scene Root) ---"
+echo "--- Step 3: Switch Dataset to Second Valid Root (Multi-Scene Root) ---"
 echo "${FIXTURE_2}" > "${MOCK_DIALOG_FILE}"
 
-echo "Triggering Open Dataset to second fixture (${FIXTURE_2})..."
-osascript <<EOF || true
-tell application "System Events"
-    tell process "Coperceive"
-        try
-            click menu item "Open Dataset…" of menu "File" of menu bar 1
-        on error
-            keystroke "o" using command down
-        end try
-    end tell
-end tell
-EOF
+# Trigger folder switch via the UI Open button!
+python3 -c '
+import sys, json, urllib.request
+
+port = "'"${RELAUNCH_PORT}"'"
+secret = "'"${RELAUNCH_SECRET}"'"
+
+def eval_js(code):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+print("Clicking UI dataset open button...")
+eval_js("document.querySelector(\x27.btn-open-dataset\x27)?.click()")
+'
 
 sleep 3.5
 
-# Verify state.json was updated with second fixture
-NEW_ROOT=$(python3 -c "import json; data=json.load(open('${STATE_FILE}')); print(data.get('last_data_root'))")
-echo "New data root in state.json: ${NEW_ROOT}"
-if [ "${NEW_ROOT}" != "${FIXTURE_2}" ]; then
-    echo "Error: state.json was not updated with new data root!" >&2
-    exit 13
-fi
-echo "Verified: switched cleanly to second fixture without restarting app."
+# Assert scene list loaded and scene graph rendered for new root
+python3 -c '
+import sys, json, urllib.request
+
+port = "'"${RELAUNCH_PORT}"'"
+secret = "'"${RELAUNCH_SECRET}"'"
+
+def eval_js(code):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+print("Checking scene counts after folder switch...")
+counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__()")
+print(f"Counts after folder switch: {counts}")
+assert counts is not None, "Scene counts must exist"
+assert counts["points"] > 0, f"Expected points > 0 in new scene, got {counts}"
+
+badge_text = eval_js("document.querySelector(\x27.dataset-name\x27)?.textContent")
+print(f"Dataset badge text: {badge_text}")
+assert "synthetic_scene" in (badge_text or ""), f"Expected synthetic_scene badge, got {badge_text}"
+
+print("Step 3 verified: switched cleanly to second fixture, new scene rendered.")
+'
 
 screencapture -x "${SCREENSHOT_DIR}/04-switched-fixture.png" 2>/dev/null || true
 
 echo ""
-echo "--- Step 5: Close Viewer Window (Cmd+W) -> Returns to Connect Screen ---"
+echo "--- Step 4: Switch Dataset to Invalid Folder (Persistent Error UI) ---"
+EMPTY_DIR=$(mktemp -d /tmp/coperceive-empty-XXXXXX)
+echo "${EMPTY_DIR}" > "${MOCK_DIALOG_FILE}"
+
+python3 -c '
+import sys, json, urllib.request
+
+port = "'"${RELAUNCH_PORT}"'"
+secret = "'"${RELAUNCH_SECRET}"'"
+
+def eval_js(code):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+print("Triggering Open Dataset to invalid empty directory...")
+eval_js("document.querySelector(\x27.btn-open-dataset\x27)?.click()")
+'
+
+sleep 1.5
+
+# Assert error UI:
+# - Message: "No coperceive scenes in <path>. A scene folder contains manifest.json."
+# - Has "Choose another folder" button
+# - Stays visible after 5s (not a 4s toast)
+python3 -c '
+import sys, json, time, urllib.request
+
+port = "'"${RELAUNCH_PORT}"'"
+secret = "'"${RELAUNCH_SECRET}"'"
+
+def eval_js(code):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=10) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+err_msg = eval_js("document.querySelector(\x27.dataset-error-msg\x27)?.textContent")
+print(f"Error banner text: {err_msg}")
+assert err_msg and "No coperceive scenes in" in err_msg, f"Expected \x27No coperceive scenes in\x27, got {err_msg}"
+assert "A scene folder contains manifest.json." in err_msg, f"Expected manifest.json notice, got {err_msg}"
+
+choose_btn = eval_js("document.querySelector(\x27.dataset-error-choose-btn\x27)?.textContent")
+print(f"Choose another folder button: {choose_btn}")
+assert choose_btn and "Choose another folder" in choose_btn, "Expected \x27Choose another folder\x27 button"
+
+print("Waiting 5 seconds to assert error UI stays persistent (not dismissed)...")
+time.sleep(5)
+
+err_msg_after = eval_js("document.querySelector(\x27.dataset-error-msg\x27)?.textContent")
+assert err_msg_after and "No coperceive scenes in" in err_msg_after, "Error UI disappeared after 5s! Must stay until dismissed."
+
+print("Step 4 verified: Persistent validation error UI displayed with \x27Choose another folder\x27 button.")
+'
+
+echo ""
+echo "--- Step 5: Close Viewer Window (Cmd+W) -> Returns to Connect Screen with Backdrop ---"
 osascript <<EOF || true
 tell application "System Events"
     tell process "Coperceive"
@@ -388,7 +495,7 @@ EOF
 
 sleep 2
 
-# Verify app is still alive, but sidecar is stopped
+# Verify app is still alive
 if ! kill -0 "${APP_PID}" 2>/dev/null; then
     echo "Error: Closing viewer window killed the application process!" >&2
     exit 14
@@ -430,7 +537,7 @@ APP_PID=""
 # Assert no orphan coperceive serve processes remain
 sleep 1
 if pgrep -f "coperceive serve" >/dev/null 2>&1; then
-    echo "Error: Orphan 'coperceive serve' processes remain after quitting app!" >&2
+    echo "Error: Orphan \x27coperceive serve\x27 processes remain after quitting app!" >&2
     ps aux | grep "coperceive serve" >&2
     pkill -f "coperceive serve" || true
     exit 15

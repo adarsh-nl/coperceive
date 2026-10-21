@@ -94,7 +94,15 @@ export function EyeToggle({
   onChange: () => void;
 }) {
   return (
-    <button type="button" className="eye" aria-pressed={on} onClick={onChange}>
+    <button
+      type="button"
+      className="eye"
+      role="switch"
+      aria-checked={on}
+      aria-pressed={on}
+      aria-label={label}
+      onClick={onChange}
+    >
       <EyeIcon open={on} />
       <span>{label}</span>
     </button>
@@ -118,7 +126,16 @@ export function SwatchToggle({
   title?: string;
 }) {
   return (
-    <button type="button" className={on ? "swatch on" : "swatch"} aria-pressed={on} onClick={onChange} title={title}>
+    <button
+      type="button"
+      className={on ? "swatch on" : "swatch"}
+      role="switch"
+      aria-checked={on}
+      aria-pressed={on}
+      aria-label={label}
+      onClick={onChange}
+      title={title}
+    >
       <i style={{ background: color }} aria-hidden="true" />
       <span>{label}</span>
       {meta}

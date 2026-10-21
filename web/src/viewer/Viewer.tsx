@@ -798,6 +798,9 @@ declare global {
         frustums?: boolean;
         map?: boolean;
         axes?: boolean;
+        frustum_images?: boolean;
+        frustum_opacity?: number;
+        frustum_image_cameras?: string[] | null;
       };
       selected_camera?: string;
       split_view?: boolean;
@@ -816,7 +819,31 @@ declare global {
       basename: string,
       root: string
     ) => void;
+    __COPERCEIVE_DATASET_ERROR__?: (error: string) => void;
+    __COPERCEIVE_TEST_ENV__?: boolean;
   }
+}
+
+function clearStage(stage: Stage) {
+  stage.points.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.points.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.boxes.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.boxes.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.dimmedBoxes.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.dimmedBoxes.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.mapLines.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.mapLines.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.frustums.clear();
+  stage.agents.clear();
+  stage.solids.clear();
+  stage.picks.clear();
+  stage.frustumPicks.clear();
+  stage.images.clear();
+  stage.imagePlanes.clear();
+  stage.predictions.clear();
+  stage.predictionPicks.clear();
+  stage.clearMotion();
+  stage.requestRender();
 }
 
 export default function Viewer({
@@ -838,6 +865,10 @@ export default function Viewer({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<Stage | null>(null);
+  const [activeToken, setActiveToken] = useState(token);
+  useEffect(() => {
+    setActiveToken(token);
+  }, [token]);
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
   const [sceneId, setSceneId] = useState("");
@@ -883,6 +914,7 @@ export default function Viewer({
     () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_ROOT__) || "",
   );
   const [toast, setToast] = useState<{ id: number; text: string; type: "error" | "info" } | null>(null);
+  const [datasetError, setDatasetError] = useState<string | null>(null);
 
   const triggerOpenFolder = () => {
     if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
@@ -925,24 +957,77 @@ export default function Viewer({
         return { ...curr, theme: next };
       });
     };
-    window.__COPERCEIVE_DATASET_CHANGED__ = (
-      _origin: string,
-      _token: string,
+    window.__COPERCEIVE_DATASET_CHANGED__ = async (
+      newOrigin: string,
+      newToken: string,
       basename: string,
       root: string,
     ) => {
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem("coperceive-origin", newOrigin);
+        sessionStorage.setItem("coperceive-token", newToken);
+      }
+      setActiveToken(newToken);
       setDataBasename(basename);
       setDataRoot(root);
-      setScenes([]);
-      setSceneId("");
+      setDatasetError(null);
       setPlaying(false);
+
+      if (stageRef.current) {
+        clearStage(stageRef.current);
+      }
+      setSummary(null);
+      setCameraFrame(null);
+      setPick(null);
+      setEvalPick(null);
+      cacheRef.current.clear();
+      predCacheRef.current.clear();
+
+      try {
+        const response = await fetch(`${newOrigin}/api/scenes`, {
+          headers: authHeaders(newToken),
+        });
+        if (!response.ok) {
+          setStatus(await errorDetail(response));
+          return;
+        }
+        const body = (await response.json()) as unknown;
+        if (!Array.isArray(body)) {
+          setStatus("The scene list was not a list.");
+          return;
+        }
+        const ids = body.flatMap((item) => {
+          if (item && typeof item === "object" && typeof (item as { scene_id?: unknown }).scene_id === "string") {
+            return [(item as { scene_id: string }).scene_id];
+          }
+          return [];
+        });
+        setScenes(ids);
+        if (ids.length === 1) {
+          setSceneId(ids[0]);
+        } else if (ids.length > 1) {
+          setSceneId((current) => (ids.includes(current) ? current : ids[0]));
+        } else {
+          setSceneId("");
+          setStatus("No scene directories under the server root.");
+        }
+      } catch (e) {
+        setStatus(e instanceof Error ? e.message : "Could not list scenes.");
+      }
+
       setToast({ id: Date.now(), text: `Switched dataset to ${basename}`, type: "info" });
     };
+
+    window.__COPERCEIVE_DATASET_ERROR__ = (msg: string) => {
+      setDatasetError(msg);
+    };
+
     return () => {
       delete window.__COPERCEIVE_SHOW_TOAST__;
       delete window.__COPERCEIVE_SET_VIEWPOINT__;
       delete window.__COPERCEIVE_TOGGLE_THEME__;
       delete window.__COPERCEIVE_DATASET_CHANGED__;
+      delete window.__COPERCEIVE_DATASET_ERROR__;
     };
   }, [onTheme]);
 
@@ -1571,7 +1656,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes`, {
-        headers: authHeaders(token),
+        headers: authHeaders(activeToken),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -1607,7 +1692,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [token]);
+  }, [activeToken]);
 
   useEffect(() => {
     if (!sceneId) {
@@ -1619,7 +1704,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}`, {
-        headers: authHeaders(token),
+        headers: authHeaders(activeToken),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -1632,7 +1717,7 @@ export default function Viewer({
         return;
       }
       let initialFrame = 0;
-      let initialHidden: Record<string, boolean> = {};
+      let initialHidden: Record<string, boolean> = { ...hidden };
       if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__) {
         const init = window.__COPERCEIVE_INITIAL_STATE__;
         if (typeof init.last_sample_index === "number" && init.last_sample_index < body.times_us.length) {
@@ -1666,6 +1751,9 @@ export default function Viewer({
             frustums: init.layer_toggles?.frustums ?? curr.frustums,
             map: init.layer_toggles?.map ?? curr.map,
             axes: init.layer_toggles?.axes ?? curr.axes,
+            frustumImages: init.layer_toggles?.frustum_images !== undefined ? init.layer_toggles.frustum_images : curr.frustumImages,
+            frustumOpacity: typeof init.layer_toggles?.frustum_opacity === "number" ? init.layer_toggles.frustum_opacity : curr.frustumOpacity,
+            frustumImageCameras: init.layer_toggles?.frustum_image_cameras !== undefined ? init.layer_toggles.frustum_image_cameras : curr.frustumImageCameras,
           }));
         }
         if (init.panel_collapse) {
@@ -1759,6 +1847,9 @@ export default function Viewer({
             frustums: appearance.frustums,
             map: appearance.map,
             axes: appearance.axes,
+            frustum_images: appearance.frustumImages,
+            frustum_opacity: appearance.frustumOpacity,
+            frustum_image_cameras: appearance.frustumImageCameras ?? undefined,
           },
           selected_camera: appearance.splitCamera || cameraId || undefined,
           split_view: Boolean(appearance.splitCamera),
@@ -2059,7 +2150,7 @@ export default function Viewer({
           runs: [],
           note:
             detail === "no predictions root"
-              ? "no predictions root; start the server with --predictions."
+              ? "no predictions available for this scene."
               : "no prediction runs for this scene.",
         });
         return;
@@ -2796,6 +2887,7 @@ export default function Viewer({
             type="button"
             className="btn-open-dataset"
             onClick={triggerOpenFolder}
+            aria-label="Open dataset folder (⌘O)"
             title="Open dataset folder (⌘O)"
           >
             Open…
@@ -2847,6 +2939,32 @@ export default function Viewer({
 
   return (
     <div className={poster ? "viewer viewer-poster" : "viewer"}>
+      {datasetError && (
+        <div className="dataset-error-banner" role="alert">
+          <div className="dataset-error-content">
+            <span className="dataset-error-icon" aria-hidden="true">⚠️</span>
+            <span className="dataset-error-msg">{datasetError}</span>
+          </div>
+          <div className="dataset-error-actions">
+            <button
+              type="button"
+              className="dataset-error-choose-btn"
+              onClick={triggerOpenFolder}
+              aria-label="Choose another dataset folder"
+            >
+              Choose another folder
+            </button>
+            <button
+              type="button"
+              className="dataset-error-dismiss-btn"
+              onClick={() => setDatasetError(null)}
+              aria-label="Dismiss error"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       {toast && (
         <div className="toast-container" role="status" aria-live="polite">
           <div className={`toast toast-${toast.type}`}>
@@ -3103,6 +3221,8 @@ export default function Viewer({
                   key={item.id}
                   type="button"
                   aria-pressed={viewpoint === item.id}
+                  aria-checked={viewpoint === item.id}
+                  aria-label={`${item.label} viewpoint (${item.shortcut})`}
                   aria-keyshortcuts={item.shortcut}
                   onClick={() => chooseViewpoint(item.id)}
                 >

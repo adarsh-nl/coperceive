@@ -9,14 +9,21 @@ import { IconGear } from "./viewer/controls";
 import type { ThemeName } from "./viewer/appearance";
 import Viewer from "./viewer/Viewer";
 
-function useHashRoute(): "home" | "viewer" {
+function useHashRoute(): "home" | "viewer" | "connect" {
   const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
-  const [route, setRoute] = useState<"home" | "viewer">(() => {
+  const [route, setRoute] = useState<"home" | "viewer" | "connect">(() => {
+    const raw = typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
+    if (raw === "/connect") return "connect";
     if (isDesktop) return "viewer";
-    return window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home";
+    return raw === "/viewer" ? "viewer" : "home";
   });
   useEffect(() => {
     const onHash = () => {
+      const raw = window.location.hash.replace(/^#/, "");
+      if (raw === "/connect") {
+        setRoute("connect");
+        return;
+      }
       const isDesktopNow = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
       if (isDesktopNow) {
         if (window.location.hash !== "#/viewer") {
@@ -25,7 +32,7 @@ function useHashRoute(): "home" | "viewer" {
         setRoute("viewer");
         return;
       }
-      setRoute(window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home");
+      setRoute(raw === "/viewer" ? "viewer" : "home");
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -223,7 +230,7 @@ export default function App() {
 
   const jobRows: Job[] = jobs.data ?? [];
 
-  if (isTauri && !connected) {
+  if ((isTauri && !connected) || route === "connect") {
     return (
       <ConnectScreen
         onConnected={(session) => {
