@@ -16,6 +16,9 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 #[cfg(target_os = "macos")]
+use tauri::Manager;
+
+#[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{RemoteClient, RemoteSessionManager, RemoteStatusResponse};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::sidecar::SidecarSession;
