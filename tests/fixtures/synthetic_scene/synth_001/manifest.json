@@ -1,16 +1,27 @@
 {
   "schema_version": 1,
-  "scene_id": "desk",
+  "scene_id": "synth_001",
   "world_frame": "ENU",
   "clock": {
     "unit": "us",
-    "scale_note": "app viewer fixture"
+    "scale_note": "synthetic scene fixture"
   },
   "agents": [
     {
       "agent_id": "vehicle",
       "agent_type": "vehicle",
-      "platform": {}
+      "platform": {
+        "map_name": "Carla/Maps/Town03"
+      },
+      "display_name": "Vehicle 1"
+    },
+    {
+      "agent_id": "uav",
+      "agent_type": "uav",
+      "platform": {
+        "map_name": "Carla/Maps/Town03"
+      },
+      "display_name": "Drone 1"
     }
   ],
   "sensors": [
@@ -24,13 +35,103 @@
       "qz": 0.0,
       "tx": 0.0,
       "ty": 0.0,
-      "tz": 0.0,
+      "tz": 1.8,
       "image_width_px": null,
       "image_height_px": null,
       "fx": null,
       "fy": null,
       "cx": null,
       "cy": null
+    },
+    {
+      "sensor_id": "cam_front",
+      "agent_id": "vehicle",
+      "modality": "camera",
+      "qw": 1.0,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": 0.0,
+      "tx": 1.5,
+      "ty": 0.0,
+      "tz": 1.5,
+      "image_width_px": 1280,
+      "image_height_px": 720,
+      "fx": 1000.0,
+      "fy": 1000.0,
+      "cx": 640.0,
+      "cy": 360.0
+    },
+    {
+      "sensor_id": "cam_rear",
+      "agent_id": "vehicle",
+      "modality": "camera",
+      "qw": 1.0,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": 0.0,
+      "tx": -1.5,
+      "ty": 0.0,
+      "tz": 1.5,
+      "image_width_px": 1280,
+      "image_height_px": 720,
+      "fx": 1000.0,
+      "fy": 1000.0,
+      "cx": 640.0,
+      "cy": 360.0
+    },
+    {
+      "sensor_id": "cam_left",
+      "agent_id": "vehicle",
+      "modality": "camera",
+      "qw": 1.0,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": 0.0,
+      "tx": 0.0,
+      "ty": 1.0,
+      "tz": 1.5,
+      "image_width_px": 1280,
+      "image_height_px": 720,
+      "fx": 1000.0,
+      "fy": 1000.0,
+      "cx": 640.0,
+      "cy": 360.0
+    },
+    {
+      "sensor_id": "cam_right",
+      "agent_id": "vehicle",
+      "modality": "camera",
+      "qw": 1.0,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": 0.0,
+      "tx": 0.0,
+      "ty": -1.0,
+      "tz": 1.5,
+      "image_width_px": 1280,
+      "image_height_px": 720,
+      "fx": 1000.0,
+      "fy": 1000.0,
+      "cx": 640.0,
+      "cy": 360.0
+    },
+    {
+      "sensor_id": "cam_down",
+      "agent_id": "uav",
+      "modality": "camera",
+      "qw": 1.0,
+      "qx": 0.0,
+      "qy": 0.0,
+      "qz": 0.0,
+      "tx": 0.0,
+      "ty": 0.0,
+      "tz": -0.2,
+      "image_width_px": 1280,
+      "image_height_px": 720,
+      "fx": 1000.0,
+      "fy": 1000.0,
+      "cx": 640.0,
+      "cy": 360.0
     }
   ]
 }

@@ -1818,6 +1818,9 @@ export default function Viewer({
       } else if (action === "step_backward") {
         setPlaying(false);
         setFrameIndex((curr) => Math.max(0, curr - 1));
+      } else if (action === "seek" && typeof value === "number") {
+        setPlaying(false);
+        setFrameIndex(summary ? Math.max(0, Math.min(value, summary.times_us.length - 1)) : 0);
       } else if (action === "speed" && typeof value === "number") {
         if (value === 0.25 || value === 0.5 || value === 1 || value === 2 || value === 4) {
           setSpeed(value);

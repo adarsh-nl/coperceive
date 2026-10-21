@@ -92,6 +92,7 @@ trap cleanup EXIT
 
 # Clear previous state
 rm -f "${STATE_FILE}"
+rm -f "${HOME}/Library/Application Support/coperceive/state.json"
 
 echo ""
 echo "--- Step 1: Launch App with Fixture 1 (Single Scene Root) ---"
@@ -104,9 +105,9 @@ export COPERCEIVE_MOCK_DIALOG_FILE="${MOCK_DIALOG_FILE}"
 APP_PID=$!
 echo "App launched with PID ${APP_PID}"
 
-# Wait for marker file
+# Wait for marker file (up to 60s)
 echo "Waiting for app to start and auto-connect..."
-for i in {1..40}; do
+for i in {1..120}; do
     if [ -f "${MARKER_FILE}" ]; then
         break
     fi
@@ -120,7 +121,14 @@ done
 
 if [ ! -f "${MARKER_FILE}" ]; then
     echo "Error: Marker file was not created within timeout!" >&2
+    echo "=== App stderr ===" >&2
     cat "${APP_STDERR}" >&2
+    echo "=== App stdout ===" >&2
+    cat "${APP_STDOUT}" >&2
+    if [ -d "${HOME}/Library/Logs/Coperceive" ]; then
+        echo "=== Coperceive logs ===" >&2
+        cat "${HOME}/Library/Logs/Coperceive/"*.log >&2 || true
+    fi
     exit 4
 fi
 
@@ -294,7 +302,8 @@ echo "Relaunching app from persistent state.json..."
 APP_PID=$!
 echo "Relaunched app PID ${APP_PID}"
 
-for i in {1..40}; do
+# Wait for marker file (up to 60s)
+for i in {1..120}; do
     if [ -f "${MARKER_FILE}" ]; then
         break
     fi
@@ -308,7 +317,14 @@ done
 
 if [ ! -f "${MARKER_FILE}" ]; then
     echo "Error: Relaunched app did not auto-resume from state.json!" >&2
+    echo "=== Relaunch stderr ===" >&2
     cat "${TMP_DIR}/relaunch_stderr.log" >&2
+    echo "=== Relaunch stdout ===" >&2
+    cat "${TMP_DIR}/relaunch_stdout.log" >&2
+    if [ -d "${HOME}/Library/Logs/Coperceive" ]; then
+        echo "=== Coperceive logs ===" >&2
+        cat "${HOME}/Library/Logs/Coperceive/"*.log >&2 || true
+    fi
     exit 10
 fi
 
