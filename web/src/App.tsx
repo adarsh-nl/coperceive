@@ -151,6 +151,19 @@ export default function App() {
   }, [token]);
 
   useEffect(() => {
+    const checkToken = () => {
+      try {
+        const stored = sessionStorage.getItem(TOKEN_KEY);
+        if (stored && stored !== token) {
+          setToken(stored);
+        }
+      } catch {}
+    };
+    window.addEventListener("storage", checkToken);
+    return () => window.removeEventListener("storage", checkToken);
+  }, [token]);
+
+  useEffect(() => {
     document.documentElement.dataset.theme = theme;
   }, [theme]);
 

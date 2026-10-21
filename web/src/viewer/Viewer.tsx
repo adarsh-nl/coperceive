@@ -868,14 +868,16 @@ export default function Viewer({
   const [activeToken, setActiveToken] = useState(() => {
     return token || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("coperceive-token") ?? "" : "");
   });
+  const prevTokenRef = useRef(token);
   useEffect(() => {
-    if (token) {
+    if (token && token !== prevTokenRef.current) {
+      prevTokenRef.current = token;
       setActiveToken(token);
-    } else {
+    } else if (!activeToken) {
       const stored = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("coperceive-token") ?? "" : "";
       if (stored) setActiveToken(stored);
     }
-  }, [token]);
+  }, [token, activeToken]);
   const effectiveToken = activeToken || token;
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
@@ -1011,10 +1013,22 @@ export default function Viewer({
           return [];
         });
         setScenes(ids);
-        if (ids.length === 1) {
-          setSceneId(ids[0]);
-        } else if (ids.length > 1) {
-          setSceneId((current) => (ids.includes(current) ? current : ids[0]));
+        if (ids.length >= 1) {
+          const nextScene = ids.length === 1 ? ids[0] : (ids.includes(sceneId) ? sceneId : ids[0]);
+          setSceneId(nextScene);
+          try {
+            const sumResp = await fetch(`${newOrigin}/api/scenes/${encodeURIComponent(nextScene)}`, {
+              headers: authHeaders(newToken),
+            });
+            if (sumResp.ok) {
+              const sumBody = (await sumResp.json()) as unknown;
+              if (isSummary(sumBody)) {
+                setFrameIndex(0);
+                setSummary(sumBody);
+                setStatus(`${sumBody.scene_id}: ${sumBody.times_us.length} samples, world ${sumBody.world_frame}.`);
+              }
+            }
+          } catch {}
         } else {
           setSceneId("");
           setStatus("No scene directories under the server root.");
@@ -1707,7 +1721,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [activeToken]);
+  }, [effectiveToken]);
 
   useEffect(() => {
     if (!sceneId) {
@@ -1719,7 +1733,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}`, {
-        headers: authHeaders(activeToken),
+        headers: authHeaders(effectiveToken),
         signal: controller.signal,
       });
       if (!response.ok) {
