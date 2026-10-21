@@ -173,6 +173,8 @@ jobs:
           (grep -A 35 "Caused by:" /tmp/cargo_test.log 2>/dev/null || true) | head -n 35 | while IFS= read -r line; do
             echo "::error title=CargoError::$line"
           done
+      - name: Sync Desktop Bundle Version
+        run: bash scripts/desktop/sync_version.sh
       - name: Build Tauri Desktop (.app and .dmg)
         run: npm run tauri build -- --target aarch64-apple-darwin --verbose 2>&1 | tee /tmp/tauri_build.log
         working-directory: web
@@ -207,11 +209,13 @@ jobs:
           name: coperceive-desktop-macos-arm64
           path: |
             src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Coperceive.app
             src-tauri/target/release/bundle/dmg/*.dmg
-            src-tauri/target/release/bundle/macos/Coperceive.app
             web/src-tauri/target/aarch64-apple-darwin/release/bundle/dmg/*.dmg
-            web/src-tauri/target/aarch64-apple-darwin/release/bundle/macos/Coperceive.app
             web/src-tauri/target/release/bundle/dmg/*.dmg
-            web/src-tauri/target/release/bundle/macos/Coperceive.app
           if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-e2e-screenshots
+          path: /tmp/e2e-shots/desktop-app-window.png
+          if-no-files-found: ignore

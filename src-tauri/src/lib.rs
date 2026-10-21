@@ -9,4 +9,5 @@ pub mod remote;
 pub mod sidecar;
 pub mod slurm;
 pub mod ssh;
+pub mod state;
 pub mod token;

@@ -776,6 +776,32 @@ function syncMotion(stage: Stage, frame: FrameDocument, types: Map<string, strin
 
 export type ClockMark = { ratio: number; label: string };
 
+declare global {
+  interface Window {
+    __COPERCEIVE_DESKTOP__?: boolean;
+    __COPERCEIVE_CTRL_PORT__?: number;
+    __COPERCEIVE_DATA_ROOT__?: string;
+    __COPERCEIVE_DATA_BASENAME__?: string;
+    __COPERCEIVE_INITIAL_STATE__?: {
+      last_scene_id?: string;
+      last_sample_index?: number;
+      last_timestamp_ns?: number;
+      last_viewpoint?: string;
+      last_theme?: string;
+    };
+    __COPERCEIVE_VIEWER_STATE__?: unknown;
+    __COPERCEIVE_SHOW_TOAST__?: (text: string, type?: "error" | "info") => void;
+    __COPERCEIVE_SET_VIEWPOINT__?: (vp: string) => void;
+    __COPERCEIVE_TOGGLE_THEME__?: () => void;
+    __COPERCEIVE_DATASET_CHANGED__?: (
+      origin: string,
+      token: string,
+      basename: string,
+      root: string
+    ) => void;
+  }
+}
+
 export default function Viewer({
   token,
   slot,
@@ -832,6 +858,76 @@ export default function Viewer({
   appearanceRef.current = appearance;
   const [playing, setPlaying] = useState(false);
   const [loop, setLoop] = useState(false);
+  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const [dataBasename, setDataBasename] = useState<string>(
+    () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_BASENAME__) || "",
+  );
+  const [dataRoot, setDataRoot] = useState<string>(
+    () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_ROOT__) || "",
+  );
+  const [toast, setToast] = useState<{ id: number; text: string; type: "error" | "info" } | null>(null);
+
+  const triggerOpenFolder = () => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      fetch(`http://127.0.0.1:${window.__COPERCEIVE_CTRL_PORT__}/open-dialog`, {
+        method: "POST",
+      }).catch(() => {});
+    }
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "o" || e.key === "O")) {
+        e.preventDefault();
+        triggerOpenFolder();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    window.__COPERCEIVE_SHOW_TOAST__ = (text: string, type: "error" | "info" = "info") => {
+      setToast({ id: Date.now(), text, type });
+    };
+    window.__COPERCEIVE_SET_VIEWPOINT__ = (vp: string) => {
+      if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
+        setViewpoint(vp as Viewpoint);
+      }
+    };
+    window.__COPERCEIVE_TOGGLE_THEME__ = () => {
+      setAppearance((curr) => {
+        const next = curr.theme === "dark" ? "light" : "dark";
+        onTheme?.(next);
+        return { ...curr, theme: next };
+      });
+    };
+    window.__COPERCEIVE_DATASET_CHANGED__ = (
+      _origin: string,
+      _token: string,
+      basename: string,
+      root: string,
+    ) => {
+      setDataBasename(basename);
+      setDataRoot(root);
+      setScenes([]);
+      setSceneId("");
+      setPlaying(false);
+      setToast({ id: Date.now(), text: `Switched dataset to ${basename}`, type: "info" });
+    };
+    return () => {
+      delete window.__COPERCEIVE_SHOW_TOAST__;
+      delete window.__COPERCEIVE_SET_VIEWPOINT__;
+      delete window.__COPERCEIVE_TOGGLE_THEME__;
+      delete window.__COPERCEIVE_DATASET_CHANGED__;
+    };
+  }, [onTheme]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
   const [speed, setSpeed] = useState<Speed>(1);
   const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
   const [cameraId, setCameraId] = useState("");
@@ -1470,8 +1566,15 @@ export default function Viewer({
         }
         return [];
       });
+      let initialScene = "";
+      if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id) {
+        const saved = window.__COPERCEIVE_INITIAL_STATE__.last_scene_id;
+        if (ids.includes(saved)) {
+          initialScene = saved;
+        }
+      }
       setScenes(ids);
-      setSceneId((current) => current || ids[0] || "");
+      setSceneId((current) => current || initialScene || ids[0] || "");
       if (ids.length === 0) {
         setStatus("No scene directories under the server root.");
       }
@@ -1505,8 +1608,30 @@ export default function Viewer({
         setStatus("The scene summary was incomplete.");
         return;
       }
+      let initialFrame = 0;
+      if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__) {
+        const init = window.__COPERCEIVE_INITIAL_STATE__;
+        if (typeof init.last_sample_index === "number" && init.last_sample_index < body.times_us.length) {
+          initialFrame = init.last_sample_index;
+        } else if (typeof init.last_timestamp_ns === "number") {
+          const targetUs = Math.round(init.last_timestamp_ns / 1000);
+          const found = body.times_us.findIndex((t) => t >= targetUs);
+          if (found >= 0) initialFrame = found;
+        }
+        if (init.last_viewpoint) {
+          const vp = init.last_viewpoint as Viewpoint;
+          if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird") {
+            setViewpoint(vp);
+          }
+        }
+        if (init.last_theme && (init.last_theme === "dark" || init.last_theme === "light")) {
+          onTheme?.(init.last_theme);
+          setAppearance((curr) => ({ ...curr, theme: init.last_theme as "dark" | "light" }));
+        }
+        window.__COPERCEIVE_INITIAL_STATE__ = undefined;
+      }
       setSummary(body);
-      setFrameIndex(0);
+      setFrameIndex(initialFrame);
       setExportStart(1);
       setExportEnd(Math.min(10, body.times_us.length));
       setExportSource("view");
@@ -1532,6 +1657,26 @@ export default function Viewer({
     });
     return () => controller.abort();
   }, [sceneId, token]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return;
+    const timer = setTimeout(() => {
+      const port = window.__COPERCEIVE_CTRL_PORT__;
+      const timeUs = summary?.times_us?.[frameIndex];
+      fetch(`http://127.0.0.1:${port}/state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          scene_id: sceneId || undefined,
+          sample_index: frameIndex,
+          timestamp_ns: typeof timeUs === "number" ? timeUs * 1000 : undefined,
+          viewpoint,
+          theme: appearance.theme,
+        }),
+      }).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [sceneId, frameIndex, viewpoint, appearance.theme, summary]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
@@ -2550,6 +2695,20 @@ export default function Viewer({
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (
     <div className="crumb">
+      {isDesktop && (
+        <div className="dataset-badge" title={dataRoot || undefined}>
+          <span className="dataset-folder-icon" aria-hidden="true">📁</span>
+          <span className="dataset-name">{dataBasename || "Dataset"}</span>
+          <button
+            type="button"
+            className="btn-open-dataset"
+            onClick={triggerOpenFolder}
+            title="Open dataset folder (⌘O)"
+          >
+            Open…
+          </button>
+        </div>
+      )}
       <span className="crumb-dataset">{sceneId ? sceneStem : "Scenes"}</span>
       <span className="crumb-sep" aria-hidden="true">/</span>
       <Menu
@@ -2595,6 +2754,21 @@ export default function Viewer({
 
   return (
     <div className={poster ? "viewer viewer-poster" : "viewer"}>
+      {toast && (
+        <div className="toast-container" role="status" aria-live="polite">
+          <div className={`toast toast-${toast.type}`}>
+            <span className="toast-text">{toast.text}</span>
+            <button
+              type="button"
+              className="toast-close"
+              onClick={() => setToast(null)}
+              aria-label="Close notification"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       {slot ? createPortal(crumb, slot) : null}
       {actions ? createPortal(actionTools, actions) : null}
       <div className="workspace">

@@ -829,6 +829,9 @@ def test_playback_updates_status_line_every_frame(session: _Session) -> None:
     session.open()
     session.wait_status(f"{SCENE_FULL} at 0 µs", timeout_s=10.0)
 
+    # Enable loop so playback does not immediately end after 400ms on short clip
+    session.page.keyboard.press("l")
+
     play = session.page.locator("button[aria-label=Play]")
     play.click()
 

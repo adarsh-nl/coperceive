@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
-import { useState } from "react";
-import { LocalExecutionTarget, pickDataRoot } from "./local";
+import { useEffect, useState } from "react";
+import { LocalExecutionTarget, getPersistentState, isRemoteEnabled, pickDataRoot } from "./local";
 import type { ConnectionSession } from "./types";
 
 interface ConnectScreenProps {
@@ -9,9 +9,26 @@ interface ConnectScreenProps {
 
 export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [dataRoot, setDataRoot] = useState<string>("");
+  const [recentRoots, setRecentRoots] = useState<string[]>([]);
+  const [showRemote, setShowRemote] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+
+  useEffect(() => {
+    void (async () => {
+      const state = await getPersistentState();
+      if (state?.recent_roots && state.recent_roots.length > 0) {
+        setRecentRoots(state.recent_roots);
+        // Pre-select the most recent data root if not yet set
+        if (!dataRoot && state.last_data_root) {
+          setDataRoot(state.last_data_root);
+        }
+      }
+      const remote = await isRemoteEnabled();
+      setShowRemote(remote);
+    })();
+  }, []);
 
   const handlePickFolder = async () => {
     try {
@@ -25,8 +42,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     }
   };
 
-  const handleConnectLocal = async () => {
-    if (!dataRoot) {
+  const handleConnectLocal = async (targetRoot?: string) => {
+    const rootToUse = targetRoot || dataRoot;
+    if (!rootToUse) {
       setError("Please select a dataset folder first.");
       return;
     }
@@ -43,7 +61,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       const target = new LocalExecutionTarget();
       const session = await target.connect({
         type: "local",
-        dataRoot,
+        dataRoot: rootToUse,
       });
       clearInterval(timer);
       setStatus("Connected! Initializing 3D viewer...");
@@ -71,7 +89,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       fontFamily: "var(--font-sans, system-ui, sans-serif)",
     }}>
       <div style={{
-        maxWidth: "480px",
+        maxWidth: "500px",
         width: "100%",
         backgroundColor: "var(--card-bg, #1a1a1a)",
         borderRadius: "12px",
@@ -81,7 +99,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       }}>
         <h1 style={{ fontSize: "1.5rem", marginBottom: "0.5rem", fontWeight: 600 }}>Coperceive</h1>
         <p style={{ color: "var(--muted, #888)", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-          Choose an execution target to launch or attach to perception data.
+          Choose a local cooperative perception dataset to launch the viewer.
         </p>
 
         <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
@@ -132,7 +150,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
             <button
               type="button"
-              onClick={handleConnectLocal}
+              onClick={() => handleConnectLocal()}
               disabled={busy || !dataRoot}
               style={{
                 width: "100%",
@@ -148,19 +166,62 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             >
               {busy ? "Connecting..." : "Open Local Viewer"}
             </button>
+
+            {recentRoots.length > 0 && (
+              <div style={{ marginTop: "1rem", borderTop: "1px solid #333", paddingTop: "0.75rem" }}>
+                <p style={{ fontSize: "0.75rem", color: "#888", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                  Recent Datasets
+                </p>
+                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+                  {recentRoots.map((root) => {
+                    const base = root.split("/").filter(Boolean).pop() || root;
+                    return (
+                      <button
+                        key={root}
+                        type="button"
+                        onClick={() => {
+                          setDataRoot(root);
+                          setError("");
+                        }}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          textAlign: "left",
+                          padding: "0.35rem 0.5rem",
+                          fontSize: "0.8rem",
+                          backgroundColor: dataRoot === root ? "#2d3748" : "#1a1a1a",
+                          color: "#eee",
+                          border: `1px solid ${dataRoot === root ? "#4a5568" : "#333"}`,
+                          borderRadius: "4px",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <span style={{ fontWeight: 500 }}>📁 {base}</span>
+                        <span style={{ color: "#666", fontSize: "0.72rem", maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                          {root}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
           </div>
 
-          <div style={{
-            padding: "1rem",
-            borderRadius: "8px",
-            border: "1px dashed var(--border-subtle, #333)",
-            opacity: 0.7,
-          }}>
-            <h2 style={{ fontSize: "1rem", marginBottom: "0.25rem" }}>HPC over SSH</h2>
-            <p style={{ fontSize: "0.85rem", color: "#888" }}>
-              Slurm GPU & dataset tunnel (Phase 3).
-            </p>
-          </div>
+          {showRemote && (
+            <div style={{
+              padding: "1rem",
+              borderRadius: "8px",
+              border: "1px dashed var(--border-subtle, #333)",
+              opacity: 0.7,
+            }}>
+              <h2 style={{ fontSize: "1rem", marginBottom: "0.25rem" }}>HPC over SSH</h2>
+              <p style={{ fontSize: "0.85rem", color: "#888" }}>
+                Slurm GPU & dataset tunnel (Phase 3).
+              </p>
+            </div>
+          )}
         </div>
 
         {status && (

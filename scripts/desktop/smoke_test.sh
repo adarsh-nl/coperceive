@@ -289,9 +289,28 @@ if [ "${SCENE_COUNT}" -lt 1 ]; then
 fi
 echo "Verified: /api/scenes returned ${SCENE_COUNT} scene(s) with HTTP 200 OK."
 
+# Verify frame endpoint probe: loads and serves frame data for synth_001
+echo "Checking GET ${APP_ORIGIN}/api/scenes/synth_001/frame?time_us=0..."
+FRAME_RESP=$(curl -s -f -H "Authorization: Bearer ${APP_TOKEN}" "${APP_ORIGIN}/api/scenes/synth_001/frame?time_us=0")
+FRAME_TIME=$(python3 -c "import json; data=json.loads('''${FRAME_RESP}'''); print(data.get('time_us', -1))")
+if [ "${FRAME_TIME}" -ne 0 ]; then
+    echo "Failure: expected time_us 0 in frame response, got ${FRAME_TIME}!" >&2
+    exit 14
+fi
+echo "Verified: frame endpoint returned valid frame data at time_us 0."
+
 # Wait up to 10 seconds to verify process stability and let the viewer webview fetch scenes
 echo "Waiting 10 seconds to verify viewer stability..."
 sleep 10
+
+# Capture native window screenshot on macOS
+SCREENSHOT_DIR="/tmp/e2e-shots"
+mkdir -p "${SCREENSHOT_DIR}"
+echo "Capturing desktop application window screenshot..."
+screencapture -x "${SCREENSHOT_DIR}/desktop-app-window.png" 2>/dev/null || true
+if [ -f "${SCREENSHOT_DIR}/desktop-app-window.png" ]; then
+    echo "Verified: screenshot captured at ${SCREENSHOT_DIR}/desktop-app-window.png ($(stat -f %z "${SCREENSHOT_DIR}/desktop-app-window.png" 2>/dev/null || wc -c < "${SCREENSHOT_DIR}/desktop-app-window.png") bytes)"
+fi
 
 if ! kill -0 "${APP_PID}" 2>/dev/null; then
     echo "Error: App process died prematurely!" >&2

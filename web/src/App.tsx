@@ -10,11 +10,23 @@ import type { ThemeName } from "./viewer/appearance";
 import Viewer from "./viewer/Viewer";
 
 function useHashRoute(): "home" | "viewer" {
-  const [route, setRoute] = useState<"home" | "viewer">(() =>
-    window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home",
-  );
+  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const [route, setRoute] = useState<"home" | "viewer">(() => {
+    if (isDesktop) return "viewer";
+    return window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home";
+  });
   useEffect(() => {
-    const onHash = () => setRoute(window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home");
+    const onHash = () => {
+      const isDesktopNow = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+      if (isDesktopNow) {
+        if (window.location.hash !== "#/viewer") {
+          window.location.hash = "#/viewer";
+        }
+        setRoute("viewer");
+        return;
+      }
+      setRoute(window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home");
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -28,6 +40,7 @@ function storedToken(): string {
 }
 
 export default function App() {
+  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
   const queryClient = useQueryClient();
   const route = useHashRoute();
   const [isTauri] = useState(isTauriEnvironment);
@@ -47,6 +60,12 @@ export default function App() {
   const [tab, setTab] = useState<"viewer" | "desk">("viewer");
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (isDesktop && window.location.hash !== "#/viewer") {
+      window.location.hash = "#/viewer";
+    }
+  }, [isDesktop]);
 
   useEffect(() => {
     sessionStorage.setItem(TOKEN_KEY, token);
@@ -162,7 +181,7 @@ export default function App() {
     );
   }
 
-  if (route === "home") {
+  if (route === "home" && !isDesktop) {
     return (
       <Landing
         token={token}
@@ -179,59 +198,63 @@ export default function App() {
   }
 
   return (
-    <div className={tab === "viewer" ? "shell" : "shell shell-desk"}>
+    <div className={tab === "viewer" || isDesktop ? "shell" : "shell shell-desk"}>
       <header className="topbar">
         <div className="top-cluster">
-          <a className="brand" href="#/">
+          <a className="brand" href={isDesktop ? "#/viewer" : "#/"}>
             <span className="brand-mark" aria-hidden="true" />
             coperceive
           </a>
           <div className="top-slot" ref={setSlot} />
         </div>
-        <div className="tabs" role="tablist" aria-label="Sections">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "viewer"}
-            className={tab === "viewer" ? "tab selected" : "tab"}
-            onClick={() => setTab("viewer")}
-          >
-            Viewer
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "desk"}
-            className={tab === "desk" ? "tab selected" : "tab"}
-            onClick={() => setTab("desk")}
-          >
-            Desk
-          </button>
-        </div>
+        {!isDesktop && (
+          <div className="tabs" role="tablist" aria-label="Sections">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "viewer"}
+              className={tab === "viewer" ? "tab selected" : "tab"}
+              onClick={() => setTab("viewer")}
+            >
+              Viewer
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "desk"}
+              className={tab === "desk" ? "tab selected" : "tab"}
+              onClick={() => setTab("desk")}
+            >
+              Desk
+            </button>
+          </div>
+        )}
         <div className="top-cluster top-end">
           <div className="top-actions" ref={setActions} />
-          <details className="settings">
-            <summary className="icon ghost" aria-label="Settings">
-              <IconGear />
-            </summary>
-          <div className="settings-pop">
-            <label htmlFor="token-global">
-              Bearer token
-              <input
-                id="token-global"
-                type="password"
-                autoComplete="off"
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="Empty when the server has no token"
-              />
-            </label>
-            <p className="muted">Stored in this tab only. A non-loopback bind refuses to start without a token.</p>
-          </div>
-          </details>
+          {!isDesktop && (
+            <details className="settings">
+              <summary className="icon ghost" aria-label="Settings">
+                <IconGear />
+              </summary>
+              <div className="settings-pop">
+                <label htmlFor="token-global">
+                  Bearer token
+                  <input
+                    id="token-global"
+                    type="password"
+                    autoComplete="off"
+                    value={token}
+                    onChange={(event) => setToken(event.target.value)}
+                    placeholder="Empty when the server has no token"
+                  />
+                </label>
+                <p className="muted">Stored in this tab only. A non-loopback bind refuses to start without a token.</p>
+              </div>
+            </details>
+          )}
         </div>
       </header>
-      {tab === "viewer" ? (
+      {tab === "viewer" || isDesktop ? (
         <Viewer token={token} slot={slot} actions={actions} onTheme={setTheme} />
       ) : null}
 

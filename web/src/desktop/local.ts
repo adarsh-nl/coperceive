@@ -31,6 +31,40 @@ export function isTauriEnvironment(): boolean {
   return typeof window !== "undefined" && Boolean(window.__TAURI_INTERNALS__);
 }
 
+export interface AppPersistentState {
+  last_data_root?: string;
+  last_scene_id?: string;
+  last_sample_index?: number;
+  last_timestamp_ns?: number;
+  last_viewpoint?: string;
+  last_theme?: string;
+  recent_roots: string[];
+}
+
+export async function getPersistentState(): Promise<AppPersistentState | null> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<AppPersistentState>("get_persistent_state");
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function isRemoteEnabled(): Promise<boolean> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<boolean>("is_remote_enabled");
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
 export async function pickDataRoot(): Promise<string | null> {
   if (isTauriEnvironment()) {
     const { invoke } = await import("@tauri-apps/api/core");
