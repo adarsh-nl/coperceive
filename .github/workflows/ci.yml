@@ -114,7 +114,6 @@ jobs:
             docs/media/Town03-000.png
             docs/media/Town03-000-split.png
             docs/media/hero_recording.mp4
-            docs/media/hero_recording.webm
           if-no-files-found: error
 
   gitleaks:
