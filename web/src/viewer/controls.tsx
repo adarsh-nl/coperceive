@@ -52,6 +52,7 @@ export function Menu({
         type="button"
         className="menu-button"
         id={id}
+        data-options={options.map((o) => o.value).filter(Boolean).join(",")}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={label ? undefined : ariaLabel}

@@ -837,6 +837,7 @@ declare global {
       root: string
     ) => void;
     __COPERCEIVE_DATASET_ERROR__?: (error: string) => void;
+    __COPERCEIVE_SCENES__?: () => string[];
     __COPERCEIVE_TEST_ENV__?: boolean;
   }
 }
@@ -1988,6 +1989,13 @@ export default function Viewer({
       window.__COPERCEIVE_PLAYBACK_STATE__ = undefined;
     };
   }, [summary]);
+
+  useEffect(() => {
+    window.__COPERCEIVE_SCENES__ = () => scenes;
+    return () => {
+      window.__COPERCEIVE_SCENES__ = undefined;
+    };
+  }, [scenes]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return;

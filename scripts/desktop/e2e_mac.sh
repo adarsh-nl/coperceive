@@ -593,7 +593,7 @@ def eval_js(code, timeout=10):
 dbg_initial = eval_js("""(() => ({
     status: document.querySelector('.status')?.textContent,
     badge: document.querySelector('.dataset-name')?.textContent,
-    scenes: Array.from(document.querySelectorAll('#scene-id option')).map(o => o.value),
+    scenes: window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : ((document.querySelector('#scene-id')?.getAttribute('data-options') || '').split(',').filter(Boolean)),
     sceneId: document.querySelector('#scene-id')?.value,
     errBanner: document.querySelector('.dataset-error-msg')?.textContent,
     lastDatasetChange: window.__LAST_DATASET_CHANGE__,
@@ -618,7 +618,7 @@ def wait_for_scene(timeout=30):
     dbg_end = eval_js("""(() => ({
         status: document.querySelector('.status')?.textContent,
         badge: document.querySelector('.dataset-name')?.textContent,
-        scenes: Array.from(document.querySelectorAll('#scene-id option')).map(o => o.value),
+        scenes: window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : ((document.querySelector('#scene-id')?.getAttribute('data-options') || '').split(',').filter(Boolean)),
         sceneId: document.querySelector('#scene-id')?.value,
         errBanner: document.querySelector('.dataset-error-msg')?.textContent,
         lastDatasetChange: window.__LAST_DATASET_CHANGE__,
@@ -705,7 +705,7 @@ def wait_for_scene(timeout=30):
     dbg = eval_js("""(() => ({
         status: document.querySelector('.status')?.textContent,
         badge: document.querySelector('.dataset-name')?.textContent,
-        scenes: Array.from(document.querySelectorAll('#scene-id option')).map(o => o.value),
+        scenes: window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : ((document.querySelector('#scene-id')?.getAttribute('data-options') || '').split(',').filter(Boolean)),
         sceneId: document.querySelector('#scene-id')?.value,
         errBanner: document.querySelector('.dataset-error-msg')?.textContent,
         counts: window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null,
@@ -718,7 +718,7 @@ counts = wait_for_scene(30)
 print(f"Counts after multi-scene switch: {counts}")
 assert counts["points"] > 0, f"Expected points > 0, got {counts}"
 
-scenes = eval_js("Array.from(document.querySelectorAll('#scene-id option')).map(o => o.value)")
+scenes = eval_js("window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : ((document.querySelector('#scene-id')?.getAttribute('data-options') || '').split(',').filter(Boolean))")
 print(f"Scene list options: {scenes}")
 assert "synth_001" in scenes, f"Expected synth_001 in scene list, got {scenes}"
 assert "synth_002" in scenes, f"Expected synth_002 in scene list, got {scenes}"
