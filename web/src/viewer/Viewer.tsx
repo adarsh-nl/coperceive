@@ -1467,8 +1467,13 @@ export default function Viewer({
       predictionPicks,
       dimmedBoxes,
     };
-    if (import.meta.env.MODE === "test" && typeof window !== "undefined") {
-      (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__ = stageRef.current;
+    const isTestOrDesktopEnv =
+      typeof window !== "undefined" &&
+      (import.meta.env.MODE === "test" || Boolean(window.__COPERCEIVE_TEST_ENV__));
+    if (isTestOrDesktopEnv) {
+      if (import.meta.env.MODE === "test") {
+        (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__ = stageRef.current;
+      }
       (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__ = () => {
         const s = stageRef.current;
         if (!s) return null;
@@ -1489,8 +1494,10 @@ export default function Viewer({
     }
     requestRender();
     return () => {
-      if (import.meta.env.MODE === "test" && typeof window !== "undefined") {
-        delete (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__;
+      if (isTestOrDesktopEnv) {
+        if (import.meta.env.MODE === "test") {
+          delete (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__;
+        }
         delete (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__;
       }
       resize.disconnect();

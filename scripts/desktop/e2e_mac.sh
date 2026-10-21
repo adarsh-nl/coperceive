@@ -148,25 +148,37 @@ screencapture -x "${SCREENSHOT_DIR}/01-initial-viewer.png" 2>/dev/null || true
 
 # Helper to run UI evaluations via the loopback controller
 python3 -c '
-import sys, json, urllib.request
+import sys, json, time, urllib.request
 
 port = "'"${CTRL_PORT}"'"
 secret = "'"${CTRL_SECRET}"'"
 
-def eval_js(code):
+def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": code}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
-print("Checking initial scene counts...")
-counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null")
+def wait_for_scene(timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+            if counts and counts.get("points", 0) > 0:
+                return counts
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError("Timed out waiting for viewer scene to load and render")
+
+print("Waiting for initial viewer scene to load and render...")
+counts = wait_for_scene(30)
 print(f"Initial scene counts: {counts}")
 assert counts is not None, "window.__COPERCEIVE_SCENE_COUNTS__ must be defined"
 assert counts.get("points", 0) > 0, f"Expected points > 0, got {counts}"
@@ -309,22 +321,37 @@ sleep 2
 
 # Assert every restored value from DOM and scene-graph counts!
 python3 -c '
-import sys, json, urllib.request
+import sys, json, time, urllib.request
 
 port = "'"${RELAUNCH_PORT}"'"
 secret = "'"${RELAUNCH_SECRET}"'"
 
-def eval_js(code):
+def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": code}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
+
+def wait_for_scene(timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+            if counts and counts.get("points", 0) > 0:
+                return counts
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError("Timed out waiting for relaunched viewer scene to load and render")
+
+print("Waiting for relaunched viewer scene to restore...")
+wait_for_scene(30)
 
 print("Checking restored values from DOM...")
 drone_pressed = eval_js("document.querySelector(\x27button[aria-keyshortcuts=\"3\"]\x27)?.getAttribute(\x27aria-pressed\x27)")
@@ -391,25 +418,37 @@ sleep 3.5
 
 # Assert scene list loaded and scene graph rendered for new root
 python3 -c '
-import sys, json, urllib.request
+import sys, json, time, urllib.request
 
 port = "'"${RELAUNCH_PORT}"'"
 secret = "'"${RELAUNCH_SECRET}"'"
 
-def eval_js(code):
+def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": code}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
-print("Checking scene counts after folder switch...")
-counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__()")
+def wait_for_scene(timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+            if counts and counts.get("points", 0) > 0:
+                return counts
+        except Exception:
+            pass
+        time.sleep(0.5)
+    raise RuntimeError("Timed out waiting for scene to load and render after dataset switch")
+
+print("Waiting for scene to load after folder switch...")
+counts = wait_for_scene(30)
 print(f"Counts after folder switch: {counts}")
 assert counts is not None, "Scene counts must exist"
 assert counts["points"] > 0, f"Expected points > 0 in new scene, got {counts}"

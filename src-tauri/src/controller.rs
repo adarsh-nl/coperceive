@@ -201,11 +201,18 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         return Ok(());
     }
 
-    // 3. CORS Check: Only allow requests originating from allowed_origin
+    // 3. CORS Check: Only allow requests originating from allowed_origin or desktop webview
     let allowed_origin = config.allowed_origin.lock().ok().and_then(|l| l.clone());
     let req_origin = headers.get("origin").cloned();
     let cors_origin = match (&req_origin, &allowed_origin) {
         (Some(origin), Some(allowed)) if origin == allowed => Some(origin.clone()),
+        (Some(origin), _)
+            if origin == "tauri://localhost"
+                || origin == "http://tauri.localhost"
+                || (origin.starts_with("http://127.0.0.1:") && allowed_origin.is_some()) =>
+        {
+            Some(origin.clone())
+        }
         _ => None,
     };
 
@@ -315,12 +322,13 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             config.eval_callbacks.lock().unwrap().insert(req_id, tx);
 
             let escaped_secret = config.auth_secret.replace('\\', "\\\\").replace('"', "\\\"");
+            let script_json = serde_json::to_string(script).unwrap_or_else(|_| "\"\"".into());
             let wrapper = format!(
                 r#"(async function() {{
                     let res = null;
                     let err = null;
                     try {{
-                        res = await (async function() {{ return {}; }})();
+                        res = await eval({});
                     }} catch(e) {{
                         err = String(e);
                     }}
@@ -335,7 +343,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                         }}).catch(function(){{}});
                     }} catch(_) {{}}
                 }})();"#,
-                script, config.ctrl_port, escaped_secret, req_id
+                script_json, config.ctrl_port, escaped_secret, req_id
             );
 
             dispatcher(wrapper);
