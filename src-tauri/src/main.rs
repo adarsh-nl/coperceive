@@ -434,7 +434,7 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
 
 #[cfg(target_os = "macos")]
 fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppState>) -> Result<u16, String> {
-    let secret = coperceive_desktop::token::generate_token();
+    let secret = coperceive_desktop::token::generate_secure_token().map_err(|e| e.to_string())?;
     let cfg = ControllerConfig::new(0, secret.clone(), None);
     let cfg_clone = cfg.clone();
     let handle = app_handle.clone();
@@ -733,7 +733,7 @@ async fn remote_connect(
     let token = mgr.token.clone();
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
 
-    open_viewer_window(&app, &origin, &token, &data_root, ctrl_port)?;
+    open_viewer_window(&app, &origin, &token, &data_root, ctrl_port, state.inner())?;
 
     let payload = SessionPayload {
         origin,
