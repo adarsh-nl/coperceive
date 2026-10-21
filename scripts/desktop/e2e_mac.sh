@@ -458,10 +458,11 @@ eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
 pb_b_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 assert pb_b_loop["loop"] == False, f"Expected loop to be False, got {pb_b_loop}"
 
-eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 148)")
+# Seek to sample 125 (before the 2s end-zone threshold at 129) so Play plays forward to the end
+eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 125)")
 eval_js("document.querySelector('button.icon.primary')?.click()")
 
-deadline = time.monotonic() + 5.0
+deadline = time.monotonic() + 6.0
 while time.monotonic() < deadline:
     pb_cur = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
     if not pb_cur["playing"] and pb_cur["frameIndex"] >= 149:
