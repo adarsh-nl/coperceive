@@ -47,19 +47,50 @@ _BOX_EDGES = (
 )
 
 
-def scene_directories(root: Path) -> list[Path]:
-    """Scene directories directly under ``root``, in name order."""
+def _has_scene_marker(path: Path, *, require_complete: bool) -> bool:
+    if not (path / "manifest.json").is_file():
+        return False
+    if require_complete and not (path / "COMPLETE.json").is_file():
+        return False
+    return True
+
+
+def scene_directories(root: Path, *, require_complete: bool = False) -> list[Path]:
+    """Scene directories directly under ``root``, in name order.
+
+    ``require_complete`` keeps only directories that have both ``manifest.json``
+    and ``COMPLETE.json``, the same pair Rust's ``validate_dataset_root`` requires
+    before the desktop app will open a folder.
+    """
     if not root.is_dir():
         raise FileNotFoundError(root)
-    if (root / "manifest.json").is_file():
+    if _has_scene_marker(root, require_complete=require_complete):
         return [root]
     found: list[Path] = []
     for child in sorted(root.iterdir(), key=lambda path: path.name):
         if child.name.startswith(".") or not child.is_dir():
             continue
-        if (child / "manifest.json").is_file():
+        if _has_scene_marker(child, require_complete=require_complete):
             found.append(child)
     return found
+
+
+def dataset_root_error(root: Path) -> str | None:
+    """``None`` when ``root`` matches Rust ``validate_dataset_root``.
+
+    A usable root is an existing directory that is itself a scene, or that
+    contains one, and that scene has both ``manifest.json`` and ``COMPLETE.json``.
+    """
+    if not root.exists():
+        return f"Dataset directory does not exist: {root}"
+    if not root.is_dir():
+        return f"Path is not a directory: {root}"
+    if scene_directories(root, require_complete=True):
+        return None
+    return (
+        f"No coperceive scenes in {root}. "
+        "A scene folder contains manifest.json and COMPLETE.json."
+    )
 
 
 def summarize(scene: Scene) -> dict[str, object]:

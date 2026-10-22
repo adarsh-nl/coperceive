@@ -213,7 +213,10 @@ def create_app(
 
     @app.get("/api/scenes")
     def scenes() -> list[dict[str, str]]:
-        return [{"scene_id": path.name} for path in scene_directories(app.state.root)]
+        return [
+            {"scene_id": path.name}
+            for path in scene_directories(app.state.root, require_complete=True)
+        ]
 
     @app.get("/api/scenes/{scene_id}")
     def scene_summary(scene_id: str) -> dict[str, object]:
@@ -476,7 +479,7 @@ class _SceneCache:
 def _scene_dir(root: Path, scene_id: str) -> Path:
     if scene_id == "" or "/" in scene_id or "\\" in scene_id or ".." in scene_id:
         raise HTTPException(status_code=400, detail="bad scene id")
-    if (root / "manifest.json").is_file():
+    if (root / "manifest.json").is_file() and (root / "COMPLETE.json").is_file():
         if scene_id in (root.name, ".", ""):
             return root
         try:
@@ -490,7 +493,7 @@ def _scene_dir(root: Path, scene_id: str) -> Path:
         # the stat raise OSError. Both are a bad id, not a server error.
         path = (root / scene_id).resolve()
         path.relative_to(root)
-        present = (path / "manifest.json").is_file()
+        present = (path / "manifest.json").is_file() and (path / "COMPLETE.json").is_file()
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail="bad scene id") from exc
     if not present:

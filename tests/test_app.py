@@ -138,6 +138,12 @@ def test_jobs_sse_and_files(tmp_path: Path) -> None:
     assert escaped.status_code == 400
 
 
+def stamp_scene(scene: Scene, directory: Path) -> None:
+    """Write a scene the desktop server will list (manifest and COMPLETE.json)."""
+    write_scene(scene, directory)
+    (directory / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
+
+
 def _viewer_scene(root: Path) -> None:
     pose = StampedPose(0, SE3.identity().translation(10.0, 0.0, 0.0))
     agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
@@ -154,7 +160,42 @@ def _viewer_scene(root: Path) -> None:
         objects=(),
         point_clouds=(cloud,),
     )
-    write_scene(scene, root / "desk")
+    stamp_scene(scene, root / "desk")
+
+
+def test_serve_rejects_a_root_without_a_complete_scene(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["serve", "--root", str(tmp_path)])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "COMPLETE.json" in err
+    assert "manifest.json" in err
+
+
+def test_scene_list_omits_a_directory_without_complete(tmp_path: Path) -> None:
+    _viewer_scene(tmp_path)
+    partial = tmp_path / "partial"
+    pose = StampedPose(0, SE3.identity())
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="partial",
+        world_frame="ENU",
+        clock=Clock("us", "incomplete"),
+        agents=(Agent("vehicle", AgentType.VEHICLE, (pose,)),),
+        sensors=(),
+        annotations=(),
+        objects=(),
+        point_clouds=(),
+    )
+    write_scene(scene, partial)
+    client = TestClient(create_app(root=tmp_path, token=None))
+    listed = client.get("/api/scenes")
+    assert listed.status_code == 200
+    assert listed.json() == [{"scene_id": "desk"}]
+    assert client.get("/api/scenes/partial").status_code == 404
+    assert client.get("/api/scenes/desk").status_code == 200
 
 
 def test_viewer_api_lists_a_frame_and_rejects_a_bad_id(tmp_path: Path) -> None:
@@ -213,7 +254,7 @@ def test_image_route_serves_the_recorded_file(tmp_path: Path) -> None:
         objects=(),
         images=(ImageRef("vehicle", "front", 0, "camera/front/000000.png"),),
     )
-    write_scene(scene, tmp_path / "desk")
+    stamp_scene(scene, tmp_path / "desk")
     image = tmp_path / "desk" / "camera" / "front" / "000000.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(_PNG)
@@ -230,7 +271,7 @@ def test_image_route_serves_the_recorded_file(tmp_path: Path) -> None:
         objects=(),
         images=(ImageRef("vehicle", "front", 0, "../secret.png"),),
     )
-    write_scene(escaped, tmp_path / "leak")
+    stamp_scene(escaped, tmp_path / "leak")
     client = TestClient(create_app(root=tmp_path, token=None))
     found = client.get(
         "/api/scenes/desk/image",
@@ -297,7 +338,7 @@ def test_sequence_export_route_writes_gif_and_view(tmp_path: Path) -> None:
         objects=(),
         images=(ImageRef("vehicle", "front", 0, "camera/front/0.png"),),
     )
-    write_scene(scene, tmp_path / "desk")
+    stamp_scene(scene, tmp_path / "desk")
     image = tmp_path / "desk" / "camera" / "front" / "0.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(_PNG)
@@ -377,7 +418,7 @@ def test_plot_routes_require_the_csrf_header_and_write_svg(tmp_path: Path) -> No
         objects=(),
         images=(ImageRef("vehicle", "front", 0, "camera/front/0.png"),),
     )
-    write_scene(scene, tmp_path / "desk")
+    stamp_scene(scene, tmp_path / "desk")
     image = tmp_path / "desk" / "camera" / "front" / "0.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(_PNG)
@@ -450,7 +491,7 @@ def _evaluated_root(root: Path, *, predictions: Path | None = None) -> Path:
     """``root/scenes/coop`` plus the ``synthetic`` run, written and evaluated."""
     scene = cooperative_scene()
     scenes = root / "scenes"
-    write_scene(replace(scene, scene_id="coop"), scenes / "coop")
+    stamp_scene(replace(scene, scene_id="coop"), scenes / "coop")
     store = scenes / "predictions" if predictions is None else predictions
     meta, boxes = synthetic_predictions(scene)
     rows = tuple(replace(box, scene_id="coop") for box in boxes)
@@ -668,13 +709,13 @@ def test_image_route_follows_a_symlink_only_into_a_media_root(tmp_path: Path) ->
     elsewhere.parent.mkdir()
     elsewhere.write_bytes(_PNG)
     root = tmp_path / "scenes"
-    write_scene(_camera_scene("linked", "vehicle-side/camera/front/000000.png"), root / "linked")
+    stamp_scene(_camera_scene("linked", "vehicle-side/camera/front/000000.png"), root / "linked")
     (root / "linked" / "vehicle-side").mkdir()
     (root / "linked" / "vehicle-side" / "camera").symlink_to(media / "vehicle-side" / "camera")
-    write_scene(_camera_scene("stray", "leak/secret.png"), root / "stray")
+    stamp_scene(_camera_scene("stray", "leak/secret.png"), root / "stray")
     (root / "stray" / "leak").symlink_to(elsewhere.parent)
     dotted = "../../release/vehicle-side/camera/front/000000.png"
-    write_scene(_camera_scene("dotted", dotted), root / "dotted")
+    stamp_scene(_camera_scene("dotted", dotted), root / "dotted")
     params = {"time_us": 0, "agent_id": "vehicle", "sensor_id": "front"}
 
     plain = TestClient(create_app(root=root, token=None))
@@ -692,8 +733,8 @@ def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
     """The scene summary says how many lidar sweeps and image rows the scene has and whether
     the image files are actually present, so the page can show an empty state per pane."""
     root = tmp_path / "scenes"
-    write_scene(_camera_scene("bare", "vehicle-side/camera/front/000000.png"), root / "bare")
-    write_scene(_camera_scene("staged", "vehicle-side/camera/front/000000.png"), root / "staged")
+    stamp_scene(_camera_scene("bare", "vehicle-side/camera/front/000000.png"), root / "bare")
+    stamp_scene(_camera_scene("staged", "vehicle-side/camera/front/000000.png"), root / "staged")
     staged_file = root / "staged" / "vehicle-side" / "camera" / "front" / "000000.png"
     staged_file.parent.mkdir(parents=True)
     staged_file.write_bytes(_PNG)
@@ -707,7 +748,7 @@ def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
     assert (desk["point_sweeps"], desk["image_rows"], desk["images_staged"]) == (1, 0, None)
     # A path the OS cannot stat (over-long component) is absent, not a 500.
     overlong = "a" * 300 + "/img.png"
-    write_scene(_camera_scene("odd", overlong), root / "odd")
+    stamp_scene(_camera_scene("odd", overlong), root / "odd")
     odd = client.get("/api/scenes/odd")
     assert odd.status_code == 200
     assert odd.json()["images_staged"] is False

@@ -218,6 +218,17 @@ jobs:
               echo "::error title=E2ETestError::$line"
             done
           fi
+      - name: Sample Connect backdrop CPU for 60s at 1280x800
+        run: bash scripts/desktop/measure_backdrop_cpu.sh 2>&1 | tee /tmp/backdrop_cpu.log
+      - name: Report backdrop CPU samples
+        if: always()
+        run: |
+          if [ -f /tmp/backdrop_cpu.log ]; then
+            echo "### Connect backdrop CPU (raw ps %cpu, 60 s, 1280x800)" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/backdrop_cpu.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
       - name: Locate and Measure Single Built DMG
         run: |
           DMG_FILE=$(find src-tauri/target -iname "*.dmg" -type f 2>/dev/null | head -n 1)

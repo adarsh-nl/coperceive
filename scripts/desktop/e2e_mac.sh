@@ -540,6 +540,127 @@ EOF
 screencapture -x "${SCREENSHOT_DIR}/03-after-relaunch.png" 2>/dev/null || true
 
 echo ""
+echo "--- Step 2b: Loop choice survives quit and relaunch (state.json, not localStorage) ---"
+python3 << EOF
+import json, urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(code, timeout=10):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+before = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+print(f"Loop before toggle: {before}")
+if before["loop"] is not False:
+    eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
+after = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+assert after["loop"] is False, f"Expected loop off before quit, got {after}"
+print("Loop is off; waiting for state.json write.")
+EOF
+
+sleep 1
+
+python3 << EOF
+import json, urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/state",
+    headers={"Authorization": f"Bearer {secret}"},
+)
+with urllib.request.urlopen(req, timeout=10) as r:
+    saved = json.loads(r.read().decode("utf-8"))
+print(f"state.json last_loop={saved.get('last_loop')}")
+assert saved.get("last_loop") is False, f"Expected last_loop false in state.json, got {saved.get('last_loop')}"
+EOF
+
+osascript <<EOF || true
+tell application "System Events"
+    tell process "Coperceive"
+        keystroke "q" using command down
+    end tell
+end tell
+EOF
+
+for i in {1..20}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -f "${MARKER_FILE}"
+
+echo "Relaunching to confirm loop stayed off..."
+"${APP_EXE}" > "${TMP_DIR}/loop_relaunch_stdout.log" 2> "${TMP_DIR}/loop_relaunch_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then
+        echo "Loop-relaunch marker after ${i} checks."
+        break
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: loop relaunch died" >&2
+        cat "${TMP_DIR}/loop_relaunch_stderr.log" >&2
+        exit 11
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "Error: loop relaunch did not resume" >&2
+    cat "${TMP_DIR}/loop_relaunch_stderr.log" >&2
+    exit 11
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+
+python3 << EOF
+import json, time, urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(code, timeout=10):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
+deadline = time.monotonic() + 30
+state = None
+while time.monotonic() < deadline:
+    try:
+        counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+        state = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+        if counts and counts.get("points", 0) > 0 and state and state.get("samples", 0) > 1:
+            break
+    except Exception:
+        pass
+    time.sleep(0.5)
+print(f"Loop after relaunch: {state}")
+assert state is not None and state.get("loop") is False, f"Loop choice did not survive relaunch: {state}"
+print("Step 2b verified: loop stayed off across quit and relaunch.")
+EOF
+
+echo ""
 echo "--- Step 3: Switch Dataset to Second Valid Root (Single Scene Root) ---"
 echo "${FIXTURE_2}" > "${MOCK_DIALOG_FILE}"
 
@@ -837,10 +958,7 @@ if ! kill -0 "${APP_PID}" 2>/dev/null; then
 fi
 echo "Verified: App process is still running after closing viewer window."
 
-echo "Measuring Connect backdrop CPU usage on macOS runner..."
-sleep 2
-BACKDROP_CPU=$(ps -p "${APP_PID}" -o %cpu | tail -n 1 | tr -d ' ' || echo "0.0")
-echo "Connect backdrop CPU usage measured: ${BACKDROP_CPU}% of one core on macOS Apple Silicon (target < 5% at 1280x800)"
+echo "Connect backdrop is on screen. The 60 s 1280x800 CPU sample is scripts/desktop/measure_backdrop_cpu.sh."
 
 screencapture -x "${SCREENSHOT_DIR}/05-connect-window.png" 2>/dev/null || true
 

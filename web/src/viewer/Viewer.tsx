@@ -817,6 +817,7 @@ declare global {
       panel_collapse?: {
         camera_strip_open?: boolean;
       };
+      last_loop?: boolean;
     };
     __COPERCEIVE_VIEWER_STATE__?: unknown;
     __COPERCEIVE_SHOW_TOAST__?: (text: string, type?: "error" | "info") => void;
@@ -866,21 +867,55 @@ function clearStage(stage: Stage) {
 
 const LOOP_STORAGE_KEY = "coperceive-loop-preference";
 
-function getStoredLoopPreference(): boolean | null {
-  if (typeof window === "undefined") return null;
+function readWebLoopChoice(): boolean | null {
   try {
     const val = localStorage.getItem(LOOP_STORAGE_KEY);
     if (val === "true") return true;
     if (val === "false") return false;
-  } catch (_) {}
+  } catch {
+    /* private mode */
+  }
   return null;
 }
 
-function setStoredLoopPreference(val: boolean) {
-  if (typeof window === "undefined") return;
+function writeWebLoopChoice(val: boolean) {
   try {
     localStorage.setItem(LOOP_STORAGE_KEY, String(val));
-  } catch (_) {}
+  } catch {
+    /* private mode */
+  }
+}
+
+function postControllerState(body: Record<string, unknown>) {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+    return;
+  }
+  const port = window.__COPERCEIVE_CTRL_PORT__;
+  const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+  void fetch(`http://127.0.0.1:${port}/state`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${secret}`,
+    },
+    body: JSON.stringify(body),
+  }).catch(() => undefined);
+}
+
+function savedLoopChoice(): boolean | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const saved = window.__COPERCEIVE_INITIAL_STATE__?.last_loop;
+  if (typeof saved === "boolean") {
+    return saved;
+  }
+  // The desktop sidecar origin changes every launch, so localStorage is not
+  // the resume record there. The fixed-port web app still uses it.
+  if (window.__COPERCEIVE_DESKTOP__ || window.__COPERCEIVE_CTRL_PORT__) {
+    return null;
+  }
+  return readWebLoopChoice();
 }
 
 export default function Viewer({
@@ -954,16 +989,19 @@ export default function Viewer({
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
   const [playing, setPlaying] = useState(false);
-  const [loop, setLoop] = useState<boolean>(() => {
-    const stored = getStoredLoopPreference();
-    return stored !== null ? stored : true;
-  });
+  const loopChoiceRef = useRef<boolean | null>(savedLoopChoice());
+  const [loop, setLoop] = useState<boolean>(() => loopChoiceRef.current ?? true);
 
   const handleToggleLoop = () => {
     const next = !loopRef.current;
     loopRef.current = next;
-    setStoredLoopPreference(next);
+    loopChoiceRef.current = next;
     setLoop(next);
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      postControllerState({ loop: next });
+    } else {
+      writeWebLoopChoice(next);
+    }
   };
   const handleToggleLoopRef = useRef(handleToggleLoop);
   handleToggleLoopRef.current = handleToggleLoop;
@@ -1920,12 +1958,14 @@ export default function Viewer({
       if (isEndZone(body.times_us, initialFrame)) {
         initialFrame = 0;
       }
-      const storedLoop = getStoredLoopPreference();
-      if (storedLoop !== null) {
-        setLoop(storedLoop);
+      if (loopChoiceRef.current !== null) {
+        loopRef.current = loopChoiceRef.current;
+        setLoop(loopChoiceRef.current);
       } else {
         const durationUs = body.times_us.length >= 2 ? body.times_us[body.times_us.length - 1] - body.times_us[0] : 0;
-        setLoop(durationUs < 60_000_000);
+        const next = durationUs < 60_000_000;
+        loopRef.current = next;
+        setLoop(next);
       }
       setSummary(body);
       setFrameIndex(initialFrame);
@@ -2031,11 +2071,12 @@ export default function Viewer({
           panel_collapse: {
             camera_strip_open: appearance.stripOpen,
           },
+          ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
         }),
       }).catch(() => {});
     }, 500);
     return () => clearTimeout(timer);
-  }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId]);
+  }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {

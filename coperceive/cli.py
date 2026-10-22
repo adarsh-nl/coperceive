@@ -528,6 +528,12 @@ def _serve(args: argparse.Namespace) -> None:
         if not Path(media).is_dir():
             print(f"--media-root {media} is not a directory", file=sys.stderr)
             raise SystemExit(2)
+    from coperceive.viewdata import dataset_root_error
+
+    root_error = dataset_root_error(Path(args.root))
+    if root_error is not None:
+        print(root_error, file=sys.stderr)
+        raise SystemExit(2)
     import importlib
 
     module = importlib.import_module("coperceive.app.serve")

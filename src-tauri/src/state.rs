@@ -117,6 +117,11 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_viewpoint: Option<String>,
 
+    /// User's loop choice. Absent until they toggle it; the viewer then
+    /// defaults loop on for scenes shorter than 60 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_loop: Option<bool>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_theme: Option<String>,
 
@@ -161,6 +166,7 @@ impl Default for AppPersistentState {
             last_timestamp_us: None,
             _legacy_timestamp_ns: None,
             last_viewpoint: Some("orbit".into()),
+            last_loop: None,
             last_theme: Some("dark".into()),
             reopen_last_session: true,
             agent_visibility: None,
@@ -363,6 +369,7 @@ pub mod tests {
             last_timestamp_us: Some(4200000),
             _legacy_timestamp_ns: None,
             last_viewpoint: Some("chase".into()),
+            last_loop: Some(false),
             last_theme: Some("light".into()),
             reopen_last_session: true,
             agent_visibility: Some(visibility),

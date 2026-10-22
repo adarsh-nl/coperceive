@@ -212,6 +212,9 @@ def _write_roots(base: Path) -> tuple[Path, Path, Path]:
     write_scene(_bare_scene(), scenes / SCENE_BARE)
     for scene_id in FILLER_SCENES:
         write_scene(_filler_scene(scene_id), scenes / scene_id)
+    for child in scenes.iterdir():
+        if child.is_dir() and (child / "manifest.json").is_file():
+            (child / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
     xodr = base / "Town03.xodr"
     _straight(xodr)
     maps = base / "maps"

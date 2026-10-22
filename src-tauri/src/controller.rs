@@ -388,6 +388,9 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             if let Some(vp) = val.get("viewpoint").and_then(|v| v.as_str()) {
                 persistent.last_viewpoint = Some(vp.to_string());
             }
+            if let Some(looping) = val.get("loop").and_then(|v| v.as_bool()) {
+                persistent.last_loop = Some(looping);
+            }
             if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
                 persistent.last_theme = Some(th.to_string());
             }
