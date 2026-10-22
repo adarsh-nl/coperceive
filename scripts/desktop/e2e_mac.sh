@@ -389,6 +389,19 @@ def eval_js(code, timeout=10):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
+def eval_retry(step, code, tries=3):
+    # The controller answers 504 after 10 s if the webview misses an eval.
+    # Outlast that and retry; one missed callback is not a product failure.
+    last = None
+    for _ in range(tries):
+        try:
+            return eval_js(code, timeout=15)
+        except Exception as e:
+            last = e
+            time.sleep(0.5)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
     last_err = None
@@ -526,10 +539,17 @@ eval_js("document.querySelector('button.icon.primary')?.click()")
 
 time.sleep(15.5)
 
-eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
-eval_js("if (window.__RECORD_INTERVAL__) { clearInterval(window.__RECORD_INTERVAL__); window.__RECORD_INTERVAL__ = null; }")
+# Reads can be retried. A toggle cannot: a lost callback may still have run.
+try:
+    eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')", timeout=15)
+except Exception as e:
+    print(f"E2E_NOTE step=2-stop-playback {type(e).__name__}: {e}", flush=True)
+try:
+    eval_js("if (window.__RECORD_INTERVAL__) { clearInterval(window.__RECORD_INTERVAL__); window.__RECORD_INTERVAL__ = null; }", timeout=15)
+except Exception as e:
+    print(f"E2E_NOTE step=2-clear-gap-recorder {type(e).__name__}: {e}", flush=True)
 
-report = eval_js("window.__RECORD_GAPS__")
+report = eval_retry("2-read-gaps", "window.__RECORD_GAPS__")
 print(f"Playback requirement (c) verified: max frame gap = {report['maxGapMs']:.1f}ms, loop wraps observed = {report['wraps']}, frames seen = {report['framesSeen']}")
 assert report["wraps"] >= 1, f"Expected at least 1 loop wrap over 15s, got {report['wraps']}"
 assert report["maxGapMs"] <= 300.0, f"Frame change gap exceeded 300ms: {report['maxGapMs']:.1f}ms"
@@ -540,13 +560,14 @@ EOF
 screencapture -x "${SCREENSHOT_DIR}/03-after-relaunch.png" 2>/dev/null || true
 
 echo ""
+echo "E2E_MARK step=2b"
 echo "--- Step 2b: Loop choice survives quit and relaunch (state.json, not localStorage) ---"
 python3 << EOF
-import json, urllib.request
+import json, time, urllib.request
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code, timeout=10):
+def eval_js(code, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": code}).encode("utf-8"),
@@ -558,28 +579,67 @@ def eval_js(code, timeout=10):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
-before = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
-print(f"Loop before toggle: {before}")
+def wait_playback(step, timeout=25):
+    deadline = time.monotonic() + timeout
+    last = "none"
+    while time.monotonic() < deadline:
+        try:
+            state = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null", timeout=15)
+            if isinstance(state, dict) and "loop" in state:
+                return state
+            last = f"unexpected {state!r}"
+        except Exception as e:
+            last = f"{type(e).__name__}: {e}"
+        time.sleep(0.4)
+    print(f"E2E_FAIL step={step} {last}", flush=True)
+    raise SystemExit(1)
+
+before = wait_playback("2b-before")
+print(f"Loop before toggle: {before}", flush=True)
 if before["loop"] is not False:
-    eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
-after = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
+    try:
+        eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
+    except Exception as e:
+        print(f"E2E_NOTE step=2b-toggle {type(e).__name__}: {e}", flush=True)
+after = wait_playback("2b-after-toggle")
+if after["loop"] is not False:
+    try:
+        eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
+    except Exception as e:
+        print(f"E2E_NOTE step=2b-toggle-again {type(e).__name__}: {e}", flush=True)
+    after = wait_playback("2b-after-toggle-again")
 assert after["loop"] is False, f"Expected loop off before quit, got {after}"
-print("Loop is off; waiting for state.json write.")
+print("Loop is off; waiting for state.json write.", flush=True)
 EOF
 
 sleep 1
 
 python3 << EOF
-import json, urllib.request
+import json, time, urllib.request
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
-req = urllib.request.Request(
-    f"http://127.0.0.1:{port}/state",
-    headers={"Authorization": f"Bearer {secret}"},
-)
-with urllib.request.urlopen(req, timeout=10) as r:
-    saved = json.loads(r.read().decode("utf-8"))
-print(f"state.json last_loop={saved.get('last_loop')}")
+
+def read_state():
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/state",
+        headers={"Authorization": f"Bearer {secret}"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+saved = None
+last = "none"
+for _ in range(3):
+    try:
+        saved = read_state()
+        break
+    except Exception as e:
+        last = f"{type(e).__name__}: {e}"
+        time.sleep(0.5)
+if saved is None:
+    print(f"E2E_FAIL step=2b-read-state {last}", flush=True)
+    raise SystemExit(1)
+print(f"state.json last_loop={saved.get('last_loop')}", flush=True)
 assert saved.get("last_loop") is False, f"Expected last_loop false in state.json, got {saved.get('last_loop')}"
 EOF
 
