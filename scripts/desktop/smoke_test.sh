@@ -104,7 +104,11 @@ chmod 0600 "${TOKEN_FILE}"
 echo "${TOKEN}" > "${TOKEN_FILE}"
 
 DATA_ROOT="${TMPDIR}/data"
-mkdir -p "${DATA_ROOT}"
+mkdir -p "${DATA_ROOT}/smoke"
+# serve refuses a root that has no scene with both markers. This is only a
+# startup probe, not a real scene.
+printf '%s\n' '{"scene_id":"smoke"}' > "${DATA_ROOT}/smoke/manifest.json"
+printf '%s\n' '{}' > "${DATA_ROOT}/smoke/COMPLETE.json"
 
 # Ephemeral port on loopback
 PORT=$("${PYTHON_BIN}" -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1]); s.close()')
