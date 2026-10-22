@@ -88,8 +88,7 @@ def dataset_root_error(root: Path) -> str | None:
     if scene_directories(root, require_complete=True):
         return None
     return (
-        f"No coperceive scenes in {root}. "
-        "A scene folder contains manifest.json and COMPLETE.json."
+        f"No coperceive scenes in {root}. A scene folder contains manifest.json and COMPLETE.json."
     )
 
 

@@ -471,6 +471,7 @@ def test_map_http_and_favicon(tmp_path: Path) -> None:
     )
     scenes = tmp_path / "scenes"
     _scene_on_lane(scenes)
+    (scenes / "Town03-000" / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
     app = create_app(root=scenes, token=None, maps=maps)
     client = TestClient(app)
     summary = client.get("/api/scenes/Town03-000/map")
