@@ -35,7 +35,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[app,griffin,dev,viewer]"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pytest
+      - name: Run pytest
+        run: |
+          set +e
+          pytest -q --tb=line | tee /tmp/pytest.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            tail -n 30 /tmp/pytest.txt | while IFS= read -r line; do
+              echo "::error title=Pytest::$line"
+            done
+            exit "$status"
+          fi
 
   web:
     # The committed API contract and the generated client must not drift.
@@ -205,7 +216,11 @@ jobs:
             done
           fi
       - name: Run Real-App macOS UI E2E Test
-        run: bash scripts/desktop/e2e_mac.sh 2>&1 | tee /tmp/e2e_mac.log
+        run: |
+          bash scripts/desktop/e2e_mac.sh 2>&1 | tee /tmp/e2e_mac.log
+          grep -E 'Step 2 verified|Step 2b verified|Playback requirement' /tmp/e2e_mac.log | while IFS= read -r line; do
+            echo "::notice title=e2e::$line"
+          done || true
       - name: Report E2E Failure
         if: failure()
         run: |
@@ -231,6 +246,9 @@ jobs:
             echo '```' >> $GITHUB_STEP_SUMMARY
             cat /tmp/backdrop_cpu.log >> $GITHUB_STEP_SUMMARY
             echo '```' >> $GITHUB_STEP_SUMMARY
+            # Job logs are not public. One notice carries the raw samples.
+            encoded=$(python3 -c 'import pathlib,urllib.parse; print(urllib.parse.quote(pathlib.Path("/tmp/backdrop_cpu.log").read_text()[:60000]))')
+            echo "::notice title=backdrop-cpu::${encoded}"
           fi
       - name: Locate and Measure Single Built DMG
         run: |
@@ -249,6 +267,7 @@ jobs:
           echo "DMG_BYTES=${DMG_BYTES}" >> $GITHUB_ENV
           echo "DMG_HUMAN=${DMG_HUMAN}" >> $GITHUB_ENV
           echo "Located single DMG at: ${DMG_ABS} (${DMG_HUMAN}, ${DMG_BYTES} bytes)"
+          echo "::notice title=DMG::$(basename "${DMG_ABS}") ${DMG_BYTES} bytes"
           echo "### Desktop DMG Artifact" >> $GITHUB_STEP_SUMMARY
           echo "- **File**: \`$(basename "${DMG_ABS}")\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Size**: ${DMG_HUMAN} (${DMG_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
