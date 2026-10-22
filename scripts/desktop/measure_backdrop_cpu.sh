@@ -156,7 +156,8 @@ for i in $(seq 0 $((SAMPLES - 1))); do
     fi
     pids="$(descendant_pids "${APP_PID}" | paste -sd, -)"
     echo "sample=${i} epoch=$(date -u +%Y-%m-%dT%H:%M:%SZ) pids=${pids}"
-    ps -p "${pids}" -o pid,ppid,%cpu,comm
+    # A child can exit between the walk and ps. Keep the samples that are still alive.
+    ps -p "${pids}" -o pid,ppid,%cpu,comm || echo "ps_exit=$?"
     if [ "${i}" -lt $((SAMPLES - 1)) ]; then
         sleep 1
     fi
