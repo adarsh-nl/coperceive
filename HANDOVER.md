@@ -2,6 +2,19 @@
 
 The desktop application is now the top priority per Adarsh's instructions (pausing V2V4Real, release work, and small fixes until the desktop app works end-to-end).
 
+## M1 close-out (2026-10-22)
+
+Task status lives in `TASKS.md`. `origin/main` is `fffda8a`. `feat/desktop` at `bf36d0d` had a green 9-job run: https://github.com/adarsh-nl/coperceive/actions/runs/39688720618 (artifact `coperceive-desktop-macos-arm64`, 83966895 bytes).
+
+Close-out commit: `f3820a0`. Still open after `bf36d0d`, and what that commit changes:
+
+- Loop choice was `localStorage` key `coperceive-loop-preference` (`web/src/viewer/Viewer.tsx`). The sidecar origin changes every launch, so the choice did not survive relaunch. It is now `last_loop` in Rust `state.json`, and `scripts/desktop/e2e_mac.sh` turns loop off, quits, relaunches, and checks it is still off.
+- Frame advance does not wait on image decode. The playback clock is `setTimeout` from `indexAfter` in `Viewer.tsx`; image decode is a separate effect (`loadImage` / `decodeBitmap`). `paintWait` is only the export path.
+- `coperceive serve` and `GET /api/scenes` now require `manifest.json` and `COMPLETE.json`, matching `validate_dataset_root` in `src-tauri/src/state.rs`.
+- Backdrop CPU is `scripts/desktop/measure_backdrop_cpu.sh`: 60 samples of `ps -o %cpu` at 1280×800 on the macOS runner. The raw lines are the report. There is no Apple Silicon measurement from this HPC login node.
+
+Adarsh still does Mac acceptance (M1-5) and the merge (M1-6). Do not treat M1-2 as closed: `e2e_mac.sh` checks that a root switch fills the scene list and draws points, and it does not assert that view settings survive the switch.
+
 ## Desktop App Status (feat/desktop)
 
 - **ADR 0014**: Committed to `main` at `662fa84` and `feat/desktop` at `c423630`.
