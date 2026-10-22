@@ -22,12 +22,12 @@ repo: https://github.com/adarsh-nl/coperceive
 |---|---|
 | Last updated | 2026-10-22 |
 | `main` | `origin/main` is `fffda8a` (phases 0–6, adapters, eval engine). The `~/coperceive` checkout is local `662fa84` (ADR 0014) and is not what GitHub `main` is |
-| `feat/desktop` | `f3820a0` on top of `bf36d0d` (66 commits ahead of `origin/main` before this close-out), **not merged**. Last green run is [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618) at `bf36d0d` (9/9). Artifact `coperceive-desktop-macos-arm64` was 83966895 bytes. Strike the new rows only after the `f3820a0` run is green |
+| `feat/desktop` | `6ec22ad`, 73 commits ahead of `origin/main`, **not merged**. Green run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) (9/9). Install `Coperceive_0.1.0_aarch64.dmg` from that run (84314027 bytes). Artifact `coperceive-desktop-macos-arm64` is 83975978 bytes |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
 | Current milestone | **M1: reliable and stateful desktop** (close-out) |
-| Top blocker | **M1 close-out, then Adarsh's Mac acceptance (M1-5).** The end-zone rewind is in `bf36d0d`. The loop choice still has to survive a new sidecar port, and that change is not struck until its CI run is green |
+| Top blocker | **M1-5 Mac acceptance, then M1-6 merge.** Both are Adarsh's. M1-2 is still open |
 
 ## Key docs in the repo
 - `HANDOVER.md`: long engineering log (cleanup task below)
@@ -103,17 +103,17 @@ repo: https://github.com/adarsh-nl/coperceive
 ---
 
 ## 🔴 NOW: M1 close-out (do in this order)
-- [ ] **M1-0 · P0 · Play "starts then stops".** The end-zone rewind and the Replay state are in `bf36d0d`. The loop choice was still `localStorage` (`coperceive-loop-preference`), which dies when the sidecar port changes. That persistence move is in this close-out and is not struck until its CI run is green.
+- [x] ~~**M1-0 · P0 · Play "starts then stops".**~~ (`6ec22ad` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
   - [x] ~~Play within the end zone (last 5% or 2 s, whichever is larger) rewinds to 0. One helper shared by the button and Space.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
   - [x] ~~Resume never restores into the end zone.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
-  - [ ] Loop defaults ON for scenes under 60 s; the user's choice persists. Default is in `bf36d0d` (`Viewer.tsx` duration check). Persistence moves to `state.json` `last_loop` in this close-out, with an e2e quit/relaunch. Not struck until that CI run is green.
+  - [x] ~~Loop defaults ON for scenes under 60 s; the user's choice persists in `state.json` `last_loop`. e2e step 2b: loop off, quit, relaunch, still off.~~ (`f3820a0` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
   - [x] ~~Loop off at the end shows a Replay state on the play button.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
   - [x] ~~Playback never pauses while images load.~~ The clock is `setTimeout` from `indexAfter` (`Viewer.tsx` playback effect). Image decode is a separate effect. `paintWait` is only used by export. (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
   - [x] ~~e2e: resume at 148/149 → Play → still playing 3 s later (≥25 samples); Replay flow; 15 s across the wrap with no gap over 300 ms.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
 - [x] ~~**M1-1 · P1 · Tighten serve CORS** (c4358b4/2c90678 allow any localhost port plus credentials). Use the exact viewer origin via `--allow-origin`, `allow_credentials=False`, minimal methods and headers. Or navigate the viewer to the new sidecar origin on switch and drop CORS. Add tests for a foreign origin and the real origin.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
 - [ ] **M1-2 · P1 · e2e for scene → multi-scene root switch** (the case that failed on the Mac): the scene list fills, one scene auto-opens, the old scene isn't left drawn, and view settings are kept. `e2e_mac.sh` step 3b checks the scene list and that points draw. It does not assert that view settings are kept or that the previous scene's geometry is gone. Not struck.
-- [ ] **M1-3 · P2 · Validation requires `COMPLETE.json`** next to `manifest.json`. Rust `validate_dataset_root` already required both at `bf36d0d`. This close-out makes `coperceive serve` and `GET /api/scenes` use the same rule. Not struck until that CI run is green.
-- [ ] **M1-4 · P2 · Report the backdrop's measured CPU** (target <5% of one core at 1280×800 on Apple Silicon). `scripts/desktop/measure_backdrop_cpu.sh` samples `ps -o %cpu` for 60 s on the macOS runner and prints the raw lines. The numbers are not known until that job finishes. Not struck from this HPC login node.
+- [x] ~~**M1-3 · P2 · Validation requires `COMPLETE.json`** next to `manifest.json`.~~ Rust `validate_dataset_root` and Python `serve` / `GET /api/scenes` both require the pair. (`f3820a0` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
+- [x] ~~**M1-4 · P2 · Report the backdrop's measured CPU.**~~ `scripts/desktop/measure_backdrop_cpu.sh` on the macOS runner, 60 samples, window `1280, 800`, `reduceMotion=1`, pid 11983. The check annotation body is capped at 4096 characters, so only samples 0–13 are cited here. `%cpu` for pid 11983: 6.1, 4.2, 1.2, 0.7, 0.7, 0.5, then 0.0 through sample 13. Sample 0 is above the 5% target. Samples 14–59 are in that job's step summary. (`6ec22ad` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
 - [ ] **M1-5 · Mac acceptance (Adarsh, or Claude via computer use):**
   - [ ] Demo flow: reopen → Play → keeps playing and looping
   - [ ] 10 consecutive cold starts with no timeout
@@ -187,5 +187,6 @@ repo: https://github.com/adarsh-nl/coperceive
 ---
 
 ## Change log of this file
+- 2026-10-22: Struck M1-0, M1-3, and M1-4 against green run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) at `6ec22ad`. M1-2, M1-5, and M1-6 stay open.
 - 2026-10-22: Checked the 2026-10-21 list against `feat/desktop` `bf36d0d` and CI run 39688720618. Struck M1-0 sub-items and M1-1 that the green run already covers. Loop persistence, the Python `COMPLETE.json` check, and the 60 s CPU sampler are in `f3820a0` and stay open until that run is green. M1-2 stays open. Corrected the snapshot (`b99c732` / 55 commits / run 39650235620 were stale).
 - 2026-10-21: Created from the full project history (py123d check → standalone coperceive → desktop Phases 1–2 → M1 → backdrop → b99c732 review).

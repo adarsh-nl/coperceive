@@ -4,16 +4,16 @@ The desktop application is now the top priority per Adarsh's instructions (pausi
 
 ## M1 close-out (2026-10-22)
 
-Task status lives in `TASKS.md`. `origin/main` is `fffda8a`. `feat/desktop` at `bf36d0d` had a green 9-job run: https://github.com/adarsh-nl/coperceive/actions/runs/39688720618 (artifact `coperceive-desktop-macos-arm64`, 83966895 bytes).
+Task status lives in `TASKS.md`. `origin/main` is `fffda8a`. The installable desktop build is `feat/desktop` `6ec22ad`, green 9/9: https://github.com/adarsh-nl/coperceive/actions/runs/39828222428. Dmg `Coperceive_0.1.0_aarch64.dmg`, 84314027 bytes. Artifact `coperceive-desktop-macos-arm64`, 83975978 bytes. A later docs commit is not that build.
 
-Close-out commit: `f3820a0`. Still open after `bf36d0d`, and what that commit changes:
+e2e notices from that run: "Step 2b verified: loop stayed off across quit and relaunch."; "Playback requirement (c) verified: max frame gap = 124.0ms, loop wraps observed = 1, frames seen = 156."
 
-- Loop choice was `localStorage` key `coperceive-loop-preference` (`web/src/viewer/Viewer.tsx`). The sidecar origin changes every launch, so the choice did not survive relaunch. It is now `last_loop` in Rust `state.json`, and `scripts/desktop/e2e_mac.sh` turns loop off, quits, relaunches, and checks it is still off.
-- Frame advance does not wait on image decode. The playback clock is `setTimeout` from `indexAfter` in `Viewer.tsx`; image decode is a separate effect (`loadImage` / `decodeBitmap`). `paintWait` is only the export path.
-- `coperceive serve` and `GET /api/scenes` now require `manifest.json` and `COMPLETE.json`, matching `validate_dataset_root` in `src-tauri/src/state.rs`.
-- Backdrop CPU is `scripts/desktop/measure_backdrop_cpu.sh`: 60 samples of `ps -o %cpu` at 1280×800 on the macOS runner. The raw lines are the report. There is no Apple Silicon measurement from this HPC login node.
+- Loop choice is `last_loop` in Rust `state.json` (`f3820a0`). The fixed-port web app still uses `localStorage` key `coperceive-loop-preference`.
+- Frame advance does not wait on image decode. The playback clock is `setTimeout` from `indexAfter` in `web/src/viewer/Viewer.tsx`; frustum images load in a separate effect via `loadImage`. `paintWait` is only the export path.
+- `coperceive serve` and `GET /api/scenes` require `manifest.json` and `COMPLETE.json`, matching `validate_dataset_root` in `src-tauri/src/state.rs`.
+- Backdrop CPU on that run: window `1280, 800`, `reduceMotion=1`, pid 11983, 60 samples requested. The public annotation includes samples 0–13 only (`%cpu` 6.1, 4.2, 1.2, 0.7, 0.7, 0.5, then 0.0). Sample 0 is above 5%.
 
-Adarsh still does Mac acceptance (M1-5) and the merge (M1-6). Do not treat M1-2 as closed: `e2e_mac.sh` checks that a root switch fills the scene list and draws points, and it does not assert that view settings survive the switch.
+Adarsh still does Mac acceptance (M1-5) and the merge (M1-6). M1-2 stays open: `e2e_mac.sh` checks that a root switch fills the scene list and draws points, and it does not assert that view settings survive the switch.
 
 ## Desktop App Status (feat/desktop)
 
