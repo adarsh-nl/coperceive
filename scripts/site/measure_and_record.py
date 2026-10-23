@@ -110,13 +110,18 @@ def main() -> None:
         )
         video = page.video
         page.close()
+        if video is None:
+            context.close()
+            browser.close()
+            sys.exit("no video recorded")
+        # path() needs the Playwright connection. The file is written when the context closes.
+        src = Path(video.path())
         context.close()
         browser.close()
 
     httpd.shutdown()
-    if video is None:
-        sys.exit("no video recorded")
-    src = Path(video.path())
+    if not src.is_file():
+        sys.exit(f"hero video was not written to {src}")
     dest = ARTIFACT_DIR / "hero_recording.webm"
     shutil.copy2(src, dest)
     print(f"wrote {shot} and {dest} ({dest.stat().st_size} bytes)")
