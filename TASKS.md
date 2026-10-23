@@ -22,12 +22,12 @@ repo: https://github.com/adarsh-nl/coperceive
 |---|---|
 | Last updated | 2026-10-23 |
 | `main` | `origin/main` is `fffda8a` (phases 0–6, adapters, eval engine). The `~/coperceive` checkout is local `662fa84` (ADR 0014) and is not what GitHub `main` is |
-| `feat/desktop` | M1-4 is open again and M1-2's step 3b now checks view settings and scene-graph tags. The last installable dmg is still `Coperceive_0.1.0_aarch64.dmg` from [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) at `6ec22ad` (84314027 bytes; artifact 83975978 bytes). That run's CPU samples do not count (`reduceMotion=1`). |
+| `feat/desktop` | `d35dddd`. Green run [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) (9/9). Install `Coperceive_0.1.0_aarch64.dmg` from that run (84305283 bytes). Artifact `coperceive-desktop-macos-arm64` is 83982684 bytes. Backdrop median 0.6%cpu, p95 0.8, motion `animated`. |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
 | Current milestone | **M1: reliable and stateful desktop** (close-out) |
-| Top blocker | **M1-4 animated CPU measurement and M1-2 step 3b**, then Adarsh's M1-5 and M1-6 |
+| Top blocker | **M1-5 Mac acceptance, then M1-6 merge.** Both are Adarsh's |
 
 ## Key docs in the repo
 - `HANDOVER.md`: long engineering log (cleanup task below)
@@ -111,9 +111,9 @@ repo: https://github.com/adarsh-nl/coperceive
   - [x] ~~Playback never pauses while images load.~~ The clock is `setTimeout` from `indexAfter` (`Viewer.tsx` playback effect). Image decode is a separate effect. `paintWait` is only used by export. (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
   - [x] ~~e2e: resume at 148/149 → Play → still playing 3 s later (≥25 samples); Replay flow; 15 s across the wrap with no gap over 300 ms.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
 - [x] ~~**M1-1 · P1 · Tighten serve CORS** (c4358b4/2c90678 allow any localhost port plus credentials). Use the exact viewer origin via `--allow-origin`, `allow_credentials=False`, minimal methods and headers. Or navigate the viewer to the new sidecar origin on switch and drop CORS. Add tests for a foreign origin and the real origin.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
-- [ ] **M1-2 · P1 · e2e for scene → multi-scene root switch** (the case that failed on the Mac). Step 3b now asserts the layer flags, agent visibility, and viewpoint from before the switch, and that every tagged mesh or point cloud belongs to the new scene's load and matches that scene's frame 0 counts. Not struck until that CI run is green.
+- [x] ~~**M1-2 · P1 · e2e for scene → multi-scene root switch** (the case that failed on the Mac).~~ Step 3b asserts the layer flags, agent visibility, and viewpoint from before the switch, and that every tagged mesh or point cloud belongs to the new scene's load and matches that scene's frame 0 counts. The desktop job is green, so those asserts passed. (`d35dddd` · [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622))
 - [x] ~~**M1-3 · P2 · Validation requires `COMPLETE.json`** next to `manifest.json`.~~ Rust `validate_dataset_root` and Python `serve` / `GET /api/scenes` both require the pair. (`f3820a0` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
-- [ ] **M1-4 · P2 · Report the backdrop's measured CPU** (target: median under 5% of one core at 1280×800, animated). The [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) samples were taken with `reduceMotion=1`, so the backdrop drew its static frame and the 0.0% readings do not count. Re-measure with `COPERCEIVE_FORCE_MOTION=1` (honoured only together with `COPERCEIVE_TEST_ENV`), drop the first 5 s, and record median, p95, and the 60 samples in the job summary and `docs/media/measurements/backdrop-cpu.md`.
+- [x] ~~**M1-4 · P2 · Report the backdrop's measured CPU** (target: median under 5% of one core at 1280×800, animated).~~ `COPERCEIVE_FORCE_MOTION=1` with `COPERCEIVE_TEST_ENV`, first 5 s dropped, 60 samples. Median 0.6, p95 0.8, motion `animated`. Numbers in `docs/media/measurements/backdrop-cpu.md`. The [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) samples do not count (`reduceMotion=1`). (`d35dddd` · [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622))
 - [ ] **M1-5 · Mac acceptance (Adarsh, or Claude via computer use):**
   - [ ] Demo flow: reopen → Play → keeps playing and looping
   - [ ] 10 consecutive cold starts with no timeout
@@ -189,6 +189,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ---
 
 ## Change log of this file
+- 2026-10-23: Struck M1-2 and M1-4 against [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) at `d35dddd`. Animated backdrop median 0.6%cpu, p95 0.8. Recorded in `docs/media/measurements/backdrop-cpu.md`.
 - 2026-10-23: Un-struck M1-4. Run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) sampled the static frame (`reduceMotion=1`). Split Import scene into M2a (`scene pack`), M2b (Import from folder), and M2c (Import from HPC, plan only until M2b).
 - 2026-10-22: Struck M1-0, M1-3, and M1-4 against green run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) at `6ec22ad`. M1-2, M1-5, and M1-6 stay open.
 - 2026-10-22: Checked the 2026-10-21 list against `feat/desktop` `bf36d0d` and CI run 39688720618. Struck M1-0 sub-items and M1-1 that the green run already covers. Loop persistence, the Python `COMPLETE.json` check, and the 60 s CPU sampler are in `f3820a0` and stay open until that run is green. M1-2 stays open. Corrected the snapshot (`b99c732` / 55 commits / run 39650235620 were stale).
