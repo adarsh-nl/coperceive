@@ -1,6 +1,6 @@
+import { ComingSoon } from "./components/ComingSoon";
 import { Footer } from "./components/Footer";
 import { Hero } from "./components/Hero";
-import { Specs } from "./components/Specs";
 import { Waitlist } from "./components/Waitlist";
 
 export function App() {
@@ -14,7 +14,7 @@ export function App() {
       </a>
       <main id="main-content">
         <Hero />
-        <Specs />
+        <ComingSoon />
         <Waitlist />
       </main>
       <Footer />

@@ -15,12 +15,12 @@ fixed in the cited line or kept on purpose.
 - `site/src/index.css:60` — `text-wrap: balance` on headings and `text-wrap: pretty` on paragraphs.
 - `site/src/App.tsx:11` — skip link to `#main-content`. One `h1`, then `h2` sections.
 - `site/src/components/FloatingLogo.tsx:28` — the logo uses `env(safe-area-inset-*)`. It is `absolute`, and scroll changes opacity only.
-- `site/src/components/Wordmark.tsx` — the wordmark is `translate="no"`, 28 px and 32 px, with a visible block cursor.
+- `site/src/components/Wordmark.tsx` — the wordmark is `translate="no"`, 28 px and 32 px, with a block cursor that stays opaque.
 - `site/src/components/Hero.tsx` — the poster has `width`, `height`, and `fetchpriority="high"`. The player script loads after idle. Reduced motion keeps the still.
 - `site/src/components/RealClip.tsx` — the canvas is `role="img"` with an `aria-label`. No pause control. The loop stops advancing when the hero leaves the viewport.
 - `site/src/components/Waitlist.tsx` — the email field has a visible label, `autocomplete="email"`, `spellcheck` off, `type="email"`, `inputmode="email"`, and an explicit background and text colour. The browser's built-in check is off (`noValidate`) so the page's own message is the one that shows. Errors set `aria-invalid` and `aria-describedby`. The status is `aria-live="polite"`. The submit control is a `<button type="submit">` with a visible name, at least 44px tall.
-- `site/src/components/Specs.tsx` — the plus icon animates `transform` only, and `motion-reduce:transition-none` drops it.
-- `site/src/components/Footer.tsx` — licence links meet the 44px hit target (`min-h-11`), with a hover colour.
+- `site/src/components/ComingSoon.tsx` — one heading and one line. No motion.
+- `site/src/components/Footer.tsx` — the wordmark only. No licence links on the page.
 - `site/src/index.css` — `prefers-reduced-motion: reduce` stops the block-cursor blink.
 - No `transition: all`. Transitions list `color`, `background-color`, or `transform`. The logo fade writes `opacity` from scroll and does not animate layout.
 - No analytics, no font CDN, no zoom lock (`user-scalable` / `maximum-scale` are absent). `site/index.html` is `width=device-width, initial-scale=1`.

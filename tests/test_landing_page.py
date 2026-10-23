@@ -163,7 +163,7 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         cursor_h = page.evaluate(
             "() => document.querySelector('.cursor-blink').getBoundingClientRect().height"
         )
-        assert isinstance(cursor_h, (int, float)) and float(cursor_h) >= 8
+        assert isinstance(cursor_h, (int, float)) and float(cursor_h) >= 12
         assert page.locator("button", has_text="Pause").count() == 0
         body = page.locator("body").inner_text()
         for banned in (
@@ -177,6 +177,9 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
             "Adarsh",
         ):
             assert banned not in body, banned
+        assert "Coming soon." in body
+        assert "Apache-2.0" not in body
+        assert "OFL" not in body
 
         page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
         page.wait_for_timeout(400)
@@ -215,9 +218,17 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         assert page.get_by_text("Waitlist opens soon.").is_visible()
         assert posts == []
 
+        page.locator("#email").focus()
+        email_outline = page.evaluate("() => getComputedStyle(document.activeElement).outlineStyle")
+        assert email_outline != "none"
         page.keyboard.press("Tab")
         outline = page.evaluate("() => getComputedStyle(document.activeElement).outlineStyle")
         assert outline != "none"
+        focused = page.evaluate(
+            "() => (document.activeElement?.innerText"
+            " || document.activeElement?.getAttribute('aria-label') || '')"
+        )
+        assert isinstance(focused, str) and "Join the waitlist" in focused
         seen: set[str] = set()
         label_js = (
             "() => (document.activeElement?.innerText"

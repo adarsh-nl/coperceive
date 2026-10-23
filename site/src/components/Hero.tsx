@@ -39,7 +39,7 @@ export function Hero() {
     <section id="hero" ref={rootRef} data-pin="false" data-story="hero" className="relative h-[100svh] min-h-[36rem] overflow-hidden">
       <img
         src={poster}
-        alt="Recorded scene. A vehicle and a drone, with lidar and boxes."
+        alt="Recorded scene. A vehicle and a drone, each in its own colour."
         width={1920}
         height={1080}
         fetchPriority="high"

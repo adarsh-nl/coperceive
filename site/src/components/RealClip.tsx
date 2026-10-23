@@ -4,21 +4,13 @@ import { tokens } from "../tokens";
 import type { BoxRecord, ParsedClip } from "../types/clip";
 import { loadClip } from "../utils/clipLoader";
 
-const CORNERS: [number, number, number][] = [
-  [-0.5, -0.5, -0.5],
-  [0.5, -0.5, -0.5],
-  [0.5, 0.5, -0.5],
-  [-0.5, 0.5, -0.5],
-  [-0.5, -0.5, 0.5],
-  [0.5, -0.5, 0.5],
-  [0.5, 0.5, 0.5],
-  [-0.5, 0.5, 0.5],
-];
-
-const EDGES: [number, number][] = [
-  [0, 1], [1, 2], [2, 3], [3, 0],
-  [4, 5], [5, 6], [6, 7], [7, 4],
-  [0, 4], [1, 5], [2, 6], [3, 7],
+const FACES: [number, number, number][] = [
+  [0, 1, 2], [0, 2, 3],
+  [4, 6, 5], [4, 7, 6],
+  [0, 5, 1], [0, 4, 5],
+  [3, 2, 6], [3, 6, 7],
+  [0, 3, 7], [0, 7, 4],
+  [1, 5, 6], [1, 6, 2],
 ];
 
 function boxColor(flag: number): THREE.Color {
@@ -27,28 +19,42 @@ function boxColor(flag: number): THREE.Color {
   return new THREE.Color(tokens.vehicle);
 }
 
-function boxGeometry(boxes: BoxRecord[]): THREE.BufferGeometry {
+function appendBox(
+  positions: number[],
+  colors: number[],
+  center: [number, number, number],
+  size: [number, number, number],
+  rotation: [number, number, number, number],
+  color: THREE.Color,
+) {
+  const quat = new THREE.Quaternion(rotation[0], rotation[1], rotation[2], rotation[3]);
+  const corners = [
+    [-0.5, -0.5, -0.5],
+    [0.5, -0.5, -0.5],
+    [0.5, 0.5, -0.5],
+    [-0.5, 0.5, -0.5],
+    [-0.5, -0.5, 0.5],
+    [0.5, -0.5, 0.5],
+    [0.5, 0.5, 0.5],
+    [-0.5, 0.5, 0.5],
+  ].map(([sx, sy, sz]) =>
+    new THREE.Vector3(sx * size[0], sy * size[1], sz * size[2]).applyQuaternion(quat).add(
+      new THREE.Vector3(center[0], center[1], center[2]),
+    ),
+  );
+  for (const [a, b, c] of FACES) {
+    for (const corner of [corners[a], corners[b], corners[c]]) {
+      positions.push(corner.x, corner.y, corner.z);
+      colors.push(color.r, color.g, color.b);
+    }
+  }
+}
+
+function detectionGeometry(boxes: BoxRecord[]): THREE.BufferGeometry {
   const positions: number[] = [];
   const colors: number[] = [];
-  const quat = new THREE.Quaternion();
-  const vec = new THREE.Vector3();
-  const corners: THREE.Vector3[] = [];
   for (const box of boxes) {
-    const color = boxColor(box.agentFlag);
-    quat.set(box.rotation[0], box.rotation[1], box.rotation[2], box.rotation[3]);
-    corners.length = 0;
-    for (const [sx, sy, sz] of CORNERS) {
-      vec.set(sx * box.size[0], sy * box.size[1], sz * box.size[2]);
-      vec.applyQuaternion(quat);
-      vec.x += box.center[0];
-      vec.y += box.center[1];
-      vec.z += box.center[2];
-      corners.push(vec.clone());
-    }
-    for (const [a, b] of EDGES) {
-      positions.push(corners[a].x, corners[a].y, corners[a].z, corners[b].x, corners[b].y, corners[b].z);
-      colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
-    }
+    appendBox(positions, colors, box.center, box.size, box.rotation, boxColor(box.agentFlag));
   }
   const geom = new THREE.BufferGeometry();
   geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
@@ -56,7 +62,82 @@ function boxGeometry(boxes: BoxRecord[]): THREE.BufferGeometry {
   return geom;
 }
 
-/** Recorded clip. Vehicle and drone poses both come from the file. */
+function labelSprite(text: string, color: string): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 512;
+  canvas.height = 128;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return new THREE.Sprite();
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.font = "600 72px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = 10;
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
+  ctx.strokeText(text, 256, 64);
+  ctx.fillStyle = color;
+  ctx.fillText(text, 256, 64);
+  const material = new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(canvas),
+    transparent: true,
+    depthTest: false,
+  });
+  const sprite = new THREE.Sprite(material);
+  sprite.scale.set(7.2, 1.8, 1);
+  sprite.renderOrder = 3;
+  return sprite;
+}
+
+function droneIcon(): THREE.Sprite {
+  const canvas = document.createElement("canvas");
+  canvas.width = 256;
+  canvas.height = 256;
+  const ctx = canvas.getContext("2d");
+  const sprite = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: ctx ? new THREE.CanvasTexture(canvas) : null,
+      transparent: true,
+      depthTest: false,
+    }),
+  );
+  if (!ctx) return sprite;
+  ctx.clearRect(0, 0, 256, 256);
+  ctx.lineCap = "round";
+  ctx.strokeStyle = tokens.drone;
+  ctx.lineWidth = 26;
+  ctx.beginPath();
+  ctx.moveTo(36, 36);
+  ctx.lineTo(220, 220);
+  ctx.moveTo(220, 36);
+  ctx.lineTo(36, 220);
+  ctx.stroke();
+  ctx.fillStyle = tokens.drone;
+  for (const [x, y] of [
+    [36, 36],
+    [220, 36],
+    [36, 220],
+    [220, 220],
+  ]) {
+    ctx.beginPath();
+    ctx.arc(x, y, 22, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.beginPath();
+  ctx.arc(128, 128, 26, 0, Math.PI * 2);
+  ctx.fill();
+  sprite.scale.set(9.5, 9.5, 1);
+  sprite.renderOrder = 2;
+  return sprite;
+}
+
+function marker(color: string, size: [number, number, number]): THREE.Mesh {
+  return new THREE.Mesh(
+    new THREE.BoxGeometry(size[0], size[1], size[2]),
+    new THREE.MeshBasicMaterial({ color }),
+  );
+}
+
+/** Recorded clip. Both platform poses come from the file. */
 export function RealClip({ active, onReady }: { active: boolean; onReady: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef(active);
@@ -112,9 +193,7 @@ export function RealClip({ active, onReady }: { active: boolean; onReady: () => 
 
   return (
     <div className="absolute inset-0" ref={hostRef}>
-      {failed ? (
-        <p className="sr-only">The scene could not play.</p>
-      ) : null}
+      {failed ? <p className="sr-only">The scene could not play.</p> : null}
     </div>
   );
 }
@@ -141,12 +220,12 @@ function mount(host: HTMLDivElement, clip: ParsedClip) {
   renderer.domElement.setAttribute("role", "img");
   renderer.domElement.setAttribute(
     "aria-label",
-    "Recorded scene. A vehicle and a drone, with lidar and boxes.",
+    "Recorded scene. A vehicle and a drone, each in its own colour.",
   );
   renderer.domElement.className = "block h-full w-full";
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(45, width / Math.max(1, height), 0.5, 800);
+  const camera = new THREE.PerspectiveCamera(50, width / Math.max(1, height), 0.5, 800);
   camera.up.set(0, 0, 1);
 
   const mapGeom = new THREE.BufferGeometry();
@@ -156,54 +235,98 @@ function mount(host: HTMLDivElement, clip: ParsedClip) {
 
   const points = new THREE.Points(
     new THREE.BufferGeometry(),
-    new THREE.PointsMaterial({ color: tokens.vehicle, size: 0.45, sizeAttenuation: true }),
+    new THREE.PointsMaterial({ color: tokens.vehicle, size: 0.85, sizeAttenuation: true }),
   );
   scene.add(points);
 
-  const boxes = new THREE.LineSegments(
+  const detections = new THREE.Mesh(
     new THREE.BufferGeometry(),
-    new THREE.LineBasicMaterial({ vertexColors: true }),
+    new THREE.MeshBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.5, depthWrite: false }),
   );
-  scene.add(boxes);
+  detections.renderOrder = 1;
+  scene.add(detections);
 
-  const vehicle = new THREE.Mesh(
-    new THREE.SphereGeometry(0.7, 16, 12),
-    new THREE.MeshBasicMaterial({ color: tokens.vehicle }),
-  );
-  const drone = new THREE.Mesh(
-    new THREE.SphereGeometry(0.55, 16, 12),
+  const vehicle = new THREE.Group();
+  const vehicleBody = marker(tokens.vehicle, [4.8, 2.05, 1.7]);
+  vehicleBody.position.z = 0.85;
+  vehicle.add(vehicleBody);
+  scene.add(vehicle);
+
+  const drone = droneIcon();
+  scene.add(drone);
+
+  const tether = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.42, 0.42, 1, 12),
     new THREE.MeshBasicMaterial({ color: tokens.drone }),
   );
-  const dropGeom = new THREE.BufferGeometry();
-  dropGeom.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(6), 3));
-  const drop = new THREE.Line(dropGeom, new THREE.LineBasicMaterial({ color: tokens.drone }));
-  scene.add(vehicle, drone, drop);
+  tether.rotation.x = Math.PI / 2;
+  tether.frustumCulled = false;
+  scene.add(tether);
+
+  const shadow = new THREE.Mesh(
+    new THREE.CircleGeometry(3.6, 32),
+    new THREE.MeshBasicMaterial({ color: tokens.drone, transparent: true, opacity: 0.5, depthWrite: false }),
+  );
+  shadow.frustumCulled = false;
+  scene.add(shadow);
+
+  const vehicleLabel = labelSprite("Vehicle", tokens.vehicle);
+  const droneLabel = labelSprite("Drone", tokens.drone);
+  vehicleLabel.scale.set(11, 2.6, 1);
+  droneLabel.scale.set(11, 2.6, 1);
+  scene.add(vehicleLabel, droneLabel);
+  points.frustumCulled = false;
+  detections.frustumCulled = false;
 
   const apply = (index: number) => {
     const frame = clip.frames[index];
-    const geom = points.geometry;
-    geom.setAttribute("position", new THREE.Float32BufferAttribute(frame.lidarPoints, 3));
-    boxes.geometry.dispose();
-    boxes.geometry = boxGeometry(frame.boxes);
+    points.geometry.setAttribute("position", new THREE.Float32BufferAttribute(frame.lidarPoints, 3));
+    detections.geometry.dispose();
+    detections.geometry = detectionGeometry(frame.boxes);
+
     const vp = frame.vehiclePose.position;
-    const dp = frame.dronePose.position;
+    const vq = frame.vehiclePose.quaternion;
     vehicle.position.set(vp[0], vp[1], vp[2]);
+    vehicle.quaternion.set(vq[0], vq[1], vq[2], vq[3]);
+
+    const dp = frame.dronePose.position;
     drone.position.set(dp[0], dp[1], dp[2]);
-    const dropPos = drop.geometry.attributes.position as THREE.BufferAttribute;
-    dropPos.setXYZ(0, dp[0], dp[1], dp[2]);
-    dropPos.setXYZ(1, dp[0], dp[1], 0);
-    dropPos.needsUpdate = true;
-    camera.position.set(vp[0] - 20, vp[1] - 32, Math.max(24, dp[2] + 8));
-    camera.lookAt(vp[0], vp[1], 1);
+
+    const height = Math.max(0.5, dp[2]);
+    tether.scale.set(1, height, 1);
+    tether.position.set(dp[0], dp[1], height / 2);
+    shadow.position.set(dp[0], dp[1], 0.15);
+
+    vehicleLabel.position.set(vp[0], vp[1], vp[2] + 3.4);
+    droneLabel.position.set(dp[0], dp[1], dp[2] + 2.4);
+
+    const lookX = (vp[0] + dp[0]) / 2;
+    const lookY = (vp[1] + dp[1]) / 2;
+    // Pulled back so the vertical pair stays above the headline for the whole loop.
+    camera.position.set(lookX - 74, lookY - 54, 8);
+    camera.lookAt(lookX, lookY, 6);
+  };
+
+  let sizedW = 0;
+  let sizedH = 0;
+  const resize = () => {
     const w = Math.max(1, host.clientWidth);
     const h = Math.max(1, host.clientHeight);
+    if (w === sizedW && h === sizedH) return;
+    sizedW = w;
+    sizedH = h;
     camera.aspect = w / h;
     camera.updateProjectionMatrix();
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.setSize(w, h);
   };
 
-  apply(0);
+  const framed = (index: number) => {
+    apply(index);
+    resize();
+  };
+
+  framed(0);
   renderer.render(scene, camera);
-  return { renderer, scene, camera, apply };
+  return { renderer, scene, camera, apply: framed };
 }
