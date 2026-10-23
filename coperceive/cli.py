@@ -115,6 +115,11 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Print the byte count for the chosen image option and do not write.",
     )
+    pack.add_argument(
+        "--force",
+        action="store_true",
+        help="Pack even if the plan is more than 3× the listed images plus scene files.",
+    )
     pack.set_defaults(func=_scene_pack)
 
     add_parser(sub)
@@ -309,6 +314,7 @@ def _scene_pack(args: argparse.Namespace) -> None:
             media_roots=[Path(item) for item in args.media_root],
             griffin_root=None if args.griffin_root is None else Path(args.griffin_root),
             dry_run=args.dry_run,
+            force=args.force,
         )
     except PackError as exc:
         print(str(exc), file=sys.stderr)

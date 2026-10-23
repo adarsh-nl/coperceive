@@ -48,7 +48,20 @@ class Plan:
     scene_name: str
     files: tuple[PlannedFile, ...]
     errors: tuple[dict[str, str], ...]
+    notes: tuple[str, ...]
     image_paths: tuple[str, ...]
+    baseline_bytes: int
+
+
+def exceeds_copy_cap(planned: int, baseline: int) -> bool:
+    """True when the plan is more than three times the scene's own files.
+
+    The baseline is the listed image bytes plus the real, non-image files that
+    sit inside the scene directory. A linked camera tree blows past this.
+    """
+    if planned < 0 or baseline < 0:
+        raise ValueError("byte counts must be >= 0")
+    return planned > 3 * baseline
 
 
 def bytes_with_margin(planned: int) -> int:
@@ -175,43 +188,41 @@ def _image_column(scene: Path) -> tuple[str, ...] | None:
     return tuple(paths)
 
 
-def _walk_files(scene: Path, roots: list[Path]) -> tuple[dict[str, Path], list[dict[str, str]]]:
+def _link_text(path: Path) -> str:
+    try:
+        return os.readlink(path)
+    except OSError:
+        return "<unreadable>"
+
+
+def _walk_files(scene: Path) -> tuple[dict[str, Path], list[str]]:
+    """Real files inside the scene. Symlinks are recorded and not followed.
+
+    A camera directory that points at the raw Griffin tree must not contribute
+    its files. Listed images are resolved later from ``images.parquet``.
+    """
     found: dict[str, Path] = {}
-    errors: list[dict[str, str]] = []
+    notes: list[str] = []
 
     def walk(directory: Path) -> None:
         try:
             children = sorted(directory.iterdir(), key=lambda path: path.name)
         except OSError as exc:
-            errors.append({"path": directory.name, "error": f"cannot list directory: {exc}"})
+            relative = directory.relative_to(scene).as_posix()
+            notes.append(f"cannot list directory: {relative}: {exc}")
             return
         for child in children:
-            relative = child.relative_to(scene).as_posix()
             if child.name in (IMPORT_NAME, COMPLETE_NAME) or child.name.endswith(".writing"):
                 continue
+            relative = child.relative_to(scene).as_posix()
             if child.is_symlink():
-                if not child.exists():
-                    errors.append({"path": relative, "error": f"dangling symlink: {relative}"})
-                    continue
-                real = Path(os.path.realpath(child))
-                if not _inside(real, roots):
-                    errors.append(
-                        {
-                            "path": relative,
-                            "error": (
-                                f"refused: {relative} resolves outside the scene, "
-                                "media root, and Griffin root"
-                            ),
-                        }
-                    )
-                    continue
-                if child.is_dir():
-                    walk(child)
-                    continue
-                if not real.is_file():
-                    errors.append({"path": relative, "error": f"refused: {relative} is not a file"})
-                    continue
-                found[relative] = real
+                target = _link_text(child)
+                if child.exists() and child.is_dir():
+                    notes.append(f"linked directory not copied: {relative} → {target}")
+                elif not child.exists():
+                    notes.append(f"dangling symlink: {relative} → {target}")
+                else:
+                    notes.append(f"linked file not copied: {relative} → {target}")
                 continue
             if child.is_dir():
                 walk(child)
@@ -220,7 +231,7 @@ def _walk_files(scene: Path, roots: list[Path]) -> tuple[dict[str, Path], list[d
                 found[relative] = child
 
     walk(scene)
-    return found, errors
+    return found, notes
 
 
 def build_plan(
@@ -242,18 +253,27 @@ def build_plan(
     roots = [scene, *[root.resolve() for root in media_roots]]
     if griffin_root is not None:
         roots.append(griffin_root.resolve())
-    walked, errors = _walk_files(scene, roots)
+    walked, notes = _walk_files(scene)
     image_paths = _image_column(scene)
     listed = set(image_paths or ())
-    seen_errors = {item["path"] for item in errors}
+    kept_notes: list[str] = []
+    for note in notes:
+        if note.startswith("linked file not copied:"):
+            linked = note.removeprefix("linked file not copied: ").split(" → ", 1)[0]
+            if linked in listed:
+                continue
+        kept_notes.append(note)
+    errors: list[dict[str, str]] = []
+    seen_errors: set[str] = set()
     files: dict[str, PlannedFile] = {}
     for relative, source in walked.items():
         if relative in listed:
             continue
-        if images == "preview" and relative == IMAGE_TABLE:
+        if relative == IMAGE_TABLE and images in ("preview", "none"):
             continue
         files[relative] = PlannedFile(relative, source, "copy")
     column: list[str] = []
+    resolved_images: list[Path] = []
     for relative in image_paths or ():
         refused = _reject_relative(relative)
         if refused is not None:
@@ -270,8 +290,8 @@ def build_plan(
                 seen_errors.add(relative)
             column.append(relative)
             continue
+        resolved_images.append(real)
         if images == "none":
-            column.append(relative)
             continue
         if images == "preview":
             dest_rel = _jpg_rel(relative)
@@ -287,15 +307,45 @@ def build_plan(
             "table",
             tuple(column),
         )
+    if images == "none" and image_paths is not None:
+        files[IMAGE_TABLE] = PlannedFile(IMAGE_TABLE, scene / IMAGE_TABLE, "empty")
     ordered = tuple(files[key] for key in sorted(files))
-    return Plan(scene.name, ordered, tuple(errors), tuple(column))
+    non_image = sum(path.stat().st_size for rel, path in walked.items() if rel not in listed)
+    listed_bytes = sum(path.stat().st_size for path in resolved_images)
+    return Plan(
+        scene.name,
+        ordered,
+        tuple(errors),
+        tuple(kept_notes),
+        tuple(column),
+        non_image + listed_bytes,
+    )
 
 
-def _payload_size(item: PlannedFile) -> int:
+def _plan_source_bytes(plan: Plan) -> int:
+    """Bytes the plan will read. Each source file counts once."""
+    seen: set[Path] = set()
+    total = 0
+    for item in plan.files:
+        if item.source is None or not item.source.is_file():
+            continue
+        real = item.source.resolve()
+        if real in seen:
+            continue
+        seen.add(real)
+        total += item.source.stat().st_size
+    return total
+
+
+def _payload_size(item: PlannedFile, cache: dict[Path, bytes]) -> int:
     if item.kind == "preview":
         if item.source is None:
             return 0
-        return len(_preview_jpeg(item.source))
+        return len(_cached_preview(item.source, cache))
+    if item.kind == "empty":
+        if item.source is None:
+            return 0
+        return len(_empty_table(item.source))
     if item.kind == "table":
         if item.source is None or item.table_paths is None:
             return 0
@@ -303,6 +353,35 @@ def _payload_size(item: PlannedFile) -> int:
     if item.source is None:
         return 0
     return item.source.stat().st_size
+
+
+def _cached_preview(source: Path, cache: dict[Path, bytes]) -> bytes:
+    cached = cache.get(source)
+    if cached is None:
+        cached = _preview_jpeg(source)
+        cache[source] = cached
+    return cached
+
+
+def _estimate_preview_bytes(sources: list[Path]) -> tuple[int, bool]:
+    """Byte total for preview JPEGs. More than 20 sources is a 20-file sample."""
+    if not sources:
+        return 0, False
+    if len(sources) <= 20:
+        return sum(len(_preview_jpeg(source)) for source in sources), False
+    step = len(sources) / 20
+    picked = [sources[min(len(sources) - 1, int(index * step))] for index in range(20)]
+    sample = [len(_preview_jpeg(source)) for source in picked]
+    estimate = int(round((sum(sample) / len(sample)) * len(sources)))
+    return estimate, True
+
+
+def _empty_table(table_path: Path) -> bytes:
+    table = pq.read_table(table_path)
+    empty = table.schema.empty_table()
+    buffer = io.BytesIO()
+    pq.write_table(empty, buffer)
+    return buffer.getvalue()
 
 
 def _rewrite_table(table_path: Path, paths: list[str]) -> bytes:
@@ -340,12 +419,21 @@ def _same_payload(dest: Path, size: int, digest: str) -> bool:
     return _sha256(dest) == digest
 
 
-def _materialise(item: PlannedFile, dest: Path) -> tuple[int, str, bool]:
+def _materialise(item: PlannedFile, dest: Path, cache: dict[Path, bytes]) -> tuple[int, str, bool]:
     """Write one file. Returns size, sha256, and whether the write was skipped."""
     if item.kind == "preview":
         if item.source is None:
             raise PackError(f"preview has no source: {item.dest_rel}")
-        data = _preview_jpeg(item.source)
+        data = _cached_preview(item.source, cache)
+        digest = hashlib.sha256(data).hexdigest()
+        if _same_payload(dest, len(data), digest):
+            return len(data), digest, True
+        _write_bytes(dest, data)
+        return len(data), digest, False
+    if item.kind == "empty":
+        if item.source is None:
+            raise PackError(f"empty table has no source: {item.dest_rel}")
+        data = _empty_table(item.source)
         digest = hashlib.sha256(data).hexdigest()
         if _same_payload(dest, len(data), digest):
             return len(data), digest, True
@@ -388,6 +476,7 @@ def pack_scene(
     media_roots: list[Path] | None = None,
     griffin_root: Path | None = None,
     dry_run: bool = False,
+    force: bool = False,
     out: TextIO | None = None,
 ) -> Path | None:
     """Pack ``scene`` under ``dest_root``. Returns the final directory, or None for a dry run."""
@@ -400,20 +489,45 @@ def pack_scene(
         media_roots=[] if media_roots is None else media_roots,
         griffin_root=griffin_root,
     )
+    for note in plan.notes:
+        _emit(sink, {"event": "note", "message": note})
     for error in plan.errors:
         _emit(sink, {"event": "error", "path": error["path"], "error": error["error"]})
-    sizes = {item.dest_rel: _payload_size(item) for item in plan.files}
-    planned = sum(sizes.values())
+    cache: dict[Path, bytes] = {}
+    preview_sources = [
+        item.source for item in plan.files if item.kind == "preview" and item.source is not None
+    ]
+    estimated = False
+    sizes: dict[str, int] = {}
+    if dry_run and len(preview_sources) > 20:
+        preview_total, estimated = _estimate_preview_bytes(preview_sources)
+        for item in plan.files:
+            if item.kind == "preview":
+                continue
+            sizes[item.dest_rel] = _payload_size(item, cache)
+        planned = sum(sizes.values()) + preview_total
+    else:
+        for item in plan.files:
+            sizes[item.dest_rel] = _payload_size(item, cache)
+        planned = sum(sizes.values())
+    source_bytes = _plan_source_bytes(plan)
+    if not force and exceeds_copy_cap(source_bytes, plan.baseline_bytes):
+        raise PackError(
+            f"plan is {source_bytes} bytes, more than 3× the listed images plus the "
+            f"non-image scene files ({plan.baseline_bytes} bytes). A linked camera "
+            "tree was probably included. Pass --force to pack anyway."
+        )
     final = dest_root / plan.scene_name
     partial = dest_root / f"{plan.scene_name}.partial"
     remaining = planned
-    if partial.is_dir():
+    if partial.is_dir() and not estimated:
         remaining = 0
         for item in plan.files:
             target = partial / item.dest_rel
-            if target.is_file() and target.stat().st_size == sizes[item.dest_rel]:
+            file_size = sizes[item.dest_rel]
+            if target.is_file() and target.stat().st_size == file_size:
                 continue
-            remaining += sizes[item.dest_rel]
+            remaining += file_size
     required = bytes_with_margin(remaining)
     free = _free_bytes(dest_root if dest_root.exists() else dest_root.parent)
     _emit(
@@ -427,6 +541,8 @@ def pack_scene(
             "free_bytes": free,
             "images": images,
             "dry_run": dry_run,
+            "bytes_estimated": estimated,
+            "notes": list(plan.notes),
         },
     )
     if free < required:
@@ -445,7 +561,7 @@ def pack_scene(
     total_bytes = 0
     for item in plan.files:
         target = partial / item.dest_rel
-        size, digest, skipped = _materialise(item, target)
+        size, digest, skipped = _materialise(item, target, cache)
         done += 1
         if not skipped:
             copied += size
@@ -469,6 +585,7 @@ def pack_scene(
         "images": images,
         "files": records,
         "errors": [dict(error) for error in plan.errors],
+        "notes": list(plan.notes),
     }
     _write_bytes(
         partial / IMPORT_NAME,

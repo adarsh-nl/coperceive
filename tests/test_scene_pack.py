@@ -13,7 +13,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from coperceive.cli import main
-from coperceive.scene.pack import PackError, bytes_with_margin, pack_scene
+from coperceive.scene.pack import PackError, bytes_with_margin, exceeds_copy_cap, pack_scene
 from coperceive.viewdata import dataset_root_error, scene_directories
 from PIL import Image
 
@@ -225,6 +225,124 @@ def test_free_space_keeps_a_ten_percent_margin(
         assert "10% margin" in str(exc)
     else:
         raise AssertionError("expected a free-space error")
+
+
+def _payload_bytes(directory: Path) -> int:
+    total = 0
+    for path in directory.rglob("*"):
+        if path.is_file() and path.name not in ("IMPORT.json", "COMPLETE.json"):
+            total += path.stat().st_size
+    return total
+
+
+@pytest.mark.parametrize("images", ["full", "preview", "none"])
+def test_linked_camera_dir_does_not_copy_unlisted_frames(tmp_path: Path, images: str) -> None:
+    camera = tmp_path / "media" / "vehicle-side" / "camera"
+    _png(camera / "listed.png", (32, 32))
+    for index in range(50):
+        (camera / f"other-{index:02d}.png").write_bytes(f"other-scene-{index:02d}".encode())
+    scene = tmp_path / "Town03-000"
+    (scene / "vehicle-side").mkdir(parents=True)
+    (scene / "manifest.json").write_text('{"scene_id":"Town03-000"}\n', encoding="utf-8")
+    (scene / "points.bin").write_bytes(b"points-ok")
+    os.symlink(camera, scene / "vehicle-side" / "camera")
+    _images(scene / "images.parquet", ["vehicle-side/camera/listed.png"])
+    buffer = io.StringIO()
+    final = pack_scene(
+        scene,
+        tmp_path / "library",
+        images=images,
+        media_roots=[tmp_path / "media"],
+        out=buffer,
+    )
+    assert final is not None
+    events = _events(buffer)
+    notes = [str(row["message"]) for row in events if row.get("event") == "note"]
+    assert len(notes) == 1
+    assert notes[0].startswith("linked directory not copied: vehicle-side/camera → ")
+    assert str(camera) in notes[0]
+    copied = [path.name for path in (final / "vehicle-side").rglob("*") if path.is_file()]
+    if images == "full":
+        assert copied == ["listed.png"]
+    elif images == "preview":
+        assert copied == ["listed.jpg"]
+    else:
+        assert copied == []
+        table = pq.read_table(final / "images.parquet")
+        assert table.num_rows == 0
+        assert "path" in table.schema.names
+    plan = next(row for row in events if row["event"] == "plan")
+    assert plan["bytes_estimated"] is False
+    assert _as_int(plan["bytes"]) == _payload_bytes(final)
+    assert not any(name.startswith("other-") for name in copied)
+
+
+def test_preview_dry_run_estimates_more_than_twenty_frames(tmp_path: Path) -> None:
+    scene = tmp_path / "scene"
+    scene.mkdir()
+    (scene / "manifest.json").write_text("{}\n", encoding="utf-8")
+    camera = tmp_path / "media" / "cam"
+    rows: list[str] = []
+    for index in range(21):
+        name = f"frame-{index:02d}.png"
+        _png(camera / name, (8, 8))
+        rows.append(f"cam/{name}")
+    os.symlink(camera, scene / "cam")
+    _images(scene / "images.parquet", rows)
+    buffer = io.StringIO()
+    assert (
+        pack_scene(
+            scene,
+            tmp_path / "library",
+            images="preview",
+            media_roots=[tmp_path / "media"],
+            dry_run=True,
+            out=buffer,
+        )
+        is None
+    )
+    plan = next(row for row in _events(buffer) if row["event"] == "plan")
+    assert plan["bytes_estimated"] is True
+    assert _as_int(plan["files"]) == 23  # manifest, rewritten table, 21 previews
+
+
+def test_copy_cap_refuses_a_plan_over_three_times_the_scene(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    assert exceeds_copy_cap(9, 3) is False
+    assert exceeds_copy_cap(10, 3) is True
+    scene = tmp_path / "scene"
+    scene.mkdir()
+    (scene / "manifest.json").write_text("{}\n", encoding="utf-8")
+    from dataclasses import replace
+
+    import coperceive.scene.pack as pack
+
+    original = pack.build_plan
+
+    def collapsed(
+        scene: Path,
+        *,
+        images: str,
+        media_roots: list[Path],
+        griffin_root: Path | None,
+    ) -> pack.Plan:
+        return replace(
+            original(
+                scene,
+                images=images,
+                media_roots=media_roots,
+                griffin_root=griffin_root,
+            ),
+            baseline_bytes=0,
+        )
+
+    monkeypatch.setattr(pack, "build_plan", collapsed)
+    with pytest.raises(PackError, match="3×"):
+        pack_scene(scene, tmp_path / "out", images="none")
+    final = pack_scene(scene, tmp_path / "forced", images="none", force=True)
+    assert final is not None
+    assert (final / "manifest.json").is_file()
 
 
 def test_cli_pack_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
