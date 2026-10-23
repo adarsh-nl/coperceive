@@ -146,9 +146,12 @@ def test_preview_rewrites_paths_and_limits_the_long_edge(tmp_path: Path) -> None
     preview = final / "cam" / "frame.jpg"
     assert preview.is_file()
     assert not (final / "cam" / "frame.png").exists()
-    with Image.open(preview) as image:
-        assert max(image.size) <= 640
-        assert image.format == "JPEG"
+    opened = cast(Image.Image, Image.open(preview))
+    try:
+        assert max(opened.size) <= 640
+        assert opened.format == "JPEG"
+    finally:
+        opened.close()
     table = pq.read_table(final / "images.parquet")
     first = table.to_pylist()[0]
     assert isinstance(first, dict)

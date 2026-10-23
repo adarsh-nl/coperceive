@@ -15,7 +15,7 @@ import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TextIO
+from typing import TextIO, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -150,12 +150,15 @@ def _resolve(
 def _preview_jpeg(source: Path) -> bytes:
     from PIL import Image
 
-    with Image.open(source) as image:
-        converted = image.convert("RGB")
+    opened = cast(Image.Image, Image.open(source))
+    try:
+        converted = opened.convert("RGB")
         converted.thumbnail((PREVIEW_EDGE, PREVIEW_EDGE), Image.Resampling.LANCZOS)
         buffer = io.BytesIO()
         converted.save(buffer, format="JPEG", quality=PREVIEW_QUALITY)
         return buffer.getvalue()
+    finally:
+        opened.close()
 
 
 def _rows(table: pa.Table) -> list[dict[str, object]]:
