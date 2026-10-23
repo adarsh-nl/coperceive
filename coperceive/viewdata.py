@@ -47,6 +47,14 @@ _BOX_EDGES = (
 )
 
 
+def is_hidden_scene_name(name: str) -> bool:
+    """Names the viewer and validator must not list.
+
+    ``.partial`` is an import that has not been renamed into place yet.
+    """
+    return name.startswith(".") or name.endswith(".partial")
+
+
 def _has_scene_marker(path: Path, *, require_complete: bool) -> bool:
     if not (path / "manifest.json").is_file():
         return False
@@ -64,11 +72,13 @@ def scene_directories(root: Path, *, require_complete: bool = False) -> list[Pat
     """
     if not root.is_dir():
         raise FileNotFoundError(root)
+    if is_hidden_scene_name(root.name):
+        return []
     if _has_scene_marker(root, require_complete=require_complete):
         return [root]
     found: list[Path] = []
     for child in sorted(root.iterdir(), key=lambda path: path.name):
-        if child.name.startswith(".") or not child.is_dir():
+        if is_hidden_scene_name(child.name) or not child.is_dir():
             continue
         if _has_scene_marker(child, require_complete=require_complete):
             found.append(child)

@@ -83,6 +83,40 @@ def build_parser() -> argparse.ArgumentParser:
     )
     serve.set_defaults(func=_serve)
 
+    scene = sub.add_parser("scene", help="Copy a scene into a self-contained library folder.")
+    scene_sub = scene.add_subparsers(dest="scene_command", required=True)
+    pack = scene_sub.add_parser(
+        "pack",
+        help="Pack one scene. Image paths are materialised as real files.",
+    )
+    pack.add_argument("source", help="Scene directory (manifest.json plus tables).")
+    pack.add_argument("dest", help="Library directory. The scene is written as a child of this.")
+    pack.add_argument(
+        "--images",
+        default="full",
+        choices=("full", "preview", "none"),
+        help="full copies image bytes, preview writes 640 px JPEG quality 85, none skips images.",
+    )
+    pack.add_argument(
+        "--media-root",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="A symlink target may resolve here. Repeatable.",
+    )
+    pack.add_argument(
+        "--griffin-root",
+        default=None,
+        metavar="DIR",
+        help="Raw Griffin release root. Image paths may resolve here.",
+    )
+    pack.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the byte count for the chosen image option and do not write.",
+    )
+    pack.set_defaults(func=_scene_pack)
+
     add_parser(sub)
     add_adapters_parser(sub)
     add_evaluation_parser(sub)
@@ -262,6 +296,23 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
     func(args)
+
+
+def _scene_pack(args: argparse.Namespace) -> None:
+    from coperceive.scene.pack import PackError, pack_scene
+
+    try:
+        pack_scene(
+            Path(args.source),
+            Path(args.dest),
+            images=args.images,
+            media_roots=[Path(item) for item in args.media_root],
+            griffin_root=None if args.griffin_root is None else Path(args.griffin_root),
+            dry_run=args.dry_run,
+        )
+    except PackError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(3) from exc
 
 
 def _validate(args: argparse.Namespace) -> None:

@@ -477,7 +477,13 @@ class _SceneCache:
 
 
 def _scene_dir(root: Path, scene_id: str) -> Path:
-    if scene_id == "" or "/" in scene_id or "\\" in scene_id or ".." in scene_id:
+    if (
+        scene_id == ""
+        or "/" in scene_id
+        or "\\" in scene_id
+        or ".." in scene_id
+        or scene_id.endswith(".partial")
+    ):
         raise HTTPException(status_code=400, detail="bad scene id")
     if (root / "manifest.json").is_file() and (root / "COMPLETE.json").is_file():
         if scene_id in (root.name, ".", ""):

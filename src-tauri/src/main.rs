@@ -597,7 +597,14 @@ fn build_app_menu(
 
     // File Submenu
     let mut file_builder = SubmenuBuilder::new(app, "File")
-        .item(&MenuItem::with_id(app, "open_dataset", "Open Dataset…", true, Some("CmdOrControl+O"))?);
+        .item(&MenuItem::with_id(app, "open_dataset", "Open Dataset…", true, Some("CmdOrControl+O"))?)
+        .item(&MenuItem::with_id(
+            app,
+            "import_folder",
+            "Import from folder…",
+            true,
+            None::<&str>,
+        )?);
 
     // Open Recent Submenu
     let mut recent_builder = SubmenuBuilder::new(app, "Open Recent");
@@ -802,6 +809,103 @@ async fn stop_local(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String
 }
 
 #[cfg(target_os = "macos")]
+static IMPORT_PID: Mutex<Option<u32>> = Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn import_from_folder(
+    app: tauri::AppHandle,
+    source: String,
+    dest: String,
+    images: String,
+    media_roots: Vec<String>,
+    griffin_root: Option<String>,
+) -> Result<(), String> {
+    use coperceive_desktop::pack::scene_pack_args;
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use tauri::Emitter;
+
+    {
+        let slot = IMPORT_PID.lock().map_err(|err| err.to_string())?;
+        if slot.is_some() {
+            return Err("an import is already running".into());
+        }
+    }
+    let args = scene_pack_args(
+        &source,
+        &dest,
+        &images,
+        &media_roots,
+        griffin_root.as_deref(),
+    )?;
+    let python = resolve_python_binary(&app);
+    let mut child = Command::new(&python)
+        .args(&args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("failed to start scene pack: {err}"))?;
+    let pid = child.id();
+    {
+        let mut slot = IMPORT_PID.lock().map_err(|err| err.to_string())?;
+        *slot = Some(pid);
+    }
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    std::thread::spawn(move || {
+        let app_out = app.clone();
+        let stdout_thread = std::thread::spawn(move || {
+            if let Some(pipe) = stdout {
+                for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                    let payload = serde_json::from_str::<serde_json::Value>(&line)
+                        .unwrap_or_else(|_| serde_json::json!({"event": "log", "line": line}));
+                    let _ = app_out.emit("import-progress", payload);
+                }
+            }
+        });
+        let app_err = app.clone();
+        let stderr_thread = std::thread::spawn(move || {
+            if let Some(pipe) = stderr {
+                for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                    let _ = app_err.emit(
+                        "import-progress",
+                        serde_json::json!({"event": "log", "line": line}),
+                    );
+                }
+            }
+        });
+        let status = child.wait();
+        let _ = stdout_thread.join();
+        let _ = stderr_thread.join();
+        if let Ok(mut slot) = IMPORT_PID.lock() {
+            if *slot == Some(pid) {
+                *slot = None;
+            }
+        }
+        let code = status.ok().and_then(|value| value.code()).unwrap_or(1);
+        let _ = app.emit("import-progress", serde_json::json!({"event": "exit", "code": code}));
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn cancel_import() -> Result<(), String> {
+    let pid = {
+        let mut slot = IMPORT_PID.lock().map_err(|err| err.to_string())?;
+        slot.take()
+    };
+    if let Some(pid) = pid {
+        // SAFETY: pid is the id of the scene-pack child this process spawned.
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload, String> {
     let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
@@ -979,6 +1083,8 @@ fn main() {
             pick_data_root,
             start_local,
             stop_local,
+            import_from_folder,
+            cancel_import,
             health,
             remote_connect,
             remote_status,
@@ -1120,6 +1226,12 @@ fn main() {
                     tauri::async_runtime::spawn(async move {
                         trigger_open_dataset_dialog(&handle, &st).await;
                     });
+                }
+                "import_folder" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("import-request", ());
+                    }
                 }
                 id if id.starts_with("recent_") => {
                     if let Ok(idx) = id.trim_start_matches("recent_").parse::<usize>() {

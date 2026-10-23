@@ -206,7 +206,7 @@ def _build_index(
         raise FileNotFoundError(root)
     order: list[tuple[str, int]] = []
     for child in sorted(root.iterdir(), key=lambda path: path.name):
-        if child.name.startswith(".") or not child.is_dir():
+        if child.name.startswith(".") or child.name.endswith(".partial") or not child.is_dir():
             continue
         if not (child / "manifest.json").is_file():
             continue

@@ -5,6 +5,7 @@
 //! and Slurm session management for the Coperceive Tauri desktop application.
 
 pub mod controller;
+pub mod pack;
 pub mod port;
 pub mod remote;
 pub mod sidecar;

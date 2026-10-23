@@ -434,7 +434,7 @@ def _centreline_row(
 def _scene_dirs(root: Path) -> list[Path]:
     found: list[Path] = []
     for child in sorted(root.iterdir(), key=lambda path: path.name):
-        if child.name.startswith(".") or not child.is_dir():
+        if child.name.startswith(".") or child.name.endswith(".partial") or not child.is_dir():
             continue
         if (child / "manifest.json").is_file():
             found.append(child)

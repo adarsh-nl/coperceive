@@ -189,3 +189,48 @@ export class LocalExecutionTarget implements ExecutionTarget {
     }
   }
 }
+
+export type ImportImages = "full" | "preview" | "none";
+
+export interface ImportProgress {
+  event: string;
+  path?: string;
+  error?: string;
+  line?: string;
+  done?: number;
+  total?: number;
+  bytes?: number;
+  code?: number;
+  skipped?: boolean;
+}
+
+export async function startImport(options: {
+  source: string;
+  dest: string;
+  images: ImportImages;
+  mediaRoots: string[];
+  griffinRoot: string;
+}): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("import_from_folder", {
+    source: options.source,
+    dest: options.dest,
+    images: options.images,
+    mediaRoots: options.mediaRoots,
+    griffinRoot: options.griffinRoot || null,
+  });
+}
+
+export async function cancelImport(): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("cancel_import");
+}
+
+export async function onImportProgress(
+  callback: (event: ImportProgress) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<ImportProgress>("import-progress", (event) => {
+    callback(event.payload);
+  });
+}

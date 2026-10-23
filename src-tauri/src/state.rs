@@ -375,6 +375,12 @@ pub fn add_recent_root(state: &mut AppPersistentState, root: &str) {
     }
 }
 
+fn name_ends_with_partial(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".partial"))
+}
+
 /// Validates whether a directory is a valid Coperceive dataset root.
 ///
 /// A valid dataset root is an existing directory that either:
@@ -388,7 +394,10 @@ pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
         return Err(format!("Path is not a directory: {}", path.display()));
     }
 
-    if path.join("manifest.json").is_file() && path.join("COMPLETE.json").is_file() {
+    if !name_ends_with_partial(path)
+        && path.join("manifest.json").is_file()
+        && path.join("COMPLETE.json").is_file()
+    {
         return Ok(());
     }
 
@@ -396,6 +405,7 @@ pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
     for entry in entries.flatten() {
         let child_path = entry.path();
         if child_path.is_dir()
+            && !name_ends_with_partial(&child_path)
             && child_path.join("manifest.json").is_file()
             && child_path.join("COMPLETE.json").is_file()
         {
@@ -667,6 +677,21 @@ pub mod tests {
         assert!(validate_dataset_root(&multi_root).is_err());
         fs::write(child_scene.join("COMPLETE.json"), "{}").expect("write complete");
         assert!(validate_dataset_root(&multi_root).is_ok());
+
+        // An import still in <scene>.partial/ is not a scene, even with both markers.
+        let partial = multi_root.join("scene_002.partial");
+        let _ = fs::create_dir_all(&partial);
+        fs::write(partial.join("manifest.json"), "{}").expect("write partial manifest");
+        fs::write(partial.join("COMPLETE.json"), "{}").expect("write partial complete");
+        assert!(validate_dataset_root(&partial).is_err());
+        assert!(validate_dataset_root(&multi_root).is_ok());
+
+        let only_partial = tmp.join("only_partial");
+        let only_child = only_partial.join("scene_003.partial");
+        let _ = fs::create_dir_all(&only_child);
+        fs::write(only_child.join("manifest.json"), "{}").expect("write only manifest");
+        fs::write(only_child.join("COMPLETE.json"), "{}").expect("write only complete");
+        assert!(validate_dataset_root(&only_partial).is_err());
 
         let _ = fs::remove_dir_all(&tmp);
     }

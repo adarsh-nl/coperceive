@@ -1,6 +1,16 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useState } from "react";
-import { LocalExecutionTarget, getPersistentState, isRemoteEnabled, pickDataRoot } from "./local";
+import {
+  LocalExecutionTarget,
+  cancelImport,
+  getPersistentState,
+  isRemoteEnabled,
+  isTauriEnvironment,
+  onImportProgress,
+  pickDataRoot,
+  startImport,
+  type ImportImages,
+} from "./local";
 import type { ConnectionSession } from "./types";
 import ConnectBackdrop from "./backdrop/ConnectBackdrop";
 
@@ -15,6 +25,15 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
+  const [importOpen, setImportOpen] = useState<boolean>(false);
+  const [importSource, setImportSource] = useState<string>("");
+  const [importDest, setImportDest] = useState<string>("");
+  const [importImages, setImportImages] = useState<ImportImages>("full");
+  const [importMedia, setImportMedia] = useState<string>("");
+  const [importGriffin, setImportGriffin] = useState<string>("");
+  const [importing, setImporting] = useState<boolean>(false);
+  const [importPercent, setImportPercent] = useState<number>(0);
+  const [importNote, setImportNote] = useState<string>("");
 
   useEffect(() => {
     void (async () => {
@@ -29,6 +48,17 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       const remote = await isRemoteEnabled();
       setShowRemote(remote);
     })();
+    if (!isTauriEnvironment()) {
+      return;
+    }
+    let unlisten: (() => void) | undefined;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlisten = await listen("import-request", () => setImportOpen(true));
+    })();
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   const handlePickFolder = async () => {
@@ -40,6 +70,47 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       }
     } catch (e) {
       setError(String(e));
+    }
+  };
+
+  const handleImport = async () => {
+    if (!importSource || !importDest) {
+      setError("Choose the scene folder and the library folder.");
+      return;
+    }
+    setImporting(true);
+    setImportPercent(0);
+    setImportNote("Starting…");
+    setError("");
+    const stop = await onImportProgress((event) => {
+      if (event.event === "file" && event.total) {
+        setImportPercent(Math.round(((event.done ?? 0) / event.total) * 100));
+        setImportNote(`${event.done ?? 0} / ${event.total}${event.skipped ? " (already copied)" : ""}`);
+      } else if (event.event === "error") {
+        setImportNote(event.error ?? "A file was skipped.");
+      } else if (event.event === "exit") {
+        setImporting(false);
+        stop();
+        if (event.code === 0) {
+          setImportNote("Import finished.");
+          setDataRoot(importDest);
+        } else {
+          setError("Import stopped. Choose the same folders to resume.");
+        }
+      }
+    });
+    try {
+      await startImport({
+        source: importSource,
+        dest: importDest,
+        images: importImages,
+        mediaRoots: importMedia ? [importMedia] : [],
+        griffinRoot: importGriffin,
+      });
+    } catch (e) {
+      setImporting(false);
+      setError(e instanceof Error ? e.message : String(e));
+      stop();
     }
   };
 
@@ -212,6 +283,68 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               >
                 Start fresh
               </button>
+            </div>
+
+            <div style={{ marginTop: "0.75rem" }}>
+              <button
+                type="button"
+                onClick={() => setImportOpen((open) => !open)}
+                disabled={busy}
+                aria-label="Import from folder…"
+              >
+                Import from folder…
+              </button>
+              {importOpen && (
+                <div style={{ marginTop: "0.75rem", display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+                  <p style={{ fontSize: "0.8rem", color: "#a1a1a6" }}>
+                    Copies the scene into a library folder. Run the same import again to resume.
+                  </p>
+                  <button type="button" onClick={async () => { const folder = await pickDataRoot(); if (folder) setImportSource(folder); }}>
+                    Scene: {importSource || "Choose…"}
+                  </button>
+                  <button type="button" onClick={async () => { const folder = await pickDataRoot(); if (folder) setImportDest(folder); }}>
+                    Library: {importDest || "Choose…"}
+                  </button>
+                  <label style={{ fontSize: "0.8rem", color: "#a1a1a6" }}>
+                    Images
+                    <select
+                      aria-label="Image copy mode"
+                      value={importImages}
+                      onChange={(event) => setImportImages(event.target.value as ImportImages)}
+                      style={{ marginLeft: "0.5rem" }}
+                    >
+                      <option value="full">full</option>
+                      <option value="preview">preview</option>
+                      <option value="none">none</option>
+                    </select>
+                  </label>
+                  <button type="button" onClick={async () => { const folder = await pickDataRoot(); if (folder) setImportMedia(folder); }}>
+                    Media root: {importMedia || "optional"}
+                  </button>
+                  <button type="button" onClick={async () => { const folder = await pickDataRoot(); if (folder) setImportGriffin(folder); }}>
+                    Griffin root: {importGriffin || "optional"}
+                  </button>
+                  <div
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={importPercent}
+                    aria-label="Import progress"
+                    style={{ height: "8px", background: "rgba(255,255,255,0.12)", borderRadius: "4px" }}
+                  >
+                    <div style={{ width: `${importPercent}%`, height: "100%", background: "#2878dc", borderRadius: "4px" }} />
+                  </div>
+                  <p style={{ fontSize: "0.75rem", color: "#86868b" }}>{importNote}</p>
+                  <div style={{ display: "flex", gap: "0.5rem" }}>
+                    <button type="button" onClick={() => void handleImport()} disabled={importing}>
+                      {importing ? "Importing…" : "Start import"}
+                    </button>
+                    <button type="button" onClick={() => void cancelImport()} disabled={!importing}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {recentRoots.length > 0 && (
