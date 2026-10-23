@@ -1,13 +1,9 @@
 import { Footer } from "./components/Footer";
-import { GetStarted } from "./components/GetStarted";
-import { Header } from "./components/Header";
 import { Hero } from "./components/Hero";
-import { Ledger } from "./components/Ledger";
 import { Occlusion } from "./components/Occlusion";
-import { Perspectives } from "./components/Perspectives";
-import { RealData } from "./components/RealData";
 import { Specs } from "./components/Specs";
 import { TwoAgents } from "./components/TwoAgents";
+import { Waitlist } from "./components/Waitlist";
 
 export function App() {
   return (
@@ -18,16 +14,12 @@ export function App() {
       >
         Skip to main content
       </a>
-      <Header />
       <main id="main-content">
         <Hero />
         <TwoAgents />
         <Occlusion />
-        <Perspectives />
-        <Ledger />
-        <RealData />
         <Specs />
-        <GetStarted />
+        <Waitlist />
       </main>
       <Footer />
     </div>

@@ -11,13 +11,13 @@
   }
 
   html {
-    scroll-padding-top: 4.5rem;
+    scroll-padding-top: 1.5rem;
     background: #000;
   }
 
   section[id],
   details[id] {
-    scroll-margin-top: 4.5rem;
+    scroll-margin-top: 1.5rem;
   }
 
   @media (pointer: fine) {
@@ -73,8 +73,27 @@
   font-variant-numeric: tabular-nums;
 }
 
+@keyframes cursor-blink {
+  0%,
+  45% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+.cursor-blink {
+  animation: cursor-blink 1.15s steps(1, end) infinite;
+}
+
 @media (prefers-reduced-motion: reduce) {
   html {
     scroll-behavior: auto;
+  }
+
+  .cursor-blink {
+    animation: none;
   }
 }

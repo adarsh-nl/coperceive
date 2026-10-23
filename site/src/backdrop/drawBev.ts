@@ -5,10 +5,11 @@
 // Optional BevRenderOptions fields below are landing-only. Defaults match the desktop port.
 
 // SPDX-License-Identifier: Apache-2.0
-// Ported and adapted from "viewer-engine.js" by Adarsh (Coperceive UI Design Options, 2026-10-18).
+// Ported and adapted from the desktop viewer backdrop.
 // Canvas 2D Bird's-Eye View (BEV) rendering for the desktop Connect screen backdrop.
 
-import type { BackdropScene, ObjectState, SceneObject } from "./scene";
+import { tokens } from "../tokens";
+import type { BackdropScene, ObjectState, Pose2D, SceneObject } from "./scene";
 
 export interface BevRenderOptions {
   scale?: number;
@@ -20,6 +21,10 @@ export interface BevRenderOptions {
   /** 0..1 sweep of the drone range ring. Default 1. */
   droneRing?: number;
   showVehicle?: boolean;
+  /** Second vehicle platform. Default on, so the hero shows two vehicles and the drone. */
+  showPartner?: boolean;
+  /** 0..1 sweep of the second vehicle ring. Default 1. */
+  partnerRing?: number;
   showDrone?: boolean;
   /** 0..1. Drone-only hits stay misses until this passes revealGate(id). */
   droneReveal?: number;
@@ -41,12 +46,21 @@ export function revealGate(id: number): number {
 }
 
 const COLOR = {
-  tp: "#1FA3A3",
-  fp: "#E0A431",
-  miss: "#8E6CEF",
-  veh: "#F58A1F",
-  uav: "#3C8DFF",
+  tp: tokens.hit,
+  fp: tokens.fp,
+  miss: tokens.miss,
+  veh: tokens.vehicle,
+  partner: tokens.vehicleAlt,
+  uav: tokens.drone,
 };
+
+function rgba(hex: string, alpha: number): string {
+  const n = Number.parseInt(hex.slice(1), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
 
 const EDGES_BEV: [number, number][] = [
   [4, 5],
@@ -83,6 +97,8 @@ export function drawBevScene(
   const vehicleRing = options.vehicleRing ?? 1;
   const droneRing = options.droneRing ?? 1;
   const showVehicle = options.showVehicle ?? true;
+  const showPartner = options.showPartner ?? true;
+  const partnerRing = options.partnerRing ?? 1;
   const showDrone = options.showDrone ?? true;
   const droneReveal = options.droneReveal ?? 1;
   const showSightLines = options.showSightLines ?? true;
@@ -95,7 +111,7 @@ export function drawBevScene(
   const allowU = lidar === "both" || lidar === "drone";
 
   const st = scene.stateAt(t);
-  const { V, U } = st;
+  const { V, U, P } = st;
 
   const hitOf = (r: ObjectState): boolean => {
     if (detection === "vehicle") return r.vDet;
@@ -106,8 +122,16 @@ export function drawBevScene(
   ctx.save();
   ctx.globalAlpha = alpha;
 
-  const cx = follow === "vehicle" ? V.x + 4 : follow === "drone" ? U.x : (V.x + U.x) / 2 + 6;
-  const cy = follow === "vehicle" ? V.y : follow === "drone" ? U.y : (V.y + U.y) / 2;
+  const followed = [
+    showVehicle ? V : null,
+    showPartner ? P : null,
+    showDrone ? U : null,
+  ].filter((pose): pose is Pose2D => pose !== null);
+  const anchor = followed.length > 0 ? followed : [V];
+  const cx =
+    follow === "vehicle" ? V.x + 4 : follow === "drone" ? U.x : anchor.reduce((sum, pose) => sum + pose.x, 0) / anchor.length;
+  const cy =
+    follow === "vehicle" ? V.y : follow === "drone" ? U.y : anchor.reduce((sum, pose) => sum + pose.y, 0) / anchor.length;
 
   // Optional gentle camera drift (±3° rotation over the 60s loop)
   const driftAngle = drift ? Math.sin((t / scene.T_END) * Math.PI * 2) * (3 * Math.PI / 180) : 0;
@@ -173,14 +197,23 @@ export function drawBevScene(
   for (const pt of scene.env) {
     const dv = Math.hypot(pt[0] - V.x, pt[1] - V.y);
     const du = Math.hypot(pt[0] - U.x, pt[1] - U.y);
-    const inV = allowV && dv < 48;
-    const inU = allowU && du < 58;
-    if (!inV && !inU) continue;
+    const dp = Math.hypot(pt[0] - P.x, pt[1] - P.y);
+    const inV = allowV && showVehicle && dv < 48;
+    const inU = allowU && showDrone && du < 58;
+    const inP = showPartner && dp < 40;
+    if (!inV && !inU && !inP) continue;
 
     const q = transformX(pt[0], pt[1]);
     if (q[0] < -10 || q[0] > w + 10 || q[1] < -10 || q[1] > h + 10) continue;
 
-    ctx.fillStyle = inV ? "rgba(245, 138, 31, 0.45)" : "rgba(60, 141, 255, 0.45)";
+    let tint = rgba(tokens.vehicle, 0.45);
+    let nearest = inV ? dv : Number.POSITIVE_INFINITY;
+    if (inP && dp < nearest) {
+      tint = rgba(tokens.vehicleAlt, 0.5);
+      nearest = dp;
+    }
+    if (inU && du < nearest) tint = rgba(tokens.drone, 0.45);
+    ctx.fillStyle = tint;
     ctx.fillRect(q[0], q[1], 1.4, 1.4);
   }
 
@@ -191,6 +224,13 @@ export function drawBevScene(
     ctx.strokeStyle = "rgba(245, 138, 31, 0.45)";
     ctx.beginPath();
     ctx.arc(q[0], q[1], 45 * scale, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, vehicleRing));
+    ctx.stroke();
+  }
+  if (showPartner && partnerRing > 0) {
+    const q = transformX(P.x, P.y);
+    ctx.strokeStyle = rgba(tokens.vehicleAlt, 0.55);
+    ctx.beginPath();
+    ctx.arc(q[0], q[1], 36 * scale, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * Math.min(1, partnerRing));
     ctx.stroke();
   }
   if (showDrone && droneRing > 0) {
@@ -310,6 +350,34 @@ export function drawBevScene(
     ctx.lineWidth = 2.0;
     ctx.beginPath();
     const top = [0, 1, 2, 3].map((i) => transformX(cs[i][0], cs[i][1]));
+    top.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])));
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  if (showPartner) {
+    ctx.strokeStyle = rgba(tokens.vehicleAlt, 0.55);
+    ctx.lineWidth = 1.6;
+    ctx.beginPath();
+    let started = false;
+    for (let tt = Math.max(0, t - 6); tt <= t; tt += 0.25) {
+      const a = scene.partnerAt(tt);
+      const q = transformX(a.x, a.y);
+      if (started) ctx.lineTo(q[0], q[1]);
+      else {
+        ctx.moveTo(q[0], q[1]);
+        started = true;
+      }
+    }
+    ctx.stroke();
+
+    const body = corners(P, { l: 4.4, w: 1.85, h: 1.45 });
+    ctx.fillStyle = rgba(tokens.vehicleAlt, 0.35);
+    ctx.strokeStyle = COLOR.partner;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    const top = [0, 1, 2, 3].map((i) => transformX(body[i][0], body[i][1]));
     top.forEach((q, i) => (i ? ctx.lineTo(q[0], q[1]) : ctx.moveTo(q[0], q[1])));
     ctx.closePath();
     ctx.fill();

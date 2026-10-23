@@ -11,7 +11,11 @@ export const tokens = {
     tertiary: "#86868b",
   },
   vehicle: "#F58A1F",
+  /** Second vehicle platform. Distinct from vehicle, drone, hit, miss, and lanes. */
+  vehicleAlt: "#4CC9F0",
   drone: "#3C8DFF",
+  /** Wordmark block cursor. Sampled from the 4c mark, about #E03A22. */
+  cursor: "#E03A22",
   hit: "#1FA3A3",
   miss: "#8E6CEF",
   fp: "#E0A431",

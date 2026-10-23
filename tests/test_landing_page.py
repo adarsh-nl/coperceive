@@ -166,10 +166,21 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         response = page.goto(site_server, wait_until="networkidle")
         assert response is not None and response.status == 200
         assert page.locator("h1").inner_text() == "See what your car can’t."
-        assert page.locator("header").get_by_text("coperceive", exact=True).is_visible()
-        assert page.locator("header").get_by_role("link", name="GitHub", exact=True).is_visible()
-        assert page.locator("header").get_by_role("link", name="View on GitHub").is_visible()
-        assert page.get_by_text("macOS app coming soon").first.is_visible()
+        assert page.locator("header").count() == 0
+        assert page.locator("[data-logo]").is_visible()
+        assert page.locator("button", has_text="Pause").count() == 0
+        body = page.locator("body").inner_text()
+        for banned in (
+            "GitHub",
+            "Griffin",
+            "CARLA",
+            "Town03",
+            "OPV2V",
+            "V2XSet",
+            "V2V4Real",
+            "Adarsh",
+        ):
+            assert banned not in body, banned
 
         page.wait_for_timeout(400)
         hero_a = _hash(page, "canvas[data-bev=hero]")
@@ -178,14 +189,28 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         hero_b = _hash(page, "canvas[data-bev=hero]")
         assert hero_a != hero_b
 
+        logo_top = page.evaluate(
+            "() => Number(getComputedStyle(document.querySelector('[data-logo]')).opacity)"
+        )
+        assert isinstance(logo_top, (int, float)) and float(logo_top) > 0.9
+        page.evaluate("() => window.scrollTo(0, window.innerHeight)")
+        page.wait_for_timeout(200)
+        logo_fade = page.evaluate(
+            "() => Number(getComputedStyle(document.querySelector('[data-logo]')).opacity)"
+        )
+        assert isinstance(logo_fade, (int, float)) and float(logo_fade) < 0.05
+        assert (
+            page.evaluate("() => getComputedStyle(document.querySelector('[data-logo]')).position")
+            != "fixed"
+        )
+        assert (
+            page.evaluate("() => getComputedStyle(document.querySelector('[data-logo]')).position")
+            != "sticky"
+        )
+
         for section_id, selector in (
             ("agents", "canvas[data-bev=agents]"),
             ("occlusion", "canvas[data-bev=occlusion]"),
-            ("perspectives", "canvas[data-bev=vehicle]"),
-            ("perspectives", "canvas[data-bev=drone]"),
-            ("perspectives", "canvas[data-bev=together]"),
-            ("perspectives", "canvas[data-bev=band]"),
-            ("ledger", "canvas[data-bev=ledger]"),
         ):
             _scroll_fraction(page, section_id, 0.05)
             assert _pixel_count(page, selector) > 20, selector
@@ -194,10 +219,15 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
             after = _hash(page, selector)
             assert before != after, selector
 
-        _scroll_fraction(page, "data", 0.2)
-        page.wait_for_selector("canvas[data-bev=clip]", timeout=20000)
-        page.wait_for_timeout(600)
-        assert _pixel_count(page, "canvas[data-bev=clip]") > 20
+        page.locator("#email").fill("not-an-email")
+        page.get_by_role("button", name="Join the waitlist").click()
+        assert page.get_by_text("Enter an email address.").is_visible()
+        posts: list[str] = []
+        page.on("request", lambda req: posts.append(req.url) if req.method == "POST" else None)
+        page.locator("#email").fill("ada@example.com")
+        page.get_by_role("button", name="Join the waitlist").click()
+        assert page.get_by_text("Waitlist opens soon.").is_visible()
+        assert posts == []
 
         page.keyboard.press("Tab")
         outline = page.evaluate("() => getComputedStyle(document.activeElement).outlineStyle")
@@ -207,14 +237,14 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
             "() => (document.activeElement?.innerText"
             " || document.activeElement?.getAttribute('aria-label') || '')"
         )
-        for _ in range(12):
+        for _ in range(16):
             name = page.evaluate(label_js)
             if not isinstance(name, str):
                 raise AssertionError("focused control has no name")
             seen.add(name.strip())
             page.keyboard.press("Tab")
-        assert any("GitHub" in item for item in seen)
-        assert any("Pause" in item or "Play" in item for item in seen)
+        assert any("Join the waitlist" in item or item == "Email" for item in seen)
+        assert not any("Pause" in item or "GitHub" in item for item in seen)
 
         hrefs = cast(
             list[object],
@@ -226,10 +256,7 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         for href in hrefs:
             if not isinstance(href, str):
                 raise AssertionError("link href is not a string")
-            if href.startswith("https://github.com/"):
-                parts = [part for part in href.split("?", 1)[0].split("/") if part]
-                assert parts[:2] == ["https:", "github.com"] and len(parts) >= 4, href
-                continue
+            assert "github.com" not in href, href
             if href.startswith(site_server) or "127.0.0.1" in href:
                 status = page.request.get(href).status
                 assert status == 200, href
@@ -254,7 +281,7 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
                 serious.append((row.get("id"), row.get("impact")))
         assert serious == [], serious
 
-        assert page.locator("[data-pin=true]").count() >= 4
+        assert page.locator("[data-pin=true]").count() >= 2
         page.screenshot(path=str(tmp_path / "landing-1440.png"), full_page=False)
         page.set_viewport_size({"width": 375, "height": 812})
         page.goto(site_server, wait_until="networkidle")
@@ -271,11 +298,16 @@ def test_reduced_motion_stills_without_pinning(site_server: str):
         page.goto(site_server, wait_until="networkidle")
         assert page.locator("[data-pin=true]").count() == 0
         assert page.locator("button", has_text="Pause").count() == 0
+        assert (
+            page.evaluate(
+                "() => getComputedStyle(document.querySelector('.cursor-blink')).animationName"
+            )
+            == "none"
+        )
         for selector in (
             "canvas[data-bev=hero]",
             "canvas[data-bev=agents]",
             "canvas[data-bev=occlusion]",
-            "canvas[data-bev=ledger]",
         ):
             page.locator(selector).scroll_into_view_if_needed()
             page.wait_for_timeout(200)

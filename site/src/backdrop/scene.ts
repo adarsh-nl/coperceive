@@ -4,8 +4,7 @@
 // Unify with web/src/desktop/backdrop after feat/desktop merges.
 
 // SPDX-License-Identifier: Apache-2.0
-// Ported and adapted from "Viewer Directions.dc.html" (Section 1b "Ledger")
-// and "viewer-engine.js" by Adarsh (Coperceive UI Design Options, 2026-10-18).
+// Ported and adapted from the desktop viewer backdrop.
 // Extended with a 3-chapter parametric 60-second loop and seamless crossfade.
 
 export type Point3D = [number, number, number];
@@ -67,6 +66,7 @@ export interface SceneFrame {
   chapter: number;
   V: Pose2D;
   U: Pose2D;
+  P: Pose2D;
   objs: ObjectState[];
   ghosts: GhostState[];
 }
@@ -80,9 +80,17 @@ export interface BackdropScene {
   env: Point3D[];
   along: (s: number, lat: number) => { x: number; y: number; h: number };
   vehAt: (t: number) => Pose2D;
+  partnerAt: (t: number) => Pose2D;
   uavAt: (t: number) => Pose2D;
   objAt: (o: SceneObject, t: number) => { x: number; y: number; h: number };
-  stateAt: (t: number) => { V: Pose2D; U: Pose2D; objs: ObjectState[]; ghosts: GhostState[]; k: number };
+  stateAt: (t: number) => {
+    V: Pose2D;
+    U: Pose2D;
+    P: Pose2D;
+    objs: ObjectState[];
+    ghosts: GhostState[];
+    k: number;
+  };
 }
 
 export function createPrng(seed: number) {
@@ -141,6 +149,12 @@ export function createBackdropScene(seed: number = 42): BackdropScene {
   function vehAt(t: number): Pose2D {
     const s = 5 + 7.5 * t;
     const p = alongPath(s, -1.75);
+    return { s, x: p.x, y: p.y, z: 0, h: p.h };
+  }
+
+  function partnerAt(t: number): Pose2D {
+    const s = 28 + 6.4 * t;
+    const p = alongPath(s, 1.75);
     return { s, x: p.x, y: p.y, z: 0, h: p.h };
   }
 
@@ -244,6 +258,7 @@ export function createBackdropScene(seed: number = 42): BackdropScene {
     const chapter = t < 20 ? 1 : t < 40 ? 2 : 3;
     const V = vehAt(t);
     const U = uavAt(t);
+    const P = partnerAt(t);
 
     const objs: ObjectState[] = objects.map((o) => {
       const p = objAt(o, t);
@@ -291,7 +306,7 @@ export function createBackdropScene(seed: number = 42): BackdropScene {
       });
     }
 
-    frames.push({ k, t, chapter, V, U, objs, ghosts });
+    frames.push({ k, t, chapter, V, U, P, objs, ghosts });
   }
 
   function stateAt(t: number) {
@@ -302,6 +317,7 @@ export function createBackdropScene(seed: number = 42): BackdropScene {
       k,
       V: vehAt(t),
       U: uavAt(t),
+      P: partnerAt(t),
       objs: f.objs.map((r) => ({ ...r, p: objAt(r.o, t) })),
       ghosts: f.ghosts,
     };
@@ -316,6 +332,7 @@ export function createBackdropScene(seed: number = 42): BackdropScene {
     env,
     along: alongPath,
     vehAt,
+    partnerAt,
     uavAt,
     objAt,
     stateAt,

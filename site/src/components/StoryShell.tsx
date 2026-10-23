@@ -3,16 +3,14 @@ import { useStory } from "../motion/useStory";
 
 export function StoryShell({
   id,
-  kicker,
   title,
   lede,
   keyProgress,
   children,
 }: {
   id: string;
-  kicker: string;
   title: string;
-  lede: string;
+  lede?: string;
   keyProgress: number;
   children: (story: ReturnType<typeof useStory>) => ReactNode;
 }) {
@@ -33,12 +31,9 @@ export function StoryShell({
             : "flex min-h-[100svh] flex-col"
         }
       >
-        <div className="mx-auto w-full max-w-6xl px-6 pb-4 pt-20 sm:px-10">
-          <p className="text-xs font-medium uppercase tracking-[0.16em] text-tertiary">{kicker}</p>
-          <h2 className="mt-3 max-w-3xl text-4xl font-semibold tracking-tight text-primary sm:text-5xl">
-            {title}
-          </h2>
-          <p className="mt-4 max-w-2xl text-base leading-relaxed text-secondary sm:text-lg">{lede}</p>
+        <div className="mx-auto w-full max-w-6xl px-6 pb-2 pt-16 sm:px-10">
+          <h2 className="max-w-3xl text-4xl font-semibold tracking-tight text-primary sm:text-5xl">{title}</h2>
+          {lede ? <p className="mt-3 max-w-xl text-base text-secondary sm:text-lg">{lede}</p> : null}
         </div>
         {children(story)}
       </div>
