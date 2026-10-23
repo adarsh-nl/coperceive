@@ -26,13 +26,18 @@ export function Hero() {
   useEffect(() => {
     if (reduced) return;
     const start = () => setPlay(true);
-    const idle = window.requestIdleCallback?.bind(window);
-    if (idle) {
-      const id = idle(start, { timeout: 1200 });
-      return () => window.cancelIdleCallback(id);
-    }
-    const timer = globalThis.setTimeout(start, 400);
-    return () => globalThis.clearTimeout(timer);
+    // The poster is the first paint. The player starts once the browser is idle,
+    // and not before the poster has had time to settle.
+    let idleId = 0;
+    const timer = globalThis.setTimeout(() => {
+      const idle = window.requestIdleCallback?.bind(window);
+      if (idle) idleId = idle(start, { timeout: 1500 });
+      else start();
+    }, 3500);
+    return () => {
+      globalThis.clearTimeout(timer);
+      if (idleId) window.cancelIdleCallback(idleId);
+    };
   }, [reduced]);
 
   return (
