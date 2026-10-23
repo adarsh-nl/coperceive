@@ -1,13 +1,17 @@
-import { useEffect, useRef, useState } from "react";
-import { BevCanvas } from "../backdrop/BevCanvas";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { useMotionMode } from "../motion/useStory";
 import { FloatingLogo } from "./FloatingLogo";
+
+const RealClip = lazy(() => import("./RealClip").then((mod) => ({ default: mod.RealClip })));
+const poster = `${import.meta.env.BASE_URL}hero/poster.webp`;
 
 export function Hero() {
   const { reduced } = useMotionMode();
   const [active, setActive] = useState(true);
+  const [play, setPlay] = useState(false);
+  const [ready, setReady] = useState(false);
   const rootRef = useRef<HTMLElement>(null);
-  const clock = useRef(8);
+  const onReady = useRef(() => setReady(true));
 
   useEffect(() => {
     const el = rootRef.current;
@@ -19,32 +23,45 @@ export function Hero() {
     return () => io.disconnect();
   }, []);
 
-  const playing = active && !reduced;
+  useEffect(() => {
+    if (reduced) return;
+    const start = () => setPlay(true);
+    const idle = window.requestIdleCallback?.bind(window);
+    if (idle) {
+      const id = idle(start, { timeout: 1200 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const timer = globalThis.setTimeout(start, 400);
+    return () => globalThis.clearTimeout(timer);
+  }, [reduced]);
 
   return (
-    <section id="hero" ref={rootRef} data-pin="false" data-story="hero" className="relative h-[100svh] min-h-[36rem]">
-      <div className="absolute inset-0">
-        <BevCanvas
-          bev="hero"
-          label="Illustrative scene. Vehicles and a drone move together."
-          active={playing}
-          reduced={reduced}
-          sample={() => {
-            if (playing) clock.current = 6 + ((performance.now() / 1000) % 14);
-            return {
-              t: reduced ? 12 : clock.current,
-              options: { showRibbon: false, showGhosts: false, showSightLines: false, drift: playing },
-            };
-          }}
-        />
-      </div>
+    <section id="hero" ref={rootRef} data-pin="false" data-story="hero" className="relative h-[100svh] min-h-[36rem] overflow-hidden">
+      <img
+        src={poster}
+        alt="Recorded scene. A vehicle and a drone, with lidar and boxes."
+        width={1920}
+        height={1080}
+        fetchPriority="high"
+        decoding="async"
+        aria-hidden={ready}
+        className="absolute inset-0 h-full w-full object-cover"
+      />
+      {play ? (
+        <Suspense fallback={null}>
+          <RealClip active={active} onReady={onReady.current} />
+        </Suspense>
+      ) : null}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black to-transparent" />
       <FloatingLogo />
       <div className="relative z-10 flex h-full flex-col justify-end px-6 pb-16 sm:px-12 lg:px-16">
         <h1 className="max-w-4xl text-5xl font-semibold tracking-tight text-primary sm:text-6xl lg:text-7xl">
-          See what your car can’t.
+          Every agent. One view.
         </h1>
-        <p className="mt-5 text-xs text-tertiary">Illustrative</p>
+        <p className="mt-4 max-w-xl text-lg text-secondary sm:text-xl">
+          Sensor data and perception, on one timeline.
+        </p>
+        <p className="mt-5 text-xs text-tertiary">Recorded</p>
       </div>
     </section>
   );

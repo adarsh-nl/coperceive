@@ -1,8 +1,6 @@
 import { Footer } from "./components/Footer";
 import { Hero } from "./components/Hero";
-import { Occlusion } from "./components/Occlusion";
 import { Specs } from "./components/Specs";
-import { TwoAgents } from "./components/TwoAgents";
 import { Waitlist } from "./components/Waitlist";
 
 export function App() {
@@ -16,8 +14,6 @@ export function App() {
       </a>
       <main id="main-content">
         <Hero />
-        <TwoAgents />
-        <Occlusion />
         <Specs />
         <Waitlist />
       </main>

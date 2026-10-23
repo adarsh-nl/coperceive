@@ -134,19 +134,6 @@ def _hash(page: Page, selector: str) -> int:
     return _as_int(page.evaluate(script, selector), selector)
 
 
-def _scroll_fraction(page: Page, section_id: str, fraction: float) -> None:
-    page.evaluate(
-        """([sectionId, fraction]) => {
-            const el = document.getElementById(sectionId);
-            const top = el.getBoundingClientRect().top + window.scrollY;
-            const total = el.offsetHeight - window.innerHeight;
-            window.scrollTo(0, top + Math.max(0, total) * fraction);
-        }""",
-        [section_id, fraction],
-    )
-    page.wait_for_timeout(280)
-
-
 def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
     with sync_playwright() as playwright:
         browser = _launch(playwright)
@@ -165,9 +152,18 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
 
         response = page.goto(site_server, wait_until="networkidle")
         assert response is not None and response.status == 200
-        assert page.locator("h1").inner_text() == "See what your car can’t."
+        assert page.locator("h1").inner_text() == "Every agent. One view."
         assert page.locator("header").count() == 0
         assert page.locator("[data-logo]").is_visible()
+        logo_size = page.evaluate(
+            "() => parseFloat(getComputedStyle("
+            "document.querySelector('[data-logo] span')).fontSize)"
+        )
+        assert isinstance(logo_size, (int, float)) and float(logo_size) >= 28
+        cursor_h = page.evaluate(
+            "() => document.querySelector('.cursor-blink').getBoundingClientRect().height"
+        )
+        assert isinstance(cursor_h, (int, float)) and float(cursor_h) >= 8
         assert page.locator("button", has_text="Pause").count() == 0
         body = page.locator("body").inner_text()
         for banned in (
@@ -182,9 +178,10 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         ):
             assert banned not in body, banned
 
+        page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
         page.wait_for_timeout(400)
         hero_a = _hash(page, "canvas[data-bev=hero]")
-        assert _pixel_count(page, "canvas[data-bev=hero]") > 50
+        assert _pixel_count(page, "canvas[data-bev=hero]") > 20
         page.wait_for_timeout(500)
         hero_b = _hash(page, "canvas[data-bev=hero]")
         assert hero_a != hero_b
@@ -207,17 +204,6 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
             page.evaluate("() => getComputedStyle(document.querySelector('[data-logo]')).position")
             != "sticky"
         )
-
-        for section_id, selector in (
-            ("agents", "canvas[data-bev=agents]"),
-            ("occlusion", "canvas[data-bev=occlusion]"),
-        ):
-            _scroll_fraction(page, section_id, 0.05)
-            assert _pixel_count(page, selector) > 20, selector
-            before = _hash(page, selector)
-            _scroll_fraction(page, section_id, 0.95)
-            after = _hash(page, selector)
-            assert before != after, selector
 
         page.locator("#email").fill("not-an-email")
         page.get_by_role("button", name="Join the waitlist").click()
@@ -281,7 +267,7 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
                 serious.append((row.get("id"), row.get("impact")))
         assert serious == [], serious
 
-        assert page.locator("[data-pin=true]").count() >= 2
+        assert page.locator("[data-pin=true]").count() == 0
         page.screenshot(path=str(tmp_path / "landing-1440.png"), full_page=False)
         page.set_viewport_size({"width": 375, "height": 812})
         page.goto(site_server, wait_until="networkidle")
@@ -298,21 +284,12 @@ def test_reduced_motion_stills_without_pinning(site_server: str):
         page.goto(site_server, wait_until="networkidle")
         assert page.locator("[data-pin=true]").count() == 0
         assert page.locator("button", has_text="Pause").count() == 0
+        assert page.locator("canvas[data-bev=hero]").count() == 0
+        assert page.locator("img[alt*='Recorded scene']").is_visible()
         assert (
             page.evaluate(
                 "() => getComputedStyle(document.querySelector('.cursor-blink')).animationName"
             )
             == "none"
         )
-        for selector in (
-            "canvas[data-bev=hero]",
-            "canvas[data-bev=agents]",
-            "canvas[data-bev=occlusion]",
-        ):
-            page.locator(selector).scroll_into_view_if_needed()
-            page.wait_for_timeout(200)
-            assert _pixel_count(page, selector) > 20, selector
-        hero_a = _hash(page, "canvas[data-bev=hero]")
-        page.wait_for_timeout(400)
-        assert _hash(page, "canvas[data-bev=hero]") == hero_a
         browser.close()

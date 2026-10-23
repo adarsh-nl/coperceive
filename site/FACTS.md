@@ -2,7 +2,7 @@
 
 Every sentence the page states, and where it comes from. The page prints no
 dataset name, no frame count, no scene count, no metric, no size, and no
-percentage. Drawing parameters in the bird's-eye scene are not printed.
+percentage.
 
 Checked against this tree on 2026-10-23.
 
@@ -10,10 +10,9 @@ Checked against this tree on 2026-10-23.
 
 | Claim on the page | Source |
 | --- | --- |
-| See what your car can’t. | The headline for this page. It is not a measured result. |
-| Illustrative. Illustrative scenes are synthetic. | The bird's-eye scenes are generated in `site/src/backdrop/scene.ts`, a copy of `web/src/desktop/backdrop/scene.ts` from `feat/desktop` at `bf36d0d`. They are not frames from a recording. |
-| One clock. Platforms share this scene. | `site/src/backdrop/scene.ts` moves two vehicle platforms (`vehAt`, `partnerAt`) and a drone (`uavAt`) on one scene clock. The page does not state a count. |
-| The blind spot. One view is blocked. Another is not. | `occlusionTime()` in `site/src/backdrop/story.ts` picks a synthetic frame where one platform misses objects another platform sees. The page prints no count. |
+| Every agent. One view. | The headline for this page. It is not a measured result. The hero draws every platform pose stored in the recorded clip: one vehicle and one drone (`site/src/utils/clipLoader.ts` reads both poses from `site/public/hero/clip.bin`). The page does not state a count. |
+| Sensor data and perception, on one timeline. | The same frames carry that vehicle's lidar points and the boxes, coloured by which of those two platforms sees each track (`scripts/site/export_hero_clip.py` writes the poses, the points, and the box flags). Playback walks the frames in order. The page does not say real-time or live. |
+| Recorded | The hero is `site/public/hero/clip.bin` and the still `site/public/hero/poster.webp`, written by `scripts/site/export_hero_clip.py`. It is not the generated backdrop in `site/src/backdrop/scene.ts`. The page does not name the dataset. |
 | Play. Several viewpoints of one scene. | `README.md:29` names the viewer viewpoints: orbit, bird's-eye, chase, drone, and a camera frustum. The page does not count them. |
 | Check. A written report for a folder of scenes. | `README.md:86-89`. `coperceive validate` writes a JSON report and a Markdown report for a directory of scenes. |
 | Compare. A prediction next to ground truth. | `README.md:70`. `eval run` matches each output to that agent's own ground truth. The page states no score. |
@@ -24,14 +23,19 @@ Checked against this tree on 2026-10-23.
 | Geist, OFL-1.1. Geist Mono, OFL-1.1. | Packages `@fontsource-variable/geist` and `@fontsource-variable/geist-mono`. Licence texts are `site/public/licenses/OFL-Geist.txt` and `site/public/licenses/OFL-Geist-Mono.txt`. |
 | Join the waitlist. Enter an email address. Waitlist opens soon. Sending… You’re on the list. Could not join. Try again. | `site/src/components/Waitlist.tsx`. The address is checked in the browser. When `VITE_WAITLIST_ENDPOINT` is unset, submit sends no request, stores nothing, and shows "Waitlist opens soon." "You’re on the list." is shown only after the endpoint responds with a success status. No service URL is written in the source. |
 
-The wordmark is the product name. The red block is the design token `cursor` in `site/src/tokens.ts` (`#E03A22`), sampled from the mark. It is not a measurement of the software.
+The wordmark is the product name. The red block is the design token `cursor` in `site/src/tokens.ts` (`#E03A22`). It is not a measurement of the software.
+
+## Clip platforms
+
+The binary stores two platform poses on every frame. Both move. The drone pose sits about 27 m above the vehicle pose. There is no second ground-vehicle pose and no infrastructure pose in the file. Boxes are tracks seen by the vehicle, the drone, or both. They are not extra platforms.
+
+The generated bird's-eye scene under `site/src/backdrop/` is not mounted.
 
 ## Not stated
 
 - A dataset name, a town name, a frame count, a scene count, a duration, a rate, a size, a percentage, or a model score.
-- A personal name or an author line. None is printed in the page, the document title, or the social tags.
+- A personal name or an author line.
 - Real-time, live, or zero configuration.
 - A repository link or a download.
 - AirSim. No file in this tree states it.
-- Ring radii, altitudes, and the second platform's colour. Those are drawing parameters in `site/src/backdrop/scene.ts` and `site/src/backdrop/drawBev.ts`. They are not printed.
-- The recorded clip previously under `site/public/hero/`. The page does not load it, and those files are not part of this site.
+- "See what your car can't." That line is not on the page.
