@@ -24,7 +24,6 @@ export interface ClipManifest {
       label: string;
       type: string;
       color: string;
-      altitude_m: number;
       sensors: Record<string, string>;
     };
   };
@@ -33,7 +32,6 @@ export interface ClipManifest {
     frame_index: number;
     track_id: string;
     category: string;
-    distance_m: number;
     description: string;
   };
   stats: {

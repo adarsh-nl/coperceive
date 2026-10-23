@@ -2,8 +2,8 @@ import type { ClipManifest, FrameData, ParsedClip, BoxRecord } from "../types/cl
 import { tokens } from "../tokens";
 
 export async function loadClip(
-  manifestUrl: string = "/hero/manifest.json",
-  binUrl: string = "/hero/clip.bin",
+  manifestUrl: string = `${import.meta.env.BASE_URL}hero/manifest.json`,
+  binUrl: string = `${import.meta.env.BASE_URL}hero/clip.bin`,
   signal?: AbortSignal
 ): Promise<ParsedClip> {
   const [manifestRes, binRes] = await Promise.all([
@@ -47,8 +47,8 @@ export async function loadClip(
     const num = parseInt(hex.replace("#", ""), 16);
     return [(num >> 16) / 255, ((num >> 8) & 0xff) / 255, (num & 0xff) / 255];
   };
-  const [laneR, laneG, laneB] = hexToRgb(tokens.data.lanes);
-  const [edgeR, edgeG, edgeB] = hexToRgb(tokens.data.roadEdge);
+  const [laneR, laneG, laneB] = hexToRgb(tokens.lanes);
+  const [edgeR, edgeG, edgeB] = hexToRgb(tokens.roadEdge);
 
   for (let i = 0; i < numPolylines; i++) {
     const layerId = view.getUint8(offset); offset += 1;

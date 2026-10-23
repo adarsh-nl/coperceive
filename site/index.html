@@ -1,31 +1,38 @@
 <!DOCTYPE html>
-<html lang="en" class="dark scroll-smooth">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#000000" />
-    <title>coperceive — Cooperative Perception for Connected Vehicles and Drones</title>
+    <meta name="color-scheme" content="dark" />
+    <title>coperceive — See what your car can’t.</title>
     <meta
       name="description"
-      content="Open-source multi-agent cooperative perception framework uniting ground vehicle LiDAR sweeps and aerial drone vision into a shared coordinate frame. Zero-blindspot detection, OpenDRIVE HD map alignment, and high-throughput sensor storage."
+      content="coperceive plays cooperative perception data — car and drone, one clock — and shows exactly what each agent sees and misses."
     />
-    
-    <!-- Open Graph / Facebook -->
+    <link rel="canonical" href="https://adarsh-nl.github.io/coperceive/" />
+    <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
+
     <meta property="og:type" content="website" />
-    <meta property="og:url" content="https://coperceive.org/" />
-    <meta property="og:title" content="coperceive — Cooperative Perception for Connected Vehicles and Drones" />
-    <meta property="og:description" content="Uniting ground vehicle LiDAR sweeps and aerial drone vision into a shared 3D coordinate frame. Open-source multi-agent perception, OpenDRIVE HD map alignment, and real-time occlusion resolution." />
-    <meta property="og:image" content="/hero/poster.png" />
+    <meta property="og:url" content="https://adarsh-nl.github.io/coperceive/" />
+    <meta property="og:title" content="coperceive — See what your car can’t." />
+    <meta
+      property="og:description"
+      content="coperceive plays cooperative perception data — car and drone, one clock — and shows exactly what each agent sees and misses."
+    />
+    <meta property="og:image" content="https://adarsh-nl.github.io/coperceive/og.png" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
 
-    <!-- Twitter -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="coperceive — Cooperative Perception for Connected Vehicles and Drones" />
-    <meta name="twitter:description" content="Uniting ground vehicle LiDAR sweeps and aerial drone vision into a shared 3D coordinate frame. Open-source multi-agent perception, OpenDRIVE HD map alignment, and real-time occlusion resolution." />
-    <meta name="twitter:image" content="/hero/poster.png" />
-
-    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='rgb(40,120,220)' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><circle cx='12' cy='12' r='3'/><path d='M3 12a9 9 0 0 1 18 0'/><path d='M7 12a5 5 0 0 1 10 0'/></svg>" />
+    <meta name="twitter:title" content="coperceive — See what your car can’t." />
+    <meta
+      name="twitter:description"
+      content="coperceive plays cooperative perception data — car and drone, one clock — and shows exactly what each agent sees and misses."
+    />
+    <meta name="twitter:image" content="https://adarsh-nl.github.io/coperceive/og.png" />
   </head>
-  <body class="bg-black text-primary font-sans antialiased min-h-screen selection:bg-uav/20 selection:text-primary">
+  <body class="bg-canvas font-sans text-primary antialiased">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

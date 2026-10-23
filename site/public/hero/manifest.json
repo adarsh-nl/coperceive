@@ -2,7 +2,7 @@
   "scene_id": "Town03-000",
   "dataset_name": "Griffin: Aerial-Ground Cooperative Detection and Tracking Dataset and Benchmark",
   "dataset_paper": "Wang et al., arXiv 2503.06983",
-  "platform": "CARLA\u2013AirSim simulation",
+  "platform": "Griffin 25 m subset. Map name Carla/Maps/Town03. Recordings are not in this repository.",
   "subset": "25m",
   "origin": [
     -105.0,
@@ -22,8 +22,8 @@
       "type": "vehicle",
       "color": "#22d3ee",
       "sensors": {
-        "lidar": "16-channel top LiDAR (2,900 pts/sweep)",
-        "cameras": "4 surrounding cameras (front, back, left, right)"
+        "lidar": "lidar_top",
+        "cameras": "front, back, left, right"
       }
     },
     "drone": {
@@ -31,9 +31,8 @@
       "label": "Aerial Drone (UAV)",
       "type": "uav",
       "color": "#c084fc",
-      "altitude_m": 27.0,
       "sensors": {
-        "cameras": "5 downward & surrounding cameras (front, back, left, right, bottom)"
+        "cameras": "front, back, left, right, bottom"
       }
     }
   },
@@ -42,8 +41,7 @@
     "frame_index": 52,
     "track_id": "265",
     "category": "pedestrian",
-    "distance_m": 17.5,
-    "description": "Pedestrian in crosswalk occluded from ground vehicle LiDAR by corner wall; detected by aerial drone camera network at 17.5m from vehicle."
+    "description": "Timestamp stored by scripts/site/export_hero_clip.py. The page does not state a visibility or a distance for this track."
   },
   "stats": {
     "num_polylines": 138,
@@ -54,8 +52,8 @@
     "gzip_size_bytes": 771256
   },
   "attributions": {
-    "dataset": "Griffin dataset is used under its academic research terms (Wang et al., 2025).",
-    "map": "CARLA Town03 OpenDRIVE HD Map assets are distributed under the Creative Commons Attribution (CC-BY) License (CARLA Simulator, carla.org).",
-    "software": "coperceive is open source under the MIT License."
+    "dataset": "Griffin toolkit and dataset card: MIT. Recordings are not committed.",
+    "map": "CARLA map assets, CC-BY. OpenDRIVE bytes are not committed.",
+    "software": "coperceive is Apache-2.0."
   }
 }

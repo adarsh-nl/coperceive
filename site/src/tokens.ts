@@ -1,8 +1,8 @@
-// Design Canvas Tokens (https://claude.ai/artifact/FEfojn3drJXYfphm9RRgEz)
-// The single source of truth for all color hex values across the application.
+/** Single source for colour. tailwind.config.ts imports this module. */
 export const tokens = {
   canvas: "#000000",
   glass: "rgb(28 28 30 / 0.78)",
+  blur: "22px",
   hairline: "rgba(255, 255, 255, 0.08)",
   hairlineBright: "rgba(255, 255, 255, 0.14)",
   text: {
@@ -10,18 +10,13 @@ export const tokens = {
     secondary: "#a1a1a6",
     tertiary: "#86868b",
   },
-  data: {
-    vehicle: "#e67828",
-    uav: "#2878dc",
-    infrastructure: "#b7b1a6",
-    lanes: "#7dcea0",
-    roadEdge: "#86868b",
-  },
-  status: {
-    ok: "#5dd39e",
-    warn: "#f0b64a",
-    bad: "#ff6259",
-  },
+  vehicle: "#F58A1F",
+  drone: "#3C8DFF",
+  hit: "#1FA3A3",
+  miss: "#8E6CEF",
+  fp: "#E0A431",
+  lanes: "#7dcea0",
+  roadEdge: "#86868b",
 } as const;
 
 export type Tokens = typeof tokens;

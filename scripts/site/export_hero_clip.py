@@ -2,8 +2,8 @@
 """Export a compact binary clip of Town03-000 for the coperceive landing page hero animation.
 
 Reads:
-- Scene: Town03-000 (Griffin dataset, 25m preset, CARLA-AirSim simulation)
-- Map: Town03 (OpenDRIVE, CARLA CC-BY assets)
+- Scene: Town03-000 (Griffin 25 m subset)
+- Map: Town03 OpenDRIVE geometry, not committed
 
 Writes:
 - site/public/hero/clip.bin: Compact binary representation of 10s clip (100 frames @ 10 Hz)
@@ -302,7 +302,10 @@ def export_hero(
             "Griffin: Aerial-Ground Cooperative Detection and Tracking Dataset and Benchmark"
         ),
         "dataset_paper": "Wang et al., arXiv 2503.06983",
-        "platform": "CARLA–AirSim simulation",
+        "platform": (
+            "Griffin 25 m subset. Map name Carla/Maps/Town03. "
+            "Recordings are not in this repository."
+        ),
         "subset": "25m",
         "origin": [ORIGIN_X, ORIGIN_Y, ORIGIN_Z],
         "scale_cm": 100.0,
@@ -318,8 +321,8 @@ def export_hero(
                 "type": "vehicle",
                 "color": "#e67828",
                 "sensors": {
-                    "lidar": "Vehicle top LiDAR (1,500 pts/sweep)",
-                    "cameras": "4 surrounding cameras (front, back, left, right)",
+                    "lidar": "lidar_top",
+                    "cameras": "front, back, left, right",
                 },
             },
             "drone": {
@@ -327,11 +330,8 @@ def export_hero(
                 "label": "Aerial Drone (UAV)",
                 "type": "uav",
                 "color": "#2878dc",
-                "altitude_m": 27.0,
                 "sensors": {
-                    "cameras": (
-                        "5 downward & surrounding cameras (front, back, left, right, bottom)"
-                    ),
+                    "cameras": "front, back, left, right, bottom",
                 },
             },
         },
@@ -340,10 +340,9 @@ def export_hero(
             "frame_index": 52,
             "track_id": "265",
             "category": "pedestrian",
-            "distance_m": 17.5,
             "description": (
-                "0 vehicle LiDAR returns on the pedestrian at this time; "
-                "the UAV camera sees it (visibility 1.0) at 17.5m from vehicle."
+                "Timestamp stored by this exporter. "
+                "It does not state a visibility or a distance for this track."
             ),
         },
         "stats": {
@@ -355,14 +354,9 @@ def export_hero(
             "gzip_size_bytes": compressed_size,
         },
         "attributions": {
-            "dataset": (
-                "Griffin dataset is used under its academic research terms (Wang et al., 2025)."
-            ),
-            "map": (
-                "CARLA Town03 OpenDRIVE HD Map assets are distributed under the "
-                "Creative Commons Attribution (CC-BY) License (CARLA Simulator, carla.org)."
-            ),
-            "software": "coperceive is open source under the MIT License.",
+            "dataset": "Griffin toolkit and dataset card: MIT. Recordings are not committed.",
+            "map": "CARLA map assets, CC-BY. OpenDRIVE bytes are not committed.",
+            "software": "coperceive is Apache-2.0.",
         },
     }
 

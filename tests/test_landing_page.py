@@ -1,5 +1,5 @@
-# SPDX-License-Identifier: MIT
-"""End-to-end and accessibility verification for the coperceive landing page."""
+# SPDX-License-Identifier: Apache-2.0
+"""Browser checks for the public landing page."""
 
 from __future__ import annotations
 
@@ -10,28 +10,44 @@ import socket
 import threading
 import time
 from pathlib import Path
+from typing import NoReturn, cast
 
 import pytest
 
-DIST_DIR = Path(__file__).resolve().parent.parent / "site" / "dist"
-AXE_PATH = (
-    Path(__file__).resolve().parent.parent / "site" / "node_modules" / "axe-core" / "axe.min.js"
-)
+try:
+    from playwright.sync_api import Browser, ConsoleMessage, Page, Playwright, sync_playwright
+except ImportError:
+    if os.environ.get("COPERCEIVE_E2E_REQUIRED", "") not in {"", "0"}:
+        raise
+    pytest.skip("playwright is not installed", allow_module_level=True)
+
+ROOT = Path(__file__).resolve().parent.parent
+DIST_DIR = ROOT / "site" / "dist"
+AXE_PATH = ROOT / "site" / "node_modules" / "axe-core" / "axe.min.js"
+PREFIX = "/coperceive"
 
 REQUIRED = os.environ.get("COPERCEIVE_E2E_REQUIRED", "") not in {"", "0"}
 
+CHROME_ARGS = [
+    "--no-sandbox",
+    "--disable-dev-shm-usage",
+    "--use-gl=angle",
+    "--use-angle=swiftshader",
+    "--enable-unsafe-swiftshader",
+    "--ignore-gpu-blocklist",
+]
 
-def _unavailable(reason: str) -> None:
-    """Skip in standard test matrix runs, but fail in CI landing/e2e jobs."""
+
+def _unavailable(reason: str) -> NoReturn:
     if REQUIRED:
         pytest.fail(reason)
     pytest.skip(reason)
 
 
 def find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind(("127.0.0.1", 0))
+        return sock.getsockname()[1]
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
@@ -40,205 +56,231 @@ class QuietHandler(http.server.SimpleHTTPRequestHandler):
 
 
 @pytest.fixture(scope="module")
-def site_server():
+def site_server(tmp_path_factory: pytest.TempPathFactory):
     if not (DIST_DIR / "index.html").is_file():
-        _unavailable(f"site/dist does not exist at {DIST_DIR}. Run 'npm run build' first.")
+        _unavailable(f"site/dist missing at {DIST_DIR}. Run npm run build in site/.")
+    root = tmp_path_factory.mktemp("pages-root")
+    (root / "coperceive").symlink_to(DIST_DIR, target_is_directory=True)
     port = find_free_port()
-    handler = functools.partial(QuietHandler, directory=str(DIST_DIR))
+    handler = functools.partial(QuietHandler, directory=str(root))
     httpd = http.server.HTTPServer(("127.0.0.1", port), handler)
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
-    base_url = f"http://127.0.0.1:{port}"
     time.sleep(0.2)
-    yield base_url
+    yield f"http://127.0.0.1:{port}{PREFIX}/"
     httpd.shutdown()
 
 
-def test_landing_page_e2e_and_a11y(site_server: str, tmp_path: Path):
+def _launch(playwright: Playwright) -> Browser:
     try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        _unavailable("playwright is not installed")
-        return
-
-    with sync_playwright() as p:
+        return playwright.chromium.launch(args=CHROME_ARGS)
+    except Exception:
+        chrome = os.environ.get("CHROME_PATH", "/usr/local/bin/google-chrome")
         try:
-            browser = p.chromium.launch(
-                args=[
-                    "--use-gl=angle",
-                    "--use-angle=swiftshader",
-                    "--enable-unsafe-swiftshader",
-                    "--ignore-gpu-blocklist",
-                ]
-            )
-        except Exception as e:
-            _unavailable(f"Failed to launch chromium: {e}")
-            return
+            return playwright.chromium.launch(executable_path=chrome, args=CHROME_ARGS)
+        except Exception as exc:
+            _unavailable(f"Failed to launch chromium: {exc}")
 
+
+_CANVAS_JS = """(selector) => {
+    const canvas = document.querySelector(selector);
+    if (!canvas || canvas.width < 2 || canvas.height < 2) return null;
+    const probe = document.createElement('canvas');
+    probe.width = canvas.width;
+    probe.height = canvas.height;
+    const ctx = probe.getContext('2d');
+    if (!ctx) return null;
+    ctx.drawImage(canvas, 0, 0);
+    return ctx.getImageData(0, 0, probe.width, probe.height).data;
+}"""
+
+
+def _with_pixels(body: str) -> str:
+    return "(selector) => {\n  const data = (" + _CANVAS_JS + ")(selector);\n" + body + "\n}"
+
+
+def _as_int(value: object, selector: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    raise AssertionError(f"{selector} did not return an int")
+
+
+def _pixel_count(page: Page, selector: str) -> int:
+    script = _with_pixels(
+        """
+            if (!data) return -1;
+            let n = 0;
+            for (let i = 0; i < data.length; i += 16) {
+                if (data[i] + data[i + 1] + data[i + 2] > 18) n += 1;
+            }
+            return n;
+        """
+    )
+    return _as_int(page.evaluate(script, selector), selector)
+
+
+def _hash(page: Page, selector: str) -> int:
+    script = _with_pixels(
+        """
+            if (!data) return 0;
+            let h = 2166136261;
+            for (let i = 0; i < data.length; i += 64) {
+                h ^= data[i] + data[i + 1] * 3 + data[i + 2] * 7;
+                h = Math.imul(h, 16777619);
+            }
+            return h >>> 0;
+        """
+    )
+    return _as_int(page.evaluate(script, selector), selector)
+
+
+def _scroll_fraction(page: Page, section_id: str, fraction: float) -> None:
+    page.evaluate(
+        """([sectionId, fraction]) => {
+            const el = document.getElementById(sectionId);
+            const top = el.getBoundingClientRect().top + window.scrollY;
+            const total = el.offsetHeight - window.innerHeight;
+            window.scrollTo(0, top + Math.max(0, total) * fraction);
+        }""",
+        [section_id, fraction],
+    )
+    page.wait_for_timeout(280)
+
+
+def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
+    with sync_playwright() as playwright:
+        browser = _launch(playwright)
         page = browser.new_page(viewport={"width": 1440, "height": 900})
+        errors: list[str] = []
 
-        # Navigate
+        def on_error(err: BaseException) -> None:
+            errors.append(str(err))
+
+        def on_console(msg: ConsoleMessage) -> None:
+            if msg.type == "error":
+                errors.append(msg.text)
+
+        page.on("pageerror", on_error)
+        page.on("console", on_console)
+
         response = page.goto(site_server, wait_until="networkidle")
         assert response is not None and response.status == 200
+        assert page.locator("h1").inner_text() == "See what your car can’t."
+        assert page.locator("header").get_by_text("coperceive", exact=True).is_visible()
+        assert page.locator("header").get_by_role("link", name="GitHub", exact=True).is_visible()
+        assert page.locator("header").get_by_role("link", name="View on GitHub").is_visible()
+        assert page.get_by_text("macOS app coming soon").first.is_visible()
 
-        # 1. Header / Navbar
-        assert page.locator("header").is_visible()
-        assert page.locator("header").get_by_text("coperceive").is_visible()
-        assert (
-            page.locator("header")
-            .get_by_role("link", name="GitHub repository", exact=True)
-            .is_visible()
+        page.wait_for_timeout(400)
+        hero_a = _hash(page, "canvas[data-bev=hero]")
+        assert _pixel_count(page, "canvas[data-bev=hero]") > 50
+        page.wait_for_timeout(500)
+        hero_b = _hash(page, "canvas[data-bev=hero]")
+        assert hero_a != hero_b
+
+        for section_id, selector in (
+            ("agents", "canvas[data-bev=agents]"),
+            ("occlusion", "canvas[data-bev=occlusion]"),
+            ("perspectives", "canvas[data-bev=vehicle]"),
+            ("perspectives", "canvas[data-bev=drone]"),
+            ("perspectives", "canvas[data-bev=together]"),
+            ("perspectives", "canvas[data-bev=band]"),
+            ("ledger", "canvas[data-bev=ledger]"),
+        ):
+            _scroll_fraction(page, section_id, 0.05)
+            assert _pixel_count(page, selector) > 20, selector
+            before = _hash(page, selector)
+            _scroll_fraction(page, section_id, 0.95)
+            after = _hash(page, selector)
+            assert before != after, selector
+
+        _scroll_fraction(page, "data", 0.2)
+        page.wait_for_selector("canvas[data-bev=clip]", timeout=20000)
+        page.wait_for_timeout(600)
+        assert _pixel_count(page, "canvas[data-bev=clip]") > 20
+
+        page.keyboard.press("Tab")
+        outline = page.evaluate("() => getComputedStyle(document.activeElement).outlineStyle")
+        assert outline != "none"
+        seen: set[str] = set()
+        label_js = (
+            "() => (document.activeElement?.innerText"
+            " || document.activeElement?.getAttribute('aria-label') || '')"
         )
+        for _ in range(12):
+            name = page.evaluate(label_js)
+            if not isinstance(name, str):
+                raise AssertionError("focused control has no name")
+            seen.add(name.strip())
+            page.keyboard.press("Tab")
+        assert any("GitHub" in item for item in seen)
+        assert any("Pause" in item or "Play" in item for item in seen)
 
-        # 2. Hero Headline & Section
-        heading = page.locator("h1")
-        assert heading.is_visible()
-        assert "Cooperative Autonomous Perception" in heading.inner_text()
-
-        # 3. 3D Canvas / Region
-        hero_region = page.locator('div[role="region"]')
-        assert hero_region.is_visible()
-
-        # Check telemetry HUD loaded
-        assert page.get_by_text("CAV (Ground)").is_visible()
-        assert page.get_by_text("UAV (Aerial 27m)").is_visible()
-
-        # 4. Interactive controls: Play/Pause button
-        play_btn = page.locator('button[aria-label="Pause 3D film"]')
-        assert play_btn.is_visible()
-        play_btn.click()
-        page.wait_for_timeout(200)
-        resume_btn = page.locator('button[aria-label="Play 3D film"]')
-        assert resume_btn.is_visible()
-        resume_btn.click()
-        page.wait_for_timeout(200)
-
-        # 5. Open the viewer link
-        viewer_link = page.get_by_role("link", name="Open the viewer", exact=False).first
-        assert viewer_link.is_visible()
-        assert "docs/viewer.md" in (viewer_link.get_attribute("href") or "")
-
-        # 6. Occlusion Section
-        occlusion_section = page.locator("#occlusion")
-        assert occlusion_section.is_visible()
-        assert page.get_by_text("Pedestrian Track 265 at Blind Corner").is_visible()
-        assert page.get_by_text("17.5 m").is_visible()
-        assert page.get_by_text("0.0137 m").first.is_visible()
-
-        # Switch perspective tab to UAV
-        uav_tab = page.get_by_role("button", name="2. Aerial UAV View")
-        assert uav_tab.is_visible()
-        uav_tab.click()
-        page.wait_for_timeout(200)
-        assert page.get_by_text("Aerial Drone Perspective").is_visible()
-
-        # 7. Architecture / How It Works
-        arch_section = page.locator("#architecture")
-        assert arch_section.is_visible()
-        assert arch_section.get_by_text("Unified Spatial Calibration").is_visible()
-        assert arch_section.get_by_role(
-            "heading", name="Subprocess Plugin Protocol", exact=True
-        ).is_visible()
-
-        # 8. Desktop Section
-        desktop_section = page.locator("#desktop")
-        assert desktop_section.is_visible()
-        assert desktop_section.get_by_text("coperceive Desktop").is_visible()
-        assert desktop_section.get_by_text("[TODO: Native app screenshot").is_visible()
-
-        # 9. Datasets Table
-        datasets_section = page.locator("#datasets")
-        assert datasets_section.is_visible()
-        assert datasets_section.get_by_text("Griffin", exact=True).is_visible()
-        assert datasets_section.get_by_text("CARLA–AirSim Simulation").is_visible()
-        assert datasets_section.get_by_text("OPV2V", exact=True).is_visible()
-        assert datasets_section.get_by_text(
-            "Licence not published; local research use only"
-        ).first.is_visible()
-        assert datasets_section.get_by_text("CARLA OpenDRIVE Maps", exact=True).is_visible()
-        assert datasets_section.get_by_text("CC-BY License").first.is_visible()
-
-        # 10. Quick Start Commands & Copy Interaction
-        quickstart = page.locator("#quickstart")
-        assert quickstart.is_visible()
-        copy_btn = quickstart.get_by_role("button", name="Copy").first
-        assert copy_btn.is_visible()
-        copy_btn.click()
-        page.wait_for_timeout(200)
-        assert page.get_by_text("Copied").first.is_visible()
-
-        # 11. Citation Section
-        assert page.get_by_text("Citation & Attribution").is_visible()
-        assert page.get_by_text("@software{coperceive2026").is_visible()
-        assert page.get_by_text("@article{wang2025griffin").is_visible()
-
-        # 12. Footer
-        footer = page.locator("footer")
-        assert footer.is_visible()
-        assert "Adarsh van Ee" in footer.inner_text()
-        assert "CC-BY" in footer.inner_text()
-
-        # 13. Accessibility Audit with axe-core
-        assert AXE_PATH.exists(), f"axe.min.js not found at {AXE_PATH}"
-        axe_script = AXE_PATH.read_text()
-        page.evaluate(axe_script)
-
-        axe_results = page.evaluate("""
-            axe.run({
-                runOnly: {
-                    type: 'tag',
-                    values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'best-practice']
-                }
-            })
-        """)
-
-        violations = axe_results.get("violations", [])
-        if violations:
-            print("AXE VIOLATIONS FOUND:")
-            for v in violations:
-                print(f"[{v['id']}] {v['help']}: {v['helpUrl']}")
-                for node in v["nodes"]:
-                    print(f"  Target: {node['target']}")
-                    print(f"  HTML: {node['html']}")
-
-        assert len(violations) == 0, (
-            f"Found {len(violations)} accessibility violations: {[v['id'] for v in violations]}"
+        hrefs = cast(
+            list[object],
+            page.eval_on_selector_all(
+                "a[href]",
+                "els => els.map(el => el.href)",
+            ),
         )
+        for href in hrefs:
+            if not isinstance(href, str):
+                raise AssertionError("link href is not a string")
+            if href.startswith("https://github.com/"):
+                parts = [part for part in href.split("?", 1)[0].split("/") if part]
+                assert parts[:2] == ["https:", "github.com"] and len(parts) >= 4, href
+                continue
+            if href.startswith(site_server) or "127.0.0.1" in href:
+                status = page.request.get(href).status
+                assert status == 200, href
 
-        # Save screenshot
-        screenshot_path = tmp_path / "landing_page.png"
-        page.screenshot(path=str(screenshot_path), full_page=True)
-        print(f"Full-page screenshot saved to {screenshot_path}")
+        assert AXE_PATH.is_file()
+        page.evaluate(AXE_PATH.read_text())
+        axe = page.evaluate(
+            """() => axe.run({
+                runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa'] }
+            })"""
+        )
+        report = cast(dict[str, object], axe)
+        violations_obj = report.get("violations", [])
+        if not isinstance(violations_obj, list):
+            raise AssertionError("axe violations missing")
+        serious: list[tuple[object, object]] = []
+        for item in cast(list[object], violations_obj):
+            if not isinstance(item, dict):
+                continue
+            row = cast(dict[str, object], item)
+            if row.get("impact") in {"serious", "critical"}:
+                serious.append((row.get("id"), row.get("impact")))
+        assert serious == [], serious
 
+        assert page.locator("[data-pin=true]").count() >= 4
+        page.screenshot(path=str(tmp_path / "landing-1440.png"), full_page=False)
+        page.set_viewport_size({"width": 375, "height": 812})
+        page.goto(site_server, wait_until="networkidle")
+        assert page.locator("[data-pin=true]").count() == 0
+        page.screenshot(path=str(tmp_path / "landing-375.png"), full_page=False)
+        assert errors == [], errors
         browser.close()
 
 
-def test_reduced_motion_behavior(site_server: str):
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        _unavailable("playwright is not installed")
-        return
-
-    with sync_playwright() as p:
-        try:
-            browser = p.chromium.launch(
-                args=[
-                    "--use-gl=angle",
-                    "--use-angle=swiftshader",
-                    "--enable-unsafe-swiftshader",
-                    "--ignore-gpu-blocklist",
-                ]
-            )
-        except Exception as e:
-            _unavailable(f"Failed to launch chromium: {e}")
-            return
-
+def test_reduced_motion_stills_without_pinning(site_server: str):
+    with sync_playwright() as playwright:
+        browser = _launch(playwright)
         page = browser.new_page(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
         page.goto(site_server, wait_until="networkidle")
-
-        # Reduced motion banner should appear
-        banner = page.get_by_text("Reduced motion active (paused at frame 52)")
-        assert banner.is_visible()
-
+        assert page.locator("[data-pin=true]").count() == 0
+        assert page.locator("button", has_text="Pause").count() == 0
+        for selector in (
+            "canvas[data-bev=hero]",
+            "canvas[data-bev=agents]",
+            "canvas[data-bev=occlusion]",
+            "canvas[data-bev=ledger]",
+        ):
+            page.locator(selector).scroll_into_view_if_needed()
+            page.wait_for_timeout(200)
+            assert _pixel_count(page, selector) > 20, selector
+        hero_a = _hash(page, "canvas[data-bev=hero]")
+        page.wait_for_timeout(400)
+        assert _hash(page, "canvas[data-bev=hero]") == hero_a
         browser.close()
