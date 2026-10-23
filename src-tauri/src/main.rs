@@ -166,6 +166,8 @@ fn open_viewer_window(
     let escaped_base = basename.replace('\\', "\\\\").replace('"', "\\\"");
     let test_env = std::env::var("COPERCEIVE_TEST_ENV").is_ok()
         || std::env::var("COPERCEIVE_TEST_MARKER_FILE").is_ok();
+    let force_motion =
+        test_env && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
 
     let init_script = format!(
         r#"
@@ -173,6 +175,7 @@ fn open_viewer_window(
             try {{
                 window.__COPERCEIVE_DESKTOP__ = true;
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
+                window.__COPERCEIVE_FORCE_MOTION__ = {force_motion};
                 window.__COPERCEIVE_CTRL_PORT__ = {ctrl_port};
                 window.__COPERCEIVE_CTRL_SECRET__ = "{escaped_secret}";
                 window.__COPERCEIVE_DATA_ROOT__ = "{escaped_root}";
@@ -485,6 +488,19 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
 
     if let Ok(mut lock) = app_state.ctrl_port.lock() {
         *lock = Some(port);
+    }
+    if let Ok(path) = std::env::var("COPERCEIVE_CTRL_INFO_FILE") {
+        // Test hook only. The file holds the loopback secret; the measurement
+        // script reads it and must not print it.
+        if let Some(parent) = Path::new(&path).parent() {
+            let _ = fs::create_dir_all(parent);
+        }
+        let _ = fs::write(&path, format!("{port}\n{secret}\n"));
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&path, fs::Permissions::from_mode(0o600));
+        }
     }
     if let Ok(mut lock) = app_state.ctrl_secret.lock() {
         *lock = Some(secret);
@@ -901,6 +917,24 @@ fn main() {
             remote_status,
             remote_disconnect,
         ])
+        .on_page_load(|webview, payload| {
+            // The Connect window is declared in tauri.conf.json, so it does not
+            // get the viewer initialization_script. This test hook is the only
+            // way the measurement can force the animated backdrop.
+            let test_env = std::env::var("COPERCEIVE_TEST_ENV").is_ok()
+                || std::env::var("COPERCEIVE_TEST_MARKER_FILE").is_ok();
+            let force = test_env
+                && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
+            if !force || webview.label() != "main" {
+                return;
+            }
+            if payload.event() != tauri::webview::PageLoadEvent::Finished {
+                return;
+            }
+            let _ = webview.eval(
+                "window.__COPERCEIVE_TEST_ENV__ = true; window.__COPERCEIVE_FORCE_MOTION__ = true; window.dispatchEvent(new Event('coperceive-force-motion'));",
+            );
+        })
         .setup(|app| {
             use tauri::Manager;
             let state = app.state::<Arc<AppState>>().inner().clone();

@@ -11,9 +11,9 @@ e2e notices from that run: "Step 2b verified: loop stayed off across quit and re
 - Loop choice is `last_loop` in Rust `state.json` (`f3820a0`). The fixed-port web app still uses `localStorage` key `coperceive-loop-preference`.
 - Frame advance does not wait on image decode. The playback clock is `setTimeout` from `indexAfter` in `web/src/viewer/Viewer.tsx`; frustum images load in a separate effect via `loadImage`. `paintWait` is only the export path.
 - `coperceive serve` and `GET /api/scenes` require `manifest.json` and `COMPLETE.json`, matching `validate_dataset_root` in `src-tauri/src/state.rs`.
-- Backdrop CPU on that run: window `1280, 800`, `reduceMotion=1`, pid 11983, 60 samples requested. The public annotation includes samples 0–13 only (`%cpu` 6.1, 4.2, 1.2, 0.7, 0.7, 0.5, then 0.0). Sample 0 is above 5%.
+- Backdrop CPU on that run does not count. The runner had `reduceMotion=1`, so the backdrop drew one static frame. M1-4 is open again until an animated measurement (force-motion test hook, 5 s warm-up dropped, median and p95) is in the job summary and `docs/media/measurements/backdrop-cpu.md`.
 
-Adarsh still does Mac acceptance (M1-5) and the merge (M1-6). M1-2 stays open: `e2e_mac.sh` checks that a root switch fills the scene list and draws points, and it does not assert that view settings survive the switch.
+Adarsh still does Mac acceptance (M1-5) and the merge (M1-6). M1-2's step 3b now checks view settings and that tagged geometry belongs to the new scene load; it stays open until that run is green.
 
 ## Desktop App Status (feat/desktop)
 

@@ -378,6 +378,73 @@ function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
   return geometry;
 }
 
+let sceneDrawToken = 0;
+
+function bumpSceneDrawToken(): number {
+  sceneDrawToken += 1;
+  return sceneDrawToken;
+}
+
+function tagObject(object: THREE.Object3D, sceneId: string) {
+  object.userData.coperceiveSceneId = sceneId;
+  object.userData.coperceiveLoadId = sceneDrawToken;
+}
+
+function untagObject(object: THREE.Object3D) {
+  delete object.userData.coperceiveSceneId;
+  delete object.userData.coperceiveLoadId;
+}
+
+function tagDrawn(stage: Stage, sceneId: string) {
+  tagObject(stage.points, sceneId);
+  tagObject(stage.boxes, sceneId);
+  tagObject(stage.dimmedBoxes, sceneId);
+  tagObject(stage.mapLines, sceneId);
+  for (const group of [stage.frustums, stage.agents, stage.solids, stage.images]) {
+    for (const child of group.children) {
+      tagObject(child, sceneId);
+    }
+  }
+}
+
+function sceneGraphAudit(stage: Stage | null) {
+  if (!stage) {
+    return null;
+  }
+  const tagged: { kind: string; sceneId: string; loadId: number }[] = [];
+  const take = (kind: string, object: THREE.Object3D) => {
+    const sceneId = object.userData.coperceiveSceneId;
+    const loadId = object.userData.coperceiveLoadId;
+    if (typeof sceneId !== "string") {
+      return;
+    }
+    tagged.push({ kind, sceneId, loadId: typeof loadId === "number" ? loadId : -1 });
+  };
+  take("points", stage.points);
+  take("boxes", stage.boxes);
+  take("dimmedBoxes", stage.dimmedBoxes);
+  take("mapLines", stage.mapLines);
+  for (const child of stage.frustums.children) {
+    take("frustum", child);
+  }
+  for (const child of stage.agents.children) {
+    take("agent", child);
+  }
+  for (const child of stage.solids.children) {
+    take("solid", child);
+  }
+  for (const child of stage.images.children) {
+    take("image", child);
+  }
+  const pointAttr = stage.points.geometry.getAttribute("position");
+  const boxAttr = stage.boxes.geometry.getAttribute("position");
+  const dimAttr = stage.dimmedBoxes.geometry.getAttribute("position");
+  const points = stage.points.visible && pointAttr ? pointAttr.count : 0;
+  const boxes =
+    ((stage.boxes.visible && boxAttr ? boxAttr.count : 0) + (stage.dimmedBoxes.visible && dimAttr ? dimAttr.count : 0)) / 24;
+  return { token: sceneDrawToken, points, boxes, tagged };
+}
+
 function clearGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child);
@@ -659,6 +726,7 @@ async function drawFrame(
     stage.agents.add(axes);
   }
   const vehicle = agentPose(frame, types, "vehicle");
+  tagDrawn(stage, frame.scene_id);
   return {
     positions,
     anchor: vehicle ? { x: vehicle.tx, y: vehicle.ty, z: vehicle.tz } : null,
@@ -840,6 +908,27 @@ declare global {
     __COPERCEIVE_DATASET_ERROR__?: (error: string) => void;
     __COPERCEIVE_SCENES__?: () => string[];
     __COPERCEIVE_TEST_ENV__?: boolean;
+    __COPERCEIVE_FORCE_MOTION__?: boolean;
+    __COPERCEIVE_VIEW_SETTINGS__?: () => {
+      sceneId: string;
+      viewpoint: string;
+      layers: {
+        points: boolean;
+        boxes: boolean;
+        frustums: boolean;
+        map: boolean;
+        axes: boolean;
+        frustumImages: boolean;
+      };
+      hiddenAgents: Record<string, boolean>;
+      hiddenClasses: string[];
+    };
+    __COPERCEIVE_SCENE_GRAPH__?: () => {
+      token: number;
+      points: number;
+      boxes: number;
+      tagged: { kind: string; sceneId: string; loadId: number }[];
+    } | null;
   }
 }
 
@@ -862,6 +951,10 @@ function clearStage(stage: Stage) {
   stage.predictions.clear();
   stage.predictionPicks.clear();
   stage.clearMotion();
+  untagObject(stage.points);
+  untagObject(stage.boxes);
+  untagObject(stage.dimmedBoxes);
+  untagObject(stage.mapLines);
   stage.requestRender();
 }
 
@@ -1084,6 +1177,7 @@ export default function Viewer({
       setDatasetError(null);
       setPlaying(false);
 
+      bumpSceneDrawToken();
       if (stageRef.current) {
         clearStage(stageRef.current);
       }
@@ -1660,6 +1754,7 @@ export default function Viewer({
       if (import.meta.env.MODE === "test") {
         (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__ = stageRef.current;
       }
+      window.__COPERCEIVE_SCENE_GRAPH__ = () => sceneGraphAudit(stageRef.current);
       (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__ = () => {
         const s = stageRef.current;
         if (!s) return null;
@@ -1684,6 +1779,7 @@ export default function Viewer({
         if (import.meta.env.MODE === "test") {
           delete (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__;
         }
+        delete window.__COPERCEIVE_SCENE_GRAPH__;
         delete (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__;
       }
       resize.disconnect();
@@ -2029,6 +2125,31 @@ export default function Viewer({
       window.__COPERCEIVE_PLAYBACK_STATE__ = undefined;
     };
   }, [summary]);
+
+  useEffect(() => {
+    const enabled =
+      typeof window !== "undefined" && (import.meta.env.MODE === "test" || Boolean(window.__COPERCEIVE_TEST_ENV__));
+    if (!enabled) {
+      return;
+    }
+    window.__COPERCEIVE_VIEW_SETTINGS__ = () => ({
+      sceneId,
+      viewpoint,
+      layers: {
+        points: appearance.points,
+        boxes: appearance.boxes,
+        frustums: appearance.frustums,
+        map: appearance.map,
+        axes: appearance.axes,
+        frustumImages: appearance.frustumImages,
+      },
+      hiddenAgents: hidden,
+      hiddenClasses: appearance.hiddenClasses,
+    });
+    return () => {
+      delete window.__COPERCEIVE_VIEW_SETTINGS__;
+    };
+  }, [sceneId, viewpoint, appearance, hidden]);
 
   useEffect(() => {
     window.__COPERCEIVE_SCENES__ = () => scenes;

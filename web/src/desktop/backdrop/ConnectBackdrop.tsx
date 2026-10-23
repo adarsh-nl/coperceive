@@ -24,6 +24,14 @@ export default function ConnectBackdrop({ hasRecent = false }: ConnectBackdropPr
       typeof window !== "undefined" && typeof window.matchMedia === "function"
         ? window.matchMedia("(prefers-reduced-motion: reduce)")
         : null;
+    // Test hook. Ignored unless the desktop shell also set the test-env flag,
+    // so a production launch cannot turn reduced motion off.
+    const forceMotion = () =>
+      Boolean(window.__COPERCEIVE_TEST_ENV__) && Boolean(window.__COPERCEIVE_FORCE_MOTION__);
+    const reduced = () => !forceMotion() && Boolean(mql?.matches);
+    const markMotion = () => {
+      canvas.dataset.backdropMotion = reduced() ? "static" : "animated";
+    };
 
     let animId = 0;
     let startTime = performance.now();
@@ -89,7 +97,8 @@ export default function ConnectBackdrop({ hasRecent = false }: ConnectBackdropPr
     const FRAME_INTERVAL = 1000 / FPS_CAP;
 
     const loop = (now: number) => {
-      if (mql?.matches) {
+      if (reduced()) {
+        markMotion();
         renderStatic();
         return;
       }
@@ -105,8 +114,9 @@ export default function ConnectBackdrop({ hasRecent = false }: ConnectBackdropPr
     };
 
     const onMotionChange = (e: MediaQueryListEvent | MediaQueryList) => {
-      if (e.matches) {
+      if (e.matches && !forceMotion()) {
         cancelAnimationFrame(animId);
+        markMotion();
         renderStatic();
       } else {
         cancelAnimationFrame(animId);
@@ -124,7 +134,7 @@ export default function ConnectBackdrop({ hasRecent = false }: ConnectBackdropPr
     }
 
     const onResize = () => {
-      if (mql?.matches) {
+      if (reduced()) {
         renderStatic();
       }
     };
@@ -145,7 +155,7 @@ export default function ConnectBackdrop({ hasRecent = false }: ConnectBackdropPr
         if (isPaused) {
           isPaused = false;
           lastFrameTime = performance.now();
-          if (!mql?.matches) {
+          if (!reduced()) {
             loop(performance.now());
           }
         }
@@ -168,7 +178,7 @@ export default function ConnectBackdrop({ hasRecent = false }: ConnectBackdropPr
       if (isPaused) {
         isPaused = false;
         lastFrameTime = performance.now();
-        if (!mql?.matches) {
+        if (!reduced()) {
           loop(performance.now());
         }
       }
@@ -178,15 +188,35 @@ export default function ConnectBackdrop({ hasRecent = false }: ConnectBackdropPr
     window.addEventListener("blur", onWindowBlur);
     window.addEventListener("focus", onWindowFocus);
 
-    if (mql?.matches) {
-      renderStatic();
-    } else {
+    const start = () => {
+      cancelAnimationFrame(animId);
+      markMotion();
+      if (reduced()) {
+        renderStatic();
+        return;
+      }
       renderFrame(startTime);
       animId = requestAnimationFrame(loop);
-    }
+    };
+    start();
+    const onForce = () => {
+      startTime = performance.now();
+      lastFrameTime = startTime;
+      start();
+    };
+    window.addEventListener("coperceive-force-motion", onForce);
+    const poll = window.setInterval(() => {
+      if (!reduced() && canvas.dataset.backdropMotion !== "animated") {
+        onForce();
+      }
+    }, 200);
+    const pollStop = window.setTimeout(() => window.clearInterval(poll), 3000);
 
     return () => {
       cancelAnimationFrame(animId);
+      window.clearInterval(poll);
+      window.clearTimeout(pollStop);
+      window.removeEventListener("coperceive-force-motion", onForce);
       if (blurTimer) clearTimeout(blurTimer);
       if (mql) {
         if (typeof mql.removeEventListener === "function") {

@@ -847,6 +847,15 @@ def eval_js(code):
         return data.get("result")
 
 print("Clicking UI dataset open button to switch back to multi-scene root...")
+before = eval_js("""(() => ({
+    settings: window.__COPERCEIVE_VIEW_SETTINGS__ ? window.__COPERCEIVE_VIEW_SETTINGS__() : null,
+    graph: window.__COPERCEIVE_SCENE_GRAPH__ ? window.__COPERCEIVE_SCENE_GRAPH__() : null,
+}))()""")
+print(f"View settings before multi-scene switch: {json.dumps(before)}")
+if not before or not before.get("settings") or not before.get("graph"):
+    raise SystemExit("E2E_FAIL step=3b-before missing view settings or scene graph")
+with open("${TMP_DIR}/before-3b.json", "w", encoding="utf-8") as handle:
+    json.dump(before, handle)
 eval_js("document.querySelector('.btn-open-dataset')?.click()")
 EOF
 
@@ -907,6 +916,55 @@ assert "synth_002" in scenes, f"Expected synth_002 in scene list, got {scenes}"
 badge = eval_js("document.querySelector('.dataset-name')?.textContent")
 print(f"Dataset badge: {badge}")
 assert "synthetic_scene" in (badge or ""), f"Expected synthetic_scene badge, got {badge}"
+
+with open("${TMP_DIR}/before-3b.json", encoding="utf-8") as handle:
+    before = json.load(handle)
+after = eval_js("""(async () => {
+    const origin = sessionStorage.getItem("coperceive-origin");
+    const token = sessionStorage.getItem("coperceive-token");
+    const settings = window.__COPERCEIVE_VIEW_SETTINGS__ ? window.__COPERCEIVE_VIEW_SETTINGS__() : null;
+    const graph = window.__COPERCEIVE_SCENE_GRAPH__ ? window.__COPERCEIVE_SCENE_GRAPH__() : null;
+    const playback = window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null;
+    if (!settings || !graph || !origin || !token) {
+        return { settings, graph, playback, error: "missing hooks" };
+    }
+    const headers = { Authorization: "Bearer " + token };
+    const summary = await (await fetch(origin + "/api/scenes/" + encodeURIComponent(settings.sceneId), { headers })).json();
+    const t0 = summary.times_us[0];
+    const frame = await (await fetch(origin + "/api/scenes/" + encodeURIComponent(settings.sceneId) + "/frame?time_us=" + t0, { headers })).json();
+    const hidden = settings.hiddenAgents || {};
+    const classes = settings.hiddenClasses || [];
+    const expectedPoints = settings.layers.points
+        ? (frame.point_sensors || []).reduce((sum, sensor) => hidden[sensor.agent_id] ? sum : sum + sensor.count, 0)
+        : 0;
+    const expectedBoxes = settings.layers.boxes
+        ? (frame.boxes || []).filter((box) => !hidden[box.agent_id] && (typeof box.category !== "string" || !classes.includes(box.category))).length
+        : 0;
+    return { settings, graph, playback, t0, expectedPoints, expectedBoxes };
+})()""", timeout=15)
+print(f"After multi-scene switch: {json.dumps(after)}")
+assert after and after.get("settings") and after.get("graph"), f"Missing settings after switch: {after}"
+for key in ("viewpoint", "layers", "hiddenAgents", "hiddenClasses"):
+    assert before["settings"][key] == after["settings"][key], (
+        f"{key} changed across the root switch: before={before['settings'][key]} after={after['settings'][key]}"
+    )
+assert after["playback"]["frameIndex"] == 0, f"Expected frame 0 after the switch, got {after['playback']}"
+old_scene = before["settings"]["sceneId"]
+new_scene = after["settings"]["sceneId"]
+old_token = before["graph"]["token"]
+tagged = after["graph"]["tagged"]
+assert tagged, f"Expected tagged scene-graph objects, got {after['graph']}"
+for item in tagged:
+    assert item["sceneId"] == new_scene, f"Object tagged with {item['sceneId']}, open scene is {new_scene}"
+    assert item["loadId"] != old_token, f"Object still tagged with the pre-switch load {old_token}: {item}"
+    if old_scene != new_scene:
+        assert item["sceneId"] != old_scene, f"Object still tagged with the old scene {old_scene}"
+assert after["graph"]["points"] == after["expectedPoints"], (
+    f"Point count {after['graph']['points']} != frame 0 {after['expectedPoints']}"
+)
+assert after["graph"]["boxes"] == after["expectedBoxes"], (
+    f"Box count {after['graph']['boxes']} != frame 0 {after['expectedBoxes']}"
+)
 
 print("Step 3b verified: Switched from single-scene folder to multi-scene root cleanly.")
 EOF
