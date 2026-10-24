@@ -12,6 +12,7 @@ import {
   type ImportImages,
 } from "./local";
 import type { ConnectionSession } from "./types";
+import { BrandWordmark } from "./Brand";
 import ConnectBackdrop from "./backdrop/ConnectBackdrop";
 
 interface ConnectScreenProps {
@@ -182,8 +183,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           boxShadow: "0 20px 50px rgba(0, 0, 0, 0.6)",
         }}
       >
-        <h1 style={{ fontSize: "1.5rem", marginBottom: "0.5rem", fontWeight: 600, color: "#f5f5f7" }}>
-          Coperceive
+        <h1 style={{ fontSize: "1.75rem", marginBottom: "0.5rem", fontWeight: 600, color: "#f5f5f7" }}>
+          <BrandWordmark blink />
         </h1>
         <p style={{ color: "#a1a1a6", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
           Choose a local cooperative perception dataset to launch the viewer.

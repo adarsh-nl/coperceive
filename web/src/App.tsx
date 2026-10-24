@@ -2,6 +2,7 @@ import { Label } from "@radix-ui/react-label";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
+import { BrandWordmark } from "./desktop/Brand";
 import ConnectScreen from "./desktop/ConnectScreen";
 import { isTauriEnvironment } from "./desktop/local";
 import Landing, { readTheme, writeTheme } from "./landing/Landing";
@@ -298,8 +299,7 @@ export default function App() {
       <header className="topbar">
         <div className="top-cluster">
           <a className="brand" href={isDesktop ? "#/viewer" : "#/"}>
-            <span className="brand-mark" aria-hidden="true" />
-            coperceive
+            <BrandWordmark />
           </a>
           <div className="top-slot" ref={setSlot} />
         </div>
