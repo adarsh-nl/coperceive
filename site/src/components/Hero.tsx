@@ -44,7 +44,7 @@ export function Hero() {
     <section id="hero" ref={rootRef} data-pin="false" data-story="hero" className="relative h-[100svh] min-h-[36rem] overflow-hidden">
       <img
         src={poster}
-        alt="Recorded scene, illustrative second vehicle."
+        alt="Recorded scene."
         width={1920}
         height={1080}
         fetchPriority="high"
@@ -60,13 +60,27 @@ export function Hero() {
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black to-transparent" />
       <FloatingLogo />
       <div className="relative z-10 flex h-full flex-col justify-end px-6 pb-16 sm:px-12 lg:px-16">
+        <div className="pointer-events-none mb-8 inline-flex w-fit items-center gap-3 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-xs text-primary backdrop-blur-[10px]">
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-[9px] w-[9px] rounded-full bg-vehicle" />
+            Vehicle
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-[9px] w-[9px] rounded-full bg-drone" />
+            Drone
+          </span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-[9px] w-[9px] rounded-full bg-lanes" />
+            Lane
+          </span>
+        </div>
         <h1 className="max-w-4xl text-5xl font-semibold tracking-tight text-primary sm:text-6xl lg:text-7xl">
           Every agent. One view.
         </h1>
         <p className="mt-4 max-w-xl text-lg text-secondary sm:text-xl">
           Sensor data and perception, on one timeline.
         </p>
-        <p className="mt-5 max-w-sm text-xs text-tertiary">Recorded scene, illustrative second vehicle</p>
+        <p className="mt-5 text-xs text-tertiary">Recorded</p>
       </div>
     </section>
   );

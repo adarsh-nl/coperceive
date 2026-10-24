@@ -1,148 +1,70 @@
 import { useEffect, useRef, useState } from "react";
 import * as THREE from "three";
 import { tokens } from "../tokens";
-import type { BoxRecord, ParsedClip } from "../types/clip";
+import type { ParsedClip } from "../types/clip";
 import { loadClip } from "../utils/clipLoader";
 
-const CORNERS: [number, number, number][] = [
-  [-0.5, -0.5, -0.5],
-  [0.5, -0.5, -0.5],
-  [0.5, 0.5, -0.5],
-  [-0.5, 0.5, -0.5],
-  [-0.5, -0.5, 0.5],
-  [0.5, -0.5, 0.5],
-  [0.5, 0.5, 0.5],
-  [-0.5, 0.5, 0.5],
-];
-
-const EDGES: [number, number][] = [
-  [0, 1], [1, 2], [2, 3], [3, 0],
-  [4, 5], [5, 6], [6, 7], [7, 4],
-  [0, 4], [1, 5], [2, 6], [3, 7],
-];
-
-/** Lane samples from the clip, the arm opposite the recorded vehicle, far end first. */
-const VEHICLE2_LANE: [number, number][] = [
-  [-77.63, -84.37], [-77.64, -81.87], [-77.65, -79.37], [-77.66, -76.87],
-  [-77.66, -74.37], [-77.67, -71.87], [-77.68, -69.37], [-77.68, -66.87],
-  [-77.69, -64.37], [-77.7, -61.87], [-77.7, -59.37], [-77.71, -56.87],
-  [-77.72, -54.37], [-77.72, -51.87], [-77.73, -49.37], [-77.74, -46.87],
-  [-77.74, -44.37], [-77.75, -41.87], [-77.76, -39.37], [-77.77, -36.87],
-  [-77.77, -34.37],
-];
-
-const SWEEP_COUNT = 380;
-
-function boxColor(flag: number): THREE.Color {
-  if (flag === 3) return new THREE.Color(tokens.hit);
-  if (flag === 2) return new THREE.Color(tokens.drone);
-  return new THREE.Color(tokens.vehicle);
-}
-
-function boxGeometry(boxes: BoxRecord[]): THREE.BufferGeometry {
-  const positions: number[] = [];
-  const colors: number[] = [];
-  const quat = new THREE.Quaternion();
-  const vec = new THREE.Vector3();
-  const corners: THREE.Vector3[] = [];
-  for (const box of boxes) {
-    const color = boxColor(box.agentFlag);
-    quat.set(box.rotation[0], box.rotation[1], box.rotation[2], box.rotation[3]);
-    corners.length = 0;
-    for (const [sx, sy, sz] of CORNERS) {
-      vec.set(sx * box.size[0], sy * box.size[1], sz * box.size[2]);
-      vec.applyQuaternion(quat);
-      vec.x += box.center[0];
-      vec.y += box.center[1];
-      vec.z += box.center[2];
-      corners.push(vec.clone());
-    }
-    for (const [a, b] of EDGES) {
-      positions.push(corners[a].x, corners[a].y, corners[a].z, corners[b].x, corners[b].y, corners[b].z);
-      colors.push(color.r, color.g, color.b, color.r, color.g, color.b);
-    }
+/**
+ * Point look from the desktop viewer (`web/src/viewer/Viewer.tsx` draws one
+ * `Points` object; `bloom.ts` blooms it). A bloom pass is too heavy for this
+ * page, so the same additive glow is a soft point sprite. Colour falls off
+ * with distance from the recorded vehicle: white near it, vehicle orange far.
+ * The clip's points are the vehicle sweep only.
+ */
+const POINT_VERTEX = `
+  uniform vec3 uOrigin;
+  varying float vDist;
+  void main() {
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+    vDist = distance(position, uOrigin);
+    gl_PointSize = clamp(820.0 / max(1.0, -mvPosition.z), 2.0, 22.0);
+    gl_Position = projectionMatrix * mvPosition;
   }
-  const geom = new THREE.BufferGeometry();
-  geom.setAttribute("position", new THREE.Float32BufferAttribute(positions, 3));
-  geom.setAttribute("color", new THREE.Float32BufferAttribute(colors, 3));
-  return geom;
-}
+`;
 
-function labelSprite(text: string, color: string): THREE.Sprite {
+const POINT_FRAGMENT = `
+  varying float vDist;
+  void main() {
+    vec2 p = gl_PointCoord - vec2(0.5);
+    float d = length(p);
+    if (d > 0.5) discard;
+    float glow = exp(-dot(p, p) * 16.0);
+    float t = smoothstep(2.0, 12.0, vDist);
+    vec3 nearColor = vec3(1.0, 0.98, 0.94);
+    vec3 farColor = vec3(0.961, 0.541, 0.122);
+    vec3 color = mix(nearColor, farColor, t);
+    gl_FragColor = vec4(color * glow * 1.15, glow);
+  }
+`;
+
+const ORBIT_RADIUS = 48;
+const ORBIT_HEIGHT = 54;
+const ORBIT_LOOK_Z = 6;
+const ORBIT_SPEED = 0.11;
+const ORBIT_START = -0.8;
+
+function glowTexture(r: number, g: number, b: number): THREE.CanvasTexture {
+  const size = 128;
   const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 128;
+  canvas.width = size;
+  canvas.height = size;
   const ctx = canvas.getContext("2d");
-  if (!ctx) return new THREE.Sprite();
-  ctx.clearRect(0, 0, canvas.width, canvas.height);
-  ctx.font = "600 64px sans-serif";
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.lineWidth = 10;
-  ctx.strokeStyle = "rgba(0, 0, 0, 0.85)";
-  ctx.strokeText(text, 256, 64);
-  ctx.fillStyle = color;
-  ctx.fillText(text, 256, 64);
-  const material = new THREE.SpriteMaterial({
-    map: new THREE.CanvasTexture(canvas),
-    transparent: true,
-    depthTest: false,
-  });
-  const sprite = new THREE.Sprite(material);
-  sprite.scale.set(12, 3, 1);
-  sprite.renderOrder = 3;
-  return sprite;
+  const texture = new THREE.CanvasTexture(canvas);
+  if (!ctx) return texture;
+  const grad = ctx.createRadialGradient(64, 64, 0, 64, 64, 64);
+  grad.addColorStop(0, "rgba(255,255,255,1)");
+  grad.addColorStop(0.2, "rgba(190,214,255,1)");
+  grad.addColorStop(0.42, `rgba(${r},${g},${b},0.95)`);
+  grad.addColorStop(0.7, `rgba(${r},${g},${b},0.28)`);
+  grad.addColorStop(1, `rgba(${r},${g},${b},0)`);
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, size, size);
+  texture.needsUpdate = true;
+  texture.colorSpace = THREE.SRGBColorSpace;
+  return texture;
 }
 
-function smallDrone(): THREE.Group {
-  const group = new THREE.Group();
-  const material = new THREE.MeshBasicMaterial({ color: tokens.drone });
-  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.22, 18), material);
-  body.rotation.x = Math.PI / 2;
-  group.add(body);
-  for (const [x, y] of [
-    [1.05, 1.05],
-    [1.05, -1.05],
-    [-1.05, 1.05],
-    [-1.05, -1.05],
-  ] as const) {
-    const rotor = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 6), material);
-    rotor.position.set(x, y, 0.1);
-    group.add(rotor);
-  }
-  return group;
-}
-
-function vehicle2Pose(frame: number, frameCount: number): { x: number; y: number; yaw: number } {
-  const span = VEHICLE2_LANE.length - 1;
-  const t = frameCount <= 1 ? 0 : frame / (frameCount - 1);
-  const scaled = t * span;
-  const index = Math.min(span - 1, Math.floor(scaled));
-  const mix = scaled - index;
-  const a = VEHICLE2_LANE[index];
-  const b = VEHICLE2_LANE[index + 1];
-  return {
-    x: a[0] + (b[0] - a[0]) * mix,
-    y: a[1] + (b[1] - a[1]) * mix,
-    yaw: Math.atan2(b[1] - a[1], b[0] - a[0]),
-  };
-}
-
-function writeSweep(target: Float32Array, x: number, y: number, yaw: number) {
-  const cos = Math.cos(yaw);
-  const sin = Math.sin(yaw);
-  for (let i = 0; i < SWEEP_COUNT; i += 1) {
-    const angle = (i / SWEEP_COUNT) * Math.PI * 2;
-    const radius = 2.4 + (i % 8) * 1.05;
-    const forward = Math.cos(angle) * radius + 3.2;
-    const side = Math.sin(angle) * radius * 0.72;
-    target[i * 3] = x + forward * cos - side * sin;
-    target[i * 3 + 1] = y + forward * sin + side * cos;
-    target[i * 3 + 2] = 0.35 + (i % 5) * 0.16;
-  }
-}
-
-/** Recorded clip, plus one illustrative vehicle on a lane from that clip. */
+/** Recorded vehicle sweep and drone pose. Nothing else is added. */
 export function RealClip({ active, onReady }: { active: boolean; onReady: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef(active);
@@ -169,6 +91,7 @@ export function RealClip({ active, onReady }: { active: boolean; onReady: () => 
         onReady();
         let last = 0;
         let index = 0;
+        const started = performance.now();
         const step = (now: number) => {
           raf = requestAnimationFrame(step);
           if (!activeRef.current) return;
@@ -177,6 +100,7 @@ export function RealClip({ active, onReady }: { active: boolean; onReady: () => 
             index = (index + 1) % clip.frames.length;
             mounted.apply(index);
           }
+          mounted.place((now - started) / 1000);
           mounted.renderer.render(mounted.scene, mounted.camera);
         };
         raf = requestAnimationFrame(step);
@@ -223,129 +147,91 @@ function mount(host: HTMLDivElement, clip: ParsedClip) {
   host.replaceChildren(renderer.domElement);
   renderer.domElement.dataset.bev = "hero";
   renderer.domElement.setAttribute("role", "img");
-  renderer.domElement.setAttribute(
-    "aria-label",
-    "Recorded scene. A vehicle and a drone, plus an illustrative second vehicle.",
-  );
+  renderer.domElement.setAttribute("aria-label", "Recorded scene. A vehicle and a drone.");
   renderer.domElement.className = "block h-full w-full";
 
   const scene = new THREE.Scene();
-  const camera = new THREE.PerspectiveCamera(50, width / Math.max(1, height), 0.5, 1400);
+  const camera = new THREE.PerspectiveCamera(52, width / Math.max(1, height), 0.5, 1400);
   camera.up.set(0, 0, 1);
-  camera.position.set(-125, -155, 90);
-  camera.lookAt(-95, -42, 7);
 
   const mapGeom = new THREE.BufferGeometry();
   mapGeom.setAttribute("position", new THREE.Float32BufferAttribute(clip.mapPositions, 3));
-  mapGeom.setAttribute("color", new THREE.Float32BufferAttribute(clip.mapColors, 3));
-  scene.add(new THREE.LineSegments(mapGeom, new THREE.LineBasicMaterial({ vertexColors: true })));
+  scene.add(
+    new THREE.LineSegments(
+      mapGeom,
+      new THREE.LineBasicMaterial({ color: tokens.lanes }),
+    ),
+  );
 
+  const origin = new THREE.Vector3();
   const points = new THREE.Points(
     new THREE.BufferGeometry(),
-    new THREE.PointsMaterial({ color: tokens.vehicle, size: 0.55, sizeAttenuation: true }),
+    new THREE.ShaderMaterial({
+      uniforms: { uOrigin: { value: origin } },
+      vertexShader: POINT_VERTEX,
+      fragmentShader: POINT_FRAGMENT,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      transparent: true,
+    }),
   );
   points.frustumCulled = false;
+  points.renderOrder = 1;
   scene.add(points);
 
-  const boxes = new THREE.LineSegments(
-    new THREE.BufferGeometry(),
-    new THREE.LineBasicMaterial({ vertexColors: true }),
+  const drone = new THREE.Sprite(
+    new THREE.SpriteMaterial({
+      map: glowTexture(60, 141, 255),
+      blending: THREE.AdditiveBlending,
+      transparent: true,
+      depthWrite: false,
+      depthTest: false,
+    }),
   );
-  boxes.frustumCulled = false;
-  scene.add(boxes);
-
-  const vehicle = new THREE.Group();
-  const vehicleBody = new THREE.Mesh(
-    new THREE.BoxGeometry(4.8, 2.05, 1.7),
-    new THREE.MeshBasicMaterial({ color: tokens.vehicle }),
-  );
-  vehicleBody.position.z = 0.85;
-  vehicle.add(vehicleBody);
-  scene.add(vehicle);
-
-  const vehicle2 = new THREE.Group();
-  const vehicle2Body = new THREE.Mesh(
-    new THREE.BoxGeometry(4.8, 2.05, 1.7),
-    new THREE.MeshBasicMaterial({ color: tokens.vehicle2 }),
-  );
-  vehicle2Body.position.z = 0.85;
-  vehicle2.add(vehicle2Body);
-  scene.add(vehicle2);
-
-  const sweep = new Float32Array(SWEEP_COUNT * 3);
-  const sweepGeom = new THREE.BufferGeometry();
-  sweepGeom.setAttribute("position", new THREE.BufferAttribute(sweep, 3));
-  const sweepPoints = new THREE.Points(
-    sweepGeom,
-    new THREE.PointsMaterial({ color: tokens.vehicle2, size: 0.55, sizeAttenuation: true }),
-  );
-  sweepPoints.frustumCulled = false;
-  scene.add(sweepPoints);
-
-  const drone = smallDrone();
+  drone.scale.set(3.6, 3.6, 1);
+  drone.renderOrder = 3;
   scene.add(drone);
 
   const tetherGeom = new THREE.BufferGeometry();
   tetherGeom.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(6), 3));
   const tether = new THREE.Line(
     tetherGeom,
-    new THREE.LineDashedMaterial({
+    new THREE.LineBasicMaterial({
       color: tokens.drone,
       transparent: true,
-      opacity: 0.38,
-      dashSize: 1.1,
-      gapSize: 0.75,
-    }),
-  );
-  tether.frustumCulled = false;
-  scene.add(tether);
-
-  const shadow = new THREE.Mesh(
-    new THREE.CircleGeometry(1.7, 24),
-    new THREE.MeshBasicMaterial({
-      color: tokens.drone,
-      transparent: true,
-      opacity: 0.28,
+      opacity: 0.22,
       depthWrite: false,
     }),
   );
-  shadow.frustumCulled = false;
-  scene.add(shadow);
+  tether.frustumCulled = false;
+  tether.renderOrder = 2;
+  scene.add(tether);
 
-  const vehicleLabel = labelSprite("Vehicle", tokens.vehicle);
-  const droneLabel = labelSprite("Drone", tokens.drone);
-  const vehicle2Label = labelSprite("Vehicle 2", tokens.vehicle2);
-  vehicle2Label.scale.set(14, 3.2, 1);
-  scene.add(vehicleLabel, droneLabel, vehicle2Label);
+  const anchor = new THREE.Vector3();
 
   const apply = (index: number) => {
     const frame = clip.frames[index];
-    points.geometry.setAttribute("position", new THREE.Float32BufferAttribute(frame.lidarPoints, 3));
-    boxes.geometry.dispose();
-    boxes.geometry = boxGeometry(frame.boxes);
-
+    points.geometry.setAttribute("position", new THREE.BufferAttribute(frame.lidarPoints, 3));
     const vp = frame.vehiclePose.position;
-    const vq = frame.vehiclePose.quaternion;
-    vehicle.position.set(vp[0], vp[1], vp[2]);
-    vehicle.quaternion.set(vq[0], vq[1], vq[2], vq[3]);
-    vehicleLabel.position.set(vp[0], vp[1], vp[2] + 3.2);
-
-    const second = vehicle2Pose(index, clip.frames.length);
-    vehicle2.position.set(second.x, second.y, 0);
-    vehicle2.rotation.set(0, 0, second.yaw);
-    vehicle2Label.position.set(second.x, second.y, 3.2);
-    writeSweep(sweep, second.x, second.y, second.yaw);
-    (sweepGeom.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    origin.set(vp[0], vp[1], vp[2]);
+    anchor.set(vp[0], vp[1], vp[2]);
 
     const dp = frame.dronePose.position;
     drone.position.set(dp[0], dp[1], dp[2]);
     const tetherPos = tether.geometry.attributes.position as THREE.BufferAttribute;
     tetherPos.setXYZ(0, dp[0], dp[1], dp[2]);
-    tetherPos.setXYZ(1, dp[0], dp[1], 0.15);
+    tetherPos.setXYZ(1, vp[0], vp[1], vp[2] + 1.2);
     tetherPos.needsUpdate = true;
-    tether.computeLineDistances();
-    shadow.position.set(dp[0], dp[1], 0.12);
-    droneLabel.position.set(dp[0], dp[1], dp[2] + 2.2);
+  };
+
+  const place = (seconds: number) => {
+    const angle = ORBIT_START + seconds * ORBIT_SPEED;
+    camera.position.set(
+      anchor.x + Math.cos(angle) * ORBIT_RADIUS,
+      anchor.y + Math.sin(angle) * ORBIT_RADIUS,
+      ORBIT_HEIGHT,
+    );
+    camera.lookAt(anchor.x, anchor.y, ORBIT_LOOK_Z);
   };
 
   let sizedW = 0;
@@ -368,6 +254,7 @@ function mount(host: HTMLDivElement, clip: ParsedClip) {
   };
 
   framed(0);
+  place(0);
   renderer.render(scene, camera);
-  return { renderer, scene, camera, apply: framed };
+  return { renderer, scene, camera, apply: framed, place };
 }
