@@ -268,8 +268,28 @@ assert updated_counts["frustums"] == 4, f"Expected frustums == 4 (UAV hidden), g
 print("Step 1 UI interactions verified successfully.")
 '
 
-# Wait 1.5s for debounced state persistence
-sleep 1.5
+# Wait up to 10s for debounced state persistence
+python3 -c '
+import sys, json, time
+
+state_file = "'"${STATE_FILE}"'"
+print(f"Waiting for state.json to persist at {state_file}...", flush=True)
+deadline = time.monotonic() + 10.0
+saved = {}
+while time.monotonic() < deadline:
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if saved.get("last_viewpoint") == "chase" and saved.get("last_sample_index") == 148:
+            break
+    except Exception:
+        pass
+    time.sleep(0.1)
+
+print(f"Step 1 verified state.json content: {saved}", flush=True)
+assert saved.get("last_viewpoint") == "chase", f"Expected last_viewpoint chase in state.json, got {saved}"
+assert saved.get("last_sample_index") == 148, f"Expected last_sample_index 148 in state.json, got {saved}"
+'
 
 # Test Help -> Copy Diagnostics menu item
 echo "Testing Help -> Copy Diagnostics via native menu..."
@@ -421,25 +441,33 @@ print("Waiting for relaunched viewer scene to restore...")
 wait_for_scene(30)
 
 print("Checking restored values from DOM...")
-drone_pressed = eval_js("document.querySelector('button[aria-keyshortcuts=\"3\"]')?.getAttribute('aria-pressed')")
+deadline = time.monotonic() + 15.0
+drone_pressed = None
+boxes_checked = None
+frustum_images_checked = None
+uav_checked = None
+
+while time.monotonic() < deadline:
+    drone_pressed = eval_js("document.querySelector('button[aria-keyshortcuts=\"3\"]')?.getAttribute('aria-pressed')")
+    boxes_checked = eval_js("""(() => {
+        const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Boxes"));
+        return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
+    })()""")
+    frustum_images_checked = eval_js("""(() => {
+        const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Frustum images"));
+        return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
+    })()""")
+    uav_checked = eval_js("""(() => {
+        const swatch = Array.from(document.querySelectorAll('.swatch')).find(b => b.textContent.includes("uav_01") || b.textContent.includes("Drone"));
+        return swatch ? (swatch.getAttribute("aria-checked") || swatch.getAttribute("aria-pressed")) : null;
+    })()""")
+    if drone_pressed == "true" and boxes_checked == "false" and frustum_images_checked == "false" and uav_checked == "false":
+        break
+    time.sleep(0.2)
+
 assert drone_pressed == "true", f"Expected Drone viewpoint aria-pressed==true, got {drone_pressed}"
-
-boxes_checked = eval_js("""(() => {
-    const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Boxes"));
-    return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
-})()""")
 assert boxes_checked == "false", f"Expected Boxes toggle aria-checked==false, got {boxes_checked}"
-
-frustum_images_checked = eval_js("""(() => {
-    const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Frustum images"));
-    return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
-})()""")
 assert frustum_images_checked == "false", f"Expected Frustum images toggle aria-checked==false, got {frustum_images_checked}"
-
-uav_checked = eval_js("""(() => {
-    const swatch = Array.from(document.querySelectorAll('.swatch')).find(b => b.textContent.includes("uav_01") || b.textContent.includes("Drone"));
-    return swatch ? (swatch.getAttribute("aria-checked") || swatch.getAttribute("aria-pressed")) : null;
-})()""")
 assert uav_checked == "false", f"Expected uav_01 swatch aria-checked==false, got {uav_checked}"
 
 print("Checking restored values from scene-graph counts...")

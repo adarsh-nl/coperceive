@@ -1011,6 +1011,35 @@ function savedLoopChoice(): boolean | null {
   return readWebLoopChoice();
 }
 
+function initialSavedViewpoint(): Viewpoint {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_viewpoint) {
+    const vp = window.__COPERCEIVE_INITIAL_STATE__.last_viewpoint as Viewpoint;
+    if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
+      return vp;
+    }
+  }
+  return "orbit";
+}
+
+function initialSavedAppearance(): Appearance {
+  const base = loadAppearance();
+  if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.layer_toggles) {
+    const lt = window.__COPERCEIVE_INITIAL_STATE__.layer_toggles;
+    return {
+      ...base,
+      points: lt.points ?? base.points,
+      boxes: lt.boxes ?? base.boxes,
+      frustums: lt.frustums ?? base.frustums,
+      map: lt.map ?? base.map,
+      axes: lt.axes ?? base.axes,
+      frustumImages: lt.frustum_images !== undefined ? lt.frustum_images : base.frustumImages,
+      frustumOpacity: typeof lt.frustum_opacity === "number" ? lt.frustum_opacity : base.frustumOpacity,
+      frustumImageCameras: lt.frustum_image_cameras !== undefined ? lt.frustum_image_cameras : base.frustumImageCameras,
+    };
+  }
+  return base;
+}
+
 export default function Viewer({
   token,
   slot,
@@ -1046,12 +1075,22 @@ export default function Viewer({
   const effectiveToken = activeToken || token;
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
-  const [sceneId, setSceneId] = useState("");
+  const [sceneId, setSceneId] = useState<string>(() => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id) {
+      return window.__COPERCEIVE_INITIAL_STATE__.last_scene_id;
+    }
+    return "";
+  });
   const sceneIdRef = useRef(sceneId);
   sceneIdRef.current = sceneId;
   const [summary, setSummary] = useState<SceneSummary | null>(null);
   const [frameIndex, setFrameIndex] = useState(0);
-  const [hidden, setHidden] = useState<Record<string, boolean>>({});
+  const [hidden, setHidden] = useState<Record<string, boolean>>(() => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.agent_visibility) {
+      return window.__COPERCEIVE_INITIAL_STATE__.agent_visibility;
+    }
+    return {};
+  });
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
   const [webglError, setWebglError] = useState("");
@@ -1078,7 +1117,7 @@ export default function Viewer({
     markers: Marker[];
   }>({ points: [], speeds: [], boxes: [], agentSpeed: {}, markers: [] });
   const [liveSpeed, setLiveSpeed] = useState<Record<string, number>>({});
-  const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
+  const [appearance, setAppearance] = useState<Appearance>(initialSavedAppearance);
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
   const [playing, setPlaying] = useState(false);
@@ -1293,7 +1332,7 @@ export default function Viewer({
     return () => clearTimeout(t);
   }, [toast]);
   const [speed, setSpeed] = useState<Speed>(1);
-  const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
+  const [viewpoint, setViewpoint] = useState<Viewpoint>(initialSavedViewpoint);
   const [cameraId, setCameraId] = useState("");
   const [pick, setPick] = useState<PickRecord | null>(null);
   const [cameraFrame, setCameraFrame] = useState<FrameDocument | null>(null);
@@ -1332,7 +1371,7 @@ export default function Viewer({
   const dimmedRef = useRef<Dimmed | null>(null);
   const onEvalPickRef = useRef<(value: EvalPick | null) => void>(() => undefined);
   const framedScene = useRef("");
-  const modeRef = useRef<Viewpoint>("orbit");
+  const modeRef = useRef<Viewpoint>(initialSavedViewpoint());
   const cameraKeyRef = useRef("");
   const latestRef = useRef<{ frame: FrameDocument; types: Map<string, string> } | null>(null);
   const orbitHomeRef = useRef<CameraGoal | null>(null);
@@ -2010,7 +2049,8 @@ export default function Viewer({
         }
         if (init.last_viewpoint) {
           const vp = init.last_viewpoint as Viewpoint;
-          if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird") {
+          if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
+            modeRef.current = vp;
             setViewpoint(vp);
           }
         }
@@ -2159,7 +2199,7 @@ export default function Viewer({
   }, [scenes]);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return;
+    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
     const timer = setTimeout(() => {
       const port = window.__COPERCEIVE_CTRL_PORT__;
       const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
