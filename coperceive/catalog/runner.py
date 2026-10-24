@@ -234,8 +234,7 @@ def run_dataset_job(
             first_scene = scene_ids[0]
         else:
             raise RuntimeError(
-                "The download finished but no scene was written. "
-                "Try the download again."
+                "The download finished but no scene was written. Try the download again."
             )
         first_path = str(library_root / first_scene)
         _emit(

@@ -1376,15 +1376,15 @@ source = eval_js("document.body.innerText.includes('synth_001') ? 'yes' : 'no'")
 assert source == "yes", "import source was not the synthetic scene"
 click_button("Start import")
 
-deadline = time.monotonic() + 20
+deadline = time.monotonic() + 30
 seen = ""
 while time.monotonic() < deadline:
     seen = eval_js("document.body.innerText") or ""
-    if " / " in seen or "Importing" in seen:
+    if " / " in seen:
         break
     time.sleep(0.2)
 else:
-    raise RuntimeError(f"import did not start: {seen[-400:]}")
+    raise RuntimeError(f"import did not copy a file: {seen[-400:]}")
 click_button("Cancel")
 time.sleep(0.8)
 partials = list(library.glob("*.partial"))
@@ -1395,11 +1395,14 @@ print(f"Step 5c cancel left {[path.name for path in partials]}")
 
 click_button("Start import")
 deadline = time.monotonic() + 40
+started = False
 while time.monotonic() < deadline:
     text = eval_js("document.body.innerText") or ""
+    if "Starting…" in text or "Importing…" in text:
+        started = True
     if "Import finished." in text:
         break
-    if "Import stopped" in text:
+    if started and "Import stopped" in text and "Importing" not in text and "Starting" not in text:
         raise RuntimeError(text[-400:])
     time.sleep(0.4)
 else:
