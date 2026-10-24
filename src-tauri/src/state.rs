@@ -250,6 +250,10 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_data_root: Option<String>,
 
+    /// Dedicated storage location for imported and downloaded datasets (default ~/coperceive-data).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_root: Option<String>,
+
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_scene_id: Option<String>,
 
@@ -307,10 +311,20 @@ pub struct AppPersistentState {
     pub recent_roots: Vec<String>,
 }
 
+/// Returns the default library location: ~/coperceive-data.
+pub fn default_library_root() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join("coperceive-data")
+    } else {
+        PathBuf::from("coperceive-data")
+    }
+}
+
 impl Default for AppPersistentState {
     fn default() -> Self {
         Self {
             last_data_root: None,
+            library_root: None,
             last_scene_id: None,
             last_sample_index: None,
             last_timestamp_us: None,
@@ -524,6 +538,7 @@ pub mod tests {
 
         let state = AppPersistentState {
             last_data_root: Some("/path/to/data".into()),
+            library_root: Some("/path/to/coperceive-data".into()),
             last_scene_id: Some("Town03-000".into()),
             last_sample_index: Some(42),
             last_timestamp_us: Some(4200000),

@@ -4,7 +4,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
 import { BrandWordmark } from "./desktop/Brand";
 import ConnectScreen from "./desktop/ConnectScreen";
-import { isTauriEnvironment } from "./desktop/local";
+import { isTauriEnvironment, getStorageInfo, revealInFinder } from "./desktop/local";
+import UpdateBanner from "./desktop/UpdateBanner";
 import Landing, { readTheme, writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
 import type { ThemeName } from "./viewer/appearance";
@@ -53,6 +54,15 @@ function storedToken(): string {
 
 function DesktopPreferences() {
   const [reopenLast, setReopenLast] = useState<boolean>(true);
+  const [autoUpdate, setAutoUpdate] = useState<boolean>(() => {
+    try {
+      const v = localStorage.getItem("coperceive_auto_update");
+      return v === null ? true : v === "true";
+    } catch {
+      return true;
+    }
+  });
+  const [storageRoot, setStorageRoot] = useState<string>("");
 
   useEffect(() => {
     if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
@@ -69,6 +79,13 @@ function DesktopPreferences() {
         })
         .catch(() => {});
     }
+
+    void (async () => {
+      const stats = await getStorageInfo();
+      if (stats?.library_root) {
+        setStorageRoot(stats.library_root);
+      }
+    })();
   }, []);
 
   const handleToggle = (checked: boolean) => {
@@ -87,8 +104,21 @@ function DesktopPreferences() {
     }
   };
 
+  const handleAutoUpdateToggle = (checked: boolean) => {
+    setAutoUpdate(checked);
+    try {
+      localStorage.setItem("coperceive_auto_update", String(checked));
+    } catch {}
+  };
+
+  const handleShowInFinder = () => {
+    if (storageRoot) {
+      revealInFinder(storageRoot);
+    }
+  };
+
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minWidth: "220px" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minWidth: "240px" }}>
       <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "13px", cursor: "pointer" }}>
         <input
           type="checkbox"
@@ -100,6 +130,42 @@ function DesktopPreferences() {
       <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
         When unchecked, Coperceive starts at the Connect screen.
       </p>
+
+      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "13px", cursor: "pointer", marginTop: "0.5rem" }}>
+        <input
+          type="checkbox"
+          checked={autoUpdate}
+          onChange={(e) => handleAutoUpdateToggle(e.target.checked)}
+        />
+        <span>Automatically check for updates</span>
+      </label>
+      <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
+        Prompt when new signed releases are available.
+      </p>
+
+      {storageRoot && (
+        <div style={{ marginTop: "0.5rem", borderTop: "1px solid rgba(255, 255, 255, 0.1)", paddingTop: "0.5rem" }}>
+          <div style={{ fontSize: "12px", fontWeight: 600, marginBottom: "0.2rem" }}>Storage</div>
+          <p className="muted" style={{ fontSize: "11px", margin: "0 0 0.4rem 0", wordBreak: "break-all" }}>
+            {storageRoot}
+          </p>
+          <button
+            type="button"
+            onClick={handleShowInFinder}
+            style={{
+              fontSize: "11px",
+              padding: "0.25rem 0.5rem",
+              borderRadius: "4px",
+              border: "1px solid rgba(255, 255, 255, 0.15)",
+              background: "transparent",
+              color: "inherit",
+              cursor: "pointer",
+            }}
+          >
+            Show in Finder
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -296,6 +362,7 @@ export default function App() {
 
   return (
     <div className={tab === "viewer" || isDesktop ? "shell" : "shell shell-desk"}>
+      {isDesktop && <UpdateBanner />}
       <header className="topbar">
         <div className="top-cluster">
           <a className="brand" href={isDesktop ? "#/viewer" : "#/"}>

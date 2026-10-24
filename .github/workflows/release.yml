@@ -1,0 +1,53 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Bundle Python Standalone Runtime
+        run: bash scripts/desktop/bundle_python.sh
+      - name: Sync Desktop Bundle Version
+        run: bash scripts/desktop/sync_version.sh
+      - name: Build Tauri Desktop & Updater Bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          npm run tauri build -- --target aarch64-apple-darwin
+        working-directory: web
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release-assets
+          find src-tauri/target/aarch64-apple-darwin/release/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" -o -name "latest.json" \) -exec cp {} release-assets/ \;
+          ls -la release-assets/
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true

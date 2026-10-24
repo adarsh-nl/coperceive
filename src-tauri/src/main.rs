@@ -598,6 +598,7 @@ fn build_app_menu(
     // File Submenu
     let mut file_builder = SubmenuBuilder::new(app, "File")
         .item(&MenuItem::with_id(app, "open_dataset", "Open Dataset…", true, Some("CmdOrControl+O"))?)
+        .item(&MenuItem::with_id(app, "get_data", "Get Data…", true, Some("CmdOrControl+G"))?)
         .item(&MenuItem::with_id(
             app,
             "import_folder",
@@ -649,6 +650,8 @@ fn build_app_menu(
 
     // Help Submenu
     let help_submenu = SubmenuBuilder::new(app, "Help")
+        .item(&MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?)
+        .separator()
         .item(&MenuItem::with_id(app, "help_logs", "Show Logs", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "help_diagnostics", "Copy Diagnostics", true, None::<&str>)?)
         .separator()
@@ -832,9 +835,15 @@ fn import_from_folder(
             return Err("an import is already running".into());
         }
     }
+    let effective_dest = if dest.trim().is_empty() {
+        let p = state::load_state();
+        p.library_root.unwrap_or_else(state::default_library_root)
+    } else {
+        dest
+    };
     let args = scene_pack_args(
         &source,
-        &dest,
+        &effective_dest,
         &images,
         &media_roots,
         griffin_root.as_deref(),
@@ -903,6 +912,230 @@ fn cancel_import() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+static DATASET_JOB_PID: Mutex<Option<u32>> = Mutex::new(None);
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, String> {
+    let p = state::load_state();
+    let root = p.library_root.unwrap_or_else(state::default_library_root);
+    coperceive_desktop::library::get_storage_stats(Path::new(&root))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_library_root(new_root: String) -> Result<coperceive_desktop::library::StorageStats, String> {
+    let mut p = state::load_state();
+    p.library_root = Some(new_root.clone());
+    let _ = state::save_state(&p);
+    coperceive_desktop::library::get_storage_stats(Path::new(&new_root))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::StorageStats, String> {
+    let mut p = state::load_state();
+    let old_root = p.library_root.clone().unwrap_or_else(state::default_library_root);
+    coperceive_desktop::library::move_library_scenes(Path::new(&old_root), Path::new(&new_root))
+        .map_err(|e| format!("Failed to move library: {e}"))?;
+    p.library_root = Some(new_root.clone());
+    let _ = state::save_state(&p);
+    coperceive_desktop::library::get_storage_stats(Path::new(&new_root))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn get_library_scenes() -> Result<Vec<coperceive_desktop::library::LibrarySceneInfo>, String> {
+    let p = state::load_state();
+    let root = p.library_root.unwrap_or_else(state::default_library_root);
+    Ok(coperceive_desktop::library::scan_library_scenes(Path::new(&root)))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn delete_library_scene(scene_path: String) -> Result<(), String> {
+    coperceive_desktop::library::delete_scene_to_trash(Path::new(&scene_path))
+        .map_err(|e| format!("Failed to delete scene: {e}"))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn reveal_in_finder(path: String) -> Result<(), String> {
+    std::process::Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .spawn()
+        .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn dataset_dry_run(
+    app: tauri::AppHandle,
+    dataset_id: String,
+    preset_id: String,
+) -> Result<serde_json::Value, String> {
+    use std::process::Command;
+
+    let p = state::load_state();
+    let root = p.library_root.unwrap_or_else(state::default_library_root);
+    let python = resolve_python_binary(&app);
+    let output = Command::new(&python)
+        .args([
+            "-m",
+            "coperceive.cli",
+            "dataset",
+            "dry-run",
+            &dataset_id,
+            &preset_id,
+            "--dest",
+            &root,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to execute dry-run: {e}"))?;
+
+    let stdout_str = String::from_utf8_lossy(&output.stdout);
+    if let Some(start_idx) = stdout_str.find('{') {
+        let json_part = &stdout_str[start_idx..];
+        if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_part) {
+            return Ok(val);
+        }
+    }
+    Err(format!(
+        "Dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    ))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn start_dataset_job(
+    app: tauri::AppHandle,
+    dataset_id: String,
+    preset_id: String,
+    accept_terms: bool,
+) -> Result<(), String> {
+    use std::io::{BufRead, BufReader};
+    use std::process::{Command, Stdio};
+    use tauri::Emitter;
+
+    {
+        let slot = DATASET_JOB_PID.lock().map_err(|err| err.to_string())?;
+        if slot.is_some() {
+            return Err("a dataset job is already running".into());
+        }
+    }
+    let p = state::load_state();
+    let root = p.library_root.unwrap_or_else(state::default_library_root);
+    let python = resolve_python_binary(&app);
+    let mut cmd_args = vec![
+        "-m".to_string(),
+        "coperceive.cli".to_string(),
+        "dataset".to_string(),
+        "download".to_string(),
+        dataset_id,
+        preset_id,
+        "--dest".to_string(),
+        root,
+    ];
+    if accept_terms {
+        cmd_args.push("--accept-terms".to_string());
+    }
+
+    let mut child = Command::new(&python)
+        .args(&cmd_args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|err| format!("failed to start dataset job: {err}"))?;
+    let pid = child.id();
+    {
+        let mut slot = DATASET_JOB_PID.lock().map_err(|err| err.to_string())?;
+        *slot = Some(pid);
+    }
+    let stdout = child.stdout.take();
+    let stderr = child.stderr.take();
+    std::thread::spawn(move || {
+        let app_out = app.clone();
+        let stdout_thread = std::thread::spawn(move || {
+            if let Some(pipe) = stdout {
+                for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                    let payload = serde_json::from_str::<serde_json::Value>(&line)
+                        .unwrap_or_else(|_| serde_json::json!({"event": "log", "line": line}));
+                    let _ = app_out.emit("dataset-progress", payload);
+                }
+            }
+        });
+        let app_err = app.clone();
+        let stderr_thread = std::thread::spawn(move || {
+            if let Some(pipe) = stderr {
+                for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                    let _ = app_err.emit(
+                        "dataset-progress",
+                        serde_json::json!({"event": "log", "line": line}),
+                    );
+                }
+            }
+        });
+        let status = child.wait();
+        let _ = stdout_thread.join();
+        let _ = stderr_thread.join();
+        if let Ok(mut slot) = DATASET_JOB_PID.lock() {
+            if *slot == Some(pid) {
+                *slot = None;
+            }
+        }
+        let code = status.ok().and_then(|value| value.code()).unwrap_or(1);
+        let _ = app.emit("dataset-progress", serde_json::json!({"event": "exit", "code": code}));
+    });
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn cancel_dataset_job() -> Result<(), String> {
+    let pid = {
+        let mut slot = DATASET_JOB_PID.lock().map_err(|err| err.to_string())?;
+        slot.take()
+    };
+    if let Some(pid) = pid {
+        unsafe {
+            libc::kill(pid as i32, libc::SIGTERM);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn validate_scene(
+    app: tauri::AppHandle,
+    scene_path: String,
+) -> Result<serde_json::Value, String> {
+    use std::process::Command;
+
+    let python = resolve_python_binary(&app);
+    let output = Command::new(&python)
+        .args([
+            "-m",
+            "coperceive.cli",
+            "validate",
+            &scene_path,
+        ])
+        .output()
+        .map_err(|e| format!("Failed to validate scene: {e}"))?;
+
+    let success = output.status.success();
+    Ok(serde_json::json!({
+        "scene_path": scene_path,
+        "valid": success,
+        "stdout": String::from_utf8_lossy(&output.stdout),
+        "stderr": String::from_utf8_lossy(&output.stderr),
+    }))
 }
 
 #[cfg(target_os = "macos")]
@@ -1085,6 +1318,16 @@ fn main() {
             stop_local,
             import_from_folder,
             cancel_import,
+            get_storage_info,
+            set_library_root,
+            move_library_root,
+            get_library_scenes,
+            delete_library_scene,
+            reveal_in_finder,
+            dataset_dry_run,
+            start_dataset_job,
+            cancel_dataset_job,
+            validate_scene,
             health,
             remote_connect,
             remote_status,
@@ -1231,6 +1474,22 @@ fn main() {
                     use tauri::Emitter;
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.emit("import-request", ());
+                    }
+                }
+                "get_data" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("navigate-get-data", ());
+                        let _ = main.set_focus();
+                    }
+                }
+                "check_updates" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("check-updates", ());
+                    }
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.emit("check-updates", ());
                     }
                 }
                 id if id.starts_with("recent_") => {

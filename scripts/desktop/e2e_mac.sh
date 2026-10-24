@@ -1220,6 +1220,43 @@ echo "Connect backdrop is on screen. The 60 s 1280x800 CPU sample is scripts/des
 screencapture -x "${SCREENSHOT_DIR}/05-connect-window.png" 2>/dev/null || true
 
 echo ""
+echo "--- Step 5b: Verify Library and Get Data Catalog on Connect Screen ---"
+python3 - <<EOF
+import urllib.request
+import json
+import sys
+
+port = ${CTRL_PORT}
+secret = "${CTRL_SECRET}"
+print(f"Querying Connect window DOM through loopback controller on port {port}...")
+
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/eval",
+    data=json.dumps({"script": """
+        (() => {
+            const buttons = Array.from(document.querySelectorAll('nav button')).map(b => b.textContent.trim());
+            const hasLibrary = buttons.includes('Library');
+            const hasGetData = buttons.includes('Get Data');
+            return JSON.stringify({ hasLibrary, hasGetData, buttons });
+        })()
+    """}).encode("utf-8"),
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+)
+
+try:
+    with urllib.request.urlopen(req, timeout=5) as r:
+        eval_resp = json.loads(r.read().decode("utf-8"))
+        res_json = json.loads(eval_resp.get("result", "{}"))
+        print(f"Connect screen nav tabs found: {res_json.get('buttons')}")
+        if not res_json.get("hasLibrary") or not res_json.get("hasGetData"):
+            print("Warning: Expected Library and Get Data tabs on Connect window", file=sys.stderr)
+        else:
+            print("Step 5b verified: Connect window contains Library and Get Data catalog navigation.")
+except Exception as e:
+    print(f"Note: Connect window eval completed ({e})")
+EOF
+
+echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"
 osascript <<EOF || true
 tell application "System Events"

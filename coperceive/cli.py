@@ -290,6 +290,26 @@ def build_parser() -> argparse.ArgumentParser:
     overlay_export.add_argument("--theme", choices=("dark", "light"), default="dark")
     overlay_export.add_argument("--color", choices=("agent", "class"), default="agent")
     overlay_export.set_defaults(func=_export_overlay)
+
+    dataset = sub.add_parser("dataset", help="Dataset catalog and operations.")
+    dataset_sub = dataset.add_subparsers(dest="dataset_command", required=True)
+
+    catalog_parser = dataset_sub.add_parser("catalog", help="Print dataset catalog as JSON.")
+    catalog_parser.set_defaults(func=_dataset_catalog)
+
+    dry_run_parser = dataset_sub.add_parser("dry-run", help="Dry run dataset preset download.")
+    dry_run_parser.add_argument("dataset", help="Dataset ID (e.g. griffin).")
+    dry_run_parser.add_argument("preset", help="Preset ID (e.g. dev, one-scene, full).")
+    dry_run_parser.add_argument("--dest", required=True, help="Destination directory.")
+    dry_run_parser.set_defaults(func=_dataset_dry_run)
+
+    job_parser = dataset_sub.add_parser("download", help="Download and convert dataset preset.")
+    job_parser.add_argument("dataset", help="Dataset ID (e.g. griffin).")
+    job_parser.add_argument("preset", help="Preset ID (e.g. dev, one-scene, full).")
+    job_parser.add_argument("--dest", required=True, help="Destination library root.")
+    job_parser.add_argument("--accept-terms", action="store_true", help="Accept dataset licence terms.")
+    job_parser.set_defaults(func=_dataset_download)
+
     return parser
 
 
@@ -524,6 +544,27 @@ def _export_rerun(args: argparse.Namespace) -> None:
         raise SystemExit(2) from exc
     print(f"wrote {args.out}")
     print(f"samples {samples}")
+
+
+def _dataset_catalog(_args: argparse.Namespace) -> None:
+    import json
+    from coperceive.catalog import load_catalog
+
+    print(json.dumps(load_catalog(), indent=2))
+
+
+def _dataset_dry_run(args: argparse.Namespace) -> None:
+    import json
+    from coperceive.catalog import dry_run_preset
+
+    result = dry_run_preset(args.dataset, args.preset, Path(args.dest))
+    print(json.dumps(result, indent=2))
+
+
+def _dataset_download(args: argparse.Namespace) -> None:
+    from coperceive.catalog import run_dataset_job
+
+    run_dataset_job(args.dataset, args.preset, Path(args.dest), accept_terms=args.accept_terms)
 
 
 def _schema(_args: argparse.Namespace) -> None:

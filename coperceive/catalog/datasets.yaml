@@ -1,0 +1,135 @@
+# SPDX-License-Identifier: Apache-2.0
+# Versioned dataset catalog for Coperceive.
+# Every licence, source repository, and official paper is verified and cited below.
+
+datasets:
+  # Griffin: Cooperative Vehicle-Drone Simulation in CARLA-AirSim
+  # Official source: https://huggingface.co/datasets/coperceive/griffin
+  # Toolkit repository: https://github.com/coperceive/griffin
+  # Verified licence: MIT (cited in dataset card and LICENSE file)
+  - id: "griffin"
+    name: "Griffin"
+    description: "Cooperative vehicle-to-everything perception with drones and vehicles in CARLA simulation"
+    modalities:
+      - "LiDAR"
+      - "Camera"
+    agents: "vehicle + drone"
+    licence: "MIT"
+    licence_url: "https://huggingface.co/datasets/coperceive/griffin/blob/main/LICENSE"
+    source_url: "https://huggingface.co/datasets/coperceive/griffin"
+    paper_url: "https://arxiv.org/abs/2403.02321"
+    status: "ready"
+    requires_terms: true
+    presets:
+      - id: "dev"
+        name: "Dev tier: metadata + LiDAR (~240 MB)"
+        description: "Lightweight subset with downsampled LiDAR and vehicle-drone trajectory metadata"
+        estimated_download_bytes: 251658240
+        estimated_disk_bytes: 524288000
+        download_command:
+          - "coperceive"
+          - "download"
+          - "griffin"
+          - "--preset"
+          - "dev"
+          - "--subset"
+          - "25m"
+        convert_command:
+          - "coperceive"
+          - "convert"
+          - "griffin"
+          - "--subset"
+          - "25m"
+      - id: "one-scene"
+        name: "One scene with images"
+        description: "Complete Town03-000 evaluation scene with all 9 cameras, LiDAR, and vector map"
+        estimated_download_bytes: 817889280
+        estimated_disk_bytes: 1610612736
+        download_command:
+          - "coperceive"
+          - "download"
+          - "griffin"
+          - "--subset"
+          - "25m"
+          - "--components"
+          - "Town03-000"
+        convert_command:
+          - "coperceive"
+          - "convert"
+          - "griffin"
+          - "--subset"
+          - "25m"
+      - id: "full"
+        name: "Full 25 m subset (~167 GB)"
+        description: "Full cooperative 25m benchmark scenes across all towns and sensor feeds"
+        estimated_download_bytes: 179307380736
+        estimated_disk_bytes: 268435456000
+        download_command:
+          - "coperceive"
+          - "download"
+          - "griffin"
+          - "--subset"
+          - "25m"
+        convert_command:
+          - "coperceive"
+          - "convert"
+          - "griffin"
+          - "--subset"
+          - "25m"
+
+  # OPV2V: Open Benchmark Dataset for Perception with V2V Communication (ICRA 2022)
+  # Paper: https://arxiv.org/abs/2109.07644
+  # Source: https://github.com/DerrickXuNu/OPV2V
+  # Data hosting: Third-party Google Drive / Baidu mirrors without explicit OSI licence
+  - id: "opv2v"
+    name: "OPV2V"
+    description: "Open cooperative perception dataset for vehicle-to-vehicle autonomous driving"
+    modalities:
+      - "LiDAR"
+      - "Camera"
+    agents: "vehicle + vehicle"
+    licence: "unknown"
+    licence_url: "https://mobility-lab.seas.ucla.edu/opv2v/"
+    source_url: "https://github.com/DerrickXuNu/OPV2V"
+    paper_url: "https://arxiv.org/abs/2109.07644"
+    status: "local-import"
+    requires_terms: false
+    notice: "Data files are hosted on third-party mirrors and lack an explicit permissive data licence. Use 'Import from folder…' to import a local copy."
+
+  # V2XSet: Vehicle-to-Everything Cooperative Perception with V2X-ViT (ECCV 2022)
+  # Paper: https://arxiv.org/abs/2203.10638
+  # Source: https://github.com/DerrickXuNu/v2x-vit
+  # Data hosting: Third-party cloud shares without explicit open-source licence
+  - id: "v2xset"
+    name: "V2XSet"
+    description: "V2X cooperative perception benchmark featuring vehicle-infrastructure collaboration"
+    modalities:
+      - "LiDAR"
+      - "Camera"
+    agents: "vehicle + infrastructure"
+    licence: "unknown"
+    licence_url: "https://github.com/DerrickXuNu/v2x-vit"
+    source_url: "https://github.com/DerrickXuNu/v2x-vit"
+    paper_url: "https://arxiv.org/abs/2203.10638"
+    status: "local-import"
+    requires_terms: false
+    notice: "Data files are hosted on third-party mirrors and lack an explicit permissive data licence. Use 'Import from folder…' to import a local copy."
+
+  # V2V4Real: Real-World Multimodal V2V Cooperative Perception (CVPR 2023)
+  # Paper: https://arxiv.org/abs/2303.07601
+  # Source: https://github.com/ucla-mobility/V2V4Real
+  # Licence: CC-BY-NC-SA-4.0
+  - id: "v2v4real"
+    name: "V2V4Real"
+    description: "Real-world dataset for vehicle-to-vehicle cooperative perception with multiple connected vehicles"
+    modalities:
+      - "LiDAR"
+      - "Camera"
+    agents: "vehicle + vehicle"
+    licence: "CC-BY-NC-SA-4.0"
+    licence_url: "https://creativecommons.org/licenses/by-nc-sa/4.0/"
+    source_url: "https://github.com/ucla-mobility/V2V4Real"
+    paper_url: "https://arxiv.org/abs/2303.07601"
+    status: "planned"
+    requires_terms: false
+    notice: "Planned for a future release."

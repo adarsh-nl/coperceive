@@ -234,3 +234,115 @@ export async function onImportProgress(
     callback(event.payload);
   });
 }
+
+export async function getStorageInfo(): Promise<import("./types").StorageStats | null> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<import("./types").StorageStats>("get_storage_info");
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function setLibraryRoot(newRoot: string): Promise<import("./types").StorageStats | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<import("./types").StorageStats>("set_library_root", { newRoot });
+  }
+  return null;
+}
+
+export async function moveLibraryRoot(newRoot: string): Promise<import("./types").StorageStats | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<import("./types").StorageStats>("move_library_root", { newRoot });
+  }
+  return null;
+}
+
+export async function getLibraryScenes(): Promise<import("./types").LibrarySceneInfo[]> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<import("./types").LibrarySceneInfo[]>("get_library_scenes");
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+export async function deleteLibraryScene(scenePath: string): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_library_scene", { scenePath });
+  }
+}
+
+export async function revealInFinder(path: string): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("reveal_in_finder", { path });
+  }
+}
+
+export async function datasetDryRun(
+  datasetId: string,
+  presetId: string,
+): Promise<import("./types").DryRunResult> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<import("./types").DryRunResult>("dataset_dry_run", {
+      datasetId,
+      presetId,
+    });
+  }
+  throw new Error("Tauri environment required for dry-run");
+}
+
+export async function startDatasetJob(
+  datasetId: string,
+  presetId: string,
+  acceptTerms: boolean,
+): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("start_dataset_job", {
+      datasetId,
+      presetId,
+      acceptTerms,
+    });
+  }
+}
+
+export async function cancelDatasetJob(): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("cancel_dataset_job");
+  }
+}
+
+export async function onDatasetProgress(
+  callback: (event: import("./types").DatasetProgressEvent) => void,
+): Promise<() => void> {
+  if (isTauriEnvironment()) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<import("./types").DatasetProgressEvent>("dataset-progress", (event) => {
+      callback(event.payload);
+    });
+  }
+  return () => {};
+}
+
+export async function validateScene(
+  scenePath: string,
+): Promise<{ scene_path: string; valid: boolean; stdout: string; stderr: string }> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke("validate_scene", { scenePath });
+  }
+  return { scene_path: scenePath, valid: true, stdout: "", stderr: "" };
+}

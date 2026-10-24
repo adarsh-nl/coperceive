@@ -48,5 +48,13 @@
       "frameworks": [],
       "minimumSystemVersion": "13.0"
     }
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY0OTQ0QURBRUZCRjYyNEIKUldSTFlyL3Yya3FVWlBUR2tIUnVXTUhXSVJJWm5jb3ZxSCtUQk1CQlFXUUYzb1BoM2p5S3BXcmMK",
+      "endpoints": [
+        "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

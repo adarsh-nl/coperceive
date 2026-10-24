@@ -84,3 +84,77 @@ export interface ExecutionTarget {
   /** Subscribes to diagnostic log lines. */
   onLog(callback: (line: string) => void): () => void;
 }
+
+export interface StorageStats {
+  readonly library_root: string;
+  readonly volume_name: string;
+  readonly free_bytes: number;
+  readonly total_bytes: number;
+  readonly used_bytes: number;
+  readonly scene_count: number;
+}
+
+export interface LibrarySceneInfo {
+  readonly scene_id: string;
+  readonly path: string;
+  readonly dataset_name?: string;
+  readonly town?: string;
+  readonly duration_s?: number;
+  readonly agent_count?: number;
+  readonly sample_count?: number;
+  readonly size_bytes: number;
+  readonly has_images: "full" | "preview" | "none";
+  readonly has_map: boolean;
+  readonly is_complete: boolean;
+}
+
+export interface CatalogPreset {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly estimated_download_bytes?: number;
+  readonly estimated_disk_bytes?: number;
+}
+
+export interface CatalogDataset {
+  readonly id: string;
+  readonly name: string;
+  readonly description: string;
+  readonly modalities: string[];
+  readonly agents: string;
+  readonly licence: string;
+  readonly licence_url?: string;
+  readonly source_url?: string;
+  readonly paper_url?: string;
+  readonly status: "ready" | "local-import" | "planned";
+  readonly requires_terms?: boolean;
+  readonly notice?: string;
+  readonly presets?: CatalogPreset[];
+}
+
+export interface DryRunResult {
+  readonly event: "dry_run";
+  readonly dataset_id: string;
+  readonly preset_id: string;
+  readonly download_bytes: number;
+  readonly disk_bytes: number;
+  readonly free_bytes: number;
+  readonly total_bytes: number;
+  readonly has_headroom: boolean;
+  readonly requires_terms: boolean;
+  readonly licence: string;
+  readonly licence_url?: string;
+}
+
+export interface DatasetProgressEvent {
+  readonly event: "stage" | "complete" | "error" | "log" | "exit";
+  readonly stage?: "download" | "verify_md5" | "extract" | "convert" | "validate";
+  readonly message?: string;
+  readonly percent?: number;
+  readonly dataset_id?: string;
+  readonly preset_id?: string;
+  readonly scenes?: string[];
+  readonly first_scene?: string;
+  readonly path?: string;
+  readonly code?: number;
+}

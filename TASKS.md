@@ -126,18 +126,18 @@ repo: https://github.com/adarsh-nl/coperceive
 - [ ] **M1-6 · Merge `feat/desktop` → `main`** (Adarsh), after M1-5 passes.
 
 ## 🟡 NEXT: M2, data without the terminal
-- [ ] P0 · **Storage & Library location:** prompt on first use ("Where should coperceive keep datasets?", default `~/coperceive-data`), save `library_root` in `state.json`, show volume free space & used space, Settings → Storage (relocate with progress, Show in Finder).
-- [ ] P0 · **M2a · `coperceive scene pack`:** self-contained scene (every scene file, plus every `images.parquet` path materialised as a real file). Reject absolute paths and `..`. Symlink targets must stay inside scene dir, media root, or raw Griffin root. Dangling links are per-file errors. Write `<dest>/<scene>.partial/` with `IMPORT.json`, resume on size+sha256, write `COMPLETE.json` last, then rename. `--images full|preview|none`. Dry-run byte count. Free-space check (10% margin). Progress NDJSON.
-- [ ] P0 · **M2b · Import from folder…** in desktop app: imported scene lands in `library_root`. Cancel leaves resumable `.partial` (hidden from scene list).
-- [ ] P0 · **Dataset catalog ("Get data"):** prominent on Connect when library is empty, File → Get Data….
-  - Versioned `coperceive/catalog/datasets.yaml` (Griffin, OPV2V, V2XSet, V2V4Real).
-  - Cards: name, description, modalities, agents, linked licence/source/paper, preset sizes via dry-run, download button.
-  - Griffin presets: Dev tier (~240 MB), One scene with images, Full 25 m (~167 GB). MIT licence acknowledgement checkbox (`--accept-griffin-terms`).
-  - OPV2V / V2XSet: honest status, "Import a local copy" folder picker + convert.
-  - Download flow: preset dry-run → 10% headroom check → licence terms → sidecar NDJSON progress (download → md5 verify → extract → convert → validate) with Pause / Resume / Cancel → auto-open first scene on completion. Quit-resumable.
-- [ ] P0 · **Library screen:** scene list/grid in `library_root`: dataset, town, duration, agents, sensors, size, has-images, has-map, validate badge. Actions: Open, Show in Finder, Validate now, Delete (to Trash).
-- [ ] P0 · **Brand / Icon ("4c Cursor"):** lowercase monospace wordmark `coperceive` + orange-red cursor token `#D9482B`. App icon `#141414` with white `c` and block cursor. Generate `.icns` and Tauri icons from SVG master in `assets/brand/`. Replace blue-dot everywhere. Cursor blinks (1 s steps) on Connect screen; static under reduced motion.
-- [ ] P1 · **Auto-update:** Tauri v2 updater with minisign keypair. Prompted like Claude app: background download, non-blocking banner/toast ("Restart to update"), Later/Restart, Help → Check for Updates…, Settings toggle. `release.yml` for `v*` tags.
+- [x] ~~P0 · **Storage & Library location:** prompt on first use ("Where should coperceive keep datasets?", default `~/coperceive-data`), save `library_root` in `state.json`, show volume free space & used space, Settings → Storage (relocate with progress, Show in Finder).~~
+- [x] ~~P0 · **M2a · `coperceive scene pack`:** self-contained scene (every scene file, plus every `images.parquet` path materialised as a real file). Reject absolute paths and `..`. Symlink targets must stay inside scene dir, media root, or raw Griffin root. Dangling links are per-file errors. Write `<dest>/<scene>.partial/` with `IMPORT.json`, resume on size+sha256, write `COMPLETE.json` last, then rename. `--images full|preview|none`. Dry-run byte count. Free-space check (10% margin). Progress NDJSON.~~
+- [x] ~~P0 · **M2b · Import from folder…** in desktop app: imported scene lands in `library_root`. Cancel leaves resumable `.partial` (hidden from scene list).~~
+- [x] ~~P0 · **Dataset catalog ("Get data"):** prominent on Connect when library is empty, File → Get Data….~~
+  - [x] ~~Versioned `coperceive/catalog/datasets.yaml` (Griffin, OPV2V, V2XSet, V2V4Real).~~
+  - [x] ~~Cards: name, description, modalities, agents, linked licence/source/paper, preset sizes via dry-run, download button.~~
+  - [x] ~~Griffin presets: Dev tier (~240 MB), One scene with images, Full 25 m (~167 GB). MIT licence acknowledgement checkbox (`--accept-griffin-terms`).~~
+  - [x] ~~OPV2V / V2XSet: honest status, "Import a local copy" folder picker + convert.~~
+  - [x] ~~Download flow: preset dry-run → 10% headroom check → licence terms → sidecar NDJSON progress (download → md5 verify → extract → convert → validate) with Pause / Resume / Cancel → auto-open first scene on completion. Quit-resumable.~~
+- [x] ~~P0 · **Library screen:** scene list/grid in `library_root`: dataset, town, duration, agents, sensors, size, has-images, has-map, validate badge. Actions: Open, Show in Finder, Validate now, Delete (to Trash).~~
+- [x] ~~P0 · **Brand / Icon ("4c Cursor"):** lowercase monospace wordmark `coperceive` + orange-red cursor token `#D9482B`. App icon `#141414` with white `c` and block cursor. Generate `.icns` and Tauri icons from SVG master in `assets/brand/`. Replace blue-dot everywhere. Cursor blinks (1 s steps) on Connect screen; static under reduced motion.~~
+- [x] ~~P1 · **Auto-update:** Tauri v2 updater with minisign keypair. Prompted like Claude app: background download, non-blocking banner/toast ("Restart to update"), Later/Restart, Help → Check for Updates…, Settings toggle. `release.yml` for `v*` tags.~~
 - [ ] P1 · **Maps in one click:** on scene card or viewer notice, "Download map for Town03 (CARLA 0.9.15, CC-BY 4.0)" into `library_root/maps/`.
 - [ ] P1 · Image thumbnails at import (640 px JPEG/WebP), full resolution on demand.
 - [ ] Acceptance: from an empty Mac, Get data → Griffin "One scene with images" → Town03-000 plays with images and map, **without Terminal**. Update prompt verified.
