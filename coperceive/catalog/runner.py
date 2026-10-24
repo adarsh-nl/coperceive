@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO, cast
 
@@ -16,6 +17,7 @@ import yaml
 
 from coperceive.griffin.convert import convert_griffin
 from coperceive.griffin.download import (
+    Hub,
     ack_path,
     acknowledgement_present,
     download_griffin,
@@ -56,40 +58,76 @@ def _emit(event: dict[str, Any], out: TextIO = sys.stdout) -> None:
     print(json.dumps(event, separators=(",", ":")), file=out, flush=True)
 
 
+def _find_preset(dataset: dict[str, Any], preset_id: str) -> dict[str, Any]:
+    raw: Any = dataset.get("presets", [])
+    items = cast(list[object], raw) if isinstance(raw, list) else []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        found = cast(dict[str, Any], item)
+        if found.get("id") == preset_id:
+            return found
+    raise ValueError(f"Unknown preset '{preset_id}'")
+
+
+def _griffin_selection(preset: dict[str, Any]) -> tuple[str, str | None, str | None]:
+    """Return subset, griffin preset name, and components for one catalog preset."""
+    subset = preset.get("subset")
+    if not isinstance(subset, str) or not subset:
+        raise ValueError("Griffin preset is missing subset")
+    named = preset.get("griffin_preset")
+    components = preset.get("components")
+    preset_name = named if isinstance(named, str) and named else None
+    component_list = components if isinstance(components, str) and components else None
+    if preset_name is None and component_list is None:
+        raise ValueError("Griffin preset needs griffin_preset or components")
+    if preset_name is not None and component_list is not None:
+        raise ValueError("Griffin preset sets both griffin_preset and components")
+    return subset, preset_name, component_list
+
+
 def dry_run_preset(
     dataset_id: str,
     preset_id: str,
     dest: Path,
+    hub: Hub | None = None,
 ) -> dict[str, Any]:
-    """Computes exact dry-run sizes and free space headroom check."""
+    """Byte counts from the dataset host, plus a free-space check.
+
+    Griffin sizes are the Hub listing for the preset's archives. A failure is
+    returned to the caller. This function does not fill in a stored estimate.
+    """
     ds = get_dataset(dataset_id)
     if not ds:
         raise ValueError(f"Unknown dataset '{dataset_id}'")
 
-    presets = ds.get("presets", [])
-    preset = next((p for p in presets if p.get("id") == preset_id), None)
-    if not preset:
-        raise ValueError(f"Unknown preset '{preset_id}' for dataset '{dataset_id}'")
+    try:
+        preset = _find_preset(ds, preset_id)
+    except ValueError as exc:
+        raise ValueError(f"Unknown preset '{preset_id}' for dataset '{dataset_id}'") from exc
 
-    # Griffin dry-run uses download_griffin(dry_run=True)
+    measured_at = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if dataset_id == "griffin":
+        subset, preset_name, components = _griffin_selection(preset)
         try:
             report = download_griffin(
                 dest,
-                subset="25m",
-                preset="dev" if preset_id == "dev" else None,
-                components="Town03-000" if preset_id == "one-scene" else None,
+                subset=subset,
+                preset=preset_name,
+                components=components,
                 dry_run=True,
+                hub=hub,
             )
-            download_bytes = sum(f.size for f in report.files)
-            disk_bytes = report.required_free_bytes
-        except Exception:
-            # Fall back to curated estimates from catalog if offline/mock
-            download_bytes = preset.get("estimated_download_bytes", 251658240)
-            disk_bytes = preset.get("estimated_disk_bytes", 524288000)
+        except Exception as exc:
+            raise RuntimeError(
+                "Could not read the Griffin file sizes from the dataset host. "
+                "Check the network connection and try again."
+            ) from exc
+        download_bytes = sum(item.size for item in report.files)
+        disk_bytes = report.required_free_bytes
+        size_source = "Hugging Face dataset wjh-svm/Griffin tree listing"
     else:
-        download_bytes = preset.get("estimated_download_bytes", 0)
-        disk_bytes = preset.get("estimated_disk_bytes", 0)
+        raise ValueError(f"{dataset_id} has no remote download to measure")
 
     # Check free space on destination volume
     dest.mkdir(parents=True, exist_ok=True)
@@ -115,6 +153,8 @@ def dry_run_preset(
         "requires_terms": requires_terms,
         "licence": ds.get("licence", "unknown"),
         "licence_url": ds.get("licence_url"),
+        "size_source": size_source,
+        "measured_at": measured_at,
     }
     return result
 
@@ -147,85 +187,75 @@ def run_dataset_job(
             out,
         )
 
-        if dataset_id == "griffin":
-            download_griffin(
-                raw_dest,
-                subset="25m",
-                preset="dev" if preset_id == "dev" else None,
-                components="Town03-000" if preset_id == "one-scene" else None,
-                accept_terms=accept_terms,
+        if dataset_id != "griffin":
+            raise ValueError(f"{dataset_id} cannot be downloaded from here")
+        preset = _find_preset(ds, preset_id)
+        subset, preset_name, components = _griffin_selection(preset)
+        report = download_griffin(
+            raw_dest,
+            subset=subset,
+            preset=preset_name,
+            components=components,
+            accept_terms=accept_terms,
+        )
+        if report.release_root is None:
+            raise RuntimeError(
+                "The Griffin download finished without an extracted release. "
+                "Try the download again."
             )
 
-            # Stage 2: Verify MD5
-            _emit(
-                {
-                    "event": "stage",
-                    "stage": "verify_md5",
-                    "message": "Verifying archive checksums…",
-                    "percent": 45,
-                },
-                out,
-            )
+        _emit(
+            {
+                "event": "stage",
+                "stage": "convert",
+                "message": "Converting the release into scenes…",
+                "percent": 70,
+            },
+            out,
+        )
+        conv_report = convert_griffin(report.release_root, library_root, subset=subset)
 
-            # Stage 3: Extract
-            _emit(
-                {
-                    "event": "stage",
-                    "stage": "extract",
-                    "message": "Extracting scene archives…",
-                    "percent": 65,
-                },
-                out,
-            )
+        _emit(
+            {
+                "event": "stage",
+                "stage": "validate",
+                "message": "Checking the converted scenes…",
+                "percent": 90,
+            },
+            out,
+        )
 
-            # Stage 4: Convert
-            _emit(
-                {
-                    "event": "stage",
-                    "stage": "convert",
-                    "message": "Converting raw sensor feeds to Schema 1…",
-                    "percent": 85,
-                },
-                out,
+        scene_ids = list(conv_report.written)
+        prefer = preset.get("open_scene")
+        preferred = prefer if isinstance(prefer, str) else ""
+        if preferred and preferred in scene_ids:
+            first_scene = preferred
+        elif scene_ids:
+            first_scene = scene_ids[0]
+        else:
+            raise RuntimeError(
+                "The download finished but no scene was written. "
+                "Try the download again."
             )
-
-            conv_report = convert_griffin(
-                raw_dest / "griffin-25m",
-                library_root / "Griffin",
-                subset="25m",
-            )
-
-            # Stage 5: Validate
-            _emit(
-                {
-                    "event": "stage",
-                    "stage": "validate",
-                    "message": "Validating converted scenes…",
-                    "percent": 95,
-                },
-                out,
-            )
-
-            scene_ids: list[str] = (
-                list(conv_report.written) if conv_report.written else ["Town03-000"]
-            )
-            first_scene: str = scene_ids[0] if scene_ids else "Town03-000"
-            first_path = str(library_root / "Griffin" / first_scene)
-
-            # Complete!
-            _emit(
-                {
-                    "event": "complete",
-                    "dataset_id": dataset_id,
-                    "preset_id": preset_id,
-                    "scenes": scene_ids,
-                    "first_scene": first_scene,
-                    "path": first_path,
-                    "message": f"Successfully imported {len(scene_ids)} scene(s).",
-                },
-                out,
-            )
+        first_path = str(library_root / first_scene)
+        _emit(
+            {
+                "event": "complete",
+                "dataset_id": dataset_id,
+                "preset_id": preset_id,
+                "scenes": scene_ids,
+                "first_scene": first_scene,
+                "path": first_path,
+                "message": f"Imported {len(scene_ids)} scene(s).",
+            },
+            out,
+        )
 
     except Exception as exc:
-        _emit({"event": "error", "message": str(exc)}, out)
+        text = str(exc).strip() or "The download stopped."
+        if "accept-griffin-terms" in text or "acknowledgement" in text:
+            text = "Tick the Griffin licence acknowledgement, then try the download again."
+        elif "dataset host" not in text and "network" not in text:
+            text = f"The download did not finish. Try again. {text}"
+        _emit({"event": "error", "message": text}, out)
         raise

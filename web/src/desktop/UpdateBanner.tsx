@@ -1,6 +1,11 @@
 // SPDX-License-Identifier: Apache-2.0
-import { useEffect, useState } from "react";
-import { isTauriEnvironment } from "./local";
+import { useEffect, useState, type CSSProperties } from "react";
+import { getPersistentState, isTauriEnvironment } from "./local";
+import { parseUpdateManifest } from "./updateManifest";
+
+const CURRENT_VERSION = "0.1.0";
+const DEFAULT_ENDPOINT = "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json";
+const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export interface UpdateInfo {
   version: string;
@@ -8,146 +13,109 @@ export interface UpdateInfo {
   ready: boolean;
 }
 
+type CheckState = "idle" | "checking" | "uptodate" | "error";
+
+function manifestUrl(): string {
+  const override = window.__COPERCEIVE_UPDATE_URL__;
+  if (typeof override === "string" && override.length > 0) return override;
+  return DEFAULT_ENDPOINT;
+}
+
+function updatesAllowed(): boolean {
+  if (isTauriEnvironment()) return true;
+  return Boolean(window.__COPERCEIVE_TEST_ENV__ && window.__COPERCEIVE_UPDATE_URL__);
+}
+
 export default function UpdateBanner() {
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [dismissed, setDismissed] = useState<boolean>(false);
-  const [checking, setChecking] = useState<boolean>(false);
-  const [manualMessage, setManualMessage] = useState<string | null>(null);
-
-  const isAutoCheckEnabled = (): boolean => {
-    try {
-      const val = localStorage.getItem("coperceive_auto_update");
-      return val === null ? true : val === "true";
-    } catch {
-      return true;
-    }
-  };
+  const [showNotes, setShowNotes] = useState<boolean>(false);
+  const [checkState, setCheckState] = useState<CheckState>("idle");
+  const [manual, setManual] = useState<boolean>(false);
 
   const checkForUpdates = async (isManual = false) => {
-    if (!isTauriEnvironment()) return;
-    if (!isManual && !isAutoCheckEnabled()) return;
+    if (!updatesAllowed()) return;
+    const saved = await getPersistentState();
+    const auto = saved?.auto_download_updates !== false;
+    if (!isManual && !auto) return;
 
-    if (isManual) {
-      setChecking(true);
-      setManualMessage(null);
-    }
-
+    setCheckState("checking");
+    setManual(isManual);
     try {
-      // In Tauri v2, we check through @tauri-apps/plugin-updater or custom endpoint
-      const res = await fetch(
-        "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json",
-        { cache: "no-cache" },
-      ).catch(() => null);
-
-      if (res && res.ok) {
-        const data = await res.json();
-        const currentVersion = "0.1.0";
-        if (data.version && data.version !== currentVersion) {
-          setUpdate({
-            version: data.version,
-            notes: data.notes,
-            ready: true,
-          });
-          setDismissed(false);
-          if (isManual) setManualMessage(null);
-          return;
-        }
+      const res = await fetch(manifestUrl(), { cache: "no-cache" });
+      if (!res.ok) {
+        throw new Error(`status ${res.status}`);
       }
-
-      if (isManual) {
-        setManualMessage("You're up to date (0.1.0)");
-        setTimeout(() => setManualMessage(null), 4000);
+      const offer = parseUpdateManifest(await res.json(), CURRENT_VERSION);
+      if (offer) {
+        setUpdate({ version: offer.version, notes: offer.notes, ready: true });
+        setDismissed(false);
+        setCheckState("idle");
+        return;
       }
+      setUpdate(null);
+      setCheckState("uptodate");
     } catch {
-      if (isManual) {
-        setManualMessage("You're up to date (0.1.0)");
-        setTimeout(() => setManualMessage(null), 4000);
-      }
-    } finally {
-      if (isManual) setChecking(false);
+      setCheckState("error");
     }
   };
 
   useEffect(() => {
-    // Initial background check
-    checkForUpdates(false);
-
-    // Listen for menu event "check-updates"
+    void checkForUpdates(false);
+    const timer = window.setInterval(() => {
+      void checkForUpdates(false);
+    }, CHECK_INTERVAL_MS);
     let unlisten: (() => void) | undefined;
     if (isTauriEnvironment()) {
       void (async () => {
         const { listen } = await import("@tauri-apps/api/event");
         unlisten = await listen("check-updates", () => {
-          checkForUpdates(true);
+          void checkForUpdates(true);
         });
       })();
     }
-
     return () => {
+      window.clearInterval(timer);
       unlisten?.();
     };
   }, []);
 
   const handleRestartToUpdate = async () => {
+    window.__COPERCEIVE_UPDATE_RESTART__ = true;
+    if (window.__COPERCEIVE_TEST_ENV__) return;
     if (isTauriEnvironment()) {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
         await invoke("plugin:process|relaunch");
       } catch {
-        // Fallback
-        window.location.reload();
+        setCheckState("error");
       }
     }
   };
 
-  if (manualMessage) {
+  if (checkState === "checking" && manual) {
     return (
-      <div
-        role="status"
-        aria-live="polite"
-        style={{
-          position: "fixed",
-          bottom: "1.5rem",
-          right: "1.5rem",
-          background: "rgba(30, 30, 30, 0.95)",
-          border: "1px solid rgba(255, 255, 255, 0.15)",
-          borderRadius: "8px",
-          padding: "0.6rem 1rem",
-          color: "#f5f5f7",
-          fontSize: "0.85rem",
-          boxShadow: "0 8px 24px rgba(0, 0, 0, 0.4)",
-          zIndex: 9999,
-          display: "flex",
-          alignItems: "center",
-          gap: "0.6rem",
-        }}
-      >
-        <span>✓</span>
-        <span>{manualMessage}</span>
+      <div role="status" aria-live="polite" className="update-status" style={toastStyle}>
+        Checking for updates…
       </div>
     );
   }
 
-  if (checking) {
+  if (checkState === "uptodate" && manual) {
     return (
-      <div
-        role="status"
-        aria-live="polite"
-        style={{
-          position: "fixed",
-          bottom: "1.5rem",
-          right: "1.5rem",
-          background: "rgba(30, 30, 30, 0.95)",
-          border: "1px solid rgba(255, 255, 255, 0.15)",
-          borderRadius: "8px",
-          padding: "0.6rem 1rem",
-          color: "#f5f5f7",
-          fontSize: "0.85rem",
-          boxShadow: "0 8px 24px rgba(0, 0, 0, 0.4)",
-          zIndex: 9999,
-        }}
-      >
-        Checking for updates…
+      <div role="status" aria-live="polite" style={toastStyle}>
+        You're up to date ({CURRENT_VERSION}).
+      </div>
+    );
+  }
+
+  if (checkState === "error") {
+    return (
+      <div role="alert" style={toastStyle}>
+        <span>Could not check for updates. Check the network and try again.</span>
+        <button type="button" onClick={() => void checkForUpdates(true)} style={buttonStyle}>
+          Retry
+        </button>
       </div>
     );
   }
@@ -157,6 +125,7 @@ export default function UpdateBanner() {
   return (
     <div
       role="banner"
+      aria-label="Update ready"
       style={{
         position: "fixed",
         top: 0,
@@ -172,46 +141,61 @@ export default function UpdateBanner() {
         boxShadow: "0 4px 16px rgba(0, 0, 0, 0.3)",
       }}
     >
-      <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", fontSize: "0.85rem", color: "#f5f5f7" }}>
-        <span style={{ fontSize: "1rem" }}>⚡</span>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.85rem", color: "#f5f5f7" }}>
         <span>
           <strong>coperceive {update.version} is ready.</strong> Restart to update.
         </span>
+        {showNotes && update.notes ? <span style={{ color: "#a1a1a6" }}>{update.notes}</span> : null}
       </div>
-
       <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-        <button
-          type="button"
-          onClick={handleRestartToUpdate}
-          style={{
-            background: "#1f6feb",
-            border: "none",
-            borderRadius: "5px",
-            color: "#fff",
-            padding: "0.3rem 0.8rem",
-            fontSize: "0.8rem",
-            fontWeight: 500,
-            cursor: "pointer",
-          }}
-        >
-          Restart to update
+        <button type="button" onClick={() => setShowNotes((open) => !open)} style={quietButton}>
+          What's new
         </button>
-        <button
-          type="button"
-          onClick={() => setDismissed(true)}
-          title="Dismiss update banner"
-          style={{
-            background: "transparent",
-            border: "none",
-            color: "#8b949e",
-            fontSize: "1.1rem",
-            cursor: "pointer",
-            padding: "0.2rem 0.4rem",
-          }}
-        >
-          ✕
+        <button type="button" onClick={() => void handleRestartToUpdate()} style={buttonStyle}>
+          Restart now
+        </button>
+        <button type="button" onClick={() => setDismissed(true)} style={quietButton}>
+          Later
         </button>
       </div>
     </div>
   );
 }
+
+const toastStyle: CSSProperties = {
+  position: "fixed",
+  bottom: "1.5rem",
+  right: "1.5rem",
+  background: "rgba(30, 30, 30, 0.95)",
+  border: "1px solid rgba(255, 255, 255, 0.15)",
+  borderRadius: "8px",
+  padding: "0.6rem 1rem",
+  color: "#f5f5f7",
+  fontSize: "0.85rem",
+  boxShadow: "0 8px 24px rgba(0, 0, 0, 0.4)",
+  zIndex: 9999,
+  display: "flex",
+  alignItems: "center",
+  gap: "0.6rem",
+};
+
+const buttonStyle: CSSProperties = {
+  background: "#1f6feb",
+  border: "none",
+  borderRadius: "5px",
+  color: "#fff",
+  padding: "0.3rem 0.8rem",
+  fontSize: "0.8rem",
+  fontWeight: 500,
+  cursor: "pointer",
+};
+
+const quietButton: CSSProperties = {
+  background: "transparent",
+  border: "1px solid rgba(255, 255, 255, 0.2)",
+  borderRadius: "5px",
+  color: "#f5f5f7",
+  padding: "0.3rem 0.8rem",
+  fontSize: "0.8rem",
+  cursor: "pointer",
+};

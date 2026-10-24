@@ -33,6 +33,9 @@ export function isTauriEnvironment(): boolean {
 
 export interface AppPersistentState {
   last_data_root?: string;
+  library_root?: string;
+  auto_download_updates?: boolean;
+  pending_download?: { dataset_id: string; preset_id: string } | null;
   last_scene_id?: string;
   last_sample_index?: number;
   last_timestamp_ns?: number;
@@ -316,6 +319,32 @@ export async function startDatasetJob(
       acceptTerms,
     });
   }
+}
+
+export async function loadDatasetCatalog(): Promise<import("./types").CatalogDataset[]> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Open the desktop app to see the dataset list.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<import("./types").CatalogDataset[]>("dataset_catalog");
+}
+
+export async function setAutoDownloadUpdates(enabled: boolean): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("set_auto_download_updates", { enabled });
+}
+
+export async function pauseDatasetJob(): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("pause_dataset_job");
+}
+
+export async function resumeDatasetJob(): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("resume_dataset_job");
 }
 
 export async function cancelDatasetJob(): Promise<void> {

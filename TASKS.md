@@ -21,14 +21,14 @@ repo: https://github.com/adarsh-nl/coperceive
 | | |
 |---|---|
 | Last updated | 2026-10-24 |
-| `main` | `origin/main` is `fffda8a` (phases 0–6, adapters, eval engine). The `~/coperceive` checkout is local `662fa84` (ADR 0014) and is not what GitHub `main` is |
-| `feat/desktop` | `5cadd1b`. Green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) (9/9). |
-| `feat/m2-import` | `c50f568`. Green run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) (9/9). Artifact `coperceive-desktop-macos-arm64` (80.19 MB). Real macOS UI e2e and backdrop CPU measurement verified green. |
+| `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
+| `feat/desktop` | `5d5c98b`. 79 commits ahead of `main`, 1 behind. Not merged. Do not rebase `feat/m2-import` onto `main` until Adarsh merges this. |
+| `feat/m2-import` | Parent `bc23b26`. Last green run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) is `c50f568` (9/9), artifact `coperceive-desktop-macos-arm64` (80.19 MB). That run does not include the checkpoint below. |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
 | Current milestone | **M2: data without the terminal** |
-| Top blocker | **M1-6 merge `feat/desktop` → `main`** (Adarsh), then rebase `feat/m2-import` onto `main` |
+| Top blocker | **M1-6 merge `feat/desktop` → `main`** (Adarsh). Do not rebase `feat/m2-import` until that merge. |
 
 ## Key docs in the repo
 - `HANDOVER.md`: long engineering log (cleanup task below)
@@ -139,9 +139,24 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~P0 · **Library screen:** scene list/grid in `library_root`: dataset, town, duration, agents, sensors, size, has-images, has-map, validate badge. Actions: Open, Show in Finder, Validate now, Delete (to Trash).~~
 - [x] ~~P0 · **Brand / Icon ("4c Cursor"):** lowercase monospace wordmark `coperceive` + orange-red cursor token `#D9482B`. App icon `#141414` with white `c` and block cursor. Generate `.icns` and Tauri icons from SVG master in `assets/brand/`. Replace blue-dot everywhere. Cursor blinks (1 s steps) on Connect screen; static under reduced motion.~~
 - [x] ~~P1 · **Auto-update:** Tauri v2 updater with minisign keypair. Prompted like Claude app: background download, non-blocking banner/toast ("Restart to update"), Later/Restart, Help → Check for Updates…, Settings toggle. `release.yml` for `v*` tags.~~
-- [ ] P1 · **Maps in one click:** on scene card or viewer notice, "Download map for Town03 (CARLA 0.9.15, CC-BY 4.0)" into `library_root/maps/`.
+- [ ] P1 · **Maps in one click:** not started. See the correction below before writing a licence on the button.
 - [ ] P1 · Image thumbnails at import (640 px JPEG/WebP), full resolution on demand.
 - [ ] Acceptance: from an empty Mac, Get data → Griffin "One scene with images" → Town03-000 plays with images and map, **without Terminal**. Update prompt verified.
+
+### Correction, 2026-10-24
+
+The strikes above describe code that is in the tree. They were written before a green run of the new real-app steps. Do not read them as e2e-verified. These stay open until `desktop-macos` is green on this checkpoint:
+
+- [ ] P0 · e2e step 5c in `scripts/desktop/e2e_mac.sh`: import `tests/fixtures/synthetic_scene/synth_001`, cancel, resume, open. The script is written. CI has not run it.
+- [ ] P1 · e2e step 2d: one viewer window after relaunch (`opened viewer window` once). Written. CI has not run it.
+- [ ] P1 · e2e step 5d: a local mock `latest.json` server, then the banner, What's new, Later, and Restart now. Restart records a test flag and leaves the app running. Written. CI has not run it.
+- [ ] P1 · Tauri updater plugin is not a Cargo dependency. `src-tauri/tauri.conf.json` `plugins.updater.pubkey` is the placeholder `PASTE_THE_PUBLIC_KEY_FROM_A_NEW_TAURI_SIGNER_KEYPAIR`. `docs/updater-secrets.md` is removed. The keypair committed in `e7f6fef` is public. Adarsh generates a new pair and pastes it as `docs/desktop/updates.md` says. Do not reuse the old key.
+- [ ] P1 · **Maps in one click** is not started. The brief's button text says CC-BY 4.0. `docs/adr/0008-hd-map.md` line 11 and `coperceive/hdmap/commands.py` record the CARLA package as MIT. Do not put CC-BY on the button until that is re-checked. Do not download the CARLA tarball or commit a `.xodr`.
+- [ ] P0 · Mac acceptance (Adarsh): empty library → Get data → Griffin "One scene with images" → Town03-000 with images and a map, no Terminal. A test release shows the banner and installs on Restart.
+
+Griffin byte counts are not stored as UI text. A dry-run on 2026-10-24 of `https://huggingface.co/api/datasets/wjh-svm/Griffin/tree/main/datasets/griffin_50scenes_25m` listed 15 files summing to 167,190,016,122 bytes (same total as `docs/design/griffin-verification.md`, tree API, 2026-10-15). Dev tier (`md5.txt` + `drone_metadata.zip` + `vehicle_metadata.zip` + `vehicle_lidar.zip`) was 239,749,191 bytes. RGB cameras plus those four files, excluding the two instance-segmentation zips, was 162,515,011,954 bytes. The on-disk check uses `required_free_bytes` from the live dry-run, not these integers. Licence: toolkit `LICENSE.txt` fetched 2026-10-24 starts "MIT License" / "Copyright (c) [2025] [Jiahao Wang]"; the dataset card YAML says `license: mit`. Paper `https://arxiv.org/abs/2503.06983`.
+
+Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in Rust `state.json` (`web/src/viewer/Viewer.tsx` `savedLoopChoice` / `handleToggleLoop`, `src-tauri/src/controller.rs`, `src-tauri/src/state.rs`). e2e step 2b already quits and relaunches with loop off. The fixed-port web app still uses `localStorage`. No further change in this checkpoint.
 
 ## 🟡 LATER: M3, HPC mode in the app
 - [ ] P0 · Connect screen HPC target: saved hosts, queue status ("Waiting for a CPU node: Priority, 0:42"), heartbeat and reattach, walltime warning, orphan cleanup on launch
@@ -197,6 +212,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ---
 
 ## Change log of this file
+- 2026-10-24: Snapshot corrected to `main` `0ee039d`, `feat/desktop` `5d5c98b` (not merged), `feat/m2-import` parent `bc23b26`. Recorded that the M2 strikes were ahead of e2e. Griffin sizes cited from the Hugging Face tree API on 2026-10-24. Removed `docs/updater-secrets.md` and replaced the burned updater public key with a placeholder. New e2e steps 2d, 5c, and 5d are written and not yet green. Last green run remains [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) at `c50f568`.
 - 2026-10-24: Verified M2 on `feat/m2-import` with all 9 CI jobs green on run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) (`c50f568`). Synchronously initialized viewpoint, appearance, scene ID and hidden agents from initial state to prevent premature state overwrite; verified real-app macOS UI e2e and backdrop CPU measurement with dmg artifact `coperceive-desktop-macos-arm64` (80.19 MB).
 - 2026-10-24: Struck M1-5 against green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) at `5cadd1b`. Fixed window position/size Retina scale doubling bug by saving/restoring in logical points with monitor visible frame clamping, added round-trip/clamping unit tests, and verified window frame unchanged across 3 relaunches in e2e step 2c.
 - 2026-10-23: Struck M1-2 and M1-4 against [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) at `d35dddd`. Animated backdrop median 0.6%cpu, p95 0.8. Recorded in `docs/media/measurements/backdrop-cpu.md`.

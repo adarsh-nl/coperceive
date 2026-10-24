@@ -1,6 +1,6 @@
 # M2c: Import from HPC
 
-Plan only. Build this after M2b (`Import from folder…`) is in.
+Plan only. Do not build this here. Folder import cancel and resume is the desktop path (`scripts/desktop/e2e_mac.sh` step 5c). This HPC flow stays a plan until that path has been used on Adarsh's Mac over eduVPN.
 
 M2a (`coperceive scene pack`) and M2b already pack a scene on the machine where the files are. M2c runs that same pack on the cluster, then copies the finished scene to the Mac library. It does not grow a second copy implementation.
 

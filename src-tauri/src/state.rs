@@ -244,6 +244,13 @@ impl Default for PanelCollapseState {
     }
 }
 
+/// A Griffin download that stopped before it finished.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingDownload {
+    pub dataset_id: String,
+    pub preset_id: String,
+}
+
 /// Persistent desktop application state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppPersistentState {
@@ -253,6 +260,14 @@ pub struct AppPersistentState {
     /// Dedicated storage location for imported and downloaded datasets (default ~/coperceive-data).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_root: Option<String>,
+
+    /// Download updates in the background. Default on.
+    #[serde(default = "default_true")]
+    pub auto_download_updates: bool,
+
+    /// Set while a catalog download is unfinished so the next launch can resume it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_download: Option<PendingDownload>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_scene_id: Option<String>,
@@ -325,6 +340,8 @@ impl Default for AppPersistentState {
         Self {
             last_data_root: None,
             library_root: None,
+            auto_download_updates: true,
+            pending_download: None,
             last_scene_id: None,
             last_sample_index: None,
             last_timestamp_us: None,
@@ -539,6 +556,8 @@ pub mod tests {
         let state = AppPersistentState {
             last_data_root: Some("/path/to/data".into()),
             library_root: Some("/path/to/coperceive-data".into()),
+            auto_download_updates: true,
+            pending_download: None,
             last_scene_id: Some("Town03-000".into()),
             last_sample_index: Some(42),
             last_timestamp_us: Some(4200000),

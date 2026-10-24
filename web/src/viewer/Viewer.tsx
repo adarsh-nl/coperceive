@@ -857,6 +857,9 @@ export type ClockMark = { ratio: number; label: string };
 declare global {
   interface Window {
     __COPERCEIVE_DESKTOP__?: boolean;
+    __COPERCEIVE_TEST_IMPORT_SOURCE__?: string;
+    __COPERCEIVE_UPDATE_URL__?: string;
+    __COPERCEIVE_UPDATE_RESTART__?: boolean;
     __COPERCEIVE_CTRL_PORT__?: number;
     __COPERCEIVE_CTRL_SECRET__?: string;
     __COPERCEIVE_DATA_ROOT__?: string;

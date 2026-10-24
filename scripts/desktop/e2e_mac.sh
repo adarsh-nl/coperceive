@@ -78,6 +78,7 @@ mkdir -p "${STATE_DIR}"
 chmod 0700 "${STATE_DIR}"
 
 APP_PID=""
+UPDATE_SERVER_PID=""
 
 cleanup() {
     local status=$?
@@ -104,6 +105,9 @@ cleanup() {
         echo "Killing app process ${APP_PID}..."
         kill -9 "${APP_PID}" 2>/dev/null || true
     fi
+    if [ -n "${UPDATE_SERVER_PID:-}" ] && kill -0 "${UPDATE_SERVER_PID}" 2>/dev/null; then
+        kill "${UPDATE_SERVER_PID}" 2>/dev/null || true
+    fi
     pkill -f "coperceive serve" 2>/dev/null || true
     rm -rf "${TMP_DIR}"
 }
@@ -124,6 +128,8 @@ export COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_1}"
 export COPERCEIVE_TEST_ENV="1"
 export COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}"
 export COPERCEIVE_MOCK_DIALOG_FILE="${MOCK_DIALOG_FILE}"
+export COPERCEIVE_TEST_IMPORT_SOURCE="${FIXTURE_2}"
+export COPERCEIVE_PACK_SLEEP_S="0.5"
 
 "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
 APP_PID=$!
@@ -888,6 +894,29 @@ done
 echo "Step 2c verified: viewer window frame remained completely unchanged across 3 relaunches."
 
 echo ""
+echo "--- Step 2d: Relaunch opens one viewer window ---"
+OPENED_COUNT=$(grep -c "opened viewer window" "${TMP_DIR}/geom_relaunch_3_stderr.log" || true)
+REUSED_COUNT=$(grep -c "reusing existing viewer window" "${TMP_DIR}/geom_relaunch_3_stderr.log" || true)
+echo "Step 2d notices: opened viewer window=${OPENED_COUNT}, reusing existing viewer window=${REUSED_COUNT}"
+if [ "${OPENED_COUNT}" != "1" ]; then
+    echo "Error: expected exactly one 'opened viewer window' on the third relaunch, got ${OPENED_COUNT}" >&2
+    echo "=== stderr ===" >&2
+    cat "${TMP_DIR}/geom_relaunch_3_stderr.log" >&2 || true
+    exit 16
+fi
+WINDOW_NAMES=$(osascript -e 'tell application "System Events" to get name of every window of process "Coperceive"' 2>/dev/null || true)
+echo "Step 2d visible window names: ${WINDOW_NAMES:-unavailable}"
+if [ -n "${WINDOW_NAMES}" ]; then
+    VIEWER_WINDOWS=$(printf '%s\n' "${WINDOW_NAMES}" | tr ',' '\n' | grep -c "coperceive —" || true)
+    echo "Step 2d viewer titles: ${VIEWER_WINDOWS}"
+    if [ "${VIEWER_WINDOWS}" != "1" ]; then
+        echo "Error: expected one viewer window title, got ${VIEWER_WINDOWS} (${WINDOW_NAMES})" >&2
+        exit 16
+    fi
+fi
+echo "Step 2d verified: one viewer window after relaunch."
+
+echo ""
 echo "--- Step 3: Switch Dataset to Second Valid Root (Single Scene Root) ---"
 echo "${FIXTURE_2}" > "${MOCK_DIALOG_FILE}"
 
@@ -1283,6 +1312,295 @@ try:
 except Exception as e:
     print(f"Note: Connect window eval completed ({e})")
 EOF
+
+echo ""
+echo "--- Step 5c: Import synthetic scene, cancel, resume, open ---"
+LIBRARY_DIR="${HOME}/coperceive-data"
+rm -rf "${LIBRARY_DIR}/synth_001" "${LIBRARY_DIR}/synth_001.partial"
+python3 - << EOF
+import json, time, urllib.request
+from pathlib import Path
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+library = Path("${LIBRARY_DIR}")
+
+def eval_js(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def click_button(label):
+    script = """
+        (() => {
+            const wanted = %s;
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').includes(wanted));
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label)
+    result = eval_js(script)
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+def wait_text(label, seconds=20):
+    deadline = time.monotonic() + seconds
+    last = ""
+    while time.monotonic() < deadline:
+        last = eval_js("document.body.innerText") or ""
+        if label in last:
+            return
+        time.sleep(0.3)
+    raise RuntimeError(f"did not see {label}: {last[-400:]}")
+
+wait_text("Use default")
+click_button("Use default")
+time.sleep(0.5)
+state = json.loads(Path("${STATE_FILE}").read_text())
+assert state.get("library_root"), f"library_root was not saved: {state}"
+print(f"Step 5c library_root={state['library_root']}")
+
+click_button("Open Folder")
+time.sleep(0.3)
+click_button("Import from folder")
+time.sleep(0.3)
+source = eval_js("document.body.innerText.includes('synth_001') ? 'yes' : 'no'")
+assert source == "yes", "import source was not the synthetic scene"
+click_button("Start import")
+
+deadline = time.monotonic() + 20
+seen = ""
+while time.monotonic() < deadline:
+    seen = eval_js("document.body.innerText") or ""
+    if " / " in seen or "Importing" in seen:
+        break
+    time.sleep(0.2)
+else:
+    raise RuntimeError(f"import did not start: {seen[-400:]}")
+click_button("Cancel")
+time.sleep(0.8)
+partials = list(library.glob("*.partial"))
+finished = library / "synth_001"
+assert partials, f"cancel left no resumable partial in {library}"
+assert not finished.is_dir(), f"cancel published the scene: {finished}"
+print(f"Step 5c cancel left {[path.name for path in partials]}")
+
+click_button("Start import")
+deadline = time.monotonic() + 40
+while time.monotonic() < deadline:
+    text = eval_js("document.body.innerText") or ""
+    if "Import finished." in text:
+        break
+    if "Import stopped" in text:
+        raise RuntimeError(text[-400:])
+    time.sleep(0.4)
+else:
+    raise RuntimeError("resume did not finish")
+assert (library / "synth_001" / "COMPLETE.json").is_file()
+assert not list(library.glob("*.partial")), "partial directory still listed after resume"
+print("Step 5c resume wrote synth_001/COMPLETE.json")
+
+click_button("Open Local Viewer")
+deadline = time.monotonic() + 40
+while time.monotonic() < deadline:
+    try:
+        scenes = eval_js("window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null")
+    except Exception:
+        scenes = None
+    if scenes and "synth_001" in scenes:
+        print(f"Step 5c opened scenes={scenes}")
+        break
+    time.sleep(0.5)
+else:
+    raise RuntimeError(f"viewer did not open synth_001, last={scenes}")
+print("Step 5c verified: import, cancel, resume, open.")
+EOF
+
+echo ""
+echo "--- Step 5d: Update banner from a mock latest.json ---"
+export UPDATE_PORT_FILE="${TMP_DIR}/update.port"
+export UPDATE_LOG_FILE="${TMP_DIR}/update-hits.log"
+rm -f "${UPDATE_PORT_FILE}" "${UPDATE_LOG_FILE}"
+python3 - << 'PY' &
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+port_file = os.environ["UPDATE_PORT_FILE"]
+log_file = os.environ["UPDATE_LOG_FILE"]
+body = json.dumps(
+    {
+        "version": "0.2.0",
+        "notes": "Mock release notes for the test.",
+        "pub_date": "2026-10-24T00:00:00Z",
+        "platforms": {
+            "darwin-aarch64": {
+                "signature": "",
+                "url": "http://127.0.0.1:9/Coperceive.app.tar.gz",
+            }
+        },
+    }
+).encode("utf-8")
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(log_file, "a", encoding="utf-8") as handle:
+            handle.write(self.path + "\n")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        return
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+with open(port_file, "w", encoding="utf-8") as handle:
+    handle.write(str(server.server_address[1]))
+server.serve_forever()
+PY
+UPDATE_SERVER_PID=$!
+for i in {1..40}; do
+    if [ -s "${UPDATE_PORT_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${UPDATE_SERVER_PID}" 2>/dev/null; then
+        echo "Error: mock update server exited" >&2
+        exit 17
+    fi
+    sleep 0.1
+done
+if [ ! -s "${UPDATE_PORT_FILE}" ]; then
+    echo "Error: mock update server did not bind" >&2
+    exit 17
+fi
+UPDATE_PORT=$(cat "${UPDATE_PORT_FILE}")
+export COPERCEIVE_UPDATE_URL="http://127.0.0.1:${UPDATE_PORT}/latest.json"
+echo "Step 5d mock latest.json at ${COPERCEIVE_UPDATE_URL}"
+
+osascript <<EOF || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+EOF
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -f "${MARKER_FILE}"
+"${APP_EXE}" > "${TMP_DIR}/update_stdout.log" 2> "${TMP_DIR}/update_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: app died before the update banner check" >&2
+        cat "${TMP_DIR}/update_stderr.log" >&2 || true
+        exit 17
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "Error: app did not start for the update banner check" >&2
+    cat "${TMP_DIR}/update_stderr.log" >&2 || true
+    exit 17
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+sleep 2
+python3 - << EOF
+import json, time, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def click_button(label):
+    script = """
+        (() => {
+            const wanted = %s;
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').includes(wanted));
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label)
+    result = eval_js(script)
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+deadline = time.monotonic() + 20
+text = ""
+while time.monotonic() < deadline:
+    text = eval_js("document.body.innerText") or ""
+    if "coperceive 0.2.0 is ready" in text:
+        break
+    time.sleep(0.4)
+else:
+    raise RuntimeError(f"update banner did not appear: {text[-500:]}")
+print("Step 5d notices: banner coperceive 0.2.0 is ready")
+click_button("What's new")
+time.sleep(0.3)
+notes = eval_js("document.body.innerText") or ""
+assert "Mock release notes for the test." in notes, notes[-500:]
+print("Step 5d notices: What's new showed the mock notes")
+click_button("Restart now")
+time.sleep(0.4)
+restarted = eval_js("window.__COPERCEIVE_UPDATE_RESTART__ === true ? 'yes' : 'no'")
+assert restarted == "yes", "Restart now did not record the test-env flag"
+print("Step 5d notices: Restart now stayed in the test app")
+click_button("Later")
+time.sleep(0.4)
+after = eval_js("document.body.innerText") or ""
+assert "is ready" not in after, after[-500:]
+print("Step 5d notices: Later hid the banner")
+print("Step 5d verified: banner, Later, and Restart.")
+EOF
+if ! grep -q "latest.json" "${UPDATE_LOG_FILE}"; then
+    echo "Error: the app did not request latest.json from the mock server" >&2
+    cat "${UPDATE_LOG_FILE}" >&2 || true
+    exit 17
+fi
+echo "Step 5d verified: mock server received latest.json."
+if ! kill -0 "${APP_PID}" 2>/dev/null; then
+    echo "Error: Restart now quit the app" >&2
+    exit 17
+fi
 
 echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"

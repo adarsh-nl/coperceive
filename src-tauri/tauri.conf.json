@@ -51,7 +51,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY0OTQ0QURBRUZCRjYyNEIKUldSTFlyL3Yya3FVWlBUR2tIUnVXTUhXSVJJWm5jb3ZxSCtUQk1CQlFXUUYzb1BoM2p5S3BXcmMK",
+      "pubkey": "PASTE_THE_PUBLIC_KEY_FROM_A_NEW_TAURI_SIGNER_KEYPAIR",
       "endpoints": [
         "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json"
       ]

@@ -8,6 +8,8 @@ use std::fs;
 #[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
 #[cfg(target_os = "macos")]
+use std::sync::atomic::{AtomicBool, Ordering};
+#[cfg(target_os = "macos")]
 use std::sync::{Arc, Mutex};
 #[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
@@ -37,6 +39,9 @@ pub struct AppState {
     pub viewer_origin: Mutex<Option<String>>,
     pub current_root: Mutex<Option<String>>,
     pub startup_instant: Instant,
+    /// One viewer window. A second open focuses the existing window.
+    pub viewer_build: Mutex<()>,
+    pub replacing_viewer: AtomicBool,
 }
 
 #[cfg(target_os = "macos")]
@@ -51,6 +56,8 @@ impl Default for AppState {
             viewer_origin: Mutex::new(None),
             current_root: Mutex::new(None),
             startup_instant: Instant::now(),
+            viewer_build: Mutex::new(()),
+            replacing_viewer: AtomicBool::new(false),
         }
     }
 }
@@ -154,6 +161,17 @@ fn open_viewer_window(
     let persistent = state::load_state();
     let initial_state_json = serde_json::to_string(&persistent).unwrap_or_else(|_| "{}".into());
 
+    let _viewer_guard = state.viewer_build.lock().map_err(|err| err.to_string())?;
+    if let Some(existing) = app.get_webview_window("viewer") {
+        eprintln!("[viewer] reusing existing viewer window");
+        let _ = existing.show();
+        let _ = existing.set_focus();
+        if let Some(main_window) = app.get_webview_window("main") {
+            let _ = main_window.hide();
+        }
+        return Ok(());
+    }
+
     let basename = Path::new(data_root)
         .file_name()
         .and_then(|n| n.to_str())
@@ -168,6 +186,8 @@ fn open_viewer_window(
         || std::env::var("COPERCEIVE_TEST_MARKER_FILE").is_ok();
     let force_motion =
         test_env && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
+    let update_url = std::env::var("COPERCEIVE_UPDATE_URL").unwrap_or_default();
+    let escaped_update = update_url.replace('\\', "\\\\").replace('"', "\\\"");
 
     let init_script = format!(
         r#"
@@ -176,6 +196,7 @@ fn open_viewer_window(
                 window.__COPERCEIVE_DESKTOP__ = true;
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
                 window.__COPERCEIVE_FORCE_MOTION__ = {force_motion};
+                window.__COPERCEIVE_UPDATE_URL__ = "{escaped_update}";
                 window.__COPERCEIVE_CTRL_PORT__ = {ctrl_port};
                 window.__COPERCEIVE_CTRL_SECRET__ = "{escaped_secret}";
                 window.__COPERCEIVE_DATA_ROOT__ = "{escaped_root}";
@@ -243,6 +264,7 @@ fn open_viewer_window(
         win_builder = win_builder.inner_size(1400.0, 900.0);
     }
 
+    eprintln!("[viewer] opened viewer window");
     let viewer_window = win_builder
         .build()
         .map_err(|e| format!("Failed to create viewer window: {}", e))?;
@@ -1044,6 +1066,14 @@ fn start_dataset_job(
     let root = p
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+    {
+        let mut persistent = state::load_state();
+        persistent.pending_download = Some(state::PendingDownload {
+            dataset_id: dataset_id.clone(),
+            preset_id: preset_id.clone(),
+        });
+        let _ = state::save_state(&persistent);
+    }
     let python = resolve_python_binary(&app);
     let mut cmd_args = vec![
         "-m".to_string(),
@@ -1079,6 +1109,11 @@ fn start_dataset_job(
                 for line in BufReader::new(pipe).lines().map_while(Result::ok) {
                     let payload = serde_json::from_str::<serde_json::Value>(&line)
                         .unwrap_or_else(|_| serde_json::json!({"event": "log", "line": line}));
+                    if payload.get("event").and_then(|value| value.as_str()) == Some("complete") {
+                        let mut persistent = state::load_state();
+                        persistent.pending_download = None;
+                        let _ = state::save_state(&persistent);
+                    }
                     let _ = app_out.emit("dataset-progress", payload);
                 }
             }
@@ -1121,6 +1156,57 @@ fn cancel_dataset_job() -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn signal_dataset_job(signal: i32) -> Result<(), String> {
+    let slot = DATASET_JOB_PID.lock().map_err(|err| err.to_string())?;
+    if let Some(pid) = *slot {
+        unsafe {
+            libc::kill(pid as i32, signal);
+        }
+        Ok(())
+    } else {
+        Err("No download is running.".into())
+    }
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn pause_dataset_job() -> Result<(), String> {
+    signal_dataset_job(libc::SIGSTOP)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn resume_dataset_job() -> Result<(), String> {
+    signal_dataset_job(libc::SIGCONT)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn dataset_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    let python = resolve_python_binary(&app);
+    let output = std::process::Command::new(&python)
+        .args(["-m", "coperceive.cli", "dataset", "catalog"])
+        .output()
+        .map_err(|err| format!("Could not read the dataset list. Try again. {err}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "Could not read the dataset list. {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+    serde_json::from_slice(&output.stdout)
+        .map_err(|err| format!("Could not read the dataset list. {err}"))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_auto_download_updates(enabled: bool) -> Result<(), String> {
+    let mut persistent = state::load_state();
+    persistent.auto_download_updates = enabled;
+    state::save_state(&persistent)
 }
 
 #[cfg(target_os = "macos")]
@@ -1340,6 +1426,10 @@ fn main() {
             dataset_dry_run,
             start_dataset_job,
             cancel_dataset_job,
+            pause_dataset_job,
+            resume_dataset_job,
+            dataset_catalog,
+            set_auto_download_updates,
             validate_scene,
             health,
             remote_connect,
@@ -1348,21 +1438,43 @@ fn main() {
         ])
         .on_page_load(|webview, payload| {
             // The Connect window is declared in tauri.conf.json, so it does not
-            // get the viewer initialization_script. This test hook is the only
-            // way the measurement can force the animated backdrop.
-            let test_env = std::env::var("COPERCEIVE_TEST_ENV").is_ok()
-                || std::env::var("COPERCEIVE_TEST_MARKER_FILE").is_ok();
-            let force = test_env
-                && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
-            if !force || webview.label() != "main" {
+            // get the viewer initialization_script. This hook gives it the
+            // loopback controller and the test-only import path.
+            if webview.label() != "main" {
                 return;
             }
             if payload.event() != tauri::webview::PageLoadEvent::Finished {
                 return;
             }
-            let _ = webview.eval(
-                "window.__COPERCEIVE_TEST_ENV__ = true; window.__COPERCEIVE_FORCE_MOTION__ = true; window.dispatchEvent(new Event('coperceive-force-motion'));",
-            );
+            let test_env = std::env::var("COPERCEIVE_TEST_ENV").is_ok()
+                || std::env::var("COPERCEIVE_TEST_MARKER_FILE").is_ok();
+            let force = test_env
+                && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
+            let import_source = std::env::var("COPERCEIVE_TEST_IMPORT_SOURCE").unwrap_or_default();
+            let update_url = std::env::var("COPERCEIVE_UPDATE_URL").unwrap_or_default();
+            let app = webview.app_handle();
+            let state = app.state::<Arc<AppState>>();
+            let port = state.ctrl_port.lock().ok().and_then(|slot| *slot).unwrap_or(0);
+            let secret = state
+                .ctrl_secret
+                .lock()
+                .ok()
+                .and_then(|slot| slot.clone())
+                .unwrap_or_default()
+                .replace('\\', "\\\\")
+                .replace('"', "\\\"");
+            let import_js = import_source.replace('\\', "\\\\").replace('"', "\\\"");
+            let update_js = update_url.replace('\\', "\\\\").replace('"', "\\\"");
+            let _ = webview.eval(&format!(
+                r#"window.__COPERCEIVE_CTRL_PORT__ = {port};
+                window.__COPERCEIVE_CTRL_SECRET__ = "{secret}";
+                window.__COPERCEIVE_TEST_ENV__ = {test_env};
+                window.__COPERCEIVE_FORCE_MOTION__ = {force};
+                window.__COPERCEIVE_TEST_IMPORT_SOURCE__ = "{import_js}";
+                window.__COPERCEIVE_UPDATE_URL__ = "{update_js}";
+                window.dispatchEvent(new Event("coperceive-test-import"));
+                if ({force}) window.dispatchEvent(new Event("coperceive-force-motion"));"#,
+            ));
         })
         .setup(|app| {
             use tauri::Manager;
@@ -1699,15 +1811,15 @@ fn main() {
                     use tauri::Manager;
                     let label = window.label().to_string();
                     if label == "viewer" {
-                        if let Ok(mut lock) = state_for_window.sidecar.lock() {
-                            if let Some(mut s) = lock.take() {
-                                let _ = s.stop();
+                        if state_for_window.replacing_viewer.load(Ordering::SeqCst) {
+                            let _ = window.destroy();
+                        } else {
+                            if let Ok(mut lock) = state_for_window.sidecar.lock() {
+                                if let Some(mut s) = lock.take() {
+                                    let _ = s.stop();
+                                }
                             }
-                        }
-                        let _ = window.destroy();
-                        if let Some(main) = window.app_handle().get_webview_window("main") {
-                            let _ = main.show();
-                            let _ = main.set_focus();
+                            let _ = window.destroy();
                         }
                     } else if label == "main" {
                         if let Ok(mut lock) = state_for_window.sidecar.lock() {
@@ -1727,14 +1839,18 @@ fn main() {
                     use tauri::Manager;
                     let label = window.label().to_string();
                     if label == "viewer" {
-                        if let Ok(mut lock) = state_for_window.sidecar.lock() {
-                            if let Some(mut s) = lock.take() {
-                                let _ = s.stop();
+                        if !state_for_window.replacing_viewer.load(Ordering::SeqCst) {
+                            if let Ok(mut lock) = state_for_window.sidecar.lock() {
+                                if let Some(mut s) = lock.take() {
+                                    let _ = s.stop();
+                                }
                             }
-                        }
-                        if let Some(main) = window.app_handle().get_webview_window("main") {
-                            let _ = main.show();
-                            let _ = main.set_focus();
+                            if window.app_handle().get_webview_window("viewer").is_none() {
+                                if let Some(main) = window.app_handle().get_webview_window("main") {
+                                    let _ = main.show();
+                                    let _ = main.set_focus();
+                                }
+                            }
                         }
                     } else if label == "main" {
                         if let Ok(mut lock) = state_for_window.sidecar.lock() {

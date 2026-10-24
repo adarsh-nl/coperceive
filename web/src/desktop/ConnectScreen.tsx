@@ -46,6 +46,15 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [importNote, setImportNote] = useState<string>("");
 
   useEffect(() => {
+    const applyTestImport = () => {
+      const src = window.__COPERCEIVE_TEST_IMPORT_SOURCE__;
+      if (typeof src === "string" && src.length > 0) {
+        setImportSource(src);
+        setImportImages("none");
+      }
+    };
+    applyTestImport();
+    window.addEventListener("coperceive-test-import", applyTestImport);
     void (async () => {
       const state = await getPersistentState();
       if (state?.recent_roots && state.recent_roots.length > 0) {
@@ -79,6 +88,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     })();
 
     return () => {
+      window.removeEventListener("coperceive-test-import", applyTestImport);
       unlistenImport?.();
       unlistenGetData?.();
     };

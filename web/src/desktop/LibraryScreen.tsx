@@ -40,12 +40,8 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
     try {
       const stats = await getStorageInfo();
       setStorage(stats);
-      if (stats && !localStorage.getItem("coperceive_storage_prompted")) {
-        // If library root is default and hasn't been confirmed
-        // But if scenes already exist, no need to prompt
-        if (stats.scene_count === 0 && !localStorage.getItem("coperceive_storage_chosen")) {
-          setShowFirstRunModal(true);
-        }
+      if (stats && stats.is_configured === false) {
+        setShowFirstRunModal(true);
       }
       const list = await getLibraryScenes();
       setScenes(list);
@@ -67,8 +63,6 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
       if (isFirstRun) {
         const stats = await setLibraryRoot(folder);
         setStorage(stats);
-        localStorage.setItem("coperceive_storage_chosen", "true");
-        localStorage.setItem("coperceive_storage_prompted", "true");
         setShowFirstRunModal(false);
         loadData();
       } else {
@@ -463,8 +457,12 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
               <button
                 type="button"
                 onClick={() => {
-                  localStorage.setItem("coperceive_storage_prompted", "true");
-                  setShowFirstRunModal(false);
+                  if (!storage) return;
+                  void (async () => {
+                    const stats = await setLibraryRoot(storage.library_root);
+                    if (stats) setStorage(stats);
+                    setShowFirstRunModal(false);
+                  })();
                 }}
                 style={{
                   padding: "0.5rem 1rem",

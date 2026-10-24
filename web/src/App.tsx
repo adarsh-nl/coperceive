@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
 import { BrandWordmark } from "./desktop/Brand";
 import ConnectScreen from "./desktop/ConnectScreen";
-import { isTauriEnvironment, getStorageInfo, revealInFinder } from "./desktop/local";
+import { isTauriEnvironment, getStorageInfo, revealInFinder, setAutoDownloadUpdates, getPersistentState } from "./desktop/local";
 import UpdateBanner from "./desktop/UpdateBanner";
 import Landing, { readTheme, writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
@@ -54,14 +54,7 @@ function storedToken(): string {
 
 function DesktopPreferences() {
   const [reopenLast, setReopenLast] = useState<boolean>(true);
-  const [autoUpdate, setAutoUpdate] = useState<boolean>(() => {
-    try {
-      const v = localStorage.getItem("coperceive_auto_update");
-      return v === null ? true : v === "true";
-    } catch {
-      return true;
-    }
-  });
+  const [autoUpdate, setAutoUpdate] = useState<boolean>(true);
   const [storageRoot, setStorageRoot] = useState<string>("");
 
   useEffect(() => {
@@ -81,6 +74,10 @@ function DesktopPreferences() {
     }
 
     void (async () => {
+      const saved = await getPersistentState();
+      if (saved && typeof saved.auto_download_updates === "boolean") {
+        setAutoUpdate(saved.auto_download_updates);
+      }
       const stats = await getStorageInfo();
       if (stats?.library_root) {
         setStorageRoot(stats.library_root);
@@ -106,9 +103,7 @@ function DesktopPreferences() {
 
   const handleAutoUpdateToggle = (checked: boolean) => {
     setAutoUpdate(checked);
-    try {
-      localStorage.setItem("coperceive_auto_update", String(checked));
-    } catch {}
+    void setAutoDownloadUpdates(checked);
   };
 
   const handleShowInFinder = () => {
@@ -137,7 +132,7 @@ function DesktopPreferences() {
           checked={autoUpdate}
           onChange={(e) => handleAutoUpdateToggle(e.target.checked)}
         />
-        <span>Automatically check for updates</span>
+        <span>Automatically download updates</span>
       </label>
       <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
         Prompt when new signed releases are available.

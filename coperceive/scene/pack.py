@@ -13,6 +13,7 @@ import io
 import json
 import os
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TextIO, cast
@@ -562,7 +563,11 @@ def pack_scene(
     done = 0
     copied = 0
     total_bytes = 0
+    pause = os.environ.get("COPERCEIVE_PACK_SLEEP_S", "").strip()
+    pause_s = float(pause) if pause else 0.0
     for item in plan.files:
+        if pause_s > 0:
+            time.sleep(pause_s)
         target = partial / item.dest_rel
         size, digest, skipped = _materialise(item, target, cache)
         done += 1

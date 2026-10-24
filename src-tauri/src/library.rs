@@ -20,6 +20,7 @@ pub struct StorageStats {
     pub used_bytes: u64,
     pub total_bytes: u64,
     pub volume_name: String,
+    pub scene_count: usize,
 }
 
 /// Metadata and validation state of a scene stored in the library.
@@ -130,6 +131,7 @@ pub fn get_storage_stats(library_root: &Path, is_configured: bool) -> StorageSta
         used_bytes,
         total_bytes,
         volume_name,
+        scene_count: scan_library_scenes(library_root).len(),
     }
 }
 

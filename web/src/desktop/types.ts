@@ -87,6 +87,7 @@ export interface ExecutionTarget {
 
 export interface StorageStats {
   readonly library_root: string;
+  readonly is_configured?: boolean;
   readonly volume_name: string;
   readonly free_bytes: number;
   readonly total_bytes: number;

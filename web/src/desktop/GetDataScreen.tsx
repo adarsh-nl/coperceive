@@ -5,8 +5,12 @@ import {
   datasetDryRun,
   startDatasetJob,
   cancelDatasetJob,
+  pauseDatasetJob,
+  resumeDatasetJob,
   onDatasetProgress,
   pickDataRoot,
+  loadDatasetCatalog,
+  getPersistentState,
 } from "./local";
 
 function formatBytes(bytes: number): string {
@@ -16,90 +20,16 @@ function formatBytes(bytes: number): string {
   return `${(bytes / Math.pow(1024, i)).toFixed(1)} ${units[i]}`;
 }
 
-const CATALOG_DATASETS: CatalogDataset[] = [
-  {
-    id: "griffin",
-    name: "Griffin",
-    description: "Cooperative vehicle-to-everything perception with drones and vehicles in CARLA simulation",
-    modalities: ["LiDAR", "Camera"],
-    agents: "vehicle + drone",
-    licence: "MIT",
-    licence_url: "https://huggingface.co/datasets/coperceive/griffin/blob/main/LICENSE",
-    source_url: "https://huggingface.co/datasets/coperceive/griffin",
-    paper_url: "https://arxiv.org/abs/2403.02321",
-    status: "ready",
-    requires_terms: true,
-    presets: [
-      {
-        id: "dev",
-        name: "Dev tier: metadata + LiDAR (~240 MB)",
-        description: "Lightweight subset with downsampled LiDAR and vehicle-drone trajectory metadata",
-        estimated_download_bytes: 251658240,
-        estimated_disk_bytes: 524288000,
-      },
-      {
-        id: "one-scene",
-        name: "One scene with images",
-        description: "Complete Town03-000 evaluation scene with all 9 cameras, LiDAR, and vector map",
-        estimated_download_bytes: 817889280,
-        estimated_disk_bytes: 1610612736,
-      },
-      {
-        id: "full",
-        name: "Full 25 m subset (~167 GB)",
-        description: "Full cooperative 25m benchmark scenes across all towns and sensor feeds",
-        estimated_download_bytes: 179307380736,
-        estimated_disk_bytes: 268435456000,
-      },
-    ],
-  },
-  {
-    id: "opv2v",
-    name: "OPV2V",
-    description: "Open cooperative perception dataset for vehicle-to-vehicle autonomous driving",
-    modalities: ["LiDAR", "Camera"],
-    agents: "vehicle + vehicle",
-    licence: "unknown",
-    licence_url: "https://mobility-lab.seas.ucla.edu/opv2v/",
-    source_url: "https://github.com/DerrickXuNu/OPV2V",
-    paper_url: "https://arxiv.org/abs/2109.07644",
-    status: "local-import",
-    notice: "Data files are hosted on third-party mirrors and lack an explicit permissive data licence. Use 'Import from folder…' to import a local copy.",
-  },
-  {
-    id: "v2xset",
-    name: "V2XSet",
-    description: "V2X cooperative perception benchmark featuring vehicle-infrastructure collaboration",
-    modalities: ["LiDAR", "Camera"],
-    agents: "vehicle + infrastructure",
-    licence: "unknown",
-    licence_url: "https://github.com/DerrickXuNu/v2x-vit",
-    source_url: "https://github.com/DerrickXuNu/v2x-vit",
-    paper_url: "https://arxiv.org/abs/2203.10638",
-    status: "local-import",
-    notice: "Data files are hosted on third-party mirrors and lack an explicit permissive data licence. Use 'Import from folder…' to import a local copy.",
-  },
-  {
-    id: "v2v4real",
-    name: "V2V4Real",
-    description: "Real-world dataset for vehicle-to-vehicle cooperative perception with multiple connected vehicles",
-    modalities: ["LiDAR", "Camera"],
-    agents: "vehicle + vehicle",
-    licence: "CC-BY-NC-SA-4.0",
-    licence_url: "https://creativecommons.org/licenses/by-nc-sa/4.0/",
-    source_url: "https://github.com/ucla-mobility/V2V4Real",
-    paper_url: "https://arxiv.org/abs/2303.07601",
-    status: "planned",
-    notice: "Planned for a future release.",
-  },
-];
-
 interface Props {
   onOpenScene: (scenePath: string) => void;
   onOpenImportFolder?: (folderPath?: string) => void;
 }
 
 export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props) {
+  const [catalog, setCatalog] = useState<CatalogDataset[]>([]);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [presetBytes, setPresetBytes] = useState<Record<string, number>>({});
+  const [presetSizeNote, setPresetSizeNote] = useState<Record<string, string>>({});
   const [selectedDataset, setSelectedDataset] = useState<CatalogDataset | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>("dev");
   const [dryRun, setDryRun] = useState<DryRunResult | null>(null);
@@ -115,16 +45,46 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
   const [jobError, setJobError] = useState<string | null>(null);
   const [jobLogs, setJobLogs] = useState<string[]>([]);
   const [showLogModal, setShowLogModal] = useState<boolean>(false);
+  const [jobPaused, setJobPaused] = useState<boolean>(false);
   const [resumableJob, setResumableJob] = useState<{ datasetId: string; presetId: string } | null>(null);
 
-  // Check saved incomplete download on mount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("coperceive_incomplete_download");
-      if (saved) {
-        setResumableJob(JSON.parse(saved));
+    void (async () => {
+      try {
+        const rows = await loadDatasetCatalog();
+        setCatalog(rows);
+        const griffin = rows.find((row) => row.id === "griffin");
+        if (griffin?.presets) {
+          for (const preset of griffin.presets) {
+            const key = `griffin:${preset.id}`;
+            setPresetSizeNote((prev) => ({ ...prev, [key]: "Checking size…" }));
+            try {
+              const measured = await datasetDryRun("griffin", preset.id);
+              setPresetBytes((prev) => ({ ...prev, [key]: measured.download_bytes }));
+              setPresetSizeNote((prev) => ({ ...prev, [key]: "" }));
+            } catch {
+              setPresetSizeNote((prev) => ({
+                ...prev,
+                [key]: "Could not check the size. Choose this preset to try again.",
+              }));
+            }
+          }
+        }
+      } catch (err) {
+        setCatalogError(
+          err instanceof Error
+            ? err.message
+            : "Could not load the dataset list. Close this screen and open Get data again.",
+        );
       }
-    } catch {}
+      const saved = await getPersistentState();
+      if (saved?.pending_download?.dataset_id && saved.pending_download.preset_id) {
+        setResumableJob({
+          datasetId: saved.pending_download.dataset_id,
+          presetId: saved.pending_download.preset_id,
+        });
+      }
+    })();
   }, []);
 
   useEffect(() => {
@@ -138,18 +98,14 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
         } else if (ev.event === "log" && ev.message) {
           setJobLogs((prev) => [...prev.slice(-100), ev.message!]);
         } else if (ev.event === "error") {
-          setJobError(ev.message ?? "An error occurred during dataset processing.");
+          setJobError(ev.message ?? "The download did not finish. Try again.");
           setJobRunning(false);
-          try {
-            localStorage.removeItem("coperceive_incomplete_download");
-          } catch {}
         } else if (ev.event === "complete") {
           setJobRunning(false);
+          setJobPaused(false);
           setJobPercent(100);
-          setJobNote("Dataset successfully imported!");
-          try {
-            localStorage.removeItem("coperceive_incomplete_download");
-          } catch {}
+          setJobNote("Dataset imported.");
+          setResumableJob(null);
           if (ev.path) {
             onOpenScene(ev.path);
           }
@@ -193,12 +149,8 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
     setJobPercent(5);
     setJobNote("Initiating download…");
     setJobLogs([]);
-    try {
-      localStorage.setItem(
-        "coperceive_incomplete_download",
-        JSON.stringify({ datasetId: selectedDataset.id, presetId: selectedPresetId }),
-      );
-    } catch {}
+    setJobPaused(false);
+    setResumableJob({ datasetId: selectedDataset.id, presetId: selectedPresetId });
 
     try {
       await startDatasetJob(selectedDataset.id, selectedPresetId, acceptedTerms);
@@ -214,8 +166,24 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
     setJobNote("Download cancelled.");
   };
 
+  const handlePauseJob = async () => {
+    try {
+      if (jobPaused) {
+        await resumeDatasetJob();
+        setJobPaused(false);
+        setJobNote("Download resumed.");
+      } else {
+        await pauseDatasetJob();
+        setJobPaused(true);
+        setJobNote("Download paused.");
+      }
+    } catch (err) {
+      setJobError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
   const handleResumeJob = (job: { datasetId: string; presetId: string }) => {
-    const ds = CATALOG_DATASETS.find((d) => d.id === job.datasetId);
+    const ds = catalog.find((d) => d.id === job.datasetId);
     if (ds) {
       handleSelectPreset(ds, job.presetId);
       setResumableJob(null);
@@ -224,6 +192,11 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
 
   return (
     <div style={{ padding: "1.5rem", maxWidth: "980px", margin: "0 auto" }}>
+      {catalogError && (
+        <p role="alert" style={{ color: "#ff6b6b", marginBottom: "1rem" }}>
+          {catalogError}
+        </p>
+      )}
       {resumableJob && !jobRunning && (
         <div
           style={{
@@ -292,7 +265,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
-        {CATALOG_DATASETS.map((ds) => {
+        {catalog.map((ds) => {
           const isPlanned = ds.status === "planned";
           const isLocal = ds.status === "local-import";
           const isReady = ds.status === "ready";
@@ -394,6 +367,11 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                         <div>
                           <strong>{preset.name}</strong>
                           <div style={{ fontSize: "0.75rem", color: "#8b949e" }}>{preset.description}</div>
+                          <div style={{ fontSize: "0.75rem", color: "#f5f5f7", marginTop: "0.2rem" }}>
+                            {presetBytes[`${ds.id}:${preset.id}`] != null
+                              ? formatBytes(presetBytes[`${ds.id}:${preset.id}`])
+                              : presetSizeNote[`${ds.id}:${preset.id}`] || "Size is checked when you choose this preset."}
+                          </div>
                         </div>
                         <span style={{ fontSize: "1rem", marginLeft: "0.5rem" }}>↓</span>
                       </button>
@@ -648,6 +626,22 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     }}
                   >
                     Show log
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void handlePauseJob()}
+                    style={{
+                      padding: "0.4rem 0.8rem",
+                      borderRadius: "6px",
+                      border: "1px solid rgba(255, 255, 255, 0.2)",
+                      background: "transparent",
+                      color: "#f5f5f7",
+                      cursor: "pointer",
+                      fontSize: "0.85rem",
+                      marginRight: "0.5rem",
+                    }}
+                  >
+                    {jobPaused ? "Resume" : "Pause"}
                   </button>
                   <button
                     type="button"
