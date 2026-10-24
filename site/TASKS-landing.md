@@ -5,7 +5,7 @@ notes for the draft PR into `main`. Do not copy the rest of `TASKS.md` here.
 
 ## Shipped
 
-- A quiet page: floating wordmark, full-bleed clip (recorded vehicle and drone, plus an illustrative second vehicle), one Coming soon beat, one waitlist form, a wordmark footer.
+- A quiet page: floating wordmark, full-bleed recorded clip (vehicle lidar and a drone marker), one Coming soon beat, one waitlist form, a wordmark footer.
 - The clip player is a separate chunk. The poster paints first. `three` is not in the first-load script and is not modulepreloaded.
 - One token source: `site/src/tokens.ts`, imported by `site/tailwind.config.ts`. The block-cursor red is `cursor`. Vehicle and drone colours are `vehicle` and `drone`.
 - Backdrop files remain a copy of `web/src/desktop/backdrop/scene.ts` and `drawBev.ts` from `feat/desktop` at `bf36d0d` (bytes of those two files were the base; the page does not mount them). Unify with `web/` after `feat/desktop` merges. This page does not import `web/`.
@@ -17,11 +17,11 @@ notes for the draft PR into `main`. Do not copy the rest of `TASKS.md` here.
 
 | Gate | Result |
 | --- | --- |
-| `npm run build` in `site/` | Passed. First-load JS `index-CFnLiJFW.js` gzip 72.56 KB. `RealClip-_BqUc8-A.js` gzip 135.51 KB. `dist/index.html` does not modulepreload it. `404.html` and `.nojekyll` are written. |
+| `npm run build` in `site/` | Passed. First-load JS `index-Co2OgOex.js` gzip 72.68 KB. `RealClip-azx7jctB.js` gzip 133.67 KB. `dist/index.html` does not modulepreload it. `404.html` and `.nojekyll` are written. |
 | Lighthouse desktop, `vite preview` at `/coperceive/` | Performance 100, Accessibility 100, Best Practices 100, SEO 100. |
-| Lighthouse mobile | Performance 98, Accessibility 100, Best Practices 100, SEO 100. |
+| Lighthouse mobile | Performance 96, Accessibility 100, Best Practices 100, SEO 100. |
 | Playwright `tests/test_landing_page.py` | 2 passed. No header, no pause control, no repository link, no licence line. Logo is at least 28 px, fades, and is not fixed. The recorded canvas moves. Reduced motion keeps the poster and stops the cursor blink. axe serious and critical: 0. |
-| Scroll video | `docs/media/landing-scroll.mp4`, 1440×900, 23.04 s, 1.2 MB. |
+| Scroll video | `docs/media/landing-scroll.mp4`, 1440×900, 24.20 s, 3.9 MB. |
 | OG image | `site/public/og.png`, 1200×630, icon variant. |
 
 ## Left for the maintainer
