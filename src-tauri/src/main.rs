@@ -256,6 +256,37 @@ fn open_viewer_window(
             updated_persistent.window_state = Some(ws.clone());
             let _ = state::save_state(&updated_persistent);
         }
+    } else {
+        let scale = viewer_window.scale_factor().unwrap_or(1.0).max(0.1);
+        let mon = viewer_window.current_monitor().ok().flatten();
+        let mon_name = mon.as_ref().and_then(|m| m.name().cloned());
+        let (pos_x, pos_y) = match viewer_window.outer_position() {
+            Ok(pos) => {
+                let logical: tauri::LogicalPosition<f64> = pos.to_logical(scale);
+                (logical.x, logical.y)
+            }
+            Err(_) => (0.0, 0.0),
+        };
+        let (size_w, size_h) = match viewer_window.inner_size() {
+            Ok(size) => {
+                let logical: tauri::LogicalSize<f64> = size.to_logical(scale);
+                (logical.width, logical.height)
+            }
+            Err(_) => (1400.0, 900.0),
+        };
+
+        let initial_ws = state::WindowState {
+            width: size_w,
+            height: size_h,
+            x: pos_x,
+            y: pos_y,
+            is_maximized: false,
+            monitor: mon_name,
+            scale_factor: Some(scale),
+        };
+        let mut updated_persistent = persistent.clone();
+        updated_persistent.window_state = Some(initial_ws);
+        let _ = state::save_state(&updated_persistent);
     }
 
     if let Some(main_window) = app.get_webview_window("main") {

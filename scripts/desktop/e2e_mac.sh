@@ -725,18 +725,28 @@ echo "E2E_MARK step=2c"
 echo "--- Step 2c: Relaunch 3 times and assert viewer window frame is unchanged ---"
 
 python3 << EOF
-import json, urllib.request
+import json, time, urllib.request
 
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-req = urllib.request.Request(
-    f"http://127.0.0.1:{port}/state",
-    headers={"Authorization": f"Bearer {secret}"}
-)
-with urllib.request.urlopen(req, timeout=10) as r:
-    st = json.loads(r.read().decode("utf-8"))
-initial_ws = st.get("window_state")
+deadline = time.monotonic() + 15
+initial_ws = None
+while time.monotonic() < deadline:
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/state",
+            headers={"Authorization": f"Bearer {secret}"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            st = json.loads(r.read().decode("utf-8"))
+            initial_ws = st.get("window_state")
+            if initial_ws:
+                break
+    except Exception:
+        pass
+    time.sleep(0.5)
+
 print(f"Initial window state before 3 relaunches: {initial_ws}")
 assert initial_ws is not None, "Expected window_state to be saved in state.json"
 assert "x" in initial_ws and "y" in initial_ws and "width" in initial_ws and "height" in initial_ws
@@ -794,11 +804,33 @@ port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 launch = "${launch}"
 
+def eval_js(code, timeout=10):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        if data.get("error"):
+            raise RuntimeError(f"JS error: {data['error']}")
+        return data.get("result")
+
 with open("${TMP_DIR}/initial_window_state.json") as f:
     expected = json.load(f)
 
 deadline = time.monotonic() + 30
+while time.monotonic() < deadline:
+    try:
+        counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__ ? window.__COPERCEIVE_SCENE_COUNTS__() : null", timeout=4)
+        if counts and counts.get("points", 0) > 0:
+            break
+    except Exception:
+        pass
+    time.sleep(0.5)
+
 curr_ws = None
+deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     try:
         req = urllib.request.Request(
