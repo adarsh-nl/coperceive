@@ -187,7 +187,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
           type="button"
           onClick={onNavigateGetData}
           style={{
-            background: "#2878dc",
+            background: "#1f6feb",
             border: "none",
             borderRadius: "6px",
             color: "#fff",
@@ -226,7 +226,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
             type="button"
             onClick={onNavigateGetData}
             style={{
-              background: "#2878dc",
+              background: "#1f6feb",
               border: "none",
               borderRadius: "6px",
               color: "#fff",
@@ -355,7 +355,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                       type="button"
                       onClick={() => onOpenScene(scene.path)}
                       style={{
-                        background: "#2878dc",
+                        background: "#1f6feb",
                         color: "#fff",
                         border: "none",
                         borderRadius: "5px",
@@ -484,7 +484,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                   padding: "0.5rem 1rem",
                   borderRadius: "6px",
                   border: "none",
-                  background: "#2878dc",
+                  background: "#1f6feb",
                   color: "#fff",
                   fontWeight: 500,
                   cursor: "pointer",
@@ -575,7 +575,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                   padding: "0.5rem 1rem",
                   borderRadius: "6px",
                   border: "none",
-                  background: "#2878dc",
+                  background: "#1f6feb",
                   color: "#fff",
                   fontWeight: 500,
                   cursor: movingStorage ? "wait" : "pointer",

@@ -279,7 +279,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         </div>
 
         {status && (
-          <div style={{ fontSize: "0.85rem", color: "#2878dc", fontWeight: 500 }}>
+          <div style={{ fontSize: "0.85rem", color: "#1f6feb", fontWeight: 500 }}>
             {status}
           </div>
         )}
@@ -386,7 +386,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     borderRadius: "6px",
                     cursor: busy || !dataRoot ? "not-allowed" : "pointer",
                     border: "none",
-                    backgroundColor: busy || !dataRoot ? "rgba(255, 255, 255, 0.1)" : "#2878dc",
+                    backgroundColor: busy || !dataRoot ? "rgba(255, 255, 255, 0.1)" : "#1f6feb",
                     color: "#fff",
                   }}
                 >
@@ -543,7 +543,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       aria-label="Import progress"
                       style={{ height: "6px", background: "rgba(255,255,255,0.12)", borderRadius: "3px" }}
                     >
-                      <div style={{ width: `${importPercent}%`, height: "100%", background: "#2878dc", borderRadius: "3px" }} />
+                      <div style={{ width: `${importPercent}%`, height: "100%", background: "#1f6feb", borderRadius: "3px" }} />
                     </div>
                     <p style={{ fontSize: "0.75rem", color: "#86868b", margin: 0 }}>{importNote}</p>
 
@@ -557,7 +557,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                           padding: "0.4rem",
                           borderRadius: "5px",
                           border: "none",
-                          background: importing || !importSource ? "rgba(255,255,255,0.1)" : "#2878dc",
+                          background: importing || !importSource ? "rgba(255,255,255,0.1)" : "#1f6feb",
                           color: "#fff",
                           fontWeight: 500,
                           cursor: importing || !importSource ? "not-allowed" : "pointer",
@@ -614,7 +614,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                             fontSize: "0.8rem",
                             backgroundColor: dataRoot === root ? "rgba(40, 120, 220, 0.2)" : "rgba(255, 255, 255, 0.04)",
                             color: "#f5f5f7",
-                            border: `1px solid ${dataRoot === root ? "#2878dc" : "rgba(255, 255, 255, 0.08)"}`,
+                            border: `1px solid ${dataRoot === root ? "#1f6feb" : "rgba(255, 255, 255, 0.08)"}`,
                             borderRadius: "6px",
                             cursor: "pointer",
                           }}

@@ -184,7 +184,7 @@ export default function UpdateBanner() {
           type="button"
           onClick={handleRestartToUpdate}
           style={{
-            background: "#2878dc",
+            background: "#1f6feb",
             border: "none",
             borderRadius: "5px",
             color: "#fff",

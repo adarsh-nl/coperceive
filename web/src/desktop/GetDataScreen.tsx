@@ -591,7 +591,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       border: "none",
                       background: !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
                         ? "rgba(255, 255, 255, 0.1)"
-                        : "#2878dc",
+                        : "#1f6feb",
                       color: "#fff",
                       cursor: !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
                         ? "not-allowed"
@@ -626,7 +626,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       style={{
                         width: `${jobPercent}%`,
                         height: "100%",
-                        background: "#2878dc",
+                        background: "#1f6feb",
                         transition: "width 0.3s ease",
                       }}
                     />
@@ -705,7 +705,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       padding: "0.4rem 0.8rem",
                       borderRadius: "6px",
                       border: "none",
-                      background: "#2878dc",
+                      background: "#1f6feb",
                       color: "#fff",
                       cursor: "pointer",
                       fontWeight: 500,

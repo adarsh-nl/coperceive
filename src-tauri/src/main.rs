@@ -922,10 +922,11 @@ static DATASET_JOB_PID: Mutex<Option<u32>> = Mutex::new(None);
 #[tauri::command]
 fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, String> {
     let p = state::load_state();
+    let is_configured = p.library_root.is_some();
     let root = p
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
-    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&root)))
+    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&root), is_configured))
 }
 
 #[cfg(target_os = "macos")]
@@ -934,7 +935,7 @@ fn set_library_root(new_root: String) -> Result<coperceive_desktop::library::Sto
     let mut p = state::load_state();
     p.library_root = Some(new_root.clone());
     let _ = state::save_state(&p);
-    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root)))
+    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root), true))
 }
 
 #[cfg(target_os = "macos")]
@@ -949,7 +950,7 @@ fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::St
         .map_err(|e| format!("Failed to move library: {e}"))?;
     p.library_root = Some(new_root.clone());
     let _ = state::save_state(&p);
-    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root)))
+    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root), true))
 }
 
 #[cfg(target_os = "macos")]
