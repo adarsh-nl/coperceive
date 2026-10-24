@@ -17,6 +17,7 @@ export default {
         tertiary: tokens.text.tertiary,
         vehicle: tokens.vehicle,
         "vehicle-alt": tokens.vehicleAlt,
+        vehicle2: tokens.vehicle2,
         drone: tokens.drone,
         cursor: tokens.cursor,
         hit: tokens.hit,

@@ -13,6 +13,8 @@ export const tokens = {
   vehicle: "#F58A1F",
   /** Second vehicle platform. Distinct from vehicle, drone, hit, miss, and lanes. */
   vehicleAlt: "#4CC9F0",
+  /** Illustrative second ground vehicle. Warm white, apart from orange, blue, and lane green. */
+  vehicle2: "#F2F0EB",
   drone: "#3C8DFF",
   /** Wordmark block cursor. Sampled from the 4c mark, about #E03A22. */
   cursor: "#E03A22",

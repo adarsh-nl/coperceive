@@ -178,6 +178,7 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         ):
             assert banned not in body, banned
         assert "Coming soon." in body
+        assert "Recorded scene, illustrative second vehicle" in body
         assert "Apache-2.0" not in body
         assert "OFL" not in body
 

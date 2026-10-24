@@ -44,7 +44,7 @@ export function Hero() {
     <section id="hero" ref={rootRef} data-pin="false" data-story="hero" className="relative h-[100svh] min-h-[36rem] overflow-hidden">
       <img
         src={poster}
-        alt="Recorded scene. A vehicle and a drone, each in its own colour."
+        alt="Recorded scene, illustrative second vehicle."
         width={1920}
         height={1080}
         fetchPriority="high"
@@ -66,7 +66,7 @@ export function Hero() {
         <p className="mt-4 max-w-xl text-lg text-secondary sm:text-xl">
           Sensor data and perception, on one timeline.
         </p>
-        <p className="mt-5 text-xs text-tertiary">Recorded</p>
+        <p className="mt-5 max-w-sm text-xs text-tertiary">Recorded scene, illustrative second vehicle</p>
       </div>
     </section>
   );
