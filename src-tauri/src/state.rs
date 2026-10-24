@@ -31,6 +31,156 @@ pub struct WindowState {
     pub y: f64,
     #[serde(default)]
     pub is_maximized: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub monitor: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scale_factor: Option<f64>,
+}
+
+/// Monitor descriptor representing a display's visible work frame in logical points.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MonitorInfo {
+    pub name: Option<String>,
+    pub x: f64,
+    pub y: f64,
+    pub width: f64,
+    pub height: f64,
+    pub scale_factor: f64,
+    pub is_primary: bool,
+}
+
+impl WindowState {
+    /// Constructs a WindowState from physical pixel position and size and scale factor.
+    pub fn from_physical(
+        physical_x: i32,
+        physical_y: i32,
+        physical_width: u32,
+        physical_height: u32,
+        scale_factor: f64,
+        monitor: Option<String>,
+        is_maximized: bool,
+    ) -> Self {
+        let scale = if scale_factor > 0.0 { scale_factor } else { 1.0 };
+        Self {
+            x: physical_x as f64 / scale,
+            y: physical_y as f64 / scale,
+            width: physical_width as f64 / scale,
+            height: physical_height as f64 / scale,
+            is_maximized,
+            monitor,
+            scale_factor: Some(scale),
+        }
+    }
+
+    /// Converts logical coordinates to physical pixels given a scale factor.
+    pub fn to_physical(&self, scale_factor: f64) -> (i32, i32, u32, u32) {
+        let scale = if scale_factor > 0.0 { scale_factor } else { 1.0 };
+        let px = (self.x * scale).round() as i32;
+        let py = (self.y * scale).round() as i32;
+        let pw = (self.width * scale).round().max(1.0) as u32;
+        let ph = (self.height * scale).round().max(1.0) as u32;
+        (px, py, pw, ph)
+    }
+}
+
+/// Clamps and validates the window state against available monitors.
+/// If the saved monitor is missing, or the rect would end up mostly off-screen (<50% overlap),
+/// centres the window on the primary monitor.
+/// Clamps the window fully inside the visible frame of the resolved monitor.
+pub fn resolve_window_geometry(
+    saved: &WindowState,
+    monitors: &[MonitorInfo],
+) -> WindowState {
+    if monitors.is_empty() {
+        return saved.clone();
+    }
+
+    let primary = monitors
+        .iter()
+        .find(|m| m.is_primary)
+        .or_else(|| monitors.first())
+        .expect("monitors not empty");
+
+    let candidate = if let Some(saved_name) = &saved.monitor {
+        monitors.iter().find(|m| m.name.as_deref() == Some(saved_name.as_str()))
+    } else {
+        // Fallback for legacy state: find monitor with >= 50% overlap
+        monitors.iter().find(|m| {
+            let w = if saved.width > 0.0 { saved.width } else { 1400.0 };
+            let h = if saved.height > 0.0 { saved.height } else { 900.0 };
+            let win_area = w * h;
+            let overlap_w = (f64::min(saved.x + w, m.x + m.width) - f64::max(saved.x, m.x)).max(0.0);
+            let overlap_h = (f64::min(saved.y + h, m.y + m.height) - f64::max(saved.y, m.y)).max(0.0);
+            let overlap_area = overlap_w * overlap_h;
+            win_area > 0.0 && overlap_area >= 0.5 * win_area
+        })
+    };
+
+    let (target_mon, should_center) = match candidate {
+        Some(mon) => {
+            let w = if saved.width > 0.0 { saved.width } else { 1400.0 };
+            let h = if saved.height > 0.0 { saved.height } else { 900.0 };
+            let win_area = w * h;
+
+            let overlap_w = (f64::min(saved.x + w, mon.x + mon.width) - f64::max(saved.x, mon.x)).max(0.0);
+            let overlap_h = (f64::min(saved.y + h, mon.y + mon.height) - f64::max(saved.y, mon.y)).max(0.0);
+            let overlap_area = overlap_w * overlap_h;
+
+            if win_area <= 0.0 || overlap_area < 0.5 * win_area {
+                // Mostly off-screen: centre on primary
+                (primary, true)
+            } else {
+                (mon, false)
+            }
+        }
+        None => {
+            // Monitor gone or no match: centre on primary
+            (primary, true)
+        }
+    };
+
+    let mut w = if saved.width > 0.0 { saved.width } else { 1400.0 };
+    let mut h = if saved.height > 0.0 { saved.height } else { 900.0 };
+
+    if w > target_mon.width {
+        w = target_mon.width;
+    }
+    if h > target_mon.height {
+        h = target_mon.height;
+    }
+
+    let (x, y) = if should_center {
+        let cx = target_mon.x + (target_mon.width - w) / 2.0;
+        let cy = target_mon.y + (target_mon.height - h) / 2.0;
+        (cx, cy)
+    } else {
+        let mut cx = saved.x;
+        let mut cy = saved.y;
+
+        if cx < target_mon.x {
+            cx = target_mon.x;
+        } else if cx + w > target_mon.x + target_mon.width {
+            cx = target_mon.x + target_mon.width - w;
+        }
+
+        if cy < target_mon.y {
+            cy = target_mon.y;
+        } else if cy + h > target_mon.y + target_mon.height {
+            cy = target_mon.y + target_mon.height - h;
+        }
+
+        (cx, cy)
+    };
+
+    WindowState {
+        width: w,
+        height: h,
+        x,
+        y,
+        is_maximized: saved.is_maximized,
+        monitor: target_mon.name.clone(),
+        scale_factor: Some(target_mon.scale_factor),
+    }
 }
 
 fn default_frustum_opacity() -> f64 {
@@ -396,6 +546,8 @@ pub mod tests {
                 x: 100.0,
                 y: 50.0,
                 is_maximized: false,
+                monitor: Some("Display 1".into()),
+                scale_factor: Some(2.0),
             }),
             recent_roots: vec!["/path/to/data".into(), "/path/to/prev".into()],
         };
@@ -541,5 +693,225 @@ pub mod tests {
             toggles.frustum_image_cameras,
             Some(vec!["veh_01/cam_front".into(), "uav_01/cam_down".into()])
         );
+    }
+
+    #[test]
+    fn test_window_geometry_round_trip_scale_1_and_2() {
+        let initial_logical_x = 132.0;
+        let initial_logical_y = 132.0;
+        let initial_logical_w = 1400.0;
+        let initial_logical_h = 900.0;
+
+        // Test scale 1.0 round trip across multiple simulated launches
+        {
+            let scale_1 = 1.0;
+            let monitor_1 = MonitorInfo {
+                name: Some("Standard 1080p Display".into()),
+                x: 0.0,
+                y: 0.0,
+                width: 1920.0,
+                height: 1080.0,
+                scale_factor: scale_1,
+                is_primary: true,
+            };
+            let monitors_1 = vec![monitor_1.clone()];
+
+            let mut current_state = WindowState {
+                x: initial_logical_x,
+                y: initial_logical_y,
+                width: initial_logical_w,
+                height: initial_logical_h,
+                is_maximized: false,
+                monitor: monitor_1.name.clone(),
+                scale_factor: Some(scale_1),
+            };
+
+            for relaunch in 1..=5 {
+                let (phys_x, phys_y, phys_w, phys_h) = current_state.to_physical(scale_1);
+                assert_eq!(phys_x, 132);
+                assert_eq!(phys_y, 132);
+                assert_eq!(phys_w, 1400);
+                assert_eq!(phys_h, 900);
+
+                let saved = WindowState::from_physical(
+                    phys_x,
+                    phys_y,
+                    phys_w,
+                    phys_h,
+                    scale_1,
+                    monitor_1.name.clone(),
+                    false,
+                );
+
+                let restored = resolve_window_geometry(&saved, &monitors_1);
+                assert_eq!(restored.x, initial_logical_x, "scale 1.0 x drifted on relaunch {}", relaunch);
+                assert_eq!(restored.y, initial_logical_y, "scale 1.0 y drifted on relaunch {}", relaunch);
+                assert_eq!(restored.width, initial_logical_w, "scale 1.0 w drifted on relaunch {}", relaunch);
+                assert_eq!(restored.height, initial_logical_h, "scale 1.0 h drifted on relaunch {}", relaunch);
+                assert_eq!(restored.scale_factor, Some(scale_1));
+                current_state = restored;
+            }
+        }
+
+        // Test scale 2.0 round trip across multiple simulated launches (prevents y = 132 -> 264 -> 528 drift)
+        {
+            let scale_2 = 2.0;
+            let monitor_2 = MonitorInfo {
+                name: Some("Built-in Retina Display".into()),
+                x: 0.0,
+                y: 0.0,
+                width: 1728.0,
+                height: 1117.0,
+                scale_factor: scale_2,
+                is_primary: true,
+            };
+            let monitors_2 = vec![monitor_2.clone()];
+
+            let mut current_state = WindowState {
+                x: initial_logical_x,
+                y: initial_logical_y,
+                width: initial_logical_w,
+                height: initial_logical_h,
+                is_maximized: false,
+                monitor: monitor_2.name.clone(),
+                scale_factor: Some(scale_2),
+            };
+
+            for relaunch in 1..=5 {
+                let (phys_x, phys_y, phys_w, phys_h) = current_state.to_physical(scale_2);
+                assert_eq!(phys_x, 264);
+                assert_eq!(phys_y, 264);
+                assert_eq!(phys_w, 2800);
+                assert_eq!(phys_h, 1800);
+
+                let saved = WindowState::from_physical(
+                    phys_x,
+                    phys_y,
+                    phys_w,
+                    phys_h,
+                    scale_2,
+                    monitor_2.name.clone(),
+                    false,
+                );
+
+                // Logical coordinates must remain exact: 132, 132, 1400, 900
+                assert_eq!(saved.x, initial_logical_x);
+                assert_eq!(saved.y, initial_logical_y);
+                assert_eq!(saved.width, initial_logical_w);
+                assert_eq!(saved.height, initial_logical_h);
+
+                let restored = resolve_window_geometry(&saved, &monitors_2);
+                assert_eq!(restored.x, initial_logical_x, "scale 2.0 x drifted on relaunch {}", relaunch);
+                assert_eq!(restored.y, initial_logical_y, "scale 2.0 y drifted on relaunch {}", relaunch);
+                assert_eq!(restored.width, initial_logical_w, "scale 2.0 w drifted on relaunch {}", relaunch);
+                assert_eq!(restored.height, initial_logical_h, "scale 2.0 h drifted on relaunch {}", relaunch);
+                assert_eq!(restored.scale_factor, Some(scale_2));
+                current_state = restored;
+            }
+        }
+    }
+
+    #[test]
+    fn test_window_geometry_clamping() {
+        let primary = MonitorInfo {
+            name: Some("Primary Display".into()),
+            x: 0.0,
+            y: 0.0,
+            width: 1920.0,
+            height: 1080.0,
+            scale_factor: 1.0,
+            is_primary: true,
+        };
+        let external = MonitorInfo {
+            name: Some("External 4K".into()),
+            x: 1920.0,
+            y: 0.0,
+            width: 2560.0,
+            height: 1440.0,
+            scale_factor: 2.0,
+            is_primary: false,
+        };
+        let monitors = vec![primary.clone(), external.clone()];
+
+        // Case 1: Partial overflow on existing monitor (>50% overlap) clamps fully inside visible frame
+        {
+            let saved = WindowState {
+                x: 1100.0,
+                y: 100.0,
+                width: 1000.0,
+                height: 800.0,
+                is_maximized: false,
+                monitor: primary.name.clone(),
+                scale_factor: Some(1.0),
+            };
+            let resolved = resolve_window_geometry(&saved, &monitors);
+            // 1100 + 1000 = 2100 > 1920 -> clamped to 1920 - 1000 = 920.0
+            assert_eq!(resolved.x, 920.0);
+            assert_eq!(resolved.y, 100.0);
+            assert_eq!(resolved.width, 1000.0);
+            assert_eq!(resolved.height, 800.0);
+            assert_eq!(resolved.monitor, primary.name);
+        }
+
+        // Case 2: Negative coordinates (overflow top-left, >50% overlap) clamped to 0.0
+        {
+            let saved = WindowState {
+                x: -100.0,
+                y: -50.0,
+                width: 1000.0,
+                height: 800.0,
+                is_maximized: false,
+                monitor: primary.name.clone(),
+                scale_factor: Some(1.0),
+            };
+            let resolved = resolve_window_geometry(&saved, &monitors);
+            assert_eq!(resolved.x, 0.0);
+            assert_eq!(resolved.y, 0.0);
+            assert_eq!(resolved.width, 1000.0);
+            assert_eq!(resolved.height, 800.0);
+        }
+
+        // Case 3: Mostly off-screen (<50% overlap) centres on primary monitor
+        {
+            let saved = WindowState {
+                x: 1800.0,
+                y: 200.0,
+                width: 1000.0,
+                height: 800.0,
+                is_maximized: false,
+                monitor: primary.name.clone(),
+                scale_factor: Some(1.0),
+            };
+            let resolved = resolve_window_geometry(&saved, &monitors);
+            // Centred on primary (1920x1080):
+            // x = (1920 - 1000) / 2 = 460.0
+            // y = (1080 - 800) / 2 = 140.0
+            assert_eq!(resolved.x, 460.0);
+            assert_eq!(resolved.y, 140.0);
+            assert_eq!(resolved.width, 1000.0);
+            assert_eq!(resolved.height, 800.0);
+        }
+
+        // Case 4: Saved monitor is gone (disconnected) centres on primary monitor
+        {
+            let saved = WindowState {
+                x: 2100.0,
+                y: 200.0,
+                width: 1200.0,
+                height: 800.0,
+                is_maximized: false,
+                monitor: Some("Disconnected Display".into()),
+                scale_factor: Some(2.0),
+            };
+            let resolved = resolve_window_geometry(&saved, &monitors);
+            // Centred on primary:
+            // x = (1920 - 1200) / 2 = 360.0
+            // y = (1080 - 800) / 2 = 140.0
+            assert_eq!(resolved.x, 360.0);
+            assert_eq!(resolved.y, 140.0);
+            assert_eq!(resolved.width, 1200.0);
+            assert_eq!(resolved.height, 800.0);
+            assert_eq!(resolved.monitor, primary.name);
+        }
     }
 }

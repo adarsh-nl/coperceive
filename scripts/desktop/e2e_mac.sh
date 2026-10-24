@@ -721,6 +721,113 @@ print("Step 2b verified: loop stayed off across quit and relaunch.")
 EOF
 
 echo ""
+echo "E2E_MARK step=2c"
+echo "--- Step 2c: Relaunch 3 times and assert viewer window frame is unchanged ---"
+
+python3 << EOF
+import json, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/state",
+    headers={"Authorization": f"Bearer {secret}"}
+)
+with urllib.request.urlopen(req, timeout=10) as r:
+    st = json.loads(r.read().decode("utf-8"))
+initial_ws = st.get("window_state")
+print(f"Initial window state before 3 relaunches: {initial_ws}")
+assert initial_ws is not None, "Expected window_state to be saved in state.json"
+assert "x" in initial_ws and "y" in initial_ws and "width" in initial_ws and "height" in initial_ws
+with open("${TMP_DIR}/initial_window_state.json", "w") as f:
+    json.dump(initial_ws, f)
+EOF
+
+for launch in 1 2 3; do
+    echo "Relaunch cycle ${launch}/3..."
+    osascript <<EOF || true
+tell application "System Events"
+    tell process "Coperceive"
+        keystroke "q" using command down
+    end tell
+end tell
+EOF
+    for i in {1..20}; do
+        if ! kill -0 "${APP_PID}" 2>/dev/null; then
+            break
+        fi
+        sleep 0.2
+    done
+    if kill -0 "${APP_PID}" 2>/dev/null; then
+        kill -TERM "${APP_PID}" 2>/dev/null || true
+        wait "${APP_PID}" 2>/dev/null || true
+    fi
+    APP_PID=""
+    rm -f "${MARKER_FILE}"
+
+    "${APP_EXE}" > "${TMP_DIR}/geom_relaunch_${launch}_stdout.log" 2> "${TMP_DIR}/geom_relaunch_${launch}_stderr.log" &
+    APP_PID=$!
+    for i in {1..120}; do
+        if [ -f "${MARKER_FILE}" ]; then
+            break
+        fi
+        if ! kill -0 "${APP_PID}" 2>/dev/null; then
+            echo "Error: relaunch ${launch} died" >&2
+            cat "${TMP_DIR}/geom_relaunch_${launch}_stderr.log" >&2
+            exit 11
+        fi
+        sleep 0.5
+    done
+    if [ ! -f "${MARKER_FILE}" ]; then
+        echo "Error: relaunch ${launch} did not produce marker file" >&2
+        cat "${TMP_DIR}/geom_relaunch_${launch}_stderr.log" >&2
+        exit 11
+    fi
+    RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+    RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+
+    python3 << EOF
+import json, time, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+launch = "${launch}"
+
+with open("${TMP_DIR}/initial_window_state.json") as f:
+    expected = json.load(f)
+
+deadline = time.monotonic() + 30
+curr_ws = None
+while time.monotonic() < deadline:
+    try:
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/state",
+            headers={"Authorization": f"Bearer {secret}"}
+        )
+        with urllib.request.urlopen(req, timeout=5) as r:
+            st = json.loads(r.read().decode("utf-8"))
+            curr_ws = st.get("window_state")
+            if curr_ws:
+                break
+    except Exception:
+        pass
+    time.sleep(0.5)
+
+print(f"Relaunch {launch} window state: {curr_ws}")
+assert curr_ws is not None, f"Window state missing on relaunch {launch}"
+
+for key in ("x", "y", "width", "height"):
+    diff = abs(float(curr_ws[key]) - float(expected[key]))
+    assert diff < 1.0, f"Window frame drifted on relaunch {launch}: {key} was {curr_ws[key]}, expected {expected[key]} (diff {diff})"
+
+print(f"Relaunch {launch}/3 verified: window frame unchanged ({curr_ws['width']}x{curr_ws['height']} at x={curr_ws['x']}, y={curr_ws['y']}).")
+EOF
+done
+
+echo "Step 2c verified: viewer window frame remained completely unchanged across 3 relaunches."
+
+echo ""
 echo "--- Step 3: Switch Dataset to Second Valid Root (Single Scene Root) ---"
 echo "${FIXTURE_2}" > "${MOCK_DIALOG_FILE}"
 

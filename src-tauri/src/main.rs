@@ -204,7 +204,38 @@ fn open_viewer_window(
     .resizable(true)
     .initialization_script(&init_script);
 
-    if let Some(ref ws) = persistent.window_state {
+    let monitors_info: Vec<state::MonitorInfo> = {
+        let primary = app.primary_monitor().ok().flatten();
+        let primary_name = primary.as_ref().and_then(|m| m.name().cloned());
+        let primary_pos = primary.as_ref().map(|m| *m.position());
+
+        let avail = app.available_monitors().unwrap_or_default();
+        avail.into_iter().map(|m| {
+            let scale = if m.scale_factor() > 0.0 { m.scale_factor() } else { 1.0 };
+            let work = m.work_area();
+            let (px, py, pw, ph) = if work.size.width > 0 && work.size.height > 0 {
+                (work.position.x, work.position.y, work.size.width, work.size.height)
+            } else {
+                (m.position().x, m.position().y, m.size().width, m.size().height)
+            };
+            let is_primary = primary_name.as_ref() == m.name() && primary_pos == Some(*m.position());
+            state::MonitorInfo {
+                name: m.name().cloned(),
+                x: px as f64 / scale,
+                y: py as f64 / scale,
+                width: pw as f64 / scale,
+                height: ph as f64 / scale,
+                scale_factor: scale,
+                is_primary,
+            }
+        }).collect()
+    };
+
+    let resolved_ws = persistent.window_state.as_ref().map(|ws| {
+        state::resolve_window_geometry(ws, &monitors_info)
+    });
+
+    if let Some(ref ws) = resolved_ws {
         win_builder = win_builder
             .inner_size(ws.width, ws.height)
             .position(ws.x, ws.y);
@@ -216,9 +247,14 @@ fn open_viewer_window(
         .build()
         .map_err(|e| format!("Failed to create viewer window: {}", e))?;
 
-    if let Some(ref ws) = persistent.window_state {
+    if let Some(ref ws) = resolved_ws {
         if ws.is_maximized {
             let _ = viewer_window.maximize();
+        }
+        if persistent.window_state.as_ref() != Some(ws) {
+            let mut updated_persistent = persistent.clone();
+            updated_persistent.window_state = Some(ws.clone());
+            let _ = state::save_state(&updated_persistent);
         }
     }
 
@@ -1164,32 +1200,84 @@ fn main() {
                 }
                 tauri::WindowEvent::Resized(size) => {
                     if window.label() == "viewer" {
+                        let scale = window.scale_factor().unwrap_or(1.0).max(0.1);
+                        let logical_size: tauri::LogicalSize<f64> = size.to_logical(scale);
+                        let mon = window.current_monitor().ok().flatten();
+                        let mon_name = mon.as_ref().and_then(|m| m.name().cloned());
+                        let is_max = window.is_maximized().unwrap_or(false);
+
                         let mut persistent = state::load_state();
                         let ws = persistent.window_state.get_or_insert_with(|| state::WindowState {
-                            width: size.width as f64,
-                            height: size.height as f64,
+                            width: logical_size.width,
+                            height: logical_size.height,
                             x: 0.0,
                             y: 0.0,
-                            is_maximized: false,
+                            is_maximized: is_max,
+                            monitor: mon_name.clone(),
+                            scale_factor: Some(scale),
                         });
-                        ws.width = size.width as f64;
-                        ws.height = size.height as f64;
+                        if !is_max {
+                            ws.width = logical_size.width;
+                            ws.height = logical_size.height;
+                        }
+                        ws.is_maximized = is_max;
+                        if mon_name.is_some() {
+                            ws.monitor = mon_name;
+                        }
+                        ws.scale_factor = Some(scale);
                         let _ = state::save_state(&persistent);
                     }
                 }
                 tauri::WindowEvent::Moved(pos) => {
                     if window.label() == "viewer" {
+                        let scale = window.scale_factor().unwrap_or(1.0).max(0.1);
+                        let logical_pos: tauri::LogicalPosition<f64> = pos.to_logical(scale);
+                        let mon = window.current_monitor().ok().flatten();
+                        let mon_name = mon.as_ref().and_then(|m| m.name().cloned());
+                        let is_max = window.is_maximized().unwrap_or(false);
+
                         let mut persistent = state::load_state();
                         let ws = persistent.window_state.get_or_insert_with(|| state::WindowState {
                             width: 1400.0,
                             height: 900.0,
-                            x: pos.x as f64,
-                            y: pos.y as f64,
-                            is_maximized: false,
+                            x: logical_pos.x,
+                            y: logical_pos.y,
+                            is_maximized: is_max,
+                            monitor: mon_name.clone(),
+                            scale_factor: Some(scale),
                         });
-                        ws.x = pos.x as f64;
-                        ws.y = pos.y as f64;
+                        if !is_max {
+                            ws.x = logical_pos.x;
+                            ws.y = logical_pos.y;
+                        }
+                        ws.is_maximized = is_max;
+                        if mon_name.is_some() {
+                            ws.monitor = mon_name;
+                        }
+                        ws.scale_factor = Some(scale);
                         let _ = state::save_state(&persistent);
+                    }
+                }
+                tauri::WindowEvent::ScaleFactorChanged { scale_factor, new_inner_size, .. } => {
+                    if window.label() == "viewer" {
+                        let scale = if *scale_factor > 0.0 { *scale_factor } else { 1.0 };
+                        let logical_size: tauri::LogicalSize<f64> = new_inner_size.to_logical(scale);
+                        let mon = window.current_monitor().ok().flatten();
+                        let mon_name = mon.as_ref().and_then(|m| m.name().cloned());
+                        let is_max = window.is_maximized().unwrap_or(false);
+
+                        let mut persistent = state::load_state();
+                        if let Some(ref mut ws) = persistent.window_state {
+                            if !is_max {
+                                ws.width = logical_size.width;
+                                ws.height = logical_size.height;
+                            }
+                            ws.scale_factor = Some(scale);
+                            if mon_name.is_some() {
+                                ws.monitor = mon_name;
+                            }
+                            let _ = state::save_state(&persistent);
+                        }
                     }
                 }
                 tauri::WindowEvent::CloseRequested { .. } => {
