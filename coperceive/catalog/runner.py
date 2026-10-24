@@ -10,7 +10,7 @@ import json
 import shutil
 import sys
 from pathlib import Path
-from typing import Any, TextIO
+from typing import Any, TextIO, cast
 
 import yaml
 
@@ -31,8 +31,18 @@ def load_catalog() -> list[dict[str, Any]]:
     if not path.exists():
         return []
     with path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f) or {}
-    return data.get("datasets", [])
+        loaded = yaml.safe_load(f)
+    if not isinstance(loaded, dict):
+        return []
+    raw_dict = cast(dict[str, Any], loaded)
+    raw_datasets: Any = raw_dict.get("datasets", [])
+    if isinstance(raw_datasets, list):
+        result: list[dict[str, Any]] = []
+        for item in cast(list[object], raw_datasets):
+            if isinstance(item, dict):
+                result.append(cast(dict[str, Any], item))
+        return result
+    return []
 
 
 def get_dataset(dataset_id: str) -> dict[str, Any] | None:
@@ -127,12 +137,15 @@ def run_dataset_job(
 
     try:
         # Stage 1: Download
-        _emit({
-            "event": "stage",
-            "stage": "download",
-            "message": f"Downloading {ds.get('name')} ({preset_id})…",
-            "percent": 10,
-        }, out)
+        _emit(
+            {
+                "event": "stage",
+                "stage": "download",
+                "message": f"Downloading {ds.get('name')} ({preset_id})…",
+                "percent": 10,
+            },
+            out,
+        )
 
         if dataset_id == "griffin":
             download_griffin(
@@ -144,28 +157,37 @@ def run_dataset_job(
             )
 
             # Stage 2: Verify MD5
-            _emit({
-                "event": "stage",
-                "stage": "verify_md5",
-                "message": "Verifying archive checksums…",
-                "percent": 45,
-            }, out)
+            _emit(
+                {
+                    "event": "stage",
+                    "stage": "verify_md5",
+                    "message": "Verifying archive checksums…",
+                    "percent": 45,
+                },
+                out,
+            )
 
             # Stage 3: Extract
-            _emit({
-                "event": "stage",
-                "stage": "extract",
-                "message": "Extracting scene archives…",
-                "percent": 65,
-            }, out)
+            _emit(
+                {
+                    "event": "stage",
+                    "stage": "extract",
+                    "message": "Extracting scene archives…",
+                    "percent": 65,
+                },
+                out,
+            )
 
             # Stage 4: Convert
-            _emit({
-                "event": "stage",
-                "stage": "convert",
-                "message": "Converting raw sensor feeds to Schema 1…",
-                "percent": 85,
-            }, out)
+            _emit(
+                {
+                    "event": "stage",
+                    "stage": "convert",
+                    "message": "Converting raw sensor feeds to Schema 1…",
+                    "percent": 85,
+                },
+                out,
+            )
 
             conv_report = convert_griffin(
                 raw_dest / "griffin-25m",
@@ -174,30 +196,35 @@ def run_dataset_job(
             )
 
             # Stage 5: Validate
-            _emit({
-                "event": "stage",
-                "stage": "validate",
-                "message": "Validating converted scenes…",
-                "percent": 95,
-            }, out)
+            _emit(
+                {
+                    "event": "stage",
+                    "stage": "validate",
+                    "message": "Validating converted scenes…",
+                    "percent": 95,
+                },
+                out,
+            )
 
-            if conv_report.scenes:
-                scene_ids = [s.scene_id for s in conv_report.scenes]
-            else:
-                scene_ids = ["Town03-000"]
-            first_scene = scene_ids[0] if scene_ids else "Town03-000"
+            scene_ids: list[str] = (
+                list(conv_report.written) if conv_report.written else ["Town03-000"]
+            )
+            first_scene: str = scene_ids[0] if scene_ids else "Town03-000"
             first_path = str(library_root / "Griffin" / first_scene)
 
             # Complete!
-            _emit({
-                "event": "complete",
-                "dataset_id": dataset_id,
-                "preset_id": preset_id,
-                "scenes": scene_ids,
-                "first_scene": first_scene,
-                "path": first_path,
-                "message": f"Successfully imported {len(scene_ids)} scene(s).",
-            }, out)
+            _emit(
+                {
+                    "event": "complete",
+                    "dataset_id": dataset_id,
+                    "preset_id": preset_id,
+                    "scenes": scene_ids,
+                    "first_scene": first_scene,
+                    "path": first_path,
+                    "message": f"Successfully imported {len(scene_ids)} scene(s).",
+                },
+                out,
+            )
 
     except Exception as exc:
         _emit({"event": "error", "message": str(exc)}, out)

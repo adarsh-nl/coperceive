@@ -77,7 +77,7 @@ def test_cli_dataset_dry_run(tmp_path: Path, capsys: pytest.CaptureFixture[str])
     captured = capsys.readouterr()
     # The output may have tqdm progress bars before the json output
     lines = [line.strip() for line in captured.out.strip().splitlines() if line.strip()]
-    json_text = "\n".join(lines[lines.index("{"):])
+    json_text = "\n".join(lines[lines.index("{") :])
     data = json.loads(json_text)
     assert data["event"] == "dry_run"
     assert data["dataset_id"] == "griffin"

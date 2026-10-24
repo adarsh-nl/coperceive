@@ -837,7 +837,8 @@ fn import_from_folder(
     }
     let effective_dest = if dest.trim().is_empty() {
         let p = state::load_state();
-        p.library_root.unwrap_or_else(state::default_library_root)
+        p.library_root
+            .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned())
     } else {
         dest
     };
@@ -921,8 +922,10 @@ static DATASET_JOB_PID: Mutex<Option<u32>> = Mutex::new(None);
 #[tauri::command]
 fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, String> {
     let p = state::load_state();
-    let root = p.library_root.unwrap_or_else(state::default_library_root);
-    coperceive_desktop::library::get_storage_stats(Path::new(&root))
+    let root = p
+        .library_root
+        .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&root)))
 }
 
 #[cfg(target_os = "macos")]
@@ -931,26 +934,31 @@ fn set_library_root(new_root: String) -> Result<coperceive_desktop::library::Sto
     let mut p = state::load_state();
     p.library_root = Some(new_root.clone());
     let _ = state::save_state(&p);
-    coperceive_desktop::library::get_storage_stats(Path::new(&new_root))
+    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root)))
 }
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::StorageStats, String> {
     let mut p = state::load_state();
-    let old_root = p.library_root.clone().unwrap_or_else(state::default_library_root);
+    let old_root = p
+        .library_root
+        .clone()
+        .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     coperceive_desktop::library::move_library_scenes(Path::new(&old_root), Path::new(&new_root))
         .map_err(|e| format!("Failed to move library: {e}"))?;
     p.library_root = Some(new_root.clone());
     let _ = state::save_state(&p);
-    coperceive_desktop::library::get_storage_stats(Path::new(&new_root))
+    Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root)))
 }
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn get_library_scenes() -> Result<Vec<coperceive_desktop::library::LibrarySceneInfo>, String> {
     let p = state::load_state();
-    let root = p.library_root.unwrap_or_else(state::default_library_root);
+    let root = p
+        .library_root
+        .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     Ok(coperceive_desktop::library::scan_library_scenes(Path::new(&root)))
 }
 
@@ -982,7 +990,9 @@ fn dataset_dry_run(
     use std::process::Command;
 
     let p = state::load_state();
-    let root = p.library_root.unwrap_or_else(state::default_library_root);
+    let root = p
+        .library_root
+        .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     let python = resolve_python_binary(&app);
     let output = Command::new(&python)
         .args([
@@ -1030,7 +1040,9 @@ fn start_dataset_job(
         }
     }
     let p = state::load_state();
-    let root = p.library_root.unwrap_or_else(state::default_library_root);
+    let root = p
+        .library_root
+        .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     let python = resolve_python_binary(&app);
     let mut cmd_args = vec![
         "-m".to_string(),
