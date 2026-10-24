@@ -212,6 +212,7 @@ def test_cancel_is_answered(process: PluginProcess, tmp_path: Path) -> None:
     process.send(_configure(tmp_path, tmp_path / "work", misbehave="sleep"))
     assert isinstance(process.receive(timeout_s=10.0), Configured)
     process.send(_frame())
+    time.sleep(0.05)
     process.cancel(1)
     started = time.monotonic()
     answer = process.receive(timeout_s=5.0)
