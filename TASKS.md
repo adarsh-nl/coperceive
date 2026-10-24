@@ -23,7 +23,7 @@ repo: https://github.com/adarsh-nl/coperceive
 | Last updated | 2026-10-24 |
 | `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
 | `feat/desktop` | `5d5c98b`. 79 commits ahead of `main`, 1 behind. Not merged. Do not rebase `feat/m2-import` onto `main` until Adarsh merges this. |
-| `feat/m2-import` | Parent `bc23b26`. Last green run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) is `c50f568` (9/9), artifact `coperceive-desktop-macos-arm64` (80.19 MB). That run does not include the checkpoint below. |
+| `feat/m2-import` | `db8aa3b` (parent `bc23b26`). CI for `db8aa3b` is not recorded yet. Last green run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) is `c50f568` (9/9), artifact `coperceive-desktop-macos-arm64` (80.19 MB). That run does not include `db8aa3b`. |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
@@ -212,7 +212,7 @@ Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in 
 ---
 
 ## Change log of this file
-- 2026-10-24: Snapshot corrected to `main` `0ee039d`, `feat/desktop` `5d5c98b` (not merged), `feat/m2-import` parent `bc23b26`. Recorded that the M2 strikes were ahead of e2e. Griffin sizes cited from the Hugging Face tree API on 2026-10-24. Removed `docs/updater-secrets.md` and replaced the burned updater public key with a placeholder. New e2e steps 2d, 5c, and 5d are written and not yet green. Last green run remains [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) at `c50f568`.
+- 2026-10-24: Snapshot corrected to `main` `0ee039d`, `feat/desktop` `5d5c98b` (not merged), `feat/m2-import` `db8aa3b` (parent `bc23b26`). Recorded that the M2 strikes were ahead of e2e. Griffin sizes cited from the Hugging Face tree API on 2026-10-24. Removed `docs/updater-secrets.md` and replaced the burned updater public key with a placeholder. New e2e steps 2d, 5c, and 5d are written and not yet green. Last green run remains [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) at `c50f568`.
 - 2026-10-24: Verified M2 on `feat/m2-import` with all 9 CI jobs green on run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) (`c50f568`). Synchronously initialized viewpoint, appearance, scene ID and hidden agents from initial state to prevent premature state overwrite; verified real-app macOS UI e2e and backdrop CPU measurement with dmg artifact `coperceive-desktop-macos-arm64` (80.19 MB).
 - 2026-10-24: Struck M1-5 against green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) at `5cadd1b`. Fixed window position/size Retina scale doubling bug by saving/restoring in logical points with monitor visible frame clamping, added round-trip/clamping unit tests, and verified window frame unchanged across 3 relaunches in e2e step 2c.
 - 2026-10-23: Struck M1-2 and M1-4 against [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) at `d35dddd`. Animated backdrop median 0.6%cpu, p95 0.8. Recorded in `docs/media/measurements/backdrop-cpu.md`.
