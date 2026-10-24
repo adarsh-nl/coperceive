@@ -1536,7 +1536,7 @@ RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
 RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
 sleep 2
 python3 - << EOF
-import json, time, urllib.request
+import json, time, urllib.request, urllib.error
 
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
@@ -1553,6 +1553,18 @@ def eval_js(script, timeout=15):
         raise RuntimeError(data["error"])
     return data.get("result")
 
+def eval_when_ready(script, deadline):
+    last = "page not ready"
+    while time.monotonic() < deadline:
+        try:
+            return eval_js(script)
+        except urllib.error.HTTPError as exc:
+            last = f"HTTP {exc.code}"
+        except Exception as exc:
+            last = str(exc)
+        time.sleep(0.5)
+    raise RuntimeError(last)
+
 def click_button(label):
     script = """
         (() => {
@@ -1567,10 +1579,10 @@ def click_button(label):
     if result != "clicked":
         raise RuntimeError(f"button not found: {label}")
 
-deadline = time.monotonic() + 20
+deadline = time.monotonic() + 40
 text = ""
 while time.monotonic() < deadline:
-    text = eval_js("document.body.innerText") or ""
+    text = eval_when_ready("document.body ? document.body.innerText : ''", deadline) or ""
     if "coperceive 0.2.0 is ready" in text:
         break
     time.sleep(0.4)

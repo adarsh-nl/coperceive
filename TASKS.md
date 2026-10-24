@@ -23,7 +23,7 @@ repo: https://github.com/adarsh-nl/coperceive
 | Last updated | 2026-10-24 |
 | `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
 | `feat/desktop` | `5d5c98b`. 79 commits ahead of `main`, 1 behind. Not merged. Do not rebase `feat/m2-import` onto `main` until Adarsh merges this. |
-| `feat/m2-import` | `acaae7f` (code `db8aa3b`, parent `bc23b26`). Run [40136197303](https://github.com/adarsh-nl/coperceive/actions/runs/40136197303) failed: `lint` (`ruff format` on `runner.py`) and `desktop-macos` (step 5c cancelled before a file was copied). Step 2d passed in that log. Web, pytest 3.10–3.13, gitleaks, and browser e2e passed. No dmg artifact. Last green run remains [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) at `c50f568`, artifact `coperceive-desktop-macos-arm64` (80.19 MB). |
+| `feat/m2-import` | `1ee6a8c`. Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) failed `desktop-macos` only: step 5c printed `Step 5c verified: import, cancel, resume, open.` and step 5d's first eval returned HTTP 504 while the viewer was still opening. Lint, web, pytest 3.10–3.13, gitleaks, and browser e2e passed. No dmg artifact. Last green run remains [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) at `c50f568`, artifact `coperceive-desktop-macos-arm64` (80.19 MB). |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
@@ -147,9 +147,9 @@ repo: https://github.com/adarsh-nl/coperceive
 
 The strikes above describe code that is in the tree. They were written before a green run of the new real-app steps. Do not read them as e2e-verified. These stay open until `desktop-macos` is green on this checkpoint:
 
-- [ ] P0 · e2e step 5c: import `tests/fixtures/synthetic_scene/synth_001`, cancel, resume, open. Run [40136197303](https://github.com/adarsh-nl/coperceive/actions/runs/40136197303) failed with `cancel left no resumable partial` because the script clicked Cancel when the button said Importing, before a file event. It now waits for ` / `.
+- [ ] P0 · e2e step 5c: import, cancel, resume, open. Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) printed `Step 5c verified: import, cancel, resume, open.` The desktop job was not green (step 5d), so this stays open.
 - [ ] P1 · e2e step 2d: one viewer window after relaunch. The log of failed run [40136197303](https://github.com/adarsh-nl/coperceive/actions/runs/40136197303) printed `Step 2d verified: one viewer window after relaunch.` The desktop job was not green, so this stays open.
-- [ ] P1 · e2e step 5d: a local mock `latest.json` server, then the banner, What's new, Later, and Restart now. Restart records a test flag and leaves the app running. Written. CI has not run it.
+- [ ] P1 · e2e step 5d: a local mock `latest.json` server, then the banner, What's new, Later, and Restart now. Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) returned HTTP 504 on the first eval while the viewer was opening. The script now retries that timeout.
 - [ ] P1 · Tauri updater plugin is not a Cargo dependency. `src-tauri/tauri.conf.json` `plugins.updater.pubkey` is the placeholder `PASTE_THE_PUBLIC_KEY_FROM_A_NEW_TAURI_SIGNER_KEYPAIR`. `docs/updater-secrets.md` is removed. The keypair committed in `e7f6fef` is public. Adarsh generates a new pair and pastes it as `docs/desktop/updates.md` says. Do not reuse the old key.
 - [ ] P1 · **Maps in one click** is not started. The brief's button text says CC-BY 4.0. `docs/adr/0008-hd-map.md` line 11 and `coperceive/hdmap/commands.py` record the CARLA package as MIT. Do not put CC-BY on the button until that is re-checked. Do not download the CARLA tarball or commit a `.xodr`.
 - [ ] P0 · Mac acceptance (Adarsh): empty library → Get data → Griffin "One scene with images" → Town03-000 with images and a map, no Terminal. A test release shows the banner and installs on Restart.
@@ -212,6 +212,7 @@ Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in 
 ---
 
 ## Change log of this file
+- 2026-10-24: Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) at `1ee6a8c` verified step 5c in the log and failed step 5d with an eval HTTP 504. Lint, web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.
 - 2026-10-24: Run [40136197303](https://github.com/adarsh-nl/coperceive/actions/runs/40136197303) at `acaae7f` failed lint (`ruff format`) and desktop e2e step 5c (cancel before the first copied file). Step 2d passed in that log. Web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.
 - 2026-10-24: Snapshot corrected to `main` `0ee039d`, `feat/desktop` `5d5c98b` (not merged), `feat/m2-import` `db8aa3b` (parent `bc23b26`). Recorded that the M2 strikes were ahead of e2e. Griffin sizes cited from the Hugging Face tree API on 2026-10-24. Removed `docs/updater-secrets.md` and replaced the burned updater public key with a placeholder. New e2e steps 2d, 5c, and 5d are written and not yet green. Last green run remains [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) at `c50f568`.
 - 2026-10-24: Verified M2 on `feat/m2-import` with all 9 CI jobs green on run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) (`c50f568`). Synchronously initialized viewpoint, appearance, scene ID and hidden agents from initial state to prevent premature state overwrite; verified real-app macOS UI e2e and backdrop CPU measurement with dmg artifact `coperceive-desktop-macos-arm64` (80.19 MB).
