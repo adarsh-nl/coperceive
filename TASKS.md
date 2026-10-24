@@ -22,12 +22,13 @@ repo: https://github.com/adarsh-nl/coperceive
 |---|---|
 | Last updated | 2026-10-24 |
 | `main` | `origin/main` is `fffda8a` (phases 0–6, adapters, eval engine). The `~/coperceive` checkout is local `662fa84` (ADR 0014) and is not what GitHub `main` is |
-| `feat/desktop` | `5cadd1b`. Green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) (9/9). Install `Coperceive_0.1.0_aarch64.dmg` from that run. Artifact `coperceive-desktop-macos-arm64` is 83978688 bytes. Window frame invariance across 3 relaunches verified. |
+| `feat/desktop` | `5cadd1b`. Green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) (9/9). |
+| `feat/m2-import` | `c50f568`. Green run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) (9/9). Artifact `coperceive-desktop-macos-arm64` (80.19 MB). Real macOS UI e2e and backdrop CPU measurement verified green. |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
-| Current milestone | **M1: reliable and stateful desktop** (ready to merge) |
-| Top blocker | **M1-6 merge `feat/desktop` → `main`** (Adarsh) |
+| Current milestone | **M2: data without the terminal** |
+| Top blocker | **M1-6 merge `feat/desktop` → `main`** (Adarsh), then rebase `feat/m2-import` onto `main` |
 
 ## Key docs in the repo
 - `HANDOVER.md`: long engineering log (cleanup task below)
@@ -196,6 +197,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ---
 
 ## Change log of this file
+- 2026-10-24: Verified M2 on `feat/m2-import` with all 9 CI jobs green on run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) (`c50f568`). Synchronously initialized viewpoint, appearance, scene ID and hidden agents from initial state to prevent premature state overwrite; verified real-app macOS UI e2e and backdrop CPU measurement with dmg artifact `coperceive-desktop-macos-arm64` (80.19 MB).
 - 2026-10-24: Struck M1-5 against green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) at `5cadd1b`. Fixed window position/size Retina scale doubling bug by saving/restoring in logical points with monitor visible frame clamping, added round-trip/clamping unit tests, and verified window frame unchanged across 3 relaunches in e2e step 2c.
 - 2026-10-23: Struck M1-2 and M1-4 against [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) at `d35dddd`. Animated backdrop median 0.6%cpu, p95 0.8. Recorded in `docs/media/measurements/backdrop-cpu.md`.
 - 2026-10-23: Un-struck M1-4. Run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) sampled the static frame (`reduceMotion=1`). Split Import scene into M2a (`scene pack`), M2b (Import from folder), and M2c (Import from HPC, plan only until M2b).
