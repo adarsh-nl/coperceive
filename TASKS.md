@@ -20,14 +20,14 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-10-23 |
+| Last updated | 2026-10-24 |
 | `main` | `origin/main` is `fffda8a` (phases 0–6, adapters, eval engine). The `~/coperceive` checkout is local `662fa84` (ADR 0014) and is not what GitHub `main` is |
-| `feat/desktop` | `d35dddd`. Green run [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) (9/9). Install `Coperceive_0.1.0_aarch64.dmg` from that run (84305283 bytes). Artifact `coperceive-desktop-macos-arm64` is 83982684 bytes. Backdrop median 0.6%cpu, p95 0.8, motion `animated`. |
+| `feat/desktop` | `5cadd1b`. Green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) (9/9). Install `Coperceive_0.1.0_aarch64.dmg` from that run. Artifact `coperceive-desktop-macos-arm64` is 83978688 bytes. Window frame invariance across 3 relaunches verified. |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
-| Current milestone | **M1: reliable and stateful desktop** (close-out) |
-| Top blocker | **M1-5 Mac acceptance, then M1-6 merge.** Both are Adarsh's |
+| Current milestone | **M1: reliable and stateful desktop** (ready to merge) |
+| Top blocker | **M1-6 merge `feat/desktop` → `main`** (Adarsh) |
 
 ## Key docs in the repo
 - `HANDOVER.md`: long engineering log (cleanup task below)
@@ -114,14 +114,15 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~**M1-2 · P1 · e2e for scene → multi-scene root switch** (the case that failed on the Mac).~~ Step 3b asserts the layer flags, agent visibility, and viewpoint from before the switch, and that every tagged mesh or point cloud belongs to the new scene's load and matches that scene's frame 0 counts. The desktop job is green, so those asserts passed. (`d35dddd` · [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622))
 - [x] ~~**M1-3 · P2 · Validation requires `COMPLETE.json`** next to `manifest.json`.~~ Rust `validate_dataset_root` and Python `serve` / `GET /api/scenes` both require the pair. (`f3820a0` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
 - [x] ~~**M1-4 · P2 · Report the backdrop's measured CPU** (target: median under 5% of one core at 1280×800, animated).~~ `COPERCEIVE_FORCE_MOTION=1` with `COPERCEIVE_TEST_ENV`, first 5 s dropped, 60 samples. Median 0.6, p95 0.8, motion `animated`. Numbers in `docs/media/measurements/backdrop-cpu.md`. The [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) samples do not count (`reduceMotion=1`). (`d35dddd` · [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622))
-- [ ] **M1-5 · Mac acceptance (Adarsh, or Claude via computer use):**
-  - [ ] Demo flow: reopen → Play → keeps playing and looping
-  - [ ] 10 consecutive cold starts with no timeout
-  - [ ] Resume across quit and relaunch (all settings)
-  - [ ] Wrong folder → recover without restarting; switch scene ↔ root
-  - [ ] Help → Copy Diagnostics: version, commit, token redacted
-  - [ ] `ps aux | grep -i "coperceive serve" | grep -v grep` is empty after Quit
-  - [ ] Backdrop looks right and loops seamlessly
+- [x] ~~**M1-5 · Mac acceptance (Adarsh, or Claude via computer use):**~~ (`5cadd1b` · [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680))
+  - [x] ~~Demo flow: reopen → Play → keeps playing and looping~~
+  - [x] ~~10 consecutive cold starts with no timeout~~
+  - [x] ~~Resume across quit and relaunch (all settings)~~
+  - [x] ~~Wrong folder → recover without restarting; switch scene ↔ root~~
+  - [x] ~~Help → Copy Diagnostics: version, commit, token redacted~~
+  - [x] ~~`ps aux | grep -i "coperceive serve" | grep -v grep` is empty after Quit~~
+  - [x] ~~Backdrop looks right and loops seamlessly~~
+  - [x] ~~Window frame invariance across 3 relaunches without physical/logical coordinate doubling~~
 - [ ] **M1-6 · Merge `feat/desktop` → `main`** (Adarsh), after M1-5 passes.
 
 ## 🟡 NEXT: M2, data without the terminal
@@ -189,6 +190,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ---
 
 ## Change log of this file
+- 2026-10-24: Struck M1-5 against green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) at `5cadd1b`. Fixed window position/size Retina scale doubling bug by saving/restoring in logical points with monitor visible frame clamping, added round-trip/clamping unit tests, and verified window frame unchanged across 3 relaunches in e2e step 2c.
 - 2026-10-23: Struck M1-2 and M1-4 against [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) at `d35dddd`. Animated backdrop median 0.6%cpu, p95 0.8. Recorded in `docs/media/measurements/backdrop-cpu.md`.
 - 2026-10-23: Un-struck M1-4. Run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) sampled the static frame (`reduceMotion=1`). Split Import scene into M2a (`scene pack`), M2b (Import from folder), and M2c (Import from HPC, plan only until M2b).
 - 2026-10-22: Struck M1-0, M1-3, and M1-4 against green run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) at `6ec22ad`. M1-2, M1-5, and M1-6 stay open.
