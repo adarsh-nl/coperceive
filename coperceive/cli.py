@@ -307,7 +307,9 @@ def build_parser() -> argparse.ArgumentParser:
     job_parser.add_argument("dataset", help="Dataset ID (e.g. griffin).")
     job_parser.add_argument("preset", help="Preset ID (e.g. dev, one-scene, full).")
     job_parser.add_argument("--dest", required=True, help="Destination library root.")
-    job_parser.add_argument("--accept-terms", action="store_true", help="Accept dataset licence terms.")
+    job_parser.add_argument(
+        "--accept-terms", action="store_true", help="Accept dataset licence terms."
+    )
     job_parser.set_defaults(func=_dataset_download)
 
     return parser
@@ -548,6 +550,7 @@ def _export_rerun(args: argparse.Namespace) -> None:
 
 def _dataset_catalog(_args: argparse.Namespace) -> None:
     import json
+
     from coperceive.catalog import load_catalog
 
     print(json.dumps(load_catalog(), indent=2))
@@ -555,6 +558,7 @@ def _dataset_catalog(_args: argparse.Namespace) -> None:
 
 def _dataset_dry_run(args: argparse.Namespace) -> None:
     import json
+
     from coperceive.catalog import dry_run_preset
 
     result = dry_run_preset(args.dataset, args.preset, Path(args.dest))

@@ -9,18 +9,17 @@ from __future__ import annotations
 import json
 import shutil
 import sys
-from dataclasses import asdict
 from pathlib import Path
 from typing import Any, TextIO
 
 import yaml
 
+from coperceive.griffin.convert import convert_griffin
 from coperceive.griffin.download import (
     ack_path,
     acknowledgement_present,
     download_griffin,
 )
-from coperceive.griffin.convert import convert_griffin
 
 
 def catalog_path() -> Path:
@@ -136,7 +135,7 @@ def run_dataset_job(
         }, out)
 
         if dataset_id == "griffin":
-            report = download_griffin(
+            download_griffin(
                 raw_dest,
                 subset="25m",
                 preset="dev" if preset_id == "dev" else None,
@@ -182,7 +181,10 @@ def run_dataset_job(
                 "percent": 95,
             }, out)
 
-            scene_ids = [s.scene_id for s in conv_report.scenes] if conv_report.scenes else ["Town03-000"]
+            if conv_report.scenes:
+                scene_ids = [s.scene_id for s in conv_report.scenes]
+            else:
+                scene_ids = ["Town03-000"]
             first_scene = scene_ids[0] if scene_ids else "Town03-000"
             first_path = str(library_root / "Griffin" / first_scene)
 

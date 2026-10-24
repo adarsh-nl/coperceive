@@ -3,16 +3,13 @@
 
 from __future__ import annotations
 
-import io
 import json
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-from coperceive.catalog import dry_run_preset, get_dataset, load_catalog
-from coperceive.catalog.runner import run_dataset_job
-from coperceive.cli import build_parser, main
+from coperceive.catalog import dry_run_preset, load_catalog
+from coperceive.cli import main
 
 
 def test_catalog_structure() -> None:
@@ -54,8 +51,7 @@ def test_catalog_structure() -> None:
 def test_dry_run_preset_headroom(tmp_path: Path) -> None:
     # Test headroom refusal when disk free space is low
     with patch("shutil.disk_usage") as mock_usage:
-        # total: 100GB, free: 1GB, estimated needed: 500MB -> (1GB - 500MB) = 500MB < 10% of 1GB (100MB)?
-        # Wait: free is 500MB, total 100GB, needed 500MB -> remaining 0 < 10% of 500MB -> has_headroom False
+        # Free is 500MB, needed 500MB -> remaining 0 < 10% headroom
         mock_usage.return_value = MagicMock(total=100 * 1024**3, free=500 * 1024**2)
         res = dry_run_preset("griffin", "dev", tmp_path)
         assert res["has_headroom"] is False
