@@ -126,15 +126,21 @@ repo: https://github.com/adarsh-nl/coperceive
 - [ ] **M1-6 · Merge `feat/desktop` → `main`** (Adarsh), after M1-5 passes.
 
 ## 🟡 NEXT: M2, data without the terminal
-- [ ] P0 · **Library screen:** each scene with dataset, town, duration, agents, sensors, size, has-images, has-map and a validate badge
-- [ ] P0 · **M2a · `coperceive scene pack`:** self-contained scene (every scene file, plus every `images.parquet` path materialised as a real file). Reject absolute paths and `..`. Symlink targets must stay inside the scene dir, the media root, or the raw Griffin root. Dangling links are per-file errors and do not stop the rest. Write `<dest>/<scene>.partial/` with `IMPORT.json`, resume on size+sha256, write `COMPLETE.json` last, then rename. `--images full|preview|none` (preview = 640 px JPEG quality 85, `.jpg` paths, parquet rewritten). Dry-run byte count. Free-space check keeps a 10% margin. Progress is NDJSON. `.partial` scenes are not listed.
-- [ ] P0 · **M2b · Import from folder…** in the desktop app. Runs the same pack code through the sidecar Python, with a progress bar, cancel, and resume.
-- [ ] P0 · **M2c · Import from HPC** (plan only until M2b is in): run `scene pack` on the cluster through the existing Rust SSH/ControlMaster session, then a resumable `rsync` over that SSH connection into the Mac library. Plan: `docs/design/import-hpc.md`. Not built yet.
-- [ ] P0 · **Get Griffin:** wrap `coperceive download/convert` with presets (dev ≈240 MB, one scene with images, full subset), licence acknowledgement, dry-run size, free-space check, progress, cancel, retry
-- [ ] P1 · **Maps in one click:** "Download map for Town03 (CARLA, CC-BY)", then fetch and align (today the viewer says "no map for Town03")
-- [ ] P1 · **Sample scene:** a tiny licence-clean demo, bundled or one-click, so a first user sees something in 10 s
-- [ ] P1 · Image thumbnails at import (640 px JPEG/WebP), full resolution on demand
-- [ ] Acceptance: from an empty Mac to Town03-000 playing with images and map, **without Terminal**
+- [ ] P0 · **Storage & Library location:** prompt on first use ("Where should coperceive keep datasets?", default `~/coperceive-data`), save `library_root` in `state.json`, show volume free space & used space, Settings → Storage (relocate with progress, Show in Finder).
+- [ ] P0 · **M2a · `coperceive scene pack`:** self-contained scene (every scene file, plus every `images.parquet` path materialised as a real file). Reject absolute paths and `..`. Symlink targets must stay inside scene dir, media root, or raw Griffin root. Dangling links are per-file errors. Write `<dest>/<scene>.partial/` with `IMPORT.json`, resume on size+sha256, write `COMPLETE.json` last, then rename. `--images full|preview|none`. Dry-run byte count. Free-space check (10% margin). Progress NDJSON.
+- [ ] P0 · **M2b · Import from folder…** in desktop app: imported scene lands in `library_root`. Cancel leaves resumable `.partial` (hidden from scene list).
+- [ ] P0 · **Dataset catalog ("Get data"):** prominent on Connect when library is empty, File → Get Data….
+  - Versioned `coperceive/catalog/datasets.yaml` (Griffin, OPV2V, V2XSet, V2V4Real).
+  - Cards: name, description, modalities, agents, linked licence/source/paper, preset sizes via dry-run, download button.
+  - Griffin presets: Dev tier (~240 MB), One scene with images, Full 25 m (~167 GB). MIT licence acknowledgement checkbox (`--accept-griffin-terms`).
+  - OPV2V / V2XSet: honest status, "Import a local copy" folder picker + convert.
+  - Download flow: preset dry-run → 10% headroom check → licence terms → sidecar NDJSON progress (download → md5 verify → extract → convert → validate) with Pause / Resume / Cancel → auto-open first scene on completion. Quit-resumable.
+- [ ] P0 · **Library screen:** scene list/grid in `library_root`: dataset, town, duration, agents, sensors, size, has-images, has-map, validate badge. Actions: Open, Show in Finder, Validate now, Delete (to Trash).
+- [ ] P0 · **Brand / Icon ("4c Cursor"):** lowercase monospace wordmark `coperceive` + orange-red cursor token `#D9482B`. App icon `#141414` with white `c` and block cursor. Generate `.icns` and Tauri icons from SVG master in `assets/brand/`. Replace blue-dot everywhere. Cursor blinks (1 s steps) on Connect screen; static under reduced motion.
+- [ ] P1 · **Auto-update:** Tauri v2 updater with minisign keypair. Prompted like Claude app: background download, non-blocking banner/toast ("Restart to update"), Later/Restart, Help → Check for Updates…, Settings toggle. `release.yml` for `v*` tags.
+- [ ] P1 · **Maps in one click:** on scene card or viewer notice, "Download map for Town03 (CARLA 0.9.15, CC-BY 4.0)" into `library_root/maps/`.
+- [ ] P1 · Image thumbnails at import (640 px JPEG/WebP), full resolution on demand.
+- [ ] Acceptance: from an empty Mac, Get data → Griffin "One scene with images" → Town03-000 plays with images and map, **without Terminal**. Update prompt verified.
 
 ## 🟡 LATER: M3, HPC mode in the app
 - [ ] P0 · Connect screen HPC target: saved hosts, queue status ("Waiting for a CPU node: Priority, 0:42"), heartbeat and reattach, walltime warning, orphan cleanup on launch
@@ -172,11 +178,11 @@ repo: https://github.com/adarsh-nl/coperceive
 - [ ] Deferred · Second real cooperative dataset end-to-end (V2V4Real) after M2
 
 ## ❓ Decisions only Adarsh can make
-- [ ] Code signing: Apple Developer Program ($99/yr) or stay unsigned (right-click → Open)
-- [ ] Auto-update: yes (GitHub Releases + Tauri updater) or manual downloads
-- [ ] Demo data: bundle a small Griffin clip (MIT plus CARLA CC-BY attribution) or download on first run
-- [ ] HPC jobs: partition `ps` only, or user-selectable partition and walltime
-- [ ] Name, icon and bundle id for 1.0 (now "Coperceive", `nl.adarsh.coperceive`)
+- [x] ~~Code signing: not now. Unsigned dmg; docs explain right-click → Open.~~ (Decided 2026-10-24)
+- [x] ~~Auto-update: yes, prompted like the Claude desktop app (GitHub Releases + Tauri v2 updater with minisign keypair).~~ (Decided 2026-10-24)
+- [x] ~~Demo data: no built-in demo data. Removed "Sample scene"; replaced by Dataset catalog ("Get data" screen).~~ (Decided 2026-10-24)
+- [x] ~~HPC jobs: partition `ps`, CPU only, default walltime 4 h (in Advanced disclosure in M3, never required).~~ (Decided 2026-10-24)
+- [x] ~~Name, icon and wordmark: design "4c Cursor" (lowercase monospace `coperceive` + orange-red block cursor `#D9482B`; dark `#141414` icon with white monospace `c`).~~ (Decided 2026-10-24)
 - [ ] Repo public: intended? Timing of the public announcement
 - [ ] Landing hosting (Vercel / GitHub Pages / university page)
 
