@@ -330,4 +330,6 @@ def test_cli_ingest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert "wrote" in capsys.readouterr().out
     loaded = load_map(tmp_path / "maps" / "Town03")
     assert loaded.map_name == "Carla/Maps/Town03"
-    assert loaded.source["licence"] == "MIT"
+    assert loaded.source["licence"] == "CC-BY"
+    assert "CC-BY" in str(loaded.source["licence_note"])
+    assert "0.9.15/README.md" in str(loaded.source["licence_note"])

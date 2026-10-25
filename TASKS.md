@@ -20,7 +20,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-10-24 |
+| Last updated | 2026-10-25 |
 | `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
 | `feat/desktop` | `5d5c98b`. 79 commits ahead of `main`, 1 behind. Not merged. Do not rebase `feat/m2-import` onto `main` until Adarsh merges this. |
 | `feat/m2-import` | `7404f0b`. Green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) (9/9). Artifact `coperceive-desktop-macos-arm64` (84,127,425 bytes). DMG `Coperceive_0.1.0_aarch64.dmg` (84,439,707 bytes). |
@@ -44,7 +44,7 @@ repo: https://github.com/adarsh-nl/coperceive
 - **Clean-room:** no code, naming or schema from kesai-labs/py123d or Adarsh's fork, not even his own merged Griffin parser.
 - **Data licences:**
   - Griffin is MIT (credit it).
-  - CARLA map assets are likely CC-BY (attribute; don't commit `.xodr`).
+  - CARLA town files are CC-BY assets (0.9.15 README, checked 2026-10-25; version not stated). The simulator code is MIT. Don't commit `.xodr`.
   - **OPV2V and V2XSet frames and images never go in the repo** (licence unknown; see `docs/datasets/opencood.md`).
 - **Never invent facts** in docs, the landing page or the UI: numbers, dataset details, claims. Cite a file:line or a measurement.
 - **Verification:**
@@ -151,7 +151,7 @@ The strikes above describe code that is in the tree. They were written before a 
 - [x] ~~P1 · e2e step 2d: one viewer window after relaunch.~~ (`7404f0b` · [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227)) Notice: `Step 2d verified: one viewer window after relaunch.`
 - [x] ~~P1 · e2e step 5d: mock `latest.json`, banner, What's new, Later, Restart now.~~ (`7404f0b` · [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227)) Notices: `Step 5d notices: banner coperceive 0.2.0 is ready`, `What's new showed the mock notes`, `Restart now stayed in the test app`, `Later hid the banner`, `mock server received latest.json`.
 - [ ] P1 · Tauri updater plugin is not a Cargo dependency. `src-tauri/tauri.conf.json` `plugins.updater.pubkey` is the placeholder `PASTE_THE_PUBLIC_KEY_FROM_A_NEW_TAURI_SIGNER_KEYPAIR`. `docs/updater-secrets.md` is removed. The keypair committed in `e7f6fef` is public. Adarsh generates a new pair and pastes it as `docs/desktop/updates.md` says. Do not reuse the old key.
-- [ ] P1 · **Maps in one click** is not started. The brief's button text says CC-BY 4.0. `docs/adr/0008-hd-map.md` line 11 and `coperceive/hdmap/commands.py` record the CARLA package as MIT. Do not put CC-BY on the button until that is re-checked. Do not download the CARLA tarball or commit a `.xodr`.
+- [ ] P1 · **Maps in one click** is not started. Checked 2026-10-25: the CARLA 0.9.15 README (`https://github.com/carla-simulator/carla/blob/0.9.15/README.md`) says code is MIT and assets are CC-BY, with no version. `docs/adr/0008-hd-map.md` and `coperceive maps ingest` now record CC-BY for the town files. Do not write "CC-BY 4.0" on the button: the README does not say 4.0. Do not download the CARLA tarball or commit a `.xodr`.
 - [ ] P0 · Mac acceptance (Adarsh): empty library → Get data → Griffin "One scene with images" → Town03-000 with images and a map, no Terminal. A test release shows the banner and installs on Restart.
 
 Griffin byte counts are not stored as UI text. A dry-run on 2026-10-24 of `https://huggingface.co/api/datasets/wjh-svm/Griffin/tree/main/datasets/griffin_50scenes_25m` listed 15 files summing to 167,190,016,122 bytes (same total as `docs/design/griffin-verification.md`, tree API, 2026-10-15). Dev tier (`md5.txt` + `drone_metadata.zip` + `vehicle_metadata.zip` + `vehicle_lidar.zip`) was 239,749,191 bytes. RGB cameras plus those four files, excluding the two instance-segmentation zips, was 162,515,011,954 bytes. The on-disk check uses `required_free_bytes` from the live dry-run, not these integers. Licence: toolkit `LICENSE.txt` fetched 2026-10-24 starts "MIT License" / "Copyright (c) [2025] [Jiahao Wang]"; the dataset card YAML says `license: mit`. Paper `https://arxiv.org/abs/2503.06983`.
@@ -212,6 +212,7 @@ Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in 
 ---
 
 ## Change log of this file
+- 2026-10-25: CARLA town-file licence checked against the 0.9.15 README. Code is MIT. Assets are CC-BY, with no version in that README. `maps ingest` now records CC-BY. "CC-BY 4.0" stays off the maps button.
 - 2026-10-24: Struck e2e steps 2d, 5c, and 5d against green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) at `7404f0b` (9/9). Artifact `coperceive-desktop-macos-arm64` 84,127,425 bytes. DMG `Coperceive_0.1.0_aarch64.dmg` 84,439,707 bytes.
 - 2026-10-24: Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) at `1ee6a8c` verified step 5c in the log and failed step 5d with an eval HTTP 504. Lint, web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.
 - 2026-10-24: Run [40136197303](https://github.com/adarsh-nl/coperceive/actions/runs/40136197303) at `acaae7f` failed lint (`ruff format`) and desktop e2e step 5c (cancel before the first copied file). Step 2d passed in that log. Web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.

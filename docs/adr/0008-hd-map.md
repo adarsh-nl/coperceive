@@ -8,7 +8,9 @@ Griffin stores `map_name` on each agent, for example `Carla/Maps/Town03`. The 25
 
 The public description of an HD-map layer drawn with the sensors is the only outside idea used here. kesai-labs/py123d and the adarsh-nl fork were not installed, imported, or opened. The on-disk layout, the names, and the parser are written for schema 1: a JSON manifest, a Parquet table, and a float32 blob.
 
-CARLA 0.9.15 is the package. Its Git tag does not contain the town OpenDRIVE files. They are members of `https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`. The file on this machine is 8,386,636,048 bytes, SHA-256 `7b2f432ce74b251593f95dcc8dee6d99ad9625c2a71a2d6d48f24d879de19ef7`. The four files used are `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr`. CARLA is MIT. Those bytes are not committed. `coperceive maps fetch` extracts them into a directory the caller chooses.
+CARLA 0.9.15 is the package. Its Git tag does not contain the town OpenDRIVE files. They are members of `https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`. The file on this machine is 8,386,636,048 bytes, SHA-256 `7b2f432ce74b251593f95dcc8dee6d99ad9625c2a71a2d6d48f24d879de19ef7`. The four files used are `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr`. Those bytes are not committed. `coperceive maps fetch` extracts them into a directory the caller chooses.
+
+The 0.9.15 README, fetched 2026-10-25 from `https://github.com/carla-simulator/carla/blob/0.9.15/README.md` (raw `https://raw.githubusercontent.com/carla-simulator/carla/0.9.15/README.md`), says CARLA-specific code is MIT and CARLA-specific assets are CC-BY. It does not say CC-BY 4.0. A maintainer reply on 2024-07-31 in `https://github.com/carla-simulator/carla/discussions/7984` repeats that split and also gives no version. The town files travel in the packaged assets, not in the MIT git tree, so the map licence recorded by `coperceive maps ingest` is CC-BY. The earlier sentence "CARLA is MIT" is the code licence. It is the wrong licence for `Town03.xodr`. The brief's "CC-BY 4.0" names the right family and a version the README does not state.
 
 ## Options
 

@@ -2,6 +2,12 @@
 
 The desktop application is now the top priority per Adarsh's instructions (pausing V2V4Real, release work, and small fixes until the desktop app works end-to-end).
 
+## 2026-10-25
+
+CARLA town files: the 0.9.15 README (fetched that day) splits MIT code from CC-BY assets and states no CC-BY version. `docs/adr/0008-hd-map.md` and `coperceive maps ingest` now record CC-BY for those files. No `.xodr` was committed.
+
+Get data, Griffin "One scene with images": dry-run on the login node at 2026-10-25T21:11:18Z reported `download_bytes` 162515011954 and `disk_bytes` 325030023010. Job `640407` (`scripts/slurm/getdata-one-scene.sh`, partition `ps`) runs that CLI on node scratch. The result is not in yet.
+
 ## M1 close-out (2026-10-22)
 
 Task status lives in `TASKS.md`. `origin/main` is `fffda8a`. The installable desktop build is `feat/desktop` `d35dddd`, green 9/9: https://github.com/adarsh-nl/coperceive/actions/runs/39923652622. Dmg `Coperceive_0.1.0_aarch64.dmg`, 84305283 bytes. Artifact `coperceive-desktop-macos-arm64`, 83982684 bytes. A later docs commit that only records these numbers is not that build.

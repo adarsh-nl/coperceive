@@ -25,10 +25,13 @@ from coperceive.hdmap.store import map_slug, write_map
 CARLA_VERSION = "0.9.15"
 CARLA_PACKAGE_URL = "https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz"
 CARLA_TOWNS = ("Town01", "Town02", "Town03", "Town04", "Town05", "Town06", "Town07", "Town10HD")
-_LICENCE = "MIT"
+_LICENCE = "CC-BY"
 _LICENCE_NOTE = (
-    "CARLA simulator, MIT licence, https://github.com/carla-simulator/carla. "
-    f"Package CARLA_{CARLA_VERSION}. The .xodr bytes are not committed here."
+    "Town OpenDRIVE files are in the CARLA 0.9.15 package, not in the git tag. "
+    "The 0.9.15 README says CARLA-specific code is MIT and CARLA-specific assets "
+    "are CC-BY. It does not give a CC-BY version. "
+    "https://github.com/carla-simulator/carla/blob/0.9.15/README.md "
+    "checked 2026-10-25. The .xodr bytes are not committed here."
 )
 
 
