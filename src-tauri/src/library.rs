@@ -4,12 +4,14 @@
 //! Provides volume free-space querying, scene metadata discovery,
 //! and library relocation functions for the Coperceive desktop app.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 #[cfg(target_os = "macos")]
 use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
+
+use crate::state::ValidationRecord;
 
 /// Storage metrics for the dataset library location.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -135,9 +137,17 @@ pub fn get_storage_stats(library_root: &Path, is_configured: bool) -> StorageSta
     }
 }
 
-/// Scans the library root for valid scenes.
+/// Scans the library root for valid scenes, without a validation cache.
 /// Skips any `.partial` folders (which are in-progress downloads or imports).
 pub fn scan_library_scenes(library_root: &Path) -> Vec<LibrarySceneInfo> {
+    scan_library_scenes_with_cache(library_root, &HashMap::new())
+}
+
+/// Scans the library root and fills `is_valid` from a fresh validation cache.
+pub fn scan_library_scenes_with_cache(
+    library_root: &Path,
+    cache: &HashMap<String, ValidationRecord>,
+) -> Vec<LibrarySceneInfo> {
     let mut scenes = Vec::new();
     if !library_root.exists() || !library_root.is_dir() {
         return scenes;
@@ -163,7 +173,7 @@ pub fn scan_library_scenes(library_root: &Path) -> Vec<LibrarySceneInfo> {
         if p.is_dir() {
             // Check if this directory directly is a scene (contains manifest.json and COMPLETE.json)
             if p.join("manifest.json").exists() && p.join("COMPLETE.json").exists() {
-                if let Some(info) = parse_scene_info(&p) {
+                if let Some(info) = parse_scene_info_with_cache(&p, cache) {
                     scenes.push(info);
                 }
             } else {
@@ -176,7 +186,7 @@ pub fn scan_library_scenes(library_root: &Path) -> Vec<LibrarySceneInfo> {
                             continue;
                         }
                         if sub_p.is_dir() && sub_p.join("manifest.json").exists() && sub_p.join("COMPLETE.json").exists() {
-                            if let Some(info) = parse_scene_info(&sub_p) {
+                            if let Some(info) = parse_scene_info_with_cache(&sub_p, cache) {
                                 scenes.push(info);
                             }
                         }
@@ -190,7 +200,10 @@ pub fn scan_library_scenes(library_root: &Path) -> Vec<LibrarySceneInfo> {
     scenes
 }
 
-fn parse_scene_info(scene_dir: &Path) -> Option<LibrarySceneInfo> {
+fn parse_scene_info_with_cache(
+    scene_dir: &Path,
+    cache: &HashMap<String, ValidationRecord>,
+) -> Option<LibrarySceneInfo> {
     let manifest_path = scene_dir.join("manifest.json");
     let content = fs::read_to_string(&manifest_path).ok()?;
     let manifest: serde_json::Value = serde_json::from_str(&content).ok()?;
@@ -272,8 +285,29 @@ fn parse_scene_info(scene_dir: &Path) -> Option<LibrarySceneInfo> {
         size_bytes,
         has_images,
         has_map,
-        is_valid: None,
+        is_valid: cached_validation(scene_dir, cache),
     })
+}
+
+/// Modification time of `manifest.json` in milliseconds since the epoch.
+pub fn manifest_mtime_ms(scene_dir: &Path) -> Option<u64> {
+    let modified = fs::metadata(scene_dir.join("manifest.json")).ok()?.modified().ok()?;
+    let elapsed = modified.duration_since(std::time::UNIX_EPOCH).ok()?;
+    Some(elapsed.as_millis() as u64)
+}
+
+/// A cached validation result, only while `manifest.json` is unchanged.
+pub fn cached_validation(
+    scene_dir: &Path,
+    cache: &HashMap<String, ValidationRecord>,
+) -> Option<bool> {
+    let key = scene_dir.to_string_lossy();
+    let record = cache.get(key.as_ref())?;
+    if Some(record.manifest_mtime_ms) == manifest_mtime_ms(scene_dir) {
+        Some(record.valid)
+    } else {
+        None
+    }
 }
 
 /// Moves scenes from an old library directory to a new library directory.
@@ -406,6 +440,45 @@ mod tests {
 
         assert!(!scene.exists());
         assert!(dst.join("scene_1").join("COMPLETE.json").exists());
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_cached_validation_is_fresh_only_while_manifest_is_unchanged() {
+        let tmp = std::env::temp_dir().join(format!(
+            "coperceive-test-valid-cache-{}",
+            std::process::id()
+        ));
+        let scene = tmp.join("Town03-000");
+        let _ = fs::create_dir_all(&scene);
+        fs::write(scene.join("manifest.json"), "{}").expect("write manifest");
+        fs::write(scene.join("COMPLETE.json"), "{}").expect("write complete");
+
+        let mtime = manifest_mtime_ms(&scene).expect("mtime");
+        let mut cache = HashMap::new();
+        assert_eq!(cached_validation(&scene, &cache), None);
+        cache.insert(
+            scene.to_string_lossy().into_owned(),
+            ValidationRecord { valid: true, manifest_mtime_ms: mtime },
+        );
+        assert_eq!(cached_validation(&scene, &cache), Some(true));
+
+        // A different manifest invalidates the cached answer.
+        cache.insert(
+            scene.to_string_lossy().into_owned(),
+            ValidationRecord { valid: true, manifest_mtime_ms: mtime + 1 },
+        );
+        assert_eq!(cached_validation(&scene, &cache), None);
+
+        // The scan carries the cached answer into the scene list.
+        cache.insert(
+            scene.to_string_lossy().into_owned(),
+            ValidationRecord { valid: false, manifest_mtime_ms: mtime },
+        );
+        let scenes = scan_library_scenes_with_cache(&tmp, &cache);
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].is_valid, Some(false));
 
         let _ = fs::remove_dir_all(&tmp);
     }
