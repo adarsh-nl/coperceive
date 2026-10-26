@@ -13,6 +13,8 @@
 # 5. Switch to invalid folder -> asserts persistent error banner ("Choose another folder" button, does NOT auto-dismiss).
 # 6. Close viewer window (Cmd+W) -> returns to Connect screen, asserts animated backdrop exists.
 # 7. Quit application -> asserts ZERO orphan coperceive serve processes remain.
+# 8. Get data: start a dataset job, Pause, Resume, Cancel (step 5e; test-mode local job, no network).
+# 9. Library: Move library relocates a scene to a new root (step 5f; temp library from the fixture).
 
 set -euo pipefail
 
@@ -108,6 +110,15 @@ cleanup() {
     if [ -n "${UPDATE_SERVER_PID:-}" ] && kill -0 "${UPDATE_SERVER_PID}" 2>/dev/null; then
         kill "${UPDATE_SERVER_PID}" 2>/dev/null || true
     fi
+    # Step 5e's fake dataset job child outlives the app if the harness dies mid-step.
+    if [ -s "${TMP_DIR:-}/fake-dataset-job.pid" ]; then
+        kill -9 "$(cat "${TMP_DIR}/fake-dataset-job.pid" 2>/dev/null)" 2>/dev/null || true
+    fi
+    # Step 5f edits state.json to point at a temp library; restore the copy even
+    # when an assertion failed so a failed run never leaves a dangling library root.
+    if [ -f "${TMP_DIR:-}/state-before-5f.json" ] && [ -f "${STATE_FILE}" ]; then
+        cp "${TMP_DIR}/state-before-5f.json" "${STATE_FILE}" 2>/dev/null || true
+    fi
     pkill -f "coperceive serve" 2>/dev/null || true
     rm -rf "${TMP_DIR}"
 }
@@ -130,6 +141,10 @@ export COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}"
 export COPERCEIVE_MOCK_DIALOG_FILE="${MOCK_DIALOG_FILE}"
 export COPERCEIVE_TEST_IMPORT_SOURCE="${FIXTURE_2}"
 export COPERCEIVE_PACK_SLEEP_S="0.5"
+# Step 5e only: a local NDJSON progress child replaces the network download so
+# pause/resume/cancel can be driven without Hugging Face. Inert in production.
+export COPERCEIVE_TEST_FAKE_DATASET_JOB="1"
+export COPERCEIVE_TEST_FAKE_DATASET_PID_FILE="${TMP_DIR}/fake-dataset-job.pid"
 
 "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
 APP_PID=$!
@@ -1616,6 +1631,464 @@ if ! kill -0 "${APP_PID}" 2>/dev/null; then
     echo "Error: Restart now quit the app" >&2
     exit 17
 fi
+
+echo ""
+echo "--- Step 5e: Pause, Resume and Cancel a dataset download job (Get data) ---"
+# /eval dispatches to the viewer window when one is open and to the Connect
+# window otherwise. Get data lives on Connect, so close the viewer first.
+python3 - <<EOF
+import urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+try:
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+except Exception:
+    pass
+EOF
+sleep 1.5
+
+# Drive the real UI: Get Data -> Griffin "Dev tier" -> accept the licence ->
+# Start Download. COPERCEIVE_TEST_FAKE_DATASET_JOB keeps the dry-run and the
+# job local and deterministic, so this step never touches the network.
+python3 - << EOF
+import json, time, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=15):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def wait_for(description, script, seconds=30.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+def body_text():
+    return eval_js("document.body.innerText") or ""
+
+def click_exact(label):
+    result = eval_js("""
+        (() => {
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === %s);
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label))
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+def click_contains(label):
+    result = eval_js("""
+        (() => {
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').includes(%s));
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label))
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+def progress_percent():
+    value = eval_js("document.querySelector('[role=progressbar]') ? document.querySelector('[role=progressbar]').getAttribute('aria-valuenow') : null")
+    return int(value) if value not in (None, "") else None
+
+click_exact("Get Data")
+wait_for("Get data catalog", "document.body.innerText.includes('Dev tier') && document.body.innerText.includes('Griffin')", 45)
+catalog_text = body_text()
+assert "Could not load the dataset list" not in catalog_text, catalog_text[-500:]
+
+click_contains("Dev tier")
+wait_for("Griffin dry-run panel", "document.body.innerText.includes('Download Griffin (dev)') && document.body.innerText.includes('Start Download')", 30)
+
+checkbox = eval_js("""
+    (() => {
+        const box = document.querySelector('input[type=checkbox]');
+        if (!box) return 'missing';
+        if (!box.checked) box.click();
+        return box.checked ? 'checked' : 'not-checked';
+    })()
+""")
+assert checkbox == "checked", f"licence checkbox state: {checkbox}"
+
+start_state = eval_js("""
+    (() => {
+        const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === 'Start Download');
+        if (!button) return 'missing';
+        return button.disabled ? 'disabled' : 'enabled';
+    })()
+""")
+assert start_state == "enabled", f"Start Download is {start_state}"
+
+click_exact("Start Download")
+wait_for("download progress panel", """
+    !!document.querySelector('[role=progressbar]') &&
+    Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Pause')
+""", 20)
+assert "Stage: download" in body_text(), body_text()[-500:]
+
+wait_for("download progress to flow", """
+    parseInt(document.querySelector('[role=progressbar]')?.getAttribute('aria-valuenow') || '0', 10) >= 8
+""", 20)
+print(f"Step 5e notices: download progress started at {progress_percent()}%")
+
+pause_note = eval_js("""
+    (async () => {
+        const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === 'Pause');
+        if (!button) return 'missing-pause-button';
+        button.click();
+        const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+            if (document.body.innerText.includes('Download paused.')) return 'seen';
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return 'not-seen';
+    })()
+""")
+assert pause_note == "seen", f"Pause did not show 'Download paused.': {pause_note}"
+wait_for("Resume button after Pause", "Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Resume')", 5)
+
+time.sleep(1.2)
+paused_percent = progress_percent()
+time.sleep(1.2)
+assert progress_percent() == paused_percent, f"progress moved while paused: {paused_percent} -> {progress_percent()}"
+with open("${TMP_DIR}/step5e-paused-percent.txt", "w", encoding="utf-8") as handle:
+    handle.write(str(paused_percent))
+print(f"Step 5e notices: Pause -> 'Download paused.', progress frozen at {paused_percent}%")
+EOF
+
+# The pause is a real SIGSTOP to the job child: assert the OS state itself.
+if [ ! -s "${COPERCEIVE_TEST_FAKE_DATASET_PID_FILE}" ]; then
+    echo "Error: the fake dataset job did not report its pid" >&2
+    exit 18
+fi
+FAKE_JOB_PID=$(cat "${COPERCEIVE_TEST_FAKE_DATASET_PID_FILE}")
+FAKE_JOB_STAT=$(ps -o stat= -p "${FAKE_JOB_PID}" 2>/dev/null | tr -d ' \n')
+echo "Step 5e notices: fake job pid ${FAKE_JOB_PID} state after Pause: ${FAKE_JOB_STAT:-gone}"
+case "${FAKE_JOB_STAT}" in
+    T*) : ;;
+    *)
+        echo "Error: paused dataset job is not stopped (ps stat '${FAKE_JOB_STAT}')" >&2
+        exit 18
+        ;;
+esac
+
+python3 - << EOF
+import json, time, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=15):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def wait_for(description, script, seconds=30.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+def click_exact(label):
+    result = eval_js("""
+        (() => {
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === %s);
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label))
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+def progress_percent():
+    value = eval_js("document.querySelector('[role=progressbar]') ? document.querySelector('[role=progressbar]').getAttribute('aria-valuenow') : null")
+    return int(value) if value not in (None, "") else None
+
+with open("${TMP_DIR}/step5e-paused-percent.txt", encoding="utf-8") as handle:
+    paused_percent = int(handle.read().strip())
+
+resume_note = eval_js("""
+    (async () => {
+        const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === 'Resume');
+        if (!button) return 'missing-resume-button';
+        button.click();
+        const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+            if (document.body.innerText.includes('Download resumed.')) return 'seen';
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return 'not-seen';
+    })()
+""")
+assert resume_note == "seen", f"Resume did not show 'Download resumed.': {resume_note}"
+wait_for("Pause button after Resume", "Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Pause')", 5)
+
+deadline = time.monotonic() + 10
+resumed_percent = None
+while time.monotonic() < deadline:
+    resumed_percent = progress_percent()
+    if resumed_percent is not None and resumed_percent > paused_percent:
+        break
+    time.sleep(0.2)
+else:
+    raise RuntimeError(f"progress did not resume: still {resumed_percent}% after {paused_percent}%")
+print(f"Step 5e notices: Resume -> 'Download resumed.', progress advanced {paused_percent}% -> {resumed_percent}%")
+
+click_exact("Cancel")
+wait_for("progress panel to stop after Cancel", """
+    !document.querySelector('[role=progressbar]') &&
+    Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Start Download')
+""", 15)
+assert eval_js("Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Pause')") is False, "Pause button still visible after Cancel"
+print("Step 5e notices: Cancel removed the progress panel and returned to Start Download")
+EOF
+
+# Cancel is a real SIGTERM to the job child: assert it is gone.
+for i in {1..20}; do
+    if ! kill -0 "${FAKE_JOB_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${FAKE_JOB_PID}" 2>/dev/null; then
+    echo "Error: Cancel left the dataset job running (pid ${FAKE_JOB_PID})" >&2
+    exit 19
+fi
+echo "Step 5e verified: Pause, Resume and Cancel of a dataset download job in Get data."
+
+echo ""
+echo "--- Step 5f: Move library to a new folder (Settings -> Change location) ---"
+# Quit so this step can point state.json at a temp library seeded only with the
+# synthetic fixture. The move therefore can never touch a real
+# ~/coperceive-data library, and the previous state.json is restored after the
+# assertions (and from the cleanup trap on any failure).
+osascript <<EOF || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+EOF
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -f "${MARKER_FILE}"
+
+LIB_A="${TMP_DIR}/e2e-library-a"
+LIB_B="${TMP_DIR}/e2e-library-b"
+STATE_BACKUP="${TMP_DIR}/state-before-5f.json"
+rm -rf "${LIB_A}" "${LIB_B}"
+mkdir -p "${LIB_A}"
+cp -R "${FIXTURE_1}/synth_001" "${LIB_A}/synth_001"
+if [ ! -f "${LIB_A}/synth_001/manifest.json" ] || [ ! -f "${LIB_A}/synth_001/COMPLETE.json" ]; then
+    echo "Error: could not seed the temp library from ${FIXTURE_1}/synth_001" >&2
+    exit 20
+fi
+cp "${STATE_FILE}" "${STATE_BACKUP}"
+python3 - "${STATE_FILE}" "${LIB_A}" <<'PY'
+import json, sys
+state_path, library = sys.argv[1], sys.argv[2]
+with open(state_path, "r", encoding="utf-8") as handle:
+    state = json.load(handle)
+state["library_root"] = library
+with open(state_path, "w", encoding="utf-8") as handle:
+    json.dump(state, handle, indent=2)
+    handle.write("\n")
+PY
+echo "Step 5f notices: temp library seeded at ${LIB_A}; state.json will be restored from the pre-step copy."
+
+"${APP_EXE}" > "${TMP_DIR}/move_stdout.log" 2> "${TMP_DIR}/move_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: app died before the Move library check" >&2
+        cat "${TMP_DIR}/move_stderr.log" >&2 || true
+        exit 20
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "Error: app did not start for the Move library check" >&2
+    cat "${TMP_DIR}/move_stderr.log" >&2 || true
+    exit 20
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+sleep 1
+
+# Close the auto-reopened viewer so /eval targets the Connect window, where the
+# Library screen and its "Change location…" flow live.
+python3 - <<EOF
+import urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+try:
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+except Exception:
+    pass
+EOF
+sleep 1.5
+
+# The mocked folder picker answers "Select New Folder…" with the temp
+# destination, then the real move_library_root command relocates the scene.
+printf '%s\n' "${LIB_B}" > "${MOCK_DIALOG_FILE}"
+
+python3 - << EOF
+import json, time, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+library_a = "${LIB_A}"
+library_b = "${LIB_B}"
+
+def eval_js(script, timeout=15):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def wait_for(description, script, seconds=30.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+def body_text():
+    return eval_js("document.body.innerText") or ""
+
+def click_contains(label):
+    result = eval_js("""
+        (() => {
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').includes(%s));
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label))
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+click_contains("Library")
+wait_for("Library screen with the seeded temp library", "document.body.innerText.includes(%s) && document.body.innerText.includes('synth_001')" % json.dumps(library_a), 30)
+library_text = body_text()
+assert "synth_001" in library_text, library_text[-500:]
+assert "1 scene" in library_text, library_text[-500:]
+
+click_contains("Change location")
+wait_for("Change Library Location dialog", "document.body.innerText.includes('Change Library Location')", 10)
+dialog_text = body_text()
+assert "Current: " + library_a in dialog_text, dialog_text[-500:]
+
+click_contains("Select New Folder")
+wait_for("library relocated to the new folder", "document.body.innerText.includes(%s) && !document.body.innerText.includes('Change Library Location')" % json.dumps(library_b), 30)
+moved_text = body_text()
+assert library_b in moved_text, moved_text[-500:]
+assert library_a not in moved_text, f"old library path still shown after the move: {moved_text[-500:]}"
+assert "synth_001" in moved_text, moved_text[-500:]
+assert "1 scene" in moved_text, moved_text[-500:]
+print(f"Step 5f notices: Library now lists synth_001 under {library_b}")
+EOF
+
+if [ ! -d "${LIB_B}/synth_001" ] || [ ! -f "${LIB_B}/synth_001/COMPLETE.json" ]; then
+    echo "Error: synth_001 was not moved to the new library ${LIB_B}" >&2
+    exit 21
+fi
+if [ -e "${LIB_A}/synth_001" ]; then
+    echo "Error: synth_001 is still in the old library ${LIB_A}" >&2
+    exit 21
+fi
+if [ -n "$(ls -A "${LIB_A}" 2>/dev/null)" ]; then
+    echo "Error: the old library was not left empty: $(ls -A "${LIB_A}")" >&2
+    exit 21
+fi
+if ls "${LIB_A}"/*.partial "${LIB_B}"/*.partial >/dev/null 2>&1; then
+    echo "Error: a .partial directory was left behind by the move" >&2
+    ls -la "${LIB_A}" "${LIB_B}" >&2
+    exit 21
+fi
+python3 - "${STATE_FILE}" "${LIB_B}" <<'PY'
+import json, sys, time
+state_path, expected = sys.argv[1], sys.argv[2]
+deadline = time.monotonic() + 5
+root = None
+while time.monotonic() < deadline:
+    try:
+        with open(state_path, "r", encoding="utf-8") as handle:
+            root = json.load(handle).get("library_root")
+    except Exception:
+        root = None
+    if root == expected:
+        break
+    time.sleep(0.1)
+assert root == expected, f"state.json library_root is {root!r}, expected {expected!r}"
+print(f"Step 5f notices: state.json library_root={root}")
+PY
+cp "${STATE_BACKUP}" "${STATE_FILE}"
+echo "Step 5f restored the pre-step state.json (real libraries were never moved)."
+echo "Step 5f verified: Move library relocated synth_001 to the new root, left the old root empty, and updated state.json."
 
 echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"
