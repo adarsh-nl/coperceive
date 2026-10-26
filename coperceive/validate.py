@@ -27,6 +27,7 @@ from coperceive.query import TimeMode, query_agents
 from coperceive.se3 import SE3
 from coperceive.store import read_scene
 from coperceive.transform import lookup_pose
+from coperceive.viewdata import scene_directories
 
 # Bands and scene counts from Dataset_Preparation.md via griffin-verification.md.
 # (official scene count, altitude low m, altitude high m)
@@ -432,13 +433,8 @@ def _centreline_row(
 
 
 def _scene_dirs(root: Path) -> list[Path]:
-    found: list[Path] = []
-    for child in sorted(root.iterdir(), key=lambda path: path.name):
-        if child.name.startswith(".") or child.name.endswith(".partial") or not child.is_dir():
-            continue
-        if (child / "manifest.json").is_file():
-            found.append(child)
-    return found
+    """The scene directory ``root`` itself, or the scene directories under it."""
+    return scene_directories(root)
 
 
 def _scene_report(

@@ -107,6 +107,8 @@ export interface LibrarySceneInfo {
   readonly has_images: "full" | "preview" | "none";
   readonly has_map: boolean;
   readonly is_complete: boolean;
+  /** Cached `coperceive validate` answer: true/false, or null until the background check finishes. */
+  readonly is_valid?: boolean | null;
 }
 
 export interface CatalogPreset {

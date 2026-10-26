@@ -35,6 +35,35 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
   const [movingStorage, setMovingStorage] = useState<boolean>(false);
   const [deleteConfirmScene, setDeleteConfirmScene] = useState<LibrarySceneInfo | null>(null);
 
+  const applyScenes = (list: LibrarySceneInfo[]) => {
+    setScenes(list);
+    setValidateStatusMap((previous) => {
+      const next: Record<string, "valid" | "invalid" | "checking"> = { ...previous };
+      for (const scene of list) {
+        if (scene.is_valid === true) {
+          next[scene.path] = "valid";
+        } else if (scene.is_valid === false) {
+          next[scene.path] = "invalid";
+        } else if (next[scene.path] !== "valid" && next[scene.path] !== "invalid") {
+          next[scene.path] = "checking";
+        }
+      }
+      return next;
+    });
+  };
+
+  // Cheap list refresh used while the app validates the library in the
+  // background. Storage stats are not re-read: that walks the whole library.
+  const refreshScenes = async (): Promise<boolean> => {
+    try {
+      const list = await getLibraryScenes();
+      applyScenes(list);
+      return list.every((scene) => scene.is_valid != null);
+    } catch {
+      return false;
+    }
+  };
+
   const loadData = async () => {
     setLoading(true);
     try {
@@ -44,7 +73,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
         setShowFirstRunModal(true);
       }
       const list = await getLibraryScenes();
-      setScenes(list);
+      applyScenes(list);
     } catch {
       // Ignore
     } finally {
@@ -53,7 +82,23 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
   };
 
   useEffect(() => {
-    loadData();
+    let cancelled = false;
+    void (async () => {
+      await loadData();
+      if (cancelled) return;
+      let settled = await refreshScenes();
+      // The first list request asks the app to validate stale scenes. Poll
+      // until every scene has a cached answer, or keep "Validating...".
+      for (const delay of [300, 500, 800, 1200, 2000, 3000, 4000, 5000, 5000, 5000]) {
+        if (cancelled || settled) break;
+        await new Promise((resolve) => setTimeout(resolve, delay));
+        if (cancelled) break;
+        settled = await refreshScenes();
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handlePickLibraryRoot = async (isFirstRun: boolean) => {

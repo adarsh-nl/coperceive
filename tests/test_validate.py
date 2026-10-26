@@ -293,6 +293,23 @@ def test_strict_exits_on_a_missing_frame(tmp_path: Path) -> None:
     assert raised.value.code == 1
 
 
+def test_validate_accepts_a_scene_directory_as_the_root(tmp_path: Path) -> None:
+    """The desktop Library validates one scene, not a parent of scenes."""
+    vehicle = _agent(
+        "vehicle",
+        AgentType.VEHICLE,
+        (_pose(0, 0.0, 0.0, 0.0), _pose(100_000, 1.0, 0.0, 0.0)),
+    )
+    scene_dir = tmp_path / "Town03-000"
+    write_scene(_scene("Town03-000", (vehicle,)), scene_dir)
+    report = validate_root(scene_dir)
+    aggregate = _mapping(report["aggregate"])
+    assert aggregate["scene_directories"] == 1
+    assert aggregate["scenes_read"] == 1
+    assert aggregate["hard_failure_count"] == 0
+    assert set(_by_scene(report)) == {"Town03-000"}
+
+
 def test_cli_writes_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = tmp_path / "scenes"
     write_scene(

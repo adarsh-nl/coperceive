@@ -251,6 +251,15 @@ pub struct PendingDownload {
     pub preset_id: String,
 }
 
+/// One cached `coperceive validate` result for a scene directory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValidationRecord {
+    /// True when the report read one scene, failed none, and had no hard failures.
+    pub valid: bool,
+    /// `manifest.json` modification time in milliseconds since the epoch when checked.
+    pub manifest_mtime_ms: u64,
+}
+
 /// Persistent desktop application state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppPersistentState {
@@ -260,6 +269,10 @@ pub struct AppPersistentState {
     /// Dedicated storage location for imported and downloaded datasets (default ~/coperceive-data).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library_root: Option<String>,
+
+    /// Background `coperceive validate` results for library scenes, keyed by scene directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_cache: Option<HashMap<String, ValidationRecord>>,
 
     /// Download updates in the background. Default on.
     #[serde(default = "default_true")]
@@ -340,6 +353,7 @@ impl Default for AppPersistentState {
         Self {
             last_data_root: None,
             library_root: None,
+            validation_cache: None,
             auto_download_updates: true,
             pending_download: None,
             last_scene_id: None,
@@ -556,6 +570,7 @@ pub mod tests {
         let state = AppPersistentState {
             last_data_root: Some("/path/to/data".into()),
             library_root: Some("/path/to/coperceive-data".into()),
+            validation_cache: None,
             auto_download_updates: true,
             pending_download: None,
             last_scene_id: Some("Town03-000".into()),
