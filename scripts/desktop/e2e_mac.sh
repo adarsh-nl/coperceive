@@ -1263,8 +1263,37 @@ def eval_once_note(step, code, timeout=10):
         print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
         return None
 
+from pathlib import Path
+
+mock_file = Path("${MOCK_DIALOG_FILE}")
+
+def open_dataset():
+    """Click the viewer's Open button once the button exists.
+
+    The viewer is still re-rendering after the previous dataset switch, so an
+    early click hits nothing (optional chaining is silent). The mock answer
+    file is consumed by the click; if it is still there after 5 s, the command
+    did not run and a second click is safe.
+    """
+    for attempt in range(1, 4):
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            if eval_js("!!document.querySelector('.btn-open-dataset')"):
+                break
+            time.sleep(0.25)
+        else:
+            return False
+        eval_once_note(f"4-open-picker-{attempt}", "document.querySelector('.btn-open-dataset')?.click()")
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if not mock_file.exists():
+                return True
+            time.sleep(0.1)
+        print(f"E2E_NOTE step=4-open-picker attempt={attempt}: the click did not consume the picker answer; retrying", flush=True)
+    return False
+
 print("Triggering Open Dataset to invalid empty directory...")
-eval_once_note("4-open-picker", "document.querySelector('.btn-open-dataset')?.click()")
+assert open_dataset(), "the viewer's Open button never appeared or never consumed the picker answer"
 EOF
 
 sleep 1.5
@@ -1346,6 +1375,15 @@ while time.monotonic() < deadline:
         break
     time.sleep(0.5)
 print(f"Error banner text: {err_msg}")
+if not err_msg:
+    dbg = eval_js("""(() => ({
+        badge: document.querySelector('.dataset-name')?.textContent,
+        scenes: window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null,
+        status: document.querySelector('.status')?.textContent,
+        open: !!document.querySelector('.btn-open-dataset'),
+        body: (document.body.innerText || '').slice(-300),
+    }))()""")
+    print(f"E2E_NOTE step=4-assert diagnostics: {dbg}", flush=True)
 assert err_msg and "No coperceive scenes in" in err_msg, f"Expected 'No coperceive scenes in', got {err_msg}"
 assert "manifest.json and COMPLETE.json" in err_msg, f"Expected manifest.json and COMPLETE.json notice, got {err_msg}"
 
