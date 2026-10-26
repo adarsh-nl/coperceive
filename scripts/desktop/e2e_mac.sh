@@ -1860,7 +1860,7 @@ from pathlib import Path
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(script, timeout=15):
+def _eval_js_once(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": script}).encode("utf-8"),
@@ -1871,6 +1871,48 @@ def eval_js(script, timeout=15):
     if data.get("error"):
         raise RuntimeError(data["error"])
     return data.get("result")
+
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, script, timeout=15, tries=5):
+    """Read-only eval with a bounded retry for transient controller failures."""
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(script, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_once_note(step, script, timeout=15):
+    """Run an action once. A lost callback is noted, not retried."""
+    try:
+        return _eval_js_once(script, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+def eval_js(script, timeout=15):
+    return eval_retry("5g", script, timeout=timeout)
 
 # The relaunched app auto-resumes into the viewer. Close it so /eval reaches
 # the Connect window that hosts the Library tab.
@@ -1895,9 +1937,17 @@ def click_library():
             return 'clicked';
         })()
     """
-    result = eval_js(script)
-    if result != "clicked":
+    # Wait for the Connect nav (a read) before the one click that opens Library.
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        if eval_js("!!Array.from(document.querySelectorAll('nav button')).find((item) => (item.textContent || '').trim() === 'Library')"):
+            break
+        time.sleep(0.25)
+    else:
         raise RuntimeError("Library tab not found on the Connect window")
+    result = eval_once_note("5g-click-library", script)
+    if result != "clicked":
+        raise RuntimeError("Library tab could not be clicked")
 
 click_library()
 deadline = time.monotonic() + 60
