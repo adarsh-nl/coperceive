@@ -836,6 +836,9 @@ async fn stop_local(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String
 #[cfg(target_os = "macos")]
 static IMPORT_PID: Mutex<Option<u32>> = Mutex::new(None);
 
+/// One background library validation at a time.
+static VALIDATION_RUNNING: AtomicBool = AtomicBool::new(false);
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn import_from_folder(
@@ -977,12 +980,21 @@ fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::St
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-fn get_library_scenes() -> Result<Vec<coperceive_desktop::library::LibrarySceneInfo>, String> {
+fn get_library_scenes(
+    app: tauri::AppHandle,
+) -> Result<Vec<coperceive_desktop::library::LibrarySceneInfo>, String> {
     let p = state::load_state();
     let root = p
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
-    Ok(coperceive_desktop::library::scan_library_scenes(Path::new(&root)))
+    let cache = p.validation_cache.unwrap_or_default();
+    let scenes = coperceive_desktop::library::scan_library_scenes_with_cache(Path::new(&root), &cache);
+    let pending = scenes
+        .iter()
+        .map(|scene| (scene.path.clone(), scene.is_valid.is_some()))
+        .collect();
+    spawn_library_validation(app, pending);
+    Ok(scenes)
 }
 
 #[cfg(target_os = "macos")]
@@ -1210,30 +1222,121 @@ fn set_auto_download_updates(enabled: bool) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
+fn run_scene_validation(python: &str, scene_path: &str) -> Result<(bool, String, String), String> {
+    use std::process::Command;
+
+    let report_dir = std::env::temp_dir().join(format!(
+        "coperceive-validate-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|value| value.as_nanos())
+            .unwrap_or(0)
+    ));
+    fs::create_dir_all(&report_dir)
+        .map_err(|err| format!("Failed to create the validation report directory: {err}"))?;
+    let json_path = report_dir.join("report.json");
+    let markdown_path = report_dir.join("report.md");
+    let output = Command::new(python)
+        .args(["-m", "coperceive.cli", "validate", scene_path])
+        .arg("--json")
+        .arg(&json_path)
+        .arg("--markdown")
+        .arg(&markdown_path)
+        .output()
+        .map_err(|e| format!("Failed to validate scene: {e}"))?;
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    if !output.status.success() {
+        let _ = fs::remove_dir_all(&report_dir);
+        return Err(format!(
+            "Validation did not finish. It exited with {}. {}",
+            output.status, stderr
+        ));
+    }
+    let parsed: serde_json::Value = fs::read_to_string(&json_path)
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .ok_or_else(|| "Validation finished but wrote no readable report.".to_string())?;
+    let _ = fs::remove_dir_all(&report_dir);
+    let aggregate = parsed.get("aggregate");
+    let read = aggregate
+        .and_then(|value| value.get("scenes_read"))
+        .and_then(|value| value.as_u64())
+        .unwrap_or(0);
+    let failed = aggregate
+        .and_then(|value| value.get("scenes_failed"))
+        .and_then(|value| value.as_u64())
+        .unwrap_or(1);
+    let hard = aggregate
+        .and_then(|value| value.get("hard_failure_count"))
+        .and_then(|value| value.as_u64())
+        .unwrap_or(1);
+    Ok((read == 1 && failed == 0 && hard == 0, stdout, stderr))
+}
+
+/// Remember a validation answer, keyed by the scene directory and manifest mtime.
+#[cfg(target_os = "macos")]
+fn remember_scene_validation(scene_path: &str, valid: bool) {
+    let Some(mtime) = coperceive_desktop::library::manifest_mtime_ms(Path::new(scene_path)) else {
+        return;
+    };
+    let mut persistent = state::load_state();
+    let cache = persistent
+        .validation_cache
+        .get_or_insert_with(std::collections::HashMap::new);
+    cache.insert(
+        scene_path.to_string(),
+        state::ValidationRecord { valid, manifest_mtime_ms: mtime },
+    );
+    if let Err(err) = state::save_state(&persistent) {
+        eprintln!("[validation] could not save the validation cache: {err}");
+    }
+}
+
+/// Validate a scene in the background and remember the answer in `state.json`.
+#[cfg(target_os = "macos")]
+fn store_scene_validation(python: &str, scene_path: &str) -> Result<bool, String> {
+    let valid = run_scene_validation(python, scene_path)?.0;
+    remember_scene_validation(scene_path, valid);
+    Ok(valid)
+}
+
+/// Validate stale library scenes in the background. One run at a time.
+#[cfg(target_os = "macos")]
+fn spawn_library_validation(app: tauri::AppHandle, scenes: Vec<(String, bool)>) {
+    if scenes.iter().all(|(_, fresh)| *fresh) {
+        return;
+    }
+    if VALIDATION_RUNNING.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    std::thread::spawn(move || {
+        let python = resolve_python_binary(&app);
+        for (scene_path, fresh) in scenes {
+            if fresh {
+                continue;
+            }
+            let _ = store_scene_validation(&python, &scene_path);
+        }
+        VALIDATION_RUNNING.store(false, Ordering::SeqCst);
+    });
+}
+
+#[cfg(target_os = "macos")]
 #[tauri::command]
 fn validate_scene(
     app: tauri::AppHandle,
     scene_path: String,
 ) -> Result<serde_json::Value, String> {
-    use std::process::Command;
-
     let python = resolve_python_binary(&app);
-    let output = Command::new(&python)
-        .args([
-            "-m",
-            "coperceive.cli",
-            "validate",
-            &scene_path,
-        ])
-        .output()
-        .map_err(|e| format!("Failed to validate scene: {e}"))?;
-
-    let success = output.status.success();
+    let (valid, stdout, stderr) = run_scene_validation(&python, &scene_path)?;
+    remember_scene_validation(&scene_path, valid);
     Ok(serde_json::json!({
         "scene_path": scene_path,
-        "valid": success,
-        "stdout": String::from_utf8_lossy(&output.stdout),
-        "stderr": String::from_utf8_lossy(&output.stderr),
+        "valid": valid,
+        "stdout": stdout,
+        "stderr": stderr,
     }))
 }
 
