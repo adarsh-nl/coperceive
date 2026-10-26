@@ -195,7 +195,7 @@ def build_parser() -> argparse.ArgumentParser:
         "validate",
         help="Write a JSON report and a Markdown report for schema 1 scenes.",
     )
-    validate.add_argument("root", help="Directory of scene directories.")
+    validate.add_argument("root", help="A scene directory, or a directory of scene directories.")
     validate.add_argument(
         "--json",
         default="coperceive-validate.json",
