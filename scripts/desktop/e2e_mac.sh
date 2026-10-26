@@ -77,6 +77,7 @@ APP_STDERR="${TMP_DIR}/app_stderr.log"
 # drone-side/camera/right in the local Town03-000) hold frames from other
 # scenes; the import must copy only the frames the scene lists.
 IMPORT_SOURCE="${TMP_DIR}/import-src/synth_001"
+mkdir -p "$(dirname "${IMPORT_SOURCE}")"
 cp -R "${FIXTURE_2}" "${IMPORT_SOURCE}"
 STRAY_FRAME="${IMPORT_SOURCE}/vehicle/cam_front/0999999.png"
 mkdir -p "$(dirname "${STRAY_FRAME}")"
