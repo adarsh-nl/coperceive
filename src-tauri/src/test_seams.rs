@@ -62,9 +62,10 @@ pub fn fake_dataset_job_enabled() -> bool {
 /// It writes the child pid for the harness when
 /// `COPERCEIVE_TEST_FAKE_DATASET_PID_FILE` is set, then emits the same NDJSON
 /// event shape as `coperceive.cli dataset download`: one `stage` plus one `log`
-/// line every 400 ms for about 38 s. That is long enough for the e2e to pause,
-/// resume and cancel while still finishing on its own if it is never cancelled.
-/// It never reads or writes any dataset path.
+/// line every 5 s. The long cadence keeps the e2e's transient "Download
+/// resumed." note on screen after a resume instead of being replaced by the
+/// next progress event within a few milliseconds. It never reads or writes any
+/// dataset path.
 pub const FAKE_DATASET_JOB_SCRIPT: &str = r#"
 if [ -n "${COPERCEIVE_TEST_FAKE_DATASET_PID_FILE:-}" ]; then
     printf '%s\n' "$$" > "$COPERCEIVE_TEST_FAKE_DATASET_PID_FILE"
@@ -75,7 +76,7 @@ while [ "$i" -lt 94 ]; do
     percent=$((i + 5))
     printf '{"event":"stage","stage":"download","percent":%d,"message":"Test download in progress (%d%%)."}\n' "$percent" "$percent"
     printf '{"event":"log","line":"test download tick %d"}\n' "$i"
-    sleep 0.4
+    sleep 5
 done
 "#;
 
@@ -183,7 +184,7 @@ mod tests {
         assert!(FAKE_DATASET_JOB_SCRIPT.contains("\"percent\""));
         assert!(FAKE_DATASET_JOB_SCRIPT.contains("\"event\":\"log\""));
         assert!(FAKE_DATASET_JOB_SCRIPT.contains("COPERCEIVE_TEST_FAKE_DATASET_PID_FILE"));
-        assert!(FAKE_DATASET_JOB_SCRIPT.contains("sleep 0.4"));
+        assert!(FAKE_DATASET_JOB_SCRIPT.contains("sleep 5"));
         // The fake job must never touch a dataset name or a real path.
         for forbidden in ["griffin", "dataset", "/Users/", "/Volumes/"] {
             assert!(
