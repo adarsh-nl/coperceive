@@ -285,13 +285,14 @@ assert updated_counts["frustums"] == 4, f"Expected frustums == 4 (UAV hidden), g
 print("Step 1 UI interactions verified successfully.")
 '
 
-# Wait up to 10s for debounced state persistence
+# Wait up to 30s for debounced state persistence. Under a loaded macOS runner
+# the save can lag well past 10 s even though the UI already applied the change.
 python3 -c '
 import sys, json, time
 
 state_file = "'"${STATE_FILE}"'"
 print(f"Waiting for state.json to persist at {state_file}...", flush=True)
-deadline = time.monotonic() + 10.0
+deadline = time.monotonic() + 30.0
 saved = {}
 while time.monotonic() < deadline:
     try:
