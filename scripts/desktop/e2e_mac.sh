@@ -2169,6 +2169,75 @@ cp "${STATE_BACKUP}" "${STATE_FILE}"
 echo "Step 5f restored the pre-step state.json (real libraries were never moved)."
 echo "Step 5f verified: Move library relocated synth_001 to the new root, left the old root empty, and updated state.json."
 
+# The app that ran the move still has library_root=LIB_B in memory and was
+# launched with COPERCEIVE_UPDATE_URL from step 5d, so it shows the update
+# banner again. Both must be gone before step 5g reads the Library: quit the
+# move app and relaunch once from the restored state.json (no update URL), so
+# 5g sees the real library that step 5c seeded (~/coperceive-data) instead of
+# the temp library or the banner.
+unset COPERCEIVE_UPDATE_URL
+osascript <<EOF || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+EOF
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -f "${MARKER_FILE}"
+
+"${APP_EXE}" > "${TMP_DIR}/settle_stdout.log" 2> "${TMP_DIR}/settle_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: app died after the Move library step" >&2
+        cat "${TMP_DIR}/settle_stderr.log" >&2 || true
+        exit 22
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "Error: app did not restart for the Library badge check" >&2
+    cat "${TMP_DIR}/settle_stderr.log" >&2 || true
+    exit 22
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+
+# The relaunched app auto-resumes into the viewer. Close it so /eval reaches
+# the Connect window that hosts the Library tab.
+python3 - <<EOF
+import urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+try:
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+except Exception:
+    pass
+EOF
+sleep 1.5
+echo "Step 5f settle: relaunched from the restored state.json without COPERCEIVE_UPDATE_URL; /eval port=${RELAUNCH_PORT}."
+
 echo ""
 echo "--- Step 5g: Library validation badge runs in the background and is cached ---"
 python3 - << EOF
@@ -2226,7 +2295,14 @@ while time.monotonic() < deadline:
         break
     time.sleep(0.5)
 else:
-    raise RuntimeError(f"Library badge never became valid without clicking Validate now: {seen[-500:]}")
+    diag = eval_js("""(() => ({
+        body: (document.body.innerText || '').slice(-800),
+        nav: Array.from(document.querySelectorAll('nav button')).map((item) => (item.textContent || '').trim()),
+        libraryBadges: Array.from(document.querySelectorAll('.library-badge, .badge, [data-validate]')).map((item) => (item.textContent || '').trim()).slice(0, 8),
+        scenes: window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null,
+        updateBanner: !!document.body.innerText.match(/is ready[.] Restart to update/),
+    }))()""")
+    raise RuntimeError(f"Library badge never became valid without clicking Validate now: {seen[-500:]} diag={diag}")
 
 state = json.loads(Path("${STATE_FILE}").read_text())
 cache = state.get("validation_cache") or {}
