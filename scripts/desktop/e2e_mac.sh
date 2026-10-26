@@ -1199,7 +1199,7 @@ EMPTY_DIR=$(mktemp -d /tmp/coperceive-empty-XXXXXX)
 echo "${EMPTY_DIR}" > "${MOCK_DIALOG_FILE}"
 
 python3 << EOF
-import sys, json, urllib.request
+import sys, json, time, urllib.request
 
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
