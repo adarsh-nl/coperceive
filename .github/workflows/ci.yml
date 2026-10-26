@@ -218,7 +218,7 @@ jobs:
       - name: Run Real-App macOS UI E2E Test
         run: |
           bash scripts/desktop/e2e_mac.sh 2>&1 | tee /tmp/e2e_mac.log
-          grep -E 'Step 2 verified|Step 2b verified|Step 2d verified|Step 3b verified|Step 5c verified|Step 5d verified|Playback requirement' /tmp/e2e_mac.log | while IFS= read -r line; do
+          grep -E 'Step 2 verified|Step 2b verified|Step 2d verified|Step 3b verified|Step 5c verified|Step 5d verified|Step 5g verified|Playback requirement' /tmp/e2e_mac.log | while IFS= read -r line; do
             echo "::notice title=e2e::$line"
           done || true
       - name: Report E2E Failure
