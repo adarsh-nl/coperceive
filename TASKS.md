@@ -20,7 +20,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
 | `feat/desktop` | `5d5c98b`. 79 commits ahead of `main`, 1 behind. Not merged. Do not rebase `feat/m2-import` onto `main` until Adarsh merges this. |
 | `feat/m2-import` | `7404f0b`. Green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) (9/9). Artifact `coperceive-desktop-macos-arm64` (84,127,425 bytes). DMG `Coperceive_0.1.0_aarch64.dmg` (84,439,707 bytes). |
@@ -29,6 +29,7 @@ repo: https://github.com/adarsh-nl/coperceive
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
 | Current milestone | **M2: data without the terminal** |
 | Top blocker | **M1-6 merge `feat/desktop` → `main`** (Adarsh). Do not rebase `feat/m2-import` until that merge. |
+| Open agent branch | `agent/deepseek-library-validation-badge` (cached background validation badge in Library). PR/CI not yet recorded. |
 
 ## Key docs in the repo
 - `HANDOVER.md`: long engineering log (cleanup task below)
@@ -141,6 +142,7 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~P1 · **Auto-update:** Tauri v2 updater with minisign keypair. Prompted like Claude app: background download, non-blocking banner/toast ("Restart to update"), Later/Restart, Help → Check for Updates…, Settings toggle. `release.yml` for `v*` tags.~~
 - [ ] P1 · **Maps in one click:** not started. See the correction below before writing a licence on the button.
 - [ ] P1 · Image thumbnails at import (640 px JPEG/WebP), full resolution on demand.
+- [ ] P0 · **Cached background validation badge in Library:** the badge now comes from a stored `coperceive validate` answer, not only from the Validate now button. `validation_cache` in `state.json` maps a scene directory to `{valid, manifest_mtime_ms}`; listing the library fills `is_valid` from the cache and asks for a background check of the scenes that have no fresh answer, one check at a time. The answer is reused while `manifest.json` is unchanged. This also fixes the single-scene bug that made the old button always report valid: `coperceive validate <scene dir>` now reads that scene (it used to find zero scenes and exit 0). Branch `agent/deepseek-library-validation-badge`; PR/CI not yet recorded.
 - [ ] Acceptance: from an empty Mac, Get data → Griffin "One scene with images" → Town03-000 plays with images and map, **without Terminal**. Update prompt verified.
 
 ### Correction, 2026-10-24
@@ -212,6 +214,7 @@ Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in 
 ---
 
 ## Change log of this file
+- 2026-10-26: Cached background validation badge in Library. `coperceive validate` now accepts a scene directory as its root (it found zero scenes and exited 0 before). The desktop app stores `{valid, manifest_mtime_ms}` per scene in `state.json` and validates stale scenes in the background; the Library badge reads the cached answer and shows `Validating…` until it lands. e2e step 5g opens Library and asserts the badge becomes `Valid ✓` without clicking Validate now and that `state.json` holds the cached answer. Branch `agent/deepseek-library-validation-badge`.
 - 2026-10-25: CARLA town-file licence checked against the 0.9.15 README. Code is MIT. Assets are CC-BY, with no version in that README. `maps ingest` now records CC-BY. "CC-BY 4.0" stays off the maps button.
 - 2026-10-24: Struck e2e steps 2d, 5c, and 5d against green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) at `7404f0b` (9/9). Artifact `coperceive-desktop-macos-arm64` 84,127,425 bytes. DMG `Coperceive_0.1.0_aarch64.dmg` 84,439,707 bytes.
 - 2026-10-24: Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) at `1ee6a8c` verified step 5c in the log and failed step 5d with an eval HTTP 504. Lint, web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.
