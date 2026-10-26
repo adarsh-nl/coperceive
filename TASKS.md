@@ -20,7 +20,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
 | `feat/desktop` | `5d5c98b`. 79 commits ahead of `main`, 1 behind. Not merged. Do not rebase `feat/m2-import` onto `main` until Adarsh merges this. |
 | `feat/m2-import` | `7404f0b`. Green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) (9/9). Artifact `coperceive-desktop-macos-arm64` (84,127,425 bytes). DMG `Coperceive_0.1.0_aarch64.dmg` (84,439,707 bytes). |
@@ -29,6 +29,7 @@ repo: https://github.com/adarsh-nl/coperceive
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
 | Current milestone | **M2: data without the terminal** |
 | Top blocker | **M1-6 merge `feat/desktop` → `main`** (Adarsh). Do not rebase `feat/m2-import` until that merge. |
+| Open agent branch | `agent/deepseek-realdata-import-check` (real-data import check on Town03-000). Draft PR into `feat/m2-import`; CI not yet recorded. |
 
 ## Key docs in the repo
 - `HANDOVER.md`: long engineering log (cleanup task below)
@@ -141,6 +142,7 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~P1 · **Auto-update:** Tauri v2 updater with minisign keypair. Prompted like Claude app: background download, non-blocking banner/toast ("Restart to update"), Later/Restart, Help → Check for Updates…, Settings toggle. `release.yml` for `v*` tags.~~
 - [ ] P1 · **Maps in one click:** not started. See the correction below before writing a licence on the button.
 - [ ] P1 · Image thumbnails at import (640 px JPEG/WebP), full resolution on demand.
+- [ ] P0 · **Real-data import check on the local Griffin Town03** (`~/coperceive-data/Town03-000`: 6.9 GB, 149 samples, 2 agents, 9 cameras; MacBook Air M3, 16 GB, macOS 26.5.2). Before the fix `scene pack` planned 2,521 files / 7,379,734,227 bytes, including 1,170 PNGs (3,380,385,023 bytes) under `drone-side/camera/right` that no `images.parquet` row names: frames from other scenes. `coperceive scene pack` now copies only the image files a scene lists, inside a listed frame directory. Measured on the real scene: full import 1,351 files / 3,999,349,204 bytes in 8.85 s (2.00 s user, 1.78 s sys, 97 MB peak RSS); `--images none` 10 files / 7,578,865 bytes; dry-run reports the 1,170 skipped frames in a note. `coperceive validate` on the packed scene: 1 scene, 0 failed, 0 missing frames, 0 warnings, 0 hard failures, 0.70 s. The packed scene opens in the app: 149 samples, 2 agents, 9 frustums, 55 boxes and 2,911 points at 111.85 s, playback advances at 1× with loop on. e2e step 5c now imports a copy with one unlisted frame beside a listed frame directory and asserts it is not copied (`IMPORT.json` note). Branch `agent/deepseek-realdata-import-check`; PR and CI not yet recorded.
 - [ ] Acceptance: from an empty Mac, Get data → Griffin "One scene with images" → Town03-000 plays with images and map, **without Terminal**. Update prompt verified.
 
 ### Correction, 2026-10-24
@@ -212,6 +214,7 @@ Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in 
 ---
 
 ## Change log of this file
+- 2026-10-26: Real-data import check on the local Griffin Town03-000. `coperceive scene pack` no longer copies unlisted image files that sit in a listed frame directory: the local scene had 1,170 such PNGs (3,380,385,023 bytes) in `drone-side/camera/right`, frames 11472–28340 from other scenes. Full import fell from 7,379,734,227 to 3,999,349,204 bytes (1,351 files, 8.85 s). `coperceive validate` on the packed scene: 0 failed, 0 missing frames, 0 warnings in 0.70 s. Real-data note: `point_index.parquet` has only `vehicle/lidar_top` (149 samples, 2,918–2,929 points per frame); the three drone lidar sensors return HTTP 200 with an empty body, and the 9 cameras each have all 149 frames. e2e step 5c now imports a copy with one unlisted frame and asserts it is not copied. Branch `agent/deepseek-realdata-import-check`.
 - 2026-10-25: CARLA town-file licence checked against the 0.9.15 README. Code is MIT. Assets are CC-BY, with no version in that README. `maps ingest` now records CC-BY. "CC-BY 4.0" stays off the maps button.
 - 2026-10-24: Struck e2e steps 2d, 5c, and 5d against green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) at `7404f0b` (9/9). Artifact `coperceive-desktop-macos-arm64` 84,127,425 bytes. DMG `Coperceive_0.1.0_aarch64.dmg` 84,439,707 bytes.
 - 2026-10-24: Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) at `1ee6a8c` verified step 5c in the log and failed step 5d with an eval HTTP 504. Lint, web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.
