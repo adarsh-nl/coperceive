@@ -981,6 +981,27 @@ def eval_js(code, timeout=10):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
+def wait_for(description, script, seconds=40.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+# The dataset switch starts a new sidecar and only then repoints the viewer, so
+# the previous root keeps rendering for a variable time (the server alone has
+# been observed at 0.8-2.6 s on CI). A fixed sleep plus a "points > 0" check is
+# not enough: the old scene already has points, so this step used to assert
+# against the old badge ("synthetic_scene" instead of "synth_001"). Wait for
+# the new dataset identity and scene list before asserting anything.
+wait_for("dataset switch to the single-scene root", """
+    (document.querySelector('.dataset-name')?.textContent || '').includes('synth_001') &&
+    (window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : []).length === 1
+""")
+
 # Print initial diagnostics right after sleep 3.5
 dbg_initial = eval_js("""(() => ({
     status: document.querySelector('.status')?.textContent,
@@ -1089,6 +1110,24 @@ def eval_js(code, timeout=10):
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
+
+def wait_for(description, script, seconds=40.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+# Same race as step 3, in the other direction. If this wait is skipped, the
+# single-scene fixture is still open and the scene-list/badge assertions below
+# run against the wrong root.
+wait_for("dataset switch back to the multi-scene root", """
+    (document.querySelector('.dataset-name')?.textContent || '').includes('synthetic_scene') &&
+    (window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : []).length === 2
+""")
 
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
