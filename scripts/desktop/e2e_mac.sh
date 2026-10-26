@@ -1618,6 +1618,74 @@ if ! kill -0 "${APP_PID}" 2>/dev/null; then
 fi
 
 echo ""
+echo "--- Step 5g: Library validation badge runs in the background and is cached ---"
+python3 - << EOF
+import json, time, urllib.request
+from pathlib import Path
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+# The relaunched app auto-resumes into the viewer. Close it so /eval reaches
+# the Connect window that hosts the Library tab.
+close = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+try:
+    with urllib.request.urlopen(close, timeout=5):
+        pass
+except Exception:
+    pass
+time.sleep(1.5)
+
+def click_library():
+    script = """
+        (() => {
+            const button = Array.from(document.querySelectorAll('nav button')).find((item) => (item.textContent || '').trim() === 'Library');
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """
+    result = eval_js(script)
+    if result != "clicked":
+        raise RuntimeError("Library tab not found on the Connect window")
+
+click_library()
+deadline = time.monotonic() + 60
+seen = ""
+while time.monotonic() < deadline:
+    seen = eval_js("document.body.innerText") or ""
+    if "Valid ✓" in seen:
+        break
+    time.sleep(0.5)
+else:
+    raise RuntimeError(f"Library badge never became valid without clicking Validate now: {seen[-500:]}")
+
+state = json.loads(Path("${STATE_FILE}").read_text())
+cache = state.get("validation_cache") or {}
+synth = [key for key in cache if key.endswith("/synth_001")]
+assert synth, f"background validation did not cache synth_001: {cache}"
+assert cache[synth[0]].get("valid") is True, cache[synth[0]]
+print(f"Step 5g cache={cache[synth[0]]}")
+print("Step 5g verified: Library badge ran in the background and its answer is cached.")
+EOF
+
+echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"
 osascript <<EOF || true
 tell application "System Events"
