@@ -1222,7 +1222,10 @@ fn set_auto_download_updates(enabled: bool) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn run_scene_validation(python: &str, scene_path: &str) -> Result<(bool, String, String), String> {
+fn run_scene_validation(
+    python: &Path,
+    scene_path: &str,
+) -> Result<(bool, String, String), String> {
     use std::process::Command;
 
     let report_dir = std::env::temp_dir().join(format!(
@@ -1296,7 +1299,7 @@ fn remember_scene_validation(scene_path: &str, valid: bool) {
 
 /// Validate a scene in the background and remember the answer in `state.json`.
 #[cfg(target_os = "macos")]
-fn store_scene_validation(python: &str, scene_path: &str) -> Result<bool, String> {
+fn store_scene_validation(python: &Path, scene_path: &str) -> Result<bool, String> {
     let valid = run_scene_validation(python, scene_path)?.0;
     remember_scene_validation(scene_path, valid);
     Ok(valid)
