@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
 import pytest
@@ -16,7 +17,9 @@ from scripts.sim.capture_writer import (
     Pose,
     Rotation,
     build_manifest,
+    choose_blueprint_ids,
     choose_spawn_indices,
+    four_wheel_ids,
     require_complete,
     time_us_for,
     write_agent_tick,
@@ -80,6 +83,32 @@ def _write_capture(out: Path, n_frames: int) -> None:
 def test_spawn_choice_follows_the_seed() -> None:
     assert choose_spawn_indices(20, 3, 20261026) == choose_spawn_indices(20, 3, 20261026)
     assert choose_spawn_indices(20, 3, 20261026) != choose_spawn_indices(20, 3, 1)
+
+
+def test_four_wheel_blueprints_use_the_spawn_rng() -> None:
+    catalog = [
+        ("vehicle.bh.crossbike", 2),
+        ("vehicle.audi.a2", 4),
+        ("vehicle.tesla.model3", 4),
+        ("vehicle.carlamotors.carlacola", 4),
+        ("vehicle.yamaha.yzf", 2),
+        ("vehicle.nissan.patrol", 4),
+    ]
+    ids = four_wheel_ids([(name, wheels) for name, wheels in catalog])
+    assert ids == [
+        "vehicle.audi.a2",
+        "vehicle.carlamotors.carlacola",
+        "vehicle.nissan.patrol",
+        "vehicle.tesla.model3",
+    ]
+    first = choose_blueprint_ids(ids, 3, 20261026, spawn_count=20)
+    assert first == choose_blueprint_ids(ids, 3, 20261026, spawn_count=20)
+    assert len(set(first)) == 3
+    assert set(first) <= set(ids)
+    rng = random.Random(20261026)
+    assert choose_spawn_indices(20, 3, 20261026) == rng.sample(range(20), 3)
+    assert first == rng.sample(ids, 3)
+    assert first != random.Random(20261026).sample(ids, 3)
 
 
 def test_manifest_records_the_licence_and_a_complete_capture(tmp_path: Path) -> None:

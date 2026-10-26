@@ -29,7 +29,9 @@ from scripts.sim.capture_writer import (
     Pose,
     Rotation,
     build_manifest,
+    choose_blueprint_ids,
     choose_spawn_indices,
+    four_wheel_ids,
     require_complete,
     time_us_for,
     write_agent_tick,
@@ -86,8 +88,17 @@ def _record(carla: object, client: object, args: argparse.Namespace) -> None:
 
     library = world.get_blueprint_library()
     spawn_points = list(world.get_map().get_spawn_points())
+    wheel_rows: list[tuple[str, int | None]] = []
+    by_id: dict[str, object] = {}
+    for blueprint in sorted(library.filter("vehicle.*"), key=lambda item: item.id):
+        wheels: int | None = None
+        if blueprint.has_attribute("number_of_wheels"):
+            wheels = int(blueprint.get_attribute("number_of_wheels"))
+        wheel_rows.append((str(blueprint.id), wheels))
+        by_id[str(blueprint.id)] = blueprint
+    candidate_ids = four_wheel_ids(wheel_rows)
     chosen = choose_spawn_indices(len(spawn_points), 3, args.seed)
-    vehicle_bp = sorted(library.filter("vehicle.*"), key=lambda item: item.id)[0]
+    blueprint_ids = choose_blueprint_ids(candidate_ids, 3, args.seed, len(spawn_points))
     lidar_bp = library.find("sensor.lidar.ray_cast")
     for name, value in LIDAR_ATTRIBUTES.items():
         lidar_bp.set_attribute(name, value)
@@ -96,8 +107,10 @@ def _record(carla: object, client: object, args: argparse.Namespace) -> None:
     sensors: dict[str, object] = {}
     pending: dict[str, queue.Queue[object]] = {}
     try:
-        for agent_id, index in zip(("car-0", "car-1", "car-2"), chosen, strict=True):
-            vehicle = world.spawn_actor(vehicle_bp, spawn_points[index])
+        for agent_id, index, blueprint_id in zip(
+            ("car-0", "car-1", "car-2"), chosen, blueprint_ids, strict=True
+        ):
+            vehicle = world.spawn_actor(by_id[blueprint_id], spawn_points[index])
             vehicle.set_autopilot(True, TM_PORT)
             vehicles.append(vehicle)
             lidar = world.spawn_actor(
@@ -153,7 +166,7 @@ def _record(carla: object, client: object, args: argparse.Namespace) -> None:
                 step_s=args.step,
                 frames=args.ticks,
                 carla_version=version,
-                agents=_agent_rows(vehicle_bp.id, chosen),
+                agents=_agent_rows(blueprint_ids, chosen),
                 sensors=_sensor_rows(),
             ),
         )
@@ -240,9 +253,11 @@ def _boxes(world: object) -> list[Box]:
     return boxes
 
 
-def _agent_rows(blueprint_id: str, spawn_indexes: list[int]) -> list[dict[str, object]]:
+def _agent_rows(blueprint_ids: list[str], spawn_indexes: list[int]) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
-    for agent_id, index in zip(("car-0", "car-1", "car-2"), spawn_indexes, strict=True):
+    for agent_id, index, blueprint_id in zip(
+        ("car-0", "car-1", "car-2"), spawn_indexes, blueprint_ids, strict=True
+    ):
         rows.append(
             {
                 "agent_id": agent_id,

@@ -66,6 +66,28 @@ def choose_spawn_indices(count: int, k: int, seed: int) -> list[int]:
     return random.Random(seed).sample(range(count), k)
 
 
+def four_wheel_ids(blueprints: list[tuple[str, int | None]]) -> list[str]:
+    """Blueprint ids whose ``number_of_wheels`` attribute is 4, in id order."""
+    return sorted(blueprint_id for blueprint_id, wheels in blueprints if wheels == 4)
+
+
+def choose_blueprint_ids(
+    blueprint_ids: list[str], k: int, seed: int, spawn_count: int
+) -> list[str]:
+    """Continue the spawn-point RNG and pick ``k`` distinct blueprint ids.
+
+    ``choose_spawn_indices(spawn_count, k, seed)`` consumes the first sample.
+    This call consumes that same sample, then draws the blueprints.
+    """
+    if spawn_count < k:
+        raise CaptureError(f"need {k} spawn points, found {spawn_count}")
+    if len(blueprint_ids) < k:
+        raise CaptureError(f"need {k} four-wheel blueprints, found {len(blueprint_ids)}")
+    rng = random.Random(seed)
+    rng.sample(range(spawn_count), k)
+    return rng.sample(blueprint_ids, k)
+
+
 def time_us_for(frame_id: int, step_s: float) -> int:
     return frame_id * int(round(step_s * 1_000_000))
 

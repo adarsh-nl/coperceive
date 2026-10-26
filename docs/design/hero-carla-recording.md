@@ -14,7 +14,7 @@ Collaborators are the actors that carry a lidar. Other vehicles and walkers, if 
 
 | Agent | What it is | Sensor |
 | --- | --- | --- |
-| `car-0`, `car-1`, `car-2` | The first alphabetical `vehicle.*` blueprint, spawned on three seed-chosen spawn points, each with autopilot | `sensor.lidar.ray_cast` named `lidar_top`, attached at `carla.Location(z=2.4)` |
+| `car-0`, `car-1`, `car-2` | Three different `vehicle.*` blueprints whose `number_of_wheels` is 4. The same `random.Random(20261026)` that picks the spawn indexes then picks the three blueprint ids. Each car is on autopilot | `sensor.lidar.ray_cast` named `lidar_top`, attached at `carla.Location(z=2.4)` |
 | `drone` | A lidar actor, not a vehicle and not attached to one. Each tick its xy is set to the centroid of the three cars and its z stays at 40 m | `sensor.lidar.ray_cast` named `lidar_top`, rotation pitch `-90` so the rays point down |
 
 ## Spawn rule
