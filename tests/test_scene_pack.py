@@ -280,6 +280,50 @@ def test_linked_camera_dir_does_not_copy_unlisted_frames(tmp_path: Path, images:
     assert not any(name.startswith("other-") for name in copied)
 
 
+@pytest.mark.parametrize("images", ["full", "preview", "none"])
+def test_real_camera_dir_does_not_copy_unlisted_frames(tmp_path: Path, images: str) -> None:
+    """A real camera directory can hold frames from other scenes.
+
+    Town03-000 in the local library has 1,170 PNGs in
+    ``drone-side/camera/right`` that no row of ``images.parquet`` names. Only
+    the listed frames belong to the scene, in every image mode.
+    """
+    scene = tmp_path / "Town03-000"
+    camera = scene / "drone-side" / "camera" / "right"
+    _png(camera / "011185.png", (32, 32))
+    for index in range(50):
+        (camera / f"other-{index:02d}.png").write_bytes(f"other-scene-{index:02d}".encode())
+    (camera / "notes.txt").write_text("keep me", encoding="utf-8")
+    (scene / "manifest.json").write_text('{"scene_id":"Town03-000"}\n', encoding="utf-8")
+    (scene / "points.bin").write_bytes(b"points-ok")
+    _png(scene / "extras" / "cover.png", (16, 16))
+    _images(scene / "images.parquet", ["drone-side/camera/right/011185.png"])
+    buffer = io.StringIO()
+    final = pack_scene(scene, tmp_path / "library", images=images, out=buffer)
+    assert final is not None
+    events = _events(buffer)
+    notes = [str(row["message"]) for row in events if row.get("event") == "note"]
+    assert len(notes) == 1
+    assert notes[0].startswith("skipped 50 image files not listed in images.parquet")
+    assert notes[0].endswith("in: drone-side/camera/right")
+    copied = sorted(
+        path.relative_to(final).as_posix() for path in final.rglob("*") if path.is_file()
+    )
+    assert not any("/other-" in name for name in copied)
+    if images == "full":
+        assert "drone-side/camera/right/011185.png" in copied
+    elif images == "preview":
+        assert "drone-side/camera/right/011185.jpg" in copied
+    else:
+        assert not any(name.startswith("drone-side/camera/right/0111") for name in copied)
+    assert "drone-side/camera/right/notes.txt" in copied
+    # A media file outside a listed directory stays a scene file.
+    assert "extras/cover.png" in copied
+    plan = next(row for row in events if row["event"] == "plan")
+    assert plan["bytes_estimated"] is False
+    assert _as_int(plan["bytes"]) == _payload_bytes(final)
+
+
 def test_preview_dry_run_estimates_more_than_twenty_frames(tmp_path: Path) -> None:
     scene = tmp_path / "scene"
     scene.mkdir()
