@@ -20,7 +20,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-10-25 |
+| Last updated | 2026-10-26 |
 | `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
 | `feat/desktop` | `5d5c98b`. 79 commits ahead of `main`, 1 behind. Not merged. Do not rebase `feat/m2-import` onto `main` until Adarsh merges this. |
 | `feat/m2-import` | `7404f0b`. Green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) (9/9). Artifact `coperceive-desktop-macos-arm64` (84,127,425 bytes). DMG `Coperceive_0.1.0_aarch64.dmg` (84,439,707 bytes). |
@@ -158,6 +158,13 @@ Griffin byte counts are not stored as UI text. A dry-run on 2026-10-24 of `https
 
 Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in Rust `state.json` (`web/src/viewer/Viewer.tsx` `savedLoopChoice` / `handleToggleLoop`, `src-tauri/src/controller.rs`, `src-tauri/src/state.rs`). e2e step 2b already quits and relaunches with loop off. The fixed-port web app still uses `localStorage`. No further change in this checkpoint.
 
+### Correction, 2026-10-26
+
+Two M2 flows have code and UI but no real-app coverage. Steps 5e and 5f below drive them through the real UI; they stay open until `desktop-macos` is green on `agent/deepseek-e2e-pause-move`, then they get the commit and run link. Both use runtime-gated Rust seams (`src-tauri/src/test_seams.rs`) that are inert unless `COPERCEIVE_TEST_ENV` / `COPERCEIVE_TEST_MARKER_FILE` is set; the app is never driven with network data in these steps.
+
+- [ ] P1 · e2e step 5e: Get data Pause / Resume / Cancel of a dataset download job. Asserts the real labels and notes from `GetDataScreen.tsx` (`Pause`, `Resume`, `Cancel`, `Download paused.`, `Download resumed.`), that progress freezes while paused and advances after resume, and that the job child is stopped (SIGSTOP) and gone after Cancel (SIGTERM). Dry-run and the job are local in test mode; no Hugging Face request.
+- [ ] P1 · e2e step 5f: Settings → Change location (Move library). Seeds a temp library from `tests/fixtures/synthetic_scene/synth_001`, moves it to a second temp root through the real "Select New Folder…" picker seam, then asserts the scene moved, the old root is empty with no `.partial` left behind, `state.json` `library_root` updated, and the Library screen still lists the scene. `state.json` is restored afterwards; a real `~/coperceive-data` library is never the source.
+
 ## 🟡 LATER: M3, HPC mode in the app
 - [ ] P0 · Connect screen HPC target: saved hosts, queue status ("Waiting for a CPU node: Priority, 0:42"), heartbeat and reattach, walltime warning, orphan cleanup on launch
 - [ ] P0 · **Real `ssh -L` tunnel test from the Mac over eduVPN**, including a VPN drop and recovery (never tested; the login node can't self-SSH)
@@ -212,6 +219,7 @@ Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in 
 ---
 
 ## Change log of this file
+- 2026-10-26: Added real-app e2e steps 5e (Get data Pause / Resume / Cancel, test-mode local job, no network) and 5f (Settings → Change location moves a scene between two temp libraries and updates `state.json`). New runtime-gated seams live in `src-tauri/src/test_seams.rs` and are inert unless `COPERCEIVE_TEST_ENV` / `COPERCEIVE_TEST_MARKER_FILE` is set. Step 5e/5f notices are surfaced in CI. Strikes wait for the first green `desktop-macos` run on `agent/deepseek-e2e-pause-move`.
 - 2026-10-25: CARLA town-file licence checked against the 0.9.15 README. Code is MIT. Assets are CC-BY, with no version in that README. `maps ingest` now records CC-BY. "CC-BY 4.0" stays off the maps button.
 - 2026-10-24: Struck e2e steps 2d, 5c, and 5d against green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) at `7404f0b` (9/9). Artifact `coperceive-desktop-macos-arm64` 84,127,425 bytes. DMG `Coperceive_0.1.0_aarch64.dmg` 84,439,707 bytes.
 - 2026-10-24: Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) at `1ee6a8c` verified step 5c in the log and failed step 5d with an eval HTTP 504. Lint, web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.
