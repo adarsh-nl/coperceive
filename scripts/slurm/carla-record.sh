@@ -9,7 +9,7 @@
 #SBATCH --output=/home/nanjaiyalathaa/logs/%x-%j.out
 #SBATCH --error=/home/nanjaiyalathaa/logs/%x-%j.err
 
-# Not submitted. Runs scripts/sim/record_carla_scene.py.
+# Runs scripts/sim/record_carla_scene.py with PYTHONPATH set to the repo.
 # The drone is a lidar actor at a fixed 40 m, not a vehicle.
 
 set -euo pipefail
@@ -88,7 +88,7 @@ for _ in $(seq 1 90); do
 done
 test "$ready" = 1
 
-"$PY" "$REPO/scripts/sim/record_carla_scene.py" \
+PYTHONPATH="$REPO" "$PY" "$REPO/scripts/sim/record_carla_scene.py" \
   --port "$PORT" \
   --out "$CAPTURE" \
   --seed 20261026 \
