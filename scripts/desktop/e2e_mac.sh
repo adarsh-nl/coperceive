@@ -74,6 +74,17 @@ MOCK_DIALOG_FILE="${TMP_DIR}/mock_dialog.txt"
 APP_STDOUT="${TMP_DIR}/app_stdout.log"
 APP_STDERR="${TMP_DIR}/app_stderr.log"
 
+# Import source: a copy of synth_001 with one PNG that no images.parquet row
+# names, sitting beside a listed frame directory. Real camera trees (e.g.
+# drone-side/camera/right in the local Town03-000) hold frames from other
+# scenes; the import must copy only the frames the scene lists.
+IMPORT_SOURCE="${TMP_DIR}/import-src/synth_001"
+mkdir -p "$(dirname "${IMPORT_SOURCE}")"
+cp -R "${FIXTURE_2}" "${IMPORT_SOURCE}"
+STRAY_FRAME="${IMPORT_SOURCE}/vehicle/cam_front/0999999.png"
+mkdir -p "$(dirname "${STRAY_FRAME}")"
+printf 'a frame from another scene that images.parquet does not list\n' > "${STRAY_FRAME}"
+
 STATE_DIR="${HOME}/Library/Application Support/nl.adarsh.coperceive"
 STATE_FILE="${STATE_DIR}/state.json"
 mkdir -p "${STATE_DIR}"
@@ -139,7 +150,7 @@ export COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_1}"
 export COPERCEIVE_TEST_ENV="1"
 export COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}"
 export COPERCEIVE_MOCK_DIALOG_FILE="${MOCK_DIALOG_FILE}"
-export COPERCEIVE_TEST_IMPORT_SOURCE="${FIXTURE_2}"
+export COPERCEIVE_TEST_IMPORT_SOURCE="${IMPORT_SOURCE}"
 export COPERCEIVE_PACK_SLEEP_S="0.5"
 # Step 5e only: a local NDJSON progress child replaces the network download so
 # pause/resume/cancel can be driven without Hugging Face. Inert in production.
@@ -1464,6 +1475,13 @@ else:
 assert (library / "synth_001" / "COMPLETE.json").is_file()
 assert not list(library.glob("*.partial")), "partial directory still listed after resume"
 print("Step 5c resume wrote synth_001/COMPLETE.json")
+
+stray = library / "synth_001" / "vehicle" / "cam_front" / "0999999.png"
+assert not stray.exists(), f"import copied an image the scene does not list: {stray}"
+import_record = json.loads((library / "synth_001" / "IMPORT.json").read_text())
+notes = import_record.get("notes") or []
+assert any("not listed in images.parquet" in note for note in notes), notes
+print(f"Step 5c skipped the unlisted frame ({notes})")
 
 click_button("Open Local Viewer")
 deadline = time.monotonic() + 40

@@ -15,7 +15,7 @@ import os
 import shutil
 import time
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TextIO, cast
 
 import pyarrow as pa
@@ -28,6 +28,12 @@ IMPORT_NAME = "IMPORT.json"
 COMPLETE_NAME = "COMPLETE.json"
 PREVIEW_EDGE = 640
 PREVIEW_QUALITY = 85
+# Suffixes that hold image bytes. A file with one of these suffixes that sits
+# beside listed frames but is not named in images.parquet is not part of the
+# scene: a camera directory on disk can hold frames from other scenes.
+MEDIA_SUFFIXES = frozenset(
+    {".avif", ".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
+)
 
 
 class PackError(Exception):
@@ -176,6 +182,16 @@ def _jpg_rel(relative: str) -> str:
     return Path(relative).with_suffix(".jpg").as_posix()
 
 
+def _image_directories(paths: tuple[str, ...]) -> set[str]:
+    """Directories whose image bytes come only from ``images.parquet``."""
+    directories: set[str] = set()
+    for relative in paths:
+        if _reject_relative(relative) is not None:
+            continue
+        directories.add(PurePosixPath(relative).parent.as_posix())
+    return directories
+
+
 def _image_column(scene: Path) -> tuple[str, ...] | None:
     table_path = scene / IMAGE_TABLE
     if not table_path.is_file():
@@ -270,12 +286,29 @@ def build_plan(
     errors: list[dict[str, str]] = []
     seen_errors: set[str] = set()
     files: dict[str, PlannedFile] = {}
+    image_dirs = _image_directories(image_paths or ())
+    skipped: dict[str, list[int]] = {}
+    skipped_rel: set[str] = set()
     for relative, source in walked.items():
         if relative in listed:
             continue
         if relative == IMAGE_TABLE and images in ("preview", "none"):
             continue
+        parent = PurePosixPath(relative).parent.as_posix()
+        if source.suffix.lower() in MEDIA_SUFFIXES and parent in image_dirs:
+            saved = skipped.setdefault(parent, [0, 0])
+            saved[0] += 1
+            saved[1] += source.stat().st_size
+            skipped_rel.add(relative)
+            continue
         files[relative] = PlannedFile(relative, source, "copy")
+    if skipped:
+        count = sum(item[0] for item in skipped.values())
+        size = sum(item[1] for item in skipped.values())
+        kept_notes.append(
+            f"skipped {count} image files not listed in {IMAGE_TABLE} "
+            f"({size} bytes) in: {', '.join(sorted(skipped))}"
+        )
     column: list[str] = []
     resolved_images: list[Path] = []
     for relative in image_paths or ():
@@ -314,7 +347,11 @@ def build_plan(
     if images == "none" and image_paths is not None:
         files[IMAGE_TABLE] = PlannedFile(IMAGE_TABLE, scene / IMAGE_TABLE, "empty")
     ordered = tuple(files[key] for key in sorted(files))
-    non_image = sum(path.stat().st_size for rel, path in walked.items() if rel not in listed)
+    non_image = sum(
+        path.stat().st_size
+        for rel, path in walked.items()
+        if rel not in listed and rel not in skipped_rel
+    )
     listed_bytes = sum(path.stat().st_size for path in resolved_images)
     return Plan(
         scene.name,
