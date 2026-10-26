@@ -570,6 +570,7 @@ pub mod tests {
         let state = AppPersistentState {
             last_data_root: Some("/path/to/data".into()),
             library_root: Some("/path/to/coperceive-data".into()),
+            validation_cache: None,
             auto_download_updates: true,
             pending_download: None,
             last_scene_id: Some("Town03-000".into()),
