@@ -439,6 +439,15 @@ def eval_retry(step, code, tries=3):
     print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
     raise SystemExit(1)
 
+def eval_once_note(step, code, timeout=15):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    toggle can change the UI twice."""
+    try:
+        return eval_js(code, timeout=timeout)
+    except Exception as e:
+        print(f"E2E_NOTE step={step} {type(e).__name__}: {e}", flush=True)
+        return None
+
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
     last_err = None
@@ -541,10 +550,17 @@ assert pb_replayed["frameIndex"] < 25, f"Expected playback to restart from 0, go
 eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (c): play 15 s across the loop wrap with no frame-change gap over 300 ms...")
-eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
-time.sleep(0.1)
-pb_c_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
-assert pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
+pb_c_loop = None
+for _attempt in range(3):
+    pb_c_loop = eval_retry("2-loop-state", "window.__COPERCEIVE_PLAYBACK_STATE__()")
+    if pb_c_loop["loop"]:
+        break
+    eval_once_note("2-loop-on", "window.__COPERCEIVE_PLAYBACK__('loop')")
+    time.sleep(0.1)
+    pb_c_loop = eval_retry("2-loop-state", "window.__COPERCEIVE_PLAYBACK_STATE__()")
+    if pb_c_loop["loop"]:
+        break
+assert pb_c_loop is not None and pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
 
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 120)")
 
@@ -1237,8 +1253,17 @@ def eval_retry(step, code, timeout=10, tries=5):
 def eval_js(code, timeout=10):
     return eval_retry("4-open", code, timeout=timeout)
 
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
 print("Triggering Open Dataset to invalid empty directory...")
-eval_js("document.querySelector('.btn-open-dataset')?.click()")
+eval_once_note("4-open-picker", "document.querySelector('.btn-open-dataset')?.click()")
 EOF
 
 sleep 1.5
@@ -1303,7 +1328,22 @@ def eval_retry(step, code, timeout=10, tries=5):
 def eval_js(code, timeout=10):
     return eval_retry("4-assert", code, timeout=timeout)
 
-err_msg = eval_js("document.querySelector('.dataset-error-msg')?.textContent")
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+deadline = time.monotonic() + 20.0
+err_msg = None
+while time.monotonic() < deadline:
+    err_msg = eval_js("document.querySelector('.dataset-error-msg')?.textContent")
+    if err_msg and "No coperceive scenes in" in err_msg:
+        break
+    time.sleep(0.5)
 print(f"Error banner text: {err_msg}")
 assert err_msg and "No coperceive scenes in" in err_msg, f"Expected 'No coperceive scenes in', got {err_msg}"
 assert "manifest.json and COMPLETE.json" in err_msg, f"Expected manifest.json and COMPLETE.json notice, got {err_msg}"
@@ -1476,6 +1516,15 @@ def eval_retry(step, code, timeout=10, tries=5):
 def eval_js(script, timeout=15):
     return eval_retry("5c", script, timeout=timeout)
 
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
 def click_button(label):
     script = """
         (() => {
@@ -1486,7 +1535,7 @@ def click_button(label):
             return 'clicked';
         })()
     """ % json.dumps(label)
-    result = eval_js(script)
+    result = eval_once_note(f"5c-click-{label}", script)
     if result != "clicked":
         raise RuntimeError(f"button not found: {label}")
 
