@@ -4,6 +4,8 @@
 
 No publishable scene on this machine has three or more recording agents. The landing clip is unchanged. The table, the licences, and the closest Griffin pair are in `docs/design/hero-scene-search.md`. The hero was not rebuilt.
 
+CARLA 0.9.15 is not installed here (no binary, no module, no client wheel for CPython 3.13.14). An own recording was not started. The check is in that same design note, dated 2026-10-26.
+
 The web viewer is a light control shell around a dark viewport, with a dark theme on the same layout. Phase 6 (playback, cameras, sequence export, view settings, and the bird's-eye and overlay figures) is on main. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
 
 ## Goal

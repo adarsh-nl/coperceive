@@ -466,3 +466,28 @@ The two OpenCOOD conversions, measured from `poses.parquet` and `point_index.par
 
 `results/629196` and `results/629227` hold the same two scene ids. Where a converted manifest stores `map_name`, it is `Carla/Maps/Town06`. The `629196` copy of `2021_08_20_20_39_00` stores only `split: train` on both agents.
 
+## Own CARLA recording, checked 2026-10-26
+
+Adarsh asked for a scene recorded in CARLA 0.9.15. The simulator is not on this cluster, so no recorder was written and no GPU job was submitted.
+
+Checked on the login node:
+
+- `module avail` has no CARLA or Unreal module (Modules 5.0.1).
+- `import carla` in `/home/nanjaiyalathaa/coperceive/.venv` (CPython 3.13.14) raises `ModuleNotFoundError`.
+- `~/wheelhouse` has no file whose name contains `carla`.
+- No `CarlaUE4` binary, CARLA tarball, or `.sif` under `/home/nanjaiyalathaa` (depth 2), or under `/opt`, `/usr/local`, `/software`, `/apps`, or `/datasets/eemcs/ps` (depth 3).
+- `~/maps-src/carla-0.9.15/` has OpenDRIVE files only (`Town03.xodr` and the other towns). That is not the simulator.
+- The repo has no `scripts/sim` recorder. Matches for `carla` are the map tools and dataset notes.
+- Partition `ps` allows account `ps` and has Lovelace GPUs: 4 on `hpc-node11` and `hpc-node12`, 3 on `hpc-node14` (`sinfo`, `scontrol show partition ps`). `nvidia-smi` is not installed on the login node. Off-screen mode was not run.
+
+Off-screen mode is documented, not tested here. The 0.9.15 rendering page, fetched 2026-10-26 from `https://carla.readthedocs.io/en/0.9.15/adv_rendering_options/`, says `./CarlaUE4.sh -RenderOffScreen` for 0.9.12 and later, and that GPU sensors return data in that mode. The same page says no-rendering mode returns empty data for GPU sensors.
+
+### Licences, fetched 2026-10-26
+
+| What | Source | Exact terms |
+| --- | --- | --- |
+| Simulator code | `https://github.com/carla-simulator/carla/blob/0.9.15/LICENSE` and the Licenses section of `https://github.com/carla-simulator/carla/blob/0.9.15/README.md` | The `LICENSE` file is the MIT licence, copyright 2017 Computer Vision Center (CVC) at the Universitat Autònoma de Barcelona (UAB). The README says: "CARLA specific code is distributed under MIT License." |
+| Assets, including towns and maps | The same README Licenses section | "CARLA specific assets are distributed under CC-BY License." It does not say CC-BY 4.0, and the git `LICENSE` file is the MIT text only. A 2024-07-31 maintainer reply at `https://github.com/carla-simulator/carla/discussions/7984` repeats "CC-BY" with no version. |
+
+The Python wheels named on `https://pypi.org/simple/carla/`, fetched 2026-10-26, for 0.9.15 on Linux are `cp27`, `cp37`, `cp38`, `cp39`, and `cp310`. There is no `cp313` wheel. None of them is in `~/wheelhouse`. They were not installed. Compute nodes are not to use PyPI, and a client wheel without `CarlaUE4.sh` cannot record a scene.
+
