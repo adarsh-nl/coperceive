@@ -1,42 +1,43 @@
 # Facts on the landing page
 
-Every sentence the page states, and where it comes from. The page prints no
-dataset name, no frame count, no scene count, no metric, no size, and no
-percentage.
+The page is the Claude Design file "Landing Motion" (imported 2026-10-27), built as designed at Adarsh's request. That decision replaced the earlier copy rules for this page: it now has a nav bar and GitHub links, names datasets and the licence, and shows two **simulations** with numbers drawn on them. This file records where each claim comes from and which numbers are simulated.
 
-Checked against this tree on 2026-10-24.
+Checked against `main` at `0ee039d` on 2026-10-27.
+
+## Simulations (not recorded data, not measured results)
+
+- **Story canvas** (`site/src/landing/story.ts`): a generated city block (seeded), 3 cars and 2 drones, 24 objects. The HUD ("seen", "shared", "agents"), the per-agent speeds and altitudes, the lidar beam count and range, the camera footprint, track ids, the hover tooltips and the timeline's microsecond counter are all values of this simulation. Visibility is ray-cast against the generated buildings.
+- **Evaluate canvas** (`site/src/landing/evalScene.ts`): a simulated drive with simulated ground truth and two simulated detector runs named "det-v1" and "det-v2". Matching (greedy by BEV IoU at the chosen threshold), hits, misses, false positives, precision and recall are computed live from those simulated boxes. No model was run; none of the numbers is a result of coperceive's evaluation on real data.
 
 ## Page claims
 
 | Claim on the page | Source |
 | --- | --- |
-| Every agent. One view. | The headline for this page. It is not a measured result. The hero draws every platform pose stored in the recorded clip: one vehicle and one drone (`site/src/utils/clipLoader.ts` reads both poses from `site/public/hero/clip.bin`). The page does not state a count. |
-| Sensor data and perception, on one timeline. | The same frames carry that vehicle's lidar points and the boxes (`scripts/site/export_hero_clip.py` writes the poses, the points, and the box flags). Playback walks the frames in order. The page draws the points and the lane lines. It does not draw the boxes. The page does not say real-time or live. |
-| Recorded | The hero plays `site/public/hero/clip.bin`, written by `scripts/site/export_hero_clip.py`, and the still `site/public/hero/poster.webp` from that playback. Both platforms in that file are recorded. The page does not name the dataset. |
-| Coming soon. | `docs/adr/0014-desktop-app.md` specifies a desktop app. `README.md:5` says this tree does not build the desktop shell. The page gives no date and no download. |
-| The desktop app for multi-agent perception. | The same sources. It names the product the ADR specifies. It does not say the shell ships from this tree. |
-| Vehicle. Drone. Lane. | The legend. Vehicle is the recorded vehicle pose and its lidar. Drone is the recorded drone pose. Lane is the map polylines in the same file, drawn in `#7dcea0`. The words are not a count and not a measurement. |
-| Join the waitlist. Enter an email address. Waitlist opens soon. Sending… You’re on the list. Could not join. Try again. | `site/src/components/Waitlist.tsx`. The address is checked in the browser. When `VITE_WAITLIST_ENDPOINT` is unset, submit sends no request, stores nothing, and shows "Waitlist opens soon." "You’re on the list." is shown only after the endpoint responds with a success status. No service URL is written in the source. |
+| The Mac app is coming soon. / coperceive for Mac is coming soon — same scenes, no terminal. | `docs/adr/0014-desktop-app.md` specifies a desktop app (Tauri, macOS first). `README.md` says this tree does not build a desktop shell. No date. |
+| Many agents. One scene. | Headline. The scene model holds N agents in one scene (`coperceive/model.py` `Scene.agents`). |
+| Every car, drone and roadside unit in one world frame, on one clock. | `AgentType` is vehicle, uav, infrastructure, other (`coperceive/model.py`); one `world_frame` and one `Clock` per scene (`docs/spec/format.md`). |
+| One car sees what's in front of it. … stays a grey outline. | Describes the simulation (captions 1–3 narrate the story canvas). |
+| Each vehicle keeps its own sensors, poses and boxes. coperceive keeps them in one scene instead of one log per car. | `Agent.poses`, `Sensor.agent_id`, `Annotation` per agent in one `Scene` (`coperceive/model.py`). |
+| Objects seen by more than one agent … only when the id is actually shared. | Shared objects group annotations by shared track id (`coperceive/diagnostics.py` `shared_objects`). On the canvas this is the simulation's rule. |
+| Frames from every agent land on one integer-microsecond clock. Scrub it, hide an agent, export to Rerun or video. | `time_us` is an int in microseconds (`docs/spec/format.md`; `require_time_us`). Viewer playback and per-agent visibility (`HANDOVER.md`, State); Rerun `.rrd` export and MP4/GIF sequence export (`README.md`, `CHANGELOG.md`). |
+| From raw logs to a shared view. One Python package. Runs on your workstation or behind a JupyterHub proxy. | `pyproject.toml` (one package); JupyterHub path-prefix support (`coperceive/cli.py`, `docs/adr/0004-web-app.md`). |
+| 01 ingest — Any dataset, one manifest. A YAML file with units, rotations and axes written out. Griffin, OPV2V and V2XSet are built in. `adapters ingest my.yaml` | `docs/adr/0009-dataset-adapters.md`; built-in manifests under `coperceive/adapters/builtin/`; `README.md` (`adapters ingest`). |
+| 02 validate — Check before you train. Time sync, pose speed, cross-agent box agreement and coverage, as JSON and Markdown. `validate ./scenes --strict` | `coperceive/validate.py`; `README.md`. |
+| 03 view — Every agent in 3D. Lidar, camera strips and HD-map lanes. Orbit, bird's-eye, chase, drone and camera views. `serve --root ./scenes` | `HANDOVER.md` (State); `docs/design/viewer-features.md`. |
+| 04 evaluate — Score in the world frame. Match predictions per agent, put precision and recall on the timeline, overlay a second run. `eval compare v1 v2` | `docs/adr/0010-eval-predictions.md` line 9; `README.md` (`eval compare`). |
+| Three commands to your first scene. (`pip install -e ".[app,griffin]"`, `coperceive convert griffin --subset 25m --out ./scenes`, `coperceive serve --root ./scenes`, `→ http://127.0.0.1:8731`) | `README.md` install and quick start; default port 8731 in `coperceive/cli.py`. The `convert` line also needs `--raw-root` in `README.md`; the design's shorter line is kept as designed. |
+| Python 3.10–3.13. Apache-2.0. Local by default — nothing leaves your machine. | `README.md` ("Python 3.10–3.13"); `pyproject.toml` `license = "Apache-2.0"`; the server binds loopback unless `--token` is set (`HANDOVER.md`, Phase 5 choices). |
+| Score every detection where it happened. Predictions match the agent's own ground truth in the world frame by BEV IoU. | `docs/adr/0010-eval-predictions.md`; BEV IoU at 0.5 and 0.7 (`README.md`). The canvas beneath is a simulation (above). |
+| Read the docs / View on GitHub / GitHub | Links to `https://github.com/adarsh-nl/coperceive/tree/main/docs` and `https://github.com/adarsh-nl/coperceive`. The design left them as `#`. |
+| multi-agent perception data | Footer tagline from the design. |
 
-The wordmark is the product name. The red block is the design token `cursor` in `site/src/tokens.ts` (`#E03A22`). It is not a measurement of the software.
+## Kept from the earlier rules
 
-## Clip platforms
+- Fonts are self-hosted (`@fontsource-variable/geist`, `geist-mono`); the design's Google Fonts link was not used. The page fetches nothing from another origin (asserted in `tests/test_landing_page.py`).
+- No analytics, trackers or third-party scripts.
+- No viewer screenshots, `.xodr` or dataset bytes are committed. The design project's `web/public/landing/*.png` were not used.
 
-The binary stores two platform poses on every frame. Both move. The drone pose sits about 27 m above the vehicle pose. There is no second ground-vehicle pose and no infrastructure pose in the file. Boxes are tracks seen by the vehicle, the drone, or both. They are not extra platforms. The hero does not draw them, so the frame stays the points, the lanes, and the drone marker.
+## Not on this page any more
 
-The vehicle is the lidar sweep in the file (`docs/datasets/griffin.md` records that the drone has no point files). Those points are drawn as small additive dots. A point near the recorded vehicle pose is white. A point farther from that pose is `#F58A1F`. The page does not add points. The drone is a small glowing marker in `#3C8DFF` at the recorded position, with a faint line to the vehicle pose. The marker does not use the drone's recorded attitude. The file does not store a body mesh, and the page does not print a size. Lane lines are the map polylines, in `#7dcea0`. The camera orbits the recorded vehicle, elevated, and follows that pose. No second vehicle is drawn.
-
-The only committed recording is `site/public/hero/clip.bin`. `scripts/site/export_hero_clip.py` reads one vehicle pose and one drone pose from a scene that is not in git. Griffin's adapter lists those two agents and no infrastructure agent (`coperceive/adapters/builtin/griffin.yaml`). Other town scenes are the same vehicle-and-drone pair, and their frames are not in this repository. A roadside unit appears only in the V2XSet adapter, which this page does not use. No second publishable recording with two ground vehicles, or a vehicle plus infrastructure, is in the tree. The hero scene was not switched.
-
-Geist and Geist Mono stay on the OFL texts in `site/public/licenses/`. Those files are not linked from the page. The page footer is the wordmark only.
-
-The generated bird's-eye scene under `site/src/backdrop/` is not mounted.
-
-## Not stated
-
-- A dataset name, a town name, a frame count, a scene count, a duration, a rate, a size, a percentage, or a model score.
-- A personal name or an author line.
-- Real-time, live, or zero configuration.
-- A repository link or a download.
-- AirSim. No file in this tree states it.
-- "See what your car can't." That line is not on the page.
+- The recorded hero clip (`site/public/hero/clip.bin`), its poster and the `three` player. The files stay in the tree; this page does not load them.
+- The waitlist form. The design has none.
