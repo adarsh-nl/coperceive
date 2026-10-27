@@ -167,6 +167,10 @@ In the Predictions block the session appears in the run list as `run_id: "live:<
 
 ### 5. Scheduling: Slurm for batch, a shared allocation for live
 
+> Amended by [ADR 0015](0015-cluster-profiles-scheduler-adapter.md): the partition and
+> resources below come from the user's server profile, not from constants such as
+> `ps`/`ps,main-gpu`. The "show the script before submitting" rule is unchanged.
+
 `--slurm` writes `<out>/.slurm/<run_id>.sbatch` and prints it; `--submit` additionally runs `sbatch <file>` as an argv list. The default is emit only, because the HPC rule is to show the script before submitting. The emitted script:
 
 - `--partition=ps,main-gpu` and `--gres=gpu:1` when `resources.gpu` is true, else `ps,main-cpu`; `--mem` from `memory_gb`; `--constraint` from `slurm_constraint`; `--mail-type=END,FAIL`; logs under `~/logs/%x-%j.{out,err}`;
