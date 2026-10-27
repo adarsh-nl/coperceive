@@ -18,6 +18,16 @@ from coperceive.remote.manager import (
     start_session,
     stop_session,
 )
+from coperceive.remote.scan import (
+    DEFAULT_DEPTH,
+    DEFAULT_MAX_ENTRIES,
+    DEFAULT_MAX_TOTAL,
+    DEFAULT_TIMEOUT_S,
+    MAX_DEPTH,
+    MAX_TIMEOUT_S,
+    ScanError,
+    scan_tree,
+)
 
 
 def add_parser(
@@ -105,6 +115,44 @@ def add_parser(
     heartbeat_parser.add_argument("--uuid", dest="opt_uuid", default=None, help="Session UUID.")
     heartbeat_parser.set_defaults(func=_remote_heartbeat)
 
+    # remote scan
+    scan_parser = remote_sub.add_parser(
+        "scan",
+        help="Describe the folders and coperceive scenes under a path (metadata only).",
+    )
+    scan_parser.add_argument(
+        "--root", required=True, help="Data directory root that limits the scan."
+    )
+    scan_parser.add_argument("--path", required=True, help="Directory inside --root to describe.")
+    scan_parser.add_argument(
+        "--depth",
+        type=int,
+        default=DEFAULT_DEPTH,
+        help=f"Folders below --path to inspect (default {DEFAULT_DEPTH}, max {MAX_DEPTH}).",
+    )
+    scan_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_S,
+        help=(
+            f"Wall-clock seconds before returning partial results "
+            f"(default {DEFAULT_TIMEOUT_S:g}, max {MAX_TIMEOUT_S:g})."
+        ),
+    )
+    scan_parser.add_argument(
+        "--max-entries",
+        type=int,
+        default=DEFAULT_MAX_ENTRIES,
+        help=f"Entries read per directory (default {DEFAULT_MAX_ENTRIES}).",
+    )
+    scan_parser.add_argument(
+        "--max-total",
+        type=int,
+        default=DEFAULT_MAX_TOTAL,
+        help=f"Folders described in total (default {DEFAULT_MAX_TOTAL}).",
+    )
+    scan_parser.set_defaults(func=_remote_scan)
+
 
 def _remote_start(args: argparse.Namespace) -> None:
     extra_args: list[str] = []
@@ -161,6 +209,24 @@ def _remote_heartbeat(args: argparse.Namespace) -> None:
         print(json.dumps({"status": "error", "error": "session uuid is required"}))
         sys.exit(1)
     result = record_heartbeat(uuid_val)
+    print(json.dumps(result, indent=2))
+    if result.get("status") == "error":
+        sys.exit(1)
+
+
+def _remote_scan(args: argparse.Namespace) -> None:
+    try:
+        result = scan_tree(
+            root=args.root,
+            path=args.path,
+            depth=args.depth,
+            timeout_s=args.timeout,
+            max_entries=args.max_entries,
+            max_total=args.max_total,
+        )
+    except ScanError as exc:
+        print(json.dumps({"status": "error", "error": str(exc)}, indent=2))
+        sys.exit(1)
     print(json.dumps(result, indent=2))
     if result.get("status") == "error":
         sys.exit(1)
