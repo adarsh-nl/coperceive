@@ -192,8 +192,13 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         ):
             assert banned not in body, banned
             assert banned not in html, banned
-        assert re.search(r"\blive\b", body, re.IGNORECASE) is None, "live"
-        assert re.search(r"\blive\b", html, re.IGNORECASE) is None, "live"
+        # Whole word, in what a reader or a link preview sees (aria-live is markup, not a claim).
+        meta = page.evaluate(
+            "() => [document.title, ...[...document.querySelectorAll('meta[content]')]"
+            ".map(m => m.getAttribute('content'))].join(' ')"
+        )
+        assert isinstance(meta, str)
+        assert re.search(r"\blive\b", f"{body} {meta}", re.IGNORECASE) is None, "live"
         headings = [h.strip() for h in page.locator("h1, h2").all_inner_texts()]
         assert headings == [
             "Every agent. One view.",
