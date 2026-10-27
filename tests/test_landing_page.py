@@ -274,8 +274,8 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         for anchor in ("#pipeline", "#install"):
             assert page.locator(anchor).count() == 1
 
-        page.evaluate("() => window.scrollTo(0, 0)")
-        page.wait_for_timeout(300)
+        # A fresh load: the skip link is the first tab stop.
+        page.goto(site_server, wait_until="networkidle")
         page.keyboard.press("Tab")
         assert (
             page.evaluate("() => document.activeElement?.textContent?.trim()") == "Skip to content"
