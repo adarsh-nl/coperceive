@@ -22,7 +22,11 @@ notes for the draft PR into `main`. Do not copy the rest of `TASKS.md` here.
 | Lighthouse mobile | Performance 96, Accessibility 100, Best Practices 100, SEO 100. |
 | Playwright `tests/test_landing_page.py` | 2 passed. No header, no pause control, no repository link, no licence line. Logo is at least 28 px, fades, and is not fixed. The recorded canvas moves. Reduced motion keeps the poster and stops the cursor blink. axe serious and critical: 0. |
 | Scroll video | `docs/media/landing-scroll.mp4`, 1440×900, 24.20 s, 3.9 MB. |
-| OG image | `site/public/og.png`, 1200×630, icon variant. |
+| OG image | `site/public/og.png`, 1200×630, icon variant. Replaced on 2026-10-27 (see below). |
+
+## OG image and touch icon (2026-10-27)
+
+`python scripts/site/render_poster.py og` renders `site/public/og.png` (1200×630, 263,053 bytes) from the committed clip in the hero's style: frame 0 at the player's starting orbit angle, every map polyline in lane mint, glowing points white near the vehicle and orange far from it, the drone glow and tether, the page's bottom fade, then the wordmark and the headline. Nothing else is written on it. Two renders are byte-identical. `python scripts/site/render_poster.py icon` renders `site/public/apple-touch-icon.png` (180×180, opaque), the favicon mark. `index.html` links the touch icon and gives the OG and Twitter images alt text. `tests/test_site_og.py` (CI `landing` job) checks determinism, size (≤ 300 kB), dimensions, the committed files against a fresh render, and the meta tags.
 
 ## Left for the maintainer
 

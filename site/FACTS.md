@@ -18,6 +18,8 @@ Checked against this tree on 2026-10-24.
 | Vehicle. Drone. Lane. | The legend. Vehicle is the recorded vehicle pose and its lidar. Drone is the recorded drone pose. Lane is the map polylines in the same file, drawn in `#7dcea0`. The words are not a count and not a measurement. |
 | Join the waitlist. Enter an email address. Waitlist opens soon. Sending… You’re on the list. Could not join. Try again. | `site/src/components/Waitlist.tsx`. The address is checked in the browser. When `VITE_WAITLIST_ENDPOINT` is unset, submit sends no request, stores nothing, and shows "Waitlist opens soon." "You’re on the list." is shown only after the endpoint responds with a success status. No service URL is written in the source. |
 
+The share image (`site/public/og.png`) and its alt text "coperceive. Every agent. One view." carry only the wordmark and the headline above, over a render of the committed clip's first frame in the hero's style (`scripts/site/render_poster.py og`). The touch icon is the favicon mark. Neither states a number or a dataset.
+
 The wordmark is the product name. The red block is the design token `cursor` in `site/src/tokens.ts` (`#E03A22`). It is not a measurement of the software.
 
 ## Clip platforms

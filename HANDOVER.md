@@ -777,3 +777,8 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
   - `test_reduced_motion_behavior`: Emulates reduced motion; verifies animation automatically halts at frame 52 and displays reduced motion notification.
   - Core unit test suite (`tests/test_store.py`, `tests/test_se3.py`, `tests/test_app.py`, `tests/test_viewdata.py`): **29 passed in 0.95 s**.
   - Python lint and format (`ruff check`, `ruff format --check`): **0 errors, all files formatted**.
+
+## OG image and touch icon (2026-10-27, `agent/claude-site-og-favicon`)
+
+- `scripts/site/render_poster.py og` renders `site/public/og.png` (1200×630, 263,053 B) from the committed clip with the player's camera and point shading reimplemented in numpy/Pillow (2× supersampled), plus the wordmark and headline in self-hosted Geist (read from `site/node_modules/@fontsource-variable`, so `npm ci` in `site/` first). `icon` renders the 180×180 `apple-touch-icon.png`. Both are deterministic. The old matplotlib poster stays behind `poster`; its labels carry numbers and the committed poster is not its output, so do not run it to refresh the poster.
+- `index.html`: `apple-touch-icon` link, `og:image:alt`, `twitter:image:alt`. Test: `tests/test_site_og.py` in CI's `landing` job.
