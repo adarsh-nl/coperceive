@@ -26,6 +26,8 @@ def _alpha() -> ServerProfile:
         ssh_alias="alpha-cluster",
         data_roots=("/data/projects/alpha", "/data/shared"),
         scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+        results_root="/data/projects/alpha/runs",
+        code_roots=("/data/projects/alpha/code",),
         scheduler=SchedulerKind.SLURM,
         defaults=JobDefaults(
             partition="gpu-a100",
@@ -50,6 +52,7 @@ def _beta() -> ServerProfile:
         user="bob",
         data_roots=("/mnt/beta/data",),
         scratch_template="/local/$USER/$SLURM_JOB_ID",
+        results_root="/mnt/beta/runs",
         scheduler=SchedulerKind.SLURM,
         defaults=JobDefaults(partition="cpu-short", account="research"),
         environment=EnvironmentSetup(
@@ -96,15 +99,58 @@ def test_alias_and_host_together_are_refused() -> None:
         ).validate()
 
 
-def test_a_server_needs_a_data_root_and_scratch() -> None:
+def test_a_server_needs_a_data_root_scratch_and_results_root() -> None:
     with pytest.raises(ProfileError, match="data root"):
         ServerProfile(name="x", ssh_alias="a", scratch_template="/s").validate()
     with pytest.raises(ProfileError, match="scratch"):
         ServerProfile(name="x", ssh_alias="a", data_roots=("/d",)).validate()
+    with pytest.raises(ProfileError, match="results root"):
+        ServerProfile(
+            name="x",
+            ssh_alias="a",
+            data_roots=("/d",),
+            scratch_template="/s",
+        ).validate()
     with pytest.raises(ProfileError, match="absolute or ~ path"):
         ServerProfile(
-            name="x", ssh_alias="a", data_roots=("relative",), scratch_template="/s"
+            name="x",
+            ssh_alias="a",
+            data_roots=("relative",),
+            scratch_template="/s",
+            results_root="/runs",
         ).validate()
+
+
+def test_results_root_is_shared_storage_not_scratch() -> None:
+    base = ServerProfile(
+        name="x",
+        ssh_alias="a",
+        data_roots=("/d",),
+        scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+        results_root="/scratch/shared",
+    )
+    with pytest.raises(ProfileError, match="inside the scratch"):
+        base.validate()
+    good = ServerProfile(
+        name="x",
+        ssh_alias="a",
+        data_roots=("/d",),
+        scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+        results_root="/shared/runs",
+        code_roots=("/shared/code",),
+    )
+    good.validate()
+    good.validate_output_dir("/shared/runs/run-1")
+    with pytest.raises(ProfileError, match="outside results_root"):
+        good.validate_output_dir("/elsewhere/run-1")
+    with pytest.raises(ProfileError, match="under scratch|outside results_root"):
+        good.validate_output_dir("/scratch/$USER/x")
+    good.validate_pipeline_script("pipelines/bev.py")
+    good.validate_pipeline_script("/shared/code/bev.py")
+    with pytest.raises(ProfileError, match="outside code_roots and data_roots"):
+        good.validate_pipeline_script("/etc/passwd")
+    with pytest.raises(ProfileError, match="must not be empty or contain"):
+        good.validate_pipeline_script("../bev.py")
 
 
 def test_unknown_json_fields_are_refused_so_credentials_cannot_ride_along() -> None:
@@ -157,6 +203,7 @@ def test_no_scheduler_profile_is_valid() -> None:
         ssh_alias="workstation",
         data_roots=("/home/bob/coperceive-data",),
         scratch_template="/tmp/$USER/coperceive",
+        results_root="/home/bob/coperceive-results",
         scheduler=SchedulerKind.NONE,
     )
     profile.validate()

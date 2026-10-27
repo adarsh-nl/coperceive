@@ -12,10 +12,13 @@ scheduler" target are documented extension points. See
 """
 
 from coperceive.hpc.pipeline import (
+    PIPELINE_SPEC_FILE,
     ArgumentKind,
+    ArgumentRole,
     ArgumentSpec,
     PipelineSpec,
     PipelineValidationError,
+    load_pipeline_registration,
 )
 from coperceive.hpc.profile import (
     EnvironmentKind,
@@ -41,6 +44,7 @@ from coperceive.hpc.scheduler import (
 
 __all__ = [
     "ArgumentKind",
+    "ArgumentRole",
     "ArgumentSpec",
     "Discovery",
     "EnvironmentKind",
@@ -50,6 +54,7 @@ __all__ = [
     "JobState",
     "NullAdapter",
     "Partition",
+    "PIPELINE_SPEC_FILE",
     "PipelineSpec",
     "PipelineValidationError",
     "ProfileError",
@@ -59,6 +64,7 @@ __all__ = [
     "ServerProfile",
     "SlurmAdapter",
     "parse_scontrol_partition",
+    "load_pipeline_registration",
     "parse_sinfo",
     "quote_remote_argv",
 ]

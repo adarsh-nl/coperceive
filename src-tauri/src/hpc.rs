@@ -23,6 +23,12 @@ pub struct ServerProfile {
     pub user: Option<String>,
     pub data_roots: Vec<String>,
     pub scratch_template: String,
+    /// Shared filesystem the login node can read; every run output lives here,
+    /// never under scratch.
+    pub results_root: String,
+    /// Directories a registered pipeline script may live in, besides data_roots.
+    #[serde(default)]
+    pub code_roots: Vec<String>,
     pub scheduler: SchedulerKind,
     pub defaults: JobDefaults,
     pub environment: EnvironmentSetup,
@@ -81,8 +87,95 @@ impl ServerProfile {
                     .into(),
             );
         }
+        if self.results_root.trim().is_empty() {
+            return Err(
+                "A results root is required: the shared filesystem where run outputs and \
+                 predictions.jsonl live, readable from the login node."
+                    .into(),
+            );
+        }
+        if !self.results_root.starts_with('/') && !self.results_root.starts_with('~') {
+            return Err(format!(
+                "results_root {:?} must be an absolute or ~ path on the server.",
+                self.results_root
+            ));
+        }
+        let scratch_prefix = self
+            .scratch_template
+            .split('$')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        if !scratch_prefix.is_empty()
+            && (self.results_root == scratch_prefix
+                || self.results_root.starts_with(&format!("{scratch_prefix}/")))
+        {
+            return Err(format!(
+                "results_root {:?} is inside the scratch area {scratch_prefix:?}. \
+                 Outputs must go to shared storage, not scratch.",
+                self.results_root
+            ));
+        }
+        for root in &self.code_roots {
+            if !root.starts_with('/') && !root.starts_with('~') {
+                return Err(format!(
+                    "code root {root:?} must be an absolute or ~ path on the server."
+                ));
+            }
+        }
         self.defaults.validate()?;
         self.environment.validate()?;
+        Ok(())
+    }
+
+    /// A run's --output-dir must be under results_root and never scratch.
+    pub fn validate_output_dir(&self, path: &str) -> Result<(), String> {
+        if !path.starts_with('/') && !path.starts_with('~') {
+            return Err(format!("Output directory {path:?} must be absolute."));
+        }
+        let root = self.results_root.trim_end_matches('/');
+        if path != root && !path.starts_with(&format!("{root}/")) {
+            return Err(format!(
+                "The output directory {path:?} is outside results_root {:?}.",
+                self.results_root
+            ));
+        }
+        let scratch_prefix = self
+            .scratch_template
+            .split('$')
+            .next()
+            .unwrap_or("")
+            .trim_end_matches('/');
+        if !scratch_prefix.is_empty()
+            && (path == scratch_prefix || path.starts_with(&format!("{scratch_prefix}/")))
+        {
+            return Err(
+                "The output directory cannot be under scratch; scratch is temporary job work \
+                 and outputs live under results_root."
+                    .into(),
+            );
+        }
+        Ok(())
+    }
+
+    /// A pipeline script must sit inside code_roots or data_roots.
+    pub fn validate_pipeline_script(&self, script: &str) -> Result<(), String> {
+        if script.is_empty() || script.split('/').any(|part| part == "..") {
+            return Err(format!("Pipeline script {script:?} must not be empty or contain '..'."));
+        }
+        if script.starts_with('/') {
+            let inside = self
+                .code_roots
+                .iter()
+                .chain(self.data_roots.iter())
+                .map(|root| root.trim_end_matches('/').to_string())
+                .any(|root| script == root || script.starts_with(&format!("{root}/")));
+            if !inside {
+                return Err(format!(
+                    "Pipeline script {script:?} is outside code_roots and data_roots."
+                ));
+            }
+        }
         Ok(())
     }
 }
@@ -229,6 +322,17 @@ fn default_output_contract() -> String {
     "coperceive-pipeline-1".to_string()
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArgumentRole {
+    Checkpoint,
+    TestData,
+    Config,
+    Output,
+    #[default]
+    Other,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ArgumentSpec {
@@ -244,6 +348,9 @@ pub struct ArgumentSpec {
     pub choices: Vec<String>,
     #[serde(default)]
     pub multiple: bool,
+    /// What the argument points at, so the UI can offer a remote-scan picker.
+    #[serde(default)]
+    pub role: ArgumentRole,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -263,12 +370,8 @@ impl PipelineSpec {
         if self.name.is_empty() {
             return Err("Pipeline name is required.".into());
         }
-        if self.script.starts_with('/') || self.script.split('/').any(|part| part == "..") {
-            return Err(
-                "Pipeline script must stay inside the server's data roots; absolute paths \
-                 and '..' are refused."
-                    .into(),
-            );
+        if self.script.is_empty() || self.script.split('/').any(|part| part == "..") {
+            return Err("Pipeline script must not be empty or contain '..'.".into());
         }
         if self.interpreter.is_empty() {
             return Err("Pipeline interpreter must have at least one argv element.".into());
@@ -382,6 +485,8 @@ mod tests {
             user: None,
             data_roots: vec!["/data/projects/alpha".into()],
             scratch_template: "/scratch/$USER/$SLURM_JOB_ID".into(),
+            results_root: "/data/projects/alpha/runs".into(),
+            code_roots: vec!["/data/projects/alpha/code".into()],
             scheduler: SchedulerKind::Slurm,
             defaults: JobDefaults {
                 partition: Some("gpu-a100".into()),
@@ -472,6 +577,24 @@ mod tests {
     }
 
     #[test]
+    fn results_root_is_shared_storage_not_scratch() {
+        let mut profile = alpha();
+        profile.results_root = "/scratch/shared".into();
+        assert!(profile.validate().is_err());
+        profile.results_root = "/data/projects/alpha/runs".into();
+        profile.validate().expect("valid");
+        profile
+            .validate_output_dir("/data/projects/alpha/runs/run-1")
+            .expect("inside results root");
+        assert!(profile.validate_output_dir("/etc/out").is_err());
+        profile
+            .validate_pipeline_script("/data/projects/alpha/code/bev.py")
+            .expect("inside code root");
+        assert!(profile.validate_pipeline_script("/etc/passwd").is_err());
+        assert!(profile.validate_pipeline_script("../bev.py").is_err());
+    }
+
+    #[test]
     fn pipeline_spec_refuses_absolute_scripts_and_known_contract() {
         let spec = PipelineSpec {
             name: "bev-fusion".into(),
@@ -486,13 +609,14 @@ mod tests {
                 default: None,
                 choices: Vec::new(),
                 multiple: false,
+                role: ArgumentRole::Checkpoint,
             }],
             output_contract: "coperceive-pipeline-1".into(),
             description: String::new(),
         };
         spec.validate().expect("valid pipeline");
         let mut bad = spec.clone();
-        bad.script = "/etc/passwd".into();
+        bad.script = "../inside.py".into();
         assert!(bad.validate().is_err());
         bad.script = "pipelines/bev_fusion.py".into();
         bad.output_contract = "other".into();

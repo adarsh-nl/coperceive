@@ -6,7 +6,12 @@ contract is deliberately small and is **not** tied to OpenCOOD, Griffin, py123d 
 any other codebase.
 
 A pipeline is a user-registered script plus a typed argument schema (see
-`docs/spec/pipeline.schema.json` and ADR 0015). coperceive starts it with
+`docs/spec/pipeline.schema.json` and ADR 0015). A lab can carry the registration
+next to the script as **`coperceive-pipeline.json`** (same JSON, `script` optional:
+the sibling script's name is used), so one file plus the script can be shared.
+Arguments may declare a `role` (`checkpoint`, `test_data`, `config`, `output`,
+`other`) so the app can offer a picker backed by `coperceive remote scan`; roles are
+metadata and the value is still passed as one argv element. coperceive starts it with
 `<interpreter...> <script> --<arg> <value> ... --output-dir <dir>`, passing only
 argv elements, and reads two files from `<dir>`:
 
@@ -89,6 +94,13 @@ Rules:
 - If the pipeline exits non-zero, coperceive keeps whatever was written and marks
   the run partial; a missing `metrics.json` marks it incomplete. It never treats
   a partial run as complete.
+
+## `metrics.json` is the pipeline's report, not the score
+
+`metrics.json` is free-form reporting owned by the pipeline. coperceive's score
+for a run comes from `coperceive eval run`, which matches the imported predictions
+against the scene ground truth (ADR 0010). The app shows the pipeline's metrics as
+context but never uses them as the score and never accepts them as ground truth.
 
 ## Converting to a stored run
 

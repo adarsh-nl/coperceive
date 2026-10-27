@@ -62,6 +62,12 @@ class EnvironmentKind(str, Enum):
             ) from exc
 
 
+def _static_prefix(template: str) -> str:
+    """The part of a scratch template before its first shell variable."""
+    prefix = template.split("$", 1)[0]
+    return prefix.rstrip("/")
+
+
 def _check_absolute(path: str, field_name: str) -> None:
     if not path:
         raise ProfileError(f"{field_name} must not be empty.")
@@ -254,7 +260,15 @@ class ServerProfile:
     data_roots: tuple[str, ...] = ()
     """Directories on the server coperceive may read (the user picks them)."""
     scratch_template: str = ""
-    """Per-user scratch for job work, e.g. ``/scratch/$USER/$SLURM_JOB_ID``."""
+    """Per-user scratch for temporary job work, e.g. ``/scratch/$USER/$SLURM_JOB_ID``."""
+    results_root: str = ""
+    """Shared filesystem the login node can read; every ``--output-dir`` goes here.
+
+    Never inside scratch: scratch is temporary job work, the results root is where
+    the app tails ``predictions.jsonl`` from and where runs live.
+    """
+    code_roots: tuple[str, ...] = ()
+    """Directories a registered pipeline script may live in (besides data_roots)."""
     scheduler: SchedulerKind = SchedulerKind.SLURM
     defaults: JobDefaults = field(default_factory=JobDefaults)
     environment: EnvironmentSetup = field(default_factory=EnvironmentSetup)
@@ -290,6 +304,23 @@ class ServerProfile:
                 "A per-user scratch path is required for job work, for example "
                 "/scratch/$USER/$SLURM_JOB_ID."
             )
+        if not self.results_root.strip():
+            raise ProfileError(
+                "A results root is required: the shared filesystem where run outputs and "
+                "predictions.jsonl live, readable from the login node. It is never scratch."
+            )
+        _check_absolute(self.results_root, "results_root")
+        for root in self.code_roots:
+            _check_absolute(root, "code_roots entry")
+        scratch_prefix = _static_prefix(self.scratch_template)
+        if scratch_prefix and (
+            self.results_root == scratch_prefix
+            or self.results_root.startswith(scratch_prefix + "/")
+        ):
+            raise ProfileError(
+                f"results_root {self.results_root!r} is inside the scratch area "
+                f"{scratch_prefix!r}. Outputs must go to shared storage, not scratch."
+            )
         self.defaults.validate()
         self.environment.validate()
 
@@ -302,6 +333,43 @@ class ServerProfile:
         assert self.host is not None
         return f"{self.user}@{self.host}" if self.user else self.host
 
+    def validate_output_dir(self, path: str) -> None:
+        """A run's ``--output-dir`` must be under results_root and never scratch."""
+        _check_absolute(path, "output directory")
+        if not self.results_root:
+            raise ProfileError("Set results_root on the server profile first.")
+        if not (path == self.results_root or path.startswith(self.results_root.rstrip("/") + "/")):
+            raise ProfileError(
+                f"The output directory {path!r} is outside results_root {self.results_root!r}."
+            )
+        scratch_prefix = _static_prefix(self.scratch_template)
+        if scratch_prefix and (path == scratch_prefix or path.startswith(scratch_prefix + "/")):
+            raise ProfileError(
+                "The output directory cannot be under scratch; scratch is temporary job "
+                "work. Use results_root instead."
+            )
+
+    def validate_pipeline_script(self, script: str) -> None:
+        """A pipeline script must live inside code_roots or data_roots.
+
+        A relative script is relative to those roots. An absolute script is allowed
+        only when its normalized path is inside one of them, so a shared
+        ``coperceive-pipeline.json`` cannot point the app at arbitrary files.
+        """
+        if not script or ".." in script.split("/"):
+            raise ProfileError(f"Pipeline script {script!r} must not be empty or contain '..'.")
+        roots = [root.rstrip("/") for root in (*self.code_roots, *self.data_roots) if root.strip()]
+        if not roots:
+            raise ProfileError(
+                "Add a code root or a data root before registering a pipeline script."
+            )
+        if script.startswith("/"):
+            normalized = "/" + "/".join(part for part in script.split("/") if part)
+            if not any(normalized == root or normalized.startswith(root + "/") for root in roots):
+                raise ProfileError(
+                    f"Pipeline script {script!r} is outside code_roots and data_roots."
+                )
+
     def to_json(self) -> dict[str, object]:
         return {
             "name": self.name,
@@ -310,6 +378,8 @@ class ServerProfile:
             "user": self.user,
             "data_roots": list(self.data_roots),
             "scratch_template": self.scratch_template,
+            "results_root": self.results_root,
+            "code_roots": list(self.code_roots),
             "scheduler": self.scheduler.value,
             "defaults": self.defaults.to_json(),
             "environment": self.environment.to_json(),
@@ -328,6 +398,11 @@ class ServerProfile:
         env_data = data.get("environment", {})
         if not isinstance(defaults_data, Mapping) or not isinstance(env_data, Mapping):
             raise ProfileError("defaults and environment must be objects.")
+        code_roots_raw = data.get("code_roots", ())
+        if not isinstance(code_roots_raw, (list, tuple)) or not all(
+            isinstance(item, str) for item in cast(Sequence[object], code_roots_raw)
+        ):
+            raise ProfileError("code_roots must be a list of paths.")
         profile = cls(
             name=_required_str(data, "name"),
             ssh_alias=_optional_str(data.get("ssh_alias"), "ssh_alias"),
@@ -335,6 +410,8 @@ class ServerProfile:
             user=_optional_str(data.get("user"), "user"),
             data_roots=tuple(cast(Sequence[str], roots_raw)),
             scratch_template=str(data.get("scratch_template", "")),
+            results_root=_required_str(data, "results_root"),
+            code_roots=tuple(cast(Sequence[str], code_roots_raw)),
             scheduler=SchedulerKind.parse(data.get("scheduler", "slurm")),
             defaults=JobDefaults.from_json(cast(Mapping[str, object], defaults_data)),
             environment=EnvironmentSetup.from_json(cast(Mapping[str, object], env_data)),

@@ -37,6 +37,7 @@ def _rendered_scripts() -> list[str]:
         ssh_alias="alpha-cluster",
         data_roots=("/data/projects/alpha",),
         scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+        results_root="/data/projects/alpha/runs",
         defaults=JobDefaults(partition="gpu-a100", gres="gpu:a100:1", time_limit="01:00:00"),
         environment=EnvironmentSetup(kind=EnvironmentKind.MODULES, modules=("python/3.12",)),
     )
@@ -46,6 +47,7 @@ def _rendered_scripts() -> list[str]:
         user="bob",
         data_roots=("/mnt/beta/data",),
         scratch_template="/local/$USER/$SLURM_JOB_ID",
+        results_root="/mnt/beta/runs",
         defaults=JobDefaults(partition="cpu-short"),
         environment=EnvironmentSetup(
             kind=EnvironmentKind.VENV, interpreter="/mnt/beta/venv/bin/python"

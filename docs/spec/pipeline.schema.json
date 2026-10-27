@@ -2,32 +2,110 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://coperceive.dev/spec/pipeline.schema.json",
   "title": "coperceive pipeline registration",
-  "description": "A user-registered model pipeline: a script, the interpreter that runs it, its server environment and a typed argument schema. coperceive validates values and passes them as argv elements only. The pipeline writes the open output contract in docs/spec/pipeline-output.md.",
+  "description": "A user-registered model pipeline: a script, the interpreter that runs it, its server environment and a typed argument schema. A file named coperceive-pipeline.json next to the script carries this registration so labs can share it. coperceive validates values and passes them as argv elements only. The pipeline writes the open output contract in docs/spec/pipeline-output.md; coperceive itself scores the run with eval run.",
   "type": "object",
   "additionalProperties": false,
-  "required": ["name", "script", "interpreter", "environment", "arguments"],
+  "required": [
+    "name",
+    "script",
+    "interpreter",
+    "environment",
+    "arguments"
+  ],
   "properties": {
-    "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$"},
-    "script": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).*$", "description": "Path inside the profile's data roots; absolute paths and '..' are refused."},
-    "interpreter": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
-    "environment": {"$ref": "cluster-profile.schema.json#/$defs/environment"},
-    "arguments": {"type": "array", "items": {"$ref": "#/$defs/argument"}},
-    "output_contract": {"type": "string", "const": "coperceive-pipeline-1"},
-    "description": {"type": "string"}
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+    },
+    "script": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!.*(?:^|/)\\.\\.(?:/|$)).*$",
+      "description": "Path to the script. A relative path is resolved inside the profile's code_roots or data_roots; an absolute path is allowed only when it is inside one of them. '..' is refused. A coperceive-pipeline.json next to it carries the full registration."
+    },
+    "interpreter": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "environment": {
+      "$ref": "cluster-profile.schema.json#/$defs/environment"
+    },
+    "arguments": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/argument"
+      }
+    },
+    "output_contract": {
+      "type": "string",
+      "const": "coperceive-pipeline-1"
+    },
+    "description": {
+      "type": "string"
+    }
   },
   "$defs": {
     "argument": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "kind"],
+      "required": [
+        "name",
+        "kind"
+      ],
       "properties": {
-        "name": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$", "description": "Credential-like names (token, password, secret, api_key, private_key) are refused: secrets come from the environment."},
-        "kind": {"type": "string", "enum": ["str", "int", "float", "bool", "path", "enum"]},
-        "help": {"type": "string"},
-        "required": {"type": "boolean", "default": false},
-        "default": {"description": "Typed default; omitted when the argument is required."},
-        "choices": {"type": "array", "items": {"type": "string"}, "description": "Required for kind=enum, refused otherwise."},
-        "multiple": {"type": "boolean", "default": false}
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,63}$",
+          "description": "Credential-like names (token, password, secret, api_key, private_key) are refused: secrets come from the environment."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "str",
+            "int",
+            "float",
+            "bool",
+            "path",
+            "enum"
+          ]
+        },
+        "help": {
+          "type": "string"
+        },
+        "required": {
+          "type": "boolean",
+          "default": false
+        },
+        "default": {
+          "description": "Typed default; omitted when the argument is required."
+        },
+        "choices": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Required for kind=enum, refused otherwise."
+        },
+        "multiple": {
+          "type": "boolean",
+          "default": false
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "checkpoint",
+            "test_data",
+            "config",
+            "output",
+            "other"
+          ],
+          "default": "other",
+          "description": "What the argument points at; path/text arguments with a role get a picker backed by coperceive remote scan."
+        }
       }
     }
   }

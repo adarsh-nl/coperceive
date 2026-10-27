@@ -3,16 +3,25 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from coperceive.hpc import (
     ArgumentKind,
+    ArgumentRole,
     ArgumentSpec,
     EnvironmentKind,
     EnvironmentSetup,
     PipelineSpec,
     PipelineValidationError,
+    ProfileError,
 )
-from coperceive.hpc.pipeline import OUTPUT_CONTRACT, pipeline_from_json
+from coperceive.hpc.pipeline import (
+    OUTPUT_CONTRACT,
+    PIPELINE_SPEC_FILE,
+    load_pipeline_registration,
+    pipeline_from_json,
+)
 
 
 def _pipeline() -> PipelineSpec:
@@ -24,7 +33,12 @@ def _pipeline() -> PipelineSpec:
             kind=EnvironmentKind.VENV, interpreter="/data/alpha/venv/bin/python"
         ),
         arguments=(
-            ArgumentSpec(name="checkpoint", kind=ArgumentKind.PATH, required=True),
+            ArgumentSpec(
+                name="checkpoint",
+                kind=ArgumentKind.PATH,
+                required=True,
+                role=ArgumentRole.CHECKPOINT,
+            ),
             ArgumentSpec(name="split", kind=ArgumentKind.ENUM, choices=("train", "val", "test")),
             ArgumentSpec(name="score_threshold", kind=ArgumentKind.FLOAT, default=0.3),
             ArgumentSpec(name="frames", kind=ArgumentKind.INT, default=10),
@@ -113,10 +127,13 @@ def test_bool_and_multiple_arguments_are_rendered_predictably() -> None:
     assert ("--categories", "bus") in pairs
 
 
-def test_a_pipeline_cannot_point_outside_the_data_roots() -> None:
-    for script in ("/etc/passwd", "../outside.py", "a/../../b.py"):
-        with pytest.raises(PipelineValidationError, match="data roots"):
+def test_a_pipeline_script_cannot_contain_a_parent_escape() -> None:
+    for script in ("../outside.py", "a/../../b.py"):
+        with pytest.raises(PipelineValidationError, match="\\.\\."):
             PipelineSpec(name="p", script=script).validate()
+    # An absolute script is accepted at spec level; the profile decides whether it
+    # is inside code_roots or data_roots.
+    PipelineSpec(name="p", script="/data/projects/alpha/code/bev.py").validate()
 
 
 def test_json_registration_round_trips_and_refuses_secrets() -> None:
@@ -146,3 +163,62 @@ def test_json_registration_round_trips_and_refuses_secrets() -> None:
 def test_unknown_output_contract_is_refused() -> None:
     with pytest.raises(PipelineValidationError, match="output contract"):
         PipelineSpec(name="p", script="p.py", output_contract="other").validate()
+
+
+def test_argument_roles_let_the_ui_offer_pickers() -> None:
+    path_argument = ArgumentSpec(
+        name="test_data",
+        kind=ArgumentKind.PATH,
+        role=ArgumentRole.TEST_DATA,
+    )
+    path_argument.validate()
+    text_argument = ArgumentSpec(name="config", kind=ArgumentKind.STR, role=ArgumentRole.CONFIG)
+    text_argument.validate()
+    with pytest.raises(PipelineValidationError, match="pickable"):
+        ArgumentSpec(name="frames", kind=ArgumentKind.INT, role=ArgumentRole.OUTPUT).validate()
+    with pytest.raises(PipelineValidationError, match="Unknown argument role"):
+        ArgumentRole.parse("weights")
+
+
+def test_pipeline_spec_file_next_to_the_script_is_shared(tmp_path: Path) -> None:
+    script = tmp_path / "pipelines" / "bev_fusion.py"
+    script.parent.mkdir()
+    script.write_text("print('user model')\n", encoding="utf-8")
+    spec = {
+        "name": "bev-fusion",
+        "interpreter": ["python3"],
+        "environment": {"kind": "none"},
+        "arguments": [{"name": "checkpoint", "kind": "path", "role": "checkpoint"}],
+    }
+    (script.parent / PIPELINE_SPEC_FILE).write_text(
+        __import__("json").dumps(spec), encoding="utf-8"
+    )
+    pipeline = load_pipeline_registration(script)
+    assert pipeline.script == "bev_fusion.py"
+    assert pipeline.arguments[0].role is ArgumentRole.CHECKPOINT
+    (script.parent / PIPELINE_SPEC_FILE).unlink()
+    with pytest.raises(PipelineValidationError, match="coperceive-pipeline.json"):
+        load_pipeline_registration(script)
+
+
+def test_pipeline_script_must_live_under_code_or_data_roots() -> None:
+    from coperceive.hpc import EnvironmentKind, EnvironmentSetup, JobDefaults, ServerProfile
+
+    profile = ServerProfile(
+        name="Alpha lab",
+        ssh_alias="alpha-cluster",
+        data_roots=("/data/projects/alpha",),
+        code_roots=("/data/projects/alpha/code",),
+        scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+        results_root="/data/projects/alpha/runs",
+        defaults=JobDefaults(partition="gpu-a100"),
+        environment=EnvironmentSetup(
+            kind=EnvironmentKind.VENV, interpreter="/data/alpha/venv/bin/python"
+        ),
+    )
+    pipeline = _pipeline()
+    pipeline.validate_for_profile(profile)
+    PipelineSpec(name="p", script="/data/projects/alpha/code/bev.py").validate_for_profile(profile)
+    outside = PipelineSpec(name="p", script="/etc/passwd")
+    with pytest.raises(ProfileError, match="outside code_roots and data_roots"):
+        outside.validate_for_profile(profile)

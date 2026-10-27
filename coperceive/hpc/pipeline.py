@@ -13,19 +13,42 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
+from pathlib import Path
 from typing import cast
 
-from coperceive.hpc.profile import EnvironmentSetup, ProfileError
+from coperceive.hpc.profile import EnvironmentSetup, ProfileError, ServerProfile
 
 _NAME_RE = re.compile(r"^[a-z][a-z0-9_-]{0,63}$")
 _FORBIDDEN_ARG_NAMES = frozenset(
     {"token", "password", "passwd", "secret", "api_key", "private_key", "credentials"}
 )
 OUTPUT_CONTRACT = "coperceive-pipeline-1"
+PIPELINE_SPEC_FILE = "coperceive-pipeline.json"
+"""A registration file next to the script, so a lab can share one pipeline spec."""
 
 
 class PipelineValidationError(ValueError):
     """A pipeline spec or its argument values are invalid. Says what to fix."""
+
+
+class ArgumentRole(str, Enum):
+    """What the argument points at, so the UI can offer the right picker."""
+
+    CHECKPOINT = "checkpoint"
+    TEST_DATA = "test_data"
+    CONFIG = "config"
+    OUTPUT = "output"
+    OTHER = "other"
+
+    @classmethod
+    def parse(cls, text: object) -> ArgumentRole:
+        try:
+            return cls(str(text))
+        except ValueError as exc:
+            raise PipelineValidationError(
+                f"Unknown argument role {text!r}. Choose one of "
+                f"{', '.join(role.value for role in cls)}."
+            ) from exc
 
 
 class ArgumentKind(str, Enum):
@@ -58,6 +81,13 @@ class ArgumentSpec:
     default: object = None
     choices: tuple[str, ...] = ()
     multiple: bool = False
+    role: ArgumentRole = ArgumentRole.OTHER
+    """What this argument points at (checkpoint/test_data/config/output/other).
+
+    Path-kind arguments with a role let the UI offer a picker backed by
+    ``coperceive remote scan`` instead of a free-text field. Roles are metadata;
+    values are still passed as argv only.
+    """
 
     def validate(self) -> None:
         if not _NAME_RE.match(self.name):
@@ -86,6 +116,14 @@ class ArgumentSpec:
         if self.required and self.default is not None:
             raise PipelineValidationError(
                 f"Argument {self.name!r} is required and has a default; pick one."
+            )
+        if self.role is not ArgumentRole.OTHER and self.kind not in (
+            ArgumentKind.PATH,
+            ArgumentKind.STR,
+        ):
+            raise PipelineValidationError(
+                f"Argument {self.name!r} has role {self.role.value!r} but kind "
+                f"{self.kind.value!r}; a pickable argument must be a path or text."
             )
 
     def coerce(self, value: object) -> object:
@@ -150,11 +188,8 @@ class PipelineSpec:
             raise PipelineValidationError("Pipeline script path is required.")
         if "\x00" in self.script:
             raise PipelineValidationError("Pipeline script path contains a NUL byte.")
-        if self.script.startswith("/") or ".." in self.script.replace("\\", "/").split("/"):
-            raise PipelineValidationError(
-                f"Pipeline script {self.script!r} must stay inside the server's data roots; "
-                "absolute paths and '..' are refused."
-            )
+        if ".." in self.script.replace("\\", "/").split("/"):
+            raise PipelineValidationError(f"Pipeline script {self.script!r} must not contain '..'.")
         if not self.interpreter:
             raise PipelineValidationError(
                 "Pipeline interpreter must have at least one argv element (e.g. python3)."
@@ -175,6 +210,11 @@ class PipelineSpec:
                 f"This version reads {OUTPUT_CONTRACT!r} (see docs/spec/pipeline-output.md)."
             )
         self.environment.validate()
+
+    def validate_for_profile(self, profile: ServerProfile) -> None:
+        """The script must sit inside the profile's code_roots or data_roots."""
+        self.validate()
+        profile.validate_pipeline_script(self.script)
 
     def validate_values(self, values: Mapping[str, object]) -> dict[str, object]:
         """Check the user's argument values and return them typed."""
@@ -274,6 +314,7 @@ def pipeline_from_json(data: Mapping[str, object]) -> PipelineSpec:
             "default",
             "choices",
             "multiple",
+            "role",
         }
         if unknown:
             raise PipelineValidationError(
@@ -293,6 +334,7 @@ def pipeline_from_json(data: Mapping[str, object]) -> PipelineSpec:
             default=raw.get("default"),
             choices=tuple(choices),
             multiple=bool(raw.get("multiple", False)),
+            role=ArgumentRole.parse(raw.get("role", "other")),
         )
         spec.validate()
         arguments.append(spec)
@@ -319,3 +361,34 @@ def assert_pipeline_has_no_site_values(pipeline: PipelineSpec) -> None:
         raise PipelineValidationError(
             "Pipeline interpreter must be argv elements, not shell assignments."
         )
+
+
+def load_pipeline_registration(script: Path) -> PipelineSpec:
+    """Read ``coperceive-pipeline.json`` next to a pipeline script.
+
+    Labs share one JSON file beside the script instead of retyping the schema in
+    every UI. The file uses the pipeline schema; when it has no ``script`` key the
+    script's own name is used, so the pair travels together.
+    """
+    import json
+
+    if not script.name or script.name.startswith("."):
+        raise PipelineValidationError("Pipeline script path is required.")
+    spec_path = script.parent / PIPELINE_SPEC_FILE
+    if not spec_path.is_file():
+        raise PipelineValidationError(
+            f"No {PIPELINE_SPEC_FILE} next to {script.name}. Add one so the pipeline "
+            "registration can be shared with other labs."
+        )
+    try:
+        data = json.loads(spec_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PipelineValidationError(
+            f"Could not read {spec_path.name}: {exc}. Fix the JSON and try again."
+        ) from exc
+    if not isinstance(data, Mapping):
+        raise PipelineValidationError(f"{spec_path.name} must contain a JSON object.")
+    payload = dict(cast(Mapping[str, object], data))
+    if not payload.get("script"):
+        payload["script"] = script.name
+    return pipeline_from_json(payload)

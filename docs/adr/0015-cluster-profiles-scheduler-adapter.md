@@ -57,7 +57,9 @@ mode 0600, parent 0700) and contains no credentials. The JSON shape is
 | `ssh_alias` | a `~/.ssh/config` Host the user already uses (ProxyJump, 2FA, agent) |
 | `host`, `user` | alternative when there is no ssh alias; never a password |
 | `data_roots` | directories the app may read on the server; paths must be absolute or `~` |
-| `scratch_template` | per-user scratch for job work, e.g. `/scratch/$USER/$SLURM_JOB_ID` |
+| `scratch_template` | per-user scratch for **temporary job work only**, e.g. `/scratch/$USER/$SLURM_JOB_ID` |
+| `results_root` | **shared filesystem readable from the login node**; every run `--output-dir` lives here and the app tails results from it. Never inside scratch |
+| `code_roots` | directories a registered pipeline script may live in, besides `data_roots` |
 | `scheduler` | `slurm` or `none` |
 | `defaults` | optional `partition`, `account`, `qos`, `gres`, `time_limit`, `memory`, `cpus_per_task` — user-confirmed, never shipped |
 | `environment` | `kind` (`none`/`modules`/`conda`/`venv`/`container`), `modules`, `interpreter`, `container_image`, `coperceive_command`, `wheelhouse`, `compute_has_internet` |
@@ -66,7 +68,8 @@ mode 0600, parent 0700) and contains no credentials. The JSON shape is
 Rules enforced by validation:
 
 - exactly one of `ssh_alias` and `host`; at least one data root; a scratch
-  template; environment pieces required by its kind (modules need modules,
+  template; a `results_root` that is **not** under the scratch area; absolute
+  `code_roots`; environment pieces required by its kind (modules need modules,
   conda/venv need the python path, container needs the image);
 - credential-looking keys are refused by the strict JSON reader, so a
   hand-edited profile cannot smuggle a token in;
@@ -146,6 +149,71 @@ progress line, a final `metrics.json`). `coperceive predictions import` converts
 that output into a stored run, so the viewer/streaming path is not tied to any
 module codebase. There is no coupling to OpenCOOD, Griffin or any one repository.
 
+### 3a. Results: where output goes, and how it streams back
+
+`--output-dir` for a run is always under the profile's **`results_root`** — shared
+storage the login node can read — and never under scratch. Scratch is only for a
+job's temporary work (`$SCRATCH`, deleted by the job's trap); losing it must not
+lose results. `ServerProfile::validate_output_dir` refuses anything outside
+`results_root` or under the scratch prefix, in both Python and the Rust mirror.
+
+The app reads results **without opening a port and without a server process**: it
+tails `predictions.jsonl` on the shared filesystem over SSH using a byte offset.
+
+- Each poll is one bounded command (`tail -c +<offset+1> <file>` with a max-bytes
+  cap, or one `stat`/read pair), runs on the session's reused SSH connection, and
+  has a hard **size cap** (e.g. 1 MiB per poll) and **time cap** (e.g. 10 s per
+  poll, 1 s minimum interval). The tailer is read-only and never runs heavy work
+  on a login node; it is the same class of light, time-bounded work as discovery.
+- **Partial lines**: bytes after the last `\n` are kept in a small per-run buffer
+  and re-read next poll; only complete lines are parsed. A single line larger than
+  the cap is reported plainly and the run marked as unreadable rather than
+  buffered without bound.
+- **Offset is the authority.** The app remembers the byte offset of the last
+  complete line it consumed. After a reconnect, a `stat` size smaller than the
+  offset (rotation, deletion, a new run reusing a directory) means "start again at
+  0"; the viewer de-duplicates appended boxes by a bounded set of line digests so
+  a re-read does not draw duplicates twice. Tailing never re-submits the job.
+- `metrics.json` is read once at the end. The app may tail while the job runs and
+  import the completed file; a run that dies is shown as partial, never complete.
+
+### 3b. One SSH connection per session
+
+Every remote command — discovery, detection probes, polling, status, reattach —
+goes through **one reused SSH connection per session**, not one login per call:
+`ssh -o ControlMaster=auto -o ControlPersist=10m -o ControlPath=<dir>/%C <target>`.
+The socket directory is per-user and mode 0700 (under `~/.coperceive/sockets/`,
+never `/tmp` shared), and the master is closed on session teardown. On clusters
+with interactive 2FA this means the user opens the connection once and the app's
+bounded polls never trigger another prompt; when a connection cannot be reused
+the app says so and asks the user to open it again rather than silently retrying
+in a loop. Host settings come from `ssh -G <alias>` (argument list, no shell
+string); credentials never leave `ssh-agent`/`~/.ssh/config`.
+
+### 3c. Pipeline arguments with roles, code roots, and shared registrations
+
+`ArgumentSpec` gains an optional `role`:
+`checkpoint | test_data | config | output | other`. Path/text arguments with a
+role let the UI offer a picker backed by `coperceive remote scan` (metadata only)
+instead of free text; the value is still passed as one argv element. Missing
+checkpoints/test data are explained plainly, not guessed.
+
+A pipeline **script must sit inside `code_roots` or `data_roots`** (relative
+paths resolve inside those roots; an absolute path is accepted only when its
+normalized path is inside one of them). A registration file named
+**`coperceive-pipeline.json`** next to the script carries the full pipeline JSON
+(schema `docs/spec/pipeline.schema.json`), so a lab can commit one file beside
+its model and share it: `coperceive-pipeline.json` + `bev_fusion.py` travel
+together, and the UI loads the pair instead of retyping the schema.
+
+### 3d. Who scores a run
+
+coperceive **scores runs itself**: `coperceive eval run` matches the imported
+predictions against the scene ground truth (the step A matcher, ADR 0010) and
+writes the authoritative `metrics.json` for the run. A pipeline's own
+`metrics.json` is its **free-form report** (latency, loss, notes); the app displays
+it but never treats it as the score and never trusts it as ground truth.
+
 ### 4. Where heavy work runs
 
 - Slurm: `sbatch` with the rendered script, after the user has seen and confirmed
@@ -174,8 +242,10 @@ module codebase. There is no coupling to OpenCOOD, Griffin or any one repository
 - Slice 1 (server profiles + detection + connection test) builds on these
   interfaces; until it lands, the pre-existing remote path still contains the old
   site defaults listed in "Known legacy defaults to remove".
-- Tests must use more than one fake cluster profile (different partitions and GRES
-  names, module+venv setups, a ProxyJump alias) and a `none` scheduler profile.
+- Tests use more than one fake cluster profile (different partitions and GRES
+  names, module+venv setups, a ProxyJump alias, a `results_root` and `code_roots`)
+  and a `none` scheduler profile; the portability check keeps no site values and no
+  default partition/host/path in the layer.
 - `tests/test_hpc_portability.py` fails if a site value (partition `ps`, an
   `hpc-node` hostname, a university host or path) appears in the new HPC layer or
   in a rendered job script, or if a default partition/host constant is added.

@@ -50,6 +50,7 @@ def _profile(**changes: object) -> ServerProfile:
         "ssh_alias": "alpha-cluster",
         "data_roots": ("/data/projects/alpha",),
         "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/data/projects/alpha/runs",
         "defaults": JobDefaults(partition="gpu-a100", gres="gpu:a100:1", memory="16G"),
         "environment": EnvironmentSetup(
             kind=EnvironmentKind.MODULES,
