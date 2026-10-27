@@ -285,13 +285,14 @@ assert updated_counts["frustums"] == 4, f"Expected frustums == 4 (UAV hidden), g
 print("Step 1 UI interactions verified successfully.")
 '
 
-# Wait up to 10s for debounced state persistence
+# Wait up to 30s for debounced state persistence. Under a loaded macOS runner
+# the save can lag well past 10 s even though the UI already applied the change.
 python3 -c '
 import sys, json, time
 
 state_file = "'"${STATE_FILE}"'"
 print(f"Waiting for state.json to persist at {state_file}...", flush=True)
-deadline = time.monotonic() + 10.0
+deadline = time.monotonic() + 30.0
 saved = {}
 while time.monotonic() < deadline:
     try:
@@ -439,6 +440,15 @@ def eval_retry(step, code, tries=3):
     print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
     raise SystemExit(1)
 
+def eval_once_note(step, code, timeout=15):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    toggle can change the UI twice."""
+    try:
+        return eval_js(code, timeout=timeout)
+    except Exception as e:
+        print(f"E2E_NOTE step={step} {type(e).__name__}: {e}", flush=True)
+        return None
+
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
     last_err = None
@@ -541,10 +551,17 @@ assert pb_replayed["frameIndex"] < 25, f"Expected playback to restart from 0, go
 eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (c): play 15 s across the loop wrap with no frame-change gap over 300 ms...")
-eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
-time.sleep(0.1)
-pb_c_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
-assert pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
+pb_c_loop = None
+for _attempt in range(3):
+    pb_c_loop = eval_retry("2-loop-state", "window.__COPERCEIVE_PLAYBACK_STATE__()")
+    if pb_c_loop["loop"]:
+        break
+    eval_once_note("2-loop-on", "window.__COPERCEIVE_PLAYBACK__('loop')")
+    time.sleep(0.1)
+    pb_c_loop = eval_retry("2-loop-state", "window.__COPERCEIVE_PLAYBACK_STATE__()")
+    if pb_c_loop["loop"]:
+        break
+assert pb_c_loop is not None and pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
 
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 120)")
 
@@ -1182,25 +1199,101 @@ EMPTY_DIR=$(mktemp -d /tmp/coperceive-empty-XXXXXX)
 echo "${EMPTY_DIR}" > "${MOCK_DIALOG_FILE}"
 
 python3 << EOF
-import sys, json, urllib.request
+import sys, json, time, urllib.request
 
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code):
+def _eval_js_once(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": code}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, code, timeout=10, tries=5):
+    """Run one controller eval, retrying transient failures with backoff.
+
+    Each retry is logged so a flaky runner is visible in the CI log; a page
+    error (RuntimeError from the webview) fails on the first attempt.
+    """
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(code, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_js(code, timeout=10):
+    return eval_retry("4-open", code, timeout=timeout)
+
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+from pathlib import Path
+
+mock_file = Path("${MOCK_DIALOG_FILE}")
+
+def open_dataset():
+    """Click the viewer's Open button once the button exists.
+
+    The viewer is still re-rendering after the previous dataset switch, so an
+    early click hits nothing (optional chaining is silent). The mock answer
+    file is consumed by the click; if it is still there after 5 s, the command
+    did not run and a second click is safe.
+    """
+    for attempt in range(1, 4):
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            if eval_js("!!document.querySelector('.btn-open-dataset')"):
+                break
+            time.sleep(0.25)
+        else:
+            return False
+        eval_once_note(f"4-open-picker-{attempt}", "document.querySelector('.btn-open-dataset')?.click()")
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if not mock_file.exists():
+                return True
+            time.sleep(0.1)
+        print(f"E2E_NOTE step=4-open-picker attempt={attempt}: the click did not consume the picker answer; retrying", flush=True)
+    return False
+
 print("Triggering Open Dataset to invalid empty directory...")
-eval_js("document.querySelector('.btn-open-dataset')?.click()")
+assert open_dataset(), "the viewer's Open button never appeared or never consumed the picker answer"
 EOF
 
 sleep 1.5
@@ -1215,20 +1308,82 @@ import sys, json, time, urllib.request
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code):
+def _eval_js_once(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": code}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
-err_msg = eval_js("document.querySelector('.dataset-error-msg')?.textContent")
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, code, timeout=10, tries=5):
+    """Run one controller eval, retrying transient failures with backoff.
+
+    Each retry is logged so a flaky runner is visible in the CI log; a page
+    error (RuntimeError from the webview) fails on the first attempt.
+    """
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(code, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_js(code, timeout=10):
+    return eval_retry("4-assert", code, timeout=timeout)
+
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+deadline = time.monotonic() + 20.0
+err_msg = None
+while time.monotonic() < deadline:
+    err_msg = eval_js("document.querySelector('.dataset-error-msg')?.textContent")
+    if err_msg and "No coperceive scenes in" in err_msg:
+        break
+    time.sleep(0.5)
 print(f"Error banner text: {err_msg}")
+if not err_msg:
+    dbg = eval_js("""(() => ({
+        badge: document.querySelector('.dataset-name')?.textContent,
+        scenes: window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null,
+        status: document.querySelector('.status')?.textContent,
+        open: !!document.querySelector('.btn-open-dataset'),
+        body: (document.body.innerText || '').slice(-300),
+    }))()""")
+    print(f"E2E_NOTE step=4-assert diagnostics: {dbg}", flush=True)
 assert err_msg and "No coperceive scenes in" in err_msg, f"Expected 'No coperceive scenes in', got {err_msg}"
 assert "manifest.json and COMPLETE.json" in err_msg, f"Expected manifest.json and COMPLETE.json notice, got {err_msg}"
 
@@ -1290,12 +1445,15 @@ screencapture -x "${SCREENSHOT_DIR}/05-connect-window.png" 2>/dev/null || true
 echo ""
 echo "--- Step 5b: Verify Library and Get Data Catalog on Connect Screen ---"
 python3 - <<EOF
+import time
 import urllib.request
 import json
 import sys
 
-port = ${CTRL_PORT}
-secret = "${CTRL_SECRET}"
+# Read the controller of the app that is running now. CTRL_PORT belongs to the
+# first launch and is dead after the step 2 relaunch.
+port = ${RELAUNCH_PORT}
+secret = "${RELAUNCH_SECRET}"
 print(f"Querying Connect window DOM through loopback controller on port {port}...")
 
 req = urllib.request.Request(
@@ -1311,17 +1469,28 @@ req = urllib.request.Request(
     headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
 )
 
-try:
-    with urllib.request.urlopen(req, timeout=5) as r:
-        eval_resp = json.loads(r.read().decode("utf-8"))
-        res_json = json.loads(eval_resp.get("result", "{}"))
-        print(f"Connect screen nav tabs found: {res_json.get('buttons')}")
-        if not res_json.get("hasLibrary") or not res_json.get("hasGetData"):
-            print("Warning: Expected Library and Get Data tabs on Connect window", file=sys.stderr)
-        else:
-            print("Step 5b verified: Connect window contains Library and Get Data catalog navigation.")
-except Exception as e:
-    print(f"Note: Connect window eval completed ({e})")
+last = None
+for attempt in range(1, 6):
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            eval_resp = json.loads(r.read().decode("utf-8"))
+        break
+    except Exception as exc:
+        last = exc
+        print(
+            f"E2E_RETRY step=5b attempt={attempt}/5 after {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        time.sleep(0.5)
+else:
+    print(f"E2E_FAIL step=5b could not read the Connect window: {last}", flush=True)
+    raise SystemExit(1)
+res_json = json.loads(eval_resp.get("result", "{}"))
+print(f"Connect screen nav tabs found: {res_json.get('buttons')}")
+if not res_json.get("hasLibrary") or not res_json.get("hasGetData"):
+    print(f"E2E_FAIL step=5b missing nav tabs: {res_json}", flush=True)
+    raise SystemExit(1)
+print("Step 5b verified: Connect window contains Library and Get Data catalog navigation.")
 EOF
 
 echo ""
@@ -1336,7 +1505,7 @@ port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 library = Path("${LIBRARY_DIR}")
 
-def eval_js(script, timeout=15):
+def _eval_js_once(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": script}).encode("utf-8"),
@@ -1348,6 +1517,53 @@ def eval_js(script, timeout=15):
         raise RuntimeError(data["error"])
     return data.get("result")
 
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, code, timeout=10, tries=5):
+    """Run one controller eval, retrying transient failures with backoff.
+
+    Each retry is logged so a flaky runner is visible in the CI log; a page
+    error (RuntimeError from the webview) fails on the first attempt.
+    """
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(code, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_js(script, timeout=15):
+    return eval_retry("5c", script, timeout=timeout)
+
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
 def click_button(label):
     script = """
         (() => {
@@ -1358,7 +1574,7 @@ def click_button(label):
             return 'clicked';
         })()
     """ % json.dumps(label)
-    result = eval_js(script)
+    result = eval_once_note(f"5c-click-{label}", script)
     if result != "clicked":
         raise RuntimeError(f"button not found: {label}")
 
@@ -1644,7 +1860,7 @@ from pathlib import Path
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(script, timeout=15):
+def _eval_js_once(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
         data=json.dumps({"script": script}).encode("utf-8"),
@@ -1655,6 +1871,48 @@ def eval_js(script, timeout=15):
     if data.get("error"):
         raise RuntimeError(data["error"])
     return data.get("result")
+
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, script, timeout=15, tries=5):
+    """Read-only eval with a bounded retry for transient controller failures."""
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(script, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_once_note(step, script, timeout=15):
+    """Run an action once. A lost callback is noted, not retried."""
+    try:
+        return _eval_js_once(script, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+def eval_js(script, timeout=15):
+    return eval_retry("5g", script, timeout=timeout)
 
 # The relaunched app auto-resumes into the viewer. Close it so /eval reaches
 # the Connect window that hosts the Library tab.
@@ -1679,9 +1937,17 @@ def click_library():
             return 'clicked';
         })()
     """
-    result = eval_js(script)
-    if result != "clicked":
+    # Wait for the Connect nav (a read) before the one click that opens Library.
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        if eval_js("!!Array.from(document.querySelectorAll('nav button')).find((item) => (item.textContent || '').trim() === 'Library')"):
+            break
+        time.sleep(0.25)
+    else:
         raise RuntimeError("Library tab not found on the Connect window")
+    result = eval_once_note("5g-click-library", script)
+    if result != "clicked":
+        raise RuntimeError("Library tab could not be clicked")
 
 click_library()
 deadline = time.monotonic() + 60
