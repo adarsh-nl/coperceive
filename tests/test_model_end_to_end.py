@@ -138,6 +138,8 @@ def test_model_run_eval_serve_compare_and_slurm_end_to_end(
             "--slurm",
             "--slurm-logs",
             str(tmp_path / "logs"),
+            "--slurm-scratch-template",
+            "/scratch/$USER/$SLURM_JOB_ID",
             "--slurm-results",
             str(tmp_path / "results"),
         ]

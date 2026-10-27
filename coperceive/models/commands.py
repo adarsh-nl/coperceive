@@ -99,6 +99,15 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument(
         "--slurm-results", default=None, help="Per-job results root; default ~/results."
     )
+    run.add_argument(
+        "--slurm-scratch-template",
+        default=None,
+        help=(
+            "Scratch template from the cluster profile for the job's temporary work "
+            "(default: $COPERCEIVE_SLURM_SCRATCH_TEMPLATE; required, for example "
+            "/scratch/$USER/$SLURM_JOB_ID)."
+        ),
+    )
     run.set_defaults(func=run_command)
 
     cache = commands.add_parser("cache", help="The per-scene result cache of runs.")
@@ -265,6 +274,15 @@ def _emit_slurm(
         if scene_id not in directories:
             raise BatchError(f"no scene directory {scene_id!r} under {scenes_root}")
         scenes[scene_id] = read_scene(directories[scene_id])
+    scratch_template = args.slurm_scratch_template or os.environ.get(
+        "COPERCEIVE_SLURM_SCRATCH_TEMPLATE"
+    )
+    if not scratch_template:
+        raise BatchError(
+            "No scratch template for the Slurm job. Set the cluster profile's "
+            "scratch_template (for example /scratch/$USER/$SLURM_JOB_ID) and pass it with "
+            "--slurm-scratch-template or COPERCEIVE_SLURM_SCRATCH_TEMPLATE."
+        )
     home = Path.home()
     plan = plan_sbatch(
         manifest,
@@ -277,6 +295,7 @@ def _emit_slurm(
         python=Path(args.slurm_python) if args.slurm_python else Path(sys.executable),
         logs_dir=Path(args.slurm_logs) if args.slurm_logs else home / "logs",
         results_dir=Path(args.slurm_results) if args.slurm_results else home / "results",
+        scratch_template=scratch_template,
     )
     path = write_plan(plan, out, str(args.run_id))
     print(f"wrote {path}")
