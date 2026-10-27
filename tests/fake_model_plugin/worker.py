@@ -72,10 +72,56 @@ def _box(agent_id: str, category: str, center: list[float], score: float) -> dic
     }
 
 
+class _Stdin:
+    """Line reader over the child's stdin that never hides a line from ``select``.
+
+    ``sys.stdin`` is buffered: one ``readline()`` can pull the following line into the
+    TextIOWrapper's own buffer, where ``select()`` on the file descriptor cannot see it.
+    The runner test writes a frame and its cancel back to back, so the cancel can land in
+    that buffer and the worker would sleep through it. This reader only consumes complete
+    lines, and callers check ``take_pending()`` before waiting on the descriptor.
+    """
+
+    def __init__(self, fd: int) -> None:
+        self._fd = fd
+        self._buffer = bytearray()
+
+    def fileno(self) -> int:
+        return self._fd
+
+    def _complete_line(self) -> str | None:
+        newline = self._buffer.find(b"\n")
+        if newline < 0:
+            return None
+        line = bytes(self._buffer[:newline]).decode("utf-8", errors="replace")
+        del self._buffer[: newline + 1]
+        return line
+
+    def take_pending(self) -> str | None:
+        """A complete line already buffered, without reading the descriptor."""
+        return self._complete_line()
+
+    def readline(self) -> str:
+        """The next line (with its newline), or "" at end of input."""
+        while True:
+            line = self._complete_line()
+            if line is not None:
+                return line + "\n"
+            chunk = os.read(self._fd, 65536)
+            if not chunk:
+                if not self._buffer:
+                    return ""
+                tail = self._buffer.decode("utf-8", errors="replace")
+                self._buffer.clear()
+                return tail
+            self._buffer.extend(chunk)
+
+
 class Worker:
     def __init__(self, model: str, count_file: str | None) -> None:
         self.model = model
         self.count_file = count_file
+        self.stdin = _Stdin(sys.stdin.fileno())
         self.config: dict[str, Any] = {}
         self.options: dict[str, Any] = {}
         self.no_exit = False
@@ -88,9 +134,8 @@ class Worker:
 
     def run(self) -> int:
         _hello()
-        stdin = sys.stdin
         while True:
-            line = stdin.readline()
+            line = self.stdin.readline()
             if line == "":
                 if self.no_exit:
                     while True:
@@ -219,31 +264,41 @@ class Worker:
         _emit({"type": "result", "id": answer_id, "boxes": boxes, "artifacts": artifacts})
 
     def _sleep_cancellable(self, seconds: float, frame_id: Any) -> bool:
-        """Sleep, but answer a cancel that arrives meanwhile. True when cancelled."""
+        """Sleep, but answer a cancel that arrives meanwhile. True when cancelled.
+
+        The cancel may already be in our own buffer (the parent can write the frame and
+        the cancel before this loop starts), so check that first; ``select`` alone would
+        miss it and the worker would sleep the full ``seconds``.
+        """
         deadline = time.monotonic() + seconds
-        while time.monotonic() < deadline:
-            ready, _, _ = select.select([sys.stdin], [], [], 0.05)
-            if ready:
-                line = sys.stdin.readline()
-                if line == "":
-                    return True
-                try:
-                    message = json.loads(line)
-                except json.JSONDecodeError:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return False
+            line = self.stdin.take_pending()
+            if line is None:
+                ready, _, _ = select.select([self.stdin.fileno()], [], [], min(0.05, remaining))
+                if not ready:
                     continue
-                if message.get("type") == "cancel" and message.get("id") in (None, frame_id):
-                    _emit(
-                        {
-                            "type": "error",
-                            "id": frame_id,
-                            "code": "cancelled",
-                            "message": "cancelled by the parent",
-                        }
-                    )
-                    return True
-                if message.get("type") == "bye":
-                    sys.exit(0)
-        return False
+                line = self.stdin.readline()
+            if line == "":
+                return True
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if message.get("type") == "cancel" and message.get("id") in (None, frame_id):
+                _emit(
+                    {
+                        "type": "error",
+                        "id": frame_id,
+                        "code": "cancelled",
+                        "message": "cancelled by the parent",
+                    }
+                )
+                return True
+            if message.get("type") == "bye":
+                sys.exit(0)
 
     def _boxes(self, message: dict[str, Any]) -> list[dict[str, Any]]:
         if self.model == "known-answer":

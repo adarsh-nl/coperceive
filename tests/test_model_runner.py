@@ -12,11 +12,13 @@ from typing import Any, cast
 import pytest
 from coperceive.models.protocol import (
     AgentRef,
+    Cancel,
     Configure,
     Configured,
     Error,
     Frame,
     Result,
+    encode,
 )
 from coperceive.models.runner import (
     PluginProcess,
@@ -217,6 +219,31 @@ def test_cancel_is_answered(process: PluginProcess, tmp_path: Path) -> None:
     answer = process.receive(timeout_s=5.0)
     assert answer == Error(id=1, code="cancelled", message="cancelled by the parent")
     assert time.monotonic() - started < 2.0
+
+
+def test_cancel_written_with_the_frame_is_read(work: Path, tmp_path: Path) -> None:
+    """A frame and its cancel can reach the child in one pipe write.
+
+    This is the worst case of ``test_cancel_is_answered``: the parent flushes both lines
+    before the child reads either one, so one buffered ``readline()`` pulls the cancel into
+    Python's stdin buffer where ``select`` on the descriptor cannot see it. The worker then
+    slept its full 5 s, the parent's ``receive(timeout_s=5.0)`` hit the same boundary and
+    the test failed with ``RunnerTimeout``. The worker must answer from its own buffer.
+    """
+    child = _start(work)
+    try:
+        child.send(_configure(tmp_path, work, misbehave="sleep"))
+        assert isinstance(child.receive(timeout_s=10.0), Configured)
+        stdin = child._process.stdin  # pyright: ignore[reportPrivateUsage] - the test writes both lines at once
+        assert stdin is not None
+        stdin.write(encode(_frame()) + encode(Cancel(id=1)))
+        stdin.flush()
+        started = time.monotonic()
+        answer = child.receive(timeout_s=2.0)
+        assert answer == Error(id=1, code="cancelled", message="cancelled by the parent")
+        assert time.monotonic() - started < 1.0
+    finally:
+        child.close(grace_s=2.0)
 
 
 def test_secret_values_are_redacted_from_logs(work: Path, tmp_path: Path) -> None:
