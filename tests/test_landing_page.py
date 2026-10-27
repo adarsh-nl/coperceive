@@ -146,6 +146,17 @@ INSTALL = (
 )
 
 
+SHOTS = os.environ.get("COPERCEIVE_E2E_SHOTS", "")
+
+
+def _shot(page: Page, tmp_path: Path, name: str) -> None:
+    """Viewport screenshot to tmp_path, and to COPERCEIVE_E2E_SHOTS when that is set."""
+    page.screenshot(path=str(tmp_path / f"{name}.png"), full_page=False)
+    if SHOTS:
+        Path(SHOTS).mkdir(parents=True, exist_ok=True)
+        page.screenshot(path=str(Path(SHOTS) / f"{name}.png"), full_page=False)
+
+
 STATS_HAS = "(t) => document.querySelector('[data-eval-stats]').textContent.includes(t)"
 
 
@@ -232,6 +243,7 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         hero_a = _hash(page, "canvas[data-bev=hero]")
         page.wait_for_timeout(500)
         assert hero_a != _hash(page, "canvas[data-bev=hero]")
+        _shot(page, tmp_path, "landing-1440-hero")
 
         # Scrolling the pinned story swaps the captions and fills the progress bar.
         _scroll_story(page, 2.5)
@@ -242,6 +254,10 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
             "() => parseFloat(document.querySelector('[data-progress]').style.height)"
         )
         assert isinstance(bar, (int, float)) and 40 < float(bar) < 60
+        _shot(page, tmp_path, "landing-1440-story-2")
+        _scroll_story(page, 4.6)
+        page.wait_for_timeout(1500)
+        _shot(page, tmp_path, "landing-1440-story-4")
 
         # Pipeline cards and the install block, which types itself out.
         assert page.locator("#pipeline h3").all_inner_texts() == [
@@ -250,12 +266,16 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
             "Every agent in 3D",
             "Score in the world frame",
         ]
+        page.locator("#pipeline").scroll_into_view_if_needed()
+        page.wait_for_timeout(1200)
+        _shot(page, tmp_path, "landing-1440-pipeline")
         page.locator("#install").scroll_into_view_if_needed()
         page.wait_for_function(
             "(t) => document.querySelector('[data-term]').textContent === t",
             arg=INSTALL,
             timeout=10000,
         )
+        _shot(page, tmp_path, "landing-1440-install")
 
         # The evaluate demo answers its toggles.
         page.locator("#evaluate").scroll_into_view_if_needed()
@@ -273,6 +293,9 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         )
         assert page.get_by_role("button", name="det-v2").get_attribute("aria-pressed") == "true"
         assert _pixel_count(page, "canvas[data-eval]") > 20
+        page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.8)")
+        page.wait_for_timeout(1500)
+        _shot(page, tmp_path, "landing-1440-evaluate")
 
         for anchor in ("#pipeline", "#install"):
             assert page.locator(anchor).count() == 1
@@ -288,14 +311,15 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         )
 
         assert _axe_serious(page) == []
-        page.screenshot(path=str(tmp_path / "landing-1440.png"), full_page=False)
 
         page.set_viewport_size({"width": 375, "height": 812})
         page.goto(site_server, wait_until="networkidle")
         page.wait_for_timeout(400)
         overflow = page.evaluate("() => document.documentElement.scrollWidth - window.innerWidth")
         assert isinstance(overflow, (int, float)) and overflow <= 0
-        page.screenshot(path=str(tmp_path / "landing-375.png"), full_page=False)
+        page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
+        page.wait_for_timeout(800)
+        _shot(page, tmp_path, "landing-375-hero")
         assert errors == [], errors
         browser.close()
 
