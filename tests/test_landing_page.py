@@ -270,6 +270,10 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         page.wait_for_timeout(1200)
         _shot(page, tmp_path, "landing-1440-pipeline")
         page.locator("#install").scroll_into_view_if_needed()
+        # It starts holding the full text; typing begins once it is in view.
+        page.wait_for_function(
+            "() => document.querySelector('[data-term]').textContent.endsWith('▍')", timeout=10000
+        )
         page.wait_for_function(
             "(t) => document.querySelector('[data-term]').textContent === t",
             arg=INSTALL,

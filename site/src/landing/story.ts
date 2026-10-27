@@ -686,10 +686,14 @@ export class StoryScene {
     // legend
     ctx.font = `500 12px ${MONO}`;
     ctx.textBaseline = "middle";
-    const pad = W < 640 ? 24 : 56;
+    const narrow = W < 640;
+    const pad = narrow ? 24 : 56;
     let lx = pad;
-    const ly = 92;
+    let ly = 92;
     for (const a of A) {
+      // Narrow screens wrap the legend instead of running it off the canvas.
+      const need = 14 + ctx.measureText(a.name).width;
+      if (lx > pad && lx + need > W - pad) { lx = pad; ly += 20; }
       ctx.globalAlpha = 0.25 + 0.75 * a.w;
       ctx.fillStyle = a.col;
       ctx.beginPath();
@@ -700,9 +704,11 @@ export class StoryScene {
       lx += 14 + ctx.measureText(a.name).width + 20;
     }
     ctx.globalAlpha = 1;
-    ctx.font = `11px ${MONO}`;
-    ctx.fillStyle = "#86868b";
-    ctx.fillText("drag to orbit · hover to inspect · click an agent to hide it · double-click to reset", pad, ly + 24);
+    if (!narrow) {
+      ctx.font = `11px ${MONO}`;
+      ctx.fillStyle = "#86868b";
+      ctx.fillText("drag to orbit · hover to inspect · click an agent to hide it · double-click to reset", pad, ly + 24);
+    }
 
     // timeline
     const tw = ss(3.8, 4.2, s);

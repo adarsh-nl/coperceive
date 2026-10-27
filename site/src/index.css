@@ -132,6 +132,9 @@
   .lm-nav {
     gap: 16px !important;
   }
+  .lm-nav .lm-anchor {
+    display: none;
+  }
 }
 
 .lm-card {
