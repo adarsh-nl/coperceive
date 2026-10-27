@@ -4,17 +4,20 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from typing import Any
+
+import pytest
 
 # Load scripts/desktop/verify_e2e_steps.py directly
 SCRIPT_PATH = Path(__file__).resolve().parent.parent / "scripts" / "desktop" / "verify_e2e_steps.py"
 spec = importlib.util.spec_from_file_location("verify_e2e_steps", SCRIPT_PATH)
 assert spec and spec.loader
-verify_e2e_steps = importlib.util.module_from_spec(spec)
+verify_e2e_steps: Any = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verify_e2e_steps)
 
 SAMPLE_PASSING_LOG = (
     "Step 1 UI interactions verified successfully.\n"
-    "Step 1 verified state.json content: {\"viewpoint\": \"chase\"}\n"
+    'Step 1 verified state.json content: {"viewpoint": "chase"}\n'
     "Playback requirement (c) verified: max frame gap = 120ms, loop wraps observed = 1\n"
     "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.\n"
     "Step 2b verified: loop stayed off across quit and relaunch.\n"
@@ -36,40 +39,36 @@ SAMPLE_PASSING_LOG = (
 )
 
 
-def test_verify_e2e_log_all_present():
-    missing = verify_e2e_steps.verify_e2e_log(SAMPLE_PASSING_LOG)
+def test_verify_e2e_log_all_present() -> None:
+    missing: list[str] = verify_e2e_steps.verify_e2e_log(SAMPLE_PASSING_LOG)
     assert missing == []
 
 
-def test_verify_e2e_log_detects_missing_step():
+def test_verify_e2e_log_detects_missing_step() -> None:
     # Remove Step 3b
     truncated = "\n".join(
         line for line in SAMPLE_PASSING_LOG.splitlines() if "Step 3b verified" not in line
     )
-    missing = verify_e2e_steps.verify_e2e_log(truncated)
+    missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated)
     assert len(missing) == 1
     assert "Step 3b verified" in missing[0]
 
 
-def test_verify_e2e_log_detects_missing_passed():
+def test_verify_e2e_log_detects_missing_passed() -> None:
     # Remove final PASSED line
     marker = "Real-App macOS E2E Test PASSED"
-    truncated = "\n".join(
-        line for line in SAMPLE_PASSING_LOG.splitlines() if marker not in line
-    )
-    missing = verify_e2e_steps.verify_e2e_log(truncated)
+    truncated = "\n".join(line for line in SAMPLE_PASSING_LOG.splitlines() if marker not in line)
+    missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated)
     assert len(missing) == 1
     assert marker in missing[0]
 
 
-def test_main_cli_exit_codes(tmp_path, monkeypatch):
+def test_main_cli_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     passing_file = tmp_path / "passing.log"
     passing_file.write_text(SAMPLE_PASSING_LOG, encoding="utf-8")
 
     failing_file = tmp_path / "failing.log"
-    failing_lines = [
-        line for line in SAMPLE_PASSING_LOG.splitlines() if "Step 5f" not in line
-    ]
+    failing_lines = [line for line in SAMPLE_PASSING_LOG.splitlines() if "Step 5f" not in line]
     failing_file.write_text("\n".join(failing_lines), encoding="utf-8")
 
     monkeypatch.setattr("sys.argv", ["verify_e2e_steps.py", str(passing_file)])
