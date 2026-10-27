@@ -35,6 +35,9 @@ CHROME_ARGS = [
     "--use-angle=swiftshader",
     "--enable-unsafe-swiftshader",
     "--ignore-gpu-blocklist",
+    # The landing canvases are 2D. On SwiftShader (software GL) an accelerated 2D canvas
+    # is slow enough that screenshots never get a frame; raster them on the CPU instead.
+    "--disable-accelerated-2d-canvas",
 ]
 
 
