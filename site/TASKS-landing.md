@@ -32,6 +32,17 @@ On this branch's build (2026-10-27): first-load JS 72,326 B, RealClip 132,549 B,
 
 `scripts/site/run_lighthouse.py` served `dist/` at `/`, so the page it audited could not load `/coperceive/assets/`; it now serves under `/coperceive/` and takes the dist path as an argument. Scores measured before this fix (the 2026-10-23 table above) may not be of the full page.
 
+## Lighthouse, 2026-10-27 (commit `c2965ef`)
+
+`scripts/site/run_lighthouse.py` on this commit's build (served under `/coperceive/`, text gzipped), HPC job 643686 on `ps,main-cpu`:
+
+| Preset | Performance | Accessibility | Best Practices | SEO |
+| --- | --- | --- | --- | --- |
+| Desktop | 100 | 100 | 100 | 100 |
+| Mobile | 96 | 100 | 100 | 100 |
+
+Mobile FCP 1.7 s, LCP 2.6 s (the h1), CLS 0, TBT 0 ms. Before the static hero shell, the same runner without gzip gave mobile performance 87 (job 643650) and 89 with only a poster preload (643670, 643677); LCP was 3.4–3.5 s because the h1 needed the script.
+
 ## Left for the maintainer
 
 1. Merge this PR into `main`.
