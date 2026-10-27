@@ -33,7 +33,7 @@ pub struct ControllerConfig {
     pub last_open_dialog: Arc<Mutex<Option<Instant>>>,
     pub eval_callbacks: Arc<Mutex<HashMap<u64, EvalSender>>>,
     pub eval_counter: Arc<Mutex<u64>>,
-    pub eval_dispatcher: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    pub eval_dispatcher: Option<Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>>,
     pub window_closer: Option<Arc<dyn Fn(&str) + Send + Sync>>,
 }
 
@@ -221,9 +221,11 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         if let Some(ref origin) = cors_origin {
             let resp = format!(
                 "HTTP/1.1 204 No Content\r\n\
+                 Connection: close\r\n\
                  Access-Control-Allow-Origin: {}\r\n\
                  Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
                  Access-Control-Allow-Headers: Authorization, Content-Type\r\n\
+                 Access-Control-Max-Age: 86400\r\n\
                  Content-Length: 0\r\n\r\n",
                 origin
             );
@@ -312,6 +314,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             }
         };
         let script = val.get("script").and_then(|v| v.as_str()).unwrap_or("");
+        let timeout_secs = val.get("timeout").and_then(|v| v.as_u64()).unwrap_or(10);
         if let Some(ref dispatcher) = config.eval_dispatcher {
             let req_id = {
                 let mut c = config.eval_counter.lock().unwrap();
@@ -335,6 +338,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                     try {{
                         fetch("http://127.0.0.1:{}/eval-result", {{
                             method: "POST",
+                            keepalive: true,
                             headers: {{
                                 "Authorization": "Bearer {}",
                                 "Content-Type": "application/json"
@@ -346,9 +350,17 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                 script_json, config.ctrl_port, escaped_secret, req_id
             );
 
-            dispatcher(wrapper);
+            if let Err(dispatch_err) = dispatcher(wrapper) {
+                config.eval_callbacks.lock().unwrap().remove(&req_id);
+                let err_payload = serde_json::to_vec(&serde_json::json!({
+                    "status": "error",
+                    "error": dispatch_err
+                })).unwrap_or_else(|_| b"{}".to_vec());
+                write_json_response(writer, 502, "Bad Gateway", cors_origin.as_deref(), &err_payload)?;
+                return Ok(());
+            }
 
-            match rx.recv_timeout(Duration::from_secs(10)) {
+            match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
                 Ok(result_val) => {
                     let payload = serde_json::to_vec(&result_val).unwrap_or_else(|_| b"{}".to_vec());
                     write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
@@ -449,7 +461,7 @@ fn write_response<W: Write>(
     cors_origin: Option<&str>,
     body: &[u8],
 ) -> Result<(), std::io::Error> {
-    let mut resp = format!("HTTP/1.1 {} {}\r\n", code, reason);
+    let mut resp = format!("HTTP/1.1 {} {}\r\nConnection: close\r\n", code, reason);
     if let Some(origin) = cors_origin {
         resp.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", origin));
         resp.push_str("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
@@ -469,7 +481,7 @@ fn write_json_response<W: Write>(
     cors_origin: Option<&str>,
     body: &[u8],
 ) -> Result<(), std::io::Error> {
-    let mut resp = format!("HTTP/1.1 {} {}\r\n", code, reason);
+    let mut resp = format!("HTTP/1.1 {} {}\r\nConnection: close\r\n", code, reason);
     if let Some(origin) = cors_origin {
         resp.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", origin));
         resp.push_str("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
@@ -704,6 +716,7 @@ pub mod tests {
                     let _ = handle_client(&mut reader, &mut writer, &cfg, &|| {});
                 });
             }
+            Ok(())
         }));
 
         let eval_payload = r#"{"script":"21 * 2"}"#;
@@ -759,6 +772,7 @@ pub mod tests {
                     stream.write_all(req.as_bytes()).unwrap();
                 });
             }
+            Ok(())
         }));
 
         let (port, _handle) = spawn_controller(config, || {}).unwrap();
@@ -786,5 +800,33 @@ pub mod tests {
 
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
         assert!(resp.contains("\"result\":100"));
+    }
+
+    #[test]
+    fn test_eval_dispatcher_error_returns_502() {
+        let mut config = make_test_config();
+        config.eval_dispatcher = Some(Arc::new(move |_script: String| {
+            Err("Window not found".into())
+        }));
+
+        let eval_payload = r#"{"script":"21 * 2"}"#;
+        let req = format!(
+            "POST /eval HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            eval_payload.len(),
+            eval_payload
+        );
+
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+
+        assert!(resp.starts_with("HTTP/1.1 502 Bad Gateway"), "Expected 502 Bad Gateway, got: {}", resp);
+        assert!(resp.contains("Window not found"));
     }
 }

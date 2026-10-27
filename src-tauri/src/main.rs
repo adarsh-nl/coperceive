@@ -557,7 +557,9 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
             .get_webview_window("viewer")
             .or_else(|| handle_eval.get_webview_window("main"))
         {
-            let _ = w.eval(&script);
+            w.eval(&script).map_err(|e| format!("w.eval failed: {e}"))
+        } else {
+            Err("No webview window found (neither 'viewer' nor 'main')".into())
         }
     }));
     let handle_close = app_handle.clone();
