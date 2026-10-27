@@ -6,6 +6,11 @@ import type {
   LocalConnectOptions,
   TargetStatus,
 } from "./types";
+import type {
+  DetectionReport,
+  ServerEntry,
+  SshHostSettings,
+} from "./hpc";
 
 interface SessionPayload {
   origin: string;
@@ -66,6 +71,69 @@ export async function isRemoteEnabled(): Promise<boolean> {
     }
   }
   return false;
+}
+
+/** Hosts from the user's ~/.ssh/config (aliases only, no secrets). */
+export async function listSshConfigHosts(): Promise<string[]> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string[]>("list_ssh_config_hosts");
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/** Effective settings for one ssh alias, read with `ssh -G`. */
+export async function readSshHostSettings(alias: string): Promise<SshHostSettings | null> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<SshHostSettings>("read_ssh_host_settings", { alias });
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function listServerProfiles(): Promise<ServerEntry[]> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<ServerEntry[]>("list_server_profiles");
+  }
+  return [];
+}
+
+export async function saveServerProfile(entry: ServerEntry): Promise<ServerEntry> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<ServerEntry>("save_server_profile", { entry });
+  }
+  throw new Error("Saving server profiles is only available in the desktop app.");
+}
+
+export async function deleteServerProfile(id: string): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_server_profile", { id });
+    return;
+  }
+  throw new Error("Deleting server profiles is only available in the desktop app.");
+}
+
+/**
+ * Runs the read-only "Test connection" checks (reachable, signed in, scheduler,
+ * partitions/GPUs, environment, scratch). Each step is time-bounded in Rust.
+ */
+export async function testServerConnection(entry: ServerEntry): Promise<DetectionReport> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<DetectionReport>("test_server_connection", { entry });
+  }
+  throw new Error("Testing a connection is only available in the desktop app.");
 }
 
 export async function pickDataRoot(): Promise<string | null> {

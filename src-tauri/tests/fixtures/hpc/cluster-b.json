@@ -1,0 +1,34 @@
+{
+  "id": "fixture-cluster-b",
+  "schema_version": 1,
+  "profile": {
+    "name": "Cluster B (through a jump host)",
+    "ssh_alias": "cluster-b",
+    "host": null,
+    "user": null,
+    "data_roots": ["/data/scenes"],
+    "scratch_template": "/work/alice",
+    "scheduler": "slurm",
+    "defaults": {
+      "partition": "main-cpu",
+      "account": null,
+      "qos": null,
+      "gres": null,
+      "time_limit": "04:00:00",
+      "memory": "8G",
+      "cpus_per_task": 2
+    },
+    "environment": {
+      "kind": "modules",
+      "modules": ["python/3.12"],
+      "interpreter": "/apps/python/3.12/bin/python",
+      "container_image": null,
+      "coperceive_command": ["/apps/coperceive/bin/coperceive"],
+      "wheelhouse": null,
+      "compute_has_internet": false
+    },
+    "notes": "Portability fixture: ProxyJump alias, module environment, no GPUs."
+  },
+  "discovered": null,
+  "ssh": null
+}

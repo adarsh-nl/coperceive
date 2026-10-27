@@ -236,6 +236,26 @@ jobs:
               echo "::error title=E2ETestError::$line"
             done
           fi
+      - name: Run HPC server-profile E2E with a fake ssh
+        # Packaged app, real "Test connection" code, three committed server
+        # profiles (Slurm GPU, ProxyJump alias, no scheduler). No network.
+        run: bash scripts/desktop/e2e_hpc_fake_ssh.sh 2>&1 | tee /tmp/e2e_hpc.log
+      - name: Report HPC E2E results and failures
+        if: always()
+        run: |
+          if [ -f /tmp/e2e_hpc.log ]; then
+            echo "### HPC server-profile E2E (fake ssh)" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'E2E_HPC_MARK|Step verified|E2E_HPC_FAIL' /tmp/e2e_hpc.log >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'E2E_HPC_MARK|Step verified' /tmp/e2e_hpc.log | while IFS= read -r line; do
+              echo "::notice title=hpc-e2e::$line"
+            done || true
+            grep -E 'E2E_HPC_FAIL' /tmp/e2e_hpc.log | while IFS= read -r line; do
+              echo "::error title=hpc-e2e::$line"
+            done || true
+          fi
+
       - name: Sample Connect backdrop CPU for 60s at 1280x800
         run: bash scripts/desktop/measure_backdrop_cpu.sh 2>&1 | tee /tmp/backdrop_cpu.log
       - name: Report backdrop CPU samples

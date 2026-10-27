@@ -8,7 +8,9 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::port::find_free_loopback_port;
-use crate::ssh::{build_ssh_command, build_ssh_tunnel_command, classify_ssh_error, SshErrorKind};
+use crate::ssh::{
+    build_ssh_command, build_ssh_tunnel_command, classify_ssh_error, quote_remote_argv, SshErrorKind,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RemoteStartResponse {
@@ -127,10 +129,56 @@ pub struct RemoteListResponse {
     pub sessions: Vec<RemoteSessionInfo>,
 }
 
+/// Builds the remote command line for `coperceive remote ...`.
+///
+/// Every argument is quoted POSIX-style: user values (data roots, partitions,
+/// UUIDs) may contain spaces, quotes or shell metacharacters and must reach the
+/// remote coperceive as one argument each.
+pub fn remote_command_line(args: &[String]) -> String {
+    let mut argv = vec!["coperceive".to_string(), "remote".to_string()];
+    argv.extend(args.iter().cloned());
+    quote_remote_argv(&argv)
+}
+
+/// Parses a JSON reply from the remote side without ever echoing the reply.
+///
+/// The start/status replies can contain a session token. An error message must
+/// never include the raw output, so only the reply kind and its size are shown.
+fn parse_remote_reply<T: serde::de::DeserializeOwned>(label: &str, stdout: &str) -> Result<T, String> {
+    serde_json::from_str::<T>(stdout).map_err(|_| {
+        format!(
+            "The server sent an unexpected reply to the {label} request ({} bytes, not valid              JSON). Check that coperceive is installed and up to date on the server, then try              again.",
+            stdout.len()
+        )
+    })
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RemoteTokenResponse {
+    #[serde(default)]
+    status: String,
+    #[serde(default)]
+    token: Option<String>,
+    #[serde(default)]
+    error: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct RemoteClient {
     pub alias: String,
     pub ssh_bin: String,
+}
+
+/// Everything needed to start a remote serve job, taken from the server profile.
+#[derive(Debug, Clone, Default)]
+pub struct RemoteStartOptions {
+    pub data_root: String,
+    pub partition: Option<String>,
+    pub walltime: Option<String>,
+    pub cpus: Option<u32>,
+    pub mem: Option<String>,
+    pub python: Option<String>,
+    pub uuid: Option<String>,
 }
 
 impl RemoteClient {
@@ -148,14 +196,14 @@ impl RemoteClient {
         }
     }
 
-    fn run_remote_cmd(&self, args: &[&str]) -> Result<String, SshErrorKind> {
-        let remote_cmd = format!("coperceive remote {}", args.join(" "));
+    fn run_remote_cmd(&self, args: &[String]) -> Result<String, SshErrorKind> {
+        let remote_cmd = remote_command_line(args);
         let ssh_args = build_ssh_command(&self.alias, &remote_cmd);
 
         let output = Command::new(&self.ssh_bin)
             .args(&ssh_args)
             .output()
-            .map_err(|e| SshErrorKind::Other(format!("Failed to execute ssh: {}", e)))?;
+            .map_err(|e| SshErrorKind::Other(format!("Could not start SSH: {}", e)))?;
 
         let stderr = String::from_utf8_lossy(&output.stderr).to_string();
         if !output.status.success() {
@@ -173,21 +221,49 @@ impl RemoteClient {
         walltime: Option<&str>,
         uuid: Option<&str>,
     ) -> Result<RemoteStartResponse, SshErrorKind> {
-        let mut args = vec!["start", "--root", data_root];
-        if let Some(p) = partition {
-            args.extend(["--partition", p]);
+        self.start_with_options(&RemoteStartOptions {
+            data_root: data_root.to_string(),
+            partition: partition.map(str::to_string),
+            walltime: walltime.map(str::to_string),
+            uuid: uuid.map(str::to_string),
+            ..Default::default()
+        })
+    }
+
+    /// Starts a session with the resources chosen in the server profile. Only
+    /// values that exist are sent; Python rejects a missing partition instead of
+    /// inventing a site default.
+    pub fn start_with_options(
+        &self,
+        options: &RemoteStartOptions,
+    ) -> Result<RemoteStartResponse, SshErrorKind> {
+        let mut args = vec![
+            "start".to_string(),
+            "--root".to_string(),
+            options.data_root.clone(),
+        ];
+        if let Some(p) = options.partition.as_deref().filter(|p| !p.trim().is_empty()) {
+            args.extend(["--partition".to_string(), p.to_string()]);
         }
-        if let Some(w) = walltime {
-            args.extend(["--time", w]);
+        if let Some(w) = options.walltime.as_deref().filter(|w| !w.trim().is_empty()) {
+            args.extend(["--time".to_string(), w.to_string()]);
         }
-        if let Some(u) = uuid {
-            args.extend(["--uuid", u]);
+        if let Some(cpus) = options.cpus.filter(|c| *c > 0) {
+            args.extend(["--cpus".to_string(), cpus.to_string()]);
+        }
+        if let Some(mem) = options.mem.as_deref().filter(|m| !m.trim().is_empty()) {
+            args.extend(["--mem".to_string(), mem.to_string()]);
+        }
+        if let Some(python) = options.python.as_deref().filter(|p| !p.trim().is_empty()) {
+            args.extend(["--python".to_string(), python.to_string()]);
+        }
+        if let Some(u) = options.uuid.as_deref().filter(|u| !u.trim().is_empty()) {
+            args.extend(["--uuid".to_string(), u.to_string()]);
         }
 
         let stdout = self.run_remote_cmd(&args)?;
-        let parsed: RemoteStartResponse = serde_json::from_str(&stdout).map_err(|e| {
-            SshErrorKind::Other(format!("Invalid start JSON: {} (output: {})", e, stdout))
-        })?;
+        let parsed: RemoteStartResponse =
+            parse_remote_reply("start", &stdout).map_err(SshErrorKind::Other)?;
         Ok(parsed)
     }
 
@@ -196,20 +272,17 @@ impl RemoteClient {
         uuid: Option<&str>,
         job_id: Option<u64>,
     ) -> Result<RemoteStatusResponse, SshErrorKind> {
-        let mut args = vec!["status"];
-        let job_id_str;
+        let mut args = vec!["status".to_string()];
         if let Some(u) = uuid {
-            args.extend(["--uuid", u]);
+            args.extend(["--uuid".to_string(), u.to_string()]);
         }
         if let Some(j) = job_id {
-            job_id_str = j.to_string();
-            args.extend(["--job-id", &job_id_str]);
+            args.extend(["--job-id".to_string(), j.to_string()]);
         }
 
         let stdout = self.run_remote_cmd(&args)?;
-        let parsed: RemoteStatusResponse = serde_json::from_str(&stdout).map_err(|e| {
-            SshErrorKind::Other(format!("Invalid status JSON: {} (output: {})", e, stdout))
-        })?;
+        let parsed: RemoteStatusResponse =
+            parse_remote_reply("status", &stdout).map_err(SshErrorKind::Other)?;
         Ok(parsed)
     }
 
@@ -218,39 +291,51 @@ impl RemoteClient {
         uuid: Option<&str>,
         job_id: Option<u64>,
     ) -> Result<RemoteStopResponse, SshErrorKind> {
-        let mut args = vec!["stop"];
-        let job_id_str;
+        let mut args = vec!["stop".to_string()];
         if let Some(u) = uuid {
-            args.extend(["--uuid", u]);
+            args.extend(["--uuid".to_string(), u.to_string()]);
         }
         if let Some(j) = job_id {
-            job_id_str = j.to_string();
-            args.extend(["--job-id", &job_id_str]);
+            args.extend(["--job-id".to_string(), j.to_string()]);
         }
 
         let stdout = self.run_remote_cmd(&args)?;
-        let parsed: RemoteStopResponse = serde_json::from_str(&stdout).map_err(|e| {
-            SshErrorKind::Other(format!("Invalid stop JSON: {} (output: {})", e, stdout))
-        })?;
+        let parsed: RemoteStopResponse =
+            parse_remote_reply("stop", &stdout).map_err(SshErrorKind::Other)?;
         Ok(parsed)
     }
 
     pub fn heartbeat(&self, uuid: &str) -> Result<RemoteHeartbeatResponse, SshErrorKind> {
-        let args = vec!["heartbeat", "--uuid", uuid];
+        let args = vec!["heartbeat".to_string(), "--uuid".to_string(), uuid.to_string()];
         let stdout = self.run_remote_cmd(&args)?;
-        let parsed: RemoteHeartbeatResponse = serde_json::from_str(&stdout).map_err(|e| {
-            SshErrorKind::Other(format!("Invalid heartbeat JSON: {} (output: {})", e, stdout))
-        })?;
+        let parsed: RemoteHeartbeatResponse =
+            parse_remote_reply("heartbeat", &stdout).map_err(SshErrorKind::Other)?;
         Ok(parsed)
     }
 
     pub fn list(&self) -> Result<RemoteListResponse, SshErrorKind> {
-        let args = vec!["list"];
+        let args = vec!["list".to_string()];
         let stdout = self.run_remote_cmd(&args)?;
-        let parsed: RemoteListResponse = serde_json::from_str(&stdout).map_err(|e| {
-            SshErrorKind::Other(format!("Invalid list JSON: {} (output: {})", e, stdout))
-        })?;
+        let parsed: RemoteListResponse =
+            parse_remote_reply("list", &stdout).map_err(SshErrorKind::Other)?;
         Ok(parsed)
+    }
+
+    /// Reads the session token for an already running session over the encrypted
+    /// SSH channel. The token is kept in memory only: it is never written to
+    /// local disk, and it is never included in an error message.
+    pub fn fetch_token(&self, uuid: &str) -> Result<String, SshErrorKind> {
+        let args = vec!["token".to_string(), "--uuid".to_string(), uuid.to_string()];
+        let stdout = self.run_remote_cmd(&args)?;
+        let parsed: RemoteTokenResponse =
+            parse_remote_reply("session key", &stdout).map_err(SshErrorKind::Other)?;
+        if let Some(token) = parsed.token.filter(|t| !t.trim().is_empty()) {
+            return Ok(token);
+        }
+        Err(SshErrorKind::Other(
+            "Coperceive could not read the running session's key from the server. Disconnect and              start a new session."
+                .to_string(),
+        ))
     }
 }
 
@@ -341,6 +426,24 @@ impl RemoteSessionManager {
         existing_uuid: Option<&str>,
         ssh_bin: Option<&str>,
     ) -> Result<Self, SshErrorKind> {
+        Self::connect_with_options(
+            alias,
+            &RemoteStartOptions {
+                data_root: data_root.to_string(),
+                uuid: existing_uuid.map(str::to_string),
+                ..Default::default()
+            },
+            ssh_bin,
+        )
+    }
+
+    pub fn connect_with_options(
+        alias: &str,
+        options: &RemoteStartOptions,
+        ssh_bin: Option<&str>,
+    ) -> Result<Self, SshErrorKind> {
+        let data_root = options.data_root.as_str();
+        let existing_uuid = options.uuid.as_deref();
         let client = match ssh_bin {
             Some(bin) => RemoteClient::with_ssh_bin(alias, bin),
             None => RemoteClient::new(alias),
@@ -358,12 +461,16 @@ impl RemoteSessionManager {
                     u, st.state
                 )));
             }
-            let ip = st.ip.ok_or_else(|| SshErrorKind::Other("No IP in status".to_string()))?;
-            let port =
-                st.port.ok_or_else(|| SshErrorKind::Other("No port in status".to_string()))?;
-            (u.to_string(), ip, port, "".to_string())
+            let ip = st
+                .ip
+                .ok_or_else(|| SshErrorKind::Other("The server did not report the session's node address.".to_string()))?;
+            let port = st
+                .port
+                .ok_or_else(|| SshErrorKind::Other("The server did not report the session's port.".to_string()))?;
+            let token = client.fetch_token(u)?;
+            (u.to_string(), ip, port, token)
         } else {
-            let resp = client.start(data_root, None, None, None)?;
+            let resp = client.start_with_options(options)?;
             if resp.status != "running" {
                 return Err(SshErrorKind::Other(format!(
                     "Failed to start remote session: {:?} (error: {:?})",
@@ -372,13 +479,13 @@ impl RemoteSessionManager {
             }
             let u = resp
                 .uuid
-                .ok_or_else(|| SshErrorKind::Other("No UUID in start response".to_string()))?;
+                .ok_or_else(|| SshErrorKind::Other("The server did not report a session id.".to_string()))?;
             let ip = resp
                 .ip
-                .ok_or_else(|| SshErrorKind::Other("No IP in start response".to_string()))?;
+                .ok_or_else(|| SshErrorKind::Other("The server did not report the session node address.".to_string()))?;
             let port = resp
                 .port
-                .ok_or_else(|| SshErrorKind::Other("No port in start response".to_string()))?;
+                .ok_or_else(|| SshErrorKind::Other("The server did not report the session port.".to_string()))?;
             let tok = resp.token.unwrap_or_default();
             (u, ip, port, tok)
         };
@@ -438,6 +545,17 @@ mod tests {
             let script = r#"#!/usr/bin/env bash
 args="$*"
 
+# Record the remote command line when a test asks for it.
+if [ -n "${FAKE_SSH_LOG:-}" ]; then
+    printf '%s\n' "${!#}" >> "$FAKE_SSH_LOG"
+fi
+
+# Invalid JSON injection (the output looks like it may hold a token).
+if [[ "$args" == *"--fail-json"* ]]; then
+    echo '{"status": "running", "token": "supersecret-token-value", broken'
+    exit 0
+fi
+
 # Error injection tests
 if [[ "$args" == *"--fail-unreachable"* ]]; then
     echo "ssh: connect to host hpc-test port 22: No route to host" >&2
@@ -485,6 +603,12 @@ fi
 # Remote heartbeat
 if [[ "$args" == *"coperceive remote heartbeat"* ]]; then
     echo '{"status": "ok", "uuid": "test-uuid-99", "timestamp": 1792500000.0}'
+    exit 0
+fi
+
+# Remote token (read-only; returns the running session key over the SSH channel)
+if [[ "$args" == *"coperceive remote token"* ]]; then
+    echo '{"status": "running", "token": "tok-reattach-99"}'
     exit 0
 fi
 
@@ -624,4 +748,111 @@ exit 1
         assert_eq!(mgr_reattach.remote_ip, "10.20.240.48");
         assert_eq!(mgr_reattach.remote_port, 52657);
     }
+    #[test]
+    fn test_remote_command_line_quotes_every_argument() {
+        let args = vec![
+            "start".to_string(),
+            "--root".to_string(),
+            "/data/my scenes; touch /tmp/x".to_string(),
+        ];
+        assert_eq!(
+            remote_command_line(&args),
+            "coperceive remote start --root '/data/my scenes; touch /tmp/x'"
+        );
+    }
+
+    #[test]
+    fn test_remote_command_injection_with_spaces_quotes_and_semicolons() {
+        let dir = std::env::temp_dir().join(format!(
+            "coperceive-injection-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("temp dir");
+        let bin_dir = dir.join("bin");
+        fs::create_dir_all(&bin_dir).expect("bin dir");
+        let fake_coperceive = bin_dir.join("coperceive");
+        fs::write(
+            &fake_coperceive,
+            "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$FAKE_COPER_LOG\"\n",
+        )
+        .expect("write fake coperceive");
+        let mut perms = fs::metadata(&fake_coperceive)
+            .expect("metadata")
+            .permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_coperceive, perms).expect("chmod");
+
+        let marker = dir.join("pwned");
+        let log = dir.join("argv.log");
+        let malicious = format!(
+            "/data/my scenes/\"quoted\"; touch /tmp/x; touch {}",
+            marker.display()
+        );
+        let line = remote_command_line(&[
+            "start".to_string(),
+            "--root".to_string(),
+            malicious.clone(),
+        ]);
+        // The value is one single-quoted argument; the injection cannot start a
+        // second command.
+        assert_eq!(
+            line,
+            format!("coperceive remote start --root '{}'", malicious)
+        );
+        let path = format!(
+            "{}:{}",
+            bin_dir.display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let status = Command::new("sh")
+            .arg("-c")
+            .arg(&line)
+            .env("PATH", path)
+            .env("FAKE_COPER_LOG", &log)
+            .status()
+            .expect("run remote line locally");
+        assert!(status.success());
+        assert!(
+            !marker.exists(),
+            "shell injection executed: the malicious path created {}",
+            marker.display()
+        );
+        let received = fs::read_to_string(&log).expect("argv log");
+        let received: Vec<&str> = received.lines().collect();
+        assert_eq!(received, vec!["remote", "start", "--root", malicious.as_str()]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_error_messages_redact_session_token() {
+        let fake = FakeSshScript::create();
+        let client = RemoteClient::with_ssh_bin("--fail-json", fake.path.to_str().unwrap());
+        let err = client.start("/root", None, None, None).unwrap_err();
+        let message = err.to_string();
+        assert!(
+            !message.contains("supersecret-token-value"),
+            "the error message leaked the session token: {message}"
+        );
+        assert!(message.contains("unexpected reply"), "{message}");
+        assert!(message.contains("bytes"), "{message}");
+    }
+
+    #[test]
+    fn test_reattach_gets_a_real_token_over_ssh() {
+        let fake = FakeSshScript::create();
+        let mgr = RemoteSessionManager::connect(
+            "hpc-alias",
+            "/data/scenes",
+            Some("test-uuid-99"),
+            Some(fake.path.to_str().unwrap()),
+        )
+        .expect("reattach");
+        assert_eq!(mgr.token, "tok-reattach-99");
+        assert!(!mgr.token.is_empty());
+        // The reconnect uses the token command rather than trusting an empty
+        // placeholder.
+        drop(mgr);
+    }
+
 }

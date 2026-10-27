@@ -14,10 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_PARTITION = "ps"
-DEFAULT_WALLTIME = "02:00:00"
-DEFAULT_CPUS = 2
-DEFAULT_MEM = "8G"
+# No partition, account, QoS or resource default lives here: every value comes
+# from the user's per-server profile (see docs/adr/0015). Submitting without a
+# chosen partition is an error, never a guess.
 
 
 def get_base_dir() -> Path:
@@ -206,16 +205,30 @@ def record_heartbeat(session_uuid: str) -> dict[str, Any]:
 def start_session(
     *,
     data_root: str | Path,
-    partition: str = DEFAULT_PARTITION,
-    walltime: str = DEFAULT_WALLTIME,
-    cpus: int = DEFAULT_CPUS,
-    mem: str = DEFAULT_MEM,
+    partition: str | None = None,
+    walltime: str | None = None,
+    cpus: int | None = None,
+    mem: str | None = None,
+    python: str | None = None,
     session_uuid: str | None = None,
     sbatch_script: str | Path | None = None,
     wait_timeout: int = 45,
     extra_args: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Submits a remote serve Slurm job and waits for RUNNING readiness."""
+    """Submits a remote serve Slurm job and waits for RUNNING readiness.
+
+    Partition and resources come from the selected server profile (the desktop
+    app passes them through); this module never invents a site default.
+    """
+    resolved_partition = (partition or os.environ.get("COPERCEIVE_REMOTE_PARTITION") or "").strip()
+    if not resolved_partition:
+        return {
+            "status": "error",
+            "error": (
+                "No partition was chosen for this server. Pick one in the server profile "
+                "(resources) and try again."
+            ),
+        }
     data_root_path = Path(data_root).resolve()
     if not data_root_path.is_dir():
         return {
@@ -269,20 +282,27 @@ def start_session(
     env["COPERCEIVE_REMOTE_UUID"] = uuid_val
     env["COPERCEIVE_REMOTE_ROOT"] = str(data_root_path)
     env["COPERCEIVE_REMOTE_TOKEN_FILE"] = str(token_file)
+    if python:
+        env["COPERCEIVE_REMOTE_PYTHON"] = python
     if extra_args:
         env["COPERCEIVE_EXTRA_ARGS"] = " ".join(extra_args)
 
+    # Only the values the profile chose are passed; omitted flags fall back to
+    # the cluster's own partition defaults, not to a Coperceive guess.
     cmd = [
         sbatch_bin,
         "--parsable",
-        f"--partition={partition}",
-        f"--time={walltime}",
-        f"--cpus-per-task={cpus}",
-        f"--mem={mem}",
+        f"--partition={resolved_partition}",
         f"--job-name={job_name}",
         f"--output={log_file}",
-        str(script_path),
     ]
+    if walltime:
+        cmd.append(f"--time={walltime}")
+    if cpus is not None and cpus > 0:
+        cmd.append(f"--cpus-per-task={cpus}")
+    if mem:
+        cmd.append(f"--mem={mem}")
+    cmd.append(str(script_path))
 
     try:
         proc = subprocess.run(
@@ -362,6 +382,70 @@ def start_session(
         "token": token,
         "log_file": str(log_file),
     }
+
+
+def _token_path_for_session(session_uuid: str) -> Path | None:
+    """Returns the token path for a session, refusing escapes from ~/.coperceive.
+
+    The token stays a 0600 file on the cluster; the desktop app reads it over the
+    encrypted SSH channel and keeps it in memory only.
+    """
+    base = get_base_dir().resolve()
+    session_file = get_sessions_dir() / f"{session_uuid}.json"
+    candidate: Path | None = None
+    if session_file.is_file():
+        try:
+            data = json.loads(session_file.read_text(encoding="utf-8"))
+            token_file = str(data.get("token_file", "")).strip()
+            if token_file:
+                candidate = Path(token_file)
+        except Exception:
+            candidate = None
+    if candidate is None:
+        candidate = get_tokens_dir() / f"{session_uuid}.token"
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(base)
+    except (OSError, ValueError):
+        return None
+    if resolved.is_symlink() or not resolved.is_file():
+        return None
+    return resolved
+
+
+def get_session_token(*, session_uuid: str) -> dict[str, Any]:
+    """Returns the running session's bearer token over the SSH channel.
+
+    The caller (desktop app) keeps it in memory only; this function never logs
+    it and never writes it anywhere new.
+    """
+    uuid_val = (session_uuid or "").strip()
+    if not uuid_val:
+        return {"status": "error", "error": "A session id is required."}
+    if any(ch in uuid_val for ch in "/\\\x00"):
+        return {"status": "error", "error": "That session id is not valid."}
+    token_path = _token_path_for_session(uuid_val)
+    if token_path is None:
+        return {
+            "status": "error",
+            "error": (
+                "Coperceive could not find the session key on the server. "
+                "Disconnect and start a new session."
+            ),
+        }
+    try:
+        token = token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return {
+            "status": "error",
+            "error": "Coperceive could not read the session key on the server.",
+        }
+    if not token:
+        return {
+            "status": "error",
+            "error": "Coperceive found an empty session key on the server.",
+        }
+    return {"status": "ok", "uuid": uuid_val, "token": token}
 
 
 def get_status(
