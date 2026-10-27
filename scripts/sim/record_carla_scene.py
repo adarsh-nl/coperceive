@@ -85,6 +85,8 @@ def _record(carla: object, client: object, args: argparse.Namespace) -> None:
     traffic = client.get_trafficmanager(TM_PORT)  # type: ignore[attr-defined]
     traffic.set_synchronous_mode(True)
     traffic.set_random_device_seed(args.seed)
+    # Enter synchronous mode before any spawn. CARLA drops actors spawned earlier.
+    world.tick()
 
     library = world.get_blueprint_library()
     spawn_points = list(world.get_map().get_spawn_points())
@@ -111,8 +113,11 @@ def _record(carla: object, client: object, args: argparse.Namespace) -> None:
             ("car-0", "car-1", "car-2"), chosen, blueprint_ids, strict=True
         ):
             vehicle = world.spawn_actor(by_id[blueprint_id], spawn_points[index])
+            if not vehicle.is_alive:
+                raise CaptureError(f"{blueprint_id} at spawn {index} was destroyed at spawn")
             vehicle.set_autopilot(True, TM_PORT)
             vehicles.append(vehicle)
+            print(f"spawn blueprint={blueprint_id} index={index} id={vehicle.id}", flush=True)
             lidar = world.spawn_actor(
                 lidar_bp,
                 carla.Transform(carla.Location(z=ROOF_LIDAR_Z_M)),  # type: ignore[attr-defined]
@@ -126,9 +131,14 @@ def _record(carla: object, client: object, args: argparse.Namespace) -> None:
         drone_bp = library.find("sensor.lidar.ray_cast")
         for name, value in LIDAR_ATTRIBUTES.items():
             drone_bp.set_attribute(name, value)
+        # Move the spectator, not the listening lidar. set_transform on a sensor
+        # that is already listening destroys that actor and the stream aborts.
+        spectator = world.get_spectator()
+        spectator.set_transform(_drone_transform(carla, _centroid(vehicles)))
         drone = world.spawn_actor(
             drone_bp,
-            _drone_transform(carla, _centroid(vehicles)),
+            carla.Transform(),  # type: ignore[attr-defined]
+            attach_to=spectator,
         )
         drone_stream: queue.Queue[object] = queue.Queue()
         drone.listen(drone_stream.put)
@@ -136,12 +146,12 @@ def _record(carla: object, client: object, args: argparse.Namespace) -> None:
         pending["drone"] = drone_stream
 
         for _ in range(args.warmup_ticks):
-            drone.set_transform(_drone_transform(carla, _centroid(vehicles)))
+            spectator.set_transform(_drone_transform(carla, _centroid(vehicles)))
             world.tick()
             _drain(pending)
 
         for frame_id in range(args.ticks):
-            drone.set_transform(_drone_transform(carla, _centroid(vehicles)))
+            spectator.set_transform(_drone_transform(carla, _centroid(vehicles)))
             _ = world.tick()
             measurements = _drain(pending)
             time_us = time_us_for(frame_id, args.step)
