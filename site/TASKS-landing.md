@@ -5,7 +5,8 @@ notes for the draft PR into `main`. Do not copy the rest of `TASKS.md` here.
 
 ## Shipped
 
-- A quiet page: floating wordmark, full-bleed recorded clip (vehicle lidar and a drone marker), one Coming soon beat, one waitlist form, a wordmark footer.
+- A quiet page: floating wordmark, full-bleed recorded clip (vehicle lidar and a drone marker); then one timeline section (every agent's sensors and detections on one timeline, with a decorative schematic), one large type tagline whose words light up on scroll, one cluster-over-SSH section marked Coming soon, the Coming soon beat, one waitlist form, and a wordmark footer. Sections rise and fade in once on scroll (IntersectionObserver). Spacing, type, radius and motion follow the landing-page-design skill mapped onto the existing Tailwind classes (no new dependency); its nav bar, FAQ, social proof and invented content are not used.
+- Open for Adarsh: CARLA map assets are CC-BY. Whether and where to credit them on the page is not decided; nothing was added.
 - The clip player is a separate chunk. The poster paints first. `three` is not in the first-load script and is not modulepreloaded.
 - One token source: `site/src/tokens.ts`, imported by `site/tailwind.config.ts`. The block-cursor red is `cursor`. Vehicle and drone colours are `vehicle` and `drone`.
 - Backdrop files remain a copy of `web/src/desktop/backdrop/scene.ts` and `drawBev.ts` from `feat/desktop` at `bf36d0d` (bytes of those two files were the base; the page does not mount them). Unify with `web/` after `feat/desktop` merges. This page does not import `web/`.

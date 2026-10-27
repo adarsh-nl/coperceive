@@ -6,6 +6,7 @@ from __future__ import annotations
 import functools
 import http.server
 import os
+import re
 import socket
 import threading
 import time
@@ -177,6 +178,31 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
             "Adarsh",
         ):
             assert banned not in body, banned
+        html = page.content()
+        for banned in (
+            "real-time",
+            "Real-time",
+            "realtime",
+            "OPV2V",
+            "V2XSet",
+            "V2V4Real",
+            "Griffin",
+            "Town03",
+            "github.com",
+        ):
+            assert banned not in body, banned
+            assert banned not in html, banned
+        assert re.search(r"\blive\b", body, re.IGNORECASE) is None, "live"
+        assert re.search(r"\blive\b", html, re.IGNORECASE) is None, "live"
+        headings = [h.strip() for h in page.locator("h1, h2").all_inner_texts()]
+        assert headings == [
+            "Every agent. One view.",
+            "Every sensor. One timeline.",
+            "What one agent misses,\nanother one sees.",
+            "Evaluate on your own cluster.",
+            "Coming soon.",
+            "Join the waitlist.",
+        ], headings
         assert "Coming soon." in body
         assert "Recorded" in body
         assert "illustrative" not in body
@@ -193,6 +219,7 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         hero_b = _hash(page, "canvas[data-bev=hero]")
         assert hero_a != hero_b
 
+        assert page.evaluate("() => document.querySelectorAll('[data-word].is-on').length") == 0
         logo_top = page.evaluate(
             "() => Number(getComputedStyle(document.querySelector('[data-logo]')).opacity)"
         )
@@ -202,7 +229,15 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
         logo_fade = page.evaluate(
             "() => Number(getComputedStyle(document.querySelector('[data-logo]')).opacity)"
         )
+        # The floating logo still fades out by one viewport of scroll.
         assert isinstance(logo_fade, (int, float)) and float(logo_fade) < 0.05
+
+        page.locator("#tagline").scroll_into_view_if_needed()
+        page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.4)")
+        page.wait_for_timeout(300)
+        words = page.evaluate("() => document.querySelectorAll('[data-word]').length")
+        lit = page.evaluate("() => document.querySelectorAll('[data-word].is-on').length")
+        assert words == 7 and lit == 7, (words, lit)
         assert (
             page.evaluate("() => getComputedStyle(document.querySelector('[data-logo]')).position")
             != "fixed"
@@ -301,6 +336,10 @@ def test_reduced_motion_stills_without_pinning(site_server: str):
         assert page.locator("button", has_text="Pause").count() == 0
         assert page.locator("canvas[data-bev=hero]").count() == 0
         assert page.locator("img[alt*='Recorded scene']").is_visible()
+        assert page.evaluate(
+            "() => [...document.querySelectorAll('[data-word]')].every("
+            "w => w.classList.contains('is-on'))"
+        )
         assert (
             page.evaluate(
                 "() => getComputedStyle(document.querySelector('.cursor-blink')).animationName"

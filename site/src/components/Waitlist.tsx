@@ -53,7 +53,7 @@ export function Waitlist() {
 
   return (
     <section id="waitlist" data-pin="false" data-story="waitlist" className="border-t border-hairline">
-      <div className="mx-auto max-w-6xl px-6 py-28 sm:px-10">
+      <div className="mx-auto max-w-6xl px-6 py-24 sm:px-10">
         <h2 className="text-4xl font-semibold tracking-tight sm:text-5xl">Join the waitlist.</h2>
         <form noValidate className="mt-10 flex max-w-md flex-col gap-3" onSubmit={(event) => void onSubmit(event)}>
           <label htmlFor="email" className="text-sm text-secondary">

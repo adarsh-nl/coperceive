@@ -777,3 +777,10 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
   - `test_reduced_motion_behavior`: Emulates reduced motion; verifies animation automatically halts at frame 52 and displays reduced motion notification.
   - Core unit test suite (`tests/test_store.py`, `tests/test_se3.py`, `tests/test_app.py`, `tests/test_viewdata.py`): **29 passed in 0.95 s**.
   - Python lint and format (`ruff check`, `ruff format --check`): **0 errors, all files formatted**.
+
+## Story sections (2026-10-27, `agent/claude-site-story`)
+
+- After the hero: `Timeline` ("Every sensor. One timeline."; decorative `aria-hidden` schematic with a CSS playhead), `Tagline` (large type, "What one agent misses, another one sees.", words go from 40% to full colour as they cross 60% of the viewport; one rAF-throttled scroll listener; reduced motion shows them lit), `Cluster` (marked Coming soon; evaluation over SSH, from ADR 0014), then the existing Coming soon beat, waitlist and wordmark footer. `Reveal` (`site/src/motion/Reveal.tsx`) rises 32 px and fades once on IntersectionObserver.
+- Every sentence has a row in `site/FACTS.md`. `tests/test_landing_page.py` now asserts the heading order, that real-time, live (whole word), OPV2V, V2XSet, V2V4Real, Griffin, Town03 and github.com are absent from the text and the DOM, that the tagline words light up on scroll (and are all lit under reduced motion), and still that the logo fades.
+- Deviation from the skill: muted tagline words are 40% (not 25–35%) so large text keeps 3:1 contrast on black.
+- Open for Adarsh: whether and where to credit CARLA's CC-BY map assets.

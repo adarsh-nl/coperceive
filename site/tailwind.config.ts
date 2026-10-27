@@ -7,6 +7,7 @@ export default {
     extend: {
       colors: {
         canvas: tokens.canvas,
+        surface: tokens.surface,
         glass: tokens.glass,
         hairline: {
           DEFAULT: tokens.hairline,

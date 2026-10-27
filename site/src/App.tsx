@@ -1,6 +1,9 @@
+import { Cluster } from "./components/Cluster";
 import { ComingSoon } from "./components/ComingSoon";
 import { Footer } from "./components/Footer";
 import { Hero } from "./components/Hero";
+import { Tagline } from "./components/Tagline";
+import { Timeline } from "./components/Timeline";
 import { Waitlist } from "./components/Waitlist";
 
 export function App() {
@@ -14,6 +17,9 @@ export function App() {
       </a>
       <main id="main-content">
         <Hero />
+        <Timeline />
+        <Tagline />
+        <Cluster />
         <ComingSoon />
         <Waitlist />
       </main>

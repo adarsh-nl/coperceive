@@ -1,6 +1,8 @@
 /** Single source for colour. tailwind.config.ts imports this module. */
 export const tokens = {
   canvas: "#000000",
+  /** Raised card surface, from landing-page-design's dark background set. */
+  surface: "#181818",
   glass: "rgb(28 28 30 / 0.78)",
   blur: "22px",
   hairline: "rgba(255, 255, 255, 0.08)",
