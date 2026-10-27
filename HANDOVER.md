@@ -777,3 +777,8 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
   - `test_reduced_motion_behavior`: Emulates reduced motion; verifies animation automatically halts at frame 52 and displays reduced motion notification.
   - Core unit test suite (`tests/test_store.py`, `tests/test_se3.py`, `tests/test_app.py`, `tests/test_viewdata.py`): **29 passed in 0.95 s**.
   - Python lint and format (`ruff check`, `ruff format --check`): **0 errors, all files formatted**.
+
+## Size budget (2026-10-27, `agent/claude-site-perf-budget`)
+
+- `scripts/site/check_budget.py` (CI `landing` job, after `npm run build`): first-load JS ≤ 80 kB gzip, RealClip ≤ 150 kB gzip, `clip.bin` ≤ 1.5 MB gzip, `poster.webp` ≤ 200 kB, and `three`/RealClip neither modulepreloaded nor in first-load JS. `tests/test_site_budget.py`: synthetic builds for each failure, the real build when present, and a browser check that the clip is fetched only after the poster has loaded and painted (FCP and LCP).
+- `scripts/site/run_lighthouse.py` now serves the build under `/coperceive/` (it served `dist/` at `/`, where the page's `/coperceive/assets/` 404), takes the dist path as an argument, reads `CHROME_PATH` from the environment, and no longer defaults `COPERCEIVE_ARTIFACT_DIR` to another tool's folder.

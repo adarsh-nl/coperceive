@@ -124,8 +124,10 @@ jobs:
         working-directory: site
       - run: npm run build
         working-directory: site
+      - name: Size budget (first-load JS, RealClip, clip.bin, poster, no three preload)
+        run: python scripts/site/check_budget.py site/dist
       - name: E2E and A11y tests
-        run: pytest tests/test_landing_page.py -v
+        run: pytest tests/test_landing_page.py tests/test_site_budget.py -v
         env:
           COPERCEIVE_E2E_REQUIRED: "1"
       - name: Measure frame-time & record hero video

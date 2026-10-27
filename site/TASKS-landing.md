@@ -24,6 +24,14 @@ notes for the draft PR into `main`. Do not copy the rest of `TASKS.md` here.
 | Scroll video | `docs/media/landing-scroll.mp4`, 1440×900, 24.20 s, 3.9 MB. |
 | OG image | `site/public/og.png`, 1200×630, icon variant. |
 
+## Size budget (CI)
+
+`scripts/site/check_budget.py site/dist` runs in CI's `landing` job after the build and fails when first-load JS (every module script and modulepreload in `index.html`) is over 80 kB gzip, the RealClip chunk over 150 kB gzip, `hero/clip.bin` over 1.5 MB gzip, or `hero/poster.webp` over 200 kB, or when `three` or RealClip is modulepreloaded or in first-load JS. kB are 1000 bytes, gzip level 9; its gzip figures run about 0.5% under Vite's report. `tests/test_site_budget.py` covers the checker on synthetic builds and checks in a browser that `clip.bin` is requested after `poster.webp` has loaded and after first and largest contentful paint.
+
+On this branch's build (2026-10-27): first-load JS 72,326 B, RealClip 132,549 B, clip.bin 771,256 B gzip, poster.webp 126,888 B; nothing preloaded.
+
+`scripts/site/run_lighthouse.py` served `dist/` at `/`, so the page it audited could not load `/coperceive/assets/`; it now serves under `/coperceive/` and takes the dist path as an argument. Scores measured before this fix (the 2026-10-23 table above) may not be of the full page.
+
 ## Left for the maintainer
 
 1. Merge this PR into `main`.
