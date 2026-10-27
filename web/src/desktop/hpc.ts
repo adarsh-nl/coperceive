@@ -39,6 +39,10 @@ export interface ServerProfile {
   data_roots: string[];
   /** Required by the shared contract; empty only while a draft is being filled. */
   scratch_template: string;
+  /** Shared storage the login node reads; run outputs must never go to scratch. */
+  results_root: string;
+  /** Extra folders a registered pipeline script may live in. */
+  code_roots: string[];
   scheduler: SchedulerKind;
   defaults: JobDefaults;
   environment: EnvironmentSetup;
@@ -106,6 +110,61 @@ export interface ScratchReport {
   detail: string;
 }
 
+/** One folder described by `coperceive remote scan`; paths are relative to the root. */
+export interface FolderInfo {
+  path: string;
+  depth: number;
+  is_scene: boolean;
+  scene_id: string | null;
+  dataset: boolean;
+  scene_count: number;
+  has_manifest: boolean;
+  has_complete: boolean;
+  subfolder_count: number;
+  file_count: number;
+}
+
+/** One detected coperceive scene. */
+export interface SceneInfo {
+  path: string;
+  scene_id: string;
+  folder_name: string;
+}
+
+/** A non-scene folder with at least one scene below it. */
+export interface DatasetInfo {
+  path: string;
+  scene_count: number;
+}
+
+/** A directory entry the scan did not follow, and why. */
+export interface SkippedInfo {
+  path: string;
+  reason: string;
+}
+
+/** The JSON document printed by `coperceive remote scan`. */
+export interface ScanDocument {
+  status: string;
+  root: string;
+  path: string;
+  relative_path: string;
+  depth: number;
+  timeout_s: number;
+  max_entries: number;
+  max_total: number;
+  elapsed_ms: number;
+  truncated: boolean;
+  truncated_reason: string | null;
+  folder_count: number;
+  scene_count: number;
+  dataset_count: number;
+  folders: FolderInfo[];
+  scenes: SceneInfo[];
+  datasets: DatasetInfo[];
+  skipped: SkippedInfo[];
+}
+
 export interface DetectionReport {
   reachable: boolean;
   signed_in: boolean;
@@ -141,6 +200,8 @@ export function emptyProfile(name = ""): ServerProfile {
     user: null,
     data_roots: [],
     scratch_template: "",
+    results_root: "",
+    code_roots: [],
     scheduler: "none",
     defaults: {
       partition: null,
@@ -209,6 +270,34 @@ export function validateDraft(entry: ServerEntry): string[] {
   if (profile.scratch_template.split("/").includes("..")) {
     errors.push("The scratch folder may not contain '..'.");
   }
+  if (!profile.results_root.trim()) {
+    errors.push(
+      "Add the shared folder where run results and predictions should live (never scratch).",
+    );
+  } else {
+    if (!profile.results_root.startsWith("/") && !profile.results_root.startsWith("~")) {
+      errors.push("The results folder must be an absolute path on the server.");
+    }
+    if (profile.results_root.split("/").includes("..")) {
+      errors.push("The results folder may not contain '..'.");
+    }
+    const scratchPrefix = profile.scratch_template.split("$")[0].replace(/\/+$/, "");
+    if (
+      scratchPrefix &&
+      (profile.results_root === scratchPrefix || profile.results_root.startsWith(`${scratchPrefix}/`))
+    ) {
+      errors.push("Results must go to shared storage, not scratch.");
+    }
+  }
+  for (const root of profile.code_roots) {
+    if (!root.trim()) continue;
+    if (!root.startsWith("/") && !root.startsWith("~")) {
+      errors.push("Pipeline code folders must be absolute paths on the server.");
+    }
+    if (root.split("/").includes("..")) {
+      errors.push("Pipeline code folders may not contain '..'.");
+    }
+  }
   if (profile.scheduler === "none" && profile.defaults.partition) {
     errors.push("A server without a scheduler cannot submit to a partition. Clear it or choose Slurm.");
   }
@@ -219,6 +308,14 @@ export function validateDraft(entry: ServerEntry): string[] {
     errors.push("A container environment needs an image path (for example a .sif file).");
   }
   return errors;
+}
+
+/** Splits a comma- or newline-separated list of folders, dropping blanks. */
+export function splitFolderList(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
 }
 
 /** The first data folder, or empty. */

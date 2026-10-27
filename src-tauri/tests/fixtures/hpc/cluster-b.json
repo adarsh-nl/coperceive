@@ -6,8 +6,12 @@
     "ssh_alias": "cluster-b",
     "host": null,
     "user": null,
-    "data_roots": ["/data/scenes"],
+    "data_roots": [
+      "/data/scenes"
+    ],
     "scratch_template": "/work/alice",
+    "results_root": "/mnt/beta/runs",
+    "code_roots": [],
     "scheduler": "slurm",
     "defaults": {
       "partition": "main-cpu",
@@ -20,10 +24,14 @@
     },
     "environment": {
       "kind": "modules",
-      "modules": ["python/3.12"],
+      "modules": [
+        "python/3.12"
+      ],
       "interpreter": "/apps/python/3.12/bin/python",
       "container_image": null,
-      "coperceive_command": ["/apps/coperceive/bin/coperceive"],
+      "coperceive_command": [
+        "/apps/coperceive/bin/coperceive"
+      ],
       "wheelhouse": null,
       "compute_has_internet": false
     },

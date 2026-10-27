@@ -161,10 +161,223 @@ PY
     echo "Step verified: HPC connection test for ${alias_name}."
 }
 
+# --- Browse: real `coperceive remote scan` over the fake ssh ---------------
+# Each launch asks the app's test seam to run one real scan (argv quoting,
+# SSH call, JSON parsing, error mapping) for a committed profile and writes the
+# parsed result. The listings, the truncated note and the refused path come from
+# the fake cluster, so no network or cluster is involved.
+run_scan() {
+    local alias_name="$1"
+    local root="$2"
+    local path="$3"
+    local fixture="${FIXTURES_DIR}/${alias_name}.json"
+    local scan_path="${path:-.}"
+    local slug
+    slug="$(printf '%s_%s' "${root}" "${scan_path}" | tr -c 'A-Za-z0-9' '_')"
+    local result_file="${TMP_DIR}/scan-${alias_name}-${slug}.json"
+    local stdout_log="${TMP_DIR}/scan-${alias_name}-${slug}.stdout.log"
+    local stderr_log="${TMP_DIR}/scan-${alias_name}-${slug}.stderr.log"
+
+    [ -f "${fixture}" ] || fail "fixture missing: ${fixture}"
+    rm -f "${result_file}"
+
+    echo "--- HPC browse scan for ${alias_name}: ${root} ${scan_path} ---"
+    COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
+    COPERCEIVE_TEST_HPC_SCAN_PROFILE="${fixture}" \
+    COPERCEIVE_TEST_HPC_SCAN_RESULT="${result_file}" \
+    COPERCEIVE_TEST_HPC_SCAN_ROOT="${root}" \
+    COPERCEIVE_TEST_HPC_SCAN_PATH="${scan_path}" \
+    "${APP_EXE}" >"${stdout_log}" 2>"${stderr_log}" &
+    APP_PID=$!
+
+    local waited=0
+    while [ ! -s "${result_file}" ]; do
+        if ! kill -0 "${APP_PID}" 2>/dev/null; then
+            fail "app exited before writing the ${alias_name} scan result"
+        fi
+        if [ "${waited}" -ge 300 ]; then
+            fail "timed out waiting for the ${alias_name} scan result"
+        fi
+        sleep 0.2
+        waited=$((waited + 1))
+    done
+    kill -9 "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+    APP_PID=""
+
+    printf '%s\n' "${result_file}"
+}
+
+scan_ok() {
+    python3 - "$1" "$2" "$3" <<'PY'
+import json
+import sys
+
+case, result_file, root = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+
+if not data.get("ok"):
+    print(f"E2E_HPC_FAIL: {case} scan failed: {data.get('error')}", file=sys.stderr)
+    sys.exit(1)
+scan = data["scan"]
+if scan["status"] != "ok":
+    print(f"E2E_HPC_FAIL: {case} scan status {scan['status']}", file=sys.stderr)
+    sys.exit(1)
+if scan["root"] != root:
+    print(f"E2E_HPC_FAIL: {case} root {scan['root']} != {root}", file=sys.stderr)
+    sys.exit(1)
+for folder in scan["folders"]:
+    path = folder["path"]
+    if path.startswith("/") or ".." in path.split("/"):
+        print(f"E2E_HPC_FAIL: {case} folder path is not relative: {path}", file=sys.stderr)
+        sys.exit(1)
+serialised = json.dumps(data).lower()
+for forbidden in ("password", "private_key", "bearer", "secret"):
+    if forbidden in serialised:
+        print(f"E2E_HPC_FAIL: {case} scan result contains {forbidden}", file=sys.stderr)
+        sys.exit(1)
+print(
+    f"E2E_HPC_MARK: scan {case} ok (root={scan['root']}, path={scan['relative_path']}, "
+    f"folders={scan['folder_count']}, scenes={scan['scene_count']}, "
+    f"datasets={scan['dataset_count']}, truncated={scan['truncated']})"
+)
+PY
+}
+
+scan_refused() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+case, result_file = sys.argv[1], sys.argv[2]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+if data.get("ok"):
+    print(f"E2E_HPC_FAIL: {case} scan should have been refused", file=sys.stderr)
+    sys.exit(1)
+error = data.get("error") or ""
+if "outside the data root" not in error:
+    print(f"E2E_HPC_FAIL: {case} refusal lost the server message: {error}", file=sys.stderr)
+    sys.exit(1)
+print(f"E2E_HPC_MARK: scan {case} refused with the server's plain message ({error})")
+PY
+}
+
+scan_root_one() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+case, result_file = sys.argv[1], sys.argv[2]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+if not data.get("ok"):
+    print(f"E2E_HPC_FAIL: {case} scan failed: {data.get('error')}", file=sys.stderr)
+    sys.exit(1)
+scan = data["scan"]
+scenes = {scene["scene_id"] for scene in scan["scenes"]}
+folders = {folder["path"]: folder for folder in scan["folders"]}
+if scenes != {"Town03-000"}:
+    print(f"E2E_HPC_FAIL: {case} scenes {scenes}", file=sys.stderr)
+    sys.exit(1)
+if not folders.get("Town03-000", {}).get("is_scene"):
+    print(f"E2E_HPC_FAIL: {case} Town03-000 is not flagged as a scene", file=sys.stderr)
+    sys.exit(1)
+datasets = {dataset["path"] for dataset in scan["datasets"]}
+if datasets != {".", "datasets"}:
+    print(f"E2E_HPC_FAIL: {case} datasets {datasets}", file=sys.stderr)
+    sys.exit(1)
+print(
+    f"E2E_HPC_MARK: scan {case} lists Town03-000 as a scene and datasets "
+    f"{sorted(datasets)} (folders={scan['folder_count']})"
+)
+PY
+}
+
+scan_truncated() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+case, result_file = sys.argv[1], sys.argv[2]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+if not data.get("ok"):
+    print(f"E2E_HPC_FAIL: {case} scan failed: {data.get('error')}", file=sys.stderr)
+    sys.exit(1)
+scan = data["scan"]
+if not scan["truncated"]:
+    print(f"E2E_HPC_FAIL: {case} scan was not marked truncated", file=sys.stderr)
+    sys.exit(1)
+if scan["truncated_reason"] != "entry limit":
+    print(f"E2E_HPC_FAIL: {case} reason {scan['truncated_reason']}", file=sys.stderr)
+    sys.exit(1)
+if scan["max_entries"] != 200:
+    print(f"E2E_HPC_FAIL: {case} max_entries {scan['max_entries']}", file=sys.stderr)
+    sys.exit(1)
+reasons = [entry["reason"] for entry in scan["skipped"]]
+if not any("outside the data root" in reason for reason in reasons):
+    print(f"E2E_HPC_FAIL: {case} skipped reasons {reasons}", file=sys.stderr)
+    sys.exit(1)
+scenes = {scene["scene_id"] for scene in scan["scenes"]}
+if scenes != {"Town03-007", "Town06-002"}:
+    print(f"E2E_HPC_FAIL: {case} scenes {scenes}", file=sys.stderr)
+    sys.exit(1)
+print(
+    f"E2E_HPC_MARK: scan {case} truncated at {scan['max_entries']} entries "
+    f"({scan['truncated_reason']}), skipped {len(scan['skipped'])} entry with a plain reason"
+)
+PY
+}
+
+scan_none() {
+    python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+case, result_file = sys.argv[1], sys.argv[2]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+if not data.get("ok"):
+    print(f"E2E_HPC_FAIL: {case} scan failed: {data.get('error')}", file=sys.stderr)
+    sys.exit(1)
+scan = data["scan"]
+scenes = {scene["scene_id"] for scene in scan["scenes"]}
+if scenes != {"Files-001"}:
+    print(f"E2E_HPC_FAIL: {case} scenes {scenes}", file=sys.stderr)
+    sys.exit(1)
+if scan["dataset_count"] != 0:
+    print(f"E2E_HPC_FAIL: {case} dataset_count {scan['dataset_count']}", file=sys.stderr)
+    sys.exit(1)
+print(f"E2E_HPC_MARK: scan {case} lists Files-001 as a scene (no datasets)")
+PY
+}
+
 # Repo-relative app path is easier to find when CI builds from a subdirectory;
 # run from the repository root so relative fixtures resolve the same way.
 run_profile cluster-a
 run_profile cluster-b
 run_profile cluster-none
 
-echo "HPC e2e verified: profiles, detection, ProxyJump alias and no-scheduler path."
+SCAN_FILE="$(run_scan cluster-a /data/scenes "" | tail -n 1)"
+scan_ok "cluster-a root" "${SCAN_FILE}" /data/scenes
+scan_root_one "cluster-a root" "${SCAN_FILE}"
+echo "Step verified: HPC browse listed data folders on cluster-a."
+
+SCAN_FILE="$(run_scan cluster-a /data/scenes datasets | tail -n 1)"
+scan_ok "cluster-a datasets" "${SCAN_FILE}" /data/scenes
+scan_truncated "cluster-a datasets" "${SCAN_FILE}"
+echo "Step verified: HPC browse showed the truncated and skipped notices for cluster-a."
+
+SCAN_FILE="$(run_scan cluster-a /data/scenes escape-link | tail -n 1)"
+scan_refused "cluster-a escape-link" "${SCAN_FILE}"
+echo "Step verified: HPC browse passed the server's refused-path message through."
+
+SCAN_FILE="$(run_scan cluster-none /data/files "" | tail -n 1)"
+scan_ok "cluster-none root" "${SCAN_FILE}" /data/files
+scan_none "cluster-none root" "${SCAN_FILE}"
+echo "Step verified: HPC browse read the no-scheduler server's folders."
+
+echo "HPC e2e verified: profiles, detection, ProxyJump alias, no-scheduler path and Browse."

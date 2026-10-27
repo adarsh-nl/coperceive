@@ -13,6 +13,7 @@ import {
   saveServerProfile,
   testServerConnection,
 } from "./local";
+import HpcBrowse from "./HpcBrowse";
 import {
   applyDiscovery,
   emptyEntry,
@@ -23,6 +24,7 @@ import {
   partitionNames,
   profileSummary,
   reportSummary,
+  splitFolderList,
   validateConnectionShape,
   validateDraft,
   type DetectionReport,
@@ -108,6 +110,7 @@ export default function HpcServers() {
   const [busy, setBusy] = useState<"test" | "save" | "card" | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
 
   useEffect(() => {
     void (async () => {
@@ -360,6 +363,19 @@ export default function HpcServers() {
                 <button
                   type="button"
                   style={secondaryButton}
+                  disabled={busy !== null || entry.profile.data_roots.length === 0}
+                  title={
+                    entry.profile.data_roots.length === 0
+                      ? "Add a data folder to this server first."
+                      : "Browse the data folders on this server (metadata only)."
+                  }
+                  onClick={() => setBrowseProfile(entry)}
+                >
+                  Browse data
+                </button>
+                <button
+                  type="button"
+                  style={secondaryButton}
                   disabled={busy !== null}
                   onClick={() => {
                     setDraft(entry);
@@ -403,6 +419,10 @@ export default function HpcServers() {
           </div>
         );
       })}
+
+      {browseProfile ? (
+        <HpcBrowse profile={browseProfile} onClose={() => setBrowseProfile(null)} />
+      ) : null}
 
       {draft ? (
         <div style={{ ...card, marginTop: "1rem" }}>
@@ -509,6 +529,35 @@ export default function HpcServers() {
                 value={draft.profile.scratch_template}
                 placeholder="/scratch/$USER"
                 onChange={(event) => updateProfile({ scratch_template: event.target.value })}
+              />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <div style={{ ...field, flex: 1 }}>
+              <label style={labelStyle} htmlFor="hpc-results-root">
+                Results folder (shared storage)
+              </label>
+              <input
+                id="hpc-results-root"
+                style={input}
+                value={draft.profile.results_root}
+                placeholder="/project/your-account/runs"
+                onChange={(event) => updateProfile({ results_root: event.target.value })}
+              />
+            </div>
+            <div style={{ ...field, flex: 1 }}>
+              <label style={labelStyle} htmlFor="hpc-code-roots">
+                Pipeline code folders (optional, comma separated)
+              </label>
+              <input
+                id="hpc-code-roots"
+                style={input}
+                value={draft.profile.code_roots.join(", ")}
+                placeholder="/project/your-account/code"
+                onChange={(event) =>
+                  updateProfile({ code_roots: splitFolderList(event.target.value) })
+                }
               />
             </div>
           </div>

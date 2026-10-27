@@ -8,6 +8,7 @@ import type {
 } from "./types";
 import type {
   DetectionReport,
+  ScanDocument,
   ServerEntry,
   SshHostSettings,
 } from "./hpc";
@@ -128,6 +129,22 @@ export async function deleteServerProfile(id: string): Promise<void> {
  * Runs the read-only "Test connection" checks (reachable, signed in, scheduler,
  * partitions/GPUs, environment, scratch). Each step is time-bounded in Rust.
  */
+/**
+ * Describes one folder inside a server's data folder (metadata only), over the
+ * same reused SSH connection as the rest of the HPC workspace.
+ */
+export async function remoteScan(
+  profileId: string,
+  root: string,
+  path: string,
+): Promise<ScanDocument> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Browsing a cluster's folders is only available in the desktop app.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<ScanDocument>("remote_scan", { profileId, root, path });
+}
+
 export async function testServerConnection(entry: ServerEntry): Promise<DetectionReport> {
   if (isTauriEnvironment()) {
     const { invoke } = await import("@tauri-apps/api/core");

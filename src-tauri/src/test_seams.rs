@@ -100,6 +100,41 @@ pub fn hpc_probe_request() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     ))
 }
 
+/// Test-only request for the packaged-app Browse step: run one real
+/// `coperceive remote scan` against the committed fake-ssh profile and write the
+/// parsed result for `scripts/desktop/e2e_hpc_fake_ssh.sh`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HpcScanProbe {
+    pub profile: std::path::PathBuf,
+    pub result: std::path::PathBuf,
+    pub root: String,
+    pub path: String,
+}
+
+/// `COPERCEIVE_TEST_HPC_SCAN_PROFILE` + `_RESULT` + `_ROOT` + `_PATH`, read only
+/// in test mode. Production launches never set these.
+pub fn hpc_scan_probe_request() -> Option<HpcScanProbe> {
+    if !test_env_active() {
+        return None;
+    }
+    let profile = std::env::var("COPERCEIVE_TEST_HPC_SCAN_PROFILE").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_HPC_SCAN_RESULT").ok()?;
+    let root = std::env::var("COPERCEIVE_TEST_HPC_SCAN_ROOT").ok()?;
+    let path = std::env::var("COPERCEIVE_TEST_HPC_SCAN_PATH").ok()?;
+    if [&profile, &result, &root, &path]
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return None;
+    }
+    Some(HpcScanProbe {
+        profile: std::path::PathBuf::from(profile),
+        result: std::path::PathBuf::from(result),
+        root,
+        path,
+    })
+}
+
 /// Canned dry-run answer used only in fake job mode. Mirrors the JSON shape of
 /// `coperceive.catalog.runner.dry_run_preset` so the Get data UI renders the
 /// size panel and enables "Start Download" without contacting the dataset host.

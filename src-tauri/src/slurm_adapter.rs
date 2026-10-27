@@ -671,6 +671,8 @@ mod tests {
             user: None,
             data_roots: vec!["/data/scenes".to_string()],
             scratch_template: "/scratch/$USER/$SLURM_JOB_ID".to_string(),
+            results_root: "/data/projects/alpha/runs".to_string(),
+            code_roots: vec!["/data/projects/alpha/code".to_string()],
             scheduler: SchedulerKind::Slurm,
             defaults: JobDefaults {
                 partition: Some("gpu-a100".to_string()),

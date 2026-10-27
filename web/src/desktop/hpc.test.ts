@@ -13,6 +13,7 @@ import {
   profileSummary,
   reportSummary,
   schedulerLabel,
+  splitFolderList,
   validateConnectionShape,
   validateDraft,
   type DetectionReport,
@@ -100,6 +101,8 @@ test("empty profile carries no site default and no secrets", () => {
   assert.strictEqual(profile.environment.interpreter, null);
   assert.strictEqual(profile.environment.compute_has_internet, false);
   assert.strictEqual(profile.scratch_template, "");
+  assert.strictEqual(profile.results_root, "");
+  assert.deepStrictEqual(profile.code_roots, []);
   const serialised = JSON.stringify(entry).toLowerCase();
   for (const forbidden of ["password", "private_key", "token", "secret", "\"ps\""]) {
     assert.ok(!serialised.includes(forbidden), `must not contain ${forbidden}`);
@@ -121,12 +124,31 @@ test("connection shape and save validation explain missing pieces", () => {
   // Reaching the cluster does not need data folders, but saving does.
   assert.ok(validateDraft(reachableShape).some((error) => error.includes("data folder")));
   assert.ok(validateDraft(reachableShape).some((error) => error.includes("scratch")));
+  assert.ok(validateDraft(reachableShape).some((error) => error.includes("results")));
 
   const escaped = emptyEntry("Cluster");
   escaped.profile.ssh_alias = "cluster-a";
   escaped.profile.data_roots = ["/data/../../etc"];
   escaped.profile.scratch_template = "/scratch/alice";
   assert.ok(validateDraft(escaped).some((error) => error.includes("..")));
+
+  const resultsInScratch = emptyEntry("Cluster");
+  resultsInScratch.profile.ssh_alias = "cluster-a";
+  resultsInScratch.profile.data_roots = ["/data/scenes"];
+  resultsInScratch.profile.scratch_template = "/scratch/alice";
+  resultsInScratch.profile.results_root = "/scratch/alice/runs";
+  assert.ok(
+    validateDraft(resultsInScratch).some((error) => error.includes("not scratch")),
+    "results inside scratch must be refused",
+  );
+
+  const savedProfile = emptyEntry("Cluster");
+  savedProfile.profile.ssh_alias = "cluster-a";
+  savedProfile.profile.data_roots = ["/data/scenes"];
+  savedProfile.profile.scratch_template = "/scratch/alice";
+  savedProfile.profile.results_root = "/data/runs";
+  assert.deepStrictEqual(validateDraft(savedProfile), []);
+  assert.deepStrictEqual(splitFolderList(" /data/code , /data/tools\n"), ["/data/code", "/data/tools"]);
 
   const noPartitionOnSlurm = emptyEntry("Cluster");
   noPartitionOnSlurm.profile.ssh_alias = "cluster-a";
