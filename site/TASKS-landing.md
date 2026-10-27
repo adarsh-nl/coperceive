@@ -11,7 +11,7 @@ notes for the draft PR into `main`. Do not copy the rest of `TASKS.md` here.
 - Backdrop files remain a copy of `web/src/desktop/backdrop/scene.ts` and `drawBev.ts` from `feat/desktop` at `bf36d0d` (bytes of those two files were the base; the page does not mount them). Unify with `web/` after `feat/desktop` merges. This page does not import `web/`.
 - The waitlist posts to `VITE_WAITLIST_ENDPOINT` when that build setting is present. Unset, it sends nothing. See `site/README.md`.
 - No repository link, no personal name, no dataset name, and no statistic on the page. Facts are in `site/FACTS.md`. Guidelines review is `site/GUIDELINES.md`.
-- GitHub Pages workflow: `.github/workflows/pages.yml`. It does not enable Pages.
+- GitHub Pages workflow: `.github/workflows/pages.yml`. It does not enable Pages. Pull requests touching `site/**` or the workflow run the same install and build and check `dist/` (base `/coperceive/`, `404.html`, `.nojekyll`); only a push to `main` or a manual run deploys. `ci.yml`'s `landing` job uses the same plain `npm ci` and action versions.
 
 ## Gates, 2026-10-23
 
