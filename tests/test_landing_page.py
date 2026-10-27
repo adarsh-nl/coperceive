@@ -214,7 +214,7 @@ def test_landing_scroll_canvas_links_and_axe(site_server: str, tmp_path: Path):
 
         page.locator("#email").fill("not-an-email")
         page.get_by_role("button", name="Join the waitlist").click()
-        assert page.get_by_text("Enter an email address.").is_visible()
+        assert page.get_by_text("Enter an email address, like name@example.com.").is_visible()
         posts: list[str] = []
         page.on("request", lambda req: posts.append(req.url) if req.method == "POST" else None)
         page.locator("#email").fill("ada@example.com")

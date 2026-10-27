@@ -16,7 +16,12 @@ Checked against this tree on 2026-10-24.
 | Coming soon. | `docs/adr/0014-desktop-app.md` specifies a desktop app. `README.md:5` says this tree does not build the desktop shell. The page gives no date and no download. |
 | The desktop app for multi-agent perception. | The same sources. It names the product the ADR specifies. It does not say the shell ships from this tree. |
 | Vehicle. Drone. Lane. | The legend. Vehicle is the recorded vehicle pose and its lidar. Drone is the recorded drone pose. Lane is the map polylines in the same file, drawn in `#7dcea0`. The words are not a count and not a measurement. |
-| Join the waitlist. Enter an email address. Waitlist opens soon. Sending… You’re on the list. Could not join. Try again. | `site/src/components/Waitlist.tsx`. The address is checked in the browser. When `VITE_WAITLIST_ENDPOINT` is unset, submit sends no request, stores nothing, and shows "Waitlist opens soon." "You’re on the list." is shown only after the endpoint responds with a success status. No service URL is written in the source. |
+| Join the waitlist. Email. Join the waitlist (button). | `site/src/components/Waitlist.tsx`. The heading, the field label and the button. |
+| name@example.com (placeholder) and "Enter an email address, like name@example.com." | The field's example and its inline message when the address does not match `EMAIL` in `Waitlist.tsx` (checked in the browser). `example.com` is a reserved example domain, not a real account. |
+| Waitlist opens soon. Nothing was sent. | Shown when `VITE_WAITLIST_ENDPOINT` is unset or blank: submit returns before any request and writes no storage (`tests/test_landing_waitlist.py` records zero requests of any kind and empty localStorage, sessionStorage, cookies and IndexedDB). No service URL is written in the source; no service has been chosen. |
+| Sending… | Shown while the POST to the configured endpoint is in flight; the field and button are disabled and the form is `aria-busy`. |
+| You’re on the list. | Shown only after the configured endpoint answers with a success status (`response.ok`). |
+| Could not join. Check your connection and try again. | Shown when the request fails or the endpoint answers with an error status. The form stays filled so the person can retry. |
 
 The wordmark is the product name. The red block is the design token `cursor` in `site/src/tokens.ts` (`#E03A22`). It is not a measurement of the software.
 

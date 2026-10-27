@@ -777,3 +777,8 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
   - `test_reduced_motion_behavior`: Emulates reduced motion; verifies animation automatically halts at frame 52 and displays reduced motion notification.
   - Core unit test suite (`tests/test_store.py`, `tests/test_se3.py`, `tests/test_app.py`, `tests/test_viewdata.py`): **29 passed in 0.95 s**.
   - Python lint and format (`ruff check`, `ruff format --check`): **0 errors, all files formatted**.
+
+## Waitlist states (2026-10-27, `agent/claude-site-waitlist-ui`)
+
+- `Waitlist.tsx`: one `role="status"` `aria-live="polite"` line for every state (invalid, opens soon, sending, joined, error); the field is `aria-invalid` and refocused when the address is wrong; while sending, the field and button are disabled and the form is `aria-busy`; errors are in the cursor red (#E03A22, 4.8:1 on black), success in primary text. Button: 16 px semibold, `active:scale-[0.98]`, colour and transform on the skill's base curve. `form[data-status]` exposes the state for tests.
+- `tests/test_landing_waitlist.py`: with `VITE_WAITLIST_ENDPOINT` unset, an invalid submit marks the field, typing clears it, and a valid submit shows "Waitlist opens soon. Nothing was sent." with zero requests of any kind and empty localStorage, sessionStorage, cookies and IndexedDB. No waitlist service has been chosen; none is named in the source.

@@ -17,5 +17,5 @@ name a hosted form service in source.
 
 When `VITE_WAITLIST_ENDPOINT` is unset or blank, the form still renders. Submit
 checks the address in the browser, sends no request, stores nothing, and shows
-"Waitlist opens soon." A success line is shown only after the configured
+"Waitlist opens soon. Nothing was sent." A success line is shown only after the configured
 endpoint responds with a success status.

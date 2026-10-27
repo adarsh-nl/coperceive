@@ -9,7 +9,7 @@ notes for the draft PR into `main`. Do not copy the rest of `TASKS.md` here.
 - The clip player is a separate chunk. The poster paints first. `three` is not in the first-load script and is not modulepreloaded.
 - One token source: `site/src/tokens.ts`, imported by `site/tailwind.config.ts`. The block-cursor red is `cursor`. Vehicle and drone colours are `vehicle` and `drone`.
 - Backdrop files remain a copy of `web/src/desktop/backdrop/scene.ts` and `drawBev.ts` from `feat/desktop` at `bf36d0d` (bytes of those two files were the base; the page does not mount them). Unify with `web/` after `feat/desktop` merges. This page does not import `web/`.
-- The waitlist posts to `VITE_WAITLIST_ENDPOINT` when that build setting is present. Unset, it sends nothing. See `site/README.md`.
+- The waitlist posts to `VITE_WAITLIST_ENDPOINT` when that build setting is present. Unset, it sends nothing. See `site/README.md`. States (invalid, opens soon, sending, joined, error) share one polite live region; `tests/test_landing_waitlist.py` asserts zero requests and no storage with the endpoint unset.
 - No repository link, no personal name, no dataset name, and no statistic on the page. Facts are in `site/FACTS.md`. Guidelines review is `site/GUIDELINES.md`.
 - GitHub Pages workflow: `.github/workflows/pages.yml`. It does not enable Pages.
 

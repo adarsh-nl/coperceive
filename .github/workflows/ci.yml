@@ -125,7 +125,7 @@ jobs:
       - run: npm run build
         working-directory: site
       - name: E2E and A11y tests
-        run: pytest tests/test_landing_page.py -v
+        run: pytest tests/test_landing_page.py tests/test_landing_waitlist.py -v
         env:
           COPERCEIVE_E2E_REQUIRED: "1"
       - name: Measure frame-time & record hero video
