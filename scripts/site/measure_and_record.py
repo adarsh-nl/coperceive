@@ -62,6 +62,7 @@ def main() -> None:
                 "--use-gl=angle",
                 "--use-angle=swiftshader",
                 "--enable-unsafe-swiftshader",
+                "--disable-accelerated-2d-canvas",
             ]
         )
         context = browser.new_context(

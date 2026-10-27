@@ -3,7 +3,13 @@
 `TASKS.md` is on `feat/desktop` and is not in this branch. These are the landing-page
 notes for the draft PR into `main`. Do not copy the rest of `TASKS.md` here.
 
-## Shipped
+## Landing Motion (2026-10-27, `agent/claude-site-landing-motion`)
+
+The page is now the Claude Design file "Landing Motion", built as designed at Adarsh's request (supersedes the story sections of #34). Layout: a scroll-pinned story (600vh) over a simulated city canvas with four captions and a progress bar; nav (Pipeline, Install, GitHub); pipeline cards; install with a typed terminal and "Read the docs" / "View on GitHub"; a pinned evaluate demo (simulated drive, IoU and run toggles); wordmark footer. Code: `site/src/landing/` (`Landing.tsx`, `story.ts`, `evalScene.ts`, `util.ts`). Both canvases are lazy chunks, so first-load JS is 75.33 kB gzip (story 7.58 kB, evaluate 5.45 kB); `three` is no longer loaded. Fonts stay self-hosted. Reduced motion freezes both simulations, shows sections at once and skips the typing. `site/FACTS.md` lists the sources and marks every simulated number.
+
+Not used any more by the page (files left in place): `Hero.tsx`, `RealClip.tsx`, `ComingSoon.tsx`, `Waitlist.tsx`, `FloatingLogo.tsx`, `utils/clipLoader.ts`, `backdrop/`, `site/public/hero/*`.
+
+## Shipped (before Landing Motion)
 
 - A quiet page: floating wordmark, full-bleed recorded clip (vehicle lidar and a drone marker), one Coming soon beat, one waitlist form, a wordmark footer.
 - The clip player is a separate chunk. The poster paints first. `three` is not in the first-load script and is not modulepreloaded.
