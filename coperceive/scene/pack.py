@@ -34,6 +34,10 @@ PREVIEW_QUALITY = 85
 MEDIA_SUFFIXES = frozenset(
     {".avif", ".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".png", ".tif", ".tiff", ".webp"}
 )
+# Files that never belong to a scene: Finder metadata and the sqlite sidecars a
+# migration tool can leave behind. They are skipped and counted in a note.
+CRUFT_NAMES = frozenset({".DS_Store", "jobs.sqlite", "jobs.sqlite-wal", "jobs.sqlite-shm"})
+APPLE_DOUBLE_PREFIX = "._"
 
 
 class PackError(Exception):
@@ -215,14 +219,27 @@ def _link_text(path: Path) -> str:
         return "<unreadable>"
 
 
-def _walk_files(scene: Path) -> tuple[dict[str, Path], list[str]]:
+def _cruft_label(name: str) -> str | None:
+    """Label of a file that never belongs to a scene, or ``None``."""
+    if name in CRUFT_NAMES:
+        return name
+    if name.startswith(APPLE_DOUBLE_PREFIX):
+        return "._*"
+    return None
+
+
+def _walk_files(
+    scene: Path,
+) -> tuple[dict[str, Path], list[str], dict[str, list[int]]]:
     """Real files inside the scene. Symlinks are recorded and not followed.
 
     A camera directory that points at the raw Griffin tree must not contribute
     its files. Listed images are resolved later from ``images.parquet``.
+    Finder metadata and database sidecars are counted, not copied.
     """
     found: dict[str, Path] = {}
     notes: list[str] = []
+    cruft: dict[str, list[int]] = {}
 
     def walk(directory: Path) -> None:
         try:
@@ -233,6 +250,13 @@ def _walk_files(scene: Path) -> tuple[dict[str, Path], list[str]]:
             return
         for child in children:
             if child.name in (IMPORT_NAME, COMPLETE_NAME) or child.name.endswith(".writing"):
+                continue
+            label = _cruft_label(child.name)
+            if label is not None:
+                saved = cruft.setdefault(label, [0, 0])
+                saved[0] += 1
+                if child.is_file():
+                    saved[1] += child.stat().st_size
                 continue
             relative = child.relative_to(scene).as_posix()
             if child.is_symlink():
@@ -251,7 +275,7 @@ def _walk_files(scene: Path) -> tuple[dict[str, Path], list[str]]:
                 found[relative] = child
 
     walk(scene)
-    return found, notes
+    return found, notes, cruft
 
 
 def build_plan(
@@ -273,7 +297,7 @@ def build_plan(
     roots = [scene, *[root.resolve() for root in media_roots]]
     if griffin_root is not None:
         roots.append(griffin_root.resolve())
-    walked, notes = _walk_files(scene)
+    walked, notes, cruft = _walk_files(scene)
     image_paths = _image_column(scene)
     listed = set(image_paths or ())
     kept_notes: list[str] = []
@@ -309,6 +333,11 @@ def build_plan(
             f"skipped {count} image files not listed in {IMAGE_TABLE} "
             f"({size} bytes) in: {', '.join(sorted(skipped))}"
         )
+    if cruft:
+        count = sum(item[0] for item in cruft.values())
+        size = sum(item[1] for item in cruft.values())
+        detail = ", ".join(f"{label} x{item[0]}" for label, item in sorted(cruft.items()))
+        kept_notes.append(f"skipped {count} macOS or database files ({size} bytes): {detail}")
     column: list[str] = []
     resolved_images: list[Path] = []
     for relative in image_paths or ():
