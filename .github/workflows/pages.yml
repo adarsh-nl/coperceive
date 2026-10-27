@@ -1,8 +1,15 @@
 name: pages
 
+# Pull requests that touch the site build it exactly as a deploy would, so a
+# break in the plain `npm ci` or the Pages build shows up before main. Only a
+# push to main or a manual dispatch can deploy.
 on:
   push:
     branches: [main]
+    paths:
+      - "site/**"
+      - ".github/workflows/pages.yml"
+  pull_request:
     paths:
       - "site/**"
       - ".github/workflows/pages.yml"
@@ -10,12 +17,12 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
+# Deploys queue behind each other and are never cancelled by a PR build;
+# each PR only cancels its own superseded builds.
 concurrency:
-  group: pages
-  cancel-in-progress: true
+  group: pages-${{ github.event_name == 'pull_request' && github.ref || 'deploy' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -31,14 +38,28 @@ jobs:
         working-directory: site
       - run: npm run build
         working-directory: site
+      - name: dist is a Pages site under /coperceive/
+        working-directory: site/dist
+        run: |
+          test -f index.html
+          test -f 404.html
+          test -f .nojekyll
+          grep -q 'src="/coperceive/assets/' index.html || { echo "index.html does not load its script from /coperceive/assets/"; exit 1; }
+          if grep -nE '(src|href)="/(assets|hero)/' index.html; then echo "root-relative asset path: the base is not /coperceive/"; exit 1; fi
+          cmp -s index.html 404.html || { echo "404.html is not a copy of index.html"; exit 1; }
       - uses: actions/upload-pages-artifact@v5
+        if: github.event_name != 'pull_request'
         with:
           path: site/dist
           include-hidden-files: true
 
   deploy:
     needs: build
+    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main')
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
