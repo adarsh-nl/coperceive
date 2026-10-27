@@ -6,6 +6,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 from typing import cast
 
@@ -278,6 +279,49 @@ def test_linked_camera_dir_does_not_copy_unlisted_frames(tmp_path: Path, images:
     assert plan["bytes_estimated"] is False
     assert _as_int(plan["bytes"]) == _payload_bytes(final)
     assert not any(name.startswith("other-") for name in copied)
+
+
+def test_pack_skips_macos_and_database_cruft(tmp_path: Path) -> None:
+    """Finder metadata and sqlite sidecars never become scene files.
+
+    The local Town03-000 has two ``.DS_Store`` files and a ``jobs.sqlite``
+    from the conversion tool; a copied ``._*`` AppleDouble is the macOS
+    resource fork of a file. They are skipped and reported in one note.
+    """
+    fixture = Path(__file__).parent / "fixtures" / "synthetic_scene" / "synth_001"
+    scene = tmp_path / "synth_001"
+    shutil.copytree(fixture, scene)
+    (scene / ".DS_Store").write_bytes(b"finder-root")
+    (scene / "nested").mkdir()
+    (scene / "nested" / ".DS_Store").write_bytes(b"finder-nested")
+    (scene / "._manifest.json").write_bytes(b"appledouble")
+    for name, payload in (
+        ("jobs.sqlite", b"sqlite"),
+        ("jobs.sqlite-wal", b"wal"),
+        ("jobs.sqlite-shm", b"shm"),
+    ):
+        (scene / name).write_bytes(payload)
+    buffer = io.StringIO()
+    final = pack_scene(scene, tmp_path / "library", images="none", out=buffer)
+    assert final is not None
+    copied = sorted(
+        path.relative_to(final).as_posix() for path in final.rglob("*") if path.is_file()
+    )
+    assert not any(name.endswith(".DS_Store") for name in copied)
+    assert "._manifest.json" not in copied
+    for name in ("jobs.sqlite", "jobs.sqlite-wal", "jobs.sqlite-shm"):
+        assert name not in copied
+    assert "manifest.json" in copied
+    notes = [str(row["message"]) for row in _events(buffer) if row.get("event") == "note"]
+    cruft_notes = [note for note in notes if "macOS or database files" in note]
+    assert len(cruft_notes) == 1, notes
+    note = cruft_notes[0]
+    assert note.startswith("skipped 6 macOS or database files")
+    assert ".DS_Store x2" in note
+    assert "._* x1" in note
+    assert "jobs.sqlite x1" in note
+    assert "jobs.sqlite-wal x1" in note
+    assert "jobs.sqlite-shm x1" in note
 
 
 @pytest.mark.parametrize("images", ["full", "preview", "none"])
