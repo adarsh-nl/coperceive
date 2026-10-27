@@ -778,6 +778,12 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
   - Core unit test suite (`tests/test_store.py`, `tests/test_se3.py`, `tests/test_app.py`, `tests/test_viewdata.py`): **29 passed in 0.95 s**.
   - Python lint and format (`ruff check`, `ruff format --check`): **0 errors, all files formatted**.
 
+## Site CI (2026-10-27, `agent/claude-site-pages-ci`)
+
+- `pages.yml` now also runs on pull requests that touch `site/**` or `pages.yml`. The PR build is the deploy build: plain `npm ci`, `npm run build`, then a check that `dist/` loads its script from `/coperceive/assets/`, has no root-relative `/assets/` or `/hero/` paths, and has `404.html` (a copy of `index.html`) and `.nojekyll`. On a PR the Pages artifact is not uploaded and `deploy` is skipped; `deploy` runs only on a push to `main` or `workflow_dispatch`.
+- `pages: write` and `id-token: write` moved from the workflow to the `deploy` job. The concurrency group is per PR ref for PR builds and a single `pages-deploy` group for deploys, so a PR can never cancel a deploy (the old shared `pages` group with `cancel-in-progress: true` would have).
+- `ci.yml`'s `landing` job uses the same install as Pages (`npm ci` without `--legacy-peer-deps`; `site/` has no peer conflicts) and the same action majors (`checkout`, `setup-node`, `setup-python`, `upload-artifact` @v7). The other `ci.yml` jobs were left on @v4/@v5; that is out of this task's scope.
+
 ## Landing Motion page (2026-10-27, `agent/claude-site-landing-motion`)
 
 - Adarsh supplied the Claude Design project "Landing directions for Coperceive" as a zip and asked for `Landing Motion.dc.html` to be the landing page, built as designed. It replaces the page from #23 and the sections of #34. The design overrides the earlier site copy rules (nav and GitHub links, dataset names, licence line, simulated scenes with numbers); self-hosted fonts and no third-party requests are kept. `site/FACTS.md` was rewritten: sources per claim, simulations marked.
