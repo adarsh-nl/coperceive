@@ -73,10 +73,10 @@ case "${remote}" in
     *"coperceive-check:sinfo"*)
         case "${all_args}" in
             *cluster-a*)
-                printf 'gpu-a100*|up|2-00:00:00|8|64000|gpu:a100:4\nmain-cpu|up|4:00:00|32|128000|(null)\n'
+                printf 'gpu-a100*|up|2-00:00:00|8|gpu:a100:4\nmain-cpu|up|4:00:00|32|(null)\n'
                 ;;
             *cluster-b*)
-                printf 'main-cpu*|up|2-00:00:00|64|256000|(null)\ngpu-h100|up|1-00:00:00|32|256000|gpu:h100:2\n'
+                printf 'main-cpu*|up|2-00:00:00|64|(null)\ngpu-h100|up|1-00:00:00|32|gpu:h100:2\n'
                 ;;
             *)
                 printf ''

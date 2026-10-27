@@ -699,18 +699,34 @@ def test_session_token_refuses_symlink_escape(
 
 def test_no_site_defaults_in_remote_code_or_sbatch_script() -> None:
     root = Path(__file__).resolve().parent.parent
-    manager_source = (root / "coperceive" / "remote" / "manager.py").read_text(encoding="utf-8")
-    commands_source = (root / "coperceive" / "remote" / "commands.py").read_text(encoding="utf-8")
-    sbatch = (root / "scripts" / "desktop" / "remote_serve.sbatch").read_text(encoding="utf-8")
-
-    assert "DEFAULT_PARTITION" not in manager_source
-    assert "DEFAULT_PARTITION" not in commands_source
-    assert '"ps"' not in manager_source
-    for site_value in ["utwente", "hpc-node11", "hpc-head1"]:
-        assert site_value not in manager_source.lower()
-        assert site_value not in sbatch.lower()
+    product_sources = {
+        "coperceive/remote/manager.py": root / "coperceive" / "remote" / "manager.py",
+        "coperceive/remote/commands.py": root / "coperceive" / "remote" / "commands.py",
+        "coperceive/models/slurm.py": root / "coperceive" / "models" / "slurm.py",
+        "coperceive/models/commands.py": root / "coperceive" / "models" / "commands.py",
+        "scripts/desktop/remote_serve.sbatch": root / "scripts" / "desktop" / "remote_serve.sbatch",
+    }
+    sources = {name: path.read_text(encoding="utf-8") for name, path in product_sources.items()}
+    all_text = "\n".join(sources.values())
+    for site_value in [
+        "DEFAULT_PARTITION",
+        "ps,main-gpu",
+        "ps,main-cpu",
+        "utwente",
+        "hpc-node",
+        "hpc-head",
+        "/datasets/eemcs",
+        "main-gpu",
+    ]:
+        assert site_value not in all_text, f"site-specific value {site_value!r} in product code"
+    assert "--partition=ps" not in all_text
+    sbatch = sources["scripts/desktop/remote_serve.sbatch"]
     for flag in ["--partition=", "--cpus-per-task=", "--mem=", "--time="]:
         assert f"#SBATCH {flag}" not in sbatch, f"{flag} must come from the profile, not the script"
+    # The model-run sbatch takes its partition from the CLI/profile too.
+    models = sources["coperceive/models/slurm.py"]
+    assert "--slurm-partition" in models or "COPERCEIVE_SLURM_PARTITION" in models
+    assert "partition=partition" in models or "#SBATCH --partition={partition}" in models
 
 
 def test_committed_portability_fixtures_are_generic_and_distinct() -> None:

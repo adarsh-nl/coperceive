@@ -4,8 +4,9 @@ batch run (ADR 0011 decision 5).
 
 The script stages exactly the scene files and raw files the selected scenes need into
 ``/local/$SLURM_JOB_ID`` with ``rsync --files-from``, runs the same ``coperceive model run``
-there, and copies the run home before the trap wipes the scratch. Partitions are
-``ps,main-gpu`` (``resources.gpu``) or ``ps,main-cpu``. ``--time`` comes from the manifest's
+there, and copies the run home before the trap wipes the scratch. The partition comes
+from ``--slurm-partition`` (or ``$COPERCEIVE_SLURM_PARTITION``), never a hard-coded
+site name. ``--time`` comes from the manifest's
 ``seconds_per_sample`` and ``staging_seconds`` until a run of the same plugin and model under
 ``--out`` exists, then from that run's ``provenance.timings``. The script carries no value
 from the parent's environment: secret names appear in one comment, nothing else; compute
@@ -242,6 +243,7 @@ def plan_sbatch(
     python: Path,
     logs_dir: Path,
     results_dir: Path,
+    partition: str,
     repo_root: Path | None = None,
 ) -> SlurmPlan:
     """The sbatch of ADR 0011 decision 5 for ``coperceive model run`` over ``scenes``."""
@@ -294,7 +296,11 @@ def plan_sbatch(
     ]
     limit = time_limit(per_sample, staging, samples, conversion)
     gpu = spec.resources.gpu
-    partition = "ps,main-gpu" if gpu else "ps,main-cpu"
+    if not partition.strip():
+        raise SlurmError(
+            "Choose a Slurm partition for this run with --slurm-partition (or set "
+            "COPERCEIVE_SLURM_PARTITION). Coperceive never guesses a site partition."
+        )
     job_name = f"model-{manifest.name}-{run_id}"
     slurm_dir = out_root.resolve() / SLURM_DIR
     command = _run_command(

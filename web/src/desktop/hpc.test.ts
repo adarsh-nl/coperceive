@@ -5,7 +5,6 @@ import { readFileSync } from "node:fs";
 import {
   applyDiscovery,
   emptyEntry,
-  emptyProfile,
   environmentLabel,
   formatBytes,
   gpuTypesFor,
@@ -14,29 +13,26 @@ import {
   profileSummary,
   reportSummary,
   schedulerLabel,
+  validateConnectionShape,
   validateDraft,
   type DetectionReport,
-  type PartitionInfo,
+  type DiscoveredPartition,
 } from "./hpc.ts";
 
-const partitions: PartitionInfo[] = [
+const partitions: DiscoveredPartition[] = [
   {
     name: "gpu-a100",
-    is_default: true,
-    available: true,
-    max_walltime: "2-00:00:00",
-    cpus: 8,
-    memory_mb: 64000,
+    nodes: 8,
+    state: "up",
+    max_time: "2-00:00:00",
     gres: "gpu:a100:4",
     gpu_types: ["a100"],
   },
   {
     name: "main-cpu",
-    is_default: false,
-    available: true,
-    max_walltime: "4:00:00",
-    cpus: 32,
-    memory_mb: 128000,
+    nodes: 32,
+    state: "up",
+    max_time: "4:00:00",
     gres: null,
     gpu_types: [],
   },
@@ -103,42 +99,62 @@ test("empty profile carries no site default and no secrets", () => {
   assert.strictEqual(profile.defaults.gres, null);
   assert.strictEqual(profile.environment.interpreter, null);
   assert.strictEqual(profile.environment.compute_has_internet, false);
+  assert.strictEqual(profile.scratch_template, "");
   const serialised = JSON.stringify(entry).toLowerCase();
   for (const forbidden of ["password", "private_key", "token", "secret", "\"ps\""]) {
     assert.ok(!serialised.includes(forbidden), `must not contain ${forbidden}`);
   }
 });
 
-test("validation explains missing name, host and escaping paths", () => {
+test("connection shape and save validation explain missing pieces", () => {
   const empty = emptyEntry("");
-  const errors = validateDraft(empty);
-  assert.ok(errors.some((e) => e.includes("name")));
-  assert.ok(errors.some((e) => e.includes("host")));
+  const shapeErrors = validateConnectionShape(empty);
+  assert.ok(shapeErrors.some((error) => error.includes("name")));
+  assert.ok(shapeErrors.some((error) => error.includes("host")));
+  assert.deepStrictEqual(validateConnectionShape(emptyEntry("Cluster")), [
+    "Choose a host from ~/.ssh/config, or type a host name.",
+  ]);
+
+  const reachableShape = emptyEntry("Cluster");
+  reachableShape.profile.ssh_alias = "cluster-a";
+  assert.deepStrictEqual(validateConnectionShape(reachableShape), []);
+  // Reaching the cluster does not need data folders, but saving does.
+  assert.ok(validateDraft(reachableShape).some((error) => error.includes("data folder")));
+  assert.ok(validateDraft(reachableShape).some((error) => error.includes("scratch")));
 
   const escaped = emptyEntry("Cluster");
   escaped.profile.ssh_alias = "cluster-a";
   escaped.profile.data_roots = ["/data/../../etc"];
   escaped.profile.scratch_template = "/scratch/alice";
-  assert.ok(validateDraft(escaped).some((e) => e.includes("..")));
+  assert.ok(validateDraft(escaped).some((error) => error.includes("..")));
 
   const noPartitionOnSlurm = emptyEntry("Cluster");
   noPartitionOnSlurm.profile.ssh_alias = "cluster-a";
+  noPartitionOnSlurm.profile.data_roots = ["/data/scenes"];
+  noPartitionOnSlurm.profile.scratch_template = "/scratch/$USER";
   noPartitionOnSlurm.profile.scheduler = "none";
   noPartitionOnSlurm.profile.defaults.partition = "gpu-a100";
-  assert.ok(validateDraft(noPartitionOnSlurm).some((e) => e.includes("scheduler")));
+  assert.ok(validateDraft(noPartitionOnSlurm).some((error) => error.includes("scheduler")));
+
+  const both = emptyEntry("Cluster");
+  both.profile.ssh_alias = "cluster-a";
+  both.profile.host = "typed.example.org";
+  assert.ok(validateConnectionShape(both).some((error) => error.includes("not both")));
 });
 
 test("applyDiscovery fills blanks from detection without inventing site defaults", () => {
   const entry = emptyEntry("Cluster A");
   entry.profile.ssh_alias = "cluster-a";
+  entry.profile.data_roots = ["/data/scenes"];
+  entry.profile.scratch_template = "/scratch/$USER";
   const applied = applyDiscovery(entry, report());
   assert.strictEqual(applied.profile.scheduler, "slurm");
   assert.strictEqual(applied.profile.defaults.partition, "gpu-a100");
   assert.strictEqual(applied.profile.defaults.gres, "gpu:a100:1");
   assert.strictEqual(applied.profile.defaults.time_limit, "2-00:00:00");
-  assert.strictEqual(applied.profile.defaults.memory, "63G");
-  assert.strictEqual(applied.profile.defaults.cpus_per_task, 8);
-  assert.strictEqual(applied.profile.scratch_template, "/scratch/alice");
+  assert.strictEqual(applied.profile.defaults.memory, null);
+  assert.strictEqual(applied.profile.defaults.cpus_per_task, null);
+  assert.strictEqual(applied.profile.scratch_template, "/scratch/$USER");
   assert.strictEqual(applied.profile.environment.kind, "modules");
   assert.ok(applied.discovered);
   assert.ok(applied.ssh);
@@ -149,10 +165,12 @@ test("applyDiscovery keeps what the user chose", () => {
   entry.profile.ssh_alias = "cluster-a";
   entry.profile.defaults.partition = "main-cpu";
   entry.profile.defaults.time_limit = "01:00:00";
+  entry.profile.data_roots = ["/data/mine"];
   entry.profile.scratch_template = "/scratch/me";
   entry.profile.environment.kind = "venv";
   entry.profile.environment.interpreter = "/home/alice/venvs/coperceive/bin/python";
   const applied = applyDiscovery(entry, report());
+  assert.strictEqual(applied.profile.data_roots[0], "/data/mine");
   assert.strictEqual(applied.profile.defaults.partition, "main-cpu");
   assert.strictEqual(applied.profile.defaults.time_limit, "01:00:00");
   assert.strictEqual(applied.profile.scratch_template, "/scratch/me");

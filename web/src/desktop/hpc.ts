@@ -37,20 +37,19 @@ export interface ServerProfile {
   host: string | null;
   user: string | null;
   data_roots: string[];
-  scratch_template: string | null;
+  /** Required by the shared contract; empty only while a draft is being filled. */
+  scratch_template: string;
   scheduler: SchedulerKind;
   defaults: JobDefaults;
   environment: EnvironmentSetup;
   notes: string | null;
 }
 
-export interface PartitionInfo {
+export interface DiscoveredPartition {
   name: string;
-  is_default: boolean;
-  available: boolean;
-  max_walltime: string | null;
-  cpus: number | null;
-  memory_mb: number | null;
+  nodes: number | null;
+  state: string | null;
+  max_time: string | null;
   gres: string | null;
   gpu_types: string[];
 }
@@ -76,7 +75,7 @@ export interface DiscoveredEnvironment {
 }
 
 export interface DiscoveredServer {
-  partitions: PartitionInfo[];
+  partitions: DiscoveredPartition[];
   gpu_types: string[];
   environment: DiscoveredEnvironment;
   checked_unix: number;
@@ -112,7 +111,7 @@ export interface DetectionReport {
   signed_in: boolean;
   scheduler: SchedulerKind;
   scheduler_note: string | null;
-  partitions: PartitionInfo[];
+  partitions: DiscoveredPartition[];
   gpu_types: string[];
   environment: EnvironmentSetup;
   discovered: DiscoveredServer;
@@ -141,7 +140,7 @@ export function emptyProfile(name = ""): ServerProfile {
     host: null,
     user: null,
     data_roots: [],
-    scratch_template: null,
+    scratch_template: "",
     scheduler: "none",
     defaults: {
       partition: null,
@@ -175,8 +174,8 @@ const ENVIRONMENT_KINDS: ReadonlySet<string> = new Set([
   "container",
 ]);
 
-/** Client-side validation with the same rules as Rust; plain-language errors. */
-export function validateDraft(entry: ServerEntry): string[] {
+/** Shape needed to reach the cluster and test the connection (no folders yet). */
+export function validateConnectionShape(entry: ServerEntry): string[] {
   const errors: string[] = [];
   const profile = entry.profile;
   if (!profile.name.trim()) {
@@ -185,13 +184,29 @@ export function validateDraft(entry: ServerEntry): string[] {
   if (!profile.ssh_alias?.trim() && !profile.host?.trim()) {
     errors.push("Choose a host from ~/.ssh/config, or type a host name.");
   }
+  if (profile.ssh_alias?.trim() && profile.host?.trim()) {
+    errors.push("Use either a ~/.ssh/config host or a typed host, not both.");
+  }
+  return errors;
+}
+
+/** Full validation before saving, matching the shared slice-0 profile rules. */
+export function validateDraft(entry: ServerEntry): string[] {
+  const errors = validateConnectionShape(entry);
+  const profile = entry.profile;
+  if (!profile.data_roots.some((root) => root.trim())) {
+    errors.push("Add at least one data folder on the cluster.");
+  }
   for (const root of profile.data_roots) {
-    if (!root.trim()) errors.push("Remove the empty data folder, or type a folder path.");
+    if (!root.trim()) continue;
     if (root.split("/").includes("..")) {
       errors.push("Data folders may not contain '..'. Paths must stay inside the folders you chose.");
     }
   }
-  if (profile.scratch_template?.split("/").includes("..")) {
+  if (!profile.scratch_template.trim()) {
+    errors.push("Add the per-user scratch folder your cluster gives you.");
+  }
+  if (profile.scratch_template.split("/").includes("..")) {
     errors.push("The scratch folder may not contain '..'.");
   }
   if (profile.scheduler === "none" && profile.defaults.partition) {
@@ -247,7 +262,10 @@ export function applyDiscovery(entry: ServerEntry, report: DetectionReport): Ser
     profile.scratch_template = report.scratch.path;
   }
   const partitions = report.partitions;
-  const partitionDefault = partitions.find((p) => p.is_default) ?? partitions[0];
+  // Offer the first partition that is not marked down. The user still confirms
+  // every choice; nothing is submitted by this function.
+  const partitionDefault =
+    partitions.find((p) => p.state !== "down") ?? partitions[0] ?? null;
   if (profile.scheduler === "slurm") {
     if (!profile.defaults.partition?.trim() && partitionDefault) {
       profile.defaults.partition = partitionDefault.name;
@@ -262,14 +280,8 @@ export function applyDiscovery(entry: ServerEntry, report: DetectionReport): Ser
       } else if (!profile.defaults.gres?.trim() && chosen.gres) {
         profile.defaults.gres = chosen.gres;
       }
-      if (!profile.defaults.time_limit && chosen.max_walltime) {
-        profile.defaults.time_limit = chosen.max_walltime;
-      }
-      if (!profile.defaults.memory && chosen.memory_mb) {
-        profile.defaults.memory = `${Math.round(chosen.memory_mb / 1024)}G`;
-      }
-      if (profile.defaults.cpus_per_task === null && chosen.cpus) {
-        profile.defaults.cpus_per_task = chosen.cpus;
+      if (!profile.defaults.time_limit && chosen.max_time) {
+        profile.defaults.time_limit = chosen.max_time;
       }
     }
   }

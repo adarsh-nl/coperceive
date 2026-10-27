@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 
 use crate::hpc::{
-    EnvironmentSetup, PartitionInfo, SchedulerAdapter, SchedulerKind, ServerProfile,
+    DiscoveredPartition, EnvironmentSetup, SchedulerAdapter, SchedulerKind, ServerProfile,
 };
 use crate::server_profiles::{
     proposed_environment, DiscoveredEnvironment, DiscoveredServer, ServerEntry, SshHostSettings,
@@ -47,7 +47,7 @@ pub struct ScratchReport {
 }
 
 /// Full report of one "Test connection".
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DetectionReport {
     pub reachable: bool,
     pub signed_in: bool,
@@ -55,7 +55,7 @@ pub struct DetectionReport {
     #[serde(default)]
     pub scheduler_note: Option<String>,
     #[serde(default)]
-    pub partitions: Vec<PartitionInfo>,
+    pub partitions: Vec<DiscoveredPartition>,
     #[serde(default)]
     pub gpu_types: Vec<String>,
     #[serde(default)]
@@ -314,8 +314,18 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     let settings = host_settings(entry, &opts.ssh_bin);
     let mut checks: Vec<CheckReport> = Vec::new();
     let mut report = DetectionReport {
+        reachable: false,
+        signed_in: false,
+        scheduler: SchedulerKind::None,
+        scheduler_note: None,
+        partitions: Vec::new(),
+        gpu_types: Vec::new(),
+        environment: EnvironmentSetup::default(),
+        discovered: DiscoveredServer::default(),
+        scratch: ScratchReport::default(),
+        checks: Vec::new(),
         ssh: settings.clone(),
-        ..Default::default()
+        total_ms: 0,
     };
 
     let target: SshTarget = match entry.ssh_target() {
@@ -459,7 +469,7 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     let scheduler_started = Instant::now();
     let mut scheduler_kind = SchedulerKind::None;
     let mut scheduler_note: Option<String> = None;
-    let mut partitions: Vec<PartitionInfo> = Vec::new();
+    let mut partitions: Vec<DiscoveredPartition> = Vec::new();
     match crate::ssh::run_ssh_command(
         &opts.ssh_bin,
         &target,
@@ -554,15 +564,16 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     if scheduler_kind == SchedulerKind::Slurm {
         let partitions_started = Instant::now();
         let runner = SshRunner::new(opts.ssh_bin.clone(), target.clone());
-        let adapter = SlurmAdapter::new(Box::new(runner), entry.profile.clone());
+        let adapter = SlurmAdapter::new(Box::new(runner));
         match adapter.discover() {
             Ok(discovery) => {
                 partitions = discovery.partitions;
-                if let Some(note) = discovery.note {
-                    scheduler_note = Some(match scheduler_note {
-                        Some(existing) => format!("{existing} {note}"),
-                        None => note,
-                    });
+                if partitions.is_empty() {
+                    scheduler_note = Some(
+                        "The cluster did not report any partitions. You can still type one in the \
+                         server's resources if you know it."
+                            .to_string(),
+                    );
                 }
                 if !partitions.is_empty() {
                     let total_gpu_types: BTreeSet<String> = partitions
@@ -607,7 +618,7 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
                     "Partitions and GPUs",
                     partitions_started,
                     false,
-                    error.message,
+                    error,
                     Some(
                         "Check that `sinfo` works in Terminal on the login node.".to_string(),
                     ),
@@ -787,11 +798,16 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     // 5. Per-user scratch, writable check plus space/quota if available.
     let scratch_started = Instant::now();
     let settings = host_settings(entry, &opts.ssh_bin);
-    let scratch_template = entry
-        .profile
-        .scratch_template
-        .clone()
-        .or_else(|| discovered.environment.scratch_candidates.first().cloned());
+    let configured_scratch = entry.profile.scratch_template.trim().to_string();
+    let scratch_template = if configured_scratch.is_empty() {
+        discovered
+            .environment
+            .scratch_candidates
+            .first()
+            .cloned()
+    } else {
+        Some(configured_scratch)
+    };
     if let Some(template) = scratch_template {
         let user = infer_user(entry, &settings, env_home.as_deref());
         let path = expand_path_template(&template, user.as_deref(), env_home.as_deref());
@@ -986,7 +1002,7 @@ mod tests {
             .partitions
             .iter()
             .any(|p| p.name == "main-cpu" && p.gpu_types.is_empty()));
-        assert!(report.partitions[0].max_walltime.is_some());
+        assert!(report.partitions[0].max_time.is_some());
         assert_eq!(
             report.ssh.proxy_jump.as_deref(),
             None,

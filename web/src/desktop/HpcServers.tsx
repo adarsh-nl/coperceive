@@ -23,6 +23,7 @@ import {
   partitionNames,
   profileSummary,
   reportSummary,
+  validateConnectionShape,
   validateDraft,
   type DetectionReport,
   type EnvironmentKind,
@@ -190,7 +191,7 @@ export default function HpcServers() {
   };
 
   const runTest = async (entry: ServerEntry, forCard: boolean) => {
-    const validation = validateDraft(entry);
+    const validation = validateConnectionShape(entry);
     if (validation.length > 0) {
       setError(validation.join(" "));
       return;
@@ -505,9 +506,9 @@ export default function HpcServers() {
               <input
                 id="hpc-scratch"
                 style={input}
-                value={draft.profile.scratch_template ?? ""}
+                value={draft.profile.scratch_template}
                 placeholder="/scratch/$USER"
-                onChange={(event) => updateProfile({ scratch_template: event.target.value || null })}
+                onChange={(event) => updateProfile({ scratch_template: event.target.value })}
               />
             </div>
           </div>
@@ -759,7 +760,16 @@ export default function HpcServers() {
                       <button
                         key={partition.name}
                         type="button"
-                        onClick={() => updateDefaults({ partition: partition.name, gres: partition.gres ?? null })}
+                        onClick={() =>
+                          updateDefaults({
+                            partition: partition.name,
+                            gres: partition.gpu_types[0]
+                              ? partition.gpu_types[0] === "gpu"
+                                ? "gpu:1"
+                                : `gpu:${partition.gpu_types[0]}:1`
+                              : (partition.gres ?? null),
+                          })
+                        }
                         style={{
                           padding: "0.3rem 0.55rem",
                           borderRadius: "999px",
@@ -778,8 +788,9 @@ export default function HpcServers() {
                       >
                         {partition.name}
                         {partition.gpu_types.length > 0 ? ` · ${partition.gpu_types.join(", ")}` : ""}
-                        {partition.max_walltime ? ` · max ${partition.max_walltime}` : ""}
-                        {!partition.available ? " · unavailable" : ""}
+                        {partition.max_time ? ` · max ${partition.max_time}` : ""}
+                        {partition.nodes ? ` · ${partition.nodes} nodes` : ""}
+                        {partition.state === "down" ? " · unavailable" : ""}
                       </button>
                     ))}
                   </div>
