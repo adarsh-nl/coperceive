@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -932,6 +932,7 @@ declare global {
       boxes: number;
       tagged: { kind: string; sceneId: string; loadId: number }[];
     } | null;
+    __COPERCEIVE_FLUSH_STATE__?: () => Promise<void>;
   }
 }
 
@@ -2201,13 +2202,13 @@ export default function Viewer({
     };
   }, [scenes]);
 
-  useEffect(() => {
+  const sendState = useCallback(async () => {
     if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
-    const timer = setTimeout(() => {
-      const port = window.__COPERCEIVE_CTRL_PORT__;
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      const timeUs = summary?.times_us?.[frameIndex];
-      fetch(`http://127.0.0.1:${port}/state`, {
+    const port = window.__COPERCEIVE_CTRL_PORT__;
+    const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+    const timeUs = summary?.times_us?.[frameIndex];
+    try {
+      await fetch(`http://127.0.0.1:${port}/state`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2237,10 +2238,40 @@ export default function Viewer({
           },
           ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
         }),
-      }).catch(() => {});
-    }, 500);
-    return () => clearTimeout(timer);
+      });
+    } catch {}
   }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop]);
+
+  const sendStateRef = useRef(sendState);
+  sendStateRef.current = sendState;
+  const stateDebounceTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    window.__COPERCEIVE_FLUSH_STATE__ = async () => {
+      if (stateDebounceTimerRef.current !== null) {
+        window.clearTimeout(stateDebounceTimerRef.current);
+        stateDebounceTimerRef.current = null;
+      }
+      await sendStateRef.current();
+    };
+    return () => {
+      delete window.__COPERCEIVE_FLUSH_STATE__;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
+    stateDebounceTimerRef.current = window.setTimeout(() => {
+      stateDebounceTimerRef.current = null;
+      void sendStateRef.current();
+    }, 500);
+    return () => {
+      if (stateDebounceTimerRef.current !== null) {
+        window.clearTimeout(stateDebounceTimerRef.current);
+        stateDebounceTimerRef.current = null;
+      }
+    };
+  }, [sendState]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
