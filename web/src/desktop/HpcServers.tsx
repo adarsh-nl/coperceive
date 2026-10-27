@@ -513,6 +513,23 @@ export default function HpcServers() {
             </div>
           </div>
 
+          <div style={field}>
+            <label style={labelStyle} htmlFor="hpc-results-root">
+              Shared results folder
+            </label>
+            <input
+              id="hpc-results-root"
+              style={input}
+              value={draft.profile.results_root}
+              placeholder="/path/your/account/can/write (not scratch)"
+              onChange={(event) => updateProfile({ results_root: event.target.value })}
+            />
+            <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
+              Run outputs and predictions are written here, on shared storage the login node can
+              read. Coperceive never puts outputs in scratch.
+            </p>
+          </div>
+
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "0.5rem 0 0.75rem" }} />
 
           <div style={{ display: "flex", gap: "0.5rem" }}>

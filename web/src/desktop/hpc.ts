@@ -39,6 +39,10 @@ export interface ServerProfile {
   data_roots: string[];
   /** Required by the shared contract; empty only while a draft is being filled. */
   scratch_template: string;
+  /** Shared filesystem for run outputs; required, never scratch. */
+  results_root: string;
+  /** Extra folders a registered pipeline script may live in. */
+  code_roots: string[];
   scheduler: SchedulerKind;
   defaults: JobDefaults;
   environment: EnvironmentSetup;
@@ -141,6 +145,8 @@ export function emptyProfile(name = ""): ServerProfile {
     user: null,
     data_roots: [],
     scratch_template: "",
+    results_root: "",
+    code_roots: [],
     scheduler: "none",
     defaults: {
       partition: null,
@@ -208,6 +214,30 @@ export function validateDraft(entry: ServerEntry): string[] {
   }
   if (profile.scratch_template.split("/").includes("..")) {
     errors.push("The scratch folder may not contain '..'.");
+  }
+  if (!profile.results_root.trim()) {
+    errors.push(
+      "Add the shared results folder where run outputs should live (not scratch).",
+    );
+  } else {
+    if (!profile.results_root.startsWith("/") && !profile.results_root.startsWith("~")) {
+      errors.push("The results folder must be an absolute path on the cluster.");
+    }
+    if (profile.results_root.split("/").includes("..")) {
+      errors.push("The results folder may not contain '..'.");
+    }
+    const scratchPrefix = profile.scratch_template.split("$")[0].replace(/\/+$/, "");
+    if (
+      scratchPrefix &&
+      (profile.results_root === scratchPrefix || profile.results_root.startsWith(`${scratchPrefix}/`))
+    ) {
+      errors.push("Results must go to shared storage, not inside the scratch folder.");
+    }
+  }
+  for (const root of profile.code_roots) {
+    if (!root.startsWith("/") && !root.startsWith("~")) {
+      errors.push("Code folders must be absolute paths on the cluster.");
+    }
   }
   if (profile.scheduler === "none" && profile.defaults.partition) {
     errors.push("A server without a scheduler cannot submit to a partition. Clear it or choose Slurm.");

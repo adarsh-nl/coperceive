@@ -100,6 +100,7 @@ test("empty profile carries no site default and no secrets", () => {
   assert.strictEqual(profile.environment.interpreter, null);
   assert.strictEqual(profile.environment.compute_has_internet, false);
   assert.strictEqual(profile.scratch_template, "");
+  assert.strictEqual(profile.results_root, "");
   const serialised = JSON.stringify(entry).toLowerCase();
   for (const forbidden of ["password", "private_key", "token", "secret", "\"ps\""]) {
     assert.ok(!serialised.includes(forbidden), `must not contain ${forbidden}`);
@@ -118,15 +119,24 @@ test("connection shape and save validation explain missing pieces", () => {
   const reachableShape = emptyEntry("Cluster");
   reachableShape.profile.ssh_alias = "cluster-a";
   assert.deepStrictEqual(validateConnectionShape(reachableShape), []);
-  // Reaching the cluster does not need data folders, but saving does.
+  // Reaching the cluster does not need folders, but saving does.
   assert.ok(validateDraft(reachableShape).some((error) => error.includes("data folder")));
   assert.ok(validateDraft(reachableShape).some((error) => error.includes("scratch")));
+  assert.ok(validateDraft(reachableShape).some((error) => error.includes("results folder")));
 
   const escaped = emptyEntry("Cluster");
   escaped.profile.ssh_alias = "cluster-a";
   escaped.profile.data_roots = ["/data/../../etc"];
   escaped.profile.scratch_template = "/scratch/alice";
+  escaped.profile.results_root = "/data/results";
   assert.ok(validateDraft(escaped).some((error) => error.includes("..")));
+
+  const resultsInScratch = emptyEntry("Cluster");
+  resultsInScratch.profile.ssh_alias = "cluster-a";
+  resultsInScratch.profile.data_roots = ["/data/scenes"];
+  resultsInScratch.profile.scratch_template = "/scratch/$USER";
+  resultsInScratch.profile.results_root = "/scratch/alice/results";
+  assert.ok(validateDraft(resultsInScratch).some((error) => error.includes("shared storage")));
 
   const noPartitionOnSlurm = emptyEntry("Cluster");
   noPartitionOnSlurm.profile.ssh_alias = "cluster-a";
