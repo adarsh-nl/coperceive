@@ -1,0 +1,12 @@
+PartitionName=cpu-short
+   Default=YES
+   MaxTime=04:00:00
+   TotalNodes=8
+   TRES=cpu=64,mem=100000M
+   State=UP
+PartitionName=gpu-h100
+   Default=NO
+   MaxTime=1-12:00:00
+   TotalNodes=4
+   TRES=cpu=64,mem=400000M,gres/gpu:h100=4
+   State=UP
