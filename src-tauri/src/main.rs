@@ -122,6 +122,13 @@ async fn is_remote_enabled() -> Result<bool, String> {
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    // Test-only: e2e writes the answer into COPERCEIVE_MOCK_DIALOG_FILE so the
+    // Move library flow can pick a temp folder without a native dialog. Inert
+    // unless the app was launched with COPERCEIVE_TEST_ENV / MARKER_FILE.
+    if let Some(path) = coperceive_desktop::test_seams::take_mock_dialog_path() {
+        return Ok(Some(path));
+    }
+
     use tauri_plugin_dialog::DialogExt;
 
     let folder = app.dialog().file().blocking_pick_folder();
@@ -182,8 +189,7 @@ fn open_viewer_window(
     let escaped_secret = ctrl_secret.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_root = data_root.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_base = basename.replace('\\', "\\\\").replace('"', "\\\"");
-    let test_env = std::env::var("COPERCEIVE_TEST_ENV").is_ok()
-        || std::env::var("COPERCEIVE_TEST_MARKER_FILE").is_ok();
+    let test_env = coperceive_desktop::test_seams::test_env_active();
     let force_motion =
         test_env && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
     let update_url = std::env::var("COPERCEIVE_UPDATE_URL").unwrap_or_default();
@@ -436,14 +442,12 @@ async fn switch_data_root(
 
 #[cfg(target_os = "macos")]
 pub async fn trigger_open_dataset_dialog(app: &tauri::AppHandle, state: &AppState) {
-    if let Ok(mock_file) = std::env::var("COPERCEIVE_MOCK_DIALOG_FILE") {
-        if let Ok(content) = std::fs::read_to_string(&mock_file) {
-            let path_str = content.trim().to_string();
-            let _ = std::fs::remove_file(&mock_file);
-            let path = PathBuf::from(path_str);
-            let _ = switch_data_root(app, state, path).await;
-            return;
-        }
+    // Test-only: e2e answers the folder picker through COPERCEIVE_MOCK_DIALOG_FILE.
+    // Inert unless the app was launched with COPERCEIVE_TEST_ENV / MARKER_FILE.
+    if let Some(path_str) = coperceive_desktop::test_seams::take_mock_dialog_path() {
+        let path = PathBuf::from(path_str);
+        let _ = switch_data_root(app, state, path).await;
+        return;
     }
 
     use tauri_plugin_dialog::DialogExt;
@@ -1024,6 +1028,15 @@ fn dataset_dry_run(
 ) -> Result<serde_json::Value, String> {
     use std::process::Command;
 
+    // Test-only: the e2e cannot wait for the Hugging Face tree listing, so the
+    // deterministic fake job returns the same JSON shape without network access.
+    // Inert unless COPERCEIVE_TEST_FAKE_DATASET_JOB is set in test mode.
+    if coperceive_desktop::test_seams::fake_dataset_job_enabled() {
+        return Ok(coperceive_desktop::test_seams::fake_dry_run_result(
+            &dataset_id, &preset_id,
+        ));
+    }
+
     let p = state::load_state();
     let root = p
         .library_root
@@ -1074,11 +1087,12 @@ fn start_dataset_job(
             return Err("a dataset job is already running".into());
         }
     }
+    let fake_job = coperceive_desktop::test_seams::fake_dataset_job_enabled();
     let p = state::load_state();
     let root = p
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
-    {
+    if !fake_job {
         let mut persistent = state::load_state();
         persistent.pending_download = Some(state::PendingDownload {
             dataset_id: dataset_id.clone(),
@@ -1086,23 +1100,36 @@ fn start_dataset_job(
         });
         let _ = state::save_state(&persistent);
     }
-    let python = resolve_python_binary(&app);
-    let mut cmd_args = vec![
-        "-m".to_string(),
-        "coperceive.cli".to_string(),
-        "dataset".to_string(),
-        "download".to_string(),
-        dataset_id,
-        preset_id,
-        "--dest".to_string(),
-        root,
-    ];
-    if accept_terms {
-        cmd_args.push("--accept-terms".to_string());
-    }
+    let mut command = if fake_job {
+        // Test-only: the e2e pauses, resumes and cancels a real child process,
+        // but that child emits NDJSON locally instead of downloading Griffin.
+        // Inert unless COPERCEIVE_TEST_FAKE_DATASET_JOB is set in test mode.
+        let mut command = Command::new("/bin/sh");
+        command
+            .arg("-c")
+            .arg(coperceive_desktop::test_seams::FAKE_DATASET_JOB_SCRIPT);
+        command
+    } else {
+        let python = resolve_python_binary(&app);
+        let mut cmd_args = vec![
+            "-m".to_string(),
+            "coperceive.cli".to_string(),
+            "dataset".to_string(),
+            "download".to_string(),
+            dataset_id,
+            preset_id,
+            "--dest".to_string(),
+            root,
+        ];
+        if accept_terms {
+            cmd_args.push("--accept-terms".to_string());
+        }
+        let mut command = Command::new(&python);
+        command.args(&cmd_args);
+        command
+    };
 
-    let mut child = Command::new(&python)
-        .args(&cmd_args)
+    let mut child = command
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
@@ -1552,8 +1579,7 @@ fn main() {
             if payload.event() != tauri::webview::PageLoadEvent::Finished {
                 return;
             }
-            let test_env = std::env::var("COPERCEIVE_TEST_ENV").is_ok()
-                || std::env::var("COPERCEIVE_TEST_MARKER_FILE").is_ok();
+            let test_env = coperceive_desktop::test_seams::test_env_active();
             let force = test_env
                 && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
             let import_source = std::env::var("COPERCEIVE_TEST_IMPORT_SOURCE").unwrap_or_default();
