@@ -231,14 +231,14 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         assert hero_a != _hash(page, "canvas[data-bev=hero]")
 
         # Scrolling the pinned story swaps the captions and fills the progress bar.
-        _scroll_story(page, 2.0)
+        _scroll_story(page, 2.5)
         assert _opacity(page, "[data-step='2']") > 0.9
         assert _opacity(page, "[data-step='1']") < 0.1
         assert page.locator("[data-step='2']").get_attribute("aria-hidden") == "false"
         bar = page.evaluate(
             "() => parseFloat(document.querySelector('[data-progress]').style.height)"
         )
-        assert isinstance(bar, (int, float)) and 30 < float(bar) < 50
+        assert isinstance(bar, (int, float)) and 40 < float(bar) < 60
 
         # Pipeline cards and the install block, which types itself out.
         assert page.locator("#pipeline h3").all_inner_texts() == [
