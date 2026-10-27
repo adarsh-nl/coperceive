@@ -62,10 +62,57 @@ class EnvironmentKind(str, Enum):
             ) from exc
 
 
+def _normalise_path(path: str, field_name: str) -> str:
+    """Lexically normalise a server path and refuse any ``..`` segment.
+
+    No symlink resolution happens here (that is the SSH-side job); this only
+    removes ``.``/empty segments, collapses duplicate slashes and guarantees the
+    result has no ``..`` segment, so containment checks cannot be fooled by
+    ``<results_root>/../<scratch>/x`` or ``a/../../b``.
+    """
+    if not path:
+        raise ProfileError(f"{field_name} must not be empty.")
+    if "\x00" in path:
+        raise ProfileError(f"{field_name} must not contain a NUL byte.")
+    if not (path.startswith("/") or path.startswith("~")):
+        raise ProfileError(
+            f"{field_name} must be an absolute or ~ path, got {path!r}. "
+            "Use the path as it exists on the server."
+        )
+    if path.startswith("~"):
+        rest = path[1:]
+        if rest and not rest.startswith("/"):
+            raise ProfileError(f"{field_name} must be ~/..., got {path!r}.")
+        prefix = "~"
+        rest = rest[1:]
+    else:
+        prefix = ""
+        rest = path[1:]
+    segments = rest.split("/") if rest else []
+    if ".." in segments:
+        raise ProfileError(f"{field_name} must not contain a '..' segment, got {path!r}.")
+    cleaned = [segment for segment in segments if segment not in ("", ".")]
+    body = "/".join(cleaned)
+    if prefix == "~":
+        return "~" + (f"/{body}" if body else "")
+    return "/" + body
+
+
+def _is_under(child: str, root: str) -> bool:
+    """True when normalised ``child`` equals or is inside normalised ``root``."""
+    root = root.rstrip("/") or "/"
+    return child == root or child.startswith(root if root == "/" else root + "/")
+
+
 def _static_prefix(template: str) -> str:
-    """The part of a scratch template before its first shell variable."""
-    prefix = template.split("$", 1)[0]
-    return prefix.rstrip("/")
+    """The normalised part of a scratch template before its first shell variable."""
+    prefix = template.split("$", 1)[0].rstrip("/")
+    if not prefix:
+        return ""
+    try:
+        return _normalise_path(prefix, "scratch prefix")
+    except ProfileError:
+        return prefix
 
 
 def _check_absolute(path: str, field_name: str) -> None:
@@ -309,14 +356,11 @@ class ServerProfile:
                 "A results root is required: the shared filesystem where run outputs and "
                 "predictions.jsonl live, readable from the login node. It is never scratch."
             )
-        _check_absolute(self.results_root, "results_root")
+        results_root = _normalise_path(self.results_root, "results_root")
         for root in self.code_roots:
-            _check_absolute(root, "code_roots entry")
+            _normalise_path(root, "code_roots entry")
         scratch_prefix = _static_prefix(self.scratch_template)
-        if scratch_prefix and (
-            self.results_root == scratch_prefix
-            or self.results_root.startswith(scratch_prefix + "/")
-        ):
+        if scratch_prefix and _is_under(results_root, scratch_prefix):
             raise ProfileError(
                 f"results_root {self.results_root!r} is inside the scratch area "
                 f"{scratch_prefix!r}. Outputs must go to shared storage, not scratch."
@@ -334,16 +378,18 @@ class ServerProfile:
         return f"{self.user}@{self.host}" if self.user else self.host
 
     def validate_output_dir(self, path: str) -> None:
-        """A run's ``--output-dir`` must be under results_root and never scratch."""
-        _check_absolute(path, "output directory")
+        """A run's ``--output-dir`` must normalise inside results_root, never scratch."""
         if not self.results_root:
             raise ProfileError("Set results_root on the server profile first.")
-        if not (path == self.results_root or path.startswith(self.results_root.rstrip("/") + "/")):
+        output = _normalise_path(path, "output directory")
+        results_root = _normalise_path(self.results_root, "results_root")
+        if not _is_under(output, results_root):
             raise ProfileError(
-                f"The output directory {path!r} is outside results_root {self.results_root!r}."
+                f"The output directory {path!r} is outside results_root "
+                f"{self.results_root!r} (after normalising paths)."
             )
         scratch_prefix = _static_prefix(self.scratch_template)
-        if scratch_prefix and (path == scratch_prefix or path.startswith(scratch_prefix + "/")):
+        if scratch_prefix and _is_under(output, scratch_prefix):
             raise ProfileError(
                 "The output directory cannot be under scratch; scratch is temporary job "
                 "work. Use results_root instead."
@@ -356,18 +402,27 @@ class ServerProfile:
         only when its normalized path is inside one of them, so a shared
         ``coperceive-pipeline.json`` cannot point the app at arbitrary files.
         """
-        if not script or ".." in script.split("/"):
-            raise ProfileError(f"Pipeline script {script!r} must not be empty or contain '..'.")
-        roots = [root.rstrip("/") for root in (*self.code_roots, *self.data_roots) if root.strip()]
+        if not script:
+            raise ProfileError("Pipeline script must not be empty.")
+        if "\x00" in script:
+            raise ProfileError("Pipeline script must not contain a NUL byte.")
+        if ".." in script.replace("\\", "/").split("/"):
+            raise ProfileError(f"Pipeline script {script!r} must not contain a '..' segment.")
+        roots = [
+            _normalise_path(root, "code/data root")
+            for root in (*self.code_roots, *self.data_roots)
+            if root.strip()
+        ]
         if not roots:
             raise ProfileError(
                 "Add a code root or a data root before registering a pipeline script."
             )
         if script.startswith("/"):
-            normalized = "/" + "/".join(part for part in script.split("/") if part)
-            if not any(normalized == root or normalized.startswith(root + "/") for root in roots):
+            normalised = _normalise_path(script, "pipeline script")
+            if not any(_is_under(normalised, root) for root in roots):
                 raise ProfileError(
-                    f"Pipeline script {script!r} is outside code_roots and data_roots."
+                    f"Pipeline script {script!r} is outside code_roots and data_roots "
+                    "after normalising paths."
                 )
 
     def to_json(self) -> dict[str, object]:
@@ -403,6 +458,11 @@ class ServerProfile:
             isinstance(item, str) for item in cast(Sequence[object], code_roots_raw)
         ):
             raise ProfileError("code_roots must be a list of paths.")
+        results_root = _normalise_path(_required_str(data, "results_root"), "results_root")
+        code_roots = tuple(
+            _normalise_path(item, "code_roots entry")
+            for item in cast(Sequence[str], code_roots_raw)
+        )
         profile = cls(
             name=_required_str(data, "name"),
             ssh_alias=_optional_str(data.get("ssh_alias"), "ssh_alias"),
@@ -410,8 +470,8 @@ class ServerProfile:
             user=_optional_str(data.get("user"), "user"),
             data_roots=tuple(cast(Sequence[str], roots_raw)),
             scratch_template=str(data.get("scratch_template", "")),
-            results_root=_required_str(data, "results_root"),
-            code_roots=tuple(cast(Sequence[str], code_roots_raw)),
+            results_root=results_root,
+            code_roots=code_roots,
             scheduler=SchedulerKind.parse(data.get("scheduler", "slurm")),
             defaults=JobDefaults.from_json(cast(Mapping[str, object], defaults_data)),
             environment=EnvironmentSetup.from_json(cast(Mapping[str, object], env_data)),

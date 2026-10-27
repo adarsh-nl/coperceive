@@ -10,6 +10,69 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Lexically normalise a server path and refuse any `..` segment.
+///
+/// No symlink resolution happens here (that is the SSH-side job); this removes
+/// `.`/empty segments and collapses duplicate slashes so a containment check
+/// cannot be fooled by `<results_root>/../<scratch>/x` or `a/../../b`.
+fn normalise_path(path: &str, field: &str) -> Result<String, String> {
+    if path.is_empty() {
+        return Err(format!("{field} must not be empty."));
+    }
+    if path.contains('\0') {
+        return Err(format!("{field} must not contain a NUL byte."));
+    }
+    if !(path.starts_with('/') || path.starts_with('~')) {
+        return Err(format!("{field} must be an absolute or ~ path, got {path:?}."));
+    }
+    let (prefix, rest) = if path.starts_with('~') {
+        let rest = &path[1..];
+        if !rest.is_empty() && !rest.starts_with('/') {
+            return Err(format!("{field} must be ~/..., got {path:?}."));
+        }
+        ("~", &rest[1..])
+    } else {
+        ("", &path[1..])
+    };
+    let mut parts: Vec<&str> = Vec::new();
+    for segment in rest.split('/') {
+        match segment {
+            "" | "." => {}
+            ".." => {
+                return Err(format!(
+                    "{field} must not contain a '..' segment, got {path:?}."
+                ))
+            }
+            other => parts.push(other),
+        }
+    }
+    let body = parts.join("/");
+    if prefix == "~" {
+        Ok(if body.is_empty() {
+            "~".to_string()
+        } else {
+            format!("~/{body}")
+        })
+    } else {
+        Ok(format!("/{body}"))
+    }
+}
+
+/// True when normalised `child` equals or is inside normalised `root`.
+fn is_under(child: &str, root: &str) -> bool {
+    let root = root.trim_end_matches('/');
+    let root = if root.is_empty() { "/" } else { root };
+    child == root || child.starts_with(&format!("{root}/"))
+}
+
+fn static_scratch_prefix(template: &str) -> String {
+    let prefix = template.split('$').next().unwrap_or("").trim_end_matches('/');
+    if prefix.is_empty() {
+        return String::new();
+    }
+    normalise_path(prefix, "scratch prefix").unwrap_or_else(|_| prefix.to_string())
+}
+
 /// A per-server profile created by the user. It never contains credentials.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -94,22 +157,9 @@ impl ServerProfile {
                     .into(),
             );
         }
-        if !self.results_root.starts_with('/') && !self.results_root.starts_with('~') {
-            return Err(format!(
-                "results_root {:?} must be an absolute or ~ path on the server.",
-                self.results_root
-            ));
-        }
-        let scratch_prefix = self
-            .scratch_template
-            .split('$')
-            .next()
-            .unwrap_or("")
-            .trim_end_matches('/');
-        if !scratch_prefix.is_empty()
-            && (self.results_root == scratch_prefix
-                || self.results_root.starts_with(&format!("{scratch_prefix}/")))
-        {
+        let results_root = normalise_path(&self.results_root, "results_root")?;
+        let scratch_prefix = static_scratch_prefix(&self.scratch_template);
+        if !scratch_prefix.is_empty() && is_under(&results_root, &scratch_prefix) {
             return Err(format!(
                 "results_root {:?} is inside the scratch area {scratch_prefix:?}. \
                  Outputs must go to shared storage, not scratch.",
@@ -117,38 +167,29 @@ impl ServerProfile {
             ));
         }
         for root in &self.code_roots {
-            if !root.starts_with('/') && !root.starts_with('~') {
-                return Err(format!(
-                    "code root {root:?} must be an absolute or ~ path on the server."
-                ));
-            }
+            normalise_path(root, "code root")?;
         }
         self.defaults.validate()?;
         self.environment.validate()?;
         Ok(())
     }
 
-    /// A run's --output-dir must be under results_root and never scratch.
+    /// A run's --output-dir must normalise inside results_root and never scratch.
     pub fn validate_output_dir(&self, path: &str) -> Result<(), String> {
-        if !path.starts_with('/') && !path.starts_with('~') {
-            return Err(format!("Output directory {path:?} must be absolute."));
+        if self.results_root.trim().is_empty() {
+            return Err("Set results_root on the server profile first.".into());
         }
-        let root = self.results_root.trim_end_matches('/');
-        if path != root && !path.starts_with(&format!("{root}/")) {
+        let output = normalise_path(path, "output directory")?;
+        let results_root = normalise_path(&self.results_root, "results_root")?;
+        if !is_under(&output, &results_root) {
             return Err(format!(
-                "The output directory {path:?} is outside results_root {:?}.",
+                "The output directory {path:?} is outside results_root {:?} (after \
+                 normalising paths).",
                 self.results_root
             ));
         }
-        let scratch_prefix = self
-            .scratch_template
-            .split('$')
-            .next()
-            .unwrap_or("")
-            .trim_end_matches('/');
-        if !scratch_prefix.is_empty()
-            && (path == scratch_prefix || path.starts_with(&format!("{scratch_prefix}/")))
-        {
+        let scratch_prefix = static_scratch_prefix(&self.scratch_template);
+        if !scratch_prefix.is_empty() && is_under(&output, &scratch_prefix) {
             return Err(
                 "The output directory cannot be under scratch; scratch is temporary job work \
                  and outputs live under results_root."
@@ -160,24 +201,41 @@ impl ServerProfile {
 
     /// A pipeline script must sit inside code_roots or data_roots.
     pub fn validate_pipeline_script(&self, script: &str) -> Result<(), String> {
-        if script.is_empty() || script.split('/').any(|part| part == "..") {
-            return Err(format!("Pipeline script {script:?} must not be empty or contain '..'."));
+        if script.is_empty() {
+            return Err("Pipeline script must not be empty.".into());
+        }
+        if script.contains('\0') {
+            return Err("Pipeline script must not contain a NUL byte.".into());
+        }
+        if script.split('/').any(|part| part == "..") {
+            return Err(format!(
+                "Pipeline script {script:?} must not contain a '..' segment."
+            ));
+        }
+        let roots: Vec<String> = self
+            .code_roots
+            .iter()
+            .chain(self.data_roots.iter())
+            .filter(|root| !root.trim().is_empty())
+            .map(|root| normalise_path(root, "code/data root"))
+            .collect::<Result<_, _>>()?;
+        if roots.is_empty() {
+            return Err(
+                "Add a code root or a data root before registering a pipeline script.".into(),
+            );
         }
         if script.starts_with('/') {
-            let inside = self
-                .code_roots
-                .iter()
-                .chain(self.data_roots.iter())
-                .map(|root| root.trim_end_matches('/').to_string())
-                .any(|root| script == root || script.starts_with(&format!("{root}/")));
-            if !inside {
+            let normalised = normalise_path(script, "pipeline script")?;
+            if !roots.iter().any(|root| is_under(&normalised, root)) {
                 return Err(format!(
-                    "Pipeline script {script:?} is outside code_roots and data_roots."
+                    "Pipeline script {script:?} is outside code_roots and data_roots after \
+                     normalising paths."
                 ));
             }
         }
         Ok(())
     }
+
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -624,5 +682,34 @@ mod tests {
         let text = serde_json::to_string(&spec).expect("json");
         let back: PipelineSpec = serde_json::from_str(&text).expect("back");
         assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn path_traversal_is_refused_after_normalisation() {
+        let profile = ServerProfile {
+            results_root: "/shared/runs".into(),
+            code_roots: vec!["/shared/code".into()],
+            ..alpha()
+        };
+        profile.validate().expect("valid profile");
+        assert!(profile.validate_output_dir("/shared/runs/../scratch/x").is_err());
+        assert!(profile.validate_output_dir("/shared/runs/../../etc/passwd").is_err());
+        assert!(profile.validate_output_dir("/shared/../shared/runs/out").is_err());
+        // Normal noise is normalised, not rejected.
+        profile
+            .validate_output_dir("/shared//runs/./run-1/")
+            .expect("normalised inside results root");
+        assert!(profile.validate_pipeline_script("code/../outside.py").is_err());
+        assert!(profile.validate_pipeline_script("/shared/code/../secret.py").is_err());
+        profile
+            .validate_pipeline_script("/shared/code/bev.py")
+            .expect("inside code root");
+        // results_root cannot be smuggled into scratch through '..' or '.'.
+        let mut scratch = profile.clone();
+        scratch.results_root = "/shared/../scratch/shared".into();
+        assert!(scratch.validate().is_err());
+        let mut dotted = profile;
+        dotted.results_root = "/scratch/./shared".into();
+        assert!(dotted.validate().is_err());
     }
 }
