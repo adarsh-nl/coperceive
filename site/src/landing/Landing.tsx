@@ -12,7 +12,7 @@ const REPO = "https://github.com/adarsh-nl/coperceive";
 const DOCS = `${REPO}/tree/main/docs`;
 const MONO_CSS = "var(--font-mono)";
 const INSTALL = `$ pip install -e ".[app,griffin]"
-$ coperceive convert griffin --subset 25m --out ./scenes
+$ coperceive convert griffin --subset 25m --raw-root ./griffin-release --out ./scenes
 $ coperceive serve --root ./scenes
 → http://127.0.0.1:8731`;
 

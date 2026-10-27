@@ -140,7 +140,7 @@ def _hash(page: Page, selector: str) -> int:
 REPO = "https://github.com/adarsh-nl/coperceive"
 INSTALL = (
     '$ pip install -e ".[app,griffin]"\n'
-    "$ coperceive convert griffin --subset 25m --out ./scenes\n"
+    "$ coperceive convert griffin --subset 25m --raw-root ./griffin-release --out ./scenes\n"
     "$ coperceive serve --root ./scenes\n"
     "→ http://127.0.0.1:8731"
 )
