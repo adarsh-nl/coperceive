@@ -1,52 +1,20 @@
-export interface ClipManifest {
-  scene_id: string;
-  dataset_name: string;
-  dataset_paper: string;
-  platform: string;
-  subset: string;
-  origin: [number, number, number];
-  scale_cm: number;
-  time_start_us: number;
-  time_step_us: number;
-  num_frames: number;
-  duration_s: number;
-  fps: number;
-  agents: {
-    vehicle: {
-      id: string;
-      label: string;
-      type: string;
-      color: string;
-      sensors: Record<string, string>;
-    };
-    drone: {
-      id: string;
-      label: string;
-      type: string;
-      color: string;
-      sensors: Record<string, string>;
-    };
-  };
-  occlusion_event: {
-    time_us: number;
-    frame_index: number;
-    track_id: string;
-    category: string;
-    description: string;
-  };
-  stats: {
-    num_polylines: number;
-    num_frames: number;
-    total_lidar_points: number;
-    avg_lidar_points_per_frame: number;
-    file_size_bytes: number;
-    gzip_size_bytes: number;
-  };
-  attributions: {
-    dataset: string;
-    map: string;
-    software: string;
-  };
+/**
+ * Hero clip formats. Both are written by `scripts/site/export_hero_clip.py`
+ * (the layout of `CPCVCLP2` is documented there).
+ *
+ * - `CPCVCLIP` (version 1): one vehicle pose, one drone pose and the vehicle
+ *   lidar per frame, plus boxes. The committed clip uses it.
+ * - `CPCVCLP2` (version 2): an agent table (id, kind, colour) and per-agent
+ *   poses and points for any number of agents, two or more.
+ */
+
+export type AgentKind = "vehicle" | "drone" | "infrastructure" | "other";
+
+export interface ClipAgent {
+  id: string;
+  kind: AgentKind;
+  /** `#rrggbb` */
+  color: string;
 }
 
 export interface BoxRecord {
@@ -58,24 +26,33 @@ export interface BoxRecord {
   rotation: [number, number, number, number]; // qx, qy, qz, qw
 }
 
+export interface AgentFrame {
+  /** False when the agent has no pose at this time; the pose is then identity. */
+  present: boolean;
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  /** World xyz floats. Empty when the agent has no sweep at this time. */
+  points: Float32Array;
+}
+
 export interface FrameData {
   timeUs: number;
-  vehiclePose: {
-    position: [number, number, number];
-    quaternion: [number, number, number, number];
-  };
-  dronePose: {
-    position: [number, number, number];
-    quaternion: [number, number, number, number];
-  };
-  lidarPoints: Float32Array; // xyz floats
+  /** One entry per agent, in agent-table order. */
+  agents: AgentFrame[];
+  /** Version 1 only. Version 2 stores no boxes. */
   boxes: BoxRecord[];
 }
 
 export interface ParsedClip {
-  manifest: ClipManifest;
+  version: 1 | 2;
+  agents: ClipAgent[];
   origin: [number, number, number];
   mapPositions: Float32Array;
   mapColors: Float32Array;
   frames: FrameData[];
 }
+
+/** Agent entries as `manifest.json` stores them: a list (version 2) or the version 1 object. */
+export type ManifestAgents =
+  | { id: string; kind: string; color: string }[]
+  | Record<string, { id?: string; type?: string; color?: string }>;

@@ -1,9 +1,13 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { agents as manifestAgentList } from "../../public/hero/manifest.json";
 import { useMotionMode } from "../motion/useStory";
+import { legendEntries, manifestAgents } from "../utils/agents";
 import { FloatingLogo } from "./FloatingLogo";
 
 const RealClip = lazy(() => import("./RealClip").then((mod) => ({ default: mod.RealClip })));
 const poster = `${import.meta.env.BASE_URL}hero/poster.webp`;
+// Built from the clip's agent table, which the exporter also writes into manifest.json.
+const legend = legendEntries(manifestAgents(manifestAgentList));
 
 export function Hero() {
   const { reduced } = useMotionMode();
@@ -61,18 +65,12 @@ export function Hero() {
       <FloatingLogo />
       <div className="relative z-10 flex h-full flex-col justify-end px-6 pb-16 sm:px-12 lg:px-16">
         <div className="pointer-events-none mb-8 inline-flex w-fit items-center gap-3 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-xs text-primary backdrop-blur-[10px]">
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-[9px] w-[9px] rounded-full bg-vehicle" />
-            Vehicle
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-[9px] w-[9px] rounded-full bg-drone" />
-            Drone
-          </span>
-          <span className="inline-flex items-center gap-1.5">
-            <span className="h-[9px] w-[9px] rounded-full bg-lanes" />
-            Lane
-          </span>
+          {legend.map((entry) => (
+            <span key={entry.key} className="inline-flex items-center gap-1.5">
+              <span className="h-[9px] w-[9px] rounded-full" style={{ backgroundColor: entry.color }} />
+              {entry.label}
+            </span>
+          ))}
         </div>
         <h1 className="max-w-4xl text-5xl font-semibold tracking-tight text-primary sm:text-6xl lg:text-7xl">
           Every agent. One view.

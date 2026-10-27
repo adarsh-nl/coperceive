@@ -124,6 +124,9 @@ jobs:
         working-directory: site
       - run: npm run build
         working-directory: site
+      - name: Clip loader tests (both clip formats)
+        run: npm test
+        working-directory: site
       - name: E2E and A11y tests
         run: pytest tests/test_landing_page.py -v
         env:
