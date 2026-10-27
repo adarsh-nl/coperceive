@@ -137,3 +137,48 @@ def test_clip_is_fetched_after_the_poster_paints(tmp_path: Path) -> None:
     assert timing["clipStart"] > timing["posterEnd"], timing
     assert timing["clipStart"] > timing["fcp"] > 0, timing
     assert timing["clipStart"] > timing["lcp"] > 0, timing
+
+
+_HERO_TEXT = """(sel) => {
+    const el = document.querySelector(sel);
+    const h1 = el.querySelector('h1').getBoundingClientRect();
+    const flow = el.querySelector('div.relative.z-10');
+    return { text: flow.innerText, h1: [h1.x, h1.y, h1.width, h1.height] };
+}"""
+
+
+def test_static_shell_matches_the_rendered_hero(tmp_path: Path) -> None:
+    """index.html's hero shell paints first; it must equal what React renders over it."""
+    if not (DIST_DIR / "index.html").is_file():
+        pytest.skip("site/dist is not built")
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        pytest.skip("playwright is not installed")
+
+    with _serve(DIST_DIR, tmp_path) as url, sync_playwright() as playwright:
+        try:
+            browser = playwright.chromium.launch(args=CHROME_ARGS)
+        except Exception as exc:
+            if REQUIRED:
+                raise
+            pytest.skip(f"Failed to launch chromium: {exc}")
+        results: list[dict[str, object]] = []
+        for js in (False, True):
+            context = browser.new_context(
+                viewport={"width": 375, "height": 812},
+                java_script_enabled=js,
+                reduced_motion="reduce",
+            )
+            page = context.new_page()
+            page.goto(url, wait_until="networkidle")
+            selector = "section#hero" if js else "section[data-shell]"
+            if js:
+                assert page.locator("section[data-shell]").count() == 0  # replaced on mount
+            page.wait_for_timeout(300)
+            results.append(cast(dict[str, object], page.evaluate(_HERO_TEXT, selector)))
+            context.close()
+        browser.close()
+    shell, hero = results
+    assert shell["text"] == hero["text"], (shell, hero)
+    assert shell["h1"] == hero["h1"], (shell, hero)

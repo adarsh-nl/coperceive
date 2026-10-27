@@ -2,7 +2,8 @@
 """Run Lighthouse audits (desktop and mobile) against site/dist and report scores.
 
 The build is served under ``/coperceive/``, as GitHub Pages serves it, so the
-audited page loads its scripts and styles. Usage:
+audited page loads its scripts and styles, and text assets are gzipped as Pages
+serves them. Usage:
 ``python scripts/site/run_lighthouse.py [DIST_DIR]``. Reports go next to the
 build; ``COPERCEIVE_ARTIFACT_DIR`` (if set) also receives copies. ``CHROME_PATH``
 overrides the browser.
@@ -11,6 +12,7 @@ overrides the browser.
 from __future__ import annotations
 
 import functools
+import gzip
 import http.server
 import json
 import os
@@ -41,8 +43,29 @@ def find_free_port() -> int:
 
 
 class QuietHandler(http.server.SimpleHTTPRequestHandler):
+    """Static files, gzipped like GitHub Pages gzips text assets, so the simulated
+    mobile network sees the bytes a visitor would download."""
+
+    GZIP_TYPES = (".html", ".js", ".css", ".svg", ".json", ".txt", ".xml")
+
     def log_message(self, format: str, *args: object) -> None:
         pass
+
+    def do_GET(self) -> None:
+        path = Path(self.translate_path(self.path))
+        if path.is_dir():
+            path = path / "index.html"
+        accepts = "gzip" in self.headers.get("Accept-Encoding", "")
+        if not (accepts and path.is_file() and path.suffix in self.GZIP_TYPES):
+            super().do_GET()
+            return
+        body = gzip.compress(path.read_bytes(), compresslevel=6, mtime=0)
+        self.send_response(200)
+        self.send_header("Content-Type", self.guess_type(str(path)))
+        self.send_header("Content-Encoding", "gzip")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
 
 def run_audit(url: str, mode: str) -> dict:

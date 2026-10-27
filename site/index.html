@@ -9,8 +9,6 @@
     <meta name="description" content="Multi-agent perception, seen together. Sensor data and perception on one timeline." />
     <link rel="canonical" href="https://adarsh-nl.github.io/coperceive/" />
     <link rel="icon" href="%BASE_URL%favicon.svg" type="image/svg+xml" />
-    <!-- The poster is the largest paint; fetch it alongside the script instead of after it. -->
-    <link rel="preload" as="image" href="%BASE_URL%hero/poster.webp" type="image/webp" fetchpriority="high" />
 
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://adarsh-nl.github.io/coperceive/" />
@@ -26,7 +24,10 @@
     <meta name="twitter:image" content="https://adarsh-nl.github.io/coperceive/og.png" />
   </head>
   <body class="bg-canvas font-sans text-primary antialiased">
-    <div id="root"></div>
+    <!-- Static shell of the hero (Hero.tsx, committed clip): it paints, and is the largest
+         contentful paint, before the script runs. React replaces it on mount with the same
+         markup and geometry. tests/test_site_budget.py fails if the two drift apart. -->
+    <div id="root"><div class="min-h-screen bg-canvas text-primary"><main><section data-shell class="relative h-[100svh] min-h-[36rem] overflow-hidden"><img src="%BASE_URL%hero/poster.webp" alt="Recorded scene." width="1920" height="1080" fetchpriority="high" decoding="async" class="absolute inset-0 h-full w-full object-cover" /><div class="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black to-transparent"></div><div class="relative z-10 flex h-full flex-col justify-end px-6 pb-16 sm:px-12 lg:px-16"><div class="pointer-events-none mb-8 inline-flex w-fit items-center gap-3 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-xs text-primary backdrop-blur-[10px]"><span class="inline-flex items-center gap-1.5"><span class="h-[9px] w-[9px] rounded-full bg-vehicle"></span>Vehicle</span><span class="inline-flex items-center gap-1.5"><span class="h-[9px] w-[9px] rounded-full bg-drone"></span>Drone</span><span class="inline-flex items-center gap-1.5"><span class="h-[9px] w-[9px] rounded-full bg-lanes"></span>Lane</span></div><h1 class="max-w-4xl text-5xl font-semibold tracking-tight text-primary sm:text-6xl lg:text-7xl">Every agent. One view.</h1><p class="mt-4 max-w-xl text-lg text-secondary sm:text-xl">Sensor data and perception, on one timeline.</p><p class="mt-5 text-xs text-tertiary">Recorded</p></div></section></main></div></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>
