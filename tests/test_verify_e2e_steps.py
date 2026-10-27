@@ -18,7 +18,8 @@ spec.loader.exec_module(verify_e2e_steps)
 SAMPLE_PASSING_LOG = (
     "Step 1 UI interactions verified successfully.\n"
     'Step 1 verified state.json content: {"viewpoint": "chase"}\n'
-    "Playback requirement (c) verified: max frame gap = 120ms, loop wraps observed = 1\n"
+    "Playback requirement (c) verified: max frame gap = 120.0ms, "
+    "loop wraps observed = 1, frames seen = 150\n"
     "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.\n"
     "Step 2b verified: loop stayed off across quit and relaunch.\n"
     "Step 2c verified: viewer window frame remained completely unchanged across 3 relaunches.\n"
@@ -52,6 +53,15 @@ def test_verify_e2e_log_detects_missing_step() -> None:
     missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated)
     assert len(missing) == 1
     assert "Step 3b verified" in missing[0]
+
+
+def test_verify_e2e_log_detects_missing_playback_requirement() -> None:
+    # Remove Playback requirement (c) verified
+    marker = "Playback requirement (c) verified"
+    truncated = "\n".join(line for line in SAMPLE_PASSING_LOG.splitlines() if marker not in line)
+    missing: list[str] = verify_e2e_steps.verify_e2e_log(truncated)
+    assert len(missing) == 1
+    assert marker in missing[0]
 
 
 def test_verify_e2e_log_detects_missing_passed() -> None:
