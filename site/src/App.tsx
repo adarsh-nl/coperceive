@@ -12,7 +12,7 @@ export function App() {
       >
         Skip to main content
       </a>
-      <main id="main-content">
+      <main id="main-content" tabIndex={-1} className="focus:outline-none">
         <Hero />
         <ComingSoon />
         <Waitlist />

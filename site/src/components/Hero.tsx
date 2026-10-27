@@ -64,9 +64,12 @@ export function Hero() {
       <div className="pointer-events-none absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-black to-transparent" />
       <FloatingLogo />
       <div className="relative z-10 flex h-full flex-col justify-end px-6 pb-16 sm:px-12 lg:px-16">
-        <div className="pointer-events-none mb-8 inline-flex w-fit items-center gap-3 rounded-full border border-white/10 bg-black/60 px-3 py-1.5 text-xs text-primary backdrop-blur-[10px]">
+        <div
+          data-legend
+          className="pointer-events-none mb-8 flex w-fit max-w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-2xl border border-white/10 bg-black/60 px-3 py-1.5 text-xs text-primary backdrop-blur-[10px]"
+        >
           {legend.map((entry) => (
-            <span key={entry.key} className="inline-flex items-center gap-1.5">
+            <span key={entry.key} data-legend-entry className="inline-flex items-center gap-1.5 whitespace-nowrap">
               <span className="h-[9px] w-[9px] rounded-full" style={{ backgroundColor: entry.color }} />
               {entry.label}
             </span>
