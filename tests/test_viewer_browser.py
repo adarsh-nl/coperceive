@@ -847,20 +847,35 @@ def test_playback_updates_status_line_every_frame(session: _Session) -> None:
     play = session.page.locator("button[aria-label=Play]")
     play.click()
 
-    # Wait for the status line to advance beyond 0 µs while playback is running
+    # Wait for the status line to advance beyond 0 µs while playback is running.
+    # Capture the status line that satisfied the condition so a short 400ms looping
+    # fixture does not wrap around to 0 µs before the post-wait assertion executes.
+    advanced_status: str | None = None
+
+    def _status_advanced() -> bool:
+        nonlocal advanced_status
+        if session.page.locator("button[aria-label=Pause]").count() != 1:
+            return False
+        st = session.status()
+        if "at 0 µs" not in st and "µs." in st:
+            advanced_status = st
+            return True
+        return False
+
     session.wait_for(
-        lambda: (
-            session.page.locator("button[aria-label=Pause]").count() == 1
-            and "at 0 µs" not in session.status()
-            and "µs." in session.status()
-        ),
+        _status_advanced,
         "status line to advance beyond 0 µs during active playback",
         timeout_s=5.0,
     )
 
-    current_status = session.status()
-    assert f"{SCENE_FULL} at " in current_status
-    assert "at 0 µs" not in current_status
+    assert advanced_status is not None
+    assert f"{SCENE_FULL} at " in advanced_status
+    assert "at 0 µs" not in advanced_status
+
+    # Pause playback so background loop does not consume CPU during subsequent tests
+    pause = session.page.locator("button[aria-label=Pause]")
+    if pause.count() == 1:
+        pause.click()
 
 
 def test_connect_backdrop_animation_and_reduced_motion(session: _Session) -> None:
