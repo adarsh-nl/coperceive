@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 /// No symlink resolution happens here (that is the SSH-side job); this removes
 /// `.`/empty segments and collapses duplicate slashes so a containment check
 /// cannot be fooled by `<results_root>/../<scratch>/x` or `a/../../b`.
-fn normalise_path(path: &str, field: &str) -> Result<String, String> {
+pub(crate) fn normalise_path(path: &str, field: &str) -> Result<String, String> {
     if path.is_empty() {
         return Err(format!("{field} must not be empty."));
     }
@@ -60,7 +60,7 @@ fn normalise_path(path: &str, field: &str) -> Result<String, String> {
 }
 
 /// True when normalised `child` equals or is inside normalised `root`.
-fn is_under(child: &str, root: &str) -> bool {
+pub(crate) fn is_under(child: &str, root: &str) -> bool {
     let root = root.trim_end_matches('/');
     let root = if root.is_empty() { "/" } else { root };
     child == root || child.starts_with(&format!("{root}/"))

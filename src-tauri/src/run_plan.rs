@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::detect::COPERCEIVE_VERSION_SCRIPT;
 use crate::hpc::{
     ArgumentKind, ArgumentRole, EnvironmentKind, EnvironmentSetup, PipelineSpec, ServerProfile,
+    is_under, normalise_path,
 };
 use crate::server_profiles::ServerEntry;
 use crate::slurm_adapter::RemoteRunner;
@@ -258,26 +259,16 @@ pub fn validate_scratch_template(template: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn normalize_absolute(path: &str) -> String {
-    let mut parts: Vec<&str> = Vec::new();
-    for part in path.split('/') {
-        match part {
-            "" | "." => {}
-            ".." => {
-                parts.pop();
-            }
-            other => parts.push(other),
-        }
-    }
-    format!("/{}", parts.join("/"))
-}
-
-fn inside_any_root(path: &str, roots: &[String]) -> bool {
-    roots
+/// Normalised profile roots (data + code), using the shared containment helpers
+/// from `crate::hpc` (the same normalisation #45 introduced for server profiles).
+fn normalised_roots(profile: &ServerProfile) -> Result<Vec<String>, String> {
+    profile
+        .data_roots
         .iter()
-        .map(|root| normalize_absolute(root.trim_end_matches('/')))
-        .filter(|root| root != "/")
-        .any(|root| path == root || path.starts_with(&format!("{root}/")))
+        .chain(profile.code_roots.iter())
+        .filter(|root| !root.trim().is_empty())
+        .map(|root| normalise_path(root, "profile root"))
+        .collect()
 }
 
 /// Checks that a user-picked path is inside the profile's data or code roots.
@@ -307,13 +298,14 @@ pub fn validate_path_in_roots(
     }
     let mut roots: Vec<String> = profile.data_roots.clone();
     roots.extend(profile.code_roots.iter().cloned());
-    let absolute = if path.starts_with('~') {
+    if path.starts_with('~') {
         // The remote check resolves ~ and verifies containment against the roots.
         return Ok(());
-    } else {
-        normalize_absolute(path)
-    };
-    if !inside_any_root(&absolute, &roots) {
+    }
+    let normalised = normalise_path(path, &format!("{what} path"))
+        .map_err(|error| format!("The {what} path {path:?} is not usable: {error}"))?;
+    let allowed = normalised_roots(profile)?;
+    if !allowed.iter().any(|root| is_under(&normalised, root)) {
         return Err(format!(
             "The {what} path {path:?} is outside this server's data and code folders. Pick a path \
              under {roots:?}."
@@ -929,9 +921,12 @@ fn real_path_inside_roots(
         .iter()
         .chain(profile.code_roots.iter())
         .map(|root| expand_root_with_home(root, remote_home))
+        .filter_map(|root| normalise_path(&root, "profile root").ok())
         .collect();
     if real_path.starts_with('/') {
-        inside_any_root(&normalize_absolute(real_path), &roots)
+        normalise_path(real_path, "real path")
+            .map(|normalised| roots.iter().any(|root| is_under(&normalised, root)))
+            .unwrap_or(false)
     } else {
         // A `~`-based real path only remains when HOME was unavailable; compare
         // its tail against the roots' tails.
