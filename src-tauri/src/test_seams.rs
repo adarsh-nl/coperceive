@@ -80,6 +80,61 @@ while [ "$i" -lt 94 ]; do
 done
 "#;
 
+/// Test-only request for the packaged-app HPC connection check.
+///
+/// `COPERCEIVE_TEST_HPC_SERVER` points at a committed `ServerEntry` JSON fixture
+/// and `COPERCEIVE_TEST_HPC_RESULT` at the file the report is written to. Only
+/// read inside test mode; production launches never set these.
+pub fn hpc_probe_request() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if !test_env_active() {
+        return None;
+    }
+    let server = std::env::var("COPERCEIVE_TEST_HPC_SERVER").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_HPC_RESULT").ok()?;
+    if server.trim().is_empty() || result.trim().is_empty() {
+        return None;
+    }
+    Some((
+        std::path::PathBuf::from(server),
+        std::path::PathBuf::from(result),
+    ))
+}
+
+/// Test-only request for the packaged-app Browse step: run one real
+/// `coperceive remote scan` against the committed fake-ssh profile and write the
+/// parsed result for `scripts/desktop/e2e_hpc_fake_ssh.sh`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HpcScanProbe {
+    pub profile: std::path::PathBuf,
+    pub result: std::path::PathBuf,
+    pub root: String,
+    pub path: String,
+}
+
+/// `COPERCEIVE_TEST_HPC_SCAN_PROFILE` + `_RESULT` + `_ROOT` + `_PATH`, read only
+/// in test mode. Production launches never set these.
+pub fn hpc_scan_probe_request() -> Option<HpcScanProbe> {
+    if !test_env_active() {
+        return None;
+    }
+    let profile = std::env::var("COPERCEIVE_TEST_HPC_SCAN_PROFILE").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_HPC_SCAN_RESULT").ok()?;
+    let root = std::env::var("COPERCEIVE_TEST_HPC_SCAN_ROOT").ok()?;
+    let path = std::env::var("COPERCEIVE_TEST_HPC_SCAN_PATH").ok()?;
+    if [&profile, &result, &root, &path]
+        .iter()
+        .any(|value| value.trim().is_empty())
+    {
+        return None;
+    }
+    Some(HpcScanProbe {
+        profile: std::path::PathBuf::from(profile),
+        result: std::path::PathBuf::from(result),
+        root,
+        path,
+    })
+}
+
 /// Canned dry-run answer used only in fake job mode. Mirrors the JSON shape of
 /// `coperceive.catalog.runner.dry_run_preset` so the Get data UI renders the
 /// size panel and enables "Start Download" without contacting the dataset host.
@@ -193,4 +248,10 @@ mod tests {
             );
         }
     }
+    #[test]
+    fn hpc_probe_request_is_inert_outside_test_mode() {
+        // The parent test process does not set test mode, so the seam is inert.
+        assert!(hpc_probe_request().is_none());
+    }
+
 }

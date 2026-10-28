@@ -224,10 +224,10 @@ secret = "'"${CTRL_SECRET}"'"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -296,6 +296,9 @@ updated_counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__()")
 print(f"Updated scene counts: {updated_counts}")
 assert updated_counts["boxes"] == 0, f"Expected boxes == 0 after toggling Boxes off, got {updated_counts}"
 assert updated_counts["frustums"] == 4, f"Expected frustums == 4 (UAV hidden), got {updated_counts}"
+
+print("Flushing debounced state to controller...")
+eval_js("window.__COPERCEIVE_FLUSH_STATE__ ? window.__COPERCEIVE_FLUSH_STATE__() : null")
 
 print("Step 1 UI interactions verified successfully.")
 '
@@ -433,10 +436,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -546,12 +549,21 @@ assert pb_b_loop["loop"] == False, f"Expected loop to be False, got {pb_b_loop}"
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 125)")
 eval_js("document.querySelector('button.icon.primary')?.click()")
 
-deadline = time.monotonic() + 6.0
-while time.monotonic() < deadline:
-    pb_cur = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
-    if not pb_cur["playing"] and pb_cur["frameIndex"] >= 149:
-        break
-    time.sleep(0.05)
+# Wait for playback to reach the end (stopped playing and reached sample >= 149) via in-page Promise
+pb_cur = eval_js("""
+new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+        const pb = window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null;
+        if ((pb && !pb.playing && pb.frameIndex >= 149) || (Date.now() - start > 8000)) {
+            resolve(pb);
+        } else {
+            setTimeout(check, 50);
+        }
+    };
+    check();
+})
+""", timeout=15)
 
 btn_label = eval_js("document.querySelector('button.icon.primary')?.getAttribute('aria-label')")
 print(f"Play button aria-label at end of playback: {btn_label}")
@@ -647,10 +659,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -772,10 +784,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -884,10 +896,10 @@ launch = "${launch}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -970,22 +982,29 @@ import sys, json, urllib.request
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code):
+def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
+def eval_once_note(step, code, timeout=15):
+    try:
+        return eval_js(code, timeout=timeout)
+    except Exception as e:
+        print(f"E2E_NOTE step={step} {type(e).__name__}: {e}", flush=True)
+        return None
+
 print("Clicking UI dataset open button...")
 btn_res = eval_js("(() => { const b = document.querySelector('.btn-open-dataset'); return b ? 'found' : 'NOT_FOUND'; })()")
 print(f"Button presence: {btn_res}")
-eval_js("document.querySelector('.btn-open-dataset')?.click()")
+eval_once_note("3-open-btn", "document.querySelector('.btn-open-dataset')?.click()")
 EOF
 
 sleep 3.5
@@ -1000,10 +1019,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -1094,17 +1113,24 @@ import sys, json, urllib.request
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code):
+def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
+
+def eval_once_note(step, code, timeout=15):
+    try:
+        return eval_js(code, timeout=timeout)
+    except Exception as e:
+        print(f"E2E_NOTE step={step} {type(e).__name__}: {e}", flush=True)
+        return None
 
 print("Clicking UI dataset open button to switch back to multi-scene root...")
 before = eval_js("""(() => ({
@@ -1116,7 +1142,7 @@ if not before or not before.get("settings") or not before.get("graph"):
     raise SystemExit("E2E_FAIL step=3b-before missing view settings or scene graph")
 with open("${TMP_DIR}/before-3b.json", "w", encoding="utf-8") as handle:
     json.dump(before, handle)
-eval_js("document.querySelector('.btn-open-dataset')?.click()")
+eval_once_note("3b-open-btn", "document.querySelector('.btn-open-dataset')?.click()")
 EOF
 
 sleep 3.5
@@ -1130,10 +1156,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -1261,10 +1287,10 @@ secret = "${RELAUNCH_SECRET}"
 def _eval_js_once(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -1365,10 +1391,10 @@ secret = "${RELAUNCH_SECRET}"
 def _eval_js_once(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -1562,10 +1588,10 @@ library = Path("${LIBRARY_DIR}")
 def _eval_js_once(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script}).encode("utf-8"),
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
         data = json.loads(response.read().decode("utf-8"))
     if data.get("error"):
         raise RuntimeError(data["error"])
@@ -1832,10 +1858,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script}).encode("utf-8"),
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
         data = json.loads(response.read().decode("utf-8"))
     if data.get("error"):
         raise RuntimeError(data["error"])
@@ -1938,10 +1964,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(script, timeout=15):
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script}).encode("utf-8"),
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout + 5) as response:
         data = json.loads(response.read().decode("utf-8"))
     if data.get("error"):
         raise RuntimeError(data["error"])
@@ -2077,10 +2103,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(script, timeout=15):
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script}).encode("utf-8"),
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout + 5) as response:
         data = json.loads(response.read().decode("utf-8"))
     if data.get("error"):
         raise RuntimeError(data["error"])
@@ -2292,10 +2318,10 @@ library_b = "${LIB_B}"
 def eval_js(script, timeout=15):
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script}).encode("utf-8"),
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with urllib.request.urlopen(request, timeout=timeout + 5) as response:
         data = json.loads(response.read().decode("utf-8"))
     if data.get("error"):
         raise RuntimeError(data["error"])
@@ -2466,10 +2492,10 @@ secret = "${RELAUNCH_SECRET}"
 def _eval_js_once(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script}).encode("utf-8"),
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
-    with urllib.request.urlopen(req, timeout=timeout) as response:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
         data = json.loads(response.read().decode("utf-8"))
     if data.get("error"):
         raise RuntimeError(data["error"])
