@@ -462,3 +462,11 @@ export function formatBytes(bytes: number | null): string {
   if (gb >= 1) return `${gb.toFixed(1)} GB`;
   return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
 }
+
+export function splitFolderList(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
