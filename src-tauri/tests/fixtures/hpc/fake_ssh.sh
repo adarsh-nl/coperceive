@@ -432,5 +432,43 @@ JSON
         ;;
 esac
 
+# --- Remote HPC 4/6: submission ------------------------------------------
+case "${remote}" in
+    *"sbatch --parsable"*)
+        log_command "sbatch"
+        cat >/dev/null 2>&1 || true
+        if [ -n "${FAKE_SSH_REJECT_SUBMIT:-}" ]; then
+            echo "sbatch: error: invalid partition" >&2
+            exit 1
+        fi
+        printf '424242;cluster-b\n'
+        exit 0
+        ;;
+    *"cat -- \"\$1\""*)
+        log_command "plan-read"
+        path=$(quoted_last "${remote}")
+        local_path=$(map_remote "${path}") || { echo "fake_ssh: no FAKE_REMOTE_ROOT" >&2; exit 1; }
+        if [ ! -f "${local_path}" ]; then
+            echo "cat: ${path}: No such file or directory" >&2
+            exit 1
+        fi
+        cat "${local_path}"
+        exit 0
+        ;;
+    *"squeue -h -j 424242"*)
+        log_command "squeue-pending"
+        printf 'PENDING|Resources\n'
+        exit 0
+        ;;
+    *"squeue -h -j"*)
+        printf 'RUNNING|None\n'
+        exit 0
+        ;;
+    *"sacct -j"*)
+        printf 'COMPLETED\n'
+        exit 0
+        ;;
+esac
+
 echo "fake_ssh: unsupported command: ${remote}" >&2
 exit 127

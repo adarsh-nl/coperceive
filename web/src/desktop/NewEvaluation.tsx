@@ -12,8 +12,10 @@ import {
   buildRunPlan,
   listPipelineOptions,
   listServerProfiles,
+  previewSubmission,
   readCustomPipeline,
   saveRunPlan,
+  submitRunPlan,
 } from "./local";
 import {
   environmentLabel,
@@ -29,11 +31,15 @@ import {
   initialArgumentForm,
   planIsSaveable,
   planSummary,
+  jobStateLabel,
   validateArgumentForm,
   type ArgumentForm,
+  type JobSubmitOutcome,
   type PipelineEntry,
   type RunPlan,
   type RunPlanRequest,
+  type SubmissionPreview,
+  type SubmitOptions,
 } from "./runPlan";
 
 const card = {
@@ -120,6 +126,14 @@ export default function NewEvaluation() {
   const [busy, setBusy] = useState<"catalog" | "check" | "save" | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
+  const [showSubmitAdvanced, setShowSubmitAdvanced] = useState(false);
+  const [submitWalltime, setSubmitWalltime] = useState("04:00:00");
+  const [submitCpus, setSubmitCpus] = useState("");
+  const [submitPreview, setSubmitPreview] = useState<SubmissionPreview | null>(null);
+  const [submitConfirmed, setSubmitConfirmed] = useState(false);
+  const [submitBusy, setSubmitBusy] = useState<"preview" | "submit" | null>(null);
+  const [submitOutcome, setSubmitOutcome] = useState<JobSubmitOutcome | null>(null);
+  const [submitError, setSubmitError] = useState("");
 
   const selectedProfile = profiles.find((entry) => entry.id === profileId) ?? null;
   const selectedPipeline = pipelines.find((entry) => entry.id === pipelineId) ?? null;
@@ -202,6 +216,63 @@ export default function NewEvaluation() {
     setEnvironment((current) => ({ ...current, ...patch }));
   };
 
+  const submitOptions = (): SubmitOptions => ({
+    walltime: submitWalltime.trim() || "04:00:00",
+    cpus_per_task: submitCpus.trim() ? Number(submitCpus.trim()) : null,
+    account: null,
+    qos: null,
+  });
+
+  const invalidateSubmitPreview = () => {
+    setSubmitPreview(null);
+    setSubmitConfirmed(false);
+    setSubmitOutcome(null);
+    setSubmitError("");
+  };
+
+  const previewJobScript = async () => {
+    if (!selectedProfile || !plan || !plan.saved_path) {
+      setError("Save the plan before preparing a submission.");
+      return;
+    }
+    setSubmitBusy("preview");
+    setSubmitError("");
+    setSubmitOutcome(null);
+    try {
+      const preview = await previewSubmission(
+        selectedProfile.id,
+        plan.id,
+        submitOptions(),
+      );
+      setSubmitPreview(preview);
+      setSubmitConfirmed(false);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitBusy(null);
+    }
+  };
+
+  const submitConfirmedPlan = async () => {
+    if (!selectedProfile || !plan || !submitPreview || !submitConfirmed) return;
+    setSubmitBusy("submit");
+    setSubmitError("");
+    try {
+      const outcome = await submitRunPlan(
+        selectedProfile.id,
+        plan.id,
+        submitOptions(),
+        submitPreview.preview_hash,
+        true,
+      );
+      setSubmitOutcome(outcome);
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSubmitBusy(null);
+    }
+  };
+
   const checkPlan = async () => {
     if (!selectedProfile || !selectedPipeline) {
       setError("Choose a server profile and a pipeline first.");
@@ -234,6 +305,7 @@ export default function NewEvaluation() {
       const built = await buildRunPlan(selectedProfile.id, request);
       setLastRequest(request);
       setPlan(built);
+      invalidateSubmitPreview();
       setNote("Plan checked. Nothing was submitted.");
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -253,6 +325,7 @@ export default function NewEvaluation() {
     try {
       const saved = await saveRunPlan(selectedProfile.id, plan, lastRequest);
       setPlan(saved);
+      invalidateSubmitPreview();
       setNote(`Saved to ${saved.saved_path ?? "the cluster"}. Nothing was submitted.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -627,6 +700,114 @@ export default function NewEvaluation() {
             the script after you have seen it in full.
             {plan.saved_path ? <div style={{ marginTop: "0.25rem", color: "#7ee787" }}>Saved to {plan.saved_path}.</div> : null}
           </div>
+
+          {plan.saved_path ? (
+            <div style={{ marginTop: "0.9rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "0.75rem" }}>
+              <h4 style={{ margin: "0 0 0.25rem", fontSize: "0.95rem", color: "#f5f5f7" }}>
+                Submit this run
+              </h4>
+              <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "#8b949e" }}>
+                Generate the full job script and read it before submitting. Nothing is submitted
+                automatically; the Submit button is enabled only after you confirm the script you see.
+              </p>
+              <button
+                type="button"
+                style={secondaryButton}
+                onClick={() => setShowSubmitAdvanced((current) => !current)}
+              >
+                {showSubmitAdvanced ? "Hide advanced" : "Advanced"}
+              </button>
+              {showSubmitAdvanced ? (
+                <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={labelStyle} htmlFor="submit-walltime">
+                      Walltime
+                    </label>
+                    <input
+                      id="submit-walltime"
+                      style={input}
+                      value={submitWalltime}
+                      placeholder="04:00:00"
+                      onChange={(event) => {
+                        setSubmitWalltime(event.target.value);
+                        invalidateSubmitPreview();
+                      }}
+                    />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={labelStyle} htmlFor="submit-cpus">
+                      CPUs per task
+                    </label>
+                    <input
+                      id="submit-cpus"
+                      type="number"
+                      min={1}
+                      style={input}
+                      value={submitCpus}
+                      placeholder="from the profile"
+                      onChange={(event) => {
+                        setSubmitCpus(event.target.value);
+                        invalidateSubmitPreview();
+                      }}
+                    />
+                  </div>
+                </div>
+              ) : null}
+              <div style={{ marginTop: "0.6rem" }}>
+                <button
+                  type="button"
+                  style={primaryButton}
+                  onClick={previewJobScript}
+                  disabled={submitBusy !== null}
+                >
+                  {submitBusy === "preview" ? "Rendering…" : "Generate submission script"}
+                </button>
+              </div>
+              {submitError ? (
+                <div style={{ marginTop: "0.5rem", color: "#ff7b72", fontSize: "0.8rem" }}>
+                  {submitError}
+                </div>
+              ) : null}
+              {submitPreview ? (
+                <div style={{ marginTop: "0.6rem" }}>
+                  <div style={{ fontSize: "0.78rem", color: "#c9d1d9" }}>
+                    Partition {submitPreview.partition} · walltime {submitPreview.walltime} ·{" "}
+                    {submitPreview.job_name}
+                  </div>
+                  <pre
+                    aria-label="Submission job script"
+                    style={{ margin: "0.3rem 0 0.5rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.1)", fontSize: "0.72rem", color: "#c9d1d9", overflowX: "auto", whiteSpace: "pre-wrap" }}
+                  >
+                    {submitPreview.script}
+                  </pre>
+                  <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.82rem", color: "#f5f5f7" }}>
+                    <input
+                      type="checkbox"
+                      checked={submitConfirmed}
+                      onChange={(event) => setSubmitConfirmed(event.target.checked)}
+                    />
+                    I have read the full job script above and confirm this submission.
+                  </label>
+                  <div style={{ marginTop: "0.5rem" }}>
+                    <button
+                      type="button"
+                      style={primaryButton}
+                      onClick={submitConfirmedPlan}
+                      disabled={!submitConfirmed || submitBusy !== null}
+                    >
+                      {submitBusy === "submit" ? "Submitting…" : "Submit job"}
+                    </button>
+                  </div>
+                  {submitOutcome ? (
+                    <div style={{ marginTop: "0.5rem", padding: "0.5rem 0.75rem", borderRadius: "8px", backgroundColor: "rgba(63, 185, 80, 0.12)", border: "1px solid rgba(63, 185, 80, 0.35)", color: "#c9d1d9", fontSize: "0.82rem" }}>
+                      Submitted as job <strong>{submitOutcome.job_id}</strong> —{" "}
+                      {jobStateLabel(submitOutcome)}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       ) : null}
     </div>

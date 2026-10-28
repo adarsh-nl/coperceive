@@ -236,3 +236,40 @@ export function planSummary(plan: RunPlan | null, entry: ServerEntry | null): st
   const ok = plan.checks.filter((check) => check.ok).length;
   return `${plan.pipeline.name} on ${server} · ${ok}/${plan.checks.length} checks passed`;
 }
+
+/** What the user can change under Advanced before submitting a saved plan. */
+export interface SubmitOptions {
+  walltime: string;
+  cpus_per_task: number | null;
+  account: string | null;
+  qos: string | null;
+}
+
+/** The complete job script the user reviews before an explicit confirm. */
+export interface SubmissionPreview {
+  plan_id: string;
+  job_name: string;
+  partition: string;
+  walltime: string;
+  cpus_per_task: number | null;
+  script: string;
+  preview_hash: string;
+}
+
+/** What the scheduler answered when the user confirmed the submission. */
+export interface JobSubmitOutcome {
+  job_id: string;
+  state: string;
+  queue_reason: string | null;
+  plan_id: string;
+}
+
+/** Plain-language scheduler state, including the pending queue reason. */
+export function jobStateLabel(outcome: JobSubmitOutcome): string {
+  if (outcome.state === "pending") {
+    return outcome.queue_reason
+      ? `PENDING — waiting in the queue: ${outcome.queue_reason}`
+      : "PENDING — waiting in the queue";
+  }
+  return outcome.state.toUpperCase();
+}

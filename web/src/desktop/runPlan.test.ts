@@ -8,6 +8,7 @@ import {
   environmentKindLabel,
   environmentSummary,
   formatArgv,
+  jobStateLabel,
   initialArgumentForm,
   planIsSaveable,
   planSummary,
@@ -140,4 +141,20 @@ test("the run-plan source has no submission call and no site-specific values", (
   for (const forbidden of ["sbatch", "scancel", "university", "utwente", "hpc-node", '"ps"']) {
     assert.ok(!source.includes(forbidden), `runPlan.ts must not contain ${forbidden}`);
   }
+});
+
+test("job state label shows the pending queue reason plainly", () => {
+  assert.strictEqual(
+    jobStateLabel({
+      plan_id: "plan-1",
+      job_id: "424242",
+      state: "pending",
+      queue_reason: "Resources",
+    }),
+    "PENDING — waiting in the queue: Resources",
+  );
+  assert.strictEqual(
+    jobStateLabel({ plan_id: "plan-1", job_id: "1", state: "running", queue_reason: null }),
+    "RUNNING",
+  );
 });
