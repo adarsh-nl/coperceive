@@ -149,7 +149,7 @@ def test_results_root_is_shared_storage_not_scratch() -> None:
     good.validate_pipeline_script("/shared/code/bev.py")
     with pytest.raises(ProfileError, match="outside code_roots and data_roots"):
         good.validate_pipeline_script("/etc/passwd")
-    with pytest.raises(ProfileError, match="must not be empty or contain"):
+    with pytest.raises(ProfileError, match=r"must not contain a '\.\.' segment"):
         good.validate_pipeline_script("../bev.py")
 
 
@@ -208,3 +208,54 @@ def test_no_scheduler_profile_is_valid() -> None:
     )
     profile.validate()
     assert profile.scheduler is SchedulerKind.NONE
+
+
+def test_path_traversal_is_refused_after_normalisation() -> None:
+    profile = ServerProfile(
+        name="Alpha lab",
+        ssh_alias="alpha-cluster",
+        data_roots=("/data/projects/alpha",),
+        code_roots=("/shared/code",),
+        scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+        results_root="/shared/runs",
+    )
+    profile.validate()
+    # results_root cannot be smuggled into scratch through ".."
+    with pytest.raises(ProfileError, match=r"\.\."):
+        ServerProfile(
+            name="x",
+            ssh_alias="a",
+            data_roots=("/d",),
+            scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+            results_root="/shared/../scratch/shared",
+        ).validate()
+    # results_root that normalises into scratch is still refused
+    with pytest.raises(ProfileError, match="inside the scratch"):
+        ServerProfile(
+            name="x",
+            ssh_alias="a",
+            data_roots=("/d",),
+            scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+            results_root="/scratch/./shared",
+        ).validate()
+    # A traversing output dir is refused; no lexical escape can fool containment.
+    for path in (
+        "/shared/runs/../scratch/user/job/out",
+        "/shared/runs/../../etc/passwd",
+        "/shared/../shared/runs/out",
+    ):
+        with pytest.raises(ProfileError, match=r"\.\."):
+            profile.validate_output_dir(path)
+    # Normal noise (duplicate slashes, ".", trailing slash) is normalised, not rejected.
+    profile.validate_output_dir("/shared//runs/./run-1/")
+    # Script containment: '..' is refused before any normalisation.
+    for script in (
+        "code/../outside.py",
+        "/shared/code/../secret.py",
+        "/data/./../etc/x.py",
+        "a/../../b.py",
+    ):
+        with pytest.raises(ProfileError, match=r"\.\."):
+            profile.validate_pipeline_script(script)
+    profile.validate_pipeline_script("/shared/code/bev.py")
+    profile.validate_pipeline_script("pipelines/bev.py")
