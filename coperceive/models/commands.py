@@ -95,6 +95,11 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument(
         "--slurm-python", default=None, help="Interpreter on the node; default this one."
     )
+    run.add_argument(
+        "--slurm-partition",
+        default=None,
+        help="Slurm partition for --slurm; defaults to $COPERCEIVE_SLURM_PARTITION.",
+    )
     run.add_argument("--slurm-logs", default=None, help="Slurm log directory; default ~/logs.")
     run.add_argument(
         "--slurm-results", default=None, help="Per-job results root; default ~/results."
@@ -284,6 +289,12 @@ def _emit_slurm(
             "--slurm-scratch-template or COPERCEIVE_SLURM_SCRATCH_TEMPLATE."
         )
     home = Path.home()
+    partition = (args.slurm_partition or os.environ.get("COPERCEIVE_SLURM_PARTITION") or "").strip()
+    if not partition:
+        raise BatchError(
+            "Choose a Slurm partition with --slurm-partition (or set "
+            "COPERCEIVE_SLURM_PARTITION). Coperceive never guesses a site partition."
+        )
     plan = plan_sbatch(
         manifest,
         spec,
@@ -295,6 +306,7 @@ def _emit_slurm(
         python=Path(args.slurm_python) if args.slurm_python else Path(sys.executable),
         logs_dir=Path(args.slurm_logs) if args.slurm_logs else home / "logs",
         results_dir=Path(args.slurm_results) if args.slurm_results else home / "results",
+        partition=partition,
         scratch_template=scratch_template,
     )
     path = write_plan(plan, out, str(args.run_id))

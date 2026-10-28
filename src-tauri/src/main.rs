@@ -23,7 +23,13 @@ use tauri::Manager;
 #[cfg(target_os = "macos")]
 use coperceive_desktop::controller::{self, ControllerConfig};
 #[cfg(target_os = "macos")]
-use coperceive_desktop::remote::{RemoteClient, RemoteSessionManager, RemoteStatusResponse};
+use coperceive_desktop::detect::{self, DetectOptions, DetectionReport};
+#[cfg(target_os = "macos")]
+use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
+#[cfg(target_os = "macos")]
+use coperceive_desktop::remote::{
+    RemoteClient, RemoteSessionManager, RemoteStartOptions, RemoteStatusResponse,
+};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::sidecar::SidecarSession;
 #[cfg(target_os = "macos")]
@@ -1392,6 +1398,75 @@ async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload,
     })
 }
 
+/// Local ssh binary. `COPERCEIVE_SSH_BIN` is used by tests and the CI
+/// packaged-app e2e harness; production uses the system ssh.
+#[cfg(target_os = "macos")]
+fn ssh_bin() -> String {
+    std::env::var("COPERCEIVE_SSH_BIN").unwrap_or_else(|_| "ssh".to_string())
+}
+
+#[cfg(target_os = "macos")]
+fn ssh_config_path() -> PathBuf {
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join(".ssh")
+        .join("config")
+}
+
+/// Lists hosts from the user's `~/.ssh/config` so "Add server" can offer them.
+/// Only Host aliases are read; no key material or options are returned.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
+    let path = ssh_config_path();
+    let contents = match fs::read_to_string(&path) {
+        Ok(contents) => contents,
+        Err(_) => return Ok(Vec::new()),
+    };
+    Ok(server_profiles::parse_ssh_config_hosts(&contents))
+}
+
+/// Reads effective settings for a `~/.ssh/config` alias with `ssh -G`.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn read_ssh_host_settings(alias: String) -> Result<SshHostSettings, String> {
+    detect::probe_ssh_alias(&alias, &ssh_bin())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn list_server_profiles() -> Result<Vec<ServerEntry>, String> {
+    Ok(server_profiles::load_servers())
+}
+
+/// Saves a server profile locally. Rejects secret-like fields and unsafe paths.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn save_server_profile(entry: ServerEntry) -> Result<ServerEntry, String> {
+    let mut servers = server_profiles::load_servers();
+    server_profiles::upsert_server(&mut servers, entry)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn delete_server_profile(id: String) -> Result<(), String> {
+    let mut servers = server_profiles::load_servers();
+    server_profiles::remove_server(&mut servers, &id)
+}
+
+/// Runs the read-only "Test connection" checks off the async runtime, bounded by
+/// per-check timeouts. The result can be applied to the draft profile in the UI.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn test_server_connection(entry: ServerEntry) -> Result<DetectionReport, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        detect::detect_server(&entry, &DetectOptions { ssh_bin: ssh_bin() })
+    })
+    .await
+    .map_err(|e| format!("The connection test could not finish: {e}"))
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
@@ -1400,6 +1475,7 @@ async fn remote_connect(
     alias: String,
     data_root: String,
     uuid: Option<String>,
+    profile_id: Option<String>,
 ) -> Result<SessionPayload, String> {
     // Disconnect existing session if one was active
     {
@@ -1415,7 +1491,34 @@ async fn remote_connect(
         }
     }
 
-    let mgr = RemoteSessionManager::connect(&alias, &data_root, uuid.as_deref(), None)
+    // Resources come from the selected server profile, never from a product
+    // default. Without a profile the remote job cannot choose a partition.
+    let profile = profile_id.as_deref().and_then(|id| {
+        server_profiles::load_servers()
+            .into_iter()
+            .find(|entry| entry.id == id)
+    });
+    let options = RemoteStartOptions {
+        data_root: data_root.clone(),
+        partition: profile
+            .as_ref()
+            .and_then(|p| p.profile.defaults.partition.clone()),
+        walltime: profile
+            .as_ref()
+            .and_then(|p| p.profile.defaults.time_limit.clone()),
+        cpus: profile
+            .as_ref()
+            .and_then(|p| p.profile.defaults.cpus_per_task),
+        mem: profile
+            .as_ref()
+            .and_then(|p| p.profile.defaults.memory.clone()),
+        python: profile
+            .as_ref()
+            .and_then(|p| p.profile.environment.interpreter.clone()),
+        uuid: uuid.clone(),
+    };
+
+    let mgr = RemoteSessionManager::connect_with_options(&alias, &options, None)
         .map_err(|e| e.to_string())?;
 
     let origin = mgr.origin();
@@ -1567,6 +1670,12 @@ fn main() {
             set_auto_download_updates,
             validate_scene,
             health,
+            list_ssh_config_hosts,
+            read_ssh_host_settings,
+            list_server_profiles,
+            save_server_profile,
+            delete_server_profile,
+            test_server_connection,
             remote_connect,
             remote_status,
             remote_disconnect,
@@ -1614,6 +1723,35 @@ fn main() {
             use tauri::Manager;
             let state = app.state::<Arc<AppState>>().inner().clone();
             let handle = app.handle().clone();
+
+            // Test-only seam for the CI packaged-app HPC check: run the real
+            // "Test connection" code against a committed fake-ssh profile and
+            // write the report for `scripts/desktop/e2e_hpc_fake_ssh.sh`.
+            if let Some((profile_path, result_path)) =
+                coperceive_desktop::test_seams::hpc_probe_request()
+            {
+                std::thread::spawn(move || {
+                    let result = match fs::read_to_string(&profile_path) {
+                        Ok(json) => match serde_json::from_str::<ServerEntry>(&json) {
+                            Ok(entry) => {
+                                let report = detect::detect_server(
+                                    &entry,
+                                    &DetectOptions { ssh_bin: ssh_bin() },
+                                );
+                                serde_json::json!({"ok": true, "report": report})
+                            }
+                            Err(error) => {
+                                serde_json::json!({"ok": false, "error": error.to_string()})
+                            }
+                        },
+                        Err(error) => serde_json::json!({"ok": false, "error": error.to_string()}),
+                    };
+                    let _ = fs::write(
+                        &result_path,
+                        serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    );
+                });
+            }
 
             // 1. Start loopback desktop controller
             match start_desktop_controller(handle.clone(), state.clone()) {

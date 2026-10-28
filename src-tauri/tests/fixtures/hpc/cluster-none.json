@@ -1,0 +1,38 @@
+{
+  "id": "fixture-cluster-none",
+  "schema_version": 1,
+  "profile": {
+    "name": "Files only (no scheduler)",
+    "ssh_alias": "cluster-none",
+    "host": null,
+    "user": null,
+    "data_roots": [
+      "/data/files"
+    ],
+    "scratch_template": "/tmp",
+    "results_root": "/data/results",
+    "code_roots": [],
+    "scheduler": "none",
+    "defaults": {
+      "partition": null,
+      "account": null,
+      "qos": null,
+      "gres": null,
+      "time_limit": null,
+      "memory": null,
+      "cpus_per_task": null
+    },
+    "environment": {
+      "kind": "none",
+      "modules": [],
+      "interpreter": "/usr/bin/python3",
+      "container_image": null,
+      "coperceive_command": [],
+      "wheelhouse": null,
+      "compute_has_internet": false
+    },
+    "notes": "Portability fixture: SSH-only server without a scheduler."
+  },
+  "discovered": null,
+  "ssh": null
+}

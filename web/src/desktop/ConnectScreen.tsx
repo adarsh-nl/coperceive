@@ -5,7 +5,6 @@ import {
   cancelImport,
   getPersistentState,
   getStorageInfo,
-  isRemoteEnabled,
   isTauriEnvironment,
   onImportProgress,
   pickDataRoot,
@@ -15,6 +14,7 @@ import {
 import type { ConnectionSession } from "./types";
 import { BrandWordmark } from "./Brand";
 import ConnectBackdrop from "./backdrop/ConnectBackdrop";
+import HpcServers from "./HpcServers";
 import LibraryScreen from "./LibraryScreen";
 import GetDataScreen from "./GetDataScreen";
 import UpdateBanner from "./UpdateBanner";
@@ -29,7 +29,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [activeTab, setActiveTab] = useState<TabMode>("library");
   const [dataRoot, setDataRoot] = useState<string>("");
   const [recentRoots, setRecentRoots] = useState<string[]>([]);
-  const [showRemote, setShowRemote] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
@@ -67,8 +66,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       if (stats?.library_root) {
         setImportDest(stats.library_root);
       }
-      const remote = await isRemoteEnabled();
-      setShowRemote(remote);
     })();
 
     if (!isTauriEnvironment()) return;
@@ -267,8 +264,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             >
               Open Folder
             </button>
-            {showRemote && (
-              <button
+            <button
                 type="button"
                 onClick={() => setActiveTab("remote")}
                 style={{
@@ -282,9 +278,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                   cursor: "pointer",
                 }}
               >
-                HPC Cluster
+                HPC Workspace
               </button>
-            )}
           </nav>
         </div>
 
@@ -643,26 +638,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           </div>
         )}
 
-        {activeTab === "remote" && showRemote && (
-          <div style={{ display: "flex", justifyContent: "center", padding: "2rem" }}>
-            <div
-              style={{
-                maxWidth: "520px",
-                width: "100%",
-                padding: "2rem",
-                borderRadius: "14px",
-                background: "rgba(28, 28, 30, 0.85)",
-                border: "1px dashed rgba(255, 255, 255, 0.15)",
-                textAlign: "center",
-              }}
-            >
-              <h3 style={{ margin: "0 0 0.5rem 0", color: "#f5f5f7" }}>HPC Cluster (SSH & Slurm)</h3>
-              <p style={{ color: "#8b949e", fontSize: "0.9rem" }}>
-                Connected to university and cloud GPU partitions.
-              </p>
-            </div>
-          </div>
-        )}
+        {activeTab === "remote" && <HpcServers />}
 
         {error && (
           <div

@@ -8,10 +8,7 @@ import json
 import sys
 
 from coperceive.remote.manager import (
-    DEFAULT_CPUS,
-    DEFAULT_MEM,
-    DEFAULT_PARTITION,
-    DEFAULT_WALLTIME,
+    get_session_token,
     get_status,
     list_sessions,
     record_heartbeat,
@@ -44,17 +41,29 @@ def add_parser(
     start_parser.add_argument("--root", required=True, help="Data directory root to serve.")
     start_parser.add_argument(
         "--partition",
-        default=DEFAULT_PARTITION,
-        help=f"Slurm partition (default: {DEFAULT_PARTITION}).",
+        required=True,
+        help="Slurm partition chosen in the server profile (there is no product default).",
     )
     start_parser.add_argument(
-        "--time", default=DEFAULT_WALLTIME, help=f"Slurm walltime (default: {DEFAULT_WALLTIME})."
+        "--time",
+        default=None,
+        help="Slurm walltime from the server profile; omitted means the partition default.",
     )
     start_parser.add_argument(
-        "--cpus", type=int, default=DEFAULT_CPUS, help=f"CPUs allocated (default: {DEFAULT_CPUS})."
+        "--cpus",
+        type=int,
+        default=None,
+        help="CPUs allocated, from the server profile; omitted means the cluster default.",
     )
     start_parser.add_argument(
-        "--mem", default=DEFAULT_MEM, help=f"Memory allocated (default: {DEFAULT_MEM})."
+        "--mem",
+        default=None,
+        help="Memory allocated, from the server profile; omitted means the cluster default.",
+    )
+    start_parser.add_argument(
+        "--python",
+        default=None,
+        help="Python interpreter on the compute node from the server profile.",
     )
     start_parser.add_argument(
         "--uuid", default=None, help="Explicit session UUID (auto-generated if omitted)."
@@ -100,6 +109,13 @@ def add_parser(
     stop_parser.add_argument("--uuid", dest="opt_uuid", default=None, help="Session UUID.")
     stop_parser.add_argument("--job-id", type=int, default=None, help="Slurm job ID.")
     stop_parser.set_defaults(func=_remote_stop)
+
+    # remote token (read-only; used by the desktop app to reattach)
+    token_parser = remote_sub.add_parser(
+        "token", help="Print the running session's bearer token (desktop reattach only)."
+    )
+    token_parser.add_argument("--uuid", required=True, help="Session UUID.")
+    token_parser.set_defaults(func=_remote_token)
 
     # remote list
     list_parser = remote_sub.add_parser(
@@ -165,6 +181,7 @@ def _remote_start(args: argparse.Namespace) -> None:
         walltime=args.time,
         cpus=args.cpus,
         mem=args.mem,
+        python=args.python,
         session_uuid=args.uuid,
         sbatch_script=args.sbatch_script,
         wait_timeout=args.wait_timeout,
@@ -193,6 +210,13 @@ def _remote_stop(args: argparse.Namespace) -> None:
         session_uuid=uuid_val,
         job_id=args.job_id,
     )
+    print(json.dumps(result, indent=2))
+    if result.get("status") == "error":
+        sys.exit(1)
+
+
+def _remote_token(args: argparse.Namespace) -> None:
+    result = get_session_token(session_uuid=args.uuid)
     print(json.dumps(result, indent=2))
     if result.get("status") == "error":
         sys.exit(1)
