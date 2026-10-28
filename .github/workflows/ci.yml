@@ -187,8 +187,11 @@ jobs:
       - name: Sync Desktop Bundle Version
         run: bash scripts/desktop/sync_version.sh
       - name: Build Tauri Desktop (.app and .dmg)
-        run: npm run tauri build -- --target aarch64-apple-darwin --verbose 2>&1 | tee /tmp/tauri_build.log
-        working-directory: web
+        # Bounded retry around the DMG bundling: hdiutil create intermittently
+        # fails with "Resource busy" on the macOS runners (runner-images#7522,
+        # XProtectBehaviorService locking a freshly created image). The script
+        # only retries that exact signature and logs hdiutil state each attempt.
+        run: bash scripts/desktop/build_dmg.sh
       - name: Report Tauri Build Failure
         if: failure()
         run: |
@@ -217,10 +220,9 @@ jobs:
           fi
       - name: Run Real-App macOS UI E2E Test
         run: |
+          set -o pipefail
           bash scripts/desktop/e2e_mac.sh 2>&1 | tee /tmp/e2e_mac.log
-          grep -E 'Step 2 verified|Step 2b verified|Step 2d verified|Step 3b verified|Step 5c verified|Step 5d verified|Step 5e verified|Step 5f verified|Step 5g verified|Playback requirement' /tmp/e2e_mac.log | while IFS= read -r line; do
-            echo "::notice title=e2e::$line"
-          done || true
+          python3 scripts/desktop/verify_e2e_steps.py /tmp/e2e_mac.log
       - name: Report E2E Failure
         if: failure()
         run: |

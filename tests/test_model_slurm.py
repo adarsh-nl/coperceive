@@ -18,6 +18,7 @@ from coperceive.evaluation.predictions import read_run_meta, write_run
 from coperceive.model import Scene
 from coperceive.models.batch import RunOptions, run_batch
 from coperceive.models.slurm import (
+    SlurmError,
     estimate_from_runs,
     interpreter_module,
     model_closure,
@@ -25,6 +26,7 @@ from coperceive.models.slurm import (
     staged_files,
     submit,
     time_limit,
+    validate_scratch_template,
     work_copy_filter,
     write_plan,
 )
@@ -81,6 +83,7 @@ def _plan(roots: tuple[Path, Path, Scene], manifest: Manifest, tmp_path: Path, *
         logs_dir=tmp_path / "logs",
         results_dir=tmp_path / "results",
         partition="test-partition",
+        scratch_template="/scratch/$USER/$SLURM_JOB_ID",
     )
 
 
@@ -131,6 +134,7 @@ def test_module_load_for_the_venv_interpreter(
         logs_dir=tmp_path / "logs",
         results_dir=tmp_path / "results",
         partition="test-partition",
+        scratch_template="/scratch/$USER/$SLURM_JOB_ID",
     )
     lines = plan.script.splitlines()
     purge = lines.index("module purge")
@@ -170,7 +174,7 @@ def test_gpu_script_lines(roots: tuple[Path, Path, Scene], tmp_path: Path) -> No
         "#SBATCH --mail-type=END,FAIL",
         "module purge",
         "module load nvidia/cuda-11.8",
-        'SCRATCH="/local/$SLURM_JOB_ID"',
+        'SCRATCH="/scratch/$USER/$SLURM_JOB_ID"',
         "trap 'rm -rf \"$SCRATCH\"' EXIT",
         "--files-from=",
         "model run --manifest",
@@ -262,11 +266,14 @@ def test_slurm_flag_emits_without_running(
             str(tmp_path / "logs"),
             "--slurm-results",
             str(tmp_path / "results"),
+            "--slurm-scratch-template",
+            "/scratch2/$USER/$SLURM_JOB_ID",
         ]
     )
     text = capsys.readouterr().out
     assert str(out / ".slurm" / "r1.sbatch") in text
     assert "#SBATCH --partition=test-partition" in text
+    assert 'SCRATCH="/scratch2/$USER/$SLURM_JOB_ID"' in text
     assert not (out / "r1").exists()  # nothing ran
     assert not (out / ".work").exists()
 
@@ -387,6 +394,7 @@ def test_the_emitter_covers_the_dependency_closure(
             logs_dir=tmp_path / "logs",
             results_dir=tmp_path / "results",
             partition="test-partition",
+            scratch_template="/scratch/$USER/$SLURM_JOB_ID",
         )
 
     both = plan()
@@ -479,6 +487,8 @@ def test_slurm_requires_a_partition_and_never_guesses_one(
                 "--run-id",
                 "r1",
                 "--slurm",
+                "--slurm-scratch-template",
+                "/scratch/$USER/$SLURM_JOB_ID",
                 "--slurm-logs",
                 str(tmp_path / "logs"),
                 "--slurm-results",
@@ -487,6 +497,40 @@ def test_slurm_requires_a_partition_and_never_guesses_one(
         )
     assert "Choose a Slurm partition" in capsys.readouterr().err
     assert not (out / ".slurm" / "r1.sbatch").exists()
+
+
+def test_missing_scratch_template_is_a_plain_error(
+    roots: tuple[Path, Path, Scene],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scenes, out, _ = roots
+    monkeypatch.delenv("COPERCEIVE_SLURM_SCRATCH_TEMPLATE", raising=False)
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "model",
+                "run",
+                "--manifest",
+                str(FAKE),
+                "--scenes",
+                str(scenes),
+                "--out",
+                str(out),
+                "--run-id",
+                "r1",
+                "--slurm",
+                "--slurm-partition",
+                "test-partition",
+                "--slurm-logs",
+                str(tmp_path / "logs"),
+                "--slurm-results",
+                str(tmp_path / "results"),
+            ]
+        )
+    captured = capsys.readouterr()
+    assert "scratch_template" in captured.err + captured.out
 
 
 def test_partition_can_come_from_the_profile_environment_variable(
@@ -507,6 +551,8 @@ def test_partition_can_come_from_the_profile_environment_variable(
             "--run-id",
             "r1",
             "--slurm",
+            "--slurm-scratch-template",
+            "/scratch/$USER/$SLURM_JOB_ID",
             "--slurm-logs",
             str(tmp_path / "logs"),
             "--slurm-results",
@@ -515,3 +561,10 @@ def test_partition_can_come_from_the_profile_environment_variable(
     )
     text = (out / ".slurm" / "r1.sbatch").read_text(encoding="utf-8")
     assert "#SBATCH --partition=profile-partition" in text
+
+
+def test_unsafe_or_shared_scratch_templates_are_refused() -> None:
+    for template in ('/scratch/x"; rm -rf ~;"', "/scratch/fixed", "/scratch/$USER"):
+        with pytest.raises(SlurmError, match=r"scratch template|\$SLURM_JOB_ID"):
+            validate_scratch_template(template)
+    assert validate_scratch_template("/scratch/$USER/$SLURM_JOB_ID")
