@@ -72,8 +72,34 @@ find "${PYTHON_DEST}/bin" -type l ! -name "python*" -delete
 rm -f "${PYTHON_DEST}/bin"/python*-config || true
 chmod +x "${PYTHON_DEST}/bin"/python*
 
-# Strip caches to keep bundle compact
+# Strip pip, ensurepip, setuptools from the bundle after installation
+echo "Stripping pip, ensurepip, and build tools from bundle..."
+rm -rf "${PYTHON_DEST}/lib/python3.13/site-packages/pip"*
+rm -rf "${PYTHON_DEST}/lib/python3.13/site-packages/setuptools"*
+rm -rf "${PYTHON_DEST}/lib/python3.13/site-packages/wheel"*
+rm -rf "${PYTHON_DEST}/lib/python3.13/ensurepip"
+
+# Strip test suites from standard library and site-packages
+echo "Stripping test suites from bundle..."
+rm -rf "${PYTHON_DEST}/lib/python3.13/test"
+find "${PYTHON_DEST}" -type d \( -name "tests" -o -name "test" -o -name "testing" \) -exec rm -rf {} + 2>/dev/null || true
+
+# Strip C headers
+echo "Stripping C/C++ header files from bundle..."
+rm -rf "${PYTHON_DEST}/include"
+find "${PYTHON_DEST}" -type d -name "include" -exec rm -rf {} + 2>/dev/null || true
+
+# Strip unused standard library GUI/demo modules
+echo "Stripping unused standard library modules..."
+rm -rf "${PYTHON_DEST}/lib/python3.13/idlelib"
+rm -rf "${PYTHON_DEST}/lib/python3.13/tkinter"
+rm -rf "${PYTHON_DEST}/lib/python3.13/turtledemo"
+rm -f "${PYTHON_DEST}/lib/python3.13/turtle.py"
+
+# Strip caches and compiled bytecode to keep bundle compact
+echo "Stripping caches and .pyc/.pyo files..."
 find "${PYTHON_DEST}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "${PYTHON_DEST}" -name "*.pyc" -delete 2>/dev/null || true
+find "${PYTHON_DEST}" -name "*.pyo" -delete 2>/dev/null || true
 
 echo "Bundled Python environment ready at: ${PYTHON_DEST}"
