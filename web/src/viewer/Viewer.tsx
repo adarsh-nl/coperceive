@@ -18,7 +18,7 @@ import {
 } from "./appearance";
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
 import CameraStrip, { CameraSplit, loadImage } from "./cameras";
-import { createFrameCache, type FrameCache } from "./cache";
+import { createFrameCache, isAbortError, type FrameCache } from "./cache";
 import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
 import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
 import { boxCenter, followPick, type PickRecord } from "./inspect";
@@ -744,12 +744,23 @@ function prefetchAhead(
   summary: SceneSummary,
   frameIndex: number,
   token: string,
+  stillWanted: () => boolean,
 ) {
   const times = summary.times_us.slice(frameIndex + 1, frameIndex + 1 + PREFETCH_FRAMES);
   for (const time of times) {
+    // Choosing another scene stops the old scene's prefetch at once: the choice changes the
+    // scene id synchronously, while the old summary lives on until the new one arrives. Without
+    // this check every frame tick between the two keeps asking for old-scene frames, and their
+    // requests queue the new scene's summary behind them.
+    if (!stillWanted()) {
+      return;
+    }
     void cache
       .loadFrame(summary.scene_id, time, token)
       .then((frame) => {
+        if (!stillWanted()) {
+          return;
+        }
         for (const sensor of frame.point_sensors) {
           if (sensor.count === 0) {
             continue;
@@ -2277,6 +2288,11 @@ export default function Viewer({
     if (!summary || !stageRef.current) {
       return;
     }
+    // A scene choice changes the scene id before the new summary arrives. The old summary must
+    // not draw, load or prefetch another frame from that moment on.
+    if (summary.scene_id !== sceneIdRef.current) {
+      return;
+    }
     const time = summary.times_us[frameIndex];
     if (typeof time !== "number") {
       return;
@@ -2284,7 +2300,7 @@ export default function Viewer({
     const stage = stageRef.current;
     const gen = ++drawGen.current;
     const types = new Map(summary.agents.map((agent) => [agent.agent_id, agent.agent_type]));
-    const stale = () => drawGen.current !== gen;
+    const stale = () => drawGen.current !== gen || summary.scene_id !== sceneIdRef.current;
 
     // Update status line immediately on every frame tick during playback
     const latest = latestRef.current;
@@ -2386,18 +2402,26 @@ export default function Viewer({
       setStatus(
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
-      prefetchAhead(cacheRef.current, summary, frameIndex, effectiveToken);
+      prefetchAhead(cacheRef.current, summary, frameIndex, effectiveToken, () => summary.scene_id === sceneIdRef.current);
       paintWait.current?.(time);
     })().catch((error: unknown) => {
-      if (!stale()) {
+      if (!stale() && !isAbortError(error)) {
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
       }
     });
-  }, [summary, frameIndex, hidden, appearance, effectiveToken, mapNote]);
+  }, [summary, frameIndex, hidden, appearance, effectiveToken, mapNote, sceneId]);
 
   useEffect(() => {
     const latest = latestRef.current;
-    if (!summary || !latest || !summary.times_us.includes(latest.frame.time_us)) {
+    if (!summary || !latest || summary.scene_id !== sceneIdRef.current) {
+      return;
+    }
+    if (!summary.times_us.includes(latest.frame.time_us)) {
+      return;
+    }
+    // Only describe the sample the slider is on: while playback runs, the last drawn frame can
+    // lag one behind, and writing its older time would move the status line backwards.
+    if (summary.times_us[Math.min(frameIndex, summary.times_us.length - 1)] !== latest.frame.time_us) {
       return;
     }
     const shown = appearance.points
@@ -2408,12 +2432,15 @@ export default function Viewer({
     setStatus(
       `${summary.scene_id} at ${latest.frame.time_us} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(viewpoint, latest.frame, latest.types, cameraId)}`,
     );
-  }, [viewpoint, cameraId, summary, mapNote, hidden, appearance]);
+  }, [viewpoint, cameraId, summary, mapNote, hidden, appearance, frameIndex, sceneId]);
 
   useEffect(() => {
     const stage = stageRef.current;
     const frame = cameraFrame;
     if (!stage || !frame) {
+      return;
+    }
+    if (frame.scene_id !== sceneIdRef.current) {
       return;
     }
     let cancelled = false;
@@ -2491,7 +2518,7 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, effectiveToken, viewpoint, cameraId, summary, frameIndex, poster]);
+  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, effectiveToken, viewpoint, cameraId, summary, frameIndex, poster, sceneId]);
 
   const sceneKey = summary?.scene_id ?? "";
   // Keyed by scene like the run list, so a switch never shows the previous town's map note.
@@ -2759,15 +2786,25 @@ export default function Viewer({
     if (!summary || !stageRef.current) {
       return;
     }
+    const stillWanted = () => summary.scene_id === sceneIdRef.current;
+    if (!stillWanted()) {
+      return;
+    }
     const stage = stageRef.current;
     const controller = new AbortController();
     void (async () => {
       const base = `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}`;
       const which = await fetch(`${base}/map`, { headers: authHeaders(effectiveToken), signal: controller.signal });
+      if (!stillWanted()) {
+        return;
+      }
       let info: MapInfo | null = null;
       if (which.ok) {
         const body = (await which.json()) as unknown;
         info = isMapInfo(body) ? body : null;
+        if (!stillWanted()) {
+          return;
+        }
         setMapInfoFor({ sceneId: summary.scene_id, info });
       }
       if (info && !info.available) {
@@ -2780,6 +2817,9 @@ export default function Viewer({
         headers: authHeaders(effectiveToken),
         signal: controller.signal,
       });
+      if (!stillWanted()) {
+        return;
+      }
       if (response.status === 404) {
         replaceMap(stage, new ArrayBuffer(0));
         stage.requestRender();
@@ -2790,16 +2830,20 @@ export default function Viewer({
         setMapNote(await errorDetail(response));
         return;
       }
-      replaceMap(stage, await response.arrayBuffer());
+      const lines = await response.arrayBuffer();
+      if (!stillWanted()) {
+        return;
+      }
+      replaceMap(stage, lines);
       stage.requestRender();
       setMapNote("map drawn.");
     })().catch((error: unknown) => {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && stillWanted()) {
         setMapNote(error instanceof Error ? error.message : "Could not draw the map.");
       }
     });
     return () => controller.abort();
-  }, [summary, effectiveToken]);
+  }, [summary, effectiveToken, sceneId]);
 
 
   function chooseViewpoint(next: Viewpoint) {
@@ -3056,6 +3100,13 @@ export default function Viewer({
       return;
     }
     let cancelled = false;
+    // The telemetry series reads every sample of the scene. It must stop at the scene choice, not
+    // when the new summary lands: until then each loop iteration would ask for another old-scene
+    // frame (the cache was already cleared), and those requests queue the new scene behind them.
+    const stillWanted = () => summary.scene_id === sceneIdRef.current;
+    if (!stillWanted()) {
+      return;
+    }
     const times = summary.times_us;
     const vehicleId = summary.agents.find((agent) => agent.agent_type === "vehicle")?.agent_id ?? "";
     void (async () => {
@@ -3070,7 +3121,7 @@ export default function Viewer({
       let previous: FrameDocument | null = null;
       let previousTime = 0;
       for (let index = 0; index < times.length; index += 1) {
-        if (cancelled) {
+        if (cancelled || !stillWanted()) {
           return;
         }
         const time = times[index];
@@ -3078,7 +3129,7 @@ export default function Viewer({
           continue;
         }
         const frame = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
-        if (cancelled) {
+        if (cancelled || !stillWanted()) {
           return;
         }
         let pointCount = 0;
@@ -3164,6 +3215,9 @@ export default function Viewer({
     if (!summary || !cameraFrame) {
       return;
     }
+    if (summary.scene_id !== sceneIdRef.current) {
+      return;
+    }
     const times = summary.times_us;
     const index = times.findIndex((time) => time === cameraFrame.time_us);
     const neighbor = index > 0 ? index - 1 : index + 1;
@@ -3176,7 +3230,7 @@ export default function Viewer({
     const frame = cameraFrame;
     void (async () => {
       const other = await cacheRef.current.loadFrame(summary.scene_id, neighborTime, effectiveToken);
-      if (cancelled) {
+      if (cancelled || summary.scene_id !== sceneIdRef.current) {
         return;
       }
       const next: Record<string, number> = {};
