@@ -1,6 +1,128 @@
 # Handover
 
-The web viewer is a light control shell around a dark viewport, with a dark theme on the same layout. Phase 6 (playback, cameras, sequence export, view settings, and the bird's-eye and overlay figures) is on main. The desktop shell stays out. Do not start a shell, a second dataset, or training code.
+The desktop application is now the top priority per Adarsh's instructions (pausing V2V4Real, release work, and small fixes until the desktop app works end-to-end).
+
+## M1 close-out (2026-10-22)
+
+Task status lives in `TASKS.md`. `origin/main` is `fffda8a`. The installable desktop build is `feat/desktop` `d35dddd`, green 9/9: https://github.com/adarsh-nl/coperceive/actions/runs/39923652622. Dmg `Coperceive_0.1.0_aarch64.dmg`, 84305283 bytes. Artifact `coperceive-desktop-macos-arm64`, 83982684 bytes. A later docs commit that only records these numbers is not that build.
+
+e2e notices from that run: "Step 2b verified: loop stayed off across quit and relaunch."; "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly."; "Playback requirement (c) verified: max frame gap = 207.0ms, loop wraps observed = 1, frames seen = 156." The desktop job is green, so step 3b's view-settings and scene-graph asserts passed. That line is not in the published notices; the workflow only emitted Step 2, Step 2b, and the playback line.
+
+- Loop choice is `last_loop` in Rust `state.json` (`f3820a0`). The fixed-port web app still uses `localStorage` key `coperceive-loop-preference`.
+- Frame advance does not wait on image decode. The playback clock is `setTimeout` from `indexAfter` in `web/src/viewer/Viewer.tsx`; frustum images load in a separate effect via `loadImage`. `paintWait` is only the export path.
+- `coperceive serve` and `GET /api/scenes` require `manifest.json` and `COMPLETE.json`, matching `validate_dataset_root` in `src-tauri/src/state.rs`.
+- Backdrop CPU on that run: motion `animated`, 60 samples after a 5 s warm-up, median 0.6, p95 0.8. The series is in `docs/media/measurements/backdrop-cpu.md`. Run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) does not count (`reduceMotion=1`).
+
+Adarsh still does Mac acceptance (M1-5) and the merge (M1-6).
+
+## Desktop App Status (feat/desktop)
+
+- **ADR 0014**: Committed to `main` at `662fa84` and `feat/desktop` at `c423630`.
+- **Phase 1: Complete**
+  - **Token Security**: Tokens are never passed on argv. `coperceive serve` now supports `COPERCEIVE_TOKEN` and `--token-file` (strictly enforcing file mode `0600` or `0400`, refusing on loose permissions). `--token` is deprecated with a warning.
+  - **Rust Tauri Core (`src-tauri/`)**:
+    - `token.rs`: Cryptographic 128-bit hex token generation and mode 0600 file read/write verification.
+    - `port.rs`: Dynamic ephemeral loopback port discovery (`127.0.0.1:0`).
+    - `ssh.rs`: System SSH wrapper enforcing `BatchMode=yes`, `ControlMaster=auto`, `ControlPersist=10m`, `ConnectTimeout=8`. Classifies stderr into `PublicKeyAuthRequired` (advises `ssh-add`), `EduVpnOrNetworkUnreachable` (advises eduVPN check), or host key mismatch.
+    - `slurm.rs`: Slurm session generator (`coperceive-desktop-<uuid>`, 2h walltime on `ps,main-cpu`), `squeue` output parser for PENDING queue reasons and elapsed time, walltime expiry monitor (warn 10 min before end), orphaned job scanner, and 0600 credentials parser.
+    - 13 Rust unit tests passing.
+  - **TypeScript Bindings**: `web/src/desktop/types.ts` defining `ExecutionTarget`, `ConnectionSession`, `TargetStatus`, `SlurmJobInfo`.
+  - **Gates**: Job `631229` green on `hpc-node12` (`gates rc=0`, 572 passed, 2 skipped, 8 warnings in 165.76s).
+
+- **Phase 2: Complete (Full Tauri v2 Implementation & Bundled Python)**
+  - **Constant-Time Token Comparison**: Updated `coperceive/app/server.py` auth middleware to enforce constant-time verification using `hmac.compare_digest(header[len(prefix):], expected)`.
+  - **Cluster Node-IP Binding**: Updated `src-tauri/src/slurm.rs` sbatch template to bind `--host "$NODE_IP"` (derived from `hostname -I`) instead of `0.0.0.0`.
+  - **Tauri v2 Application (`src-tauri/` & `web/`)**:
+    - `web/package.json`: Upgraded with `@tauri-apps/api@^2.12.4`, `@tauri-apps/plugin-dialog@^2.8.3`, and `@tauri-apps/cli@^2.0.0`.
+    - `src-tauri/Cargo.toml`: Added `tauri = { version = "2.2.5", ... }` and `tauri-plugin-dialog = "2.2.0"` under macOS target dependencies, and `tauri-build = "2.0.5"` build dependency. Non-macOS target retains standard Rust unit tests without GTK3/WebKitGTK dependencies.
+    - `src-tauri/capabilities/default.json`: Grants `core:default` and `dialog:default`.
+    - `src-tauri/tauri.conf.json`: Configures Tauri v2 bundle targets `["app", "dmg"]` with `resources: ["resources/**/*"]`.
+    - `src-tauri/src/main.rs`: Full Tauri application runtime with `#[tauri::command]` handlers:
+      - `pick_data_root`: Invokes `tauri_plugin_dialog::DialogExt::file().blocking_pick_folder()`.
+      - `start_local`: Spawns bundled Python running `coperceive serve` on ephemeral port with mode 0600 token-file; polls `/api/health` with Bearer auth; returns `LocalServeResult { origin, token, port }`.
+      - `stop_local`: Sends SIGTERM, waits up to 3s, then SIGKILL to child process; cleans up token file.
+      - `health`: Probes `/api/health` with Bearer token.
+      - Application lifecycle hooks (`WindowEvent::Destroyed` and `RunEvent::Exit`) terminate any active child process cleanly.
+  - **UI Connection Flow (`web/src/desktop/ConnectScreen.tsx`, `web/src/App.tsx`, `web/src/desktop/local.ts`)**:
+    - Detects Tauri environment via `window.__TAURI_INTERNALS__`.
+    - Shows `ConnectScreen` with Local and Remote options.
+    - Folder picker -> calls `start_local` -> stores token in `sessionStorage` -> transitions into full viewer UI -> plays scenes.
+  - **Bundled Python Standalone (`scripts/desktop/bundle_python.sh`)**:
+    - Packages `python-build-standalone` (`cpython-3.13.1+20250115-aarch64-apple-darwin-install_only.tar.gz`, pinned SHA-256 `d00ac75b15a05da2f6bc0057fe36f6944f9d513239f1c7af12766e03f288fe65`).
+    - Builds `coperceive` wheel and installs into bundled python without torch or viewer extras.
+    - Runtime resolver in `src-tauri/src/main.rs` locates `Contents/Resources/python/bin/python3` via `tauri::path::PathResolver::resource_dir()`, with fallback to `which python3` for development.
+  - **Smoke Test & Verification (`scripts/desktop/smoke_test.sh`)**:
+    - Validates bundled interpreter and `coperceive --help`.
+    - Spawns `coperceive serve` on dynamic port with mode 0600 `--token-file`.
+    - Asserts `/api/health` returns HTTP 401 without token and HTTP 200 with Bearer auth.
+    - Asserts server terminates cleanly on SIGTERM.
+    - Records measured `.app` and `.dmg` bundle sizes.
+  - **CI Workflow (`.github/workflows/ci.yml`)**:
+    - `desktop-macos` job runs on `macos-14` (Apple Silicon arm64).
+    - Standalone Python hash-locked (`scripts/desktop/requirements-darwin-arm64.lock` generated with `uv pip compile --generate-hashes --python-platform aarch64-apple-darwin --python-version 3.13`), installed via `--require-hashes`.
+    - Bundles standalone Python, runs `npm run tauri build -- --target aarch64-apple-darwin`, runs `scripts/desktop/smoke_test.sh`, and uploads `.app` and `.dmg` artifacts.
+    - Verified green in CI run [`39462553220`](https://github.com/adarsh-nl/coperceive/actions/runs/39462553220) (all jobs passed in 6m 40s; artifact `coperceive-desktop-macos-arm64` ID `12284290394`, 352.9 MB; measured `Coperceive.app`: 368 MB, `Coperceive .dmg`: 179 MB).
+  - **Gates**: Job `631378` green on `hpc-node12` (`gates rc=0`, 574 passed, 2 skipped, 8 warnings in 154.16s).
+  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop` (commit `98c625c`).
+
+- **Phase 3: Complete (Cluster Remote Serve, Heartbeat Lease, and Rust SSH Target)**
+  - **Slurm Remote Serve Job (`scripts/desktop/remote_serve.sbatch`)**:
+    - Partition `ps` (UTwente HPC nodes `hpc-node[11-12,14]`), 2 CPUs, 8 GB memory, default walltime 2 hours (configurable).
+    - Session job name `coperceive-desktop-<uuid>`.
+    - Ephemeral cluster IP binding: discovers node IP via `hostname -I` (or `127.0.0.1`), picks an unbound port dynamically.
+    - Security: Token is never placed on argv; read strictly from `~/.coperceive/tokens/<uuid>.token` (mode `0600`). Session state `{uuid, node, ip, port, pid, started_at, last_heartbeat}` written to `~/.coperceive/sessions/<uuid>.json` (mode `0600`). Base directory enforced mode `0700`.
+    - Signal handling: Traps SIGTERM and EXIT, cleanly terminating `coperceive serve`, removing all credentials, and exiting 0.
+    - Heartbeat lease watchdog: background watchdog checks `~/.coperceive/sessions/<uuid>.heartbeat` every 5s; terminates serve and cleans up if heartbeat age >= `COPERCEIVE_HEARTBEAT_TIMEOUT` (default: 600s / 10 min, configurable via env, 0 to disable).
+  - **Cluster Remote CLI (`coperceive remote ...`)**:
+    - Pure machine-readable JSON output for seamless integration with Tauri Rust backend:
+      - `coperceive remote start --root <dir> [--partition ps] [--time 02:00:00] [--cpus 2] [--mem 8G] [--uuid <uuid>]`: Submits sbatch, polls until RUNNING, probes health with Bearer token, returns session JSON.
+      - `coperceive remote status [--uuid <uuid>] [--job-id <id>]`: Reports state (`RUNNING`, `PENDING`, `STOPPED`), elapsed time, time left, queue reason, `last_heartbeat_age_s`, `stopped_reason` (mapped to `cancelled`, `timeout`, `completed`, `failed`), and health check. Emits early warning when walltime has < 10 minutes remaining. Reconstructs state via `sacct` if session file was removed.
+      - `coperceive remote stop [--uuid <uuid>] [--job-id <id>]`: Terminates Slurm job via `scancel` and removes credentials.
+      - `coperceive remote heartbeat --uuid <uuid>`: Touches `<uuid>.heartbeat` (mode 0600) and updates `last_heartbeat` in session JSON; returns `{"status":"ok","uuid":...,"timestamp":...}`.
+      - `coperceive remote list`: Lists active sessions from `~/.coperceive/sessions/` and Slurm jobs owned by user matching `coperceive-desktop-*`; detects and flags orphan jobs (`is_orphan: true`), including sessions with `last_heartbeat_age_s > 180s` (`orphan_reason: "heartbeat_timeout"`).
+  - **Rust SSH Target Core (`src-tauri/src/remote.rs`, `src-tauri/src/ssh.rs`)**:
+    - `RemoteClient`: Runs `coperceive remote start|status|stop|heartbeat|list` over SSH using ControlMaster multiplexing, parsing typed JSON outputs and mapping SSH error stderr.
+    - `SshTunnel`: Manages `ssh -N -L 127.0.0.1:<lp>:<ip>:<port>` subprocess; verifies process liveness, cleanly shuts down on exit/drop.
+    - `RemoteSessionManager`: Manages connection lifecycle and seamlessly reattaches to existing sessions given a UUID.
+    - Tauri commands: `remote_connect`, `remote_status`, `remote_disconnect` under `#[cfg(target_os = "macos")]`; window event listeners ensure background tunnels terminate on close.
+    - 19 Rust unit tests passing in 0.32s (`cargo test --lib`).
+  - **Cluster Drills & Empirical Verification**:
+    - *Heartbeat Drill*: Job `632152` (`af6be217d126533c`) with 45s timeout; `status` showed age 30.7s; heartbeat renewal reduced age to 3.4s; stopping heartbeats triggered watchdog at 46s (`Heartbeat lease expired (46s >= 45s), stopping serve...`) with graceful shutdown and exit 0.
+    - *Walltime Drill*: Job `632153` with 2-minute walltime; trap exited 0 cleanly, sacct state mapped to `stopped_reason`.
+    - *Login-Node Forwarding*: `ssh -N -L localhost` is blocked: port 22 refused on loopback (sshd binds only public IP `130.89.6.42`), and SSH to `spark-head1` gives `Permission denied (publickey)` as login node has no self-referential keys in `~/.ssh/authorized_keys`.
+  - **Unit and Integration Tests**:
+    - 11 fast Python unit tests in `tests/test_remote.py` passing in ~1.2s.
+    - 19 Rust unit tests in `src-tauri/` passing in ~0.3s.
+    - CI Run [`39467524258`](https://github.com/adarsh-nl/coperceive/actions/runs/39467524258) green across all jobs.
+  - **Gates**: Job `632157` green on `hpc-node12` (`gates rc=0`, 586 passed, 2 skipped, 8 warnings in 203.24s).
+
+## Phase 2 Mac Acceptance Instructions
+
+- **Scene to copy**: `Town03-000` (6.9 MB, 149 frames, vehicle + drone with bounding boxes and annotations).
+- **SCP Command from Mac**:
+  ```bash
+  mkdir -p ~/coperceive-data
+  scp -r nanjaiyalathaa@hpc-head1.ewi.utwente.nl:~/results/reference-stepb-20261020/staged-scenes/Town03-000 ~/coperceive-data/
+  ```
+- **Opening Unsigned App on macOS**:
+  1. Download `coperceive-desktop-macos-arm64` artifact from GitHub Actions run on `feat/desktop`.
+  2. Open the `.dmg` and drag `Coperceive.app` into `/Applications` (or Desktop).
+  3. Bypass Apple Gatekeeper for the unsigned build:
+     ```bash
+     xattr -cr /Applications/Coperceive.app
+     ```
+     *(Alternatively: Right-click `Coperceive.app` in Finder -> select **Open** -> click **Open** in the security dialog).*
+  4. Launch the app, select **Local**, choose folder `~/coperceive-data`, and confirm `Town03-000` loads and plays.
+
+## Cluster Empirical Findings (UTwente HPC)
+
+- **Login-Node Policy**: "Login-node commands stay under 1 minute. Heavy work goes through sbatch" (source: user handover rules & UTwente EEMCS HPC documentation at `https://hpc.wiki.utwente.nl/eemcs-hpc`). Persistent server daemons serving point cloud queries on `hpc-head1` are prohibited.
+- **Partitions**: `ps,main-cpu` verified via `sinfo -p ps,main-cpu` (yielding `hpc-node[11-12]` on `ps` and `spark-head[1-4],caserta,ctit087` on `main-cpu`).
+- **Remote Bind Architecture & Evidence**:
+  - Direct SSH from login node to compute nodes (`ssh -o BatchMode=yes hpc-node11`) returns `Permission denied (publickey,password,keyboard-interactive)`.
+  - `/etc/pam.d/slurm` contains only `pam_localuser.so, pam_unix.so, pam_limits.so`; `pam_slurm_adopt` is not installed.
+  - Direct user SSH to compute nodes (and SSH `ProxyJump`) is blocked.
+  - **Architecture**: `coperceive serve` binds to compute node IP (`10.20.240.x`) inside the Slurm job with `--token-file` (mode 0600), and an SSH local port forward tunnels from macOS loopback through the login node (`hpc-head1`): `ssh -L 127.0.0.1:<local_port>:<node_ip>:<port> <hpc_alias> -N`.
 
 ## Goal
 
@@ -737,7 +859,6 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
     - `scripts/griffin/compare_runs.py` against filtered 628386 (`~/results/stepb/compare-628386-early.txt`): `early-vehicle-fused` vs `griffin25m-early-plugin` (`8,971 of 8,971 rows`) pairs **100% of rows in exact file order**, `0 with another (time, agent, category)`, `|size| 0 m`, `|quaternion| 0`, `|score| 0` across all 10 scenes; `max |centre|` is `1.42109e-14 m` to `2.84217e-14 m` (1–2 float64 ULPs).
     - `coperceive eval compare` across all 4 configs (`~/results/stepb/compare-early-old-vs-plugin{,-mapped,-centre,-centre-mapped}.md`): **every single cell of every scene row and every `all` row across all 4 comparison tables is `+0` or `+0.000`** (`10 shared, 0 only in either run`).
 
-
 ### 2026-10-20 — Public Landing Page with 3D Cooperative Hero Animation (`feat/landing`)
 
 - **Branch and isolation**: Built on branch `feat/landing` in worktree `/home/nanjaiyalathaa/wt/landing` (branched from `main` at `662fa84`). Completely isolated: zero touches to `src-tauri/`, `web/src/desktop/` or desktop CI jobs.
@@ -790,3 +911,20 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
 - Code in `site/src/landing/`: a TypeScript port of the design's two canvases (`story.ts`: seeded city, cars with ray-cast lidar, drones with camera footprints, shared tracks, hover, legend, timeline; `evalScene.ts`: simulated drive, BEV-IoU greedy matching, precision/recall fence, toggles) and `Landing.tsx` for the markup, reveal-on-scroll and typed install block. Deviations: the evaluate scene's roadside posts use a seeded hash instead of `Math.random`; the stats show from the first frame; narrow screens use a 24 px gutter and hide the HUD and stats; reduced motion holds both scenes still.
 - `tests/test_landing_page.py` was rewritten for this page (headline, nav and links, same-origin requests only, canvas draws and moves, scroll captions and progress, pipeline titles, typed install, evaluate toggles, skip link, axe serious/critical 0, no overflow at 375 px; reduced motion). `scripts/site/measure_and_record.py` works unchanged (`canvas[data-bev=hero]` is the story canvas).
 - The open PRs #33 (N-agent clip), #35 (responsive tests on the old hero), #36 (budget: its RealClip check expects a RealClip chunk, and its static shell mirrors the old hero) and #38 (waitlist) target the previous page; decide which still apply.
+
+## Desktop App — Phase 2: macOS Apple Silicon Native Bundle & Verification
+- **Architecture**:
+  - Real Tauri v2 desktop application (`tauri` 2.x, `tauri-plugin-dialog`, `@tauri-apps/api`, `@tauri-apps/cli`).
+  - Bundled pinned `python-build-standalone` (`cpython-3.13.1+20250115-aarch64-apple-darwin`, SHA-256 `d00ac75b15a05da2f6bc0057fe36f6944f9d513239f1c7af12766e03f288fe65`), coperceive wheel, and locked core/app dependencies (numpy, pyarrow, pillow, matplotlib, pyyaml, fastapi, uvicorn, pydantic) in `Contents/Resources/resources/python`. Excludes PyTorch and viewer extras.
+  - Rust IPC commands: `pick_data_root`, `start_local`, `stop_local`, `health`.
+  - Process lifecycle: Allocates ephemeral loopback port and mode 0600 token file, polls `/api/health` with Bearer auth, automatically terminates child process with SIGTERM/SIGKILL on window close (`WindowEvent::Destroyed`) and app exit (`RunEvent::Exit`).
+- **Security & Conformance (ADR 0007 / ADR 0014)**:
+  - Non-loopback and loopback token enforcement: `test_non_loopback_token_auth_protects_all_api_routes`, `test_token_auth_uses_constant_time_comparison` (`hmac.compare_digest`), `test_serve_token_from_file_strict_permissions`.
+  - Token never in argv or URLs; passed strictly via `COPERCEIVE_TOKEN` or `--token-file` (mode 0600 required).
+- **CI Verification (Run 39446091812 on `macos-14`, duration 5m 31s, Conclusion: SUCCESS)**:
+  - Run URL: `https://github.com/adarsh-nl/coperceive/actions/runs/39446091812`
+  - 14 Rust unit tests in `src/lib.rs` passed.
+  - Bundled `.app` and `.dmg` built natively on Apple Silicon runner.
+  - Smoke test passed in 15s: verified bundled Python interpreter, confirmed `coperceive` imports from bundled site-packages, confirmed `Server is healthy!`, confirmed HTTP 401 on unauthenticated access, confirmed HTTP 200 on authenticated access, and clean child termination.
+  - Uploaded artifact: `coperceive-desktop-macos-arm64` (`size_in_bytes: 352864650`, SHA-256 `65abd05dce2687e87e60f23e1a67f06d2c7339cd524f8cf275c2534b14aff13e`).
+

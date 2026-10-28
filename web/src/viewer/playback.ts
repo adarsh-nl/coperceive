@@ -91,3 +91,22 @@ export function neighborSpeed(current: Speed, direction: number): Speed {
 export function formatClock(timeUs: number): string {
   return `${(timeUs / 1_000_000).toFixed(1)} s`;
 }
+
+/**
+ * Returns true if the index falls inside the end zone:
+ * the last 5% of samples or the last 2 seconds, whichever covers more samples.
+ */
+export function isEndZone(times: readonly number[] | undefined, index: number): boolean {
+  if (!times || times.length < 2) {
+    return false;
+  }
+  const length = times.length;
+  if (index >= length - 1) {
+    return true;
+  }
+  const fivePercentIndex = Math.max(0, Math.floor(length * 0.95));
+  const endTime = times[length - 1];
+  const twoSecondsBefore = endTime - 2_000_000;
+  return index >= fivePercentIndex || (typeof times[index] === "number" && times[index] >= twoSecondsBefore);
+}
+

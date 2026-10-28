@@ -2,17 +2,38 @@ import { Label } from "@radix-ui/react-label";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
+import ConnectScreen from "./desktop/ConnectScreen";
+import { isTauriEnvironment } from "./desktop/local";
 import Landing, { readTheme, writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
 import type { ThemeName } from "./viewer/appearance";
 import Viewer from "./viewer/Viewer";
 
-function useHashRoute(): "home" | "viewer" {
-  const [route, setRoute] = useState<"home" | "viewer">(() =>
-    window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home",
-  );
+function useHashRoute(): "home" | "viewer" | "connect" {
+  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const [route, setRoute] = useState<"home" | "viewer" | "connect">(() => {
+    const raw = typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
+    if (raw === "/connect") return "connect";
+    if (isDesktop) return "viewer";
+    return raw === "/viewer" ? "viewer" : "home";
+  });
   useEffect(() => {
-    const onHash = () => setRoute(window.location.hash.replace(/^#/, "") === "/viewer" ? "viewer" : "home");
+    const onHash = () => {
+      const raw = window.location.hash.replace(/^#/, "");
+      if (raw === "/connect") {
+        setRoute("connect");
+        return;
+      }
+      const isDesktopNow = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+      if (isDesktopNow) {
+        if (window.location.hash !== "#/viewer") {
+          window.location.hash = "#/viewer";
+        }
+        setRoute("viewer");
+        return;
+      }
+      setRoute(raw === "/viewer" ? "viewer" : "home");
+    };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
   }, []);
@@ -22,12 +43,77 @@ function useHashRoute(): "home" | "viewer" {
 const TOKEN_KEY = "coperceive-token";
 
 function storedToken(): string {
-  return sessionStorage.getItem(TOKEN_KEY) ?? "";
+  try {
+    return (typeof sessionStorage !== "undefined" ? sessionStorage.getItem(TOKEN_KEY) ?? "" : "");
+  } catch {
+    return "";
+  }
+}
+
+function DesktopPreferences() {
+  const [reopenLast, setReopenLast] = useState<boolean>(true);
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      const port = window.__COPERCEIVE_CTRL_PORT__;
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+      fetch(`http://127.0.0.1:${port}/state`, {
+        headers: { Authorization: `Bearer ${secret}` },
+      })
+        .then((r) => r.json())
+        .then((data: { reopen_last_session?: boolean }) => {
+          if (data && typeof data.reopen_last_session === "boolean") {
+            setReopenLast(data.reopen_last_session);
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  const handleToggle = (checked: boolean) => {
+    setReopenLast(checked);
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      const port = window.__COPERCEIVE_CTRL_PORT__;
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+      fetch(`http://127.0.0.1:${port}/state`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${secret}`,
+        },
+        body: JSON.stringify({ reopen_last_session: checked }),
+      }).catch(() => {});
+    }
+  };
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minWidth: "220px" }}>
+      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "13px", cursor: "pointer" }}>
+        <input
+          type="checkbox"
+          checked={reopenLast}
+          onChange={(e) => handleToggle(e.target.checked)}
+        />
+        <span>Reopen last session on launch</span>
+      </label>
+      <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
+        When unchecked, Coperceive starts at the Connect screen.
+      </p>
+    </div>
+  );
 }
 
 export default function App() {
+  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
   const queryClient = useQueryClient();
   const route = useHashRoute();
+  const [isTauri] = useState(isTauriEnvironment);
+  const isRemoteOrHttp =
+    typeof window !== "undefined" &&
+    (window.location.protocol === "http:" || window.location.protocol === "https:");
+  const [connected, setConnected] = useState(
+    () => !isTauriEnvironment() || isRemoteOrHttp || Boolean(storedToken()),
+  );
   const [token, setToken] = useState(storedToken);
   const [theme, setTheme] = useState<ThemeName>(readTheme);
   const [argument, setArgument] = useState("hello from the data desk");
@@ -40,7 +126,45 @@ export default function App() {
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    sessionStorage.setItem(TOKEN_KEY, token);
+    if (isDesktop && window.location.hash !== "#/viewer") {
+      window.location.hash = "#/viewer";
+    }
+  }, [isDesktop]);
+
+  useEffect(() => {
+    if (token && typeof sessionStorage !== "undefined") {
+      try {
+        sessionStorage.setItem(TOKEN_KEY, token);
+      } catch {}
+    }
+  }, [token]);
+
+  useEffect(() => {
+    if (!token && typeof sessionStorage !== "undefined") {
+      try {
+        const stored = sessionStorage.getItem(TOKEN_KEY);
+        if (stored) {
+          setToken(stored);
+        }
+      } catch {}
+    }
+  }, [token]);
+
+  useEffect(() => {
+    const checkToken = () => {
+      try {
+        const stored = sessionStorage.getItem(TOKEN_KEY);
+        if (stored && stored !== token) {
+          setToken(stored);
+        }
+      } catch {}
+    };
+    window.addEventListener("storage", checkToken);
+    window.addEventListener("coperceive-token-sync", checkToken);
+    return () => {
+      window.removeEventListener("storage", checkToken);
+      window.removeEventListener("coperceive-token-sync", checkToken);
+    };
   }, [token]);
 
   useEffect(() => {
@@ -142,7 +266,18 @@ export default function App() {
 
   const jobRows: Job[] = jobs.data ?? [];
 
-  if (route === "home") {
+  if ((isTauri && !connected) || route === "connect") {
+    return (
+      <ConnectScreen
+        onConnected={(session) => {
+          setToken(session.token);
+          setConnected(true);
+        }}
+      />
+    );
+  }
+
+  if (route === "home" && !isDesktop) {
     return (
       <Landing
         token={token}
@@ -159,59 +294,67 @@ export default function App() {
   }
 
   return (
-    <div className={tab === "viewer" ? "shell" : "shell shell-desk"}>
+    <div className={tab === "viewer" || isDesktop ? "shell" : "shell shell-desk"}>
       <header className="topbar">
         <div className="top-cluster">
-          <a className="brand" href="#/">
+          <a className="brand" href={isDesktop ? "#/viewer" : "#/"}>
             <span className="brand-mark" aria-hidden="true" />
             coperceive
           </a>
           <div className="top-slot" ref={setSlot} />
         </div>
-        <div className="tabs" role="tablist" aria-label="Sections">
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "viewer"}
-            className={tab === "viewer" ? "tab selected" : "tab"}
-            onClick={() => setTab("viewer")}
-          >
-            Viewer
-          </button>
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "desk"}
-            className={tab === "desk" ? "tab selected" : "tab"}
-            onClick={() => setTab("desk")}
-          >
-            Desk
-          </button>
-        </div>
+        {!isDesktop && (
+          <div className="tabs" role="tablist" aria-label="Sections">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "viewer"}
+              className={tab === "viewer" ? "tab selected" : "tab"}
+              onClick={() => setTab("viewer")}
+            >
+              Viewer
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === "desk"}
+              className={tab === "desk" ? "tab selected" : "tab"}
+              onClick={() => setTab("desk")}
+            >
+              Desk
+            </button>
+          </div>
+        )}
         <div className="top-cluster top-end">
           <div className="top-actions" ref={setActions} />
           <details className="settings">
             <summary className="icon ghost" aria-label="Settings">
               <IconGear />
             </summary>
-          <div className="settings-pop">
-            <label htmlFor="token-global">
-              Bearer token
-              <input
-                id="token-global"
-                type="password"
-                autoComplete="off"
-                value={token}
-                onChange={(event) => setToken(event.target.value)}
-                placeholder="Empty when the server has no token"
-              />
-            </label>
-            <p className="muted">Stored in this tab only. A non-loopback bind refuses to start without a token.</p>
-          </div>
+            <div className="settings-pop">
+              {!isDesktop ? (
+                <>
+                  <label htmlFor="token-global">
+                    Bearer token
+                    <input
+                      id="token-global"
+                      type="password"
+                      autoComplete="off"
+                      value={token}
+                      onChange={(event) => setToken(event.target.value)}
+                      placeholder="Empty when the server has no token"
+                    />
+                  </label>
+                  <p className="muted">Stored in this tab only. A non-loopback bind refuses to start without a token.</p>
+                </>
+              ) : (
+                <DesktopPreferences />
+              )}
+            </div>
           </details>
         </div>
       </header>
-      {tab === "viewer" ? (
+      {tab === "viewer" || isDesktop ? (
         <Viewer token={token} slot={slot} actions={actions} onTheme={setTheme} />
       ) : null}
 

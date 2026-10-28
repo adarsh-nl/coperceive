@@ -96,6 +96,7 @@ def test_import_run_serve_export_and_compare(
     scene = replace(cooperative_scene(), scene_id=SCENE_ID)
     scenes = tmp_path / "scenes"
     write_scene(scene, scenes / SCENE_ID)
+    (scenes / SCENE_ID / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
     _, boxes = synthetic_predictions(scene)
     jsonl = tmp_path / "boxes.jsonl"
     jsonl.write_text("".join(json.dumps(_jsonl_row(box)) + "\n" for box in boxes), encoding="utf-8")

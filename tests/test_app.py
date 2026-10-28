@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 from coperceive.app.jobs import confine
 from coperceive.app.server import create_app
-from coperceive.cli import main
+from coperceive.cli import build_parser, main
 from coperceive.evaluation.config import DEFAULT_CONFIG
 from coperceive.evaluation.evaluate import evaluate_run
 from coperceive.evaluation.predictions import write_run
@@ -51,6 +51,56 @@ def test_refuses_public_bind_without_token() -> None:
     assert exc.value.code == 2
 
 
+def test_serve_token_from_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("COPERCEIVE_TOKEN", "env-secret-token")
+    parser = build_parser()
+    args = parser.parse_args(["serve", "--root", str(tmp_path)])
+    from coperceive.cli import _resolve_token
+
+    assert _resolve_token(args) == "env-secret-token"
+
+
+def test_serve_token_from_file_strict_permissions(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    token_file = tmp_path / "token.txt"
+    token_file.write_text("file-secret-token\n", encoding="utf-8")
+    token_file.chmod(0o600)
+
+    parser = build_parser()
+    args = parser.parse_args(["serve", "--root", str(tmp_path), "--token-file", str(token_file)])
+    from coperceive.cli import _resolve_token
+
+    assert _resolve_token(args) == "file-secret-token"
+
+    # Loose permissions (0o644 or 0o660) must be rejected
+    token_file.chmod(0o644)
+    with pytest.raises(SystemExit) as exc:
+        _resolve_token(args)
+    assert exc.value.code == 2
+    assert "loose permissions" in capsys.readouterr().err
+
+    # Missing file must be rejected
+    missing = tmp_path / "missing.txt"
+    args_missing = parser.parse_args(
+        ["serve", "--root", str(tmp_path), "--token-file", str(missing)]
+    )
+    with pytest.raises(SystemExit) as exc_missing:
+        _resolve_token(args_missing)
+    assert exc_missing.value.code == 2
+    assert "not a file" in capsys.readouterr().err
+
+
+def test_serve_token_argv_warns_deprecation(tmp_path: Path) -> None:
+    parser = build_parser()
+    args = parser.parse_args(["serve", "--root", str(tmp_path), "--token", "argv-token"])
+    from coperceive.cli import _resolve_token
+
+    with pytest.deprecated_call(match="Passing --token on argv is deprecated"):
+        token = _resolve_token(args)
+    assert token == "argv-token"
+
+
 def test_path_confinement(tmp_path: Path) -> None:
     inside = tmp_path / "note.txt"
     inside.write_text("ok", encoding="utf-8")
@@ -88,6 +138,12 @@ def test_jobs_sse_and_files(tmp_path: Path) -> None:
     assert escaped.status_code == 400
 
 
+def stamp_scene(scene: Scene, directory: Path) -> None:
+    """Write a scene the desktop server will list (manifest and COMPLETE.json)."""
+    write_scene(scene, directory)
+    (directory / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
+
+
 def _viewer_scene(root: Path) -> None:
     pose = StampedPose(0, SE3.identity().translation(10.0, 0.0, 0.0))
     agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
@@ -104,7 +160,42 @@ def _viewer_scene(root: Path) -> None:
         objects=(),
         point_clouds=(cloud,),
     )
-    write_scene(scene, root / "desk")
+    stamp_scene(scene, root / "desk")
+
+
+def test_serve_rejects_a_root_without_a_complete_scene(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with pytest.raises(SystemExit) as exc:
+        main(["serve", "--root", str(tmp_path)])
+    assert exc.value.code == 2
+    err = capsys.readouterr().err
+    assert "COMPLETE.json" in err
+    assert "manifest.json" in err
+
+
+def test_scene_list_omits_a_directory_without_complete(tmp_path: Path) -> None:
+    _viewer_scene(tmp_path)
+    partial = tmp_path / "partial"
+    pose = StampedPose(0, SE3.identity())
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="partial",
+        world_frame="ENU",
+        clock=Clock("us", "incomplete"),
+        agents=(Agent("vehicle", AgentType.VEHICLE, (pose,)),),
+        sensors=(),
+        annotations=(),
+        objects=(),
+        point_clouds=(),
+    )
+    write_scene(scene, partial)
+    client = TestClient(create_app(root=tmp_path, token=None))
+    listed = client.get("/api/scenes")
+    assert listed.status_code == 200
+    assert listed.json() == [{"scene_id": "desk"}]
+    assert client.get("/api/scenes/partial").status_code == 404
+    assert client.get("/api/scenes/desk").status_code == 200
 
 
 def test_viewer_api_lists_a_frame_and_rejects_a_bad_id(tmp_path: Path) -> None:
@@ -163,7 +254,7 @@ def test_image_route_serves_the_recorded_file(tmp_path: Path) -> None:
         objects=(),
         images=(ImageRef("vehicle", "front", 0, "camera/front/000000.png"),),
     )
-    write_scene(scene, tmp_path / "desk")
+    stamp_scene(scene, tmp_path / "desk")
     image = tmp_path / "desk" / "camera" / "front" / "000000.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(_PNG)
@@ -180,7 +271,7 @@ def test_image_route_serves_the_recorded_file(tmp_path: Path) -> None:
         objects=(),
         images=(ImageRef("vehicle", "front", 0, "../secret.png"),),
     )
-    write_scene(escaped, tmp_path / "leak")
+    stamp_scene(escaped, tmp_path / "leak")
     client = TestClient(create_app(root=tmp_path, token=None))
     found = client.get(
         "/api/scenes/desk/image",
@@ -247,7 +338,7 @@ def test_sequence_export_route_writes_gif_and_view(tmp_path: Path) -> None:
         objects=(),
         images=(ImageRef("vehicle", "front", 0, "camera/front/0.png"),),
     )
-    write_scene(scene, tmp_path / "desk")
+    stamp_scene(scene, tmp_path / "desk")
     image = tmp_path / "desk" / "camera" / "front" / "0.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(_PNG)
@@ -327,7 +418,7 @@ def test_plot_routes_require_the_csrf_header_and_write_svg(tmp_path: Path) -> No
         objects=(),
         images=(ImageRef("vehicle", "front", 0, "camera/front/0.png"),),
     )
-    write_scene(scene, tmp_path / "desk")
+    stamp_scene(scene, tmp_path / "desk")
     image = tmp_path / "desk" / "camera" / "front" / "0.png"
     image.parent.mkdir(parents=True)
     image.write_bytes(_PNG)
@@ -380,6 +471,7 @@ def test_map_http_and_favicon(tmp_path: Path) -> None:
     )
     scenes = tmp_path / "scenes"
     _scene_on_lane(scenes)
+    (scenes / "Town03-000" / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
     app = create_app(root=scenes, token=None, maps=maps)
     client = TestClient(app)
     summary = client.get("/api/scenes/Town03-000/map")
@@ -400,7 +492,7 @@ def _evaluated_root(root: Path, *, predictions: Path | None = None) -> Path:
     """``root/scenes/coop`` plus the ``synthetic`` run, written and evaluated."""
     scene = cooperative_scene()
     scenes = root / "scenes"
-    write_scene(replace(scene, scene_id="coop"), scenes / "coop")
+    stamp_scene(replace(scene, scene_id="coop"), scenes / "coop")
     store = scenes / "predictions" if predictions is None else predictions
     meta, boxes = synthetic_predictions(scene)
     rows = tuple(replace(box, scene_id="coop") for box in boxes)
@@ -618,13 +710,13 @@ def test_image_route_follows_a_symlink_only_into_a_media_root(tmp_path: Path) ->
     elsewhere.parent.mkdir()
     elsewhere.write_bytes(_PNG)
     root = tmp_path / "scenes"
-    write_scene(_camera_scene("linked", "vehicle-side/camera/front/000000.png"), root / "linked")
+    stamp_scene(_camera_scene("linked", "vehicle-side/camera/front/000000.png"), root / "linked")
     (root / "linked" / "vehicle-side").mkdir()
     (root / "linked" / "vehicle-side" / "camera").symlink_to(media / "vehicle-side" / "camera")
-    write_scene(_camera_scene("stray", "leak/secret.png"), root / "stray")
+    stamp_scene(_camera_scene("stray", "leak/secret.png"), root / "stray")
     (root / "stray" / "leak").symlink_to(elsewhere.parent)
     dotted = "../../release/vehicle-side/camera/front/000000.png"
-    write_scene(_camera_scene("dotted", dotted), root / "dotted")
+    stamp_scene(_camera_scene("dotted", dotted), root / "dotted")
     params = {"time_us": 0, "agent_id": "vehicle", "sensor_id": "front"}
 
     plain = TestClient(create_app(root=root, token=None))
@@ -642,8 +734,8 @@ def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
     """The scene summary says how many lidar sweeps and image rows the scene has and whether
     the image files are actually present, so the page can show an empty state per pane."""
     root = tmp_path / "scenes"
-    write_scene(_camera_scene("bare", "vehicle-side/camera/front/000000.png"), root / "bare")
-    write_scene(_camera_scene("staged", "vehicle-side/camera/front/000000.png"), root / "staged")
+    stamp_scene(_camera_scene("bare", "vehicle-side/camera/front/000000.png"), root / "bare")
+    stamp_scene(_camera_scene("staged", "vehicle-side/camera/front/000000.png"), root / "staged")
     staged_file = root / "staged" / "vehicle-side" / "camera" / "front" / "000000.png"
     staged_file.parent.mkdir(parents=True)
     staged_file.write_bytes(_PNG)
@@ -657,7 +749,7 @@ def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
     assert (desk["point_sweeps"], desk["image_rows"], desk["images_staged"]) == (1, 0, None)
     # A path the OS cannot stat (over-long component) is absent, not a 500.
     overlong = "a" * 300 + "/img.png"
-    write_scene(_camera_scene("odd", overlong), root / "odd")
+    stamp_scene(_camera_scene("odd", overlong), root / "odd")
     odd = client.get("/api/scenes/odd")
     assert odd.status_code == 200
     assert odd.json()["images_staged"] is False
@@ -665,3 +757,137 @@ def test_summary_reports_what_media_is_staged(tmp_path: Path) -> None:
         "/api/scenes/odd/image", params={"time_us": 0, "agent_id": "vehicle", "sensor_id": "front"}
     )
     assert image.status_code == 404
+
+
+def test_non_loopback_token_auth_protects_all_api_routes(tmp_path: Path) -> None:
+    """When a token is configured (e.g. binding non-loopback on a cluster node), every /api
+    route (GET included: scenes, frames, points, images, map lines, jobs, predictions)
+    strictly requires the Bearer token and returns 401 if missing or invalid."""
+    root = tmp_path / "scenes"
+    _viewer_scene(root)  # creates scene "desk"
+    token = "secret-session-token-xyz"
+    app = create_app(root=root, token=token)
+    client = TestClient(app)
+
+    routes = [
+        "/api/health",
+        "/api/scenes",
+        "/api/scenes/desk",
+        "/api/scenes/desk/frame",
+        "/api/scenes/desk/points",
+        "/api/scenes/desk/image",
+        "/api/scenes/desk/map/lines",
+        "/api/jobs",
+        "/api/scenes/desk/predictions",
+    ]
+
+    for route in routes:
+        # Request with no Authorization header
+        resp_no_auth = client.get(route)
+        assert resp_no_auth.status_code == 401, (
+            f"{route} without auth returned {resp_no_auth.status_code}"
+        )
+        assert resp_no_auth.json() == {"detail": "bearer token required"}
+
+        # Request with invalid token
+        resp_bad_auth = client.get(route, headers={"Authorization": "Bearer wrong-token"})
+        assert resp_bad_auth.status_code == 401, (
+            f"{route} with bad auth returned {resp_bad_auth.status_code}"
+        )
+        assert resp_bad_auth.json() == {"detail": "bearer token required"}
+
+        # Request with valid token should not be rejected with 401
+        resp_good = client.get(route, headers={"Authorization": f"Bearer {token}"})
+        assert resp_good.status_code != 401, (
+            f"{route} with valid auth returned {resp_good.status_code}"
+        )
+
+
+def test_token_auth_uses_constant_time_comparison(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Token authentication uses constant-time comparison (hmac.compare_digest)
+    to prevent timing attacks."""
+    import hmac
+
+    called = []
+    original_compare = hmac.compare_digest
+
+    def spy_compare(a: str, b: str) -> bool:
+        called.append((a, b))
+        return original_compare(a, b)
+
+    monkeypatch.setattr(hmac, "compare_digest", spy_compare)
+
+    token = "super-secret-token-123"
+    app = create_app(root=tmp_path, token=token)
+    client = TestClient(app)
+
+    resp = client.get("/api/health", headers={"Authorization": f"Bearer {token}"})
+    assert resp.status_code == 200
+    assert len(called) >= 1
+    assert called[-1] == (token, token)
+
+    called.clear()
+    resp_bad = client.get("/api/health", headers={"Authorization": "Bearer bad-token"})
+    assert resp_bad.status_code == 401
+    assert len(called) >= 1
+    assert called[-1] == ("bad-token", token)
+
+
+def test_cors_options_preflight_on_authenticated_server(tmp_path: Path) -> None:
+    """CORS OPTIONS preflight requests must succeed without Authorization headers
+    when allow_origin matches, so that the browser can complete cross-origin
+    requests when switching sidecar instances."""
+    app = create_app(
+        root=tmp_path,
+        token="preflight-secret-token",
+        allow_origin="http://127.0.0.1:49152",
+    )
+    client = TestClient(app)
+
+    resp = client.options(
+        "/api/scenes",
+        headers={
+            "Origin": "http://127.0.0.1:49152",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.headers.get("access-control-allow-origin") == "http://127.0.0.1:49152"
+    assert "authorization" in resp.headers.get("access-control-allow-headers", "").lower()
+    # allow_credentials must be False
+    allow_cred = resp.headers.get("access-control-allow-credentials")
+    assert allow_cred is None or allow_cred == "false"
+
+
+def test_cors_foreign_origin_rejected(tmp_path: Path) -> None:
+    """A foreign localhost or remote origin gets no CORS allow headers."""
+    app = create_app(
+        root=tmp_path,
+        token="preflight-secret-token",
+        allow_origin="http://127.0.0.1:49152",
+    )
+    client = TestClient(app)
+
+    # Foreign localhost origin preflight
+    resp_preflight = client.options(
+        "/api/scenes",
+        headers={
+            "Origin": "http://127.0.0.1:55555",
+            "Access-Control-Request-Method": "GET",
+            "Access-Control-Request-Headers": "authorization",
+        },
+    )
+    assert resp_preflight.headers.get("access-control-allow-origin") is None
+
+    # Foreign origin GET request
+    resp_get = client.get(
+        "/api/scenes",
+        headers={
+            "Origin": "http://127.0.0.1:55555",
+            "Authorization": "Bearer preflight-secret-token",
+        },
+    )
+    assert resp_get.headers.get("access-control-allow-origin") is None

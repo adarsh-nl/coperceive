@@ -21,6 +21,7 @@ def run(
     predictions: str | None = None,
     static: str | None = None,
     media_roots: tuple[str, ...] = (),
+    allow_origin: str | None = None,
 ) -> None:
     app = create_app(
         root=Path(root),
@@ -30,5 +31,12 @@ def run(
         predictions=predictions,
         static=static,
         media_roots=media_roots,
+        allow_origin=allow_origin,
     )
     uvicorn.run(app, host=host, port=port, root_path=root_path)
+
+
+if __name__ == "__main__":
+    from coperceive.cli import main
+
+    main()
