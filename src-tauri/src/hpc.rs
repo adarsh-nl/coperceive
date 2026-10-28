@@ -30,7 +30,8 @@ fn normalise_path(path: &str, field: &str) -> Result<String, String> {
         if !rest.is_empty() && !rest.starts_with('/') {
             return Err(format!("{field} must be ~/..., got {path:?}."));
         }
-        ("~", &rest[1..])
+        // "~" alone has no rest; slicing [1..] on it would panic.
+        ("~", if rest.is_empty() { "" } else { &rest[1..] })
     } else {
         ("", &path[1..])
     };
@@ -682,6 +683,21 @@ mod tests {
         let text = serde_json::to_string(&spec).expect("json");
         let back: PipelineSpec = serde_json::from_str(&text).expect("back");
         assert_eq!(back, spec);
+    }
+
+    #[test]
+    fn normalise_path_handles_tilde_roots_without_panicking() {
+        assert_eq!(normalise_path("~", "root").expect("home"), "~");
+        assert_eq!(normalise_path("~/", "root").expect("home slash"), "~");
+        assert_eq!(normalise_path("~/data", "root").expect("home data"), "~/data");
+        assert_eq!(
+            normalise_path("~/data//scenes/./x", "root").expect("noise"),
+            "~/data/scenes/x"
+        );
+        // "~user" is not the remote home; refuse it plainly instead of panicking.
+        assert!(normalise_path("~user/data", "root").is_err());
+        assert_eq!(normalise_path("/a//b/./c", "root").expect("absolute"), "/a/b/c");
+        assert_eq!(normalise_path("/", "root").expect("slash"), "/");
     }
 
     #[test]
