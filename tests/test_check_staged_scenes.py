@@ -141,7 +141,7 @@ def test_check_opens_the_scene_it_was_asked_for_whatever_the_page_opened_on(
         # names the gap. Nothing else may fail.
         assert [url.rsplit("/", 1)[-1] for url in row["http_errors"]] == ["predictions"]
         pills = row["missing_pill"]
-        assert any(pill.startswith("Predictions: no predictions root") for pill in pills)
+        assert any(pill.startswith("Predictions: no predictions") for pill in pills)
         assert (out / f"{row['scene_id']}.png").is_file()
         assert (out / f"{row['scene_id']}-split.png").is_file()
     assert report["page_errors"] == []

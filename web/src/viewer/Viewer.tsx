@@ -25,7 +25,7 @@ import { boxCenter, followPick, type PickRecord } from "./inspect";
 import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
 import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
-import { formatClock, indexAfter, neighborSpeed, stepIndex, type Speed } from "./playback";
+import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
 import {
   buildPredictionObjects,
   disposePredictionGroup,
@@ -90,6 +90,7 @@ type Stage = {
   controls: OrbitControls;
   solids: THREE.Group;
   requestRender: () => void;
+  renderNow: () => void;
   captureView: (width: number, height: number) => string;
   setTheme: (theme: Appearance["theme"]) => void;
   bloom: BloomRig;
@@ -377,6 +378,73 @@ function mapGeometry(buffer: ArrayBuffer): THREE.BufferGeometry {
   return geometry;
 }
 
+let sceneDrawToken = 0;
+
+function bumpSceneDrawToken(): number {
+  sceneDrawToken += 1;
+  return sceneDrawToken;
+}
+
+function tagObject(object: THREE.Object3D, sceneId: string) {
+  object.userData.coperceiveSceneId = sceneId;
+  object.userData.coperceiveLoadId = sceneDrawToken;
+}
+
+function untagObject(object: THREE.Object3D) {
+  delete object.userData.coperceiveSceneId;
+  delete object.userData.coperceiveLoadId;
+}
+
+function tagDrawn(stage: Stage, sceneId: string) {
+  tagObject(stage.points, sceneId);
+  tagObject(stage.boxes, sceneId);
+  tagObject(stage.dimmedBoxes, sceneId);
+  tagObject(stage.mapLines, sceneId);
+  for (const group of [stage.frustums, stage.agents, stage.solids, stage.images]) {
+    for (const child of group.children) {
+      tagObject(child, sceneId);
+    }
+  }
+}
+
+function sceneGraphAudit(stage: Stage | null) {
+  if (!stage) {
+    return null;
+  }
+  const tagged: { kind: string; sceneId: string; loadId: number }[] = [];
+  const take = (kind: string, object: THREE.Object3D) => {
+    const sceneId = object.userData.coperceiveSceneId;
+    const loadId = object.userData.coperceiveLoadId;
+    if (typeof sceneId !== "string") {
+      return;
+    }
+    tagged.push({ kind, sceneId, loadId: typeof loadId === "number" ? loadId : -1 });
+  };
+  take("points", stage.points);
+  take("boxes", stage.boxes);
+  take("dimmedBoxes", stage.dimmedBoxes);
+  take("mapLines", stage.mapLines);
+  for (const child of stage.frustums.children) {
+    take("frustum", child);
+  }
+  for (const child of stage.agents.children) {
+    take("agent", child);
+  }
+  for (const child of stage.solids.children) {
+    take("solid", child);
+  }
+  for (const child of stage.images.children) {
+    take("image", child);
+  }
+  const pointAttr = stage.points.geometry.getAttribute("position");
+  const boxAttr = stage.boxes.geometry.getAttribute("position");
+  const dimAttr = stage.dimmedBoxes.geometry.getAttribute("position");
+  const points = stage.points.visible && pointAttr ? pointAttr.count : 0;
+  const boxes =
+    ((stage.boxes.visible && boxAttr ? boxAttr.count : 0) + (stage.dimmedBoxes.visible && dimAttr ? dimAttr.count : 0)) / 24;
+  return { token: sceneDrawToken, points, boxes, tagged };
+}
+
 function clearGroup(group: THREE.Group) {
   for (const child of [...group.children]) {
     group.remove(child);
@@ -409,7 +477,9 @@ function replaceColored(geometry: THREE.BufferGeometry, positions: Float32Array,
   } else {
     geometry.setAttribute("position", new THREE.BufferAttribute(positions, 3));
     geometry.setAttribute("color", new THREE.BufferAttribute(colors, 3));
+    geometry.dispose();
   }
+  geometry.setDrawRange(0, positions.length / 3);
   geometry.computeBoundingSphere();
 }
 
@@ -538,6 +608,8 @@ function drawBoxes(
   });
   replaceColored(stage.boxes.geometry, boxPositions, boxColors);
   replaceColored(stage.dimmedBoxes.geometry, dimPositions, dimColors);
+  stage.boxes.visible = boxPositions.length > 0;
+  stage.dimmedBoxes.visible = dimPositions.length > 0;
 
   clearGroup(stage.solids);
   if (appearance.boxStyle === "solid") {
@@ -589,6 +661,7 @@ async function drawFrame(
       token,
     );
     if (stale()) {
+      (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "mid-sensor" };
       return null;
     }
     const xyz = new Float32Array(buffer);
@@ -596,6 +669,7 @@ async function drawFrame(
     sweeps.push({ xyz, color: new THREE.Color(colorFor(types.get(sensor.agent_id) ?? "")) });
   }
   if (stale()) {
+    (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "post-sensor" };
     return null;
   }
   const positions = new Float32Array(pointCount * 3);
@@ -611,6 +685,15 @@ async function drawFrame(
     cursor += sweep.xyz.length;
   }
   replaceColored(stage.points.geometry, positions, colors);
+  stage.points.visible = positions.length > 0;
+  (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = {
+    step: "drawn",
+    pointCount,
+    positionsLength: positions.length,
+    visible: stage.points.visible,
+    timeUs: frame.time_us,
+    sceneId: frame.scene_id,
+  };
   // Read the dim set now, not at call time: the prediction frame for this sample may have arrived while
   // the point buffers were loading.
   drawBoxes(stage, frame, types, hidden, appearance, dimmed());
@@ -643,6 +726,7 @@ async function drawFrame(
     stage.agents.add(axes);
   }
   const vehicle = agentPose(frame, types, "vehicle");
+  tagDrawn(stage, frame.scene_id);
   return {
     positions,
     anchor: vehicle ? { x: vehicle.tx, y: vehicle.ty, z: vehicle.tz } : null,
@@ -770,6 +854,163 @@ function syncMotion(stage: Stage, frame: FrameDocument, types: Map<string, strin
 
 export type ClockMark = { ratio: number; label: string };
 
+declare global {
+  interface Window {
+    __COPERCEIVE_DESKTOP__?: boolean;
+    __COPERCEIVE_CTRL_PORT__?: number;
+    __COPERCEIVE_CTRL_SECRET__?: string;
+    __COPERCEIVE_DATA_ROOT__?: string;
+    __COPERCEIVE_DATA_BASENAME__?: string;
+    __COPERCEIVE_INITIAL_STATE__?: {
+      last_scene_id?: string;
+      last_sample_index?: number;
+      last_timestamp_us?: number;
+      last_timestamp_ns?: number;
+      last_viewpoint?: string;
+      last_theme?: string;
+      reopen_last_session?: boolean;
+      agent_visibility?: Record<string, boolean>;
+      layer_toggles?: {
+        points?: boolean;
+        boxes?: boolean;
+        frustums?: boolean;
+        map?: boolean;
+        axes?: boolean;
+        frustum_images?: boolean;
+        frustum_opacity?: number;
+        frustum_image_cameras?: string[] | null;
+      };
+      selected_camera?: string;
+      split_view?: boolean;
+      panel_collapse?: {
+        camera_strip_open?: boolean;
+      };
+      last_loop?: boolean;
+    };
+    __COPERCEIVE_VIEWER_STATE__?: unknown;
+    __COPERCEIVE_SHOW_TOAST__?: (text: string, type?: "error" | "info") => void;
+    __COPERCEIVE_SET_VIEWPOINT__?: (vp: string) => void;
+    __COPERCEIVE_TOGGLE_THEME__?: () => void;
+    __COPERCEIVE_PLAYBACK__?: (action: string, value?: number) => void;
+    __COPERCEIVE_PLAYBACK_STATE__?: () => {
+      playing: boolean;
+      loop: boolean;
+      frameIndex: number;
+      timeUs: number | null;
+      samples: number;
+    };
+    __COPERCEIVE_DATASET_CHANGED__?: (
+      origin: string,
+      token: string,
+      basename: string,
+      root: string
+    ) => void;
+    __COPERCEIVE_DATASET_ERROR__?: (error: string) => void;
+    __COPERCEIVE_SCENES__?: () => string[];
+    __COPERCEIVE_TEST_ENV__?: boolean;
+    __COPERCEIVE_FORCE_MOTION__?: boolean;
+    __COPERCEIVE_VIEW_SETTINGS__?: () => {
+      sceneId: string;
+      viewpoint: string;
+      layers: {
+        points: boolean;
+        boxes: boolean;
+        frustums: boolean;
+        map: boolean;
+        axes: boolean;
+        frustumImages: boolean;
+      };
+      hiddenAgents: Record<string, boolean>;
+      hiddenClasses: string[];
+    };
+    __COPERCEIVE_SCENE_GRAPH__?: () => {
+      token: number;
+      points: number;
+      boxes: number;
+      tagged: { kind: string; sceneId: string; loadId: number }[];
+    } | null;
+  }
+}
+
+function clearStage(stage: Stage) {
+  stage.points.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.points.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.boxes.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.boxes.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.dimmedBoxes.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.dimmedBoxes.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.mapLines.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.mapLines.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
+  stage.frustums.clear();
+  stage.agents.clear();
+  stage.solids.clear();
+  stage.picks.clear();
+  stage.frustumPicks.clear();
+  stage.images.clear();
+  stage.imagePlanes.clear();
+  stage.predictions.clear();
+  stage.predictionPicks.clear();
+  stage.clearMotion();
+  untagObject(stage.points);
+  untagObject(stage.boxes);
+  untagObject(stage.dimmedBoxes);
+  untagObject(stage.mapLines);
+  stage.requestRender();
+}
+
+const LOOP_STORAGE_KEY = "coperceive-loop-preference";
+
+function readWebLoopChoice(): boolean | null {
+  try {
+    const val = localStorage.getItem(LOOP_STORAGE_KEY);
+    if (val === "true") return true;
+    if (val === "false") return false;
+  } catch {
+    /* private mode */
+  }
+  return null;
+}
+
+function writeWebLoopChoice(val: boolean) {
+  try {
+    localStorage.setItem(LOOP_STORAGE_KEY, String(val));
+  } catch {
+    /* private mode */
+  }
+}
+
+function postControllerState(body: Record<string, unknown>) {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+    return;
+  }
+  const port = window.__COPERCEIVE_CTRL_PORT__;
+  const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+  void fetch(`http://127.0.0.1:${port}/state`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${secret}`,
+    },
+    body: JSON.stringify(body),
+  }).catch(() => undefined);
+}
+
+function savedLoopChoice(): boolean | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const saved = window.__COPERCEIVE_INITIAL_STATE__?.last_loop;
+  if (typeof saved === "boolean") {
+    return saved;
+  }
+  // The desktop sidecar origin changes every launch, so localStorage is not
+  // the resume record there. The fixed-port web app still uses it.
+  if (window.__COPERCEIVE_DESKTOP__ || window.__COPERCEIVE_CTRL_PORT__) {
+    return null;
+  }
+  return readWebLoopChoice();
+}
+
 export default function Viewer({
   token,
   slot,
@@ -789,9 +1030,25 @@ export default function Viewer({
 }) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<Stage | null>(null);
+  const [activeToken, setActiveToken] = useState(() => {
+    return token || (typeof sessionStorage !== "undefined" ? sessionStorage.getItem("coperceive-token") ?? "" : "");
+  });
+  const prevTokenRef = useRef(token);
+  useEffect(() => {
+    if (token && token !== prevTokenRef.current) {
+      prevTokenRef.current = token;
+      setActiveToken(token);
+    } else if (!activeToken) {
+      const stored = typeof sessionStorage !== "undefined" ? sessionStorage.getItem("coperceive-token") ?? "" : "";
+      if (stored) setActiveToken(stored);
+    }
+  }, [token, activeToken]);
+  const effectiveToken = activeToken || token;
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
   const [sceneId, setSceneId] = useState("");
+  const sceneIdRef = useRef(sceneId);
+  sceneIdRef.current = sceneId;
   const [summary, setSummary] = useState<SceneSummary | null>(null);
   const [frameIndex, setFrameIndex] = useState(0);
   const [hidden, setHidden] = useState<Record<string, boolean>>({});
@@ -825,7 +1082,216 @@ export default function Viewer({
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
   const [playing, setPlaying] = useState(false);
-  const [loop, setLoop] = useState(false);
+  const loopChoiceRef = useRef<boolean | null>(savedLoopChoice());
+  const [loop, setLoop] = useState<boolean>(() => loopChoiceRef.current ?? true);
+
+  const handleToggleLoop = () => {
+    const next = !loopRef.current;
+    loopRef.current = next;
+    loopChoiceRef.current = next;
+    setLoop(next);
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      postControllerState({ loop: next });
+    } else {
+      writeWebLoopChoice(next);
+    }
+  };
+  const handleToggleLoopRef = useRef(handleToggleLoop);
+  handleToggleLoopRef.current = handleToggleLoop;
+  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const [dataBasename, setDataBasename] = useState<string>(
+    () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_BASENAME__) || "",
+  );
+  const [dataRoot, setDataRoot] = useState<string>(
+    () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_ROOT__) || "",
+  );
+  const [toast, setToast] = useState<{ id: number; text: string; type: "error" | "info" } | null>(null);
+  const [datasetError, setDatasetError] = useState<string | null>(null);
+
+  const triggerOpenFolder = () => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+      fetch(`http://127.0.0.1:${window.__COPERCEIVE_CTRL_PORT__}/open-dialog`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${secret}`,
+          "Content-Type": "application/json",
+        },
+      }).catch((e) => {
+        console.error("open-dialog fetch error:", e);
+      });
+    }
+  };
+
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && (e.key === "o" || e.key === "O")) {
+        e.preventDefault();
+        triggerOpenFolder();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
+
+  useEffect(() => {
+    window.__COPERCEIVE_SHOW_TOAST__ = (text: string, type: "error" | "info" = "info") => {
+      setToast({ id: Date.now(), text, type });
+    };
+    window.__COPERCEIVE_SET_VIEWPOINT__ = (vp: string) => {
+      if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
+        setViewpoint(vp as Viewpoint);
+      }
+    };
+    window.__COPERCEIVE_TOGGLE_THEME__ = () => {
+      setAppearance((curr) => {
+        const next = curr.theme === "dark" ? "light" : "dark";
+        onTheme?.(next);
+        return { ...curr, theme: next };
+      });
+    };
+    window.__COPERCEIVE_DATASET_CHANGED__ = async (
+      newOrigin: string,
+      newToken: string,
+      basename: string,
+      root: string,
+    ) => {
+      (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+        step: "started",
+        time: Date.now(),
+        newOrigin,
+        newTokenPresent: Boolean(newToken),
+        basename,
+        root,
+      };
+      if (typeof sessionStorage !== "undefined") {
+        sessionStorage.setItem("coperceive-origin", newOrigin);
+        sessionStorage.setItem("coperceive-token", newToken);
+      }
+      setActiveToken(newToken);
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event("coperceive-token-sync"));
+      }
+      setDataBasename(basename);
+      setDataRoot(root);
+      setDatasetError(null);
+      setPlaying(false);
+
+      bumpSceneDrawToken();
+      if (stageRef.current) {
+        clearStage(stageRef.current);
+      }
+      setSummary(null);
+      setCameraFrame(null);
+      setPick(null);
+      setEvalPick(null);
+      cacheRef.current.clear();
+      predCacheRef.current.clear();
+
+      try {
+        const response = await fetch(`${newOrigin}/api/scenes`, {
+          headers: authHeaders(newToken),
+        });
+        if (!response.ok) {
+          const detail = await errorDetail(response);
+          setStatus(detail);
+          (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+            step: "scenes_fetch_failed",
+            status: response.status,
+            detail,
+          };
+          return;
+        }
+        const body = (await response.json()) as unknown;
+        if (!Array.isArray(body)) {
+          setStatus("The scene list was not a list.");
+          (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+            step: "scenes_not_array",
+            body,
+          };
+          return;
+        }
+        const ids = body.flatMap((item) => {
+          if (item && typeof item === "object" && typeof (item as { scene_id?: unknown }).scene_id === "string") {
+            return [(item as { scene_id: string }).scene_id];
+          }
+          return [];
+        });
+        setScenes(ids);
+        if (ids.length >= 1) {
+          const nextScene = ids.length === 1 ? ids[0] : (ids.includes(sceneIdRef.current) ? sceneIdRef.current : ids[0]);
+          setSceneId(nextScene);
+          try {
+            const sumResp = await fetch(`${newOrigin}/api/scenes/${encodeURIComponent(nextScene)}`, {
+              headers: authHeaders(newToken),
+            });
+            if (sumResp.ok) {
+              const sumBody = (await sumResp.json()) as unknown;
+              if (isSummary(sumBody)) {
+                setFrameIndex(0);
+                setSummary(sumBody);
+                setStatus(`${sumBody.scene_id}: ${sumBody.times_us.length} samples, world ${sumBody.world_frame}.`);
+                (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+                  step: "success",
+                  ids,
+                  nextScene,
+                  samples: sumBody.times_us.length,
+                };
+              } else {
+                (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+                  step: "isSummary_false",
+                  sumBody,
+                };
+              }
+            } else {
+              (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+                step: "sumResp_not_ok",
+                status: sumResp.status,
+              };
+            }
+          } catch (e) {
+            (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+              step: "sumResp_exception",
+              error: String(e),
+            };
+          }
+        } else {
+          setSceneId("");
+          setStatus("No scene directories under the server root.");
+          (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+            step: "no_scenes",
+            ids,
+          };
+        }
+      } catch (e) {
+        setStatus(e instanceof Error ? e.message : "Could not list scenes.");
+        (window as unknown as { __LAST_DATASET_CHANGE__?: unknown }).__LAST_DATASET_CHANGE__ = {
+          step: "scenes_exception",
+          error: String(e),
+        };
+      }
+
+      setToast({ id: Date.now(), text: `Switched dataset to ${basename}`, type: "info" });
+    };
+
+    window.__COPERCEIVE_DATASET_ERROR__ = (msg: string) => {
+      setDatasetError(msg);
+    };
+
+    return () => {
+      delete window.__COPERCEIVE_SHOW_TOAST__;
+      delete window.__COPERCEIVE_SET_VIEWPOINT__;
+      delete window.__COPERCEIVE_TOGGLE_THEME__;
+      delete window.__COPERCEIVE_DATASET_CHANGED__;
+      delete window.__COPERCEIVE_DATASET_ERROR__;
+    };
+  }, [onTheme]);
+
+  useEffect(() => {
+    if (!toast) return;
+    const t = setTimeout(() => setToast(null), 4000);
+    return () => clearTimeout(t);
+  }, [toast]);
   const [speed, setSpeed] = useState<Speed>(1);
   const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
   const [cameraId, setCameraId] = useState("");
@@ -873,8 +1339,32 @@ export default function Viewer({
   const settleRef = useRef(false);
   const reduceMotionRef = useRef(false);
   const lengthRef = useRef(0);
-  const loopRef = useRef(false);
+  const loopRef = useRef(loop);
+  loopRef.current = loop;
   const frameRef = useRef(0);
+  const playingRef = useRef(false);
+  playingRef.current = playing;
+  const summaryRef = useRef(summary);
+  summaryRef.current = summary;
+
+  const handleTogglePlay = () => {
+    canvasRef.current?.focus();
+    const sum = summaryRef.current;
+    if (!sum || sum.times_us.length < 2) {
+      return;
+    }
+    if (playingRef.current) {
+      setPlaying(false);
+      return;
+    }
+    if (isEndZone(sum.times_us, frameRef.current)) {
+      setFrameIndex(0);
+      frameRef.current = 0;
+    }
+    setPlaying(true);
+  };
+  const handleTogglePlayRef = useRef(handleTogglePlay);
+  handleTogglePlayRef.current = handleTogglePlay;
   const drawGen = useRef(0);
   const paintWait = useRef<((time: number) => void) | null>(null);
   const onPickRef = useRef<(value: PickRecord | null) => void>(() => undefined);
@@ -1111,6 +1601,13 @@ export default function Viewer({
       }
       frameId = window.requestAnimationFrame(draw);
     };
+    const renderNow = () => {
+      if (frameId !== 0) {
+        window.cancelAnimationFrame(frameId);
+        frameId = 0;
+      }
+      draw();
+    };
     const onStart = () => {
       dragging = true;
       requestRender();
@@ -1228,6 +1725,7 @@ export default function Viewer({
       camera,
       controls,
       requestRender,
+      renderNow,
       captureView,
       setTheme,
       bloom,
@@ -1249,6 +1747,27 @@ export default function Viewer({
       predictionPicks,
       dimmedBoxes,
     };
+    const isTestOrDesktopEnv =
+      typeof window !== "undefined" &&
+      (import.meta.env.MODE === "test" || Boolean(window.__COPERCEIVE_TEST_ENV__));
+    if (isTestOrDesktopEnv) {
+      if (import.meta.env.MODE === "test") {
+        (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__ = stageRef.current;
+      }
+      window.__COPERCEIVE_SCENE_GRAPH__ = () => sceneGraphAudit(stageRef.current);
+      (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__ = () => {
+        const s = stageRef.current;
+        if (!s) return null;
+        const pAttr = s.points.geometry.getAttribute("position");
+        const pts = s.points.visible && pAttr ? pAttr.count : 0;
+        const bAttr = s.boxes.geometry.getAttribute("position");
+        const dimAttr = s.dimmedBoxes.geometry.getAttribute("position");
+        const bxs = ((s.boxes.visible && bAttr ? bAttr.count : 0) + (s.dimmedBoxes.visible && dimAttr ? dimAttr.count : 0)) / 24;
+        const frs = s.frustums.children.length;
+        const ags = s.agents.children.length;
+        return { points: pts, boxes: bxs, frustums: frs, agents: ags };
+      };
+    }
     setTheme(appearanceRef.current.theme);
     const pointsMaterial = points.material;
     if (pointsMaterial instanceof THREE.PointsMaterial) {
@@ -1256,6 +1775,13 @@ export default function Viewer({
     }
     requestRender();
     return () => {
+      if (isTestOrDesktopEnv) {
+        if (import.meta.env.MODE === "test") {
+          delete (window as unknown as { __COPERCEIVE_STAGE__?: unknown }).__COPERCEIVE_STAGE__;
+        }
+        delete window.__COPERCEIVE_SCENE_GRAPH__;
+        delete (window as unknown as { __COPERCEIVE_SCENE_COUNTS__?: unknown }).__COPERCEIVE_SCENE_COUNTS__;
+      }
       resize.disconnect();
       canvas.removeEventListener("pointerdown", onPointerDown);
       canvas.removeEventListener("pointerup", onPointerUp);
@@ -1310,25 +1836,14 @@ export default function Viewer({
       }
       if (event.key === " ") {
         event.preventDefault();
-        setPlaying((current) => {
-          if (current) {
-            return false;
-          }
-          if (lengthRef.current < 2) {
-            return false;
-          }
-          if (!loopRef.current && frameRef.current >= lengthRef.current - 1) {
-            setFrameIndex(0);
-          }
-          return true;
-        });
+        handleTogglePlayRef.current();
       } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
         event.preventDefault();
         setPlaying(false);
         const delta = event.key === "ArrowLeft" ? -1 : 1;
         setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loopRef.current));
       } else if (event.key === "l" || event.key === "L") {
-        setLoop((current) => !current);
+        handleToggleLoopRef.current();
       } else if (event.key === "c" || event.key === "C") {
         setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }));
       } else if (event.key === "Escape") {
@@ -1419,7 +1934,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes`, {
-        headers: authHeaders(token),
+        headers: authHeaders(activeToken),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -1437,8 +1952,15 @@ export default function Viewer({
         }
         return [];
       });
+      let initialScene = "";
+      if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id) {
+        const saved = window.__COPERCEIVE_INITIAL_STATE__.last_scene_id;
+        if (ids.includes(saved)) {
+          initialScene = saved;
+        }
+      }
       setScenes(ids);
-      setSceneId((current) => current || ids[0] || "");
+      setSceneId((current) => current || initialScene || ids[0] || "");
       if (ids.length === 0) {
         setStatus("No scene directories under the server root.");
       }
@@ -1448,7 +1970,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [token]);
+  }, [effectiveToken]);
 
   useEffect(() => {
     if (!sceneId) {
@@ -1460,7 +1982,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}`, {
-        headers: authHeaders(token),
+        headers: authHeaders(effectiveToken),
         signal: controller.signal,
       });
       if (!response.ok) {
@@ -1472,12 +1994,82 @@ export default function Viewer({
         setStatus("The scene summary was incomplete.");
         return;
       }
+      let initialFrame = 0;
+      let initialHidden: Record<string, boolean> = { ...hidden };
+      if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__) {
+        const init = window.__COPERCEIVE_INITIAL_STATE__;
+        if (typeof init.last_sample_index === "number" && init.last_sample_index < body.times_us.length) {
+          initialFrame = init.last_sample_index;
+        } else if (typeof init.last_timestamp_us === "number") {
+          const found = body.times_us.findIndex((t) => t >= init.last_timestamp_us!);
+          if (found >= 0) initialFrame = found;
+        } else if (typeof init.last_timestamp_ns === "number") {
+          const targetUs = Math.round(init.last_timestamp_ns / 1000);
+          const found = body.times_us.findIndex((t) => t >= targetUs);
+          if (found >= 0) initialFrame = found;
+        }
+        if (init.last_viewpoint) {
+          const vp = init.last_viewpoint as Viewpoint;
+          if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird") {
+            setViewpoint(vp);
+          }
+        }
+        if (init.last_theme && (init.last_theme === "dark" || init.last_theme === "light")) {
+          onTheme?.(init.last_theme);
+          setAppearance((curr) => ({ ...curr, theme: init.last_theme as "dark" | "light" }));
+        }
+        if (init.agent_visibility) {
+          initialHidden = init.agent_visibility;
+        }
+        if (init.layer_toggles) {
+          setAppearance((curr) => ({
+            ...curr,
+            points: init.layer_toggles?.points ?? curr.points,
+            boxes: init.layer_toggles?.boxes ?? curr.boxes,
+            frustums: init.layer_toggles?.frustums ?? curr.frustums,
+            map: init.layer_toggles?.map ?? curr.map,
+            axes: init.layer_toggles?.axes ?? curr.axes,
+            frustumImages: init.layer_toggles?.frustum_images !== undefined ? init.layer_toggles.frustum_images : curr.frustumImages,
+            frustumOpacity: typeof init.layer_toggles?.frustum_opacity === "number" ? init.layer_toggles.frustum_opacity : curr.frustumOpacity,
+            frustumImageCameras: init.layer_toggles?.frustum_image_cameras !== undefined ? init.layer_toggles.frustum_image_cameras : curr.frustumImageCameras,
+          }));
+        }
+        if (init.panel_collapse) {
+          setAppearance((curr) => ({
+            ...curr,
+            stripOpen: init.panel_collapse?.camera_strip_open ?? curr.stripOpen,
+          }));
+        }
+        if (init.selected_camera) {
+          setCameraId(init.selected_camera);
+        }
+        if (init.split_view !== undefined) {
+          setAppearance((curr) => ({
+            ...curr,
+            splitCamera: init.split_view ? (init.selected_camera ?? curr.splitCamera) : null,
+          }));
+        }
+        window.__COPERCEIVE_INITIAL_STATE__ = undefined;
+      }
+      if (isEndZone(body.times_us, initialFrame)) {
+        initialFrame = 0;
+      }
+      if (loopChoiceRef.current !== null) {
+        loopRef.current = loopChoiceRef.current;
+        setLoop(loopChoiceRef.current);
+      } else {
+        const durationUs = body.times_us.length >= 2 ? body.times_us[body.times_us.length - 1] - body.times_us[0] : 0;
+        const next = durationUs < 60_000_000;
+        loopRef.current = next;
+        setLoop(next);
+      }
       setSummary(body);
-      setFrameIndex(0);
+      setFrameIndex(initialFrame);
+      frameRef.current = initialFrame;
       setExportStart(1);
       setExportEnd(Math.min(10, body.times_us.length));
       setExportSource("view");
-      setHidden({});
+      setHidden(initialHidden);
       setPick(null);
       setEvalPick(null);
       setPlaying(false);
@@ -1498,7 +2090,114 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [sceneId, token]);
+  }, [sceneId, effectiveToken]);
+
+  useEffect(() => {
+    window.__COPERCEIVE_PLAYBACK__ = (action: string, value?: number) => {
+      if (action === "toggle") {
+        handleTogglePlayRef.current();
+      } else if (action === "loop") {
+        handleToggleLoopRef.current();
+      } else if (action === "step_forward") {
+        setPlaying(false);
+        setFrameIndex((curr) => (summary ? Math.min(curr + 1, summary.times_us.length - 1) : curr));
+      } else if (action === "step_backward") {
+        setPlaying(false);
+        setFrameIndex((curr) => Math.max(0, curr - 1));
+      } else if (action === "seek" && typeof value === "number") {
+        setPlaying(false);
+        setFrameIndex(summary ? Math.max(0, Math.min(value, summary.times_us.length - 1)) : 0);
+      } else if (action === "speed" && typeof value === "number") {
+        if (value === 0.25 || value === 0.5 || value === 1 || value === 2 || value === 4) {
+          setSpeed(value);
+        }
+      }
+    };
+    window.__COPERCEIVE_PLAYBACK_STATE__ = () => ({
+      playing: playingRef.current,
+      loop: loopRef.current,
+      frameIndex: frameRef.current,
+      timeUs: summaryRef.current?.times_us[frameRef.current] ?? null,
+      samples: summaryRef.current?.times_us.length ?? 0,
+    });
+    return () => {
+      window.__COPERCEIVE_PLAYBACK__ = undefined;
+      window.__COPERCEIVE_PLAYBACK_STATE__ = undefined;
+    };
+  }, [summary]);
+
+  useEffect(() => {
+    const enabled =
+      typeof window !== "undefined" && (import.meta.env.MODE === "test" || Boolean(window.__COPERCEIVE_TEST_ENV__));
+    if (!enabled) {
+      return;
+    }
+    window.__COPERCEIVE_VIEW_SETTINGS__ = () => ({
+      sceneId,
+      viewpoint,
+      layers: {
+        points: appearance.points,
+        boxes: appearance.boxes,
+        frustums: appearance.frustums,
+        map: appearance.map,
+        axes: appearance.axes,
+        frustumImages: appearance.frustumImages,
+      },
+      hiddenAgents: hidden,
+      hiddenClasses: appearance.hiddenClasses,
+    });
+    return () => {
+      delete window.__COPERCEIVE_VIEW_SETTINGS__;
+    };
+  }, [sceneId, viewpoint, appearance, hidden]);
+
+  useEffect(() => {
+    window.__COPERCEIVE_SCENES__ = () => scenes;
+    return () => {
+      window.__COPERCEIVE_SCENES__ = undefined;
+    };
+  }, [scenes]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return;
+    const timer = setTimeout(() => {
+      const port = window.__COPERCEIVE_CTRL_PORT__;
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+      const timeUs = summary?.times_us?.[frameIndex];
+      fetch(`http://127.0.0.1:${port}/state`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${secret}`,
+        },
+        body: JSON.stringify({
+          scene_id: sceneId || undefined,
+          sample_index: frameIndex,
+          timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
+          viewpoint,
+          theme: appearance.theme,
+          agent_visibility: hidden,
+          layer_toggles: {
+            points: appearance.points,
+            boxes: appearance.boxes,
+            frustums: appearance.frustums,
+            map: appearance.map,
+            axes: appearance.axes,
+            frustum_images: appearance.frustumImages,
+            frustum_opacity: appearance.frustumOpacity,
+            frustum_image_cameras: appearance.frustumImageCameras ?? undefined,
+          },
+          selected_camera: appearance.splitCamera || cameraId || undefined,
+          split_view: Boolean(appearance.splitCamera),
+          panel_collapse: {
+            camera_strip_open: appearance.stripOpen,
+          },
+          ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
+        }),
+      }).catch(() => {});
+    }, 500);
+    return () => clearTimeout(timer);
+  }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
@@ -1512,19 +2211,87 @@ export default function Viewer({
     const gen = ++drawGen.current;
     const types = new Map(summary.agents.map((agent) => [agent.agent_id, agent.agent_type]));
     const stale = () => drawGen.current !== gen;
+
+    // Update status line immediately on every frame tick during playback
+    const latest = latestRef.current;
+    if (latest && latest.frame) {
+      const shown = appearance.points
+        ? latest.frame.point_sensors.reduce((sum, sensor) => (hidden[sensor.agent_id] ? sum : sum + sensor.count), 0)
+        : 0;
+      const boxes = latest.frame.boxes.filter((box) => boxShown(box, hidden, appearance)).length;
+      const frustums = latest.frame.frustums.filter((frustum) => appearance.frustums && !hidden[frustum.agent_id]).length;
+      setStatus(
+        `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, latest.frame, types, cameraKeyRef.current)}`,
+      );
+    } else {
+      setStatus(`${summary.scene_id} at ${time} µs. ${mapNote}`);
+    }
+
+    // Immediately remove hidden agents' objects and trigger immediate redraw
+    if (latestRef.current) {
+      const { frame: curFrame, types: curTypes } = latestRef.current;
+      drawBoxes(stage, curFrame, curTypes, hidden, appearance, dimmedRef.current);
+
+      clearGroup(stage.frustums);
+      const pickable: { key: string; fovY: number; aspect: number; pose: Pose }[] = [];
+      for (const frustum of curFrame.frustums) {
+        if (!appearance.frustums || hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+          continue;
+        }
+        const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(curTypes.get(frustum.agent_id) ?? ""));
+        applyPose(lines, frustum.pose);
+        stage.frustums.add(lines);
+        pickable.push({
+          key: cameraKey(frustum.agent_id, frustum.sensor_id),
+          fovY: frustum.fov_y_rad,
+          aspect: frustum.aspect,
+          pose: frustum.pose,
+        });
+      }
+      syncFrustumPicks(stage.frustumPicks, pickable);
+
+      clearGroup(stage.agents);
+      for (const agent of curFrame.agents) {
+        if (!appearance.axes || hidden[agent.agent_id] || !isPose(agent.pose)) {
+          continue;
+        }
+        const axes = new THREE.AxesHelper(2);
+        applyPose(axes, agent.pose);
+        stage.agents.add(axes);
+      }
+
+      for (const [key, mesh] of stage.imagePlanes) {
+        const agentId = key.split(":")[0];
+        if (hidden[agentId]) {
+          mesh.visible = false;
+        }
+      }
+
+      syncMotion(stage, curFrame, curTypes, hidden);
+      syncPicks(stage.picks, curFrame.boxes, (box) => boxShown(box, hidden, appearance));
+
+      const anyPointsShown = appearance.points && curFrame.point_sensors.some((sensor) => !hidden[sensor.agent_id] && sensor.count > 0);
+      if (!anyPointsShown) {
+        replaceColored(stage.points.geometry, new Float32Array(0), new Float32Array(0));
+        stage.points.visible = false;
+      }
+
+      stage.renderNow();
+    }
+
     void (async () => {
-      const body = await cacheRef.current.loadFrame(summary.scene_id, time, token);
+      const body = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
       if (stale()) {
         return;
       }
       latestRef.current = { frame: body, types };
-      const drawn = await drawFrame(stage, body, types, hidden, appearance, token, cacheRef.current, () => dimmedRef.current, stale);
+      const drawn = await drawFrame(stage, body, types, hidden, appearance, effectiveToken, cacheRef.current, () => dimmedRef.current, stale);
       if (!drawn || stale()) {
         return;
       }
       syncMotion(stage, body, types, hidden);
       syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
-      stage.requestRender();
+      stage.renderNow();
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
         orbitHomeRef.current = home;
@@ -1545,14 +2312,14 @@ export default function Viewer({
       setStatus(
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
-      prefetchAhead(cacheRef.current, summary, frameIndex, token);
+      prefetchAhead(cacheRef.current, summary, frameIndex, effectiveToken);
       paintWait.current?.(time);
     })().catch((error: unknown) => {
       if (!stale()) {
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
       }
     });
-  }, [summary, frameIndex, hidden, appearance, token, mapNote]);
+  }, [summary, frameIndex, hidden, appearance, effectiveToken, mapNote]);
 
   useEffect(() => {
     const latest = latestRef.current;
@@ -1601,7 +2368,7 @@ export default function Viewer({
       await Promise.all(
         wanted.map(async (frustum) => {
           const key = cameraKey(frustum.agent_id, frustum.sensor_id);
-          const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE);
+          const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, effectiveToken, FRUSTUM_TEXTURE);
           if (cancelled || !bitmap) {
             return;
           }
@@ -1642,7 +2409,7 @@ export default function Viewer({
       const nextTime = summary?.times_us[frameIndex + 1];
       if (typeof nextTime === "number") {
         for (const frustum of wanted) {
-          void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, token, FRUSTUM_TEXTURE).catch(() => undefined);
+          void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, effectiveToken, FRUSTUM_TEXTURE).catch(() => undefined);
         }
       }
       stage.requestRender();
@@ -1650,7 +2417,7 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, token, viewpoint, cameraId, summary, frameIndex, poster]);
+  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, effectiveToken, viewpoint, cameraId, summary, frameIndex, poster]);
 
   const sceneKey = summary?.scene_id ?? "";
   // Keyed by scene like the run list, so a switch never shows the previous town's map note.
@@ -1710,7 +2477,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/predictions`, {
-        headers: authHeaders(token),
+        headers: authHeaders(effectiveToken),
         signal: controller.signal,
       });
       if (response.status === 404) {
@@ -1720,7 +2487,7 @@ export default function Viewer({
           runs: [],
           note:
             detail === "no predictions root"
-              ? "no predictions root; start the server with --predictions."
+              ? "no predictions available for this scene."
               : "no prediction runs for this scene.",
         });
         return;
@@ -1747,7 +2514,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [summary, token]);
+  }, [summary, effectiveToken]);
 
   useEffect(() => {
     if (!summary || !run || !run.evaluated) {
@@ -1761,7 +2528,7 @@ export default function Viewer({
       const query = other ? `?compare=${encodeURIComponent(other)}` : "";
       const response = await fetch(
         `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/predictions/${encodeURIComponent(id)}/series${query}`,
-        { headers: authHeaders(token), signal: controller.signal },
+        { headers: authHeaders(effectiveToken), signal: controller.signal },
       );
       if (!response.ok) {
         setPredSeries({ sceneId, runId: id, compareId: other, series: null, note: await errorDetail(response) });
@@ -1785,7 +2552,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [summary, run, activeCompare, token]);
+  }, [summary, run, activeCompare, effectiveToken]);
 
   useEffect(() => {
     if (!summary || !run || !run.evaluated) {
@@ -1802,7 +2569,7 @@ export default function Viewer({
     const gen = ++predGen.current;
     const cache = predCacheRef.current;
     void cache
-      .load(sceneId, id, other, time, token)
+      .load(sceneId, id, other, time, effectiveToken)
       .then((frame) => {
         if (predGen.current !== gen) {
           return;
@@ -1810,7 +2577,7 @@ export default function Viewer({
         setPredFrame({ sceneId, runId: id, compareId: other, frame });
         setPredNote({ key, text: "" });
         for (const ahead of summary.times_us.slice(frameIndex + 1, frameIndex + 1 + PREFETCH_FRAMES)) {
-          void cache.load(sceneId, id, other, ahead, token).catch(() => undefined);
+          void cache.load(sceneId, id, other, ahead, effectiveToken).catch(() => undefined);
         }
       })
       .catch((error: unknown) => {
@@ -1818,7 +2585,7 @@ export default function Viewer({
           setPredNote({ key, text: error instanceof Error ? error.message : "Could not read the prediction frame." });
         }
       });
-  }, [summary, run, activeCompare, frameIndex, token]);
+  }, [summary, run, activeCompare, frameIndex, effectiveToken]);
 
   const layer = useMemo<{ a: LayerResult; b: LayerResult | null; timeUs: number } | null>(() => {
     if (!livePred) {
@@ -1922,7 +2689,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const base = `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}`;
-      const which = await fetch(`${base}/map`, { headers: authHeaders(token), signal: controller.signal });
+      const which = await fetch(`${base}/map`, { headers: authHeaders(effectiveToken), signal: controller.signal });
       let info: MapInfo | null = null;
       if (which.ok) {
         const body = (await which.json()) as unknown;
@@ -1936,7 +2703,7 @@ export default function Viewer({
         return;
       }
       const response = await fetch(`${base}/map/lines`, {
-        headers: authHeaders(token),
+        headers: authHeaders(effectiveToken),
         signal: controller.signal,
       });
       if (response.status === 404) {
@@ -1958,20 +2725,8 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [summary, token]);
+  }, [summary, effectiveToken]);
 
-  function togglePlay() {
-    canvasRef.current?.focus();
-    if (!summary || summary.times_us.length < 2) {
-      return;
-    }
-    if (!playing && !loop && frameIndex >= summary.times_us.length - 1) {
-      setFrameIndex(0);
-      setPlaying(true);
-      return;
-    }
-    setPlaying((current) => !current);
-  }
 
   function chooseViewpoint(next: Viewpoint) {
     const resolved = next === "chase" && modeRef.current === "chase" ? "orbit" : next;
@@ -2015,7 +2770,7 @@ export default function Viewer({
     const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(scene)}${path}`, {
       method: "POST",
       headers: {
-        ...authHeaders(token),
+        ...authHeaders(effectiveToken),
         "X-Coperceive-Request": "1",
         "Content-Type": "application/json",
       },
@@ -2046,7 +2801,7 @@ export default function Viewer({
       return;
     }
     const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(relative)}`, {
-      headers: authHeaders(token),
+      headers: authHeaders(effectiveToken),
     });
     if (!response.ok) {
       return;
@@ -2140,7 +2895,7 @@ export default function Viewer({
     setExportNote("Writing the .rrd…");
     const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/export/rerun`, {
       method: "POST",
-      headers: { ...authHeaders(token), "X-Coperceive-Request": "1" },
+      headers: { ...authHeaders(effectiveToken), "X-Coperceive-Request": "1" },
     });
     if (!response.ok) {
       setExportNote(await errorDetail(response));
@@ -2198,7 +2953,7 @@ export default function Viewer({
       );
       setPlotAlt(kind === "bev" ? "Bird's-eye plot of the current sample" : "Camera overlay of the current sample");
       const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(path)}`, {
-        headers: authHeaders(token),
+        headers: authHeaders(effectiveToken),
       });
       if (!response.ok) {
         return;
@@ -2248,7 +3003,7 @@ export default function Viewer({
         if (typeof time !== "number") {
           continue;
         }
-        const frame = await cacheRef.current.loadFrame(summary.scene_id, time, token);
+        const frame = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
         if (cancelled) {
           return;
         }
@@ -2329,7 +3084,7 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [summary, token, hidden, appearance]);
+  }, [summary, effectiveToken, hidden, appearance]);
 
   useEffect(() => {
     if (!summary || !cameraFrame) {
@@ -2346,7 +3101,7 @@ export default function Viewer({
     let cancelled = false;
     const frame = cameraFrame;
     void (async () => {
-      const other = await cacheRef.current.loadFrame(summary.scene_id, neighborTime, token);
+      const other = await cacheRef.current.loadFrame(summary.scene_id, neighborTime, effectiveToken);
       if (cancelled) {
         return;
       }
@@ -2367,7 +3122,7 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [summary, cameraFrame, token]);
+  }, [summary, cameraFrame, effectiveToken]);
 
   const last = summary ? Math.max(summary.times_us.length - 1, 0) : 0;
   const timeUs = summary?.times_us[Math.min(frameIndex, last)];
@@ -2449,6 +3204,21 @@ export default function Viewer({
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (
     <div className="crumb">
+      {isDesktop && (
+        <div className="dataset-badge" title={dataRoot || undefined}>
+          <span className="dataset-folder-icon" aria-hidden="true">📁</span>
+          <span className="dataset-name">{dataBasename || "Dataset"}</span>
+          <button
+            type="button"
+            className="btn-open-dataset"
+            onClick={triggerOpenFolder}
+            aria-label="Open dataset folder (⌘O)"
+            title="Open dataset folder (⌘O)"
+          >
+            Open…
+          </button>
+        </div>
+      )}
       <span className="crumb-dataset">{sceneId ? sceneStem : "Scenes"}</span>
       <span className="crumb-sep" aria-hidden="true">/</span>
       <Menu
@@ -2494,6 +3264,47 @@ export default function Viewer({
 
   return (
     <div className={poster ? "viewer viewer-poster" : "viewer"}>
+      {datasetError && (
+        <div className="dataset-error-banner" role="alert">
+          <div className="dataset-error-content">
+            <span className="dataset-error-icon" aria-hidden="true">⚠️</span>
+            <span className="dataset-error-msg">{datasetError}</span>
+          </div>
+          <div className="dataset-error-actions">
+            <button
+              type="button"
+              className="dataset-error-choose-btn"
+              onClick={triggerOpenFolder}
+              aria-label="Choose another dataset folder"
+            >
+              Choose another folder
+            </button>
+            <button
+              type="button"
+              className="dataset-error-dismiss-btn"
+              onClick={() => setDatasetError(null)}
+              aria-label="Dismiss error"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
+      {toast && (
+        <div className="toast-container" role="status" aria-live="polite">
+          <div className={`toast toast-${toast.type}`}>
+            <span className="toast-text">{toast.text}</span>
+            <button
+              type="button"
+              className="toast-close"
+              onClick={() => setToast(null)}
+              aria-label="Close notification"
+            >
+              ×
+            </button>
+          </div>
+        </div>
+      )}
       {slot ? createPortal(crumb, slot) : null}
       {actions ? createPortal(actionTools, actions) : null}
       <div className="workspace">
@@ -2735,6 +3546,8 @@ export default function Viewer({
                   key={item.id}
                   type="button"
                   aria-pressed={viewpoint === item.id}
+                  aria-checked={viewpoint === item.id}
+                  aria-label={`${item.label} viewpoint (${item.shortcut})`}
                   aria-keyshortcuts={item.shortcut}
                   onClick={() => chooseViewpoint(item.id)}
                 >
@@ -2772,7 +3585,7 @@ export default function Viewer({
                 onPointerMove={onDividerMove}
               />
               <CameraSplit
-                token={token}
+                token={effectiveToken}
                 sceneId={summary.scene_id}
                 timeUs={cameraFrame.time_us}
                 nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
@@ -2793,7 +3606,7 @@ export default function Viewer({
           </div>
           {cameraFrame && summary ? (
             <CameraStrip
-              token={token}
+              token={effectiveToken}
               sceneId={summary.scene_id}
               timeUs={cameraFrame.time_us}
               nextTimeUs={summary.times_us[frameIndex + 1] ?? null}
@@ -2865,7 +3678,7 @@ export default function Viewer({
             pick={pick}
             frame={cameraFrame}
             summary={summary}
-            token={token}
+            token={effectiveToken}
             cache={cacheRef.current}
             evalPick={liveEvalPick}
             gtDetail={gtDetail}
@@ -2893,9 +3706,9 @@ export default function Viewer({
           setPlaying(false);
           setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loop));
         }}
-        onToggle={togglePlay}
+        onToggle={handleTogglePlay}
         onSpeed={setSpeed}
-        onLoop={() => setLoop((current) => !current)}
+        onLoop={handleToggleLoop}
       />
       <ExportDialog
         open={exportOpen}

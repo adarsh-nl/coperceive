@@ -53,6 +53,7 @@ def test_model_run_eval_serve_compare_and_slurm_end_to_end(
     scenes = tmp_path / "scenes"
     predictions = scenes / "predictions"
     write_scene(scene, scenes / SCENE_ID)
+    (scenes / SCENE_ID / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
 
     # 1. Batch run of the fake plugin's known-answer model -> complete format 1 run.
     main(

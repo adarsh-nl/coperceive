@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+import warnings
 from pathlib import Path
 from typing import cast
 
@@ -14,6 +16,7 @@ from coperceive.evaluation.commands import add_parser as add_evaluation_parser
 from coperceive.hdmap.commands import add_parser
 from coperceive.model import SCHEMA_VERSION
 from coperceive.models.commands import add_parser as add_models_parser
+from coperceive.remote.commands import add_parser as add_remote_parser
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -36,7 +39,13 @@ def build_parser() -> argparse.ArgumentParser:
     serve.add_argument(
         "--token",
         default=None,
-        help="Bearer token. Required when --host is not loopback.",
+        help="Bearer token (deprecated for security; use COPERCEIVE_TOKEN or --token-file).",
+    )
+    serve.add_argument(
+        "--token-file",
+        default=None,
+        metavar="PATH",
+        help="Path to a file containing the bearer token. Must be mode 0600 or 0400.",
     )
     serve.add_argument(
         "--root-path",
@@ -67,12 +76,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory a scene's image links may resolve into, e.g. the dataset copy a "
         "staged scene links its camera directories to. Repeatable.",
     )
+    serve.add_argument(
+        "--allow-origin",
+        default=None,
+        help="Exact origin allowed for cross-origin requests.",
+    )
     serve.set_defaults(func=_serve)
 
     add_parser(sub)
     add_adapters_parser(sub)
     add_evaluation_parser(sub)
     add_models_parser(sub)
+    add_remote_parser(sub)
 
     download = sub.add_parser("download", help="Download a dataset.")
     download_sub = download.add_subparsers(dest="dataset", required=True)
@@ -472,9 +487,39 @@ def _convert_griffin(args: argparse.Namespace) -> None:
     module.convert_command(args)  # type: ignore[attr-defined]
 
 
+def _resolve_token(args: argparse.Namespace) -> str | None:
+    token: str | None = None
+    if getattr(args, "token_file", None) is not None:
+        token_path = Path(args.token_file)
+        if not token_path.is_file():
+            print(f"--token-file {args.token_file} is not a file", file=sys.stderr)
+            raise SystemExit(2)
+        mode = token_path.stat().st_mode & 0o777
+        if (mode & 0o077) != 0:
+            print(
+                f"--token-file {args.token_file} has loose permissions {oct(mode)} "
+                "(must be mode 0600 or 0400)",
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+        token = token_path.read_text(encoding="utf-8").strip() or None
+    elif "COPERCEIVE_TOKEN" in os.environ and os.environ["COPERCEIVE_TOKEN"].strip():
+        token = os.environ["COPERCEIVE_TOKEN"].strip()
+    elif getattr(args, "token", None):
+        warnings.warn(
+            "Passing --token on argv is deprecated for security (visible in ps on shared nodes); "
+            "use COPERCEIVE_TOKEN or --token-file instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        token = args.token
+    return token
+
+
 def _serve(args: argparse.Namespace) -> None:
-    if args.host not in _LOOPBACK and not args.token:
-        print("refusing to bind a non-loopback host without --token", file=sys.stderr)
+    token = _resolve_token(args)
+    if args.host not in _LOOPBACK and not token:
+        print("refusing to bind a non-loopback host without a token", file=sys.stderr)
         raise SystemExit(2)
     if args.static is not None and not (Path(args.static) / "index.html").is_file():
         print(f"--static {args.static} has no index.html", file=sys.stderr)
@@ -483,6 +528,12 @@ def _serve(args: argparse.Namespace) -> None:
         if not Path(media).is_dir():
             print(f"--media-root {media} is not a directory", file=sys.stderr)
             raise SystemExit(2)
+    from coperceive.viewdata import dataset_root_error
+
+    root_error = dataset_root_error(Path(args.root))
+    if root_error is not None:
+        print(root_error, file=sys.stderr)
+        raise SystemExit(2)
     import importlib
 
     module = importlib.import_module("coperceive.app.serve")
@@ -491,12 +542,13 @@ def _serve(args: argparse.Namespace) -> None:
         host=args.host,
         port=args.port,
         root=args.root,
-        token=args.token,
+        token=token,
         root_path=args.root_path,
         maps=args.maps,
         predictions=args.predictions,
         static=args.static,
         media_roots=tuple(args.media_root),
+        allow_origin=args.allow_origin,
     )
 
 

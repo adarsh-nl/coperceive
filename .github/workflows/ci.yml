@@ -35,7 +35,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: pip install -e ".[app,griffin,dev,viewer]"
       - run: pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - run: pytest
+      - name: Run pytest
+        run: |
+          set +e
+          pytest -q --tb=line | tee /tmp/pytest.txt
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            tail -n 30 /tmp/pytest.txt | while IFS= read -r line; do
+              echo "::error title=Pytest::$line"
+            done
+            exit "$status"
+          fi
 
   web:
     # The committed API contract and the generated client must not drift.
@@ -64,12 +75,15 @@ jobs:
         working-directory: web
       - run: npx tsc -b
         working-directory: web
+      - run: npm test
+        working-directory: web
       - name: committed bundle matches a fresh build
         # coperceive/app/static ships in the wheel; it must be what web/src builds.
         run: |
           npm run build
-          git status --porcelain -- coperceive/app/static
-          test -z "$(git status --porcelain -- coperceive/app/static)" || { git diff --stat -- coperceive/app/static; echo "coperceive/app/static is stale: run npm run build in web/ and commit it"; exit 1; }
+          git status --porcelain -- ../coperceive/app/static
+          test -z "$(git status --porcelain -- ../coperceive/app/static)" || { git diff --stat -- ../coperceive/app/static; echo "coperceive/app/static is stale: run npm run build in web/ and commit it"; exit 1; }
+          ! grep -q "__COPERCEIVE_STAGE__" ../coperceive/app/static/assets/*.js || { echo "__COPERCEIVE_STAGE__ leaked into release bundle"; exit 1; }
         working-directory: web
 
   e2e:
@@ -91,7 +105,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci --legacy-peer-deps
         working-directory: web
-      - run: npx vite build --outDir /tmp/web-dist --emptyOutDir
+      - run: npx vite build --mode test --outDir /tmp/web-dist --emptyOutDir
         working-directory: web
       - run: pytest tests/test_viewer_browser.py -q -rs
         env:
@@ -104,6 +118,14 @@ jobs:
           name: viewer-screenshots
           path: /tmp/e2e-shots
           if-no-files-found: ignore
+      - uses: actions/upload-artifact@v4
+        with:
+          name: viewer-media
+          path: |
+            docs/media/Town03-000.png
+            docs/media/Town03-000-split.png
+            docs/media/hero_recording.mp4
+          if-no-files-found: error
 
   landing:
     # Build and verify the coperceive public landing page (bundle, E2E, a11y, media recording)
@@ -148,9 +170,160 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: gitleaks
         run: |
           curl -sSL -o gitleaks.tar.gz \
             https://github.com/gitleaks/gitleaks/releases/download/v8.28.0/gitleaks_8.28.0_linux_x64.tar.gz
           tar -xzf gitleaks.tar.gz
-          ./gitleaks detect --source . --redact --no-banner --exit-code 1
+          ./gitleaks detect --source . --config .gitleaks.toml --redact --no-banner --exit-code 1 || {
+            echo "## Gitleaks Findings" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            ./gitleaks detect --source . --config .gitleaks.toml --no-banner --report-path /tmp/gitleaks.json || true
+            cat /tmp/gitleaks.json >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            exit 1
+          }
+
+  desktop-macos:
+    runs-on: macos-14
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: web
+      - run: npm run build
+        working-directory: web
+      - run: npm test
+        working-directory: web
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - name: Bundle Python Standalone Runtime
+        run: bash scripts/desktop/bundle_python.sh
+      - name: Run Rust unit tests
+        run: cargo test --verbose --color=never 2>&1 | tee /tmp/cargo_test.log
+        working-directory: src-tauri
+      - name: Report Cargo Test Failure
+        if: failure()
+        run: |
+          echo "### Cargo Test Failures" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          grep -A 35 "Caused by:" /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
+          tail -n 80 /tmp/cargo_test.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          (grep -A 35 "Caused by:" /tmp/cargo_test.log 2>/dev/null || true) | head -n 35 | while IFS= read -r line; do
+            echo "::error title=CargoError::$line"
+          done
+      - name: Sync Desktop Bundle Version
+        run: bash scripts/desktop/sync_version.sh
+      - name: Build Tauri Desktop (.app and .dmg)
+        run: npm run tauri build -- --target aarch64-apple-darwin --verbose 2>&1 | tee /tmp/tauri_build.log
+        working-directory: web
+      - name: Report Tauri Build Failure
+        if: failure()
+        run: |
+          if [ -f /tmp/tauri_build.log ]; then
+            echo "### Tauri Build Failures" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 80 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 45 /tmp/tauri_build.log | while IFS= read -r line; do
+              echo "::error title=TauriBuildError::$line"
+            done
+          fi
+      - name: Run Headless Smoke Test and Measure Sizes
+        run: bash scripts/desktop/smoke_test.sh 2>&1 | tee /tmp/smoke_test.log
+      - name: Report Smoke Test Failure
+        if: failure()
+        run: |
+          if [ -f /tmp/smoke_test.log ]; then
+            echo "### Smoke Test Log" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/smoke_test.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 10 /tmp/smoke_test.log | while IFS= read -r line; do
+              echo "::error title=SmokeTestError::$line"
+            done
+          fi
+      - name: Run Real-App macOS UI E2E Test
+        run: |
+          bash scripts/desktop/e2e_mac.sh 2>&1 | tee /tmp/e2e_mac.log
+          grep -E 'Step 2 verified|Step 2b verified|Step 3b verified|Playback requirement' /tmp/e2e_mac.log | while IFS= read -r line; do
+            echo "::notice title=e2e::$line"
+          done || true
+      - name: Report E2E Failure
+        if: failure()
+        run: |
+          if [ -f /tmp/e2e_mac.log ]; then
+            echo "### E2E Test Log" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/e2e_mac.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'E2E_FAIL|E2E_MARK|Error:' /tmp/e2e_mac.log | tail -n 20 | while IFS= read -r line; do
+              echo "::error title=E2ETestError::$line"
+            done || true
+            tail -n 15 /tmp/e2e_mac.log | while IFS= read -r line; do
+              echo "::error title=E2ETestError::$line"
+            done
+          fi
+      - name: Sample Connect backdrop CPU for 60s at 1280x800
+        run: bash scripts/desktop/measure_backdrop_cpu.sh 2>&1 | tee /tmp/backdrop_cpu.log
+      - name: Report backdrop CPU samples
+        if: always()
+        run: |
+          if [ -f /tmp/backdrop_cpu.log ]; then
+            echo "### Connect backdrop CPU (animated, warm-up dropped)" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            cat /tmp/backdrop_cpu.log >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f docs/media/measurements/backdrop-cpu.md ]; then
+            echo "### backdrop-cpu.md" >> $GITHUB_STEP_SUMMARY
+            cat docs/media/measurements/backdrop-cpu.md >> $GITHUB_STEP_SUMMARY
+          fi
+          if [ -f /tmp/backdrop_cpu.log ]; then
+            grep -E '^(backdrop_motion|backdrop_cpu_(median|p95|samples|n))=' /tmp/backdrop_cpu.log | while IFS= read -r line; do
+              echo "::notice title=backdrop-cpu::${line}"
+            done || true
+          fi
+      - name: Locate and Measure Single Built DMG
+        run: |
+          DMG_FILE=$(find src-tauri/target -iname "*.dmg" -type f 2>/dev/null | head -n 1)
+          if [ -z "${DMG_FILE}" ]; then
+            DMG_FILE=$(find . -iname "*.dmg" -type f 2>/dev/null | head -n 1)
+          fi
+          if [ -z "${DMG_FILE}" ] || [ ! -f "${DMG_FILE}" ]; then
+            echo "Error: Could not locate built .dmg file!" >&2
+            exit 1
+          fi
+          DMG_ABS="$(cd "$(dirname "${DMG_FILE}")" && pwd)/$(basename "${DMG_FILE}")"
+          DMG_BYTES=$(stat -f %z "${DMG_ABS}" 2>/dev/null || wc -c < "${DMG_ABS}")
+          DMG_HUMAN=$(ls -lh "${DMG_ABS}" | awk '{print $5}')
+          echo "DMG_PATH=${DMG_ABS}" >> $GITHUB_ENV
+          echo "DMG_BYTES=${DMG_BYTES}" >> $GITHUB_ENV
+          echo "DMG_HUMAN=${DMG_HUMAN}" >> $GITHUB_ENV
+          echo "Located single DMG at: ${DMG_ABS} (${DMG_HUMAN}, ${DMG_BYTES} bytes)"
+          echo "::notice title=DMG::$(basename "${DMG_ABS}") ${DMG_BYTES} bytes"
+          echo "### Desktop DMG Artifact" >> $GITHUB_STEP_SUMMARY
+          echo "- **File**: \`$(basename "${DMG_ABS}")\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Size**: ${DMG_HUMAN} (${DMG_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coperceive-desktop-macos-arm64
+          path: ${{ env.DMG_PATH }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: desktop-e2e-screenshots
+          path: /tmp/e2e-shots/*.png
+          if-no-files-found: ignore

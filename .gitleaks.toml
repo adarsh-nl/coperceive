@@ -1,0 +1,5 @@
+[allowlist]
+description = "Ignore dummy tokens in test fixtures"
+paths = [
+  '''src-tauri/src/slurm\.rs'''
+]

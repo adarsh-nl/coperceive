@@ -11,7 +11,23 @@ export type Job = {
 };
 
 export function apiBase(): string {
-  return new URL(".", document.baseURI).href.replace(/\/$/, "");
+  if (typeof sessionStorage !== "undefined") {
+    const origin = sessionStorage.getItem("coperceive-origin");
+    if (origin && !origin.startsWith("tauri://")) {
+      return origin.replace(/\/$/, "");
+    }
+  }
+
+  const base = new URL(".", document.baseURI).href.replace(/\/$/, "");
+  if (base.startsWith("tauri://")) {
+    if (typeof sessionStorage !== "undefined") {
+      const origin = sessionStorage.getItem("coperceive-origin");
+      if (origin && !origin.startsWith("tauri://")) {
+        return origin.replace(/\/$/, "");
+      }
+    }
+  }
+  return base;
 }
 
 export function authHeaders(token: string): Record<string, string> {

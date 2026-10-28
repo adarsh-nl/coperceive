@@ -52,6 +52,7 @@ export function Menu({
         type="button"
         className="menu-button"
         id={id}
+        data-options={options.map((o) => o.value).filter(Boolean).join(",")}
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-label={label ? undefined : ariaLabel}
@@ -94,7 +95,15 @@ export function EyeToggle({
   onChange: () => void;
 }) {
   return (
-    <button type="button" className="eye" aria-pressed={on} onClick={onChange}>
+    <button
+      type="button"
+      className="eye"
+      role="switch"
+      aria-checked={on}
+      aria-pressed={on}
+      aria-label={label}
+      onClick={onChange}
+    >
       <EyeIcon open={on} />
       <span>{label}</span>
     </button>
@@ -118,7 +127,16 @@ export function SwatchToggle({
   title?: string;
 }) {
   return (
-    <button type="button" className={on ? "swatch on" : "swatch"} aria-pressed={on} onClick={onChange} title={title}>
+    <button
+      type="button"
+      className={on ? "swatch on" : "swatch"}
+      role="switch"
+      aria-checked={on}
+      aria-pressed={on}
+      aria-label={label}
+      onClick={onChange}
+      title={title}
+    >
       <i style={{ background: color }} aria-hidden="true" />
       <span>{label}</span>
       {meta}
@@ -156,11 +174,21 @@ export function Segmented({
   );
 }
 
-export function IconPlay({ playing }: { playing: boolean }) {
+export function IconPlay({ playing, replay = false }: { playing: boolean; replay?: boolean }) {
   if (playing) {
     return (
       <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
         <path fill="currentColor" d="M4 3h3v10H4zM9 3h3v10H9z" />
+      </svg>
+    );
+  }
+  if (replay) {
+    return (
+      <svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true">
+        <path
+          fill="currentColor"
+          d="M8 2.5a5.5 5.5 0 1 0 5.4 4.5h-1.55a4 4 0 1 1-1.2-2.7L8.5 6.5H14V1l-2.1 2.1A5.48 5.48 0 0 0 8 2.5z"
+        />
       </svg>
     );
   }

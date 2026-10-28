@@ -212,6 +212,9 @@ def _write_roots(base: Path) -> tuple[Path, Path, Path]:
     write_scene(_bare_scene(), scenes / SCENE_BARE)
     for scene_id in FILLER_SCENES:
         write_scene(_filler_scene(scene_id), scenes / scene_id)
+    for child in scenes.iterdir():
+        if child.is_dir() and (child / "manifest.json").is_file():
+            (child / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
     xodr = base / "Town03.xodr"
     _straight(xodr)
     maps = base / "maps"
@@ -295,6 +298,7 @@ class _Session:
         self.base = base
         self.requests: list[str] = []
         self.errors: list[str] = []
+        page.add_init_script("window.__COPERCEIVE_TEST_ENV__ = true;")
         page.on("request", lambda request: self._record(request.url))
         page.on("pageerror", lambda error: self.errors.append(str(error)))
 
@@ -357,6 +361,8 @@ def test_play_advances_the_timeline_at_the_recorded_pace(session: _Session, shot
     session.choose_scene(SCENE_BARE)
     assert session.slider("aria-valuemax") == BARE_SAMPLES - 1
     assert session.slider("aria-valuenow") == 0
+    # Turn loop OFF to test pausing at the last sample
+    session.page.locator("button[aria-label=Loop]").click()
     play = session.page.locator("button[aria-label=Play]")
     start = time.monotonic()  # before the click: the page starts its clock on the click
     play.click()
@@ -375,7 +381,10 @@ def test_play_advances_the_timeline_at_the_recorded_pace(session: _Session, shot
     for elapsed, index in seen:
         assert index <= int(elapsed * 10) + 2, seen
     session.wait_for(
-        lambda: session.page.locator("button[aria-label=Play]").count() == 1,
+        lambda: (
+            session.page.locator("button[aria-label=Replay]").count() == 1
+            or session.page.locator("button[aria-label=Play]").count() == 1
+        ),
         "playback to pause on the last sample",
         timeout_s=6.0,
     )
@@ -756,3 +765,158 @@ def test_legend_names_the_agent_types_of_the_scene(session: _Session) -> None:
     assert through_lane() == ["Vehicle", "Drone", "RSU", "Lane"]
     session.choose_scene(SCENE_BARE)
     assert through_lane() == ["Vehicle", "Lane"]
+
+
+def test_agent_visibility_toggles_remove_objects_from_scene_graph(session: _Session) -> None:
+    """Toggling agent visibility removes points, frustums, and bounding boxes directly
+    from the Three.js scene graph and updates object counts immediately."""
+    session.open()
+    session.wait_status(f"{SCENE_FULL} at", timeout_s=10.0)
+
+    # Advance to sample 2 (100000 µs) where vehicle has points and both agents have boxes
+    session.page.keyboard.press("ArrowRight")
+    session.page.keyboard.press("ArrowRight")
+    session.wait_status("100000 µs", timeout_s=10.0)
+
+    # Initial counts from Three.js scene graph
+    initial = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert initial is not None
+    assert initial["frustums"] == 2  # cam_front and cam_rear on vehicle
+    assert initial["boxes"] == 6  # 3 vehicle boxes + 3 drone boxes
+    assert initial["points"] == 1  # 1 point in vehicle lidar sweep
+    assert initial["agents"] == 2  # vehicle and drone have poses at 100000 µs
+
+    # Also verify direct stage reference if available in development mode
+    has_stage = session.page.evaluate("() => typeof window.__COPERCEIVE_STAGE__ !== 'undefined'")
+    if has_stage:
+        stage_frustums = session.page.evaluate(
+            "() => window.__COPERCEIVE_STAGE__.frustums.children.length"
+        )
+        assert stage_frustums == initial["frustums"]
+
+    # 1. Hide Vehicle: vehicle's points and frustums must immediately disappear from scene graph
+    vehicle_item = (
+        session.page.locator(".agent-list li").filter(has_text="Vehicle 1").locator("button.swatch")
+    )
+    vehicle_item.click()
+
+    after_vehicle = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert after_vehicle["points"] == 0, "LiDAR points must be removed when vehicle is hidden"
+    assert after_vehicle["frustums"] == 0, "Camera frustums must be removed when vehicle is hidden"
+    assert after_vehicle["boxes"] == 3, "Only drone's 3 boxes should remain"
+    assert after_vehicle["agents"] == 1  # Only Drone 1 remains visible
+
+    # 2. Hide Drone: drone's annotations/boxes and axis helper removed
+    uav_item = (
+        session.page.locator(".agent-list li").filter(has_text="Drone 1").locator("button.swatch")
+    )
+    uav_item.click()
+
+    after_all = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert after_all["points"] == 0
+    assert after_all["frustums"] == 0
+    assert after_all["boxes"] == 0
+    assert after_all["agents"] == 0
+
+    # 3. Unhide Vehicle: vehicle's points, frustums, and boxes restored immediately
+    vehicle_item.click()
+    restored_veh = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert restored_veh["points"] == 1
+    assert restored_veh["frustums"] == 2
+    assert restored_veh["boxes"] == 3
+    assert restored_veh["agents"] == 1
+
+    # 4. Unhide Drone: all 6 boxes and 2 agents restored
+    uav_item.click()
+    restored_all = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")
+    assert restored_all["points"] == 1
+    assert restored_all["frustums"] == 2
+    assert restored_all["boxes"] == 6
+    assert restored_all["agents"] == 2
+
+
+def test_playback_updates_status_line_every_frame(session: _Session) -> None:
+    """The status line updates its sample time on every frame while playback is running."""
+    session.open()
+    session.wait_status(f"{SCENE_FULL} at 0 µs", timeout_s=10.0)
+
+    # Ensure loop is active so playback does not immediately end after 400ms on short clip
+    if session.page.locator("button[aria-label=Loop][aria-pressed=true]").count() == 0:
+        session.page.keyboard.press("l")
+
+    play = session.page.locator("button[aria-label=Play]")
+    play.click()
+
+    # Wait for the status line to advance beyond 0 µs while playback is running
+    session.wait_for(
+        lambda: (
+            session.page.locator("button[aria-label=Pause]").count() == 1
+            and "at 0 µs" not in session.status()
+            and "µs." in session.status()
+        ),
+        "status line to advance beyond 0 µs during active playback",
+        timeout_s=5.0,
+    )
+
+    current_status = session.status()
+    assert f"{SCENE_FULL} at " in current_status
+    assert "at 0 µs" not in current_status
+
+
+def test_connect_backdrop_animation_and_reduced_motion(session: _Session) -> None:
+    """The Connect backdrop is non-blank, animates, and stays static under reduced motion."""
+    session.page.goto(f"{session.base}/#/connect", wait_until="networkidle")
+    canvas = session.page.locator("canvas")
+    session.page.wait_for_selector("canvas", timeout=5000)
+
+    # 1. Non-blank: check that pixels are drawn
+    non_black = canvas.evaluate(
+        "c => { const ctx = c.getContext('2d'); "
+        "const d = ctx.getImageData(0, 0, c.width, c.height).data; "
+        "let count = 0; "
+        "for (let i = 0; i < d.length; i += 4) { "
+        "if (d[i] > 10 || d[i + 1] > 10 || d[i + 2] > 10) count++; } "
+        "return count; }"
+    )
+    assert non_black > 50, f"Connect backdrop canvas was blank (non_black={non_black})"
+
+    # 2. Canvas animates: pixels change between two frames 500ms apart
+    sample_hash = (
+        "c => { const ctx = c.getContext('2d'); "
+        "const d = ctx.getImageData(0, 0, c.width, c.height).data; "
+        "let s = 0; "
+        "for (let i = 0; i < d.length; i += 16) s += d[i] + d[i + 1] + d[i + 2]; "
+        "return s; }"
+    )
+    h1 = canvas.evaluate(sample_hash)
+    time.sleep(0.5)
+    h2 = canvas.evaluate(sample_hash)
+    assert h1 != h2, "Connect backdrop canvas did not animate over 500ms"
+
+    # 3. Reduced motion: frame stays static
+    session.page.emulate_media(reduced_motion="reduce")
+    session.page.goto(f"{session.base}/#/connect", wait_until="networkidle")
+    canvas_rm = session.page.locator("canvas")
+    session.page.wait_for_selector("canvas", timeout=5000)
+    time.sleep(0.1)
+    rm1 = canvas_rm.evaluate(sample_hash)
+    time.sleep(0.5)
+    rm2 = canvas_rm.evaluate(sample_hash)
+    assert rm1 == rm2, "Under prefers-reduced-motion, backdrop frame changed"
+
+    # 4. Accessibility audit with axe-core
+    session.page.emulate_media(reduced_motion="no-preference")
+    repo_root = Path(__file__).resolve().parents[1]
+    axe_path = repo_root / "web" / "node_modules" / "axe-core" / "axe.min.js"
+    if axe_path.exists():
+        session.page.evaluate(axe_path.read_text(encoding="utf-8"))
+        results = session.page.evaluate("""
+            axe.run({
+                runOnly: {
+                    type: 'tag',
+                    values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
+                }
+            })
+        """)
+        violations = results.get("violations", [])
+        assert len(violations) == 0, f"Connect backdrop axe violations: {violations}"

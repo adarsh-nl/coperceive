@@ -23,7 +23,15 @@ from coperceive.model import (
 from coperceive.rerun_export import export_rerun
 from coperceive.se3 import SE3
 from coperceive.store import write_scene
-from coperceive.viewdata import fov_y_rad, frame_document, frame_points, summarize, world_points
+from coperceive.viewdata import (
+    dataset_root_error,
+    fov_y_rad,
+    frame_document,
+    frame_points,
+    scene_directories,
+    summarize,
+    world_points,
+)
 
 
 def _scene() -> Scene:
@@ -104,6 +112,21 @@ def test_world_point_and_box_follow_the_body_pose() -> None:
     assert summary["times_us"] == [0, 100_000]
     later = frame_points(scene, 100_000, "vehicle", "lidar_top")
     assert later == b""
+
+
+def test_listing_requires_complete_when_asked(tmp_path: Path) -> None:
+    scene = _scene()
+    write_scene(scene, tmp_path / "desk")
+    assert scene_directories(tmp_path) == [tmp_path / "desk"]
+    assert scene_directories(tmp_path, require_complete=True) == []
+    assert dataset_root_error(tmp_path) is not None
+    (tmp_path / "desk" / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
+    assert scene_directories(tmp_path, require_complete=True) == [tmp_path / "desk"]
+    assert dataset_root_error(tmp_path) is None
+    missing = tmp_path / "gone"
+    message = dataset_root_error(missing)
+    assert message is not None
+    assert "does not exist" in message
 
 
 def test_camera_without_a_pinhole_has_no_frustum() -> None:

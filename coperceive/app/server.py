@@ -5,12 +5,14 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import hmac
 import json
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -123,6 +125,7 @@ def create_app(
     predictions: str | Path | None = None,
     static: str | Path | None = None,
     media_roots: Sequence[str | Path] = (),
+    allow_origin: str | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -141,6 +144,14 @@ def create_app(
         root_path=root_path,
         description="Local cooperative-perception data app.",
     )
+    if allow_origin:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=[allow_origin],
+            allow_credentials=False,
+            allow_methods=["GET", "POST", "OPTIONS"],
+            allow_headers=["Authorization", "Content-Type", "X-Coperceive-Request"],
+        )
     app.state.root = root_path_obj
     app.state.token = token
     app.state.db_path = root_path_obj / "jobs.sqlite"
@@ -155,11 +166,17 @@ def create_app(
 
     @app.middleware("http")
     async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if request.method == "OPTIONS":
+            return await call_next(request)
         if request.url.path.startswith("/api/"):
             expected = request.app.state.token
             if expected:
                 header = request.headers.get("authorization", "")
-                if header != f"Bearer {expected}":
+                prefix = "Bearer "
+                if not (
+                    header.startswith(prefix)
+                    and hmac.compare_digest(header[len(prefix) :], expected)
+                ):
                     return _json_error(401, "bearer token required")
             if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
                 if request.headers.get(CSRF_HEADER) != "1":
@@ -196,7 +213,10 @@ def create_app(
 
     @app.get("/api/scenes")
     def scenes() -> list[dict[str, str]]:
-        return [{"scene_id": path.name} for path in scene_directories(app.state.root)]
+        return [
+            {"scene_id": path.name}
+            for path in scene_directories(app.state.root, require_complete=True)
+        ]
 
     @app.get("/api/scenes/{scene_id}")
     def scene_summary(scene_id: str) -> dict[str, object]:
@@ -459,12 +479,21 @@ class _SceneCache:
 def _scene_dir(root: Path, scene_id: str) -> Path:
     if scene_id == "" or "/" in scene_id or "\\" in scene_id or ".." in scene_id:
         raise HTTPException(status_code=400, detail="bad scene id")
+    if (root / "manifest.json").is_file() and (root / "COMPLETE.json").is_file():
+        if scene_id in (root.name, ".", ""):
+            return root
+        try:
+            loaded = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+            if isinstance(loaded, dict) and loaded.get("scene_id") == scene_id:
+                return root
+        except Exception:
+            pass
     try:
         # A NUL byte makes resolve() raise ValueError; an over-long name makes
         # the stat raise OSError. Both are a bad id, not a server error.
         path = (root / scene_id).resolve()
         path.relative_to(root)
-        present = (path / "manifest.json").is_file()
+        present = (path / "manifest.json").is_file() and (path / "COMPLETE.json").is_file()
     except (ValueError, OSError) as exc:
         raise HTTPException(status_code=400, detail="bad scene id") from exc
     if not present:
