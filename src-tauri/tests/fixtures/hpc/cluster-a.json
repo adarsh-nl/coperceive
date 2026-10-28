@@ -10,7 +10,7 @@
       "/data/scenes"
     ],
     "scratch_template": "/scratch/$USER",
-    "results_root": "/data/projects/alpha/runs",
+    "results_root": "/data/results",
     "code_roots": [],
     "scheduler": "slurm",
     "defaults": {

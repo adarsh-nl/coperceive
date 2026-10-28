@@ -39,7 +39,7 @@ export interface ServerProfile {
   data_roots: string[];
   /** Required by the shared contract; empty only while a draft is being filled. */
   scratch_template: string;
-  /** Shared storage the login node reads; run outputs must never go to scratch. */
+  /** Shared filesystem for run outputs; required, never scratch. */
   results_root: string;
   /** Extra folders a registered pipeline script may live in. */
   code_roots: string[];
@@ -109,6 +109,7 @@ export interface ScratchReport {
   quota: string | null;
   detail: string;
 }
+
 
 /** One folder described by `coperceive remote scan`; paths are relative to the root. */
 export interface FolderInfo {
@@ -272,11 +273,11 @@ export function validateDraft(entry: ServerEntry): string[] {
   }
   if (!profile.results_root.trim()) {
     errors.push(
-      "Add the shared folder where run results and predictions should live (never scratch).",
+      "Add the shared results folder where run outputs should live (not scratch).",
     );
   } else {
     if (!profile.results_root.startsWith("/") && !profile.results_root.startsWith("~")) {
-      errors.push("The results folder must be an absolute path on the server.");
+      errors.push("The results folder must be an absolute path on the cluster.");
     }
     if (profile.results_root.split("/").includes("..")) {
       errors.push("The results folder may not contain '..'.");
@@ -286,16 +287,12 @@ export function validateDraft(entry: ServerEntry): string[] {
       scratchPrefix &&
       (profile.results_root === scratchPrefix || profile.results_root.startsWith(`${scratchPrefix}/`))
     ) {
-      errors.push("Results must go to shared storage, not scratch.");
+      errors.push("Results must go to shared storage, not inside the scratch folder.");
     }
   }
   for (const root of profile.code_roots) {
-    if (!root.trim()) continue;
     if (!root.startsWith("/") && !root.startsWith("~")) {
-      errors.push("Pipeline code folders must be absolute paths on the server.");
-    }
-    if (root.split("/").includes("..")) {
-      errors.push("Pipeline code folders may not contain '..'.");
+      errors.push("Code folders must be absolute paths on the cluster.");
     }
   }
   if (profile.scheduler === "none" && profile.defaults.partition) {
@@ -308,14 +305,6 @@ export function validateDraft(entry: ServerEntry): string[] {
     errors.push("A container environment needs an image path (for example a .sif file).");
   }
   return errors;
-}
-
-/** Splits a comma- or newline-separated list of folders, dropping blanks. */
-export function splitFolderList(value: string): string[] {
-  return value
-    .split(/[,\n]/)
-    .map((item) => item.trim())
-    .filter((item) => item.length > 0);
 }
 
 /** The first data folder, or empty. */

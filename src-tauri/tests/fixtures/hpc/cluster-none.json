@@ -10,7 +10,7 @@
       "/data/files"
     ],
     "scratch_template": "/tmp",
-    "results_root": "/data/files/runs",
+    "results_root": "/data/results",
     "code_roots": [],
     "scheduler": "none",
     "defaults": {

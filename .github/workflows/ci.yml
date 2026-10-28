@@ -187,8 +187,11 @@ jobs:
       - name: Sync Desktop Bundle Version
         run: bash scripts/desktop/sync_version.sh
       - name: Build Tauri Desktop (.app and .dmg)
-        run: npm run tauri build -- --target aarch64-apple-darwin --verbose 2>&1 | tee /tmp/tauri_build.log
-        working-directory: web
+        # Bounded retry around the DMG bundling: hdiutil create intermittently
+        # fails with "Resource busy" on the macOS runners (runner-images#7522,
+        # XProtectBehaviorService locking a freshly created image). The script
+        # only retries that exact signature and logs hdiutil state each attempt.
+        run: bash scripts/desktop/build_dmg.sh
       - name: Report Tauri Build Failure
         if: failure()
         run: |

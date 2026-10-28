@@ -24,13 +24,13 @@ import {
   partitionNames,
   profileSummary,
   reportSummary,
-  splitFolderList,
   validateConnectionShape,
   validateDraft,
   type DetectionReport,
   type EnvironmentKind,
   type SchedulerKind,
   type ServerEntry,
+  splitFolderList,
 } from "./hpc";
 
 const card = {
@@ -533,33 +533,35 @@ export default function HpcServers() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <div style={{ ...field, flex: 1 }}>
-              <label style={labelStyle} htmlFor="hpc-results-root">
-                Results folder (shared storage)
-              </label>
-              <input
-                id="hpc-results-root"
-                style={input}
-                value={draft.profile.results_root}
-                placeholder="/project/your-account/runs"
-                onChange={(event) => updateProfile({ results_root: event.target.value })}
-              />
-            </div>
-            <div style={{ ...field, flex: 1 }}>
-              <label style={labelStyle} htmlFor="hpc-code-roots">
-                Pipeline code folders (optional, comma separated)
-              </label>
-              <input
-                id="hpc-code-roots"
-                style={input}
-                value={draft.profile.code_roots.join(", ")}
-                placeholder="/project/your-account/code"
-                onChange={(event) =>
-                  updateProfile({ code_roots: splitFolderList(event.target.value) })
-                }
-              />
-            </div>
+          <div style={field}>
+            <label style={labelStyle} htmlFor="hpc-results-root">
+              Shared results folder
+            </label>
+            <input
+              id="hpc-results-root"
+              style={input}
+              value={draft.profile.results_root}
+              placeholder="/path/your/account/can/write (not scratch)"
+              onChange={(event) => updateProfile({ results_root: event.target.value })}
+            />
+            <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
+              Run outputs and predictions are written here, on shared storage the login node can
+              read. Coperceive never puts outputs in scratch.
+            </p>
+          </div>
+          <div style={field}>
+            <label style={labelStyle} htmlFor="hpc-code-roots">
+              Pipeline code folders (optional, comma separated)
+            </label>
+            <input
+              id="hpc-code-roots"
+              style={input}
+              value={draft.profile.code_roots.join(", ")}
+              placeholder="/project/you/code, /project/you/tools"
+              onChange={(event) =>
+                updateProfile({ code_roots: splitFolderList(event.target.value) })
+              }
+            />
           </div>
 
           <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "0.5rem 0 0.75rem" }} />

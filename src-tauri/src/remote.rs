@@ -147,7 +147,7 @@ pub fn remote_command_line(args: &[String]) -> String {
 fn parse_remote_reply<T: serde::de::DeserializeOwned>(label: &str, stdout: &str) -> Result<T, String> {
     serde_json::from_str::<T>(stdout).map_err(|_| {
         format!(
-            "The server sent an unexpected reply to the {label} request ({} bytes, not valid              JSON). Check that coperceive is installed and up to date on the server, then try              again.",
+            "The server sent an unexpected reply to the {label} request ({} bytes, not valid JSON). Check that coperceive is installed and up to date on the server, then try again.",
             stdout.len()
         )
     })
@@ -333,7 +333,7 @@ impl RemoteClient {
             return Ok(token);
         }
         Err(SshErrorKind::Other(
-            "Coperceive could not read the running session's key from the server. Disconnect and              start a new session."
+            "Coperceive could not read the running session's key from the server. Disconnect and start a new session."
                 .to_string(),
         ))
     }

@@ -2,11 +2,15 @@
 """``coperceive model run --slurm``: emit (and on request submit) the Slurm job for the same
 batch run (ADR 0011 decision 5).
 
-The script stages exactly the scene files and raw files the selected scenes need into
-``/local/$SLURM_JOB_ID`` with ``rsync --files-from``, runs the same ``coperceive model run``
-there, and copies the run home before the trap wipes the scratch. The partition comes
-from ``--slurm-partition`` (or ``$COPERCEIVE_SLURM_PARTITION``), never a hard-coded
-site name. ``--time`` comes from the manifest's
+The script stages exactly the scene files and raw files the selected scenes need into the
+cluster profile's ``scratch_template`` (for example ``/scratch/$USER/$SLURM_JOB_ID``) with
+``rsync --files-from``, runs the same ``coperceive model run`` there, and copies the run home
+before the trap wipes the scratch, then the trap removes it. Both the scratch template and
+the partition come from the server profile: ``--slurm-scratch-template`` /
+``COPERCEIVE_SLURM_SCRATCH_TEMPLATE`` and ``--slurm-partition`` /
+``COPERCEIVE_SLURM_PARTITION``. There is no hard-coded site name, node or path; the profile
+value is passed through until pipeline submission uses the profile directly. ``--time``
+comes from the manifest's
 ``seconds_per_sample`` and ``staging_seconds`` until a run of the same plugin and model under
 ``--out`` exists, then from that run's ``provenance.timings``. The script carries no value
 from the parent's environment: secret names appear in one comment, nothing else; compute
@@ -45,6 +49,35 @@ WORK_COPY_FILTER = (
     "--prune-empty-dirs",
 )
 _SOFTWARE_PYTHON = re.compile(r"/software/python/([^/]+)/")
+
+
+_SCRATCH_TEMPLATE_RE = re.compile(r"^[A-Za-z0-9_./${}~-]+$")
+
+
+def validate_scratch_template(template: str) -> str:
+    """Check a cluster profile's scratch template before it is embedded in a script.
+
+    The template is the user/profile choice (for example
+    ``/scratch/$USER/$SLURM_JOB_ID``); it must be a safe shell word with a
+    per-job variable so parallel jobs never share a directory.
+    """
+    if not template or not template.strip():
+        raise SlurmError(
+            "No scratch template for the job. Set the cluster profile's scratch_template "
+            "(for example /scratch/$USER/$SLURM_JOB_ID) and pass it with "
+            "--slurm-scratch-template or COPERCEIVE_SLURM_SCRATCH_TEMPLATE."
+        )
+    if not _SCRATCH_TEMPLATE_RE.match(template):
+        raise SlurmError(
+            f"scratch template {template!r} has characters that are unsafe in a job script. "
+            "Use the cluster profile's path (letters, digits, _ . / $ { } ~ -)."
+        )
+    if "$SLURM_JOB_ID" not in template:
+        raise SlurmError(
+            f"scratch template {template!r} needs $SLURM_JOB_ID so each job gets its own "
+            "directory (for example /scratch/$USER/$SLURM_JOB_ID)."
+        )
+    return template
 
 
 class SlurmError(CoperceiveError):
@@ -216,6 +249,7 @@ def staged_files(
 @dataclass(frozen=True)
 class SlurmPlan:
     job_name: str
+    scratch_template: str
     partition: str
     gres: str | None
     cpus: int
@@ -244,9 +278,11 @@ def plan_sbatch(
     logs_dir: Path,
     results_dir: Path,
     partition: str,
+    scratch_template: str,
     repo_root: Path | None = None,
 ) -> SlurmPlan:
     """The sbatch of ADR 0011 decision 5 for ``coperceive model run`` over ``scenes``."""
+    scratch_template = validate_scratch_template(scratch_template)
     samples = sum(len(pose_times(scene)) for scene in scenes.values())
     closure = model_closure(manifest, spec, options)
     scene_set: set[str] = set()
@@ -338,7 +374,7 @@ def plan_sbatch(
         [
             "",
             "set -euo pipefail",
-            'SCRATCH="/local/$SLURM_JOB_ID"',
+            f'SCRATCH="{scratch_template}"',
             'mkdir -p "$SCRATCH"',
             "trap 'rm -rf \"$SCRATCH\"' EXIT",
             'export TMPDIR="$SCRATCH/tmp"',
@@ -407,6 +443,7 @@ def plan_sbatch(
     )
     return SlurmPlan(
         job_name=job_name,
+        scratch_template=scratch_template,
         partition=partition,
         gres="gpu:1" if gpu else None,
         cpus=spec.resources.cpus,

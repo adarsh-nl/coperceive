@@ -560,7 +560,7 @@ mod tests {
             user: None,
             data_roots: vec!["/data/scenes".to_string()],
             scratch_template: "/scratch/$USER".to_string(),
-            results_root: "/data/projects/runs".to_string(),
+            results_root: "/data/results".to_string(),
             code_roots: Vec::new(),
             scheduler: SchedulerKind::Slurm,
             defaults: JobDefaults {

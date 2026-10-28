@@ -10,7 +10,7 @@
       "/data/scenes"
     ],
     "scratch_template": "/work/alice",
-    "results_root": "/mnt/beta/runs",
+    "results_root": "/data/results",
     "code_roots": [],
     "scheduler": "slurm",
     "defaults": {
