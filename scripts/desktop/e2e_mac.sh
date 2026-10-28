@@ -385,7 +385,9 @@ time.sleep(0.5)
 
 print("Driving real UI: clicking Bird\x27s-eye export button...")
 eval_js("""(() => {
-    const bevBtn = Array.from(document.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.includes("Bird\x27s-eye"));
+    const dialog = document.querySelector(\x27.dialog\x27);
+    if (!dialog) throw new Error("Export dialog not found in DOM");
+    const bevBtn = Array.from(dialog.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.includes("Bird\x27s-eye"));
     if (!bevBtn) throw new Error("Bird\x27s-eye button not found in export dialog");
     bevBtn.click();
 })()""")
@@ -395,8 +397,9 @@ deadline = time.monotonic() + 30.0
 exported = False
 while time.monotonic() < deadline:
     res = eval_js("""(() => {
-        const img = document.querySelector(\x27img.plot-preview\x27);
-        const note = document.querySelector(\x27p.muted\x27);
+        const dialog = document.querySelector(\x27.dialog\x27);
+        const img = dialog ? dialog.querySelector(\x27img.plot-preview\x27) : null;
+        const note = dialog ? dialog.querySelector(\x27p.muted\x27) : null;
         const noteText = note ? note.textContent : "";
         if (img && img.src) {
             return { done: true, src: img.src, note: noteText };
@@ -409,10 +412,10 @@ while time.monotonic() < deadline:
         }
         return { done: false, note: noteText };
     })()""")
-    err_text = res.get("error")
+    err_text = res.get("error") if res else None
     if err_text:
         raise RuntimeError(f"BEV export failed in UI: {err_text}")
-    if res.get("done"):
+    if res and res.get("done"):
         print(f"BEV export completed in UI: {res}", flush=True)
         exported = True
         break
@@ -422,7 +425,8 @@ assert exported, "BEV export timed out in UI"
 
 print("Closing Export dialog...")
 eval_js("""(() => {
-    const closeBtn = Array.from(document.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.trim() === "Close");
+    const dialog = document.querySelector(\x27.dialog\x27);
+    const closeBtn = dialog ? Array.from(dialog.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.trim() === "Close") : null;
     if (closeBtn) closeBtn.click();
 })()""")
 
