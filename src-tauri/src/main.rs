@@ -25,6 +25,8 @@ use coperceive_desktop::controller::{self, ControllerConfig};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::detect::{self, DetectOptions, DetectionReport};
 #[cfg(target_os = "macos")]
+use coperceive_desktop::run_plan::{self, PipelineEntry, RunPlan, RunPlanRequest};
+#[cfg(target_os = "macos")]
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{
@@ -32,6 +34,8 @@ use coperceive_desktop::remote::{
 };
 #[cfg(target_os = "macos")]
 use coperceive_desktop::sidecar::SidecarSession;
+#[cfg(target_os = "macos")]
+use coperceive_desktop::slurm_adapter::SshRunner;
 #[cfg(target_os = "macos")]
 use coperceive_desktop::state::{self, AppPersistentState};
 
@@ -1467,6 +1471,88 @@ async fn test_server_connection(entry: ServerEntry) -> Result<DetectionReport, S
     .map_err(|e| format!("The connection test could not finish: {e}"))
 }
 
+/// The saved server profile a plan/command belongs to.
+#[cfg(target_os = "macos")]
+fn find_server_entry(profile_id: &str) -> Result<ServerEntry, String> {
+    server_profiles::load_servers()
+        .into_iter()
+        .find(|entry| entry.id == profile_id)
+        .ok_or_else(|| "This server is no longer saved. Add it again, then retry.".to_string())
+}
+
+/// SSH runner for a saved profile, using the user's own ssh config and agent.
+#[cfg(target_os = "macos")]
+fn plan_runner(entry: &ServerEntry) -> Result<SshRunner, String> {
+    Ok(SshRunner::new(ssh_bin(), entry.ssh_target()?))
+}
+
+/// Installed model plugins on the cluster, offered as built-in pipelines. A
+/// cluster without plugins returns an empty list; the UI also accepts a custom
+/// `coperceive-pipeline.json` script path.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn list_pipeline_options(profile_id: String) -> Result<Vec<PipelineEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        Ok::<Vec<PipelineEntry>, String>(run_plan::list_builtin_pipelines(&runner))
+    })
+    .await
+    .map_err(|error| format!("Could not list pipelines: {error}"))?
+}
+
+/// Reads a custom pipeline registration (`coperceive-pipeline.json` next to the
+/// script) read-only over SSH.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn read_custom_pipeline(
+    profile_id: String,
+    script_path: String,
+) -> Result<PipelineEntry, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        run_plan::load_pipeline_registration(&runner, &entry.profile, &script_path)
+    })
+    .await
+    .map_err(|error| format!("Could not read the pipeline registration: {error}"))?
+}
+
+/// Builds and checks a run plan. Nothing is submitted: the plan only renders the
+/// argv, environment, checks and the contract-check script for the user to see.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn build_run_plan(
+    profile_id: String,
+    request: RunPlanRequest,
+) -> Result<RunPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        run_plan::build_run_plan(&runner, &entry, &request)
+    })
+    .await
+    .map_err(|error| format!("Could not build the run plan: {error}"))?
+}
+
+/// Saves a checked plan under the profile's `results_root/plans/<id>.json`.
+/// Nothing is submitted.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn save_run_plan(
+    profile_id: String,
+    plan: RunPlan,
+    request: RunPlanRequest,
+) -> Result<RunPlan, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        run_plan::save_run_plan(&runner, &entry, &plan, &request)
+    })
+    .await
+    .map_err(|error| format!("Could not save the run plan: {error}"))?
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
@@ -1708,6 +1794,10 @@ fn main() {
             save_server_profile,
             delete_server_profile,
             test_server_connection,
+            list_pipeline_options,
+            read_custom_pipeline,
+            build_run_plan,
+            save_run_plan,
             remote_connect,
             remote_status,
             remote_disconnect,
@@ -1760,6 +1850,55 @@ fn main() {
             // Test-only seam for the CI packaged-app HPC check: run the real
             // "Test connection" code against a committed fake-ssh profile and
             // write the report for `scripts/desktop/e2e_hpc_fake_ssh.sh`.
+            if let Some((request_path, result_path)) =
+                coperceive_desktop::test_seams::run_plan_probe_request()
+            {
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<serde_json::Value, String> {
+                        let text = fs::read_to_string(&request_path)
+                            .map_err(|error| format!("Could not read the plan request: {error}"))?;
+                        let payload: serde_json::Value = serde_json::from_str(&text)
+                            .map_err(|error| format!("Plan request is not JSON: {error}"))?;
+                        let server_path = payload
+                            .get("server")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| "Plan request needs a server fixture path.".to_string())?;
+                        let server_text = fs::read_to_string(server_path).map_err(|error| {
+                            format!("Could not read the server fixture: {error}")
+                        })?;
+                        let entry: ServerEntry = serde_json::from_str(&server_text)
+                            .map_err(|error| format!("Server fixture is not valid: {error}"))?;
+                        let request: RunPlanRequest = serde_json::from_value(
+                            payload
+                                .get("request")
+                                .cloned()
+                                .ok_or_else(|| "Plan request needs a request object.".to_string())?,
+                        )
+                        .map_err(|error| format!("Plan request is not valid: {error}"))?;
+                        let runner = plan_runner(&entry)?;
+                        let built = run_plan::build_run_plan(&runner, &entry, &request)?;
+                        let save = payload
+                            .get("save")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+                        let plan = if save {
+                            run_plan::save_run_plan(&runner, &entry, &built, &request)?
+                        } else {
+                            built
+                        };
+                        Ok(serde_json::json!({"ok": true, "plan": plan}))
+                    })();
+                    let document = match result {
+                        Ok(value) => value,
+                        Err(error) => serde_json::json!({"ok": false, "error": error}),
+                    };
+                    let _ = fs::write(
+                        &result_path,
+                        serde_json::to_string_pretty(&document).unwrap_or_default(),
+                    );
+                });
+            }
+
             // The same seam also runs one real folder scan for the Browse step.
             if let Some(request) = coperceive_desktop::test_seams::hpc_scan_probe_request() {
                 std::thread::spawn(move || {

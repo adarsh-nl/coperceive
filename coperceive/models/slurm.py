@@ -51,6 +51,30 @@ WORK_COPY_FILTER = (
 _SOFTWARE_PYTHON = re.compile(r"/software/python/([^/]+)/")
 
 
+_SLURM_PARTITION_CHARS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.,"
+)
+
+
+def validate_partition(partition: str) -> str:
+    """Check the profile/CLI partition name before it is embedded in a script."""
+    if not partition or not partition.strip():
+        raise SlurmError(
+            "Choose a Slurm partition for this run with --slurm-partition (or set "
+            "COPERCEIVE_SLURM_PARTITION). Coperceive never guesses a site partition."
+        )
+    if any(ch.isspace() or ord(ch) < 32 for ch in partition):
+        raise SlurmError(
+            f"partition {partition!r} must not contain spaces, newlines or control characters."
+        )
+    if any(ch not in _SLURM_PARTITION_CHARS for ch in partition):
+        raise SlurmError(
+            f"partition {partition!r} has characters a Slurm partition name cannot contain; "
+            "use the name the cluster lists (letters, digits, '-', '_', '.' and ',')."
+        )
+    return partition
+
+
 _SCRATCH_TEMPLATE_RE = re.compile(r"^[A-Za-z0-9_./${}~-]+$")
 
 
@@ -332,11 +356,7 @@ def plan_sbatch(
     ]
     limit = time_limit(per_sample, staging, samples, conversion)
     gpu = spec.resources.gpu
-    if not partition.strip():
-        raise SlurmError(
-            "Choose a Slurm partition for this run with --slurm-partition (or set "
-            "COPERCEIVE_SLURM_PARTITION). Coperceive never guesses a site partition."
-        )
+    partition = validate_partition(partition)
     job_name = f"model-{manifest.name}-{run_id}"
     slurm_dir = out_root.resolve() / SLURM_DIR
     command = _run_command(

@@ -361,6 +361,10 @@ run_profile cluster-a
 run_profile cluster-b
 run_profile cluster-none
 
+# The "New evaluation" run plan against the same fake cluster: builds, checks
+# and saves a plan (module and container environments); never submits.
+bash "$(dirname "$0")/e2e_hpc_plan.sh" "${APP_EXE}"
+
 SCAN_FILE="$(run_scan cluster-a /data/scenes "" | tail -n 1)"
 scan_ok "cluster-a root" "${SCAN_FILE}" /data/scenes
 scan_root_one "cluster-a root" "${SCAN_FILE}"
@@ -380,4 +384,4 @@ scan_ok "cluster-none root" "${SCAN_FILE}" /data/files
 scan_none "cluster-none root" "${SCAN_FILE}"
 echo "Step verified: HPC browse read the no-scheduler server's folders."
 
-echo "HPC e2e verified: profiles, detection, ProxyJump alias, no-scheduler path and Browse."
+echo "HPC e2e verified: profiles, detection, ProxyJump alias, no-scheduler path, run plans and Browse."

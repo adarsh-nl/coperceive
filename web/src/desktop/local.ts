@@ -12,6 +12,7 @@ import type {
   ServerEntry,
   SshHostSettings,
 } from "./hpc";
+import type { PipelineEntry, RunPlan, RunPlanRequest } from "./runPlan";
 
 interface SessionPayload {
   origin: string;
@@ -151,6 +152,54 @@ export async function testServerConnection(entry: ServerEntry): Promise<Detectio
     return await invoke<DetectionReport>("test_server_connection", { entry });
   }
   throw new Error("Testing a connection is only available in the desktop app.");
+}
+
+/** Installed model plugins on the cluster, offered as built-in pipelines. */
+export async function listPipelineOptions(profileId: string): Promise<PipelineEntry[]> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<PipelineEntry[]>("list_pipeline_options", { profileId });
+  }
+  return [];
+}
+
+/** Reads a custom coperceive-pipeline.json registration over SSH (read-only). */
+export async function readCustomPipeline(
+  profileId: string,
+  scriptPath: string,
+): Promise<PipelineEntry> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<PipelineEntry>("read_custom_pipeline", { profileId, scriptPath });
+  }
+  throw new Error("Reading a pipeline registration is only available in the desktop app.");
+}
+
+/**
+ * Builds and checks a run plan (read-only remote checks). Nothing is submitted.
+ */
+export async function buildRunPlan(
+  profileId: string,
+  request: RunPlanRequest,
+): Promise<RunPlan> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<RunPlan>("build_run_plan", { profileId, request });
+  }
+  throw new Error("Building a run plan is only available in the desktop app.");
+}
+
+/** Saves a checked plan under the profile's results_root. Nothing is submitted. */
+export async function saveRunPlan(
+  profileId: string,
+  plan: RunPlan,
+  request: RunPlanRequest,
+): Promise<RunPlan> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<RunPlan>("save_run_plan", { profileId, plan, request });
+  }
+  throw new Error("Saving a run plan is only available in the desktop app.");
 }
 
 export async function pickDataRoot(): Promise<string | null> {
