@@ -39,7 +39,7 @@ Source = "https://github.com/adarsh-nl/coperceive"
 torch = ["torch"]
 viewer = ["rerun-sdk==0.22.1", "viser==0.2.23"]
 plot = ["matplotlib>=3.8"]
-app = ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2"]
+app = ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2", "matplotlib>=3.8"]
 griffin = ["huggingface_hub>=0.26"]
 docs = ["mkdocs-material>=9.5"]
 dev = [

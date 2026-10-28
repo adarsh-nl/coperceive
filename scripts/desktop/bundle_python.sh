@@ -79,10 +79,13 @@ rm -rf "${PYTHON_DEST}/lib/python3.13/site-packages/setuptools"*
 rm -rf "${PYTHON_DEST}/lib/python3.13/site-packages/wheel"*
 rm -rf "${PYTHON_DEST}/lib/python3.13/ensurepip"
 
-# Strip test suites from standard library and site-packages
+# Strip test suites from standard library and site-packages (do not delete *.testing packages)
 echo "Stripping test suites from bundle..."
 rm -rf "${PYTHON_DEST}/lib/python3.13/test"
-find "${PYTHON_DEST}" -type d \( -name "tests" -o -name "test" -o -name "testing" \) -exec rm -rf {} + 2>/dev/null || true
+rm -rf "${PYTHON_DEST}/lib/python3.13/unittest/test"
+rm -rf "${PYTHON_DEST}/lib/python3.13/ctypes/test"
+rm -rf "${PYTHON_DEST}/lib/python3.13/sqlite3/test"
+find "${PYTHON_DEST}/lib/python3.13/site-packages" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
 
 # Strip C headers
 echo "Stripping C/C++ header files from bundle..."

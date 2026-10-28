@@ -184,9 +184,7 @@ def _get_mpl() -> tuple[type, type, type, type, type]:
         _mpl_cache = (Figure, FigureCanvasAgg, FigureCanvasSVG, Line2D, Polygon)
         return _mpl_cache
     except ImportError as exc:
-        raise PlotError(
-            "matplotlib is required for plotting and export: pip install 'coperceive[plot]'"
-        ) from exc
+        raise PlotError("matplotlib is required for plotting and figure export.") from exc
 
 
 def _figure_cls() -> type:

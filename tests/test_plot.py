@@ -420,5 +420,6 @@ def test_plot_raises_when_matplotlib_missing(
         if k.startswith("matplotlib"):
             monkeypatch.delitem(sys.modules, k, raising=False)
     monkeypatch.setitem(sys.modules, "matplotlib", None)
-    with pytest.raises(plot_mod.PlotError, match="matplotlib is required for plotting and export"):
+    msg = "matplotlib is required for plotting and figure export"
+    with pytest.raises(plot_mod.PlotError, match=msg):
         plot_mod._get_mpl()  # pyright: ignore[reportPrivateUsage]
