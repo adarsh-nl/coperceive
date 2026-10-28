@@ -961,6 +961,16 @@ static DATASET_JOB_PID: Mutex<Option<u32>> = Mutex::new(None);
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
+fn library_thumbnail(scene_path: String) -> Result<Option<Vec<u8>>, String> {
+    let p = state::load_state();
+    let root = p
+        .library_root
+        .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+    coperceive_desktop::library::read_thumbnail_bytes(Path::new(&root), &scene_path)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
 fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, String> {
     let p = state::load_state();
     let is_configured = p.library_root.is_some();
@@ -1787,6 +1797,7 @@ fn main() {
             set_library_root,
             move_library_root,
             get_library_scenes,
+            library_thumbnail,
             delete_library_scene,
             reveal_in_finder,
             dataset_dry_run,

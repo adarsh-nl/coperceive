@@ -105,6 +105,8 @@ export interface LibrarySceneInfo {
   readonly sample_count?: number;
   readonly size_bytes: number;
   readonly has_images: "full" | "preview" | "none";
+  /** A 640 px preview was written at import time (thumbnail.jpg). */
+  readonly has_thumbnail: boolean;
   readonly has_map: boolean;
   readonly is_complete: boolean;
   /** Cached `coperceive validate` answer: true/false, or null until the background check finishes. */
