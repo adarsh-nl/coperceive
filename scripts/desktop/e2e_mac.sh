@@ -369,8 +369,9 @@ def eval_js(code, timeout=15):
     )
     with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
-        if data.get("error"):
-            raise RuntimeError(f"JS error: {data[\x27error\x27]}")
+        err = data.get("error")
+        if err:
+            raise RuntimeError(f"JS error: {err}")
         return data.get("result")
 
 print("Driving real UI: opening Export dialog...")
@@ -408,8 +409,9 @@ while time.monotonic() < deadline:
         }
         return { done: false, note: noteText };
     })()""")
-    if res.get("error"):
-        raise RuntimeError(f"BEV export failed in UI: {res[\x27error\x27]}")
+    err_text = res.get("error")
+    if err_text:
+        raise RuntimeError(f"BEV export failed in UI: {err_text}")
     if res.get("done"):
         print(f"BEV export completed in UI: {res}", flush=True)
         exported = True
