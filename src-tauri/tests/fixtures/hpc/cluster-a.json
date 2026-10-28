@@ -11,7 +11,9 @@
     ],
     "scratch_template": "/scratch/$USER",
     "results_root": "/data/results",
-    "code_roots": [],
+    "code_roots": [
+      "/data/code"
+    ],
     "scheduler": "slurm",
     "defaults": {
       "partition": "gpu-a100",

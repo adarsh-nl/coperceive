@@ -14,7 +14,7 @@ import {
 import type { ConnectionSession } from "./types";
 import { BrandWordmark } from "./Brand";
 import ConnectBackdrop from "./backdrop/ConnectBackdrop";
-import HpcServers from "./HpcServers";
+import HpcWorkspace from "./HpcWorkspace";
 import LibraryScreen from "./LibraryScreen";
 import GetDataScreen from "./GetDataScreen";
 import UpdateBanner from "./UpdateBanner";
@@ -638,7 +638,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           </div>
         )}
 
-        {activeTab === "remote" && <HpcServers />}
+        {activeTab === "remote" && <HpcWorkspace />}
 
         {error && (
           <div

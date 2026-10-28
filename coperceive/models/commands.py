@@ -22,7 +22,13 @@ from coperceive.models.check import check_plugin, render_check
 from coperceive.models.inputs import InputError
 from coperceive.models.registry import RegistryError, list_plugins, resolve_manifest
 from coperceive.models.runner import resolve_interpreter
-from coperceive.models.slurm import SlurmError, plan_sbatch, submit, write_plan
+from coperceive.models.slurm import (
+    SlurmError,
+    plan_sbatch,
+    submit,
+    validate_partition,
+    write_plan,
+)
 from coperceive.models.spec import Manifest, ModelSpecError, select_model
 from coperceive.store import read_scene
 from coperceive.viewdata import scene_directories
@@ -295,6 +301,10 @@ def _emit_slurm(
             "Choose a Slurm partition with --slurm-partition (or set "
             "COPERCEIVE_SLURM_PARTITION). Coperceive never guesses a site partition."
         )
+    try:
+        partition = validate_partition(partition)
+    except SlurmError as error:
+        raise BatchError(str(error)) from error
     plan = plan_sbatch(
         manifest,
         spec,
