@@ -16,6 +16,7 @@ from collections.abc import Iterable
 from pathlib import Path
 from typing import cast
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 THUMBNAIL_NAME = "thumbnail.jpg"
@@ -32,13 +33,28 @@ def thumbnail_path(scene: Path) -> Path:
     return scene / THUMBNAIL_NAME
 
 
+def _rows(table: pa.Table) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for item in table.to_pylist():
+        row: dict[str, object] = {}
+        for key, value in item.items():
+            row[key] = value
+        rows.append(row)
+    return rows
+
+
 def _image_paths(scene: Path) -> list[str]:
     table_path = scene / "images.parquet"
     if not table_path.is_file():
         return []
-    table = pq.read_table(table_path, columns=["path"])
-    column = table.column("path").to_pylist()
-    return [row for row in column if isinstance(row, str) and row]
+    table: pa.Table = pq.read_table(table_path)
+    if "path" not in table.schema.names:
+        return []
+    return [
+        cast(str, row["path"])
+        for row in _rows(table)
+        if isinstance(row.get("path"), str) and row["path"]
+    ]
 
 
 def _first_frame(scene: Path) -> Path | None:
@@ -84,14 +100,19 @@ def write_scene_thumbnail(scene: Path, *, force: bool = False) -> Path | None:
     if source is None:
         return None
     try:
-        with Image.open(source) as opened:
-            converted = opened.convert("RGB")
-            converted.thumbnail((PREVIEW_EDGE, PREVIEW_EDGE), Image.Resampling.LANCZOS)
-            buffer = io.BytesIO()
-            converted.save(buffer, format="JPEG", quality=PREVIEW_QUALITY, optimize=True)
-            payload = buffer.getvalue()
+        opened = cast(Image.Image, Image.open(source))
     except (OSError, ValueError) as exc:
         raise ThumbnailError(f"could not read an image for the thumbnail: {exc}") from exc
+    try:
+        converted: Image.Image = opened.convert("RGB")
+        converted.thumbnail((PREVIEW_EDGE, PREVIEW_EDGE), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        converted.save(buffer, format="JPEG", quality=PREVIEW_QUALITY, optimize=True)
+        payload = buffer.getvalue()
+    except (OSError, ValueError) as exc:
+        raise ThumbnailError(f"could not read an image for the thumbnail: {exc}") from exc
+    finally:
+        opened.close()
     if not payload or len(payload) > MAX_THUMBNAIL_BYTES:
         raise ThumbnailError("the thumbnail came out empty or too large")
     tmp = target.with_suffix(".jpg.tmp")
@@ -100,7 +121,7 @@ def write_scene_thumbnail(scene: Path, *, force: bool = False) -> Path | None:
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
-    return cast(Path, target)
+    return target
 
 
 def write_scene_thumbnails(scenes: Iterable[Path]) -> tuple[list[str], list[str]]:
