@@ -35,6 +35,8 @@ import {
   type StatusChip,
 } from "./predictionLayer";
 import PredictionsBlock, { LineSample } from "./predictions";
+import PanelState from "../desktop/PanelState";
+import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
 import { SPLIT_MAX, SPLIT_MIN } from "./appearance";
 import {
@@ -3757,7 +3759,17 @@ export default function Viewer({
         </div>
         <aside className="panel panel-right" aria-label="Agent telemetry">
           <h2>Telemetry</h2>
-          {(summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).map((agent) => {
+          {(!summary || (summary.agents ?? []).filter((agent) => !hidden[agent.agent_id]).length === 0) ? (
+            <PanelState
+              compact
+              kind="empty"
+              title={PANEL_DEFINITIONS.telemetry.empty.title}
+              description={PANEL_DEFINITIONS.telemetry.empty.description}
+              actionLabel={PANEL_DEFINITIONS.telemetry.empty.actionLabel}
+              onAction={() => setHidden({})}
+            />
+          ) : (
+            (summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).map((agent) => {
             const pose = cameraFrame?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
             const sampleSpeed = agentSpeed(agent.agent_id);
             const history = series.agentSpeed[agent.agent_id] ?? [];
@@ -3800,7 +3812,7 @@ export default function Viewer({
                 </svg>
               </article>
             );
-          })}
+          }))}
           <SceneCard summary={summary} frame={cameraFrame} evalSummary={evalSummary} />
           <Inspector
             pick={pick}

@@ -255,6 +255,22 @@ assert counts is not None, "window.__COPERCEIVE_SCENE_COUNTS__ must be defined"
 assert counts.get("points", 0) > 0, f"Expected points > 0, got {counts}"
 assert counts.get("boxes", 0) > 0, f"Expected boxes > 0, got {counts}"
 
+print("Asserting Inspector empty state in UI...")
+inspector_empty = eval_js("""(() => {
+    const el = document.querySelector('.side-card[aria-label="Selected object"] .panel-state-empty');
+    if (!el) return null;
+    return {
+        title: el.querySelector('.panel-state-title')?.textContent?.trim() || "",
+        desc: el.querySelector('.panel-state-description')?.textContent?.trim() || "",
+        action: el.querySelector('.panel-state-action')?.textContent?.trim() || ""
+    };
+})()""")
+assert inspector_empty, "Expected Inspector empty state in sidebar"
+assert inspector_empty["title"] == "No object selected", f"Unexpected title: {inspector_empty['title']}"
+assert inspector_empty["desc"].endswith("."), f"Description must end with period: {inspector_empty['desc']}"
+assert inspector_empty["action"] == "Reset Selection", f"Unexpected action: {inspector_empty['action']}"
+print(f"Verified: Inspector empty state rendered correctly ({inspector_empty['title']})")
+
 print("Driving real UI: clicking Drone viewpoint button...")
 eval_js("""(() => {
     const btn = document.querySelector(\x27button[aria-keyshortcuts="3"]\x27);

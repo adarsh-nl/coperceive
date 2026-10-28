@@ -5,6 +5,8 @@
  * ~/.ssh/config; there is no password or key field anywhere.
  */
 import { useEffect, useState } from "react";
+import PanelState from "./PanelState";
+import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   deleteServerProfile,
   listServerProfiles,
@@ -108,23 +110,31 @@ export default function HpcServers() {
   const [report, setReport] = useState<DetectionReport | null>(null);
   const [cardReports, setCardReports] = useState<Record<string, DetectionReport>>({});
   const [busy, setBusy] = useState<"test" | "save" | "card" | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
 
+  const refreshServers = async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const [loadedProfiles, loadedHosts] = await Promise.all([
+        listServerProfiles(),
+        listSshConfigHosts(),
+      ]);
+      setProfiles(loadedProfiles);
+      setHosts(loadedHosts);
+    } catch (e) {
+      setLoadError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    void (async () => {
-      try {
-        const [loadedProfiles, loadedHosts] = await Promise.all([
-          listServerProfiles(),
-          listSshConfigHosts(),
-        ]);
-        setProfiles(loadedProfiles);
-        setHosts(loadedHosts);
-      } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
-      }
-    })();
+    void refreshServers();
   }, []);
 
   const updateProfile = (patch: Partial<ServerEntry["profile"]>) => {
@@ -328,15 +338,34 @@ export default function HpcServers() {
         </div>
       ) : null}
 
-      {profiles.length === 0 && !draft ? (
-        <div style={{ ...card, textAlign: "center", padding: "2.5rem 1.25rem" }}>
-          <p style={{ color: "#8b949e", fontSize: "0.9rem", margin: "0 0 1rem" }}>
-            No servers yet. Add your cluster to see its partitions, GPUs and environment.
-          </p>
-          <button type="button" onClick={startAdd} style={primaryButton}>
-            Add your first server
-          </button>
-        </div>
+      {loading && !draft ? (
+        <PanelState
+          kind="loading"
+          title={PANEL_DEFINITIONS.hpc_workspace.loading.title}
+          description={PANEL_DEFINITIONS.hpc_workspace.loading.description}
+          actionLabel={PANEL_DEFINITIONS.hpc_workspace.loading.actionLabel}
+          onAction={() => void refreshServers()}
+        />
+      ) : null}
+
+      {!loading && loadError && !draft ? (
+        <PanelState
+          kind="error"
+          title={PANEL_DEFINITIONS.hpc_workspace.error.title}
+          description={PANEL_DEFINITIONS.hpc_workspace.error.description}
+          actionLabel={PANEL_DEFINITIONS.hpc_workspace.error.actionLabel}
+          onAction={() => void refreshServers()}
+        />
+      ) : null}
+
+      {!loading && !loadError && profiles.length === 0 && !draft ? (
+        <PanelState
+          kind="empty"
+          title={PANEL_DEFINITIONS.hpc_workspace.empty.title}
+          description={PANEL_DEFINITIONS.hpc_workspace.empty.description}
+          actionLabel={PANEL_DEFINITIONS.hpc_workspace.empty.actionLabel}
+          onAction={startAdd}
+        />
       ) : null}
 
       {profiles.map((entry) => {

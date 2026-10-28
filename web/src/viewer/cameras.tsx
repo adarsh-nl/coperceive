@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import PanelState from "../desktop/PanelState";
+import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import type { FrameCache } from "./cache";
 import { IconImage } from "./controls";
@@ -663,7 +665,29 @@ export default function CameraStrip({
               </div>
             </div>
           ))}
-          {!imagesAvailable ? <p className="cam-strip-note muted">{missingText}</p> : null}
+          {frustums.length === 0 ? (
+            <PanelState
+              compact
+              kind="empty"
+              title={PANEL_DEFINITIONS.camera_strip.empty.title}
+              description={PANEL_DEFINITIONS.camera_strip.empty.description}
+              actionLabel={PANEL_DEFINITIONS.camera_strip.empty.actionLabel}
+              onAction={onToggleOpen}
+            />
+          ) : null}
+          {!imagesAvailable ? (
+            <>
+              <p className="cam-strip-note muted">{missingText}</p>
+              <PanelState
+                compact
+                kind="error"
+                title={PANEL_DEFINITIONS.camera_strip.error.title}
+                description={PANEL_DEFINITIONS.camera_strip.error.description}
+                actionLabel={PANEL_DEFINITIONS.camera_strip.error.actionLabel}
+                onAction={onToggleOpen}
+              />
+            </>
+          ) : null}
         </div>
       ) : null}
     </section>

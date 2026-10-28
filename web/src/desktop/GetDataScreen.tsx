@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useState } from "react";
 import type { CatalogDataset, DryRunResult, DatasetProgressEvent } from "./types";
+import PanelState from "./PanelState";
+import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   datasetDryRun,
   startDatasetJob,
@@ -27,6 +29,7 @@ interface Props {
 
 export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props) {
   const [catalog, setCatalog] = useState<CatalogDataset[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState<boolean>(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [presetBytes, setPresetBytes] = useState<Record<string, number>>({});
   const [presetSizeNote, setPresetSizeNote] = useState<Record<string, string>>({});
@@ -48,35 +51,43 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
   const [jobPaused, setJobPaused] = useState<boolean>(false);
   const [resumableJob, setResumableJob] = useState<{ datasetId: string; presetId: string } | null>(null);
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const rows = await loadDatasetCatalog();
-        setCatalog(rows);
-        const griffin = rows.find((row) => row.id === "griffin");
-        if (griffin?.presets) {
-          for (const preset of griffin.presets) {
-            const key = `griffin:${preset.id}`;
-            setPresetSizeNote((prev) => ({ ...prev, [key]: "Checking size…" }));
-            try {
-              const measured = await datasetDryRun("griffin", preset.id);
-              setPresetBytes((prev) => ({ ...prev, [key]: measured.download_bytes }));
-              setPresetSizeNote((prev) => ({ ...prev, [key]: "" }));
-            } catch {
-              setPresetSizeNote((prev) => ({
-                ...prev,
-                [key]: "Could not check the size. Choose this preset to try again.",
-              }));
-            }
+  const loadCatalog = async () => {
+    setCatalogLoading(true);
+    setCatalogError(null);
+    try {
+      const rows = await loadDatasetCatalog();
+      setCatalog(rows);
+      const griffin = rows.find((row) => row.id === "griffin");
+      if (griffin?.presets) {
+        for (const preset of griffin.presets) {
+          const key = `griffin:${preset.id}`;
+          setPresetSizeNote((prev) => ({ ...prev, [key]: "Checking size…" }));
+          try {
+            const measured = await datasetDryRun("griffin", preset.id);
+            setPresetBytes((prev) => ({ ...prev, [key]: measured.download_bytes }));
+            setPresetSizeNote((prev) => ({ ...prev, [key]: "" }));
+          } catch {
+            setPresetSizeNote((prev) => ({
+              ...prev,
+              [key]: "Could not check the size. Choose this preset to try again.",
+            }));
           }
         }
-      } catch (err) {
-        setCatalogError(
-          err instanceof Error
-            ? err.message
-            : "Could not load the dataset list. Close this screen and open Get data again.",
-        );
       }
+    } catch (err) {
+      setCatalogError(
+        err instanceof Error
+          ? err.message
+          : "Could not load the dataset list. Close this screen and open Get data again.",
+      );
+    } finally {
+      setCatalogLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    void loadCatalog();
+    void (async () => {
       const saved = await getPersistentState();
       if (saved?.pending_download?.dataset_id && saved.pending_download.preset_id) {
         setResumableJob({
@@ -264,8 +275,39 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
         </p>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
-        {catalog.map((ds) => {
+      {catalogLoading && (
+        <PanelState
+          kind="loading"
+          title={PANEL_DEFINITIONS.get_data.loading.title}
+          description={PANEL_DEFINITIONS.get_data.loading.description}
+          actionLabel={PANEL_DEFINITIONS.get_data.loading.actionLabel}
+          onAction={() => void loadCatalog()}
+        />
+      )}
+
+      {!catalogLoading && catalogError && (
+        <PanelState
+          kind="error"
+          title={PANEL_DEFINITIONS.get_data.error.title}
+          description={PANEL_DEFINITIONS.get_data.error.description}
+          actionLabel={PANEL_DEFINITIONS.get_data.error.actionLabel}
+          onAction={() => void loadCatalog()}
+        />
+      )}
+
+      {!catalogLoading && !catalogError && catalog.length === 0 && (
+        <PanelState
+          kind="empty"
+          title={PANEL_DEFINITIONS.get_data.empty.title}
+          description={PANEL_DEFINITIONS.get_data.empty.description}
+          actionLabel={PANEL_DEFINITIONS.get_data.empty.actionLabel}
+          onAction={() => onOpenImportFolder?.()}
+        />
+      )}
+
+      {!catalogLoading && !catalogError && catalog.length > 0 && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
+          {catalog.map((ds) => {
           const isPlanned = ds.status === "planned";
           const isLocal = ds.status === "local-import";
           const isReady = ds.status === "ready";
@@ -413,7 +455,8 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             </div>
           );
         })}
-      </div>
+        </div>
+      )}
 
       {/* Preset Dry-run Modal */}
       {selectedDataset && (
