@@ -1562,6 +1562,38 @@ async fn remote_disconnect(state: tauri::State<'_, Arc<AppState>>) -> Result<(),
     Ok(())
 }
 
+/// Describes one folder inside a server's chosen data folder, over the same
+/// reused SSH connection as the rest of the HPC workspace.
+///
+/// Metadata only: the remote `coperceive remote scan` reads folder entries and
+/// scene manifests, never scene data, and it bounds depth, entries and time so
+/// the login node stays light. The result is the command's own JSON.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn remote_scan(
+    profile_id: String,
+    root: String,
+    path: String,
+    depth: Option<u32>,
+    timeout_s: Option<f64>,
+    max_entries: Option<u32>,
+    max_total: Option<u32>,
+) -> Result<coperceive_desktop::remote_scan::ScanDocument, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = server_profiles::load_servers()
+            .into_iter()
+            .find(|entry| entry.id == profile_id)
+            .ok_or_else(|| "Choose a server before browsing its folders.".to_string())?;
+        let target = entry.ssh_target()?;
+        coperceive_desktop::remote_scan::validate_target(&entry.profile, &root, &path)?;
+        let limits =
+            coperceive_desktop::remote_scan::ScanLimits::resolve(depth, timeout_s, max_entries, max_total);
+        coperceive_desktop::remote_scan::run_scan(&ssh_bin(), &target, &root, &path, limits)
+    })
+    .await
+    .map_err(|e| format!("The folder scan could not finish: {e}"))?
+}
+
 /// Simple loopback HTTP polling using TcpStream without external HTTP client crate.
 /// Reads until headers end (\r\n\r\n) rather than assuming a single buffer read.
 #[cfg(target_os = "macos")]
@@ -1679,6 +1711,7 @@ fn main() {
             remote_connect,
             remote_status,
             remote_disconnect,
+            remote_scan,
         ])
         .on_page_load(|webview, payload| {
             // The Connect window is declared in tauri.conf.json, so it does not
@@ -1727,6 +1760,54 @@ fn main() {
             // Test-only seam for the CI packaged-app HPC check: run the real
             // "Test connection" code against a committed fake-ssh profile and
             // write the report for `scripts/desktop/e2e_hpc_fake_ssh.sh`.
+            // The same seam also runs one real folder scan for the Browse step.
+            if let Some(request) = coperceive_desktop::test_seams::hpc_scan_probe_request() {
+                std::thread::spawn(move || {
+                    let result = (|| -> serde_json::Value {
+                        let json = match fs::read_to_string(&request.profile) {
+                            Ok(json) => json,
+                            Err(error) => {
+                                return serde_json::json!({"ok": false, "error": error.to_string()});
+                            }
+                        };
+                        let entry: ServerEntry = match serde_json::from_str(&json) {
+                            Ok(entry) => entry,
+                            Err(error) => {
+                                return serde_json::json!({"ok": false, "error": error.to_string()});
+                            }
+                        };
+                        let target = match entry.ssh_target() {
+                            Ok(target) => target,
+                            Err(error) => {
+                                return serde_json::json!({"ok": false, "error": error});
+                            }
+                        };
+                        if let Err(error) = coperceive_desktop::remote_scan::validate_target(
+                            &entry.profile,
+                            &request.root,
+                            &request.path,
+                        ) {
+                            return serde_json::json!({"ok": false, "error": error});
+                        }
+                        let limits = coperceive_desktop::remote_scan::ScanLimits::default();
+                        match coperceive_desktop::remote_scan::run_scan(
+                            &ssh_bin(),
+                            &target,
+                            &request.root,
+                            &request.path,
+                            limits,
+                        ) {
+                            Ok(document) => serde_json::json!({"ok": true, "scan": document}),
+                            Err(error) => serde_json::json!({"ok": false, "error": error}),
+                        }
+                    })();
+                    let _ = fs::write(
+                        &request.result,
+                        serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    );
+                });
+            }
+
             if let Some((profile_path, result_path)) =
                 coperceive_desktop::test_seams::hpc_probe_request()
             {

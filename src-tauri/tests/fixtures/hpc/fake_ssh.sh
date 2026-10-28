@@ -167,5 +167,162 @@ EOF
         ;;
 esac
 
+# --- Browse: `coperceive remote scan` -------------------------------------
+# Metadata-only listings for the committed cluster fixtures. The scan bounds
+# (depth/entries/time) are exercised by the Rust and Python unit tests; here the
+# fake answers with the same JSON shape, including one truncated listing and one
+# refused path so the UI's plain-language messages are covered end to end.
+case "${remote}" in
+    *"coperceive remote scan"*)
+        case "${remote}" in
+            *"coperceive remote scan"*"--root /data/files"*)
+                cat <<'JSON'
+{
+  "status": "ok",
+  "root": "/data/files",
+  "path": "/data/files",
+  "relative_path": ".",
+  "depth": 2,
+  "timeout_s": 10.0,
+  "max_entries": 200,
+  "max_total": 2000,
+  "elapsed_ms": 3.5,
+  "truncated": false,
+  "truncated_reason": null,
+  "folder_count": 2,
+  "scene_count": 1,
+  "dataset_count": 0,
+  "folders": [
+    {"path": ".", "depth": 0, "is_scene": false, "scene_id": null, "dataset": false,
+     "scene_count": 0, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 1, "file_count": 0},
+    {"path": "Files-001", "depth": 1, "is_scene": true, "scene_id": "Files-001",
+     "dataset": false, "scene_count": 0, "has_manifest": true, "has_complete": true,
+     "subfolder_count": 0, "file_count": 4}
+  ],
+  "scenes": [{"path": "Files-001", "scene_id": "Files-001", "folder_name": "Files-001"}],
+  "datasets": [],
+  "skipped": []
+}
+JSON
+                exit 0
+                ;;
+            *"--root /data/scenes"*"--path datasets"*)
+                cat <<'JSON'
+{
+  "status": "ok",
+  "root": "/data/scenes",
+  "path": "/data/scenes/datasets",
+  "relative_path": "datasets",
+  "depth": 2,
+  "timeout_s": 10.0,
+  "max_entries": 200,
+  "max_total": 2000,
+  "elapsed_ms": 9.0,
+  "truncated": true,
+  "truncated_reason": "entry limit",
+  "folder_count": 4,
+  "scene_count": 2,
+  "dataset_count": 1,
+  "folders": [
+    {"path": "datasets", "depth": 0, "is_scene": false, "scene_id": null, "dataset": true,
+     "scene_count": 2, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 3, "file_count": 1},
+    {"path": "datasets/Town03-007", "depth": 1, "is_scene": true, "scene_id": "Town03-007",
+     "dataset": false, "scene_count": 0, "has_manifest": true, "has_complete": true,
+     "subfolder_count": 0, "file_count": 7},
+    {"path": "datasets/Town06-002", "depth": 1, "is_scene": true, "scene_id": "Town06-002",
+     "dataset": false, "scene_count": 0, "has_manifest": true, "has_complete": true,
+     "subfolder_count": 0, "file_count": 7},
+    {"path": "datasets/notes", "depth": 1, "is_scene": false, "scene_id": null,
+     "dataset": false, "scene_count": 0, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 0, "file_count": 2}
+  ],
+  "scenes": [
+    {"path": "datasets/Town03-007", "scene_id": "Town03-007", "folder_name": "Town03-007"},
+    {"path": "datasets/Town06-002", "scene_id": "Town06-002", "folder_name": "Town06-002"}
+  ],
+  "datasets": [{"path": "datasets", "scene_count": 2}],
+  "skipped": [{"path": "datasets/camera-link", "reason": "symlink target is outside the data root"}]
+}
+JSON
+                exit 0
+                ;;
+            *"--root /data/scenes"*"--path escape-link"*)
+                cat <<'JSON'
+{"status": "error", "error": "the path is a symlink that points outside the data root: /data/scenes/escape-link -> /etc"}
+JSON
+                exit 1
+                ;;
+            *"--root /data/scenes"*"--path loose-folder"*)
+                cat <<'JSON'
+{
+  "status": "ok",
+  "root": "/data/scenes",
+  "path": "/data/scenes/loose-folder",
+  "relative_path": "loose-folder",
+  "depth": 2,
+  "timeout_s": 10.0,
+  "max_entries": 200,
+  "max_total": 2000,
+  "elapsed_ms": 1.5,
+  "truncated": false,
+  "truncated_reason": null,
+  "folder_count": 1,
+  "scene_count": 0,
+  "dataset_count": 0,
+  "folders": [
+    {"path": "loose-folder", "depth": 0, "is_scene": false, "scene_id": null,
+     "dataset": false, "scene_count": 0, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 0, "file_count": 3}
+  ],
+  "scenes": [],
+  "datasets": [],
+  "skipped": []
+}
+JSON
+                exit 0
+                ;;
+            *"--root /data/scenes"*)
+                cat <<'JSON'
+{
+  "status": "ok",
+  "root": "/data/scenes",
+  "path": "/data/scenes",
+  "relative_path": ".",
+  "depth": 2,
+  "timeout_s": 10.0,
+  "max_entries": 200,
+  "max_total": 2000,
+  "elapsed_ms": 6.0,
+  "truncated": false,
+  "truncated_reason": null,
+  "folder_count": 3,
+  "scene_count": 1,
+  "dataset_count": 1,
+  "folders": [
+    {"path": ".", "depth": 0, "is_scene": false, "scene_id": null, "dataset": true,
+     "scene_count": 1, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 3, "file_count": 0},
+    {"path": "Town03-000", "depth": 1, "is_scene": true, "scene_id": "Town03-000",
+     "dataset": false, "scene_count": 0, "has_manifest": true, "has_complete": true,
+     "subfolder_count": 0, "file_count": 7},
+    {"path": "datasets", "depth": 1, "is_scene": false, "scene_id": null, "dataset": true,
+     "scene_count": 1, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 3, "file_count": 0}
+  ],
+  "scenes": [{"path": "Town03-000", "scene_id": "Town03-000", "folder_name": "Town03-000"}],
+  "datasets": [{"path": ".", "scene_count": 1}, {"path": "datasets", "scene_count": 1}],
+  "skipped": []
+}
+JSON
+                exit 0
+                ;;
+        esac
+        echo "fake_ssh: unsupported scan target: ${remote}" >&2
+        exit 127
+        ;;
+esac
+
 echo "fake_ssh: unsupported command: ${remote}" >&2
 exit 127

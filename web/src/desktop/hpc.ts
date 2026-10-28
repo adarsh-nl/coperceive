@@ -110,6 +110,62 @@ export interface ScratchReport {
   detail: string;
 }
 
+
+/** One folder described by `coperceive remote scan`; paths are relative to the root. */
+export interface FolderInfo {
+  path: string;
+  depth: number;
+  is_scene: boolean;
+  scene_id: string | null;
+  dataset: boolean;
+  scene_count: number;
+  has_manifest: boolean;
+  has_complete: boolean;
+  subfolder_count: number;
+  file_count: number;
+}
+
+/** One detected coperceive scene. */
+export interface SceneInfo {
+  path: string;
+  scene_id: string;
+  folder_name: string;
+}
+
+/** A non-scene folder with at least one scene below it. */
+export interface DatasetInfo {
+  path: string;
+  scene_count: number;
+}
+
+/** A directory entry the scan did not follow, and why. */
+export interface SkippedInfo {
+  path: string;
+  reason: string;
+}
+
+/** The JSON document printed by `coperceive remote scan`. */
+export interface ScanDocument {
+  status: string;
+  root: string;
+  path: string;
+  relative_path: string;
+  depth: number;
+  timeout_s: number;
+  max_entries: number;
+  max_total: number;
+  elapsed_ms: number;
+  truncated: boolean;
+  truncated_reason: string | null;
+  folder_count: number;
+  scene_count: number;
+  dataset_count: number;
+  folders: FolderInfo[];
+  scenes: SceneInfo[];
+  datasets: DatasetInfo[];
+  skipped: SkippedInfo[];
+}
+
 export interface DetectionReport {
   reachable: boolean;
   signed_in: boolean;
@@ -406,3 +462,11 @@ export function formatBytes(bytes: number | null): string {
   if (gb >= 1) return `${gb.toFixed(1)} GB`;
   return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
 }
+
+export function splitFolderList(value: string): string[] {
+  return value
+    .split(/[,\n]/)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+}
+
