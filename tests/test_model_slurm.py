@@ -26,6 +26,7 @@ from coperceive.models.slurm import (
     staged_files,
     submit,
     time_limit,
+    validate_partition,
     validate_scratch_template,
     work_copy_filter,
     write_plan,
@@ -568,3 +569,39 @@ def test_unsafe_or_shared_scratch_templates_are_refused() -> None:
         with pytest.raises(SlurmError, match=r"scratch template|\$SLURM_JOB_ID"):
             validate_scratch_template(template)
     assert validate_scratch_template("/scratch/$USER/$SLURM_JOB_ID")
+
+
+def test_slurm_partition_characters_are_validated(
+    roots: tuple[Path, Path, Scene],
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    scenes, out, _ = roots
+    for bad in ("ps;rm -rf /", "ps\nmain", "gpu a100", "gpu$(id)"):
+        with pytest.raises(SystemExit):
+            main(
+                [
+                    "model",
+                    "run",
+                    "--manifest",
+                    str(FAKE),
+                    "--scenes",
+                    str(scenes),
+                    "--out",
+                    str(out),
+                    "--run-id",
+                    "r1",
+                    "--slurm",
+                    "--slurm-partition",
+                    bad,
+                    "--slurm-scratch-template",
+                    "/scratch/$USER/$SLURM_JOB_ID",
+                ]
+            )
+        captured = capsys.readouterr()
+        assert "partition" in captured.err + captured.out
+    for bad in ("bad name", "bad;name", "bad\nname", "/abs"):
+        with pytest.raises(SlurmError):
+            validate_partition(bad)
+    assert validate_partition("gpu-a100") == "gpu-a100"
+    assert validate_partition("cpu,main-gpu") == "cpu,main-gpu"

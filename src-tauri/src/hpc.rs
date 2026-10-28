@@ -269,17 +269,21 @@ pub struct JobDefaults {
 
 impl JobDefaults {
     pub fn validate(&self) -> Result<(), String> {
-        for (field, value) in [
-            ("partition", &self.partition),
-            ("account", &self.account),
-            ("qos", &self.qos),
-            ("gres", &self.gres),
+        for (field, value, allowed) in [
+            ("partition", &self.partition, SLURM_PARTITION_CHARS),
+            ("account", &self.account, SLURM_ACCOUNT_CHARS),
+            ("qos", &self.qos, SLURM_ACCOUNT_CHARS),
+            ("gres", &self.gres, SLURM_GRES_CHARS),
         ] {
             if let Some(text) = value {
-                if text.trim().is_empty() || text.chars().any(char::is_whitespace) {
-                    return Err(format!("defaults.{field} must be non-empty and without spaces."));
-                }
+                validate_token(field, text, allowed)?;
             }
+        }
+        if let Some(text) = self.time_limit.as_deref() {
+            validate_slurm_time_limit(text)?;
+        }
+        if let Some(text) = self.memory.as_deref() {
+            validate_slurm_memory(text)?;
         }
         if let Some(cpus) = self.cpus_per_task {
             if cpus < 1 {
@@ -288,6 +292,126 @@ impl JobDefaults {
         }
         Ok(())
     }
+}
+
+/// Characters a Slurm partition name may contain (the profile's discovery value).
+const SLURM_PARTITION_CHARS: &str =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.,";
+/// Characters an account or QoS name may contain.
+const SLURM_ACCOUNT_CHARS: &str =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_-.";
+/// Characters a GRES string may contain (gpu:a100:1, gpu:2, ...).
+const SLURM_GRES_CHARS: &str =
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:.,-";
+
+fn validate_token(field: &str, text: &str, allowed: &str) -> Result<(), String> {
+    if text.trim().is_empty() {
+        return Err(format!("defaults.{field} must not be empty."));
+    }
+    if text.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+        return Err(format!(
+            "defaults.{field} must not contain spaces, newlines or control characters."
+        ));
+    }
+    if !text.chars().all(|ch| allowed.contains(ch)) {
+        return Err(format!(
+            "defaults.{field} has an unexpected character; allowed are letters, digits, '_', \
+             '-' and '.'{}.",
+            if field == "partition" {
+                ", and ','"
+            } else if field == "gres" {
+                ", ':' and ','"
+            } else {
+                ""
+            }
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a Slurm time limit: HH:MM:SS, D-HH:MM:SS, or "UNLIMITED".
+fn validate_slurm_time_limit(text: &str) -> Result<(), String> {
+    if text.eq_ignore_ascii_case("UNLIMITED") {
+        return Ok(());
+    }
+    if text.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+        return Err(
+            "defaults.time_limit must not contain spaces, newlines or control characters.".into(),
+        );
+    }
+    let (days, clock) = match text.split_once('-') {
+        Some((days, clock)) => {
+            if days.is_empty() || !days.chars().all(|ch| ch.is_ascii_digit()) {
+                return Err(format!(
+                    "defaults.time_limit {text:?} is not a Slurm time; use HH:MM:SS or D-HH:MM:SS."
+                ));
+            }
+            (
+                days.parse::<u64>()
+                    .map_err(|_| format!("defaults.time_limit {text:?} has too many days."))?,
+                clock,
+            )
+        }
+        None => (0, text),
+    };
+    let parts: Vec<&str> = clock.split(':').collect();
+    if parts.len() != 3
+        || parts
+            .iter()
+            .any(|part| part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()))
+    {
+        return Err(format!(
+            "defaults.time_limit {text:?} is not a Slurm time; use HH:MM:SS or D-HH:MM:SS."
+        ));
+    }
+    let hours = parts[0]
+        .parse::<u64>()
+        .map_err(|_| "Invalid time hours.".to_string())?;
+    let minutes = parts[1]
+        .parse::<u64>()
+        .map_err(|_| "Invalid time minutes.".to_string())?;
+    let seconds = parts[2]
+        .parse::<u64>()
+        .map_err(|_| "Invalid time seconds.".to_string())?;
+    if days == 0 && hours > 23 {
+        return Err(format!(
+            "defaults.time_limit {text:?} has more than 23 hours; use D-HH:MM:SS for multi-day \
+             limits."
+        ));
+    }
+    if minutes > 59 || seconds > 59 {
+        return Err(format!(
+            "defaults.time_limit {text:?} is not a Slurm time; minutes and seconds must be 0-59."
+        ));
+    }
+    Ok(())
+}
+
+/// Validate a Slurm memory value: a positive integer with an optional K/M/G/T unit.
+fn validate_slurm_memory(text: &str) -> Result<(), String> {
+    if text.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
+        return Err(
+            "defaults.memory must not contain spaces, newlines or control characters.".into(),
+        );
+    }
+    let (number, unit) = match text.chars().last() {
+        Some(ch) if ch.is_ascii_alphabetic() => (&text[..text.len() - 1], Some(ch)),
+        _ => (text, None),
+    };
+    if let Some(unit) = unit {
+        if !"KMGTkmgt".contains(unit) {
+            return Err(format!(
+                "defaults.memory {text:?} has an unknown unit; use K, M, G or T (e.g. 16G)."
+            ));
+        }
+    }
+    if number.is_empty() || !number.chars().all(|ch| ch.is_ascii_digit()) || number == "0" {
+        return Err(format!(
+            "defaults.memory {text:?} is not a Slurm memory size; use a number with an optional \
+             K/M/G/T unit (e.g. 16G)."
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -475,7 +599,11 @@ pub struct Discovery {
 /// Everything the app needs from a scheduler. PBS/LSF extend this later.
 pub trait SchedulerAdapter {
     fn discover(&self) -> Result<Discovery, String>;
-    fn render_job_script(&self, profile: &ServerProfile, request: &JobRequest) -> Result<String, String>;
+    fn render_job_script(
+        &self,
+        profile: &ServerProfile,
+        request: &JobRequest,
+    ) -> Result<String, String>;
     fn submit(&self, script: &str) -> Result<String, String>;
     fn status(&self, job_id: &str) -> Result<JobState, String>;
     fn cancel(&self, job_id: &str) -> Result<(), String>;
@@ -607,6 +735,106 @@ mod tests {
         let mut ok = request;
         ok.job_name = "coperceive-eval".into();
         ok.validate().expect("valid job");
+    }
+
+    #[test]
+    fn job_defaults_validate_time_memory_and_names() {
+        // Valid values.
+        JobDefaults {
+            partition: Some("gpu-a100".into()),
+            account: Some("research".into()),
+            qos: Some("normal".into()),
+            gres: Some("gpu:a100:1".into()),
+            time_limit: Some("02:30:00".into()),
+            memory: Some("16G".into()),
+            ..JobDefaults::default()
+        }
+        .validate()
+        .expect("valid defaults");
+        JobDefaults {
+            time_limit: Some("1-12:00:00".into()),
+            ..JobDefaults::default()
+        }
+        .validate()
+        .expect("multi-day time");
+        JobDefaults {
+            memory: Some("64000M".into()),
+            ..JobDefaults::default()
+        }
+        .validate()
+        .expect("memory with unit");
+        // Invalid values, with plain messages.
+        for (defaults, needle) in [
+            (
+                JobDefaults {
+                    time_limit: Some("two hours".into()),
+                    ..JobDefaults::default()
+                },
+                "time_limit",
+            ),
+            (
+                JobDefaults {
+                    time_limit: Some("01:60:00".into()),
+                    ..JobDefaults::default()
+                },
+                "minutes and seconds",
+            ),
+            (
+                JobDefaults {
+                    time_limit: Some("25:00:00".into()),
+                    ..JobDefaults::default()
+                },
+                "D-HH:MM:SS",
+            ),
+            (
+                JobDefaults {
+                    time_limit: Some("01:00:00\n#SBATCH --partition=evil".into()),
+                    ..JobDefaults::default()
+                },
+                "spaces, newlines",
+            ),
+            (
+                JobDefaults {
+                    memory: Some("a lot".into()),
+                    ..JobDefaults::default()
+                },
+                "memory",
+            ),
+            (
+                JobDefaults {
+                    memory: Some("16GB".into()),
+                    ..JobDefaults::default()
+                },
+                "unknown unit",
+            ),
+            (
+                JobDefaults {
+                    memory: Some("16G\n".into()),
+                    ..JobDefaults::default()
+                },
+                "spaces, newlines",
+            ),
+            (
+                JobDefaults {
+                    partition: Some("gpu;rm".into()),
+                    ..JobDefaults::default()
+                },
+                "unexpected character",
+            ),
+            (
+                JobDefaults {
+                    partition: Some("gpu\nmain".into()),
+                    ..JobDefaults::default()
+                },
+                "spaces, newlines",
+            ),
+        ] {
+            let error = defaults.validate().expect_err("invalid defaults");
+            assert!(
+                error.contains(needle),
+                "message {error:?} should mention {needle:?}"
+            );
+        }
     }
 
     #[test]

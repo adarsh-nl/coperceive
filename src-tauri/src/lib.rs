@@ -12,6 +12,7 @@ pub mod pack;
 pub mod port;
 pub mod remote;
 pub mod remote_scan;
+pub mod run_plan;
 pub mod server_profiles;
 pub mod sidecar;
 pub mod slurm;

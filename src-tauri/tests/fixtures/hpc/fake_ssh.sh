@@ -12,6 +12,34 @@ set -u
 all_args="$*"
 remote="${!#:-}"
 
+# Optional simulated remote filesystem for the "New evaluation" plan flow.
+# Paths in the plan fixtures are absolute on the cluster; here they map under
+# $FAKE_REMOTE_ROOT so the packaged-app e2e can inspect what was written.
+map_remote() {
+    if [ -z "${FAKE_REMOTE_ROOT:-}" ]; then
+        return 1
+    fi
+    printf '%s%s' "${FAKE_REMOTE_ROOT}" "$1"
+}
+
+# The remote command ends with `sh '<path>'` or `sh '<path1>' '<path2>'`;
+# take everything after the final " sh " and unquote it (fixture paths are plain).
+quoted_last() {
+    local rest="${1##* sh }"
+    printf '%s' "${rest}" | sed "s/^'//; s/'\$//"
+}
+
+quoted_pair() {
+    local rest="${1##* sh }"
+    printf '%s' "${rest}" | sed -E "s/^'?([^' ]+)'? '?([^' ]+)'?\$/\1|\2/"
+}
+
+log_command() {
+    if [ -n "${FAKE_SSH_LOG:-}" ]; then
+        printf '%s\n' "$1" >> "${FAKE_SSH_LOG}"
+    fi
+}
+
 case "${all_args}" in
     *"-G cluster-a"*)
         printf 'host cluster-a\nuser alice\nhostname cluster-a.example.org\nport 22\nproxyjump none\nproxycommand none\nidentityfile ~/.ssh/id_ed25519\n'
@@ -163,6 +191,86 @@ EOF
                 printf 'NOT_WRITABLE\n'
                 ;;
         esac
+        exit 0
+        ;;
+esac
+
+case "${remote}" in
+    *"coperceive-check:plan-path"*)
+        log_command "plan-path ${remote}"
+        if [ -z "${FAKE_REMOTE_ROOT:-}" ]; then
+            echo "fake_ssh: no FAKE_REMOTE_ROOT" >&2
+            exit 1
+        fi
+        path=$(quoted_last "${remote}")
+        local_path=$(map_remote "${path}")
+        if [ ! -e "${local_path}" ]; then
+            printf 'EXISTS=0\nREADABLE=0\nEXEC=0\n'
+            exit 0
+        fi
+        sha=""
+        if [ -f "${local_path}" ]; then
+            sha=$(shasum -a 256 "${local_path}" | cut -d" " -f1)
+        fi
+        exec_flag=0
+        if [ -x "${local_path}" ]; then exec_flag=1; fi
+        dir_flag=0
+        if [ -d "${local_path}" ]; then dir_flag=1; fi
+        printf 'EXISTS=1\nREADABLE=1\nEXEC=%s\nISDIR=%s\nREALPATH=%s\nSHA256=%s\n' \
+            "${exec_flag}" "${dir_flag}" "${path}" "${sha}"
+        exit 0
+        ;;
+    *"coperceive-check:plan-folders"*)
+        log_command "plan-folders ${remote}"
+        if [ -z "${FAKE_REMOTE_ROOT:-}" ]; then
+            echo "fake_ssh: no FAKE_REMOTE_ROOT" >&2
+            exit 1
+        fi
+        pair=$(quoted_pair "${remote}")
+        results=$(printf '%s' "${pair}" | cut -d'|' -f2)
+        results_ok=0
+        if [ -d "$(map_remote "${results}")" ]; then results_ok=1; fi
+        printf 'SCRATCH_OK=1\nRESULTS_OK=%s\n' "${results_ok}"
+        exit 0
+        ;;
+    *"coperceive-check:plan-read"*)
+        log_command "plan-read ${remote}"
+        path=$(quoted_last "${remote}")
+        local_path=$(map_remote "${path}") || { echo "fake_ssh: no FAKE_REMOTE_ROOT" >&2; exit 1; }
+        if [ ! -f "${local_path}" ]; then
+            echo "cat: ${path}: No such file or directory" >&2
+            exit 1
+        fi
+        cat "${local_path}"
+        exit 0
+        ;;
+    *"coperceive-check:plan-write"*)
+        log_command "plan-write ${remote}"
+        path=$(quoted_last "${remote}")
+        local_path=$(map_remote "${path}") || { echo "fake_ssh: no FAKE_REMOTE_ROOT" >&2; exit 1; }
+        mkdir -p "$(dirname "${local_path}")"
+        cat > "${local_path}.tmp"
+        chmod 600 "${local_path}.tmp"
+        mv "${local_path}.tmp" "${local_path}"
+        echo "wrote ${path}"
+        exit 0
+        ;;
+    *"coperceive-check:plan-env"*)
+        log_command "plan-env"
+        cat <<'EOF'
+MODULE=/usr/share/lmod/lmod/libexec/lmod
+LMOD=/usr/share/lmod/lmod/libexec/lmod
+APPTAINER=/usr/bin/apptainer
+SINGULARITY=
+PYTHON3=/usr/bin/python3
+COPERCEIVE=/apps/coperceive/bin/coperceive
+HOME=/home/bob
+EOF
+        exit 0
+        ;;
+    *"coperceive-check:model-list"*)
+        log_command "model-list"
+        printf 'griffin  entry-point  /data/code/griffin/manifest.yaml\n'
         exit 0
         ;;
 esac

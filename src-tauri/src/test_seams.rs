@@ -100,6 +100,27 @@ pub fn hpc_probe_request() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
     ))
 }
 
+/// Test-only request for the packaged-app "New evaluation" plan check.
+///
+/// `COPERCEIVE_TEST_HPC_PLAN_REQUEST` points at a JSON document
+/// `{"server": <ServerEntry fixture>, "request": <RunPlanRequest>, "save": bool}`
+/// and `COPERCEIVE_TEST_HPC_PLAN_RESULT` at the file the result is written to.
+/// Only read inside test mode; production launches never set these.
+pub fn run_plan_probe_request() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if !test_env_active() {
+        return None;
+    }
+    let request = std::env::var("COPERCEIVE_TEST_HPC_PLAN_REQUEST").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_HPC_PLAN_RESULT").ok()?;
+    if request.trim().is_empty() || result.trim().is_empty() {
+        return None;
+    }
+    Some((
+        std::path::PathBuf::from(request),
+        std::path::PathBuf::from(result),
+    ))
+}
+
 /// Test-only request for the packaged-app Browse step: run one real
 /// `coperceive remote scan` against the committed fake-ssh profile and write the
 /// parsed result for `scripts/desktop/e2e_hpc_fake_ssh.sh`.
