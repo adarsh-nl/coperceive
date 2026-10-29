@@ -324,7 +324,7 @@ mod tests {
             r#"#!/usr/bin/env bash
 set -u
 remote="${{!#}}"
-printf '%s\n' "$remote" >> "{log}"
+printf 'call\n' >> "{log}"
 version="${{remote##* }}"; version="${{version#\'}}"; version="${{version%\'}}"
 case "$remote" in
   *"coperceive-static-verify"*)
