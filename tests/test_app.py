@@ -472,7 +472,14 @@ def test_map_http_and_favicon(tmp_path: Path) -> None:
     scenes = tmp_path / "scenes"
     _scene_on_lane(scenes)
     (scenes / "Town03-000" / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
-    app = create_app(root=scenes, token=None, maps=maps)
+    # The viewer bundle is built, not committed; this test needs the favicon the
+    # server serves from the static directory, so give it a minimal one.
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "favicon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n', encoding="utf-8"
+    )
+    app = create_app(root=scenes, token=None, maps=maps, static=static)
     client = TestClient(app)
     summary = client.get("/api/scenes/Town03-000/map")
     assert summary.status_code == 200
