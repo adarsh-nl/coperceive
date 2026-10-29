@@ -669,15 +669,22 @@ def test_choosing_a_scene_while_playing_pauses_at_once(session: _Session, _repea
     page.locator("#scene-id").click()
     option = page.locator("[role=option]", has_text=SCENE_FULL)
     session.wait_for(lambda: option.count() == 1, "the scene option")
-    session.requests.clear()
+    # The click itself is the choice. Requests that were already in flight when it was
+    # dispatched are not "after the choice": the old scene's prefetch may legitimately have
+    # queued one window of them just before the event. Measure from after the click
+    # returns, not from a snapshot taken before it; the waits below are the #49 rule
+    # (state or event, never wall time).
     option.click()
+    after_click = len(session.requests)
     session.wait_for(lambda: page.locator("button[aria-label=Play]").count() == 1, "paused")
     session.wait_status(SCENE_FULL)
-    old = [url for url in session.requests if f"/api/scenes/{SCENE_BARE}/" in url]
-    assert len(old) <= 10, old
+    old_scene_after_click = [
+        url for url in session.requests[after_click:] if f"/api/scenes/{SCENE_BARE}/" in url
+    ]
+    assert len(old_scene_after_click) <= 10, old_scene_after_click
     page.wait_for_load_state("networkidle")
-    settled = [url for url in session.requests if f"/api/scenes/{SCENE_BARE}/" in url]
-    assert settled == old, settled[len(old) :]  # nothing more for the old scene once shown
+    settled = [url for url in session.requests[after_click:] if f"/api/scenes/{SCENE_BARE}/" in url]
+    assert settled == old_scene_after_click, settled[len(old_scene_after_click) :]
     assert session.slider("aria-valuenow") == 0
 
 
