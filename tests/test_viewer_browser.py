@@ -946,14 +946,13 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
     empty_inspector.wait_for(state="visible", timeout=10000)
     title = (empty_inspector.locator(".panel-state-title").text_content() or "").strip()
     desc = (empty_inspector.locator(".panel-state-description").text_content() or "").strip()
-    action = (empty_inspector.locator(".panel-state-action").text_content() or "").strip()
+    assert empty_inspector.locator(".panel-state-action").count() == 0, "No dead action on empty inspector"
 
     assert title == "No object selected", f"Unexpected empty state title: {title}"
     assert desc.endswith("."), f"Description must be a sentence ending with period: {desc}"
     sentences = [s for s in desc.split(".") if s.strip()]
     assert len(sentences) == 1, f"Expected exactly 1 sentence, got: {desc}"
-    assert action == "Reset Selection", f"Unexpected action button: {action}"
-    assert "pip" not in (title + desc + action).lower(), "No CLI jargon permitted"
+    assert "pip" not in (title + desc).lower(), "No CLI jargon permitted"
 
     # 2. Loading state: Dispatch test state to ConnectScreen in local tab
     session.page.goto(f"{session.base}/#/connect", wait_until="networkidle")

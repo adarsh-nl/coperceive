@@ -271,7 +271,7 @@ empty_desc = inspector_empty["desc"]
 empty_action = inspector_empty["action"]
 assert empty_title == "No object selected", f"Unexpected title: {empty_title}"
 assert empty_desc.endswith("."), f"Description must end with period: {empty_desc}"
-assert empty_action == "Reset Selection", f"Unexpected action: {empty_action}"
+assert empty_action == "", f"Empty inspector should have no action button: {empty_action}"
 print(f"Verified: Inspector empty state rendered correctly ({empty_title})")
 
 print("Driving real UI: clicking Drone viewpoint button...")
