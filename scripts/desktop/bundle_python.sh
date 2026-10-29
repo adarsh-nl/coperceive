@@ -48,6 +48,11 @@ fi
 
 echo "Python runtime extracted: $("${PYTHON_BIN}" --version)"
 
+# Build the viewer bundle into coperceive/app/static so the wheel install below
+# contains it (the built files are not committed).
+echo "Building the viewer bundle for the bundled Python environment..."
+bash "${REPO_ROOT}/scripts/build_web_static.sh"
+
 # Install coperceive and locked dependencies into bundled Python environment
 echo "Installing locked dependencies into bundled Python environment..."
 cd "${REPO_ROOT}"
@@ -63,6 +68,9 @@ fi
 
 echo "Installing coperceive package into bundled Python environment..."
 "${PYTHON_BIN}" -m pip install --no-deps --no-warn-script-location .
+
+BUNDLED_STATIC="${PYTHON_DEST}/lib/python3.13/site-packages/coperceive/app/static"
+"${PYTHON_BIN}" "${REPO_ROOT}/scripts/check_bundle_assets.py" --static "${BUNDLED_STATIC}"
 
 # Clean up console scripts with host-specific shebangs from bin/
 # The sidecar executes `python3 -m coperceive serve` directly.

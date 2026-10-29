@@ -23,8 +23,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci --legacy-peer-deps
         working-directory: web
-      - run: npm run build
-        working-directory: web
+      - run: bash scripts/build_web_static.sh
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
@@ -49,6 +48,11 @@ jobs:
               echo "::error title=TauriBuildError::$line"
             done
           fi
+      - name: Verify packaged app ships the viewer bundle
+        run: |
+          APP="$(find src-tauri/target -type d -name Coperceive.app | head -n 1)"
+          test -n "${APP}" || { echo "No Coperceive.app found" >&2; exit 1; }
+          python3 scripts/check_bundle_assets.py --app "${APP}"
       - name: Prepare Release Assets
         run: |
           mkdir -p release-assets

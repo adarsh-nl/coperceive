@@ -59,6 +59,9 @@ coperceive = "coperceive.cli:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["coperceive"]
+# coperceive/app/static is built by scripts/build_web_static.sh and gitignored;
+# artifacts keeps those built files inside the wheel anyway.
+artifacts = ["coperceive/app/static/**"]
 
 [tool.ruff]
 target-version = "py310"

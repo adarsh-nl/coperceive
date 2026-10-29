@@ -22,6 +22,8 @@ data/
 .DS_Store
 agent-tools/
 web/node_modules/
+# Built by scripts/build_web_static.sh; not committed.
+coperceive/app/static/
 site/
 target/
 src-tauri/target/
