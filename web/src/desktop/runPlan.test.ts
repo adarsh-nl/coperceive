@@ -8,11 +8,15 @@ import {
   environmentKindLabel,
   environmentSummary,
   formatArgv,
+  isJobActive,
   jobStateLabel,
+  jobWatchLabel,
+  shouldPollJob,
   initialArgumentForm,
   planIsSaveable,
   planSummary,
   validateArgumentForm,
+  type JobWatchStatus,
   type PipelineSpec,
   type RunPlan,
 } from "./runPlan.ts";
@@ -157,4 +161,37 @@ test("job state label shows the pending queue reason plainly", () => {
     jobStateLabel({ plan_id: "plan-1", job_id: "1", state: "running", queue_reason: null }),
     "RUNNING",
   );
+});
+
+test("the job watch label includes queue reason, elapsed and time left", () => {
+  const base: JobWatchStatus = {
+    job_id: "424242",
+    plan_id: "plan-1",
+    job_name: "coperceive-run-plan-1",
+    state: "pending",
+    queue_reason: "Resources",
+    elapsed: null,
+    time_left: null,
+    node: null,
+  };
+  assert.strictEqual(jobWatchLabel(base), "PENDING — waiting in the queue: Resources");
+  assert.strictEqual(
+    jobWatchLabel({ ...base, state: "running", queue_reason: null, elapsed: "00:12:00", time_left: "03:48:00" }),
+    "RUNNING · 00:12:00 elapsed · 03:48:00 left",
+  );
+  assert.strictEqual(
+    jobWatchLabel({ ...base, state: "completed", queue_reason: null, elapsed: "04:00:00", time_left: null }),
+    "COMPLETED · 04:00:00 elapsed",
+  );
+});
+
+test("polling only happens while a job can still change", () => {
+  assert.strictEqual(shouldPollJob(null), false);
+  assert.strictEqual(isJobActive("pending"), true);
+  assert.strictEqual(isJobActive("completed"), false);
+  assert.strictEqual(shouldPollJob("pending"), true);
+  assert.strictEqual(shouldPollJob("running"), true);
+  for (const terminal of ["completed", "failed", "cancelled", "unknown"]) {
+    assert.strictEqual(shouldPollJob(terminal), false);
+  }
 });

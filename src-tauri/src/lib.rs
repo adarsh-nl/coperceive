@@ -8,6 +8,7 @@ pub mod controller;
 pub mod detect;
 pub mod hpc;
 pub mod job_submit;
+pub mod job_watch;
 pub mod library;
 pub mod pack;
 pub mod port;

@@ -455,6 +455,38 @@ case "${remote}" in
         cat "${local_path}"
         exit 0
         ;;
+    *"squeue -h -j 424242 -o '%j|%T|%r|%M|%L|%N'"*)
+        log_command "squeue-watch"
+        printf '%s|%s|%s|00:00:12|03:59:48|%s\n' \
+            "${FAKE_JOB_NAME:-coperceive-run-plan}" \
+            "${FAKE_JOB_STATE:-PENDING}" \
+            "${FAKE_JOB_REASON:-Resources}" \
+            "${FAKE_JOB_NODE:-node00}"
+        exit 0
+        ;;
+    *"sacct -j 424242 -n -X -o JobName"*)
+        log_command "sacct-watch"
+        printf '%s %s 01:00:00 04:00:00\n' \
+            "${FAKE_JOB_NAME:-coperceive-run-plan}" \
+            "${FAKE_JOB_STATE:-COMPLETED}"
+        exit 0
+        ;;
+    *"tail -n "*)
+        log_command "tail"
+        rest="${remote#*-- }"
+        path="${rest% 2>/dev/null}"
+        path="${path#\'}"; path="${path%\'}"
+        local_path=$(map_remote "${path}") || { echo "fake_ssh: no FAKE_REMOTE_ROOT" >&2; exit 1; }
+        if [ ! -f "${local_path}" ]; then
+            exit 1
+        fi
+        cat "${local_path}"
+        exit 0
+        ;;
+    *"scancel 424242"*)
+        log_command "scancel"
+        exit 0
+        ;;
     *"squeue -h -j 424242"*)
         log_command "squeue-pending"
         printf 'PENDING|Resources\n'

@@ -88,7 +88,7 @@ fn script_hash(script: &str) -> String {
     format!("{:016x}", hasher.finish())
 }
 
-fn safe_job_name(plan_id: &str) -> String {
+pub(crate) fn safe_job_name(plan_id: &str) -> String {
     let clean: String = plan_id
         .chars()
         .map(|ch| {

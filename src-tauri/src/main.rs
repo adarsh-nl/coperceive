@@ -31,6 +31,10 @@ use coperceive_desktop::job_submit::{
     self as job_submit, JobSubmitOutcome, SubmissionPreview, SubmitOptions,
 };
 #[cfg(target_os = "macos")]
+use coperceive_desktop::job_watch::{
+    self as job_watch, JobCancelResult, JobLogTail, JobWatchStatus,
+};
+#[cfg(target_os = "macos")]
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{
@@ -1613,6 +1617,60 @@ async fn submit_run_plan(
     .map_err(|error| format!("Could not submit the run plan: {error}"))?
 }
 
+/// Live state, elapsed and remaining wall time for a run submitted by this app.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn job_watch_status(
+    profile_id: String,
+    plan_id: String,
+    job_id: String,
+) -> Result<JobWatchStatus, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        job_watch::watch_status(&runner, &entry.profile, &plan_id, &job_id)
+    })
+    .await
+    .map_err(|error| format!("Could not read the job state: {error}"))?
+}
+
+/// A bounded tail (10..=200 lines) of the run's stdout or stderr log.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn job_watch_logs(
+    profile_id: String,
+    plan_id: String,
+    job_id: String,
+    stream: String,
+    lines: u32,
+) -> Result<JobLogTail, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        job_watch::tail_log(&runner, &entry.profile, &plan_id, &job_id, &stream, lines)
+    })
+    .await
+    .map_err(|error| format!("Could not read the job log: {error}"))?
+}
+
+/// Cancels a running/pending job this app submitted, after an explicit confirm.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn cancel_run_job(
+    profile_id: String,
+    plan_id: String,
+    job_id: String,
+    confirmed: bool,
+) -> Result<JobCancelResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        job_watch::cancel_job(&runner, &entry.profile, &plan_id, &job_id, confirmed)
+    })
+    .await
+    .map_err(|error| format!("Could not cancel the job: {error}"))?
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
@@ -1871,6 +1929,9 @@ fn main() {
             save_run_plan,
             preview_submission,
             submit_run_plan,
+            job_watch_status,
+            job_watch_logs,
+            cancel_run_job,
             remote_connect,
             remote_status,
             remote_disconnect,
@@ -2033,6 +2094,96 @@ fn main() {
                                 "error": error,
                             }),
                         })
+                    })();
+                    let document = match result {
+                        Ok(value) => value,
+                        Err(error) => serde_json::json!({"ok": false, "error": error}),
+                    };
+                    let _ = fs::write(
+                        &probe.result,
+                        serde_json::to_string_pretty(&document).unwrap_or_default(),
+                    );
+                });
+            }
+
+            // Test-only seam for the watch step: run the real status/log/cancel
+            // functions against the fake ssh and write the result for the e2e.
+            if let Some(probe) = coperceive_desktop::test_seams::hpc_watch_probe_request() {
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<serde_json::Value, String> {
+                        let text = fs::read_to_string(&probe.request)
+                            .map_err(|error| format!("Could not read the watch request: {error}"))?;
+                        let payload: serde_json::Value = serde_json::from_str(&text)
+                            .map_err(|error| format!("Watch request is not JSON: {error}"))?;
+                        let server_path = payload
+                            .get("server")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| "Watch request needs a server fixture path.".to_string())?;
+                        let server_text = fs::read_to_string(server_path)
+                            .map_err(|error| format!("Could not read the server fixture: {error}"))?;
+                        let entry: ServerEntry = serde_json::from_str(&server_text)
+                            .map_err(|error| format!("Server fixture is not valid: {error}"))?;
+                        let plan_id = payload
+                            .get("plan_id")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| "Watch request needs a plan_id.".to_string())?
+                            .to_string();
+                        let job_id = payload
+                            .get("job_id")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| "Watch request needs a job_id.".to_string())?
+                            .to_string();
+                        let action = payload
+                            .get("action")
+                            .and_then(serde_json::Value::as_str)
+                            .unwrap_or("status");
+                        let runner = plan_runner(&entry)?;
+                        match action {
+                            "status" => {
+                                let status = job_watch::watch_status(
+                                    &runner,
+                                    &entry.profile,
+                                    &plan_id,
+                                    &job_id,
+                                )?;
+                                Ok(serde_json::json!({"ok": true, "status": status}))
+                            }
+                            "logs" => {
+                                let stream = payload
+                                    .get("stream")
+                                    .and_then(serde_json::Value::as_str)
+                                    .unwrap_or("stdout");
+                                let lines = payload
+                                    .get("lines")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(50)
+                                    as u32;
+                                let tail = job_watch::tail_log(
+                                    &runner,
+                                    &entry.profile,
+                                    &plan_id,
+                                    &job_id,
+                                    stream,
+                                    lines,
+                                )?;
+                                Ok(serde_json::json!({"ok": true, "logs": tail}))
+                            }
+                            "cancel" => {
+                                let confirmed = payload
+                                    .get("confirmed")
+                                    .and_then(serde_json::Value::as_bool)
+                                    .unwrap_or(false);
+                                let cancelled = job_watch::cancel_job(
+                                    &runner,
+                                    &entry.profile,
+                                    &plan_id,
+                                    &job_id,
+                                    confirmed,
+                                )?;
+                                Ok(serde_json::json!({"ok": true, "cancel": cancelled}))
+                            }
+                            other => Err(format!("Unknown watch action {other:?}.")),
+                        }
                     })();
                     let document = match result {
                         Ok(value) => value,

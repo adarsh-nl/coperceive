@@ -273,3 +273,54 @@ export function jobStateLabel(outcome: JobSubmitOutcome): string {
   }
   return outcome.state.toUpperCase();
 }
+
+/** A live view of a submitted run (mirrors the Rust JobWatchStatus). */
+export interface JobWatchStatus {
+  job_id: string;
+  plan_id: string;
+  job_name: string;
+  state: string;
+  queue_reason: string | null;
+  elapsed: string | null;
+  time_left: string | null;
+  node: string | null;
+}
+
+/** A bounded tail of one log stream. */
+export interface JobLogTail {
+  job_id: string;
+  stream: string;
+  lines: number;
+  text: string;
+  truncated: boolean;
+}
+
+/** The scheduler's answer to an explicit cancel. */
+export interface JobCancelResult {
+  job_id: string;
+  state: string;
+  queue_reason: string | null;
+}
+
+/** Terminal states never poll again. */
+export function isJobActive(state: string): boolean {
+  return state === "pending" || state === "running";
+}
+
+/** Plain-language live state, including the pending reason and timings. */
+export function jobWatchLabel(status: JobWatchStatus): string {
+  const base = status.state.toUpperCase();
+  if (status.state === "pending") {
+    const queue = status.queue_reason ? ` — waiting in the queue: ${status.queue_reason}` : " — waiting in the queue";
+    return `PENDING${queue}`;
+  }
+  const parts = [base];
+  if (status.elapsed) parts.push(`${status.elapsed} elapsed`);
+  if (status.time_left && isJobActive(status.state)) parts.push(`${status.time_left} left`);
+  return parts.join(" · ");
+}
+
+/** Poll only while the job can still change; never in a tight loop. */
+export function shouldPollJob(state: string | null): boolean {
+  return state !== null && isJobActive(state);
+}

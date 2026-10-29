@@ -13,7 +13,10 @@ import type {
   SshHostSettings,
 } from "./hpc";
 import type {
+  JobCancelResult,
+  JobLogTail,
   JobSubmitOutcome,
+  JobWatchStatus,
   PipelineEntry,
   RunPlan,
   RunPlanRequest,
@@ -568,4 +571,46 @@ export async function validateScene(
     return await invoke("validate_scene", { scenePath });
   }
   return { scene_path: scenePath, valid: true, stdout: "", stderr: "" };
+}
+
+/** Live state of a run submitted from this app. */
+export async function jobWatchStatus(
+  profileId: string,
+  planId: string,
+  jobId: string,
+): Promise<JobWatchStatus> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<JobWatchStatus>("job_watch_status", { profileId, planId, jobId });
+  }
+  throw new Error("Watching a run is only available in the desktop app.");
+}
+
+/** A bounded tail of the run's stdout or stderr log. */
+export async function jobWatchLogs(
+  profileId: string,
+  planId: string,
+  jobId: string,
+  stream: "stdout" | "stderr",
+  lines = 50,
+): Promise<JobLogTail> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<JobLogTail>("job_watch_logs", { profileId, planId, jobId, stream, lines });
+  }
+  throw new Error("Reading a job log is only available in the desktop app.");
+}
+
+/** Cancels a pending/running job after the user confirmed it. */
+export async function cancelRunJob(
+  profileId: string,
+  planId: string,
+  jobId: string,
+  confirmed: boolean,
+): Promise<JobCancelResult> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<JobCancelResult>("cancel_run_job", { profileId, planId, jobId, confirmed });
+  }
+  throw new Error("Cancelling a run is only available in the desktop app.");
 }
