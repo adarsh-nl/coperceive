@@ -257,19 +257,22 @@ assert counts.get("boxes", 0) > 0, f"Expected boxes > 0, got {counts}"
 
 print("Asserting Inspector empty state in UI...")
 inspector_empty = eval_js("""(() => {
-    const el = document.querySelector(\x27.side-card[aria-label="Selected object"] .panel-state-empty\x27);
+    const el = document.querySelector(".side-card .panel-state-empty");
     if (!el) return null;
     return {
-        title: el.querySelector(\x27.panel-state-title\x27)?.textContent?.trim() || "",
-        desc: el.querySelector(\x27.panel-state-description\x27)?.textContent?.trim() || "",
-        action: el.querySelector(\x27.panel-state-action\x27)?.textContent?.trim() || ""
+        title: el.querySelector(".panel-state-title")?.textContent?.trim() || "",
+        desc: el.querySelector(".panel-state-description")?.textContent?.trim() || "",
+        action: el.querySelector(".panel-state-action")?.textContent?.trim() || ""
     };
 })()""")
 assert inspector_empty, "Expected Inspector empty state in sidebar"
-assert inspector_empty["title"] == "No object selected", f"Unexpected title: {inspector_empty['title']}"
-assert inspector_empty["desc"].endswith("."), f"Description must end with period: {inspector_empty['desc']}"
-assert inspector_empty["action"] == "Reset Selection", f"Unexpected action: {inspector_empty['action']}"
-print(f"Verified: Inspector empty state rendered correctly ({inspector_empty['title']})")
+empty_title = inspector_empty["title"]
+empty_desc = inspector_empty["desc"]
+empty_action = inspector_empty["action"]
+assert empty_title == "No object selected", f"Unexpected title: {empty_title}"
+assert empty_desc.endswith("."), f"Description must end with period: {empty_desc}"
+assert empty_action == "Reset Selection", f"Unexpected action: {empty_action}"
+print(f"Verified: Inspector empty state rendered correctly ({empty_title})")
 
 print("Driving real UI: clicking Drone viewpoint button...")
 eval_js("""(() => {
