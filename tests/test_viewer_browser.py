@@ -938,10 +938,11 @@ def test_connect_backdrop_animation_and_reduced_motion(session: _Session) -> Non
 
 
 def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> None:
-    """Verify empty, loading, and error states adhere to title, 1 sentence, 1 action button, and zero CLI jargon."""
+    """Verify empty, loading, and error states adhere to title, 1 sentence, and 1 button."""
     # 1. Empty state: In Viewer's Selected Object (Inspector) panel
     session.page.goto(f"{session.base}/#/viewer", wait_until="networkidle")
-    empty_inspector = session.page.locator(".side-card[aria-label='Selected object'] [data-testid='panel-state-empty']")
+    empty_sel = ".side-card[aria-label='Selected object'] [data-testid='panel-state-empty']"
+    empty_inspector = session.page.locator(empty_sel)
     empty_inspector.wait_for(state="visible", timeout=10000)
     title = (empty_inspector.locator(".panel-state-title").text_content() or "").strip()
     desc = (empty_inspector.locator(".panel-state-description").text_content() or "").strip()
@@ -949,7 +950,8 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
 
     assert title == "No object selected", f"Unexpected empty state title: {title}"
     assert desc.endswith("."), f"Description must be a sentence ending with period: {desc}"
-    assert len([s for s in desc.split(".") if s.strip()]) == 1, f"Expected exactly 1 sentence, got: {desc}"
+    sentences = [s for s in desc.split(".") if s.strip()]
+    assert len(sentences) == 1, f"Expected exactly 1 sentence, got: {desc}"
     assert action == "Reset Selection", f"Unexpected action button: {action}"
     assert "pip" not in (title + desc + action).lower(), "No CLI jargon permitted"
 
@@ -968,16 +970,19 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
 
     assert load_title == "Connecting to dataset", f"Unexpected loading title: {load_title}"
     assert load_desc.endswith("."), f"Loading description must be a sentence: {load_desc}"
-    assert len([s for s in load_desc.split(".") if s.strip()]) == 1, f"Expected 1 sentence: {load_desc}"
+    load_sentences = [s for s in load_desc.split(".") if s.strip()]
+    assert len(load_sentences) == 1, f"Expected 1 sentence: {load_desc}"
     assert load_action == "Cancel", f"Unexpected loading action button: {load_action}"
-    assert "coperceive" not in (load_title + load_desc + load_action).lower(), "No CLI jargon permitted"
+    jargon_free = (load_title + load_desc + load_action).lower()
+    assert "coperceive" not in jargon_free, "No CLI jargon permitted"
 
     # 3. Error state: Dispatch error state to ConnectScreen
-    session.page.evaluate("""() => {
-        window.dispatchEvent(new CustomEvent('coperceive-test-panel-state', {
-            detail: { busy: false, error: 'Unable to start the local service with the chosen folder.' }
-        }));
-    }""")
+    err_detail = "Unable to start the local service with the chosen folder."
+    session.page.evaluate(f"""() => {{
+        window.dispatchEvent(new CustomEvent('coperceive-test-panel-state', {{
+            detail: {{ busy: false, error: '{err_detail}' }}
+        }}));
+    }}""")
     error_state = session.page.locator("[data-testid='panel-state-error']")
     error_state.wait_for(state="visible", timeout=5000)
     err_title = (error_state.locator(".panel-state-title").text_content() or "").strip()
@@ -986,7 +991,8 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
 
     assert err_title == "Connection failed", f"Unexpected error title: {err_title}"
     assert err_desc.endswith("."), f"Error description must be a sentence: {err_desc}"
-    assert len([s for s in err_desc.split(".") if s.strip()]) == 1, f"Expected 1 sentence: {err_desc}"
+    err_sentences = [s for s in err_desc.split(".") if s.strip()]
+    assert len(err_sentences) == 1, f"Expected 1 sentence: {err_desc}"
     assert err_action == "Choose another folder", f"Unexpected error action button: {err_action}"
     assert "bash" not in (err_title + err_desc + err_action).lower(), "No CLI jargon permitted"
 
