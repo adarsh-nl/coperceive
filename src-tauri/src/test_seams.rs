@@ -146,6 +146,32 @@ pub fn hpc_submit_probe_request() -> Option<HpcSubmitProbe> {
     })
 }
 
+/// Test-only request for the packaged-app watch step: read
+/// `{"server": <ServerEntry fixture>, "plan_id", "job_id", "action":
+/// "status"|"logs"|"cancel", "stream", "lines", "confirmed"}` and write the
+/// real status/log/cancel result for the HPC e2e.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HpcWatchProbe {
+    pub request: std::path::PathBuf,
+    pub result: std::path::PathBuf,
+}
+
+/// `COPERCEIVE_TEST_HPC_WATCH_REQUEST` + `_RESULT`, read only in test mode.
+pub fn hpc_watch_probe_request() -> Option<HpcWatchProbe> {
+    if !test_env_active() {
+        return None;
+    }
+    let request = std::env::var("COPERCEIVE_TEST_HPC_WATCH_REQUEST").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_HPC_WATCH_RESULT").ok()?;
+    if request.trim().is_empty() || result.trim().is_empty() {
+        return None;
+    }
+    Some(HpcWatchProbe {
+        request: std::path::PathBuf::from(request),
+        result: std::path::PathBuf::from(result),
+    })
+}
+
 /// Test-only request for the packaged-app Browse step: run one real
 /// `coperceive remote scan` against the committed fake-ssh profile and write the
 /// parsed result for `scripts/desktop/e2e_hpc_fake_ssh.sh`.

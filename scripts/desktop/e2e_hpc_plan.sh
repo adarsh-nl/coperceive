@@ -378,6 +378,120 @@ PY
     echo "Step verified: submission for ${name}."
 }
 
+make_watch_request() {
+    local name="$1"
+    local action="$2"
+    local stream="$3"
+    local confirmed="$4"
+    local request_file="${TMP_DIR}/${name}-watch-request.json"
+    python3 - "${request_file}" "${FIXTURES_DIR}/cluster-b.json" "${PLAN_ID}" "${action}" "${stream}" "${confirmed}" <<'PY'
+import json
+import sys
+
+request_file, server_path, plan_id, action, stream, confirmed = sys.argv[1:7]
+payload = {
+    "server": server_path,
+    "plan_id": plan_id,
+    "job_id": "424242",
+    "action": action,
+    "stream": stream,
+    "lines": 50,
+    "confirmed": confirmed == "true",
+}
+with open(request_file, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+PY
+    printf '%s' "${request_file}"
+}
+
+run_watch() {
+    local name="$1"
+    local request_file="$2"
+    local action="$3"
+    local job_state="$4"
+    local result_file="${TMP_DIR}/${name}-watch-result.json"
+    local ssh_log="${TMP_DIR}/fake-ssh-${name}.log"
+    local stdout_log="${TMP_DIR}/${name}.stdout.log"
+    local stderr_log="${TMP_DIR}/${name}.stderr.log"
+    rm -f "${result_file}" "${ssh_log}"
+
+    echo "--- Watch ${name} (action=${action}, job_state=${job_state}) ---"
+    FAKE_REMOTE_ROOT="${PLAN_ROOT}" \
+    FAKE_SSH_LOG="${ssh_log}" \
+    FAKE_JOB_NAME="coperceive-run-${PLAN_ID}" \
+    FAKE_JOB_STATE="${job_state}" \
+    COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
+    COPERCEIVE_TEST_HPC_WATCH_REQUEST="${request_file}" \
+    COPERCEIVE_TEST_HPC_WATCH_RESULT="${result_file}" \
+    "${APP_EXE}" >"${stdout_log}" 2>"${stderr_log}" &
+    APP_PID=$!
+
+    local waited=0
+    while [ ! -s "${result_file}" ]; do
+        if ! kill -0 "${APP_PID}" 2>/dev/null; then
+            fail "app exited before writing the ${name} watch result"
+        fi
+        if [ "${waited}" -ge 450 ]; then
+            fail "timed out waiting for the ${name} watch result"
+        fi
+        sleep 0.2
+        waited=$((waited + 1))
+    done
+    kill -9 "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+    APP_PID=""
+
+    python3 - "${name}" "${action}" "${job_state}" "${result_file}" "${ssh_log}" <<'PY'
+import json
+import sys
+
+name, action, job_state, result_file, ssh_log = sys.argv[1:6]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+if not data.get("ok"):
+    print(f"E2E_WATCH_FAIL: {name}: {data.get('error')}", file=sys.stderr)
+    sys.exit(1)
+log = ""
+try:
+    log = open(ssh_log, encoding="utf-8").read()
+except OSError:
+    pass
+if action == "status":
+    status = data.get("status") or {}
+    expected_state = job_state.lower()
+    if status.get("state") != expected_state:
+        print(f"E2E_WATCH_FAIL: {name}: state {status.get('state')!r}", file=sys.stderr)
+        sys.exit(1)
+    if job_state == "PENDING" and status.get("queue_reason") != "Resources":
+        print(f"E2E_WATCH_FAIL: {name}: reason {status.get('queue_reason')!r}", file=sys.stderr)
+        sys.exit(1)
+    if not status.get("time_left"):
+        print(f"E2E_WATCH_FAIL: {name}: no wall time left", file=sys.stderr)
+        sys.exit(1)
+    print(f"E2E_WATCH_MARK: {name} verified (state={status['state']}, queue_reason={status.get('queue_reason')}, time_left={status.get('time_left')})")
+elif action == "logs":
+    tail = data.get("logs") or {}
+    if "wrote predictions" not in (tail.get("text") or ""):
+        print(f"E2E_WATCH_FAIL: {name}: log text {tail.get('text')!r}", file=sys.stderr)
+        sys.exit(1)
+    if "tail" not in log:
+        print(f"E2E_WATCH_FAIL: {name}: no tail command was issued", file=sys.stderr)
+        sys.exit(1)
+    print(f"E2E_WATCH_MARK: {name} verified (stream={tail.get('stream')}, lines={tail.get('lines')}, tail_calls={log.count('tail')})")
+elif action == "cancel":
+    cancel = data.get("cancel") or {}
+    if cancel.get("state") != "cancelled":
+        print(f"E2E_WATCH_FAIL: {name}: cancel state {cancel.get('state')!r}", file=sys.stderr)
+        sys.exit(1)
+    if log.count("scancel") != 1:
+        print(f"E2E_WATCH_FAIL: {name}: expected exactly one scancel, log={log!r}", file=sys.stderr)
+        sys.exit(1)
+    print(f"E2E_WATCH_MARK: {name} verified (cancelled, scancel_calls=1)")
+PY
+    echo "Step verified: watch ${name}."
+}
+
 REQUEST_MODULE="$(make_request plan-module \
     "${PLAN_ROOT}/data/code/pipelines/coperceive-pipeline.json" \
     "/data/code/pipelines/contract_pipeline.py")"
@@ -395,4 +509,15 @@ CONFIRMED="$(make_submit_request plan-submit \
     '{"walltime":"12:00:00","cpus_per_task":16,"account":null,"qos":null}')"
 run_submit plan-submit "${CONFIRMED}" true
 
-echo "Plan e2e verified: module and container plans built, checked and saved; nothing submitted until an explicit confirmation."
+WATCH_JOB_NAME="coperceive-run-${PLAN_ID}"
+mkdir -p "${PLAN_ROOT}/data/results"
+printf 'starting run\nwrote predictions for Town03\n' > "${PLAN_ROOT}/data/results/${WATCH_JOB_NAME}-424242.out"
+printf 'warning: one frame was skipped\n' > "${PLAN_ROOT}/data/results/${WATCH_JOB_NAME}-424242.err"
+WATCH_PENDING="$(make_watch_request watch-pending status "" false)"
+run_watch watch-pending "${WATCH_PENDING}" status PENDING
+WATCH_LOGS="$(make_watch_request watch-logs logs stdout false)"
+run_watch watch-logs "${WATCH_LOGS}" logs RUNNING
+WATCH_CANCEL="$(make_watch_request watch-cancel cancel "" true)"
+run_watch watch-cancel "${WATCH_CANCEL}" cancel RUNNING
+
+echo "Plan e2e verified: module and container plans built, checked and saved; nothing submitted until an explicit confirmation; the submitted job was watched and cancelled."

@@ -8,6 +8,7 @@
  * results_root; the next step submits it after the user has seen the script.
  */
 import { useEffect, useState } from "react";
+import JobWatch from "./JobWatch";
 import {
   buildRunPlan,
   listPipelineOptions,
@@ -798,10 +799,15 @@ export default function NewEvaluation() {
                       {submitBusy === "submit" ? "Submitting…" : "Submit job"}
                     </button>
                   </div>
-                  {submitOutcome ? (
+                  {submitOutcome && plan ? (
                     <div style={{ marginTop: "0.5rem", padding: "0.5rem 0.75rem", borderRadius: "8px", backgroundColor: "rgba(63, 185, 80, 0.12)", border: "1px solid rgba(63, 185, 80, 0.35)", color: "#c9d1d9", fontSize: "0.82rem" }}>
                       Submitted as job <strong>{submitOutcome.job_id}</strong> —{" "}
                       {jobStateLabel(submitOutcome)}
+                      <JobWatch
+                        profileId={profileId}
+                        planId={plan.id}
+                        initialOutcome={submitOutcome}
+                      />
                     </div>
                   ) : null}
                 </div>
