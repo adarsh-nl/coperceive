@@ -252,9 +252,11 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             <BrandWordmark blink />
           </h1>
 
-          <nav style={{ display: "flex", gap: "0.5rem" }}>
+          <nav style={{ display: "flex", gap: "0.5rem" }} role="tablist" aria-label="Connect navigation">
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === "library"}
               onClick={() => setActiveTab("library")}
               style={{
                 background: activeTab === "library" ? "rgba(255, 255, 255, 0.12)" : "transparent",
@@ -271,6 +273,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === "get_data"}
               onClick={() => setActiveTab("get_data")}
               style={{
                 background: activeTab === "get_data" ? "rgba(255, 255, 255, 0.12)" : "transparent",
@@ -287,6 +291,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             </button>
             <button
               type="button"
+              role="tab"
+              aria-selected={activeTab === "local"}
               onClick={() => setActiveTab("local")}
               style={{
                 background: activeTab === "local" ? "rgba(255, 255, 255, 0.12)" : "transparent",
@@ -303,6 +309,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             </button>
             <button
                 type="button"
+                role="tab"
+                aria-selected={activeTab === "remote"}
                 onClick={() => setActiveTab("remote")}
                 style={{
                   background: activeTab === "remote" ? "rgba(255, 255, 255, 0.12)" : "transparent",
@@ -700,7 +708,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         {activeTab === "remote" && <HpcWorkspace />}
 
         {error && (
-          <div style={{ maxWidth: "520px", margin: "1rem auto" }}>
+          <div role="alert" style={{ maxWidth: "520px", margin: "1rem auto" }}>
             <PanelState
               kind="error"
               title={PANEL_DEFINITIONS.connect.error.title}

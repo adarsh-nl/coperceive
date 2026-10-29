@@ -14,6 +14,8 @@ import {
   showCameraImage,
   toggleFrustumImages,
   toggleOneFrustumImage,
+  systemTheme,
+  setThemeOverride,
   type Appearance,
 } from "./appearance";
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
@@ -1137,6 +1139,23 @@ export default function Viewer({
   const [appearance, setAppearance] = useState<Appearance>(initialSavedAppearance);
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
+  const userThemeOverrideRef = useRef<boolean>(
+    typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.last_theme)
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => {
+      if (!userThemeOverrideRef.current) {
+        const sys = e.matches ? "dark" : "light";
+        setAppearance((curr) => ({ ...curr, theme: sys }));
+        onTheme?.(sys);
+      }
+    };
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, [onTheme]);
   const [playing, setPlaying] = useState(false);
   const loopChoiceRef = useRef<boolean | null>(savedLoopChoice());
   const [loop, setLoop] = useState<boolean>(() => loopChoiceRef.current ?? true);
@@ -2074,6 +2093,10 @@ export default function Viewer({
         if (init.last_theme && (init.last_theme === "dark" || init.last_theme === "light")) {
           onTheme?.(init.last_theme);
           setAppearance((curr) => ({ ...curr, theme: init.last_theme as "dark" | "light" }));
+        } else {
+          const sys = systemTheme();
+          onTheme?.(sys);
+          setAppearance((curr) => ({ ...curr, theme: sys }));
         }
         if (init.agent_visibility) {
           initialHidden = init.agent_visibility;
@@ -3383,9 +3406,14 @@ export default function Viewer({
         className="icon ghost"
         aria-label={appearance.theme === "dark" ? "Use light theme" : "Use dark theme"}
         aria-pressed={appearance.theme === "dark"}
-        onClick={() =>
-          setAppearance((current) => ({ ...current, theme: current.theme === "dark" ? "light" : "dark" }))
-        }
+        onClick={() => {
+          userThemeOverrideRef.current = true;
+          const next = appearance.theme === "dark" ? "light" : "dark";
+          setThemeOverride(next);
+          setAppearance((current) => ({ ...current, theme: next }));
+          onTheme?.(next);
+          postControllerState({ theme: next });
+        }}
       >
         {appearance.theme === "dark" ? <IconMoon /> : <IconSun />}
       </button>

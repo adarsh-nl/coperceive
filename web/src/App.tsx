@@ -6,9 +6,9 @@ import { BrandWordmark } from "./desktop/Brand";
 import ConnectScreen from "./desktop/ConnectScreen";
 import { isTauriEnvironment, getStorageInfo, revealInFinder, setAutoDownloadUpdates, getPersistentState } from "./desktop/local";
 import UpdateBanner from "./desktop/UpdateBanner";
-import Landing, { readTheme, writeTheme } from "./landing/Landing";
+import Landing, { writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
-import type { ThemeName } from "./viewer/appearance";
+import { systemTheme, type ThemeName } from "./viewer/appearance";
 import Viewer from "./viewer/Viewer";
 
 function useHashRoute(): "home" | "viewer" | "connect" {
@@ -178,7 +178,32 @@ export default function App() {
     () => !isTauriEnvironment() || isRemoteOrHttp || Boolean(storedToken()),
   );
   const [token, setToken] = useState(storedToken);
-  const [theme, setTheme] = useState<ThemeName>(readTheme);
+  const [theme, setTheme] = useState<ThemeName>(() => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_theme) {
+      const saved = window.__COPERCEIVE_INITIAL_STATE__.last_theme;
+      if (saved === "dark" || saved === "light") {
+        return saved;
+      }
+    }
+    return systemTheme();
+  });
+  const [hasThemeOverride, setHasThemeOverride] = useState<boolean>(() => {
+    return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.last_theme);
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => {
+      if (!hasThemeOverride) {
+        const next = e.matches ? "dark" : "light";
+        setTheme(next);
+        document.documentElement.dataset.theme = next;
+      }
+    };
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, [hasThemeOverride]);
   const [argument, setArgument] = useState("hello from the data desk");
   const [filePath, setFilePath] = useState("");
   const [fileText, setFileText] = useState("");
@@ -335,6 +360,7 @@ export default function App() {
         onConnected={(session) => {
           setToken(session.token);
           setConnected(true);
+          window.location.hash = "#/viewer";
         }}
       />
     );
@@ -346,8 +372,21 @@ export default function App() {
         token={token}
         theme={theme}
         onTheme={(next) => {
+          setHasThemeOverride(true);
           writeTheme(next);
           setTheme(next);
+          if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+            const port = window.__COPERCEIVE_CTRL_PORT__;
+            const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+            void fetch(`http://127.0.0.1:${port}/state`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${secret}`,
+              },
+              body: JSON.stringify({ theme: next }),
+            }).catch(() => {});
+          }
         }}
         onOpen={() => {
           window.location.hash = "#/viewer";

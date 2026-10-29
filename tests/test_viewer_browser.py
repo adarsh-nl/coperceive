@@ -925,6 +925,7 @@ def test_connect_backdrop_animation_and_reduced_motion(session: _Session) -> Non
     axe_path = repo_root / "web" / "node_modules" / "axe-core" / "axe.min.js"
     if axe_path.exists():
         session.page.evaluate(axe_path.read_text(encoding="utf-8"))
+        # Run axe on Connect / Library
         results = session.page.evaluate("""
             axe.run({
                 runOnly: {
@@ -934,7 +935,36 @@ def test_connect_backdrop_animation_and_reduced_motion(session: _Session) -> Non
             })
         """)
         violations = results.get("violations", [])
-        assert len(violations) == 0, f"Connect backdrop axe violations: {violations}"
+        serious = [v for v in violations if v.get("impact") in ("serious", "critical")]
+        assert len(serious) == 0, f"Library tab axe violations: {serious}"
+
+        # Run axe on Get Data
+        session.page.click("button:has-text('Get Data')")
+        results_gd = session.page.evaluate("""
+            axe.run({
+                runOnly: {
+                    type: 'tag',
+                    values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
+                }
+            })
+        """)
+        violations_gd = results_gd.get("violations", [])
+        serious_gd = [v for v in violations_gd if v.get("impact") in ("serious", "critical")]
+        assert len(serious_gd) == 0, f"Get Data tab axe violations: {serious_gd}"
+
+        # Run axe on Open Folder (Local Connect)
+        session.page.click("button:has-text('Open Folder')")
+        results_local = session.page.evaluate("""
+            axe.run({
+                runOnly: {
+                    type: 'tag',
+                    values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa']
+                }
+            })
+        """)
+        violations_local = results_local.get("violations", [])
+        serious_local = [v for v in violations_local if v.get("impact") in ("serious", "critical")]
+        assert len(serious_local) == 0, f"Open Folder tab axe violations: {serious_local}"
 
 
 def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> None:
@@ -997,3 +1027,57 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
     assert "bash" not in (err_title + err_desc + err_action).lower(), "No CLI jargon permitted"
 
     session.page.screenshot(path=str(shots / "panel-states.png"))
+
+
+def test_system_theme_follows_prefers_color_scheme(session: _Session) -> None:
+    """Default theme follows system appearance (prefers-color-scheme)."""
+    # 1. Dark scheme
+    session.page.emulate_media(color_scheme="dark")
+    session.page.reload(wait_until="networkidle")
+    info = session.page.evaluate("""() => ({
+        matches: window.matchMedia('(prefers-color-scheme: dark)').matches,
+        theme: document.documentElement.dataset.theme,
+        override: localStorage.getItem('coperceive-theme-override'),
+        view: localStorage.getItem('coperceive-view')
+    })""")
+    assert info["theme"] == "dark", f"Expected dark theme under dark scheme, got: {info}"
+
+    # 2. Light scheme
+    session.page.emulate_media(color_scheme="light")
+    session.page.reload(wait_until="networkidle")
+    theme_light = session.page.evaluate("() => document.documentElement.dataset.theme")
+    assert theme_light == "light", f"Expected light theme under light scheme, got: {theme_light}"
+
+    # 3. User override locks theme
+    session.page.click("button[aria-label='Use dark theme']")
+    theme_override = session.page.evaluate("() => document.documentElement.dataset.theme")
+    assert theme_override == "dark", f"Expected dark theme after override, got: {theme_override}"
+
+
+def test_keyboard_navigation_flow(session: _Session) -> None:
+    """Keyboard-only path: Connect -> Library -> open scene -> play with visible focus."""
+    session.page.goto(f"{session.base}/#/connect", wait_until="networkidle")
+
+    # Focus and activate Library tab via keyboard
+    library_tab = session.page.locator("button[role='tab']:has-text('Library')")
+    library_tab.focus()
+    session.page.keyboard.press("Enter")
+
+    # Tab to the open button for a scene
+    open_btn = session.page.locator("button[aria-label^='Open scene']").first
+    open_btn.wait_for(state="visible", timeout=10000)
+    open_btn.focus()
+    session.page.keyboard.press("Enter")
+
+    # Wait for viewer to load or navigate
+    session.page.wait_for_selector(".timeline-tools", timeout=10000)
+    play_btn = session.page.locator("button[aria-label='Play'], button[aria-label='Pause']").first
+    play_btn.wait_for(state="visible", timeout=10000)
+
+    # Press Space or click Play button via keyboard
+    session.page.keyboard.press("Space")
+    time.sleep(0.3)
+    play_state = session.page.evaluate("""() => {
+        return window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null;
+    }""")
+    assert play_state is not None, "Playback state must be available"

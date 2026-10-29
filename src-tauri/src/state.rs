@@ -362,7 +362,7 @@ impl Default for AppPersistentState {
             _legacy_timestamp_ns: None,
             last_viewpoint: Some("orbit".into()),
             last_loop: None,
-            last_theme: Some("dark".into()),
+            last_theme: None,
             reopen_last_session: true,
             agent_visibility: None,
             layer_toggles: Some(LayerToggles::default()),
@@ -643,7 +643,7 @@ pub mod tests {
         let loaded = load_state_from_path(&state_path);
         assert_eq!(loaded, AppPersistentState::default());
         assert_eq!(loaded.last_viewpoint, Some("orbit".into()));
-        assert_eq!(loaded.last_theme, Some("dark".into()));
+        assert_eq!(loaded.last_theme, None);
 
         let _ = fs::remove_dir_all(&tmp);
     }
