@@ -12,6 +12,7 @@ use crate::token::{generate_secure_token, write_token_file};
 
 pub static ACTIVE_SIDECAR_PID: AtomicI32 = AtomicI32::new(0);
 
+#[cfg(unix)]
 extern "C" fn sidecar_exit_handler() {
     let pid = ACTIVE_SIDECAR_PID.swap(0, Ordering::SeqCst);
     if pid > 0 {
@@ -23,6 +24,7 @@ extern "C" fn sidecar_exit_handler() {
     }
 }
 
+#[cfg(unix)]
 extern "C" fn sidecar_signal_handler(_sig: libc::c_int) {
     sidecar_exit_handler();
     unsafe {
@@ -31,12 +33,15 @@ extern "C" fn sidecar_signal_handler(_sig: libc::c_int) {
 }
 
 pub fn register_process_exit_cleaner() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| unsafe {
-        libc::atexit(sidecar_exit_handler);
-        libc::signal(libc::SIGTERM, sidecar_signal_handler as *const () as usize);
-        libc::signal(libc::SIGINT, sidecar_signal_handler as *const () as usize);
-    });
+    #[cfg(unix)]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| unsafe {
+            libc::atexit(sidecar_exit_handler);
+            libc::signal(libc::SIGTERM, sidecar_signal_handler as *const () as usize);
+            libc::signal(libc::SIGINT, sidecar_signal_handler as *const () as usize);
+        });
+    }
 }
 
 #[derive(Debug)]
@@ -124,9 +129,14 @@ impl SidecarSession {
         if ACTIVE_SIDECAR_PID.load(Ordering::SeqCst) == pid {
             ACTIVE_SIDECAR_PID.store(0, Ordering::SeqCst);
         }
-        // Send SIGTERM
+        // Send SIGTERM on Unix, or kill on Windows
+        #[cfg(unix)]
         unsafe {
             libc::kill(pid, libc::SIGTERM);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = self.child.kill();
         }
 
         let deadline = Instant::now() + Duration::from_millis(3000);
@@ -168,6 +178,7 @@ impl Drop for SidecarSession {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn test_sidecar_lifecycle_mock() {
         // Test lifecycle with python -c 'import time; time.sleep(10)'

@@ -986,6 +986,7 @@ async fn stop_local(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String
 static IMPORT_PID: Mutex<Option<u32>> = Mutex::new(None);
 
 /// One background library validation at a time.
+#[cfg(target_os = "macos")]
 static VALIDATION_RUNNING: AtomicBool = AtomicBool::new(false);
 
 #[cfg(target_os = "macos")]

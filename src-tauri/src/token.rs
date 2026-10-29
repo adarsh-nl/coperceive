@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+#[cfg(unix)]
+use std::fs::File;
+use std::fs::OpenOptions;
+#[cfg(unix)]
+use std::io::Read;
+use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
@@ -28,9 +33,23 @@ impl std::error::Error for TokenSecurityError {}
 
 /// Generates a cryptographically secure 128-bit hex token (32 lowercase hex characters).
 pub fn generate_secure_token() -> std::io::Result<String> {
-    let mut bytes = [0u8; 16];
-    let mut file = File::open("/dev/urandom")?;
-    file.read_exact(&mut bytes)?;
+    #[cfg(unix)]
+    let bytes = {
+        let mut b = [0u8; 16];
+        let mut file = File::open("/dev/urandom")?;
+        file.read_exact(&mut b)?;
+        b
+    };
+    #[cfg(not(unix))]
+    let bytes = {
+        let seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let pid = std::process::id() as u128;
+        let mixed = seed ^ (pid << 64);
+        mixed.to_le_bytes()
+    };
     let mut hex = String::with_capacity(32);
     for b in bytes {
         use std::fmt::Write as _;
@@ -43,6 +62,7 @@ pub fn generate_secure_token() -> std::io::Result<String> {
 pub fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(path)?;
     file.write_all(token.as_bytes())?;
@@ -56,10 +76,13 @@ pub fn verify_token_file_permissions(path: &Path) -> Result<(), TokenSecurityErr
     if !path.is_file() {
         return Err(TokenSecurityError::FileNotFound);
     }
-    let metadata = path.metadata().map_err(|e| TokenSecurityError::IoError(e.to_string()))?;
-    let mode = metadata.permissions().mode() & 0o777;
-    if (mode & 0o077) != 0 {
-        return Err(TokenSecurityError::LoosePermissions(mode));
+    #[cfg(unix)]
+    {
+        let metadata = path.metadata().map_err(|e| TokenSecurityError::IoError(e.to_string()))?;
+        let mode = metadata.permissions().mode() & 0o777;
+        if (mode & 0o077) != 0 {
+            return Err(TokenSecurityError::LoosePermissions(mode));
+        }
     }
     Ok(())
 }
@@ -79,6 +102,7 @@ mod tests {
         assert!(t1.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_token_file_strict_permissions() {
         let unique = format!("test-coperceive-token-{}-{}", std::process::id(), generate_secure_token().unwrap());
