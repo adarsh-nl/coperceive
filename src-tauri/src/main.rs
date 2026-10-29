@@ -60,6 +60,7 @@ pub struct AppState {
     /// One viewer window. A second open focuses the existing window.
     pub viewer_build: Mutex<()>,
     pub replacing_viewer: AtomicBool,
+    pub pending_export: coperceive_desktop::export::PendingExportDestination,
 }
 
 #[cfg(target_os = "macos")]
@@ -76,6 +77,7 @@ impl Default for AppState {
             startup_instant: Instant::now(),
             viewer_build: Mutex::new(()),
             replacing_viewer: AtomicBool::new(false),
+            pending_export: coperceive_desktop::export::PendingExportDestination::new(),
         }
     }
 }
@@ -151,6 +153,64 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
 
     let folder = app.dialog().file().blocking_pick_folder();
     Ok(folder.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn pick_save_path(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    default_name: String,
+    extension: String,
+) -> Result<Option<String>, String> {
+    if let Some(path) = coperceive_desktop::test_seams::take_mock_dialog_path() {
+        state.pending_export.set(Some(PathBuf::from(&path)));
+        return Ok(Some(path));
+    }
+    if coperceive_desktop::test_seams::test_env_active() {
+        state.pending_export.set(None);
+        return Err("No mock dialog file path provided in test environment (seed COPERCEIVE_MOCK_DIALOG_FILE)".into());
+    }
+
+    use tauri_plugin_dialog::DialogExt;
+
+    let mut builder = app.dialog().file().set_file_name(&default_name);
+    if !extension.is_empty() {
+        builder = builder.add_filter("Export File", &[&extension]);
+    }
+    let choice = builder.blocking_save_file();
+    let chosen_path = choice.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned());
+
+    state.pending_export.set(chosen_path.as_deref().map(PathBuf::from));
+
+    Ok(chosen_path)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn save_exported_file(
+    source_relative: Option<String>,
+    bytes: Option<Vec<u8>>,
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<String, String> {
+    let dest_path = state.pending_export.take()?;
+
+    let root_lock = state.current_root.lock().map_err(|e| e.to_string())?;
+    let root_ref = root_lock.as_deref().map(Path::new);
+    let bytes_ref = bytes.as_deref();
+    let rel_ref = source_relative.as_deref();
+
+    coperceive_desktop::export::write_export_file(
+        root_ref,
+        rel_ref,
+        &dest_path,
+        bytes_ref,
+    )?;
+
+    let path_str = dest_path.to_string_lossy().into_owned();
+    state.pending_export.set_last_saved(dest_path);
+
+    Ok(path_str)
 }
 
 #[cfg(target_os = "macos")]
@@ -587,6 +647,71 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
             let _ = w.close();
         }
     }));
+
+    let picker_handle = app_handle.clone();
+    let picker_state = app_state.clone();
+    cfg.export_picker = Some(Arc::new(move |default_name: &str, extension: &str| {
+        if let Some(path) = coperceive_desktop::test_seams::take_mock_dialog_path() {
+            picker_state.pending_export.set(Some(PathBuf::from(&path)));
+            return Ok(Some(path));
+        }
+        if coperceive_desktop::test_seams::test_env_active() {
+            picker_state.pending_export.set(None);
+            return Err("No mock dialog file path provided in test environment (seed COPERCEIVE_MOCK_DIALOG_FILE)".into());
+        }
+        #[cfg(target_os = "macos")]
+        {
+            use tauri_plugin_dialog::DialogExt;
+            let mut builder = picker_handle.dialog().file().set_file_name(default_name);
+            if !extension.is_empty() {
+                builder = builder.add_filter("Export File", &[extension]);
+            }
+            let choice = builder.blocking_save_file();
+            let path = choice.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned());
+            picker_state.pending_export.set(path.as_deref().map(PathBuf::from));
+            Ok(path)
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            picker_state.pending_export.set(None);
+            Ok(None)
+        }
+    }));
+
+    let saver_state = app_state.clone();
+    cfg.export_saver = Some(Arc::new(move |source_relative: Option<&str>, bytes: Option<&[u8]>| {
+        let dest_path = saver_state.pending_export.take()?;
+        let root_lock = saver_state.current_root.lock().map_err(|e| e.to_string())?;
+        let root_ref = root_lock.as_deref().map(Path::new);
+        coperceive_desktop::export::write_export_file(
+            root_ref,
+            source_relative,
+            &dest_path,
+            bytes,
+        )?;
+        let path_str = dest_path.to_string_lossy().into_owned();
+        saver_state.pending_export.set_last_saved(dest_path);
+        Ok(path_str)
+    }));
+
+    let revealer_state = app_state.clone();
+    cfg.finder_revealer = Some(Arc::new(move || {
+        let dest_path = revealer_state.pending_export.last_saved()?;
+        #[cfg(target_os = "macos")]
+        {
+            std::process::Command::new("open")
+                .arg("-R")
+                .arg(&dest_path)
+                .spawn()
+                .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = dest_path;
+        }
+        Ok(())
+    }));
+
     let cfg_clone = cfg.clone();
     let handle = app_handle.clone();
     let st = app_state.clone();
@@ -1936,6 +2061,8 @@ fn main() {
             remote_status,
             remote_disconnect,
             remote_scan,
+            pick_save_path,
+            save_exported_file,
         ])
         .on_page_load(|webview, payload| {
             // The Connect window is declared in tauri.conf.json, so it does not

@@ -6,6 +6,7 @@
 
 pub mod controller;
 pub mod detect;
+pub mod export;
 pub mod hpc;
 pub mod job_submit;
 pub mod job_watch;

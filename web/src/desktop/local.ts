@@ -42,6 +42,8 @@ interface HealthPayload {
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
+    __COPERCEIVE_CTRL_PORT__?: number;
+    __COPERCEIVE_CTRL_SECRET__?: string;
   }
 }
 
@@ -512,11 +514,83 @@ export async function deleteLibraryScene(scenePath: string): Promise<void> {
   }
 }
 
-export async function revealInFinder(path: string): Promise<void> {
+async function controllerPost<T>(endpoint: string, body: unknown): Promise<T> {
+  const port = window.__COPERCEIVE_CTRL_PORT__;
+  const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+  const res = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${secret}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Controller request failed (${res.status}): ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export async function revealInFinder(path?: string): Promise<void> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    await controllerPost("/reveal-in-finder", {});
+    return;
+  }
   if (isTauriEnvironment()) {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("reveal_in_finder", { path });
+    await invoke("reveal_in_finder", { path: path || "" });
   }
+}
+
+export async function pickSavePath(
+  defaultName: string,
+  extension: string,
+): Promise<string | null> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    try {
+      const resp = await controllerPost<{ status: string; path?: string | null }>("/export-pick", {
+        default_name: defaultName,
+        extension,
+      });
+      return resp.path ?? null;
+    } catch {
+      return null;
+    }
+  }
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string | null>("pick_save_path", {
+        defaultName,
+        extension,
+      });
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function saveExportedFile(
+  sourceRelative?: string,
+  bytes?: Uint8Array,
+): Promise<string> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const resp = await controllerPost<{ status: string; path: string }>("/export-save", {
+      source_relative: sourceRelative,
+      bytes: bytes ? Array.from(bytes) : undefined,
+    });
+    return resp.path;
+  }
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string>("save_exported_file", {
+      sourceRelative,
+      bytes: bytes ? Array.from(bytes) : undefined,
+    });
+  }
+  throw new Error("Desktop export only available in desktop environment");
 }
 
 export async function datasetDryRun(

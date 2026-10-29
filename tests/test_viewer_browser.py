@@ -16,6 +16,7 @@ Chromium can start on this machine, the module is skipped with the reason.
 from __future__ import annotations
 
 import base64
+import json
 import os
 import socket
 import threading
@@ -1088,3 +1089,61 @@ def test_keyboard_navigation_flow(session: _Session) -> None:
         return window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null;
     }""")
     assert play_state is not None, "Playback state must be available"
+
+
+def test_export_dialog_native_flow(session: _Session, tmp_path: Path) -> None:
+    """Export dialog opens, saves still via native save dialog in desktop mode,
+    and surfaces 'Show in Finder'.
+    """
+    dest_file = tmp_path / "saved_still.png"
+    session.page.add_init_script(
+        f"""
+        window.__COPERCEIVE_DESKTOP__ = true;
+        window.__TAURI_INTERNALS__ = {{
+            invocations: [],
+            pickedPath: {json.dumps(str(dest_file))},
+            transformCallback: function(cb) {{ return 0; }},
+            invoke: async function(cmd, args) {{
+                this.invocations.push({{ cmd, args }});
+                if (cmd === 'pick_save_path') {{
+                    return this.pickedPath;
+                }}
+                if (cmd === 'save_exported_file') {{
+                    return this.pickedPath;
+                }}
+                if (cmd === 'reveal_in_finder') {{
+                    return null;
+                }}
+                return null;
+            }}
+        }};
+        """
+    )
+    session.page.reload(wait_until="networkidle")
+    session.wait_status(SCENE_FULL)
+    session.page.wait_for_selector(".top-actions button:has-text('Export')", timeout=5000)
+
+    # Open Export dialog
+    session.page.click(".top-actions button:has-text('Export')")
+    session.page.wait_for_selector("div[role='dialog'] h2:has-text('Export')", timeout=5000)
+
+    # Click 'Save still'
+    session.page.click("div[role='dialog'] button:has-text('Save still')")
+
+    # Verify status updates and 'Show in Finder' button appears
+    session.page.wait_for_selector("button:has-text('Show in Finder')", timeout=10000)
+    note_locator = session.page.locator("div[role='dialog'] p.muted:not(#export-detail)")
+    note_text = note_locator.text_content() or ""
+    assert "saved_still.png" in note_text
+    assert "Saved to" in note_text
+
+    # Click 'Show in Finder' and verify IPC was invoked
+    session.page.click("button:has-text('Show in Finder')")
+    session.page.wait_for_function(
+        "() => window.__TAURI_INTERNALS__.invocations.some(i => i.cmd === 'reveal_in_finder')"
+    )
+    invocations = session.page.evaluate("window.__TAURI_INTERNALS__.invocations")
+    cmds = [inv["cmd"] for inv in invocations]
+    assert "pick_save_path" in cmds
+    assert "save_exported_file" in cmds
+    assert "reveal_in_finder" in cmds

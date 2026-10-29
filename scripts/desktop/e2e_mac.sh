@@ -396,13 +396,16 @@ if echo "${CLIPBOARD_TEXT}" | grep -q "Coperceive Diagnostics"; then
 fi
 
 echo ""
-echo "--- Step 1b: Export BEV Figure in Real App and Assert Non-Empty PNG ---"
+echo "--- Step 1b: Export Still and BEV in Real App and Assert Non-Empty PNGs ---"
 python3 -c '
 import sys, json, time, urllib.request, glob, os
+from pathlib import Path
 
 port = "'"${CTRL_PORT}"'"
 secret = "'"${CTRL_SECRET}"'"
 fixture_dir = "'"${FIXTURE_1}"'"
+tmp_dir = "'"${TMP_DIR}"'"
+mock_dialog_file = "'"${MOCK_DIALOG_FILE}"'"
 
 def eval_js(code, timeout=15):
     req = urllib.request.Request(
@@ -426,6 +429,59 @@ eval_js("""(() => {
 
 time.sleep(0.5)
 
+# --- Substep 1: Export still via native save dialog ---
+still_dest = os.path.join(tmp_dir, f"e2e_still_{int(time.time())}.png")
+Path(mock_dialog_file).write_text(still_dest + "\n", encoding="utf-8")
+print(f"Seeded mock dialog for still export: {still_dest}")
+
+print("Driving real UI: clicking Save still button...")
+eval_js("""(() => {
+    const dialog = document.querySelector(\x27.dialog\x27);
+    if (!dialog) throw new Error("Export dialog not found in DOM");
+    const stillBtn = Array.from(dialog.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.includes("Save still"));
+    if (!stillBtn) throw new Error("Save still button not found in export dialog");
+    stillBtn.click();
+})()""")
+
+print("Waiting for still export to complete in real UI...")
+deadline = time.monotonic() + 30.0
+still_exported = False
+while time.monotonic() < deadline:
+    res = eval_js("""(() => {
+        const dialog = document.querySelector(\x27.dialog\x27);
+        const note = dialog ? dialog.querySelector(\x27p.muted\x27) : null;
+        const noteText = note ? note.textContent : "";
+        if (noteText.includes("Saved to ") && noteText.includes("still")) {
+            return { done: true, note: noteText };
+        }
+        if (noteText.includes("Failed") || noteText.includes("Error") || noteText.includes("error")) {
+            return { error: noteText };
+        }
+        return { done: false, note: noteText };
+    })()""")
+    err_text = res.get("error") if res else None
+    if err_text:
+        raise RuntimeError(f"Still export failed in UI: {err_text}")
+    if res and res.get("done"):
+        print(f"Still export completed in UI: {res}", flush=True)
+        still_exported = True
+        break
+    time.sleep(0.5)
+
+assert still_exported, "Still export timed out in UI"
+assert os.path.isfile(still_dest), f"Exported still file does not exist at {still_dest}"
+still_size = os.path.getsize(still_dest)
+print(f"Asserting non-empty still PNG: {still_dest} is {still_size} bytes")
+assert still_size > 0, f"Exported still PNG {still_dest} is empty (0 bytes)"
+assert "Saved to " in res["note"], "Expected Saved to in note: " + str(res.get("note"))
+assert os.path.basename(still_dest) in res["note"], "Expected filename in note: " + str(res.get("note"))
+print("Step 1b verified: Still exported successfully and non-empty PNG asserted.", flush=True)
+
+# --- Substep 2: Export BEV figure via native save dialog with preview ---
+bev_dest = os.path.join(tmp_dir, f"e2e_bev_{int(time.time())}.png")
+Path(mock_dialog_file).write_text(bev_dest + "\n", encoding="utf-8")
+print(f"Seeded mock dialog for BEV export: {bev_dest}")
+
 print("Driving real UI: clicking Bird\x27s-eye export button...")
 eval_js("""(() => {
     const dialog = document.querySelector(\x27.dialog\x27);
@@ -437,18 +493,15 @@ eval_js("""(() => {
 
 print("Waiting for BEV export to complete and render preview in real UI...")
 deadline = time.monotonic() + 30.0
-exported = False
+bev_exported = False
 while time.monotonic() < deadline:
     res = eval_js("""(() => {
         const dialog = document.querySelector(\x27.dialog\x27);
         const img = dialog ? dialog.querySelector(\x27img.plot-preview\x27) : null;
         const note = dialog ? dialog.querySelector(\x27p.muted\x27) : null;
         const noteText = note ? note.textContent : "";
-        if (img && img.src) {
+        if (img && img.src && noteText.includes("Saved to ") && noteText.includes("bev")) {
             return { done: true, src: img.src, note: noteText };
-        }
-        if (noteText.includes("Wrote ") && noteText.includes("bev")) {
-            return { done: true, note: noteText };
         }
         if (noteText.includes("Failed") || noteText.includes("Error") || noteText.includes("error")) {
             return { error: noteText };
@@ -460,11 +513,11 @@ while time.monotonic() < deadline:
         raise RuntimeError(f"BEV export failed in UI: {err_text}")
     if res and res.get("done"):
         print(f"BEV export completed in UI: {res}", flush=True)
-        exported = True
+        bev_exported = True
         break
     time.sleep(0.5)
 
-assert exported, "BEV export timed out in UI"
+assert bev_exported, "BEV export timed out in UI"
 
 print("Closing Export dialog...")
 eval_js("""(() => {
@@ -473,19 +526,14 @@ eval_js("""(() => {
     if (closeBtn) closeBtn.click();
 })()""")
 
-export_pattern = os.path.join(fixture_dir, "**", "*bev*.png")
-export_files = glob.glob(export_pattern, recursive=True)
-if not export_files:
-    export_files = glob.glob(os.path.join(fixture_dir, "exports", "*bev*.png"))
+assert os.path.isfile(bev_dest), f"Exported BEV file does not exist at {bev_dest}"
+bev_size = os.path.getsize(bev_dest)
+print(f"Asserting non-empty BEV PNG: {bev_dest} is {bev_size} bytes")
+assert bev_size > 0, f"Exported BEV PNG {bev_dest} is empty (0 bytes)"
+assert "Saved to " in res["note"], "Expected Saved to in note: " + str(res.get("note"))
+assert os.path.basename(bev_dest) in res["note"], "Expected filename in note: " + str(res.get("note"))
 
-print(f"Found exported BEV files: {export_files}")
-assert len(export_files) > 0, f"No exported BEV PNG found matching {export_pattern}"
-png_file = export_files[0]
-png_size = os.path.getsize(png_file)
-print(f"Asserting non-empty PNG: {png_file} is {png_size} bytes")
-assert png_size > 0, f"Exported BEV PNG {png_file} is empty (0 bytes)"
-
-print("Step 1b verified: BEV figure exported successfully and non-empty PNG asserted.", flush=True)
+print("Step 1c verified: BEV figure exported successfully and non-empty PNG asserted.", flush=True)
 '
 
 screencapture -x "${SCREENSHOT_DIR}/02-before-quit.png" 2>/dev/null || true

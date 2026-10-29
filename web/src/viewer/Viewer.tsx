@@ -27,6 +27,7 @@ import { boxCenter, followPick, type PickRecord } from "./inspect";
 import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
 import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
+import { pickSavePath, revealInFinder, saveExportedFile } from "../desktop/local";
 import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
 import {
   buildPredictionObjects,
@@ -1129,6 +1130,7 @@ export default function Viewer({
   const [plotAlt, setPlotAlt] = useState("Bird's-eye plot");
   const [plotting, setPlotting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [lastSavedPath, setLastSavedPath] = useState<string | null>(null);
   const [series, setSeries] = useState<{
     points: number[];
     speeds: number[];
@@ -2977,8 +2979,22 @@ export default function Viewer({
     }
     const size = exportSizeChoice();
     const format = still ? "png" : exportFormat;
+
+    let targetPath: string | null = null;
+    if (isDesktop) {
+      const defaultName = still
+        ? `${summary.scene_id}_still_sample${frameIndex + 1}.png`
+        : `${summary.scene_id}_clip_${exportSource.replace('/', '_')}_${exportStart}_to_${exportEnd}.${format}`;
+      targetPath = await pickSavePath(defaultName, format);
+      if (targetPath === null) {
+        setExportNote("Export cancelled.");
+        return;
+      }
+    }
+
     setExporting(true);
     setPlaying(false);
+    setPlotNote("");
     setExportNote(still ? "Writing the still…" : "Writing the sequence…");
     try {
       const startUs = summary.times_us[start];
@@ -3021,10 +3037,19 @@ export default function Viewer({
         });
       }
       const path = typeof saved.path === "string" ? saved.path : "";
-      setExportNote(
-        `Wrote ${path} (${String(saved.frames)} frames, ${String(saved.width)}×${String(saved.height)} at ${String(saved.fps)} fps).`,
-      );
-      await downloadExported(path);
+      if (isDesktop && targetPath) {
+        await saveExportedFile(path);
+        setLastSavedPath(targetPath);
+        const fileName = targetPath.split("/").pop() ?? targetPath;
+        setExportNote(
+          `Wrote ${path} (${String(saved.frames)} frames, ${String(saved.width)}×${String(saved.height)} at ${String(saved.fps)} fps). Saved to ${fileName}.`,
+        );
+      } else {
+        setExportNote(
+          `Wrote ${path} (${String(saved.frames)} frames, ${String(saved.width)}×${String(saved.height)} at ${String(saved.fps)} fps).`,
+        );
+        await downloadExported(path);
+      }
     } catch (error) {
       setExportNote(error instanceof Error ? error.message : "Export failed.");
     } finally {
@@ -3033,20 +3058,45 @@ export default function Viewer({
   }
 
   async function exportRerun() {
-    if (!summary) {
+    if (!summary || exporting) {
       return;
     }
+    let targetPath: string | null = null;
+    if (isDesktop) {
+      const defaultName = `${summary.scene_id}.rrd`;
+      targetPath = await pickSavePath(defaultName, "rrd");
+      if (targetPath === null) {
+        setExportNote("Export cancelled.");
+        return;
+      }
+    }
+    setExporting(true);
+    setPlotNote("");
     setExportNote("Writing the .rrd…");
-    const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/export/rerun`, {
-      method: "POST",
-      headers: { ...authHeaders(effectiveToken), "X-Coperceive-Request": "1" },
-    });
-    if (!response.ok) {
-      setExportNote(await errorDetail(response));
-      return;
+    try {
+      const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/export/rerun`, {
+        method: "POST",
+        headers: { ...authHeaders(effectiveToken), "X-Coperceive-Request": "1" },
+      });
+      if (!response.ok) {
+        setExportNote(await errorDetail(response));
+        return;
+      }
+      const body = (await response.json()) as { path?: unknown; samples?: unknown };
+      const path = typeof body.path === "string" ? body.path : "";
+      if (isDesktop && targetPath && path) {
+        await saveExportedFile(path);
+        setLastSavedPath(targetPath);
+        const fileName = targetPath.split("/").pop() ?? targetPath;
+        setExportNote(`Wrote ${path} (${String(body.samples)} samples). Saved to ${fileName}.`);
+      } else {
+        setExportNote(`Wrote ${String(body.path)} (${String(body.samples)} samples).`);
+      }
+    } catch (error) {
+      setExportNote(error instanceof Error ? error.message : "Rerun export failed.");
+    } finally {
+      setExporting(false);
     }
-    const body = (await response.json()) as { path?: unknown; samples?: unknown };
-    setExportNote(`Wrote ${String(body.path)} (${String(body.samples)} samples).`);
   }
 
   async function savePlot(kind: "bev" | "overlay") {
@@ -3073,7 +3123,19 @@ export default function Viewer({
       agentId = cameraId.slice(0, slash);
       sensorId = cameraId.slice(slash + 1);
     }
+
+    let targetPath: string | null = null;
+    if (isDesktop) {
+      const defaultName = `${summary.scene_id}_${kind}_sample${frameIndex + 1}.${plotFormat}`;
+      targetPath = await pickSavePath(defaultName, plotFormat);
+      if (targetPath === null) {
+        setPlotNote("Export cancelled.");
+        return;
+      }
+    }
+
     setPlotting(true);
+    setExportNote("");
     setPlotNote(kind === "bev" ? "Drawing the bird's-eye plot…" : "Drawing the camera overlay…");
     try {
       const saved = await postExport(summary.scene_id, kind === "bev" ? "/export/bev" : "/export/overlay", {
@@ -3092,9 +3154,6 @@ export default function Viewer({
       });
       const path = typeof saved.path === "string" ? saved.path : "";
       const mapNote = saved.map_drawn === true ? ", map drawn" : "";
-      setPlotNote(
-        `Wrote ${path} (${String(saved.points)} points, ${String(saved.boxes)} boxes${mapNote}).`,
-      );
       setPlotAlt(kind === "bev" ? "Bird's-eye plot of the current sample" : "Camera overlay of the current sample");
       const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(path)}`, {
         headers: authHeaders(effectiveToken),
@@ -3110,10 +3169,24 @@ export default function Viewer({
         }
         return url;
       });
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = path.split("/").pop() ?? `plot.${plotFormat}`;
-      link.click();
+      if (isDesktop && targetPath) {
+        await saveExportedFile(path);
+        setLastSavedPath(targetPath);
+        const fileName = targetPath.split("/").pop() ?? targetPath;
+        setPlotNote(
+          `Wrote ${path} (${String(saved.points)} points, ${String(saved.boxes)} boxes${mapNote}). Saved to ${fileName}.`,
+        );
+      } else {
+        setPlotNote(
+          `Wrote ${path} (${String(saved.points)} points, ${String(saved.boxes)} boxes${mapNote}).`,
+        );
+        if (!isDesktop) {
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = path.split("/").pop() ?? `plot.${plotFormat}`;
+          link.click();
+        }
+      }
     } catch (error) {
       setPlotNote(error instanceof Error ? error.message : "Plot failed.");
     } finally {
@@ -3996,7 +4069,22 @@ export default function Viewer({
             Export Rerun
           </button>
         </div>
-        <p className="muted">{exportNote || plotNote || "Sequence, still, bird's-eye, camera overlay, and Rerun use the current sample and layers."}</p>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", marginTop: "0.8rem" }}>
+          <p className="muted" style={{ margin: 0 }}>
+            {exportNote || plotNote || "Sequence, still, bird's-eye, camera overlay, and Rerun use the current sample and layers."}
+          </p>
+          {lastSavedPath && isDesktop && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void revealInFinder(lastSavedPath)}
+              style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+              aria-label="Show exported file in Finder"
+            >
+              Show in Finder
+            </button>
+          )}
+        </div>
         {plotUrl ? <img className="plot-preview" src={plotUrl} alt={plotAlt} /> : null}
       </ExportDialog>
     </div>
