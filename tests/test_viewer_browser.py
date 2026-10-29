@@ -946,7 +946,8 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
     empty_inspector.wait_for(state="visible", timeout=10000)
     title = (empty_inspector.locator(".panel-state-title").text_content() or "").strip()
     desc = (empty_inspector.locator(".panel-state-description").text_content() or "").strip()
-    assert empty_inspector.locator(".panel-state-action").count() == 0, "No dead action on empty inspector"
+    btn_count = empty_inspector.locator(".panel-state-action").count()
+    assert btn_count == 0, "No dead action on empty inspector"
 
     assert title == "No object selected", f"Unexpected empty state title: {title}"
     assert desc.endswith("."), f"Description must be a sentence ending with period: {desc}"
