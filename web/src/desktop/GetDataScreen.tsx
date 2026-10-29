@@ -280,8 +280,6 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
           kind="loading"
           title={PANEL_DEFINITIONS.get_data.loading.title}
           description={PANEL_DEFINITIONS.get_data.loading.description}
-          actionLabel={PANEL_DEFINITIONS.get_data.loading.actionLabel}
-          onAction={() => void loadCatalog()}
         />
       )}
 

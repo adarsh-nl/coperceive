@@ -118,8 +118,6 @@ export default function PredictionsBlock({
           kind="loading"
           title={PANEL_DEFINITIONS.predictions.loading.title}
           description={PANEL_DEFINITIONS.predictions.loading.description}
-          actionLabel={PANEL_DEFINITIONS.predictions.loading.actionLabel}
-          onAction={() => {}}
         />
       ) : null}
       {runs !== null && runs.length === 0 ? (
@@ -146,13 +144,10 @@ export default function PredictionsBlock({
           {run && !run.evaluated ? (
             <PanelState
               compact
-              kind="error"
+              kind="empty"
+              icon="ℹ️"
               title={PANEL_DEFINITIONS.predictions.error.title}
               description={PANEL_DEFINITIONS.predictions.error.description}
-              actionLabel={PANEL_DEFINITIONS.predictions.error.actionLabel}
-              onAction={() => {
-                window.location.hash = "#/connect";
-              }}
             />
           ) : null}
           {run?.evaluated ? (

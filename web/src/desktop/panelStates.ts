@@ -6,7 +6,7 @@ export interface PanelStateDef {
   kind: PanelStateKind;
   title: string;
   description: string;
-  actionLabel: string;
+  actionLabel?: string;
 }
 
 export type PanelId =
@@ -37,7 +37,7 @@ export const PANEL_DEFINITIONS: Record<PanelId, Record<PanelStateKind, PanelStat
       kind: "error",
       title: "Connection failed",
       description: "Unable to start the local service with the chosen folder.",
-      actionLabel: "Choose another folder",
+      actionLabel: "Choose Another Folder",
     },
   },
   library: {
@@ -51,7 +51,6 @@ export const PANEL_DEFINITIONS: Record<PanelId, Record<PanelStateKind, PanelStat
       kind: "loading",
       title: "Loading library scenes",
       description: "Scanning stored datasets and validating scene records.",
-      actionLabel: "Refresh",
     },
     error: {
       kind: "error",
@@ -70,14 +69,13 @@ export const PANEL_DEFINITIONS: Record<PanelId, Record<PanelStateKind, PanelStat
     loading: {
       kind: "loading",
       title: "Loading dataset catalog",
-      description: "Fetching the latest benchmark datasets and presets from the repository.",
-      actionLabel: "Reload Catalog",
+      description: "Reading datasets and presets from the bundled catalog file.",
     },
     error: {
       kind: "error",
       title: "Failed to load catalog",
-      description: "Unable to retrieve the dataset catalog from the server.",
-      actionLabel: "Try Again",
+      description: "Could not read the bundled dataset catalog file.",
+      actionLabel: "Retry",
     },
   },
   inspector: {
@@ -85,13 +83,11 @@ export const PANEL_DEFINITIONS: Record<PanelId, Record<PanelStateKind, PanelStat
       kind: "empty",
       title: "No object selected",
       description: "Select an agent or bounding box to inspect properties and distances.",
-      actionLabel: "Reset Selection",
     },
     loading: {
       kind: "loading",
       title: "Loading object details",
-      description: "Computing relative velocity and cross-agent distances.",
-      actionLabel: "Cancel",
+      description: "Retrieving object properties from the frame.",
     },
     error: {
       kind: "error",
@@ -111,13 +107,12 @@ export const PANEL_DEFINITIONS: Record<PanelId, Record<PanelStateKind, PanelStat
       kind: "loading",
       title: "Loading camera feeds",
       description: "Retrieving camera sensor frustums and sample frames.",
-      actionLabel: "Reload",
     },
     error: {
       kind: "error",
       title: "Camera feed unavailable",
-      description: "Unable to decode image frames for the active camera sensors.",
-      actionLabel: "Retry",
+      description: "No camera image files are present for this scene in the current dataset root.",
+      actionLabel: "Hide Strip",
     },
   },
   telemetry: {
@@ -130,8 +125,7 @@ export const PANEL_DEFINITIONS: Record<PanelId, Record<PanelStateKind, PanelStat
     loading: {
       kind: "loading",
       title: "Loading telemetry",
-      description: "Calculating agent velocities, headings, and lidar returns.",
-      actionLabel: "Refresh",
+      description: "Reading agent poses and trajectory records from the scene.",
     },
     error: {
       kind: "error",
@@ -151,13 +145,11 @@ export const PANEL_DEFINITIONS: Record<PanelId, Record<PanelStateKind, PanelStat
       kind: "loading",
       title: "Loading prediction runs",
       description: "Scanning for cooperative perception evaluations and model outputs.",
-      actionLabel: "Refresh",
     },
     error: {
-      kind: "error",
+      kind: "empty",
       title: "Unevaluated predictions",
-      description: "Prediction boxes were imported but have not been evaluated against ground truth.",
-      actionLabel: "Evaluate Now",
+      description: "Prediction boxes were imported without ground truth evaluation metrics.",
     },
   },
   hpc_workspace: {
@@ -171,13 +163,12 @@ export const PANEL_DEFINITIONS: Record<PanelId, Record<PanelStateKind, PanelStat
       kind: "loading",
       title: "Loading server profiles",
       description: "Reading configured remote HPC clusters and connection profiles.",
-      actionLabel: "Refresh",
     },
     error: {
       kind: "error",
       title: "Failed to load servers",
       description: "Could not read saved server profiles from local storage.",
-      actionLabel: "Try Again",
+      actionLabel: "Retry",
     },
   },
 };

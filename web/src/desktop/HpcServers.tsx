@@ -343,8 +343,6 @@ export default function HpcServers() {
           kind="loading"
           title={PANEL_DEFINITIONS.hpc_workspace.loading.title}
           description={PANEL_DEFINITIONS.hpc_workspace.loading.description}
-          actionLabel={PANEL_DEFINITIONS.hpc_workspace.loading.actionLabel}
-          onAction={() => void refreshServers()}
         />
       ) : null}
 

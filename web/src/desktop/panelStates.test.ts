@@ -52,11 +52,16 @@ test("every panel has empty, loading, and error states conforming to requirement
       const periods = desc.split(".").filter((s) => s.trim().length > 0);
       assert.strictEqual(periods.length, 1, `${panelId}.${kind} description must be exactly 1 sentence, got: "${desc}"`);
 
-      // 3. Exactly 1 action button
-      assert.ok(state.actionLabel.trim().length > 0, `${panelId}.${kind} must have an action button label`);
+      // 3. Action button: if present, must be non-empty; loading states must only use Cancel if present
+      if (state.actionLabel) {
+        assert.ok(state.actionLabel.trim().length > 0, `${panelId}.${kind} actionLabel must be non-empty`);
+        if (kind === "loading") {
+          assert.strictEqual(state.actionLabel, "Cancel", `${panelId}.loading action should only be Cancel`);
+        }
+      }
 
       // 4. No CLI jargon
-      const fullText = `${state.title} ${state.description} ${state.actionLabel}`;
+      const fullText = `${state.title} ${state.description} ${state.actionLabel ?? ""}`;
       for (const pattern of CLI_JARGON_PATTERNS) {
         assert.ok(
           !pattern.test(fullText),

@@ -58,6 +58,13 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     window.addEventListener("coperceive-test-import", applyTestImport);
 
     const handleTestPanelState = (event: Event) => {
+      if (
+        typeof window !== "undefined" &&
+        !window.__COPERCEIVE_TEST_ENV__ &&
+        import.meta.env.MODE !== "test"
+      ) {
+        return;
+      }
       const custom = event as CustomEvent<{ busy?: boolean; error?: string; tab?: TabMode }>;
       if (typeof custom.detail?.busy === "boolean") setBusy(custom.detail.busy);
       if (typeof custom.detail?.error === "string") setError(custom.detail.error);

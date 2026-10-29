@@ -253,8 +253,6 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
           kind="loading"
           title={PANEL_DEFINITIONS.library.loading.title}
           description={PANEL_DEFINITIONS.library.loading.description}
-          actionLabel={PANEL_DEFINITIONS.library.loading.actionLabel}
-          onAction={() => void loadData()}
         />
       )}
       {!loading && loadError && (

@@ -993,7 +993,7 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
     assert err_desc.endswith("."), f"Error description must be a sentence: {err_desc}"
     err_sentences = [s for s in err_desc.split(".") if s.strip()]
     assert len(err_sentences) == 1, f"Expected 1 sentence: {err_desc}"
-    assert err_action == "Choose another folder", f"Unexpected error action button: {err_action}"
+    assert err_action == "Choose Another Folder", f"Unexpected error action button: {err_action}"
     assert "bash" not in (err_title + err_desc + err_action).lower(), "No CLI jargon permitted"
 
     session.page.screenshot(path=str(shots / "panel-states.png"))

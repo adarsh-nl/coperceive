@@ -354,10 +354,6 @@ export function Inspector({
           kind="empty"
           title={PANEL_DEFINITIONS.inspector.empty.title}
           description={PANEL_DEFINITIONS.inspector.empty.description}
-          actionLabel={PANEL_DEFINITIONS.inspector.empty.actionLabel}
-          onAction={() => {
-            // No-op or clear selection
-          }}
         />
       ) : null}
       {!evalPick && current && frame ? (
