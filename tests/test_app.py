@@ -459,6 +459,22 @@ def test_plot_routes_require_the_csrf_header_and_write_svg(tmp_path: Path) -> No
     assert (tmp_path / saved["path"]).is_file()
 
 
+def test_missing_viewer_bundle_shows_a_build_hint(tmp_path: Path) -> None:
+    """A checkout without a built viewer explains how to build it instead of 404ing."""
+    root = tmp_path / "root"
+    root.mkdir()
+    static = tmp_path / "empty-static"
+    static.mkdir()
+    app = create_app(root=root, token=None, static=static)
+    client = TestClient(app)
+    page = client.get("/")
+    assert page.status_code == 200
+    text = page.text
+    assert "viewer isn’t built in this checkout" in text
+    assert "bash scripts/build_web_static.sh" in text
+    assert client.get("/api/health").status_code == 200
+
+
 def test_map_http_and_favicon(tmp_path: Path) -> None:
     xodr = tmp_path / "Town03.xodr"
     _straight(xodr)
@@ -472,7 +488,14 @@ def test_map_http_and_favicon(tmp_path: Path) -> None:
     scenes = tmp_path / "scenes"
     _scene_on_lane(scenes)
     (scenes / "Town03-000" / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
-    app = create_app(root=scenes, token=None, maps=maps)
+    # The viewer bundle is built, not committed; this test needs the favicon the
+    # server serves from the static directory, so give it a minimal one.
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "favicon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n', encoding="utf-8"
+    )
+    app = create_app(root=scenes, token=None, maps=maps, static=static)
     client = TestClient(app)
     summary = client.get("/api/scenes/Town03-000/map")
     assert summary.status_code == 200

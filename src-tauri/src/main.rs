@@ -1584,6 +1584,15 @@ async fn remote_connect(
             .into_iter()
             .find(|entry| entry.id == id)
     });
+    // The HPC checkout no longer ships coperceive/app/static (it is built, not
+    // committed). Upload this app's built viewer to a per-version cache dir on
+    // the login home and point the remote server at it; no Node on the login node.
+    let static_dir = coperceive_desktop::remote_static::prepare_remote_static(
+        &alias,
+        env!("CARGO_PKG_VERSION"),
+    )
+    .map_err(|error| format!("Could not prepare the remote viewer page: {error}"))?;
+
     let options = RemoteStartOptions {
         data_root: data_root.clone(),
         partition: profile
@@ -1602,6 +1611,7 @@ async fn remote_connect(
             .as_ref()
             .and_then(|p| p.profile.environment.interpreter.clone()),
         uuid: uuid.clone(),
+        static_dir: Some(static_dir),
     };
 
     let mgr = RemoteSessionManager::connect_with_options(&alias, &options, None)

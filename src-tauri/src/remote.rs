@@ -179,6 +179,8 @@ pub struct RemoteStartOptions {
     pub mem: Option<String>,
     pub python: Option<String>,
     pub uuid: Option<String>,
+    /// Remote `coperceive/app/static` cache dir, uploaded before the session.
+    pub static_dir: Option<String>,
 }
 
 impl RemoteClient {
@@ -259,6 +261,13 @@ impl RemoteClient {
         }
         if let Some(u) = options.uuid.as_deref().filter(|u| !u.trim().is_empty()) {
             args.extend(["--uuid".to_string(), u.to_string()]);
+        }
+        if let Some(static_dir) = options
+            .static_dir
+            .as_deref()
+            .filter(|dir| !dir.trim().is_empty())
+        {
+            args.extend(["--static".to_string(), static_dir.to_string()]);
         }
 
         let stdout = self.run_remote_cmd(&args)?;
@@ -633,6 +642,34 @@ exit 1
         fn drop(&mut self) {
             let _ = fs::remove_file(&self.path);
         }
+    }
+
+    #[test]
+    fn remote_start_passes_the_uploaded_static_directory() {
+        let fake = FakeSshScript::create();
+        let log = std::env::temp_dir().join(format!(
+            "coperceive_remote_start_static_{}_{}.log",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        std::env::set_var("FAKE_SSH_LOG", &log);
+        let client = RemoteClient::with_ssh_bin("hpc-alias", fake.path.to_str().unwrap());
+        let options = RemoteStartOptions {
+            data_root: "/path/to/scenes".to_string(),
+            static_dir: Some("~/.cache/coperceive/static/0.1.0".to_string()),
+            ..Default::default()
+        };
+        client.start_with_options(&options).expect("start");
+        std::env::remove_var("FAKE_SSH_LOG");
+        let logged = fs::read_to_string(&log).expect("read log");
+        assert!(
+            logged.contains("--static") && logged.contains("~/.cache/coperceive/static/0.1.0"),
+            "the remote start must carry the uploaded viewer directory: {logged}"
+        );
+        let _ = fs::remove_file(&log);
     }
 
     #[test]

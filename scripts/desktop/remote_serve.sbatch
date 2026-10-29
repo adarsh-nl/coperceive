@@ -92,6 +92,19 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT EXIT
 
+# The desktop app uploads its built viewer bundle to a per-version cache dir
+# under the login home (shared with compute nodes on this cluster) and passes it
+# as COPERCEIVE_REMOTE_STATIC; serve it so Remote mode has a page without Node
+# or a build on the login node.
+STATIC_ARGS=()
+if [ -n "${COPERCEIVE_REMOTE_STATIC:-}" ]; then
+    if [ ! -f "${COPERCEIVE_REMOTE_STATIC}/index.html" ]; then
+        echo "Remote viewer page missing at ${COPERCEIVE_REMOTE_STATIC}" >&2
+        exit 1
+    fi
+    STATIC_ARGS=(--static "${COPERCEIVE_REMOTE_STATIC}")
+fi
+
 # Launch server binding to cluster IP with token-file
 # Note: Token is in a 0600 file and NEVER on argv
 "${PYTHON_BIN}" -m coperceive serve \
@@ -99,6 +112,7 @@ trap cleanup SIGTERM SIGINT EXIT
     --port "${PORT}" \
     --token-file "${TOKEN_FILE}" \
     --root "${DATA_ROOT}" \
+    ${STATIC_ARGS[@]+"${STATIC_ARGS[@]}"} \
     ${COPERCEIVE_EXTRA_ARGS:-} &
 SERVE_PID=$!
 

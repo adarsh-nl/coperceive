@@ -113,6 +113,86 @@ def test_remote_start_with_fake_sbatch(tmp_path: Path, monkeypatch: pytest.Monke
     assert len(res["token"]) == 32
 
 
+def test_remote_start_uploads_static_dir_via_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The desktop uploads its viewer page; the server must receive that dir."""
+    coperceive_dir = tmp_path / ".coperceive"
+    monkeypatch.setattr("coperceive.remote.manager.get_base_dir", lambda: coperceive_dir)
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_sessions_dir", lambda: coperceive_dir / "sessions"
+    )
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_tokens_dir", lambda: coperceive_dir / "tokens"
+    )
+    monkeypatch.setattr("coperceive.remote.manager.get_logs_dir", lambda: coperceive_dir / "logs")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    fake_sbatch_script = tmp_path / "fake.sbatch"
+    fake_sbatch_script.touch()
+    static_dir = tmp_path / "remote-static"
+    static_dir.mkdir()
+
+    # Without a built page the desktop app would leave Remote mode with a 404;
+    # refuse before submitting anything.
+    missing = start_session(
+        data_root=data_dir,
+        partition="test-partition",
+        sbatch_script=fake_sbatch_script,
+        static_dir=static_dir,
+        wait_timeout=1,
+    )
+    assert missing["status"] == "error"
+    assert "no index.html" in missing["error"]
+
+    (static_dir / "index.html").write_text('<script src="./a.js"></script>\n', encoding="utf-8")
+    (static_dir / "a.js").write_text("console.log('viewer')\n", encoding="utf-8")
+    captured: dict[str, str] = {}
+
+    def fake_subprocess_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "sbatch" or cmd[0].endswith("sbatch"):
+            captured.update(kwargs.get("env", {}))
+            return subprocess.CompletedProcess(cmd, 0, stdout="778899\n", stderr="")
+        if cmd[0] == "squeue":
+            return subprocess.CompletedProcess(cmd, 0, stdout="RUNNING|None\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    uuid_test = "test-static-uuid"
+    session_file = coperceive_dir / "sessions" / f"{uuid_test}.json"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                "uuid": uuid_test,
+                "job_id": 778899,
+                "node": "hpc-node11",
+                "ip": "10.20.240.48",
+                "port": 8731,
+                "pid": 5544,
+                "started_at": 1700000000,
+                "data_root": str(data_dir),
+                "token_file": str(coperceive_dir / "tokens" / f"{uuid_test}.token"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr("shutil.which", lambda prog: f"/usr/bin/{prog}")
+    monkeypatch.setattr(
+        "coperceive.remote.manager.probe_health", lambda ip, port, token, timeout: True
+    )
+    res = start_session(
+        data_root=data_dir,
+        partition="test-partition",
+        session_uuid=uuid_test,
+        sbatch_script=fake_sbatch_script,
+        static_dir=static_dir,
+        wait_timeout=2,
+    )
+    assert res["status"] == "running"
+    assert captured.get("COPERCEIVE_REMOTE_STATIC") == str(static_dir.resolve())
+
+
 def test_remote_start_pending_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     coperceive_dir = tmp_path / ".coperceive"
     monkeypatch.setattr("coperceive.remote.manager.get_base_dir", lambda: coperceive_dir)
