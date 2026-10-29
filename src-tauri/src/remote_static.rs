@@ -185,6 +185,20 @@ fn run_ssh(
     Ok(result.stdout)
 }
 
+/// Confirms the remote cache still has every file the manifest lists (same size).
+/// A manifest match alone would trust a deleted/corrupted directory.
+fn verify_remote_cache(runner: &dyn RemoteRunner, version: &str) -> Result<(), String> {
+    let command = format!(
+        "# coperceive-static-verify\nset -e\ncd \"$HOME/{STATIC_REL}/{version}\"\n\
+         while read -r _hash size rel; do\n\
+         \x20 [ -n \"$rel\" ] || continue\n\
+         \x20 [ -f \"$rel\" ] || exit 1\n\
+         \x20 [ \"$(wc -c < \"$rel\")\" -eq \"$size\" ] || exit 1\n\
+         done < {MANIFEST_NAME}\n"
+    );
+    run_ssh(runner, &command, None).map(|_| ())
+}
+
 fn fetch_remote_manifest(
     alias: &str,
     remote_rel: &str,
@@ -262,11 +276,13 @@ fn prepare_remote_static_with(
     ));
     let existing = fetch_remote_manifest(alias, &remote_rel, &temporary, scp)?;
     let _ = fs::remove_file(&temporary);
-    if existing.as_deref() == Some(manifest.as_str()) {
+    let runner = SshRunner::new(ssh, SshTarget::alias(alias));
+    if existing.as_deref() == Some(manifest.as_str())
+        && verify_remote_cache(&runner, &version).is_ok()
+    {
         return Ok(remote_display);
     }
 
-    let runner = SshRunner::new(ssh, SshTarget::alias(alias));
     let version_quoted = shell_quote(&version);
     let mkdir = format!(
         "sh -c 'mkdir -p -- \"$HOME/{STATIC_REL}/$1\"' sh {version_quoted}"
@@ -311,6 +327,10 @@ remote="${{!#}}"
 printf '%s\n' "$remote" >> "{log}"
 version="${{remote##* }}"; version="${{version#\'}}"; version="${{version%\'}}"
 case "$remote" in
+  *"coperceive-static-verify"*)
+      HOME="{root}/home" bash -c "$remote"
+      exit $?
+      ;;
   *"mkdir -p -- \"\$HOME/.cache/coperceive/static/\$1\""*)
       mkdir -p "{root}/home/.cache/coperceive/static/$version"
       exit 0
@@ -393,7 +413,7 @@ esac
             .expect("second start");
         assert_eq!(second, first);
         assert_eq!(uploads(&scp_log), 1, "a complete cache is not uploaded again");
-        assert_eq!(ssh_writes(&ssh_log), 2, "a complete cache needs no ssh writes");
+        assert_eq!(ssh_writes(&ssh_log), 3, "only the cache verification runs");
         let _ = fs::remove_dir_all(&root);
     }
 
@@ -403,10 +423,10 @@ esac
         prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
             .expect("upload");
         let cached = remote.join("home/.cache/coperceive/static/0.1.0");
-        fs::write(cached.join("assets/app.js"), "console.log('stale')\n").expect("stale");
+        fs::remove_file(cached.join("assets/app.js")).expect("remove asset");
         prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
             .expect("re-upload");
-        assert_eq!(uploads(&scp_log), 2, "a stale cache is uploaded again");
+        assert_eq!(uploads(&scp_log), 2, "an incomplete cache is uploaded again");
         let current = fs::read_to_string(cached.join("assets/app.js")).expect("js");
         assert!(current.contains("viewer"), "{current}");
         let _ = fs::remove_dir_all(&root);
