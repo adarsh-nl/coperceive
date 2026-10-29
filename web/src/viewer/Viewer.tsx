@@ -1391,6 +1391,20 @@ export default function Viewer({
   const [runList, setRunList] = useState<{ sceneId: string; runs: RunInfo[]; note: string } | null>(null);
   const [runId, setRunId] = useState("");
   const [compareId, setCompareId] = useState("");
+  // "Open predictions" links to #/viewer?predictions=<run_id>; keep the wanted run
+  // until the scene's run list contains it, then select it once.
+  const wantedPredictionRunRef = useRef<string>(
+    (() => {
+      try {
+        const hash = window.location.hash;
+        const queryAt = hash.indexOf("?");
+        if (queryAt < 0) return "";
+        return new URLSearchParams(hash.slice(queryAt + 1)).get("predictions") ?? "";
+      } catch {
+        return "";
+      }
+    })(),
+  );
   const [outputChoice, setOutputChoice] = useState("");
   const [hiddenSources, setHiddenSources] = useState<ReadonlySet<string>>(() => new Set());
   const [hiddenStatuses, setHiddenStatuses] = useState<ReadonlySet<StatusChip>>(() => new Set());
@@ -2631,11 +2645,16 @@ export default function Viewer({
         return;
       }
       setRunList({ sceneId, runs: body.runs, note: body.runs.length === 0 ? "no prediction runs for this scene." : "" });
-      setRunId((current) =>
-        body.runs.some((item) => item.run_id === current)
+      setRunId((current) => {
+        const wanted = wantedPredictionRunRef.current;
+        if (wanted && body.runs.some((item) => item.run_id === wanted)) {
+          wantedPredictionRunRef.current = "";
+          return wanted;
+        }
+        return body.runs.some((item) => item.run_id === current)
           ? current
-          : ((body.runs.find((item) => item.evaluated) ?? body.runs[0])?.run_id ?? ""),
-      );
+          : ((body.runs.find((item) => item.evaluated) ?? body.runs[0])?.run_id ?? "");
+      });
       setCompareId((current) => (body.runs.some((item) => item.run_id === current && item.evaluated) ? current : ""));
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) {

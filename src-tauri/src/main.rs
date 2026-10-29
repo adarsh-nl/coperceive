@@ -35,6 +35,10 @@ use coperceive_desktop::job_watch::{
     self as job_watch, JobCancelResult, JobLogTail, JobWatchStatus,
 };
 #[cfg(target_os = "macos")]
+use coperceive_desktop::job_report::{
+    self as job_report, ImportedPredictions, MetricsReport, PredictionTail,
+};
+#[cfg(target_os = "macos")]
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{
@@ -221,6 +225,7 @@ fn open_viewer_window(
     data_root: &str,
     ctrl_port: u16,
     state: &AppState,
+    query: Option<&str>,
 ) -> Result<(), String> {
     use tauri::Manager;
 
@@ -232,7 +237,11 @@ fn open_viewer_window(
         *lock = Some(origin.to_string());
     }
 
-    let viewer_url_str = format!("{}/#/viewer", origin);
+    let hash = match query {
+        Some(query) if !query.is_empty() => format!("{}/#/viewer?{}", origin, query),
+        _ => format!("{}/#/viewer", origin),
+    };
+    let viewer_url_str = hash;
     let parsed_url: tauri::Url = viewer_url_str
         .parse()
         .map_err(|e| format!("Failed to parse viewer URL '{}': {}", viewer_url_str, e))?;
@@ -923,7 +932,7 @@ async fn start_local_session(
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
 
     // Open viewer window at session.origin with initialization_script
-    if let Err(e) = open_viewer_window(app, &origin, &token, &data_root, ctrl_port, state) {
+    if let Err(e) = open_viewer_window(app, &origin, &token, &data_root, ctrl_port, state, None) {
         session.preserve_log = true;
         let _ = session.stop();
         return Err(e);
@@ -1796,6 +1805,98 @@ async fn cancel_run_job(
     .map_err(|error| format!("Could not cancel the job: {error}"))?
 }
 
+/// One bounded read of the streamed predictions file for a saved run plan.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn prediction_stream(
+    profile_id: String,
+    plan_id: String,
+    offset: u64,
+    max_bytes: Option<u64>,
+) -> Result<PredictionTail, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+        job_report::tail_predictions(
+            &runner,
+            &entry.profile,
+            &plan.output_dir,
+            offset,
+            max_bytes.unwrap_or(65536),
+        )
+    })
+    .await
+    .map_err(|error| format!("Could not read the prediction stream: {error}"))?
+}
+
+/// The pipeline's own final metrics report, once it exists.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn run_metrics(
+    profile_id: String,
+    plan_id: String,
+) -> Result<Option<MetricsReport>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+        job_report::read_metrics(&runner, &entry.profile, &plan.output_dir)
+    })
+    .await
+    .map_err(|error| format!("Could not read the metrics report: {error}"))?
+}
+
+/// Imports the run's predictions as a stored run and opens the viewer on it.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn open_predictions(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    profile_id: String,
+    plan_id: String,
+) -> Result<ImportedPredictions, String> {
+    // The remote session owns the data root the viewer/server are using; copy
+    // what the blocking import needs, then open the window on this thread.
+    let (origin, token, data_root) = {
+        let lock = state.remote.lock().map_err(|e| e.to_string())?;
+        let mgr = lock.as_ref().ok_or_else(|| {
+            "Open predictions needs an active remote session; connect to the server first."
+                .to_string()
+        })?;
+        (mgr.origin(), mgr.token.clone(), mgr.data_root.clone())
+    };
+    let ctrl_port = state.ctrl_port.lock().ok().and_then(|port| *port).unwrap_or(0);
+    let import_root = data_root.clone();
+    let imported = tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+        job_report::import_predictions(
+            &runner,
+            &entry.profile,
+            &plan_id,
+            &plan.output_dir,
+            &import_root,
+        )
+    })
+    .await
+    .map_err(|error| format!("Could not import the predictions: {error}"))??;
+    let mut imported = imported;
+    imported.url = format!("{}/#/viewer?predictions={}", origin, imported.run_id);
+    let query = format!("predictions={}", imported.run_id);
+    open_viewer_window(
+        &app,
+        &origin,
+        &token,
+        &data_root,
+        ctrl_port,
+        state.inner(),
+        Some(&query),
+    )?;
+    Ok(imported)
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
@@ -1864,7 +1965,7 @@ async fn remote_connect(
     let token = mgr.token.clone();
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
 
-    open_viewer_window(&app, &origin, &token, &data_root, ctrl_port, state.inner())?;
+    open_viewer_window(&app, &origin, &token, &data_root, ctrl_port, state.inner(), None)?;
 
     let payload = SessionPayload {
         origin,
@@ -2057,6 +2158,9 @@ fn main() {
             job_watch_status,
             job_watch_logs,
             cancel_run_job,
+            prediction_stream,
+            run_metrics,
+            open_predictions,
             remote_connect,
             remote_status,
             remote_disconnect,
@@ -2308,6 +2412,55 @@ fn main() {
                                     confirmed,
                                 )?;
                                 Ok(serde_json::json!({"ok": true, "cancel": cancelled}))
+                            }
+                            "tail" => {
+                                let plan =
+                                    job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+                                let offset = payload
+                                    .get("offset")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(0);
+                                let tail = job_report::tail_predictions(
+                                    &runner,
+                                    &entry.profile,
+                                    &plan.output_dir,
+                                    offset,
+                                    payload
+                                        .get("max_bytes")
+                                        .and_then(serde_json::Value::as_u64)
+                                        .unwrap_or(65536),
+                                )?;
+                                Ok(serde_json::json!({"ok": true, "tail": tail}))
+                            }
+                            "metrics" => {
+                                let plan =
+                                    job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+                                let metrics = job_report::read_metrics(
+                                    &runner,
+                                    &entry.profile,
+                                    &plan.output_dir,
+                                )?;
+                                Ok(serde_json::json!({"ok": true, "metrics": metrics}))
+                            }
+                            "import" => {
+                                let plan =
+                                    job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+                                let data_root = payload
+                                    .get("data_root")
+                                    .and_then(serde_json::Value::as_str)
+                                    .map(str::to_string)
+                                    .or_else(|| entry.profile.data_roots.first().cloned())
+                                    .ok_or_else(|| {
+                                        "The profile has no data root to import into.".to_string()
+                                    })?;
+                                let imported = job_report::import_predictions(
+                                    &runner,
+                                    &entry.profile,
+                                    &plan_id,
+                                    &plan.output_dir,
+                                    &data_root,
+                                )?;
+                                Ok(serde_json::json!({"ok": true, "imported": imported}))
                             }
                             other => Err(format!("Unknown watch action {other:?}.")),
                         }

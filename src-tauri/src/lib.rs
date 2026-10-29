@@ -9,6 +9,7 @@ pub mod detect;
 pub mod export;
 pub mod hpc;
 pub mod job_submit;
+pub mod job_report;
 pub mod job_watch;
 pub mod library;
 pub mod pack;

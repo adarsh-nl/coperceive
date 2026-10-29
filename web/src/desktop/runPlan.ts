@@ -324,3 +324,95 @@ export function jobWatchLabel(status: JobWatchStatus): string {
 export function shouldPollJob(state: string | null): boolean {
   return state !== null && isJobActive(state);
 }
+
+/** Latest progress counters from the pipeline's `{"type":"progress"}` lines. */
+export interface PredictionProgress {
+  scenes_done: number | null;
+  scenes_total: number | null;
+  frames_done: number | null;
+  frames_total: number | null;
+}
+
+export interface LatestPrediction {
+  agent_id: string;
+  source: string;
+  time_us: number;
+}
+
+export interface PredictionSourceCount {
+  source: string;
+  boxes: number;
+}
+
+/** One bounded read of the streamed predictions file. */
+export interface PredictionTail {
+  offset: number;
+  size: number;
+  boxes: number;
+  sources: PredictionSourceCount[];
+  progress: PredictionProgress | null;
+  idle: boolean;
+  latest: LatestPrediction | null;
+}
+
+/** The pipeline's own final report (docs/spec/pipeline-output.md). */
+export interface MetricsReport {
+  run: unknown;
+  outputs: unknown;
+  metrics: unknown;
+  notes: string | null;
+  raw: string;
+}
+
+/** What `Open predictions` imported and the viewer link it opens. */
+export interface ImportedPredictions {
+  run_id: string;
+  scenes: string[];
+  predictions_root: string;
+  url: string;
+}
+
+export function progressLabel(progress: PredictionProgress | null): string {
+  if (!progress) return "";
+  const parts: string[] = [];
+  if (progress.scenes_done !== null || progress.scenes_total !== null) {
+    parts.push(`scenes ${progress.scenes_done ?? 0}/${progress.scenes_total ?? "?"}`);
+  }
+  if (progress.frames_done !== null || progress.frames_total !== null) {
+    parts.push(`frames ${progress.frames_done ?? 0}/${progress.frames_total ?? "?"}`);
+  }
+  return parts.join(" · ");
+}
+
+/** Flatten the pipeline report's free-form metrics/outputs into table rows. */
+export function metricsRows(report: MetricsReport): { label: string; value: string }[] {
+  const rows: { label: string; value: string }[] = [];
+  const run = report.run;
+  if (run && typeof run === "object") {
+    for (const key of ["model", "checkpoint"]) {
+      const value = (run as Record<string, unknown>)[key];
+      if (typeof value === "string" && value) rows.push({ label: key, value });
+    }
+  }
+  if (report.metrics && typeof report.metrics === "object") {
+    for (const [key, value] of Object.entries(report.metrics as Record<string, unknown>)) {
+      rows.push({ label: key, value: typeof value === "string" ? value : String(value) });
+    }
+  }
+  if (Array.isArray(report.outputs)) {
+    for (const output of report.outputs) {
+      if (!output || typeof output !== "object") continue;
+      const item = output as Record<string, unknown>;
+      const source = typeof item.source === "string" ? item.source : "output";
+      const agent = typeof item.agent_id === "string" ? item.agent_id : "?";
+      const boxes = typeof item.boxes === "number" ? item.boxes : "?";
+      rows.push({ label: `${agent}/${source}`, value: `${boxes} boxes` });
+    }
+  }
+  return rows;
+}
+
+/** The single next action shown after a failed run. */
+export function failureNextAction(): string {
+  return "Open the stderr tail above, fix the reported cause (checkpoint, environment, or split), then submit a new run from this plan.";
+}
