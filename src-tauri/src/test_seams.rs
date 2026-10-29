@@ -325,5 +325,4 @@ mod tests {
         // The parent test process does not set test mode, so the seam is inert.
         assert!(hpc_probe_request().is_none());
     }
-
 }

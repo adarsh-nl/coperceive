@@ -23,6 +23,9 @@ pub const MAX_BODY_SIZE: usize = 65536;
 pub const OPEN_DIALOG_RATE_LIMIT: Duration = Duration::from_millis(1000);
 
 pub type EvalSender = std::sync::mpsc::Sender<serde_json::Value>;
+pub type ExportPicker = Arc<dyn Fn(&str, &str) -> Result<Option<String>, String> + Send + Sync>;
+pub type ExportSaver = Arc<dyn Fn(Option<&str>, Option<&[u8]>) -> Result<String, String> + Send + Sync>;
+pub type FinderRevealer = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
 
 /// Configuration for the loopback controller.
 #[derive(Clone)]
@@ -35,6 +38,9 @@ pub struct ControllerConfig {
     pub eval_counter: Arc<Mutex<u64>>,
     pub eval_dispatcher: Option<Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>>,
     pub window_closer: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    pub export_picker: Option<ExportPicker>,
+    pub export_saver: Option<ExportSaver>,
+    pub finder_revealer: Option<FinderRevealer>,
 }
 
 impl ControllerConfig {
@@ -48,6 +54,9 @@ impl ControllerConfig {
             eval_counter: Arc::new(Mutex::new(0)),
             eval_dispatcher: None,
             window_closer: None,
+            export_picker: None,
+            export_saver: None,
+            finder_revealer: None,
         }
     }
 
@@ -65,6 +74,7 @@ fn read_request_body<R: Read, W: Write>(
     header_buf: &[u8],
     header_pos: usize,
     cors_origin: Option<&str>,
+    max_size: usize,
 ) -> Result<Option<Vec<u8>>, std::io::Error> {
     let content_type = headers.get("content-type").cloned().unwrap_or_default();
     if !content_type.starts_with("application/json") {
@@ -92,13 +102,13 @@ fn read_request_body<R: Read, W: Write>(
         }
     };
 
-    if content_len > MAX_BODY_SIZE {
+    if content_len > max_size {
         write_response(
             writer,
             413,
             "Payload Too Large",
             cors_origin,
-            b"Payload exceeds 64 KB limit",
+            b"Payload exceeds allowed size limit",
         )?;
         return Ok(None);
     }
@@ -295,7 +305,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
     }
 
     if method == "POST" && path == "/eval-result" {
-        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
             Some(b) => b,
             None => return Ok(()),
         };
@@ -311,7 +321,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
     }
 
     if method == "POST" && path == "/eval" {
-        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
             Some(b) => b,
             None => return Ok(()),
         };
@@ -387,7 +397,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
     }
 
     if method == "POST" && path == "/state" {
-        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
             Some(b) => b,
             None => return Ok(()),
         };
@@ -459,6 +469,149 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         }
 
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/export-pick" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let val: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => {
+                write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"Invalid JSON\"}")?;
+                return Ok(());
+            }
+        };
+        let default_name = val.get("default_name").and_then(|v| v.as_str()).unwrap_or("export");
+        let extension = val.get("extension").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(ref picker) = config.export_picker {
+            match picker(default_name, extension) {
+                Ok(chosen_path) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "ok",
+                        "path": chosen_path
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), &resp)?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No export picker registered\"}")?;
+        }
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/export-save" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), 15 * 1024 * 1024)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let val: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => {
+                write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"Invalid JSON\"}")?;
+                return Ok(());
+            }
+        };
+        let source_relative = val.get("source_relative").and_then(|v| v.as_str());
+        let bytes_vec = if let Some(bytes_val) = val.get("bytes") {
+            let arr = match bytes_val.as_array() {
+                Some(a) => a,
+                None => {
+                    write_json_response(
+                        writer,
+                        400,
+                        "Bad Request",
+                        cors_origin.as_deref(),
+                        b"{\"status\":\"error\",\"error\":\"Field 'bytes' must be an array of integers\"}",
+                    )?;
+                    return Ok(());
+                }
+            };
+            if arr.len() > crate::export::MAX_EXPORT_BYTES {
+                let err_msg = format!(
+                    "Byte array exceeds maximum allowed export size of {} bytes (effective JSON body cap is 15 MB, got {} items)",
+                    crate::export::MAX_EXPORT_BYTES,
+                    arr.len()
+                );
+                let resp = serde_json::to_vec(&serde_json::json!({
+                    "status": "error",
+                    "error": err_msg
+                })).unwrap_or_else(|_| b"{}".to_vec());
+                write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                return Ok(());
+            }
+            let mut v = Vec::with_capacity(arr.len());
+            for item in arr {
+                let n = match item.as_u64() {
+                    Some(num) if num <= 255 => num as u8,
+                    _ => {
+                        let resp = serde_json::to_vec(&serde_json::json!({
+                            "status": "error",
+                            "error": "Invalid byte value in export payload: must be integers between 0 and 255"
+                        })).unwrap_or_else(|_| b"{}".to_vec());
+                        write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                        return Ok(());
+                    }
+                };
+                v.push(n);
+            }
+            Some(v)
+        } else {
+            None
+        };
+        if let Some(ref saver) = config.export_saver {
+            match saver(source_relative, bytes_vec.as_deref()) {
+                Ok(dest_path) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "ok",
+                        "path": dest_path
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), &resp)?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No export saver registered\"}")?;
+        }
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/reveal-in-finder" {
+        let _ = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        if let Some(ref revealer) = config.finder_revealer {
+            match revealer() {
+                Ok(()) => {
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No finder revealer registered\"}")?;
+        }
         return Ok(());
     }
 
@@ -868,5 +1021,191 @@ pub mod tests {
         assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": -5})), 10);
         assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": "fast"})), 10);
         assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": false})), 10);
+    }
+
+    #[test]
+    fn test_export_pick_endpoint() {
+        let mut config = make_test_config();
+        config.export_picker = Some(Arc::new(|default_name: &str, ext: &str| {
+            if default_name == "fail" {
+                Err("Picker failed".into())
+            } else {
+                Ok(Some(format!("/tmp/{}.{}", default_name, ext)))
+            }
+        }));
+
+        // Success case
+        let payload = r#"{"default_name":"test_clip","extension":"mp4"}"#;
+        let req = format!(
+            "POST /export-pick HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("/tmp/test_clip.mp4"));
+
+        // Error case
+        let err_payload = r#"{"default_name":"fail","extension":"mp4"}"#;
+        let err_req = format!(
+            "POST /export-pick HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            err_payload.len(),
+            err_payload
+        );
+        let mut reader = Cursor::new(err_req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(resp.contains("Picker failed"));
+    }
+
+    #[test]
+    fn test_export_save_endpoint() {
+        let mut config = make_test_config();
+        config.export_saver = Some(Arc::new(|src_rel: Option<&str>, bytes: Option<&[u8]>| {
+            if let Some(src) = src_rel {
+                if src == "missing.png" {
+                    return Err("Source file missing".into());
+                }
+                return Ok(format!("/saved/dest/{}", src));
+            }
+            if let Some(b) = bytes {
+                return Ok(format!("/saved/bytes/len_{}", b.len()));
+            }
+            Err("No export source".into())
+        }));
+
+        let payload = r#"{"source_relative":"clip.mp4"}"#;
+        let req = format!(
+            "POST /export-save HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("/saved/dest/clip.mp4"));
+
+        // Bytes case
+        let bytes_payload = r#"{"bytes":[1,2,3,4,5]}"#;
+        let bytes_req = format!(
+            "POST /export-save HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            bytes_payload.len(),
+            bytes_payload
+        );
+        let mut reader = Cursor::new(bytes_req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("/saved/bytes/len_5"));
+    }
+
+    #[test]
+    fn test_export_save_byte_validation() {
+        let mut config = make_test_config();
+        config.export_saver = Some(Arc::new(|_, _| Ok("/saved".into())));
+
+        // Value above 255 rejected
+        let invalid_val_payload = r#"{"bytes":[0, 100, 256, 1]}"#;
+        let req = format!(
+            "POST /export-save HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            invalid_val_payload.len(),
+            invalid_val_payload
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(resp.contains("Invalid byte value in export payload: must be integers between 0 and 255"));
+
+        // Negative value rejected
+        let negative_val_payload = r#"{"bytes":[0, -5, 20]}"#;
+        let req = format!(
+            "POST /export-save HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            negative_val_payload.len(),
+            negative_val_payload
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(resp.contains("Invalid byte value in export payload"));
+    }
+
+    #[test]
+    fn test_reveal_in_finder_endpoint() {
+        let mut config = make_test_config();
+        let reveal_called = Arc::new(Mutex::new(false));
+        let called_clone = reveal_called.clone();
+        config.finder_revealer = Some(Arc::new(move || {
+            *called_clone.lock().unwrap() = true;
+            Ok(())
+        }));
+
+        let payload = r#"{}"#;
+        let req = format!(
+            "POST /reveal-in-finder HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let mut reader = Cursor::new(req.clone().into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(*reveal_called.lock().unwrap());
+
+        // Error case (e.g. no export saved yet)
+        config.finder_revealer = Some(Arc::new(|| Err("No exported file has been saved yet".into())));
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(resp.contains("No exported file has been saved yet"));
     }
 }

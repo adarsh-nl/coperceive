@@ -16,7 +16,8 @@ from pathlib import Path
 REQUIRED_STEP_MARKERS: list[str] = [
     "Step 1 UI interactions verified successfully.",
     "Step 1 verified state.json content:",
-    "Step 1b verified: BEV figure exported successfully and non-empty PNG asserted.",
+    "Step 1b verified: Still exported successfully and non-empty PNG asserted.",
+    "Step 1c verified: BEV figure exported successfully and non-empty PNG asserted.",
     "Playback requirement (c) verified",
     "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.",
     "Step 2b verified: loop stayed off across quit and relaunch.",
