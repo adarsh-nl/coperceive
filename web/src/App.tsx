@@ -13,16 +13,17 @@ import Viewer from "./viewer/Viewer";
 
 function useHashRoute(): "home" | "viewer" | "connect" {
   const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const isConnect = (raw: string) => raw === "/connect" || raw.startsWith("/connect/") || raw.startsWith("/connect?");
   const [route, setRoute] = useState<"home" | "viewer" | "connect">(() => {
     const raw = typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
-    if (raw === "/connect") return "connect";
+    if (isConnect(raw)) return "connect";
     if (isDesktop) return "viewer";
     return raw === "/viewer" ? "viewer" : "home";
   });
   useEffect(() => {
     const onHash = () => {
       const raw = window.location.hash.replace(/^#/, "");
-      if (raw === "/connect") {
+      if (isConnect(raw)) {
         setRoute("connect");
         return;
       }

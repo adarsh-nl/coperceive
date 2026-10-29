@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useState } from "react";
 import type { LibrarySceneInfo, StorageStats } from "./types";
+import PanelState from "./PanelState";
+import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   deleteLibraryScene,
   getLibraryScenes,
@@ -29,6 +31,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
   const [scenes, setScenes] = useState<LibrarySceneInfo[]>([]);
   const [storage, setStorage] = useState<StorageStats | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [validatingMap, setValidatingMap] = useState<Record<string, boolean>>({});
   const [validateStatusMap, setValidateStatusMap] = useState<Record<string, "valid" | "invalid" | "checking">>({});
   const [showFirstRunModal, setShowFirstRunModal] = useState<boolean>(false);
@@ -94,6 +97,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
 
   const loadData = async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       const stats = await getStorageInfo();
       setStorage(stats);
@@ -102,8 +106,8 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
       }
       const list = await getLibraryScenes();
       applyScenes(list);
-    } catch {
-      // Ignore
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoading(false);
     }
@@ -271,41 +275,31 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
         </button>
       </div>
 
-      {/* Empty State */}
-      {!loading && scenes.length === 0 && (
-        <div
-          style={{
-            border: "1px dashed rgba(255, 255, 255, 0.15)",
-            borderRadius: "12px",
-            padding: "3.5rem 2rem",
-            textAlign: "center",
-            background: "rgba(255, 255, 255, 0.01)",
-          }}
-        >
-          <div style={{ fontSize: "2.5rem", marginBottom: "1rem" }}>📦</div>
-          <h3 style={{ fontSize: "1.2rem", color: "#f5f5f7", marginBottom: "0.5rem" }}>
-            Your library is empty
-          </h3>
-          <p style={{ color: "#a1a1a6", fontSize: "0.9rem", maxWidth: "440px", margin: "0 auto 1.5rem auto", lineHeight: 1.5 }}>
-            Download cooperative-perception benchmarks from the catalog or import local datasets without using the terminal.
-          </p>
-          <button
-            type="button"
-            onClick={onNavigateGetData}
-            style={{
-              background: "#1f6feb",
-              border: "none",
-              borderRadius: "6px",
-              color: "#fff",
-              padding: "0.6rem 1.5rem",
-              fontSize: "0.95rem",
-              fontWeight: 500,
-              cursor: "pointer",
-            }}
-          >
-            Explore Dataset Catalog
-          </button>
-        </div>
+      {/* Panel States: Loading, Error, and Empty */}
+      {loading && (
+        <PanelState
+          kind="loading"
+          title={PANEL_DEFINITIONS.library.loading.title}
+          description={PANEL_DEFINITIONS.library.loading.description}
+        />
+      )}
+      {!loading && loadError && (
+        <PanelState
+          kind="error"
+          title={PANEL_DEFINITIONS.library.error.title}
+          description={PANEL_DEFINITIONS.library.error.description}
+          actionLabel={PANEL_DEFINITIONS.library.error.actionLabel}
+          onAction={() => void loadData()}
+        />
+      )}
+      {!loading && !loadError && scenes.length === 0 && (
+        <PanelState
+          kind="empty"
+          title={PANEL_DEFINITIONS.library.empty.title}
+          description={PANEL_DEFINITIONS.library.empty.description}
+          actionLabel={PANEL_DEFINITIONS.library.empty.actionLabel}
+          onAction={onNavigateGetData}
+        />
       )}
 
       {/* Scenes Grid */}

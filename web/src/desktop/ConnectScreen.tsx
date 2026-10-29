@@ -18,6 +18,8 @@ import HpcWorkspace from "./HpcWorkspace";
 import LibraryScreen from "./LibraryScreen";
 import GetDataScreen from "./GetDataScreen";
 import UpdateBanner from "./UpdateBanner";
+import PanelState from "./PanelState";
+import { PANEL_DEFINITIONS } from "./panelStates";
 
 interface ConnectScreenProps {
   onConnected: (session: ConnectionSession) => void;
@@ -26,7 +28,20 @@ interface ConnectScreenProps {
 type TabMode = "library" | "get_data" | "local" | "remote";
 
 export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
-  const [activeTab, setActiveTab] = useState<TabMode>("library");
+  const [activeTab, setActiveTab] = useState<TabMode>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        if (sessionStorage.getItem("coperceive-connect-tab") === "remote") {
+          sessionStorage.removeItem("coperceive-connect-tab");
+          return "remote";
+        }
+      } catch {}
+      if (window.location.hash.includes("evaluation")) {
+        return "remote";
+      }
+    }
+    return "library";
+  });
   const [dataRoot, setDataRoot] = useState<string>("");
   const [recentRoots, setRecentRoots] = useState<string[]>([]);
   const [status, setStatus] = useState<string>("");
@@ -54,6 +69,21 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     };
     applyTestImport();
     window.addEventListener("coperceive-test-import", applyTestImport);
+
+    const handleTestPanelState = (event: Event) => {
+      if (
+        typeof window !== "undefined" &&
+        !window.__COPERCEIVE_TEST_ENV__ &&
+        import.meta.env.MODE !== "test"
+      ) {
+        return;
+      }
+      const custom = event as CustomEvent<{ busy?: boolean; error?: string; tab?: TabMode }>;
+      if (typeof custom.detail?.busy === "boolean") setBusy(custom.detail.busy);
+      if (typeof custom.detail?.error === "string") setError(custom.detail.error);
+      if (custom.detail?.tab) setActiveTab(custom.detail.tab);
+    };
+    window.addEventListener("coperceive-test-panel-state", handleTestPanelState);
     void (async () => {
       const state = await getPersistentState();
       if (state?.recent_roots && state.recent_roots.length > 0) {
@@ -84,8 +114,15 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       });
     })();
 
+    const handleOpenEval = () => {
+      setActiveTab("remote");
+    };
+    window.addEventListener("coperceive-open-evaluation", handleOpenEval);
+
     return () => {
       window.removeEventListener("coperceive-test-import", applyTestImport);
+      window.removeEventListener("coperceive-test-panel-state", handleTestPanelState);
+      window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
       unlistenImport?.();
       unlistenGetData?.();
     };
@@ -338,6 +375,28 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               <p style={{ fontSize: "0.85rem", color: "#86868b", marginBottom: "1.2rem" }}>
                 Browse directly to any folder holding schema 1 scenes or datasets.
               </p>
+
+              {busy && (
+                <PanelState
+                  compact
+                  kind="loading"
+                  title={PANEL_DEFINITIONS.connect.loading.title}
+                  description={PANEL_DEFINITIONS.connect.loading.description}
+                  actionLabel={PANEL_DEFINITIONS.connect.loading.actionLabel}
+                  onAction={() => { setBusy(false); setStatus(""); }}
+                />
+              )}
+
+              {!busy && !dataRoot && recentRoots.length === 0 && (
+                <PanelState
+                  compact
+                  kind="empty"
+                  title={PANEL_DEFINITIONS.connect.empty.title}
+                  description={PANEL_DEFINITIONS.connect.empty.description}
+                  actionLabel={PANEL_DEFINITIONS.connect.empty.actionLabel}
+                  onAction={handlePickFolder}
+                />
+              )}
 
               <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
                 <input
@@ -641,30 +700,14 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         {activeTab === "remote" && <HpcWorkspace />}
 
         {error && (
-          <div
-            role="alert"
-            style={{
-              maxWidth: "520px",
-              margin: "1rem auto",
-              padding: "0.75rem 1rem",
-              borderRadius: "8px",
-              backgroundColor: "rgba(255, 98, 89, 0.12)",
-              border: "1px solid rgba(255, 98, 89, 0.35)",
-              color: "#ff6259",
-              fontSize: "0.85rem",
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-            }}
-          >
-            <span>{error}</span>
-            <button
-              type="button"
-              onClick={() => setError("")}
-              style={{ background: "transparent", border: "none", color: "#a1a1a6", cursor: "pointer" }}
-            >
-              ✕
-            </button>
+          <div style={{ maxWidth: "520px", margin: "1rem auto" }}>
+            <PanelState
+              kind="error"
+              title={PANEL_DEFINITIONS.connect.error.title}
+              description={PANEL_DEFINITIONS.connect.error.description}
+              actionLabel={PANEL_DEFINITIONS.connect.error.actionLabel}
+              onAction={() => void handlePickFolder()}
+            />
           </div>
         )}
       </main>

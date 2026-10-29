@@ -1,4 +1,6 @@
 import { useEffect, useState } from "react";
+import PanelState from "../desktop/PanelState";
+import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { classColor } from "./appearance";
 import type { FrameCache } from "./cache";
 import {
@@ -346,7 +348,14 @@ export function Inspector({
     <section className="side-card" aria-label="Selected object" aria-live="polite">
       <h3>Selected</h3>
       {evalPick ? <PredictionInspector pick={evalPick} frame={frame} /> : null}
-      {!evalPick && (!current || !frame) ? <p className="muted">Click a box in the view.</p> : null}
+      {!evalPick && (!current || !frame) ? (
+        <PanelState
+          compact
+          kind="empty"
+          title={PANEL_DEFINITIONS.inspector.empty.title}
+          description={PANEL_DEFINITIONS.inspector.empty.description}
+        />
+      ) : null}
       {!evalPick && current && frame ? (
         <>
           <dl className="stat-grid">

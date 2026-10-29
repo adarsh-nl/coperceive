@@ -1,13 +1,34 @@
 // SPDX-License-Identifier: Apache-2.0
 /** The HPC workspace: saved servers and the "New evaluation" run-plan panel. */
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import HpcServers from "./HpcServers";
 import NewEvaluation from "./NewEvaluation";
 
 type WorkspaceTab = "servers" | "evaluation";
 
 export default function HpcWorkspace() {
-  const [tab, setTab] = useState<WorkspaceTab>("servers");
+  const [tab, setTab] = useState<WorkspaceTab>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        if (sessionStorage.getItem("coperceive-hpc-tab") === "evaluation") {
+          sessionStorage.removeItem("coperceive-hpc-tab");
+          return "evaluation";
+        }
+      } catch {}
+      if (window.location.hash.includes("evaluation")) {
+        return "evaluation";
+      }
+    }
+    return "servers";
+  });
+
+  useEffect(() => {
+    const handleOpenEval = () => {
+      setTab("evaluation");
+    };
+    window.addEventListener("coperceive-open-evaluation", handleOpenEval);
+    return () => window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
+  }, []);
   const tabStyle = (active: boolean) =>
     ({
       padding: "0.45rem 0.9rem",

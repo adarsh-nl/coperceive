@@ -320,6 +320,16 @@ export function IconGear() {
   );
 }
 
+export function IconInfo() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="8" cy="5.2" r="0.9" fill="currentColor" />
+      <path stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" d="M8 7.5v4" />
+    </svg>
+  );
+}
+
 function Caret() {
   return (
     <svg viewBox="0 0 12 12" width="10" height="10" aria-hidden="true">

@@ -1,4 +1,6 @@
-import { Menu, Slider } from "./controls";
+import { IconInfo, Menu, Slider } from "./controls";
+import PanelState from "../desktop/PanelState";
+import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { COOPERATIVE_VIEWS, STATUS_CHIPS, STATUS_STYLES, STATUS_WORDS, type StatusChip } from "./predictionLayer";
 import { outputKey, type CooperativeCounts, type CooperativeView, type RunInfo, type RunTag } from "./predictionTypes";
 
@@ -110,8 +112,33 @@ export default function PredictionsBlock({
   return (
     <details open>
       <summary>Predictions</summary>
-      {runs === null ? <p className="muted">Looking for prediction runs…</p> : null}
-      {runs !== null && runs.length === 0 ? <p className="muted">{note || "No prediction runs for this scene."}</p> : null}
+      {runs === null ? (
+        <PanelState
+          compact
+          kind="loading"
+          title={PANEL_DEFINITIONS.predictions.loading.title}
+          description={PANEL_DEFINITIONS.predictions.loading.description}
+        />
+      ) : null}
+      {runs !== null && runs.length === 0 ? (
+        <PanelState
+          compact
+          kind="empty"
+          title={PANEL_DEFINITIONS.predictions.empty.title}
+          description={PANEL_DEFINITIONS.predictions.empty.description}
+          actionLabel={PANEL_DEFINITIONS.predictions.empty.actionLabel}
+          onAction={() => {
+            if (typeof sessionStorage !== "undefined") {
+              try {
+                sessionStorage.setItem("coperceive-connect-tab", "remote");
+                sessionStorage.setItem("coperceive-hpc-tab", "evaluation");
+              } catch {}
+            }
+            window.location.hash = "#/connect/evaluation";
+            window.dispatchEvent(new CustomEvent("coperceive-open-evaluation"));
+          }}
+        />
+      ) : null}
       {runs !== null && runs.length > 0 ? (
         <div className="stack">
           <Menu
@@ -122,9 +149,13 @@ export default function PredictionsBlock({
             onChange={onRun}
           />
           {run && !run.evaluated ? (
-            <p className="muted">
-              Imported, not evaluated. Run <code>coperceive eval run {run.run_id}</code> to see matches.
-            </p>
+            <PanelState
+              compact
+              kind="empty"
+              icon={<IconInfo />}
+              title={PANEL_DEFINITIONS.predictions.error.title}
+              description={PANEL_DEFINITIONS.predictions.error.description}
+            />
           ) : null}
           {run?.evaluated ? (
             <>
