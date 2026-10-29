@@ -624,6 +624,7 @@ export default function CameraStrip({
         className="cam-strip-toggle"
         aria-expanded={open}
         aria-keyshortcuts="C"
+        aria-label={open ? "Collapse camera strip" : "Expand camera strip"}
         onClick={onToggleOpen}
         title="Cameras (C)"
       >

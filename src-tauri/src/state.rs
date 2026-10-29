@@ -304,8 +304,14 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_loop: Option<bool>,
 
+    /// Explicit user theme override ("light" or "dark"). None means follow system appearance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_theme: Option<String>,
+    pub theme_override: Option<String>,
+
+    /// Legacy field from older versions: `last_theme: "dark"`.
+    /// Deserialized for backwards compatibility, but ignored and never sets `theme_override`.
+    #[serde(default, skip_serializing, rename = "last_theme")]
+    pub _legacy_last_theme: Option<String>,
 
     /// Reopen last session on launch (default true).
     #[serde(default = "default_true")]
@@ -362,7 +368,8 @@ impl Default for AppPersistentState {
             _legacy_timestamp_ns: None,
             last_viewpoint: Some("orbit".into()),
             last_loop: None,
-            last_theme: Some("dark".into()),
+            theme_override: None,
+            _legacy_last_theme: None,
             reopen_last_session: true,
             agent_visibility: None,
             layer_toggles: Some(LayerToggles::default()),
@@ -579,7 +586,8 @@ pub mod tests {
             _legacy_timestamp_ns: None,
             last_viewpoint: Some("chase".into()),
             last_loop: Some(false),
-            last_theme: Some("light".into()),
+            theme_override: Some("light".into()),
+            _legacy_last_theme: None,
             reopen_last_session: true,
             agent_visibility: Some(visibility),
             layer_toggles: Some(LayerToggles {
@@ -643,7 +651,42 @@ pub mod tests {
         let loaded = load_state_from_path(&state_path);
         assert_eq!(loaded, AppPersistentState::default());
         assert_eq!(loaded.last_viewpoint, Some("orbit".into()));
-        assert_eq!(loaded.last_theme, Some("dark".into()));
+        assert_eq!(loaded.theme_override, None);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_legacy_last_theme_does_not_set_theme_override() {
+        let tmp = std::env::temp_dir().join(format!("coperceive-test-theme-migration-{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+
+        // Old state.json with `last_theme: "dark"`
+        fs::write(
+            &state_path,
+            r#"{"last_data_root":"/tmp","last_theme":"dark","last_scene_id":"synth_001"}"#,
+        )
+        .expect("write old state");
+
+        let loaded = load_state_from_path(&state_path);
+        // Migration rule: an old last_theme alone does not set an override!
+        assert_eq!(loaded.theme_override, None);
+
+        // When saved back, last_theme is dropped and theme_override is omitted
+        save_state_to_path(&loaded, &state_path).expect("save state");
+        let raw = fs::read_to_string(&state_path).expect("read migrated state");
+        assert!(!raw.contains("last_theme"), "legacy last_theme should not be re-serialized");
+        assert!(!raw.contains("theme_override"), "unset theme_override should not be serialized");
+
+        // An explicit theme_override IS loaded and preserved
+        fs::write(
+            &state_path,
+            r#"{"last_data_root":"/tmp","theme_override":"dark","last_scene_id":"synth_001"}"#,
+        )
+        .expect("write explicit override state");
+        let loaded_override = load_state_from_path(&state_path);
+        assert_eq!(loaded_override.theme_override, Some("dark".to_string()));
 
         let _ = fs::remove_dir_all(&tmp);
     }

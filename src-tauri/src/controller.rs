@@ -412,8 +412,18 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             if let Some(looping) = val.get("loop").and_then(|v| v.as_bool()) {
                 persistent.last_loop = Some(looping);
             }
-            if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
-                persistent.last_theme = Some(th.to_string());
+            if let Some(th) = val.get("theme_override") {
+                if th.is_null() {
+                    persistent.theme_override = None;
+                } else if let Some(s) = th.as_str() {
+                    if s == "light" || s == "dark" {
+                        persistent.theme_override = Some(s.to_string());
+                    }
+                }
+            } else if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
+                if th == "light" || th == "dark" {
+                    persistent.theme_override = Some(th.to_string());
+                }
             }
             if let Some(reopen) = val.get("reopen_last_session").and_then(|v| v.as_bool()) {
                 persistent.reopen_last_session = reopen;

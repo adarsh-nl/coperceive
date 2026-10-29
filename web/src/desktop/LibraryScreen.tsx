@@ -318,6 +318,16 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
             return (
               <div
                 key={scene.path}
+                tabIndex={0}
+                role="region"
+                aria-label={`Scene ${scene.scene_id}`}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onOpenScene(scene.path);
+                  }
+                }}
+                className="library-scene-card"
                 style={{
                   background: "rgba(255, 255, 255, 0.04)",
                   border: "1px solid rgba(255, 255, 255, 0.1)",
@@ -447,6 +457,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                     <button
                       type="button"
                       onClick={() => onOpenScene(scene.path)}
+                      aria-label={`Open scene ${scene.scene_id}`}
                       style={{
                         background: "#1f6feb",
                         color: "#fff",
@@ -464,6 +475,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                       type="button"
                       onClick={() => revealInFinder(scene.path)}
                       title="Show in Finder"
+                      aria-label={`Show ${scene.scene_id} in Finder`}
                       style={{
                         background: "rgba(255, 255, 255, 0.08)",
                         color: "#f5f5f7",
@@ -484,6 +496,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                       onClick={() => handleValidateNow(scene)}
                       disabled={isValidating}
                       title="Validate scene metadata against schema"
+                      aria-label={`Validate scene ${scene.scene_id}`}
                       style={{
                         background: "transparent",
                         color: "#8b949e",
@@ -498,6 +511,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                       type="button"
                       onClick={() => setDeleteConfirmScene(scene)}
                       title="Move scene to Trash"
+                      aria-label={`Delete scene ${scene.scene_id}`}
                       style={{
                         background: "transparent",
                         color: "#ff6b6b",
