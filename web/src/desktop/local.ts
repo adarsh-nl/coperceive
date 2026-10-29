@@ -475,7 +475,7 @@ export async function getLibraryScenes(): Promise<import("./types").LibraryScene
     if (res.ok) {
       const data = (await res.json()) as unknown;
       if (Array.isArray(data)) {
-        return data.map((s: { scene_id?: string }) => ({
+        return data.map((s: { scene_id?: string; has_thumbnail?: boolean }) => ({
           scene_id: s.scene_id ?? "scene",
           path: s.scene_id ?? "scene",
           dataset_name: "Local Scenes",
@@ -485,6 +485,7 @@ export async function getLibraryScenes(): Promise<import("./types").LibraryScene
           has_map: true,
           is_complete: true,
           is_valid: true,
+          has_thumbnail: Boolean(s.has_thumbnail),
         }));
       }
     }
