@@ -22,6 +22,7 @@ from coperceive.griffin.download import (
     acknowledgement_present,
     download_griffin,
 )
+from coperceive.scene.thumbnail import write_scene_thumbnails
 
 
 def catalog_path() -> Path:
@@ -218,6 +219,20 @@ def run_dataset_job(
         _emit(
             {
                 "event": "stage",
+                "stage": "thumbnails",
+                "message": "Writing preview thumbnails for the library cards…",
+                "percent": 80,
+            },
+            out,
+        )
+        thumb_scenes = [
+            library_root / name for name in (*conv_report.written, *conv_report.resumed)
+        ]
+        thumbnail_count, thumbnail_errors = write_scene_thumbnails(thumb_scenes)
+
+        _emit(
+            {
+                "event": "stage",
                 "stage": "validate",
                 "message": "Checking the converted scenes…",
                 "percent": 90,
@@ -245,6 +260,8 @@ def run_dataset_job(
                 "scenes": scene_ids,
                 "first_scene": first_scene,
                 "path": first_path,
+                "thumbnails": thumbnail_count,
+                "thumbnail_errors": thumbnail_errors,
                 "message": f"Imported {len(scene_ids)} scene(s).",
             },
             out,

@@ -5,6 +5,7 @@ import {
   deleteLibraryScene,
   getLibraryScenes,
   getStorageInfo,
+  libraryThumbnail,
   moveLibraryRoot,
   pickDataRoot,
   revealInFinder,
@@ -34,6 +35,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
   const [showSettingsModal, setShowSettingsModal] = useState<boolean>(false);
   const [movingStorage, setMovingStorage] = useState<boolean>(false);
   const [deleteConfirmScene, setDeleteConfirmScene] = useState<LibrarySceneInfo | null>(null);
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
 
   const applyScenes = (list: LibrarySceneInfo[]) => {
     setScenes(list);
@@ -51,6 +53,32 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
       return next;
     });
   };
+
+  // Import-time previews: fetch each small JPEG once and show it on the card.
+  // Scenes imported before this feature have no thumbnail and get a placeholder.
+  useEffect(() => {
+    const created: string[] = [];
+    let cancelled = false;
+    void (async () => {
+      for (const scene of scenes) {
+        if (!scene.has_thumbnail) continue;
+        try {
+          const bytes = await libraryThumbnail(scene.path);
+          if (cancelled || !bytes || bytes.length === 0) continue;
+          const blob = new Blob([new Uint8Array(bytes)], { type: "image/jpeg" });
+          const url = URL.createObjectURL(blob);
+          created.push(url);
+          setThumbnails((previous) => ({ ...previous, [scene.path]: url }));
+        } catch {
+          // A broken thumbnail must not hide the card; it keeps the placeholder.
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+      for (const url of created) URL.revokeObjectURL(url);
+    };
+  }, [scenes]);
 
   // Cheap list refresh used while the app validates the library in the
   // background. Storage stats are not re-read: that walks the whole library.
@@ -307,6 +335,38 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                 }}
               >
                 <div>
+                  {thumbnails[scene.path] ? (
+                    <img
+                      src={thumbnails[scene.path]}
+                      alt={`Preview of ${scene.scene_id}`}
+                      style={{
+                        width: "100%",
+                        height: "160px",
+                        objectFit: "cover",
+                        borderRadius: "7px",
+                        marginBottom: "0.7rem",
+                        backgroundColor: "rgba(255,255,255,0.06)",
+                      }}
+                    />
+                  ) : (
+                    <div
+                      aria-label="No preview for this scene"
+                      style={{
+                        width: "100%",
+                        height: "160px",
+                        borderRadius: "7px",
+                        marginBottom: "0.7rem",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "center",
+                        background: "linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+                        color: "#8b949e",
+                        fontSize: "0.78rem",
+                      }}
+                    >
+                      {scene.has_thumbnail ? "Loading preview…" : "No preview — new imports get one"}
+                    </div>
+                  )}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
                     <div>
                       <h4 style={{ margin: 0, fontSize: "1.05rem", color: "#f5f5f7", fontWeight: 600 }}>

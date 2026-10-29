@@ -463,6 +463,15 @@ export async function getLibraryScenes(): Promise<import("./types").LibraryScene
   return [];
 }
 
+/** Reads the small import-time preview for a library card (null when absent). */
+export async function libraryThumbnail(scenePath: string): Promise<number[] | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<number[] | null>("library_thumbnail", { scenePath });
+  }
+  return null;
+}
+
 export async function deleteLibraryScene(scenePath: string): Promise<void> {
   if (isTauriEnvironment()) {
     const { invoke } = await import("@tauri-apps/api/core");

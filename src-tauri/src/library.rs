@@ -39,6 +39,9 @@ pub struct LibrarySceneInfo {
     pub size_bytes: u64,
     /// "full" (original images), "preview" (compressed 640px JPEG), or "none" (no camera data)
     pub has_images: String,
+    /// A 640 px preview was written at import time (`thumbnail.jpg`).
+    #[serde(default)]
+    pub has_thumbnail: bool,
     pub has_map: bool,
     pub is_valid: Option<bool>,
 }
@@ -272,6 +275,7 @@ fn parse_scene_info_with_cache(
     };
 
     let size_bytes = calculate_directory_size(scene_dir);
+    let has_thumbnail = scene_dir.join("thumbnail.jpg").is_file();
 
     Some(LibrarySceneInfo {
         scene_id,
@@ -284,6 +288,7 @@ fn parse_scene_info_with_cache(
         sensor_modalities,
         size_bytes,
         has_images,
+        has_thumbnail,
         has_map,
         is_valid: cached_validation(scene_dir, cache),
     })
@@ -311,6 +316,35 @@ pub fn cached_validation(
 }
 
 /// Moves scenes from an old library directory to a new library directory.
+/// Largest preview the UI will load; the import writes a small 640 px JPEG.
+const MAX_THUMBNAIL_BYTES: u64 = 2 * 1024 * 1024;
+
+/// Reads `thumbnail.jpg` for a scene inside the current library root.
+///
+/// The path must resolve inside the library root (no symlink escape); a missing
+/// thumbnail is `Ok(None)` so cards fall back to a placeholder.
+pub fn read_thumbnail_bytes(library_root: &Path, scene_path: &str) -> Result<Option<Vec<u8>>, String> {
+    let root = library_root
+        .canonicalize()
+        .map_err(|error| format!("The library folder is not readable: {error}"))?;
+    let scene = Path::new(scene_path)
+        .canonicalize()
+        .map_err(|error| format!("The scene folder is not readable: {error}"))?;
+    if !scene.starts_with(&root) {
+        return Err("The scene is outside the library folder.".to_string());
+    }
+    let thumbnail = scene.join("thumbnail.jpg");
+    let bytes = match fs::read(&thumbnail) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Could not read the thumbnail: {error}")),
+    };
+    if bytes.len() as u64 > MAX_THUMBNAIL_BYTES {
+        return Err("The thumbnail is larger than the preview limit.".to_string());
+    }
+    Ok(Some(bytes))
+}
+
 pub fn move_library_scenes(from_root: &Path, to_root: &Path) -> Result<(), String> {
     if !from_root.exists() {
         return Ok(());
@@ -376,6 +410,56 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_library_thumbnail_scan_and_bounded_read() {
+        let tmp = std::env::temp_dir().join(format!(
+            "coperceive-test-thumb-{}-{}",
+            std::process::id(),
+            line!()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        let scene = tmp.join("Town03-000");
+        fs::create_dir_all(&scene).expect("scene dir");
+        let manifest = r#"{"schema_version": 1, "scene_id": "Town03-000", "agents": [], "sensors": []}"#;
+        fs::write(scene.join("manifest.json"), manifest).expect("manifest");
+        fs::write(scene.join("COMPLETE.json"), "{}").expect("complete");
+        fs::write(scene.join("images.parquet"), "data").expect("images");
+        fs::write(scene.join("thumbnail.jpg"), [0xff, 0xd8, 0xff, 0xd9]).expect("thumbnail");
+
+        let scenes = scan_library_scenes(&tmp);
+        assert_eq!(scenes.len(), 1);
+        assert!(scenes[0].has_thumbnail, "scan should report the preview");
+
+        let bytes = read_thumbnail_bytes(&tmp, &scene.to_string_lossy())
+            .expect("read")
+            .expect("thumbnail present");
+        assert_eq!(bytes, vec![0xff, 0xd8, 0xff, 0xd9]);
+
+        // A scene outside the library root is refused.
+        let outside = std::env::temp_dir().join(format!("coperceive-outside-{}", std::process::id()));
+        fs::create_dir_all(&outside).expect("outside dir");
+        fs::write(outside.join("thumbnail.jpg"), b"x").expect("outside thumbnail");
+        assert!(read_thumbnail_bytes(&tmp, &outside.to_string_lossy()).is_err());
+
+        // Missing preview falls back to None.
+        let empty = tmp.join("empty-scene");
+        fs::create_dir_all(&empty).expect("empty scene");
+        fs::write(empty.join("manifest.json"), manifest).expect("manifest");
+        fs::write(empty.join("COMPLETE.json"), "{}").expect("complete");
+        assert_eq!(
+            read_thumbnail_bytes(&tmp, &empty.to_string_lossy()).expect("read missing"),
+            None
+        );
+
+        // An oversized file is refused, not loaded into the UI.
+        let big = scene.join("thumbnail.jpg");
+        fs::write(&big, vec![0u8; (MAX_THUMBNAIL_BYTES as usize) + 1]).expect("big thumb");
+        assert!(read_thumbnail_bytes(&tmp, &scene.to_string_lossy()).is_err());
+
+        let _ = fs::remove_dir_all(&tmp);
+        let _ = fs::remove_dir_all(&outside);
+    }
+
+    #[test]
     fn test_scan_library_scenes_skips_partial_and_reads_metadata() {
         let tmp = std::env::temp_dir().join(format!("coperceive-test-lib-{}", std::process::id()));
         let _ = fs::create_dir_all(&tmp);
@@ -420,6 +504,7 @@ mod tests {
         assert_eq!(s.sensor_modalities, vec!["camera".to_string(), "lidar".to_string()]);
         assert_eq!(s.has_map, true);
         assert_eq!(s.has_images, "full");
+        assert!(!s.has_thumbnail, "no thumbnail file was written");
 
         let _ = fs::remove_dir_all(&tmp);
     }
