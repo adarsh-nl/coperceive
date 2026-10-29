@@ -27,7 +27,6 @@ dependencies = [
     "numpy>=1.26.4",
     "pyarrow>=18",
     "pillow>=10.4",
-    "matplotlib>=3.8",
     "pyyaml>=6",
 ]
 
@@ -39,7 +38,8 @@ Source = "https://github.com/adarsh-nl/coperceive"
 [project.optional-dependencies]
 torch = ["torch"]
 viewer = ["rerun-sdk==0.22.1", "viser==0.2.23"]
-app = ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2"]
+plot = ["matplotlib>=3.8"]
+app = ["fastapi>=0.115", "uvicorn>=0.30", "pydantic>=2", "matplotlib>=3.8"]
 griffin = ["huggingface_hub>=0.26"]
 docs = ["mkdocs-material>=9.5"]
 dev = [
@@ -51,6 +51,7 @@ dev = [
     "hypothesis>=6.100",
     "playwright>=1.49",
     "types-PyYAML>=6",
+    "matplotlib>=3.8",
 ]
 
 [project.scripts]

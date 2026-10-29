@@ -18,6 +18,7 @@ spec.loader.exec_module(verify_e2e_steps)
 SAMPLE_PASSING_LOG = (
     "Step 1 UI interactions verified successfully.\n"
     'Step 1 verified state.json content: {"viewpoint": "chase"}\n'
+    "Step 1b verified: BEV figure exported successfully and non-empty PNG asserted.\n"
     "Playback requirement (c) verified: max frame gap = 120.0ms, "
     "loop wraps observed = 1, frames seen = 150\n"
     "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.\n"

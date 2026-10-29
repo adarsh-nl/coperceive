@@ -352,6 +352,99 @@ if echo "${CLIPBOARD_TEXT}" | grep -q "Coperceive Diagnostics"; then
     fi
 fi
 
+echo ""
+echo "--- Step 1b: Export BEV Figure in Real App and Assert Non-Empty PNG ---"
+python3 -c '
+import sys, json, time, urllib.request, glob, os
+
+port = "'"${CTRL_PORT}"'"
+secret = "'"${CTRL_SECRET}"'"
+fixture_dir = "'"${FIXTURE_1}"'"
+
+def eval_js(code, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        err = data.get("error")
+        if err:
+            raise RuntimeError(f"JS error: {err}")
+        return data.get("result")
+
+print("Driving real UI: opening Export dialog...")
+eval_js("""(() => {
+    const exportBtn = Array.from(document.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.trim() === "Export");
+    if (!exportBtn) throw new Error("Export button not found");
+    exportBtn.click();
+})()""")
+
+time.sleep(0.5)
+
+print("Driving real UI: clicking Bird\x27s-eye export button...")
+eval_js("""(() => {
+    const dialog = document.querySelector(\x27.dialog\x27);
+    if (!dialog) throw new Error("Export dialog not found in DOM");
+    const bevBtn = Array.from(dialog.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.includes("Bird\x27s-eye"));
+    if (!bevBtn) throw new Error("Bird\x27s-eye button not found in export dialog");
+    bevBtn.click();
+})()""")
+
+print("Waiting for BEV export to complete and render preview in real UI...")
+deadline = time.monotonic() + 30.0
+exported = False
+while time.monotonic() < deadline:
+    res = eval_js("""(() => {
+        const dialog = document.querySelector(\x27.dialog\x27);
+        const img = dialog ? dialog.querySelector(\x27img.plot-preview\x27) : null;
+        const note = dialog ? dialog.querySelector(\x27p.muted\x27) : null;
+        const noteText = note ? note.textContent : "";
+        if (img && img.src) {
+            return { done: true, src: img.src, note: noteText };
+        }
+        if (noteText.includes("Wrote ") && noteText.includes("bev")) {
+            return { done: true, note: noteText };
+        }
+        if (noteText.includes("Failed") || noteText.includes("Error") || noteText.includes("error")) {
+            return { error: noteText };
+        }
+        return { done: false, note: noteText };
+    })()""")
+    err_text = res.get("error") if res else None
+    if err_text:
+        raise RuntimeError(f"BEV export failed in UI: {err_text}")
+    if res and res.get("done"):
+        print(f"BEV export completed in UI: {res}", flush=True)
+        exported = True
+        break
+    time.sleep(0.5)
+
+assert exported, "BEV export timed out in UI"
+
+print("Closing Export dialog...")
+eval_js("""(() => {
+    const dialog = document.querySelector(\x27.dialog\x27);
+    const closeBtn = dialog ? Array.from(dialog.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.trim() === "Close") : null;
+    if (closeBtn) closeBtn.click();
+})()""")
+
+export_pattern = os.path.join(fixture_dir, "**", "*bev*.png")
+export_files = glob.glob(export_pattern, recursive=True)
+if not export_files:
+    export_files = glob.glob(os.path.join(fixture_dir, "exports", "*bev*.png"))
+
+print(f"Found exported BEV files: {export_files}")
+assert len(export_files) > 0, f"No exported BEV PNG found matching {export_pattern}"
+png_file = export_files[0]
+png_size = os.path.getsize(png_file)
+print(f"Asserting non-empty PNG: {png_file} is {png_size} bytes")
+assert png_size > 0, f"Exported BEV PNG {png_file} is empty (0 bytes)"
+
+print("Step 1b verified: BEV figure exported successfully and non-empty PNG asserted.", flush=True)
+'
+
 screencapture -x "${SCREENSHOT_DIR}/02-before-quit.png" 2>/dev/null || true
 
 echo ""

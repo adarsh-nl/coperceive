@@ -23,17 +23,15 @@ import sys
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
-from matplotlib.axes import Axes
-from matplotlib.backends.backend_agg import FigureCanvasAgg
-from matplotlib.backends.backend_svg import FigureCanvasSVG
-from matplotlib.figure import Figure
-from matplotlib.lines import Line2D
-from matplotlib.patches import Polygon
-from matplotlib.typing import LineStyleType
 from PIL import Image
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
+    from matplotlib.figure import Figure
+    from matplotlib.typing import LineStyleType
 
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.geometry import WorldBox, footprint
@@ -169,6 +167,46 @@ class _Theme:
     grid: str
 
 
+_mpl_cache: tuple[type, type, type, type, type] | None = None
+
+
+def _get_mpl() -> tuple[type, type, type, type, type]:
+    global _mpl_cache
+    if _mpl_cache is not None:
+        return _mpl_cache
+    try:
+        from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.backends.backend_svg import FigureCanvasSVG
+        from matplotlib.figure import Figure
+        from matplotlib.lines import Line2D
+        from matplotlib.patches import Polygon
+
+        _mpl_cache = (Figure, FigureCanvasAgg, FigureCanvasSVG, Line2D, Polygon)
+        return _mpl_cache
+    except ImportError as exc:
+        raise PlotError("matplotlib is required for plotting and figure export.") from exc
+
+
+def _figure_cls() -> type:
+    return _get_mpl()[0]
+
+
+def _canvas_agg_cls() -> type:
+    return _get_mpl()[1]
+
+
+def _canvas_svg_cls() -> type:
+    return _get_mpl()[2]
+
+
+def _line2d_cls() -> type:
+    return _get_mpl()[3]
+
+
+def _polygon_cls() -> type:
+    return _get_mpl()[4]
+
+
 def render_bev(
     scene: Scene,
     dest: Path,
@@ -213,7 +251,7 @@ def render_bev(
         raise PlotError("nothing to plot at this sample")
     bounds = _square(window_points)
 
-    figure = Figure(figsize=(8.0, 8.0), dpi=120, facecolor=colors.bg)
+    figure = _figure_cls()(figsize=(8.0, 8.0), dpi=120, facecolor=colors.bg)
     axes = _axes(figure)
     _style_axes(axes, colors)
     map_drawn = False
@@ -253,7 +291,7 @@ def render_bev(
         face = color if style == "solid" else "none"
         alpha = _MATCHED_GT_ALPHA if _is_matched(item.center, matched) else 0.95
         axes.add_patch(
-            Polygon(
+            _polygon_cls()(
                 item.ring,
                 closed=True,
                 fill=style == "solid",
@@ -281,7 +319,7 @@ def render_bev(
     for item, ring in wires:
         status_style = _STATUS_STYLES[item.status]
         axes.add_patch(
-            Polygon(
+            _polygon_cls()(
                 ring,
                 closed=True,
                 fill=False,
@@ -316,7 +354,7 @@ def render_bev(
     for status in statuses_drawn:
         status_style = _STATUS_STYLES[status]
         handles.append(
-            Line2D(
+            _line2d_cls()(
                 [0.0, 1.0],
                 [0.0, 0.0],
                 color=status_style.color,
@@ -376,7 +414,7 @@ def render_overlay(
         image_size = rgb.size
     finally:
         opened.close()
-    figure = Figure(
+    figure = _figure_cls()(
         figsize=(image_size[0] / 100.0, image_size[1] / 100.0),
         dpi=100,
         facecolor=colors.bg,
@@ -782,7 +820,7 @@ def _draw_overlay_boxes(
             ]
             if len(face) >= 3:
                 axes.add_patch(
-                    Polygon(
+                    _polygon_cls()(
                         face,
                         closed=True,
                         facecolor=color,
@@ -870,9 +908,9 @@ def _draw_overlay_points(
 def _write(figure: Figure, dest: Path, fmt: str) -> tuple[int, int]:
     dest.parent.mkdir(parents=True, exist_ok=True)
     if fmt == "svg":
-        FigureCanvasSVG(figure)
+        _canvas_svg_cls()(figure)
     else:
-        FigureCanvasAgg(figure)
+        _canvas_agg_cls()(figure)
     figure.savefig(dest, format=fmt)
     width, height = figure.canvas.get_width_height()
     return int(width), int(height)
