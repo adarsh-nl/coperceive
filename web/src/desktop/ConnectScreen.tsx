@@ -28,7 +28,20 @@ interface ConnectScreenProps {
 type TabMode = "library" | "get_data" | "local" | "remote";
 
 export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
-  const [activeTab, setActiveTab] = useState<TabMode>("library");
+  const [activeTab, setActiveTab] = useState<TabMode>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        if (sessionStorage.getItem("coperceive-connect-tab") === "remote") {
+          sessionStorage.removeItem("coperceive-connect-tab");
+          return "remote";
+        }
+      } catch {}
+      if (window.location.hash.includes("evaluation")) {
+        return "remote";
+      }
+    }
+    return "library";
+  });
   const [dataRoot, setDataRoot] = useState<string>("");
   const [recentRoots, setRecentRoots] = useState<string[]>([]);
   const [status, setStatus] = useState<string>("");
@@ -101,9 +114,15 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       });
     })();
 
+    const handleOpenEval = () => {
+      setActiveTab("remote");
+    };
+    window.addEventListener("coperceive-open-evaluation", handleOpenEval);
+
     return () => {
       window.removeEventListener("coperceive-test-import", applyTestImport);
       window.removeEventListener("coperceive-test-panel-state", handleTestPanelState);
+      window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
       unlistenImport?.();
       unlistenGetData?.();
     };

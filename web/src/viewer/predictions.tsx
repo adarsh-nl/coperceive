@@ -1,4 +1,4 @@
-import { Menu, Slider } from "./controls";
+import { IconInfo, Menu, Slider } from "./controls";
 import PanelState from "../desktop/PanelState";
 import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { COOPERATIVE_VIEWS, STATUS_CHIPS, STATUS_STYLES, STATUS_WORDS, type StatusChip } from "./predictionLayer";
@@ -128,7 +128,14 @@ export default function PredictionsBlock({
           description={PANEL_DEFINITIONS.predictions.empty.description}
           actionLabel={PANEL_DEFINITIONS.predictions.empty.actionLabel}
           onAction={() => {
-            window.location.hash = "#/connect";
+            if (typeof sessionStorage !== "undefined") {
+              try {
+                sessionStorage.setItem("coperceive-connect-tab", "remote");
+                sessionStorage.setItem("coperceive-hpc-tab", "evaluation");
+              } catch {}
+            }
+            window.location.hash = "#/connect/evaluation";
+            window.dispatchEvent(new CustomEvent("coperceive-open-evaluation"));
           }}
         />
       ) : null}
@@ -145,7 +152,7 @@ export default function PredictionsBlock({
             <PanelState
               compact
               kind="empty"
-              icon="ℹ️"
+              icon={<IconInfo />}
               title={PANEL_DEFINITIONS.predictions.error.title}
               description={PANEL_DEFINITIONS.predictions.error.description}
             />
