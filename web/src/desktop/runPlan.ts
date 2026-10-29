@@ -416,3 +416,36 @@ export function metricsRows(report: MetricsReport): { label: string; value: stri
 export function failureNextAction(): string {
   return "Open the stderr tail above, fix the reported cause (checkpoint, environment, or split), then submit a new run from this plan.";
 }
+
+/** One submitted run in the history table. */
+export interface RunHistoryEntry {
+  job_id: string;
+  plan_id: string;
+  state: string;
+  active: boolean;
+  elapsed: string | null;
+  time_limit: string | null;
+  partition: string | null;
+  started: string | null;
+  ended: string | null;
+  plan_available: boolean;
+}
+
+/** Plain-language state for a history row. */
+export function historyStateLabel(entry: RunHistoryEntry): string {
+  if (entry.state === "pending") return "PENDING";
+  if (entry.state === "running") return "RUNNING";
+  return entry.state.toUpperCase();
+}
+
+/** Re-run is possible only while the saved plan is still on the server. */
+export function historyCanRerun(entry: RunHistoryEntry): boolean {
+  return entry.plan_available;
+}
+
+/** A compact "elapsed / limit" column. */
+export function historyTiming(entry: RunHistoryEntry): string {
+  const elapsed = entry.elapsed ? `${entry.elapsed} elapsed` : "";
+  const limit = entry.time_limit ? `${entry.time_limit} limit` : "";
+  return [elapsed, limit].filter(Boolean).join(" · ") || "—";
+}

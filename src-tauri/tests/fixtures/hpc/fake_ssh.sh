@@ -471,6 +471,18 @@ case "${remote}" in
             "${FAKE_JOB_STATE:-COMPLETED}"
         exit 0
         ;;
+    *"ls -1 --"*)
+        log_command "plan-list"
+        printf '%s.json\n' "${FAKE_PLAN_ID:-plan-1793222864-c5af819dbd2b}"
+        exit 0
+        ;;
+    *"sacct -u"*)
+        log_command "history"
+        plan="${FAKE_PLAN_ID:-plan-1793222864-c5af819dbd2b}"
+        printf '424243|coperceive-run-%s|RUNNING|00:10:00|04:00:00|main-cpu|2026-10-29T09:00:00|Unknown\n' "${plan}"
+        printf '424242|coperceive-run-%s|COMPLETED|01:00:00|04:00:00|main-cpu|2026-10-28T10:00:00|2026-10-28T11:00:00\n' "${plan}"
+        exit 0
+        ;;
     *"predictions import"*)
         log_command "predictions-import"
         mkdir -p "${FAKE_REMOTE_ROOT}/data/scenes/predictions/test-run" 2>/dev/null || true

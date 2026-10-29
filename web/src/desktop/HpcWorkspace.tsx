@@ -3,8 +3,9 @@
 import { useEffect, useState } from "react";
 import HpcServers from "./HpcServers";
 import NewEvaluation from "./NewEvaluation";
+import RunHistory from "./RunHistory";
 
-type WorkspaceTab = "servers" | "evaluation";
+type WorkspaceTab = "servers" | "evaluation" | "history";
 
 export default function HpcWorkspace() {
   const [tab, setTab] = useState<WorkspaceTab>(() => {
@@ -49,8 +50,11 @@ export default function HpcWorkspace() {
         <button type="button" role="tab" aria-selected={tab === "evaluation"} style={tabStyle(tab === "evaluation")} onClick={() => setTab("evaluation")}>
           New evaluation
         </button>
+        <button type="button" role="tab" aria-selected={tab === "history"} style={tabStyle(tab === "history")} onClick={() => setTab("history")}>
+          Run history
+        </button>
       </div>
-      {tab === "servers" ? <HpcServers /> : <NewEvaluation />}
+      {tab === "servers" ? <HpcServers /> : tab === "evaluation" ? <NewEvaluation /> : <RunHistory />}
     </div>
   );
 }

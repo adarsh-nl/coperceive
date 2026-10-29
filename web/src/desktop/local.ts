@@ -21,6 +21,7 @@ import type {
   MetricsReport,
   PipelineEntry,
   PredictionTail,
+  RunHistoryEntry,
   RunPlan,
   RunPlanRequest,
   SubmissionPreview,
@@ -755,4 +756,13 @@ export async function openPredictions(
     return await invoke<ImportedPredictions>("open_predictions", { profileId, planId });
   }
   throw new Error("Opening predictions is only available in the desktop app.");
+}
+
+/** The app's submitted runs from Slurm accounting, newest first. */
+export async function listRunHistory(profileId: string, limit = 50): Promise<RunHistoryEntry[]> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<RunHistoryEntry[]>("list_run_history", { profileId, limit });
+  }
+  throw new Error("The run history is only available in the desktop app.");
 }

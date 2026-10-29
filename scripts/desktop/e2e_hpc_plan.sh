@@ -425,6 +425,7 @@ run_watch() {
     FAKE_SSH_LOG="${ssh_log}" \
     FAKE_JOB_NAME="coperceive-run-${PLAN_ID}" \
     FAKE_JOB_STATE="${job_state}" \
+    FAKE_PLAN_ID="${PLAN_ID}" \
     FAKE_PREDICTIONS_PATH="${PREDICTIONS_FILE}" \
     FAKE_METRICS_PATH="${METRICS_FILE}" \
     COPERCEIVE_TEST_ENV=1 \
@@ -515,6 +516,23 @@ elif action == "metrics":
         print(f"E2E_REPORT_FAIL: {name}: metrics {metrics!r}", file=sys.stderr)
         sys.exit(1)
     print(f"E2E_REPORT_MARK: {name} verified (latency_ms_per_frame=41.2, notes={report.get('notes')!r})")
+elif action == "history":
+    history = data.get("history") or []
+    if len(history) != 2:
+        print(f"E2E_REPORT_FAIL: {name}: history length {len(history)}", file=sys.stderr)
+        sys.exit(1)
+    running = history[0]
+    completed = history[1]
+    if not running.get("active") or running.get("state") != "running":
+        print(f"E2E_REPORT_FAIL: {name}: running entry {running!r}", file=sys.stderr)
+        sys.exit(1)
+    if completed.get("state") != "completed" or not completed.get("plan_available"):
+        print(f"E2E_REPORT_FAIL: {name}: completed entry {completed!r}", file=sys.stderr)
+        sys.exit(1)
+    if "history" not in log:
+        print(f"E2E_REPORT_FAIL: {name}: no sacct history command", file=sys.stderr)
+        sys.exit(1)
+    print(f"E2E_REPORT_MARK: {name} verified (entries=2, running={running['job_id']}, completed={completed['job_id']}, plan_available=True)")
 elif action == "import":
     imported = data.get("imported") or {}
     if imported.get("run_id") != plan_id:
@@ -578,5 +596,12 @@ WATCH_METRICS="$(make_watch_request watch-metrics metrics "" false '{}')"
 run_watch watch-metrics "${WATCH_METRICS}" metrics COMPLETED
 WATCH_IMPORT="$(make_watch_request watch-import import "" false '{}')"
 run_watch watch-import "${WATCH_IMPORT}" import COMPLETED
+WATCH_HISTORY="$(make_watch_request watch-history history "" false '{}')"
+run_watch watch-history "${WATCH_HISTORY}" history COMPLETED
 
-echo "Plan e2e verified: module and container plans built, checked and saved; nothing submitted until an explicit confirmation; the submitted job was watched, its log and predictions were read, its metrics report was read, and its predictions were imported."
+# Re-run from history reuses the same saved plan and the reviewed-script confirm
+# path as a first submission; this proves that path a second time.
+RERUN_REQUEST="$(make_submit_request plan-rerun "${PLAN_ID}" true '{}')"
+run_submit plan-rerun "${RERUN_REQUEST}" true
+
+echo "Plan e2e verified: module and container plans built, checked and saved; nothing submitted until an explicit confirmation; the submitted job was watched, its log and predictions were read, its metrics report was read, its predictions were imported, the history listed it and a re-run of the saved plan was submitted."
