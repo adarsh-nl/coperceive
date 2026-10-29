@@ -683,9 +683,7 @@ def test_choosing_a_scene_while_playing_pauses_at_once(session: _Session, _repea
     ]
     assert len(old_scene_after_click) <= 10, old_scene_after_click
     page.wait_for_load_state("networkidle")
-    settled = [
-        url for url in session.requests[after_click:] if f"/api/scenes/{SCENE_BARE}/" in url
-    ]
+    settled = [url for url in session.requests[after_click:] if f"/api/scenes/{SCENE_BARE}/" in url]
     assert settled == old_scene_after_click, settled[len(old_scene_after_click) :]
     assert session.slider("aria-valuenow") == 0
 
