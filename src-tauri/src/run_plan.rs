@@ -1665,7 +1665,7 @@ fn now_unix() -> u64 {
 ///
 /// The id comes back from the UI at save time, so it is validated here instead of
 /// trusted: no `..`, no path separators, no arbitrary characters.
-fn validate_plan_id(id: &str) -> Result<(), String> {
+pub(crate) fn validate_plan_id(id: &str) -> Result<(), String> {
     let rest = id.strip_prefix("plan-").ok_or_else(|| {
         "This plan id is not one coperceive generated; refusing to save it.".to_string()
     })?;

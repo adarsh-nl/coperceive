@@ -266,6 +266,118 @@ PY
     echo "Step verified: run plan for ${name} (nothing submitted)."
 }
 
+make_submit_request() {
+    local name="$1"
+    local plan_id="$2"
+    local confirmed="$3"
+    local options_json="$4"
+    local request_file="${TMP_DIR}/${name}-submit-request.json"
+    python3 - "${request_file}" "${FIXTURES_DIR}/cluster-b.json" "${plan_id}" "${confirmed}" "${options_json}" <<'PY'
+import json
+import sys
+
+request_file, server_path, plan_id, confirmed, options_json = sys.argv[1:6]
+payload = {
+    "server": server_path,
+    "plan_id": plan_id,
+    "options": json.loads(options_json),
+    "confirmed": confirmed == "true",
+}
+with open(request_file, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle)
+PY
+    printf '%s' "${request_file}"
+}
+
+run_submit() {
+    local name="$1"
+    local request_file="$2"
+    local confirmed="$3"
+    local result_file="${TMP_DIR}/${name}-submit-result.json"
+    local ssh_log="${TMP_DIR}/fake-ssh-${name}.log"
+    local stdout_log="${TMP_DIR}/${name}.stdout.log"
+    local stderr_log="${TMP_DIR}/${name}.stderr.log"
+    rm -f "${result_file}" "${ssh_log}"
+
+    echo "--- Submission for ${name} (confirmed=${confirmed}) ---"
+    FAKE_REMOTE_ROOT="${PLAN_ROOT}" \
+    FAKE_SSH_LOG="${ssh_log}" \
+    COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
+    COPERCEIVE_TEST_HPC_SUBMIT_REQUEST="${request_file}" \
+    COPERCEIVE_TEST_HPC_SUBMIT_RESULT="${result_file}" \
+    "${APP_EXE}" >"${stdout_log}" 2>"${stderr_log}" &
+    APP_PID=$!
+
+    local waited=0
+    while [ ! -s "${result_file}" ]; do
+        if ! kill -0 "${APP_PID}" 2>/dev/null; then
+            fail "app exited before writing the ${name} submit result"
+        fi
+        if [ "${waited}" -ge 450 ]; then
+            fail "timed out waiting for the ${name} submit result"
+        fi
+        sleep 0.2
+        waited=$((waited + 1))
+    done
+    kill -9 "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+    APP_PID=""
+
+    python3 - "${name}" "${result_file}" "${ssh_log}" "${confirmed}" <<'PY'
+import json
+import sys
+
+name, result_file, ssh_log, confirmed = sys.argv[1:5]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+script = data.get("script", "")
+for needle in ("#SBATCH --partition=main-cpu", "--output-dir"):
+    if needle not in script:
+        print(f"E2E_SUBMIT_FAIL: {name}: script lacks {needle!r}", file=sys.stderr)
+        sys.exit(1)
+log = ""
+try:
+    log = open(ssh_log, encoding="utf-8").read()
+except OSError:
+    pass
+if confirmed == "true":
+    if not data.get("ok"):
+        print(f"E2E_SUBMIT_FAIL: {name}: {data.get('error')}", file=sys.stderr)
+        sys.exit(1)
+    outcome = data.get("outcome") or {}
+    if outcome.get("job_id") != "424242":
+        print(f"E2E_SUBMIT_FAIL: {name}: job id {outcome.get('job_id')!r}", file=sys.stderr)
+        sys.exit(1)
+    if outcome.get("state") != "pending" or outcome.get("queue_reason") != "Resources":
+        print(f"E2E_SUBMIT_FAIL: {name}: state/reason {outcome.get('state')!r}/{outcome.get('queue_reason')!r}", file=sys.stderr)
+        sys.exit(1)
+    if log.count("sbatch") != 1:
+        print(f"E2E_SUBMIT_FAIL: {name}: expected exactly one sbatch, log={log!r}", file=sys.stderr)
+        sys.exit(1)
+    if "scancel" in log:
+        print(f"E2E_SUBMIT_FAIL: {name}: submitted job was cancelled", file=sys.stderr)
+        sys.exit(1)
+    print(
+        f"E2E_SUBMIT_MARK: {name} verified (confirmed=True, job_id={outcome['job_id']}, "
+        f"state={outcome['state']}, queue_reason={outcome['queue_reason']}, "
+        f"script_partition=main-cpu)"
+    )
+else:
+    if data.get("ok"):
+        print(f"E2E_SUBMIT_FAIL: {name}: unconfirmed submit was accepted", file=sys.stderr)
+        sys.exit(1)
+    if "confirmation" not in (data.get("error") or "").lower():
+        print(f"E2E_SUBMIT_FAIL: {name}: {data.get('error')}", file=sys.stderr)
+        sys.exit(1)
+    if "sbatch" in log:
+        print(f"E2E_SUBMIT_FAIL: {name}: unconfirmed submit called sbatch", file=sys.stderr)
+        sys.exit(1)
+    print(f"E2E_SUBMIT_MARK: {name} refused without confirmation (no sbatch)")
+PY
+    echo "Step verified: submission for ${name}."
+}
+
 REQUEST_MODULE="$(make_request plan-module \
     "${PLAN_ROOT}/data/code/pipelines/coperceive-pipeline.json" \
     "/data/code/pipelines/contract_pipeline.py")"
@@ -275,4 +387,12 @@ REQUEST_CONTAINER="$(make_request plan-container \
     "/data/code/pipelines/container/contract_pipeline.py")"
 run_plan plan-container "${REQUEST_CONTAINER}"
 
-echo "Plan e2e verified: module and container plans built, checked and saved; nothing submitted."
+PLAN_ID="$(python3 -c "import json; print(json.load(open('${TMP_DIR}/plan-module-result.json'))['plan']['id'])")"
+UNCONFIRMED="$(make_submit_request plan-submit-unconfirmed "${PLAN_ID}" false '{}')"
+run_submit plan-submit-unconfirmed "${UNCONFIRMED}" false
+CONFIRMED="$(make_submit_request plan-submit \
+    "${PLAN_ID}" true \
+    '{"walltime":"12:00:00","cpus_per_task":16,"account":null,"qos":null}')"
+run_submit plan-submit "${CONFIRMED}" true
+
+echo "Plan e2e verified: module and container plans built, checked and saved; nothing submitted until an explicit confirmation."

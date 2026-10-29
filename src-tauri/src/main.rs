@@ -27,6 +27,10 @@ use coperceive_desktop::detect::{self, DetectOptions, DetectionReport};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::run_plan::{self, PipelineEntry, RunPlan, RunPlanRequest};
 #[cfg(target_os = "macos")]
+use coperceive_desktop::job_submit::{
+    self as job_submit, JobSubmitOutcome, SubmissionPreview, SubmitOptions,
+};
+#[cfg(target_os = "macos")]
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{
@@ -1553,6 +1557,52 @@ async fn save_run_plan(
     .map_err(|error| format!("Could not save the run plan: {error}"))?
 }
 
+/// Renders the complete job script for a saved plan without submitting anything.
+/// The UI shows this text and sends its `preview_hash` back on confirm.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn preview_submission(
+    profile_id: String,
+    plan_id: String,
+    options: SubmitOptions,
+) -> Result<SubmissionPreview, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+        job_submit::render_run_script(&entry.profile, &plan, &options)
+    })
+    .await
+    .map_err(|error| format!("Could not render the submission script: {error}"))?
+}
+
+/// Submits a saved plan after the user explicitly confirmed the previewed
+/// script. Unconfirmed calls and preview-hash mismatches submit nothing.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn submit_run_plan(
+    profile_id: String,
+    plan_id: String,
+    options: SubmitOptions,
+    preview_hash: String,
+    confirmed: bool,
+) -> Result<JobSubmitOutcome, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        job_submit::submit_saved_plan(
+            &runner,
+            &entry.profile,
+            &plan_id,
+            &options,
+            &preview_hash,
+            confirmed,
+        )
+    })
+    .await
+    .map_err(|error| format!("Could not submit the run plan: {error}"))?
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
@@ -1808,6 +1858,8 @@ fn main() {
             read_custom_pipeline,
             build_run_plan,
             save_run_plan,
+            preview_submission,
+            submit_run_plan,
             remote_connect,
             remote_status,
             remote_disconnect,
@@ -1904,6 +1956,79 @@ fn main() {
                     };
                     let _ = fs::write(
                         &result_path,
+                        serde_json::to_string_pretty(&document).unwrap_or_default(),
+                    );
+                });
+            }
+
+            // Test-only seam for the submit step: preview and (only when the
+            // payload says confirmed) submit a saved plan against the fake ssh.
+            if let Some(probe) = coperceive_desktop::test_seams::hpc_submit_probe_request() {
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<serde_json::Value, String> {
+                        let text = fs::read_to_string(&probe.request)
+                            .map_err(|error| format!("Could not read the submit request: {error}"))?;
+                        let payload: serde_json::Value = serde_json::from_str(&text)
+                            .map_err(|error| format!("Submit request is not JSON: {error}"))?;
+                        let server_path = payload
+                            .get("server")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| "Submit request needs a server fixture path.".to_string())?;
+                        let server_text = fs::read_to_string(server_path)
+                            .map_err(|error| format!("Could not read the server fixture: {error}"))?;
+                        let entry: ServerEntry = serde_json::from_str(&server_text)
+                            .map_err(|error| format!("Server fixture is not valid: {error}"))?;
+                        let plan_id = payload
+                            .get("plan_id")
+                            .and_then(serde_json::Value::as_str)
+                            .ok_or_else(|| "Submit request needs a plan_id.".to_string())?
+                            .to_string();
+                        let options: SubmitOptions = payload
+                            .get("options")
+                            .cloned()
+                            .map(serde_json::from_value)
+                            .transpose()
+                            .map_err(|error| format!("Submit options are not valid: {error}"))?
+                            .unwrap_or_default();
+                        let confirmed = payload
+                            .get("confirmed")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false);
+                        let runner = plan_runner(&entry)?;
+                        let plan = job_submit::load_saved_plan(&runner, &entry.profile, &plan_id)?;
+                        let preview =
+                            job_submit::render_run_script(&entry.profile, &plan, &options)?;
+                        let submitted = job_submit::submit_saved_plan(
+                            &runner,
+                            &entry.profile,
+                            &plan_id,
+                            &options,
+                            &preview.preview_hash,
+                            confirmed,
+                        );
+                        Ok(match submitted {
+                            Ok(outcome) => serde_json::json!({
+                                "ok": true,
+                                "confirmed": confirmed,
+                                "preview_hash": preview.preview_hash,
+                                "script": preview.script,
+                                "outcome": outcome,
+                            }),
+                            Err(error) => serde_json::json!({
+                                "ok": false,
+                                "confirmed": confirmed,
+                                "preview_hash": preview.preview_hash,
+                                "script": preview.script,
+                                "error": error,
+                            }),
+                        })
+                    })();
+                    let document = match result {
+                        Ok(value) => value,
+                        Err(error) => serde_json::json!({"ok": false, "error": error}),
+                    };
+                    let _ = fs::write(
+                        &probe.result,
                         serde_json::to_string_pretty(&document).unwrap_or_default(),
                     );
                 });

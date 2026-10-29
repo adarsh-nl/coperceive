@@ -12,7 +12,14 @@ import type {
   ServerEntry,
   SshHostSettings,
 } from "./hpc";
-import type { PipelineEntry, RunPlan, RunPlanRequest } from "./runPlan";
+import type {
+  JobSubmitOutcome,
+  PipelineEntry,
+  RunPlan,
+  RunPlanRequest,
+  SubmissionPreview,
+  SubmitOptions,
+} from "./runPlan";
 
 interface SessionPayload {
   origin: string;
@@ -200,6 +207,50 @@ export async function saveRunPlan(
     return await invoke<RunPlan>("save_run_plan", { profileId, plan, request });
   }
   throw new Error("Saving a run plan is only available in the desktop app.");
+}
+
+/**
+ * Renders the complete job script for a saved plan without submitting anything.
+ * The UI shows this text; its preview_hash is sent back with the confirmation.
+ */
+export async function previewSubmission(
+  profileId: string,
+  planId: string,
+  options: SubmitOptions,
+): Promise<SubmissionPreview> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<SubmissionPreview>("preview_submission", {
+      profileId,
+      planId,
+      options,
+    });
+  }
+  throw new Error("Rendering a submission script is only available in the desktop app.");
+}
+
+/**
+ * Submits a saved plan after the user confirmed the previewed script on screen.
+ * The backend refuses when `confirmed` is false or the preview hash changed.
+ */
+export async function submitRunPlan(
+  profileId: string,
+  planId: string,
+  options: SubmitOptions,
+  previewHash: string,
+  confirmed: boolean,
+): Promise<JobSubmitOutcome> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<JobSubmitOutcome>("submit_run_plan", {
+      profileId,
+      planId,
+      options,
+      previewHash,
+      confirmed,
+    });
+  }
+  throw new Error("Submitting a run plan is only available in the desktop app.");
 }
 
 export async function pickDataRoot(): Promise<string | null> {
