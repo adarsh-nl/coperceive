@@ -13,11 +13,14 @@ import type {
   SshHostSettings,
 } from "./hpc";
 import type {
+  ImportedPredictions,
   JobCancelResult,
   JobLogTail,
   JobSubmitOutcome,
   JobWatchStatus,
+  MetricsReport,
   PipelineEntry,
+  PredictionTail,
   RunPlan,
   RunPlanRequest,
   SubmissionPreview,
@@ -643,4 +646,39 @@ export async function cancelRunJob(
     return await invoke<JobCancelResult>("cancel_run_job", { profileId, planId, jobId, confirmed });
   }
   throw new Error("Cancelling a run is only available in the desktop app.");
+}
+
+/** One bounded read of the run's streamed predictions.jsonl. */
+export async function predictionStream(
+  profileId: string,
+  planId: string,
+  offset: number,
+  maxBytes = 65536,
+): Promise<PredictionTail> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<PredictionTail>("prediction_stream", { profileId, planId, offset, maxBytes });
+  }
+  throw new Error("Following a run's predictions is only available in the desktop app.");
+}
+
+/** The pipeline's final metrics.json, or null while it does not exist. */
+export async function runMetrics(profileId: string, planId: string): Promise<MetricsReport | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<MetricsReport | null>("run_metrics", { profileId, planId });
+  }
+  throw new Error("The run report is only available in the desktop app.");
+}
+
+/** Imports the run's predictions and opens the viewer on the stored run. */
+export async function openPredictions(
+  profileId: string,
+  planId: string,
+): Promise<ImportedPredictions> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<ImportedPredictions>("open_predictions", { profileId, planId });
+  }
+  throw new Error("Opening predictions is only available in the desktop app.");
 }

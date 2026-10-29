@@ -471,6 +471,38 @@ case "${remote}" in
             "${FAKE_JOB_STATE:-COMPLETED}"
         exit 0
         ;;
+    *"predictions import"*)
+        log_command "predictions-import"
+        mkdir -p "${FAKE_REMOTE_ROOT}/data/scenes/predictions/test-run" 2>/dev/null || true
+        if [ -n "${FAKE_REMOTE_ROOT:-}" ]; then
+            mkdir -p "${FAKE_REMOTE_ROOT}/data/scenes/predictions/test-run"
+            printf '{"format":"coperceive-predictions","format_version":1}\n' \
+                > "${FAKE_REMOTE_ROOT}/data/scenes/predictions/test-run/run.json"
+        fi
+        exit 0
+        ;;
+    *"test -s"*)
+        log_command "test-predictions"
+        exit 0
+        ;;
+    *"tail -c +"*)
+        log_command "predictions-tail"
+        if [ -z "${FAKE_PREDICTIONS_PATH:-}" ] || [ ! -f "${FAKE_PREDICTIONS_PATH}" ]; then
+            echo "fake_ssh: no FAKE_PREDICTIONS_PATH" >&2
+            exit 1
+        fi
+        wc -c < "${FAKE_PREDICTIONS_PATH}"
+        cat "${FAKE_PREDICTIONS_PATH}"
+        exit 0
+        ;;
+    *"head -c 262144"*)
+        log_command "metrics"
+        if [ -z "${FAKE_METRICS_PATH:-}" ] || [ ! -f "${FAKE_METRICS_PATH}" ]; then
+            exit 1
+        fi
+        cat "${FAKE_METRICS_PATH}"
+        exit 0
+        ;;
     *"tail -n "*)
         log_command "tail"
         rest="${remote#*-- }"

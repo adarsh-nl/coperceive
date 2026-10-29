@@ -383,12 +383,13 @@ make_watch_request() {
     local action="$2"
     local stream="$3"
     local confirmed="$4"
+    local extra_json="${5:-{\}}"
     local request_file="${TMP_DIR}/${name}-watch-request.json"
-    python3 - "${request_file}" "${FIXTURES_DIR}/cluster-b.json" "${PLAN_ID}" "${action}" "${stream}" "${confirmed}" <<'PY'
+    python3 - "${request_file}" "${FIXTURES_DIR}/cluster-b.json" "${PLAN_ID}" "${action}" "${stream}" "${confirmed}" "${extra_json}" <<'PY'
 import json
 import sys
 
-request_file, server_path, plan_id, action, stream, confirmed = sys.argv[1:7]
+request_file, server_path, plan_id, action, stream, confirmed, extra_json = sys.argv[1:8]
 payload = {
     "server": server_path,
     "plan_id": plan_id,
@@ -398,6 +399,7 @@ payload = {
     "lines": 50,
     "confirmed": confirmed == "true",
 }
+payload.update(json.loads(extra_json))
 with open(request_file, "w", encoding="utf-8") as handle:
     json.dump(payload, handle)
 PY
@@ -420,6 +422,8 @@ run_watch() {
     FAKE_SSH_LOG="${ssh_log}" \
     FAKE_JOB_NAME="coperceive-run-${PLAN_ID}" \
     FAKE_JOB_STATE="${job_state}" \
+    FAKE_PREDICTIONS_PATH="${PREDICTIONS_FILE}" \
+    FAKE_METRICS_PATH="${METRICS_FILE}" \
     COPERCEIVE_TEST_ENV=1 \
     COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
     COPERCEIVE_TEST_HPC_WATCH_REQUEST="${request_file}" \
@@ -442,11 +446,11 @@ run_watch() {
     wait "${APP_PID}" 2>/dev/null || true
     APP_PID=""
 
-    python3 - "${name}" "${action}" "${job_state}" "${result_file}" "${ssh_log}" <<'PY'
+    python3 - "${name}" "${action}" "${job_state}" "${PLAN_ID}" "${result_file}" "${ssh_log}" <<'PY'
 import json
 import sys
 
-name, action, job_state, result_file, ssh_log = sys.argv[1:6]
+name, action, job_state, plan_id, result_file, ssh_log = sys.argv[1:7]
 with open(result_file, encoding="utf-8") as handle:
     data = json.load(handle)
 if not data.get("ok"):
@@ -488,6 +492,38 @@ elif action == "cancel":
         print(f"E2E_WATCH_FAIL: {name}: expected exactly one scancel, log={log!r}", file=sys.stderr)
         sys.exit(1)
     print(f"E2E_WATCH_MARK: {name} verified (cancelled, scancel_calls=1)")
+elif action == "tail":
+    tail = data.get("tail") or {}
+    progress = tail.get("progress") or {}
+    if tail.get("boxes") != 3:
+        print(f"E2E_REPORT_FAIL: {name}: boxes {tail.get('boxes')!r}", file=sys.stderr)
+        sys.exit(1)
+    if progress.get("frames_done") != 3:
+        print(f"E2E_REPORT_FAIL: {name}: progress {progress!r}", file=sys.stderr)
+        sys.exit(1)
+    if "predictions-tail" not in log:
+        print(f"E2E_REPORT_FAIL: {name}: no bounded tail command", file=sys.stderr)
+        sys.exit(1)
+    print(f"E2E_REPORT_MARK: {name} verified (boxes={tail['boxes']}, frames_done=3, offset={tail.get('offset')})")
+elif action == "metrics":
+    report = data.get("metrics") or {}
+    metrics = report.get("metrics") or {}
+    if metrics.get("latency_ms_per_frame") != 41.2:
+        print(f"E2E_REPORT_FAIL: {name}: metrics {metrics!r}", file=sys.stderr)
+        sys.exit(1)
+    print(f"E2E_REPORT_MARK: {name} verified (latency_ms_per_frame=41.2, notes={report.get('notes')!r})")
+elif action == "import":
+    imported = data.get("imported") or {}
+    if imported.get("run_id") != plan_id:
+        print(f"E2E_REPORT_FAIL: {name}: run id {imported.get('run_id')!r}", file=sys.stderr)
+        sys.exit(1)
+    if "Town03-000" not in (imported.get("scenes") or []):
+        print(f"E2E_REPORT_FAIL: {name}: scenes {imported.get('scenes')!r}", file=sys.stderr)
+        sys.exit(1)
+    if "predictions-import" not in log:
+        print(f"E2E_REPORT_FAIL: {name}: no predictions import command", file=sys.stderr)
+        sys.exit(1)
+    print(f"E2E_REPORT_MARK: {name} verified (run_id={imported['run_id']}, predictions_root={imported.get('predictions_root')})")
 PY
     echo "Step verified: watch ${name}."
 }
@@ -509,6 +545,8 @@ CONFIRMED="$(make_submit_request plan-submit \
     '{"walltime":"12:00:00","cpus_per_task":16,"account":null,"qos":null}')"
 run_submit plan-submit "${CONFIRMED}" true
 
+PREDICTIONS_FILE="${TMP_DIR}/predictions.jsonl"
+METRICS_FILE="${TMP_DIR}/metrics.json"
 WATCH_JOB_NAME="coperceive-run-${PLAN_ID}"
 mkdir -p "${PLAN_ROOT}/data/results"
 printf 'starting run\nwrote predictions for Town03\n' > "${PLAN_ROOT}/data/results/${WATCH_JOB_NAME}-424242.out"
@@ -520,4 +558,22 @@ run_watch watch-logs "${WATCH_LOGS}" logs RUNNING
 WATCH_CANCEL="$(make_watch_request watch-cancel cancel "" true)"
 run_watch watch-cancel "${WATCH_CANCEL}" cancel RUNNING
 
-echo "Plan e2e verified: module and container plans built, checked and saved; nothing submitted until an explicit confirmation; the submitted job was watched and cancelled."
+PREDICTIONS_FILE="${TMP_DIR}/predictions.jsonl"
+cat > "${PREDICTIONS_FILE}" <<'JSON'
+{"agent_id":"vehicle","source":"bev-fusion","time_us":0,"category":"car","score":0.9,"track_id":null,"cx":1,"cy":0,"cz":0,"length":4,"width":2,"height":1.6,"qw":1,"qx":0,"qy":0,"qz":0,"frame":"world"}
+{"agent_id":"vehicle","source":"bev-fusion","time_us":100000,"category":"car","score":0.8,"track_id":null,"cx":2,"cy":0,"cz":0,"length":4,"width":2,"height":1.6,"qw":1,"qx":0,"qy":0,"qz":0,"frame":"world"}
+{"agent_id":"vehicle","source":"bev-fusion","time_us":200000,"category":"car","score":0.7,"track_id":null,"cx":3,"cy":0,"cz":0,"length":4,"width":2,"height":1.6,"qw":1,"qx":0,"qy":0,"qz":0,"frame":"world"}
+{"type":"progress","scenes_done":1,"scenes_total":1,"frames_done":3,"frames_total":10}
+JSON
+METRICS_FILE="${TMP_DIR}/metrics.json"
+cat > "${METRICS_FILE}" <<'JSON'
+{"schema":"coperceive-pipeline-metrics","version":1,"run":{"model":"bev-fusion","checkpoint":"model.pt","scenes":["Town03-000"]},"outputs":[{"agent_id":"vehicle","source":"bev-fusion","boxes":3,"scenes":1}],"metrics":{"latency_ms_per_frame":41.2},"notes":"fake pipeline report"}
+JSON
+WATCH_TAIL="$(make_watch_request watch-output-tail tail stdout false '{}')"
+run_watch watch-output-tail "${WATCH_TAIL}" tail RUNNING
+WATCH_METRICS="$(make_watch_request watch-metrics metrics "" false '{}')"
+run_watch watch-metrics "${WATCH_METRICS}" metrics COMPLETED
+WATCH_IMPORT="$(make_watch_request watch-import import "" false '{}')"
+run_watch watch-import "${WATCH_IMPORT}" import COMPLETED
+
+echo "Plan e2e verified: module and container plans built, checked and saved; nothing submitted until an explicit confirmation; the submitted job was watched, its log and predictions were read, its metrics report was read, and its predictions were imported."

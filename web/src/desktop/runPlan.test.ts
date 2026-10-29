@@ -7,14 +7,17 @@ import {
   emptyEnvironmentOverride,
   environmentKindLabel,
   environmentSummary,
+  failureNextAction,
   formatArgv,
   isJobActive,
   jobStateLabel,
+  metricsRows,
   jobWatchLabel,
   shouldPollJob,
   initialArgumentForm,
   planIsSaveable,
   planSummary,
+  progressLabel,
   validateArgumentForm,
   type JobWatchStatus,
   type PipelineSpec,
@@ -194,4 +197,36 @@ test("polling only happens while a job can still change", () => {
   for (const terminal of ["completed", "failed", "cancelled", "unknown"]) {
     assert.strictEqual(shouldPollJob(terminal), false);
   }
+});
+
+test("live progress reads plainly and omits counters the pipeline did not send", () => {
+  assert.strictEqual(progressLabel(null), "");
+  assert.strictEqual(
+    progressLabel({ scenes_done: 2, scenes_total: 5, frames_done: 300, frames_total: 745 }),
+    "scenes 2/5 · frames 300/745",
+  );
+  assert.strictEqual(
+    progressLabel({ scenes_done: null, scenes_total: null, frames_done: 3, frames_total: null }),
+    "frames 3/?",
+  );
+});
+
+test("the metrics report table shows model, metrics and outputs", () => {
+  const rows = metricsRows({
+    run: { model: "bev-fusion", checkpoint: "ckpt.pt", scenes: ["Town03-000"] },
+    outputs: [{ agent_id: "vehicle", source: "bev-fusion", boxes: 1490, scenes: 1 }],
+    metrics: { latency_ms_per_frame: 41.2, notes: "fast" },
+    notes: "pipeline note",
+    raw: "{}",
+  });
+  assert.ok(rows.some((row) => row.label === "model" && row.value === "bev-fusion"));
+  assert.ok(rows.some((row) => row.label === "checkpoint" && row.value === "ckpt.pt"));
+  assert.ok(rows.some((row) => row.label === "latency_ms_per_frame" && row.value === "41.2"));
+  assert.ok(rows.some((row) => row.label === "vehicle/bev-fusion" && row.value === "1490 boxes"));
+});
+
+test("a failed run has one concrete next action", () => {
+  const action = failureNextAction();
+  assert.ok(action.includes("stderr"));
+  assert.ok(action.includes("submit a new run"));
 });
