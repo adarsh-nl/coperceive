@@ -145,7 +145,7 @@ def test_remote_start_uploads_static_dir_via_env(
     assert missing["status"] == "error"
     assert "no index.html" in missing["error"]
 
-    (static_dir / "index.html").write_text("<script src=\"./a.js\"></script>\n", encoding="utf-8")
+    (static_dir / "index.html").write_text('<script src="./a.js"></script>\n', encoding="utf-8")
     (static_dir / "a.js").write_text("console.log('viewer')\n", encoding="utf-8")
     captured: dict[str, str] = {}
 

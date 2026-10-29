@@ -474,6 +474,7 @@ def test_missing_viewer_bundle_shows_a_build_hint(tmp_path: Path) -> None:
     assert "bash scripts/build_web_static.sh" in text
     assert client.get("/api/health").status_code == 200
 
+
 def test_map_http_and_favicon(tmp_path: Path) -> None:
     xodr = tmp_path / "Town03.xodr"
     _straight(xodr)

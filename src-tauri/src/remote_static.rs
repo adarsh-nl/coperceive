@@ -167,9 +167,10 @@ fn fetch_remote_manifest(
     alias: &str,
     remote_rel: &str,
     destination: &Path,
+    scp: &str,
 ) -> Result<Option<String>, String> {
     let _ = fs::remove_file(destination);
-    let output = Command::new(scp_bin())
+    let output = Command::new(scp)
         .args(["-q", "-p"])
         .arg(format!("{alias}:{remote_rel}/{MANIFEST_NAME}"))
         .arg(destination)
@@ -183,10 +184,10 @@ fn fetch_remote_manifest(
         .map_err(|error| format!("Could not read the fetched manifest: {error}"))
 }
 
-fn upload_static(alias: &str, local: &Path, remote_rel: &str) -> Result<(), String> {
+fn upload_static(alias: &str, local: &Path, remote_rel: &str, scp: &str) -> Result<(), String> {
     let source = format!("{}/.", local.display());
     let destination = format!("{alias}:{remote_rel}");
-    let output = Command::new(scp_bin())
+    let output = Command::new(scp)
         .args(["-r", "-q", "-p"])
         .arg(&source)
         .arg(&destination)
@@ -205,10 +206,27 @@ fn upload_static(alias: &str, local: &Path, remote_rel: &str) -> Result<(), Stri
 /// Ensures the remote cache holds this app version's static bundle and returns
 /// the remote directory to pass as `--static` (a `~/...` path).
 pub fn prepare_remote_static(alias: &str, version: &str) -> Result<String, String> {
+    let local = static_bundle_dir()?;
+    prepare_remote_static_with(alias, version, &local, &ssh_bin(), &scp_bin())
+}
+
+/// Same, with the transport and the local bundle injected (unit tests).
+fn prepare_remote_static_with(
+    alias: &str,
+    version: &str,
+    local: &Path,
+    ssh: &str,
+    scp: &str,
+) -> Result<String, String> {
     validate_alias(alias)?;
     let version = validate_version(version)?;
-    let local = static_bundle_dir()?;
-    let manifest = manifest_for(&local)?;
+    if !local.join("index.html").is_file() {
+        return Err(format!(
+            "The built viewer bundle at {} has no index.html. Run scripts/build_web_static.sh.",
+            local.display()
+        ));
+    }
+    let manifest = manifest_for(local)?;
     let remote_rel = format!("{STATIC_REL}/{version}");
     let remote_display = format!("~/{remote_rel}");
 
@@ -220,19 +238,19 @@ pub fn prepare_remote_static(alias: &str, version: &str) -> Result<String, Strin
             .map(|duration| duration.as_nanos())
             .unwrap_or_default()
     ));
-    let existing = fetch_remote_manifest(alias, &remote_rel, &temporary)?;
+    let existing = fetch_remote_manifest(alias, &remote_rel, &temporary, scp)?;
     let _ = fs::remove_file(&temporary);
     if existing.as_deref() == Some(manifest.as_str()) {
         return Ok(remote_display);
     }
 
-    let runner = SshRunner::new(ssh_bin(), SshTarget::alias(alias));
+    let runner = SshRunner::new(ssh, SshTarget::alias(alias));
     let version_quoted = shell_quote(&version);
     let mkdir = format!(
         "sh -c 'mkdir -p -- \"$HOME/{STATIC_REL}/$1\"' sh {version_quoted}"
     );
     run_ssh(&runner, &mkdir, None)?;
-    upload_static(alias, &local, &remote_rel)?;
+    upload_static(alias, local, &remote_rel, scp)?;
     let write_manifest = format!(
         "sh -c 'cat > \"$HOME/{STATIC_REL}/$1/{MANIFEST_NAME}\"' sh {version_quoted}"
     );
@@ -243,23 +261,7 @@ pub fn prepare_remote_static(alias: &str, version: &str) -> Result<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write as _;
     use std::os::unix::fs::PermissionsExt;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct EnvGuard {
-        keys: Vec<&'static str>,
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            for key in &self.keys {
-                std::env::remove_var(key);
-            }
-        }
-    }
 
     fn write_script(path: &Path, body: &str) {
         fs::write(path, body).expect("write script");
@@ -268,183 +270,124 @@ mod tests {
         fs::set_permissions(path, perms).expect("permissions");
     }
 
-    fn fake_ssh_script() -> &'static str {
-        r#"#!/usr/bin/env bash
+    fn write_static(root: &Path) {
+        let assets = root.join("assets");
+        fs::create_dir_all(&assets).expect("assets");
+        fs::write(
+            root.join("index.html"),
+            "<script src=\"./assets/app.js\"></script>\n",
+        )
+        .expect("index");
+        fs::write(assets.join("app.js"), "console.log('viewer')\n").expect("js");
+    }
+
+    fn fake_ssh_script(remote_root: &Path, log: &Path) -> String {
+        format!(
+            r#"#!/usr/bin/env bash
 set -u
-remote="${!#}"
-if [ -n "${FAKE_SSH_LOG:-}" ]; then printf '%s\n' "$remote" >> "$FAKE_SSH_LOG"; fi
-version="${remote##* }"; version="${version#\'}"; version="${version%\'}"
+remote="${{!#}}"
+printf '%s\n' "$remote" >> "{log}"
+version="${{remote##* }}"; version="${{version#\'}}"; version="${{version%\'}}"
 case "$remote" in
   *"mkdir -p -- \"\$HOME/.cache/coperceive/static/\$1\""*)
-      mkdir -p "$FAKE_REMOTE_ROOT/home/.cache/coperceive/static/$version"
+      mkdir -p "{root}/home/.cache/coperceive/static/$version"
       exit 0
       ;;
   *"cat > \"\$HOME/.cache/coperceive/static/\$1/.coperceive-static-manifest\""*)
-      mkdir -p "$FAKE_REMOTE_ROOT/home/.cache/coperceive/static/$version"
-      cat > "$FAKE_REMOTE_ROOT/home/.cache/coperceive/static/$version/.coperceive-static-manifest"
+      mkdir -p "{root}/home/.cache/coperceive/static/$version"
+      cat > "{root}/home/.cache/coperceive/static/$version/.coperceive-static-manifest"
       exit 0
       ;;
 esac
 echo "fake ssh: unsupported: $remote" >&2
 exit 1
-"#
+"#,
+            log = log.display(),
+            root = remote_root.display(),
+        )
     }
 
-    fn fake_scp_script() -> &'static str {
-        r#"#!/usr/bin/env bash
+    fn fake_scp_script(remote_root: &Path, log: &Path) -> String {
+        format!(
+            r#"#!/usr/bin/env bash
 set -u
-printf '%s\n' "$*" >> "${FAKE_SCP_LOG:?}"
-src="${@: -2:1}"
-dst="${@: -1:1}"
+printf '%s\n' "$*" >> "{log}"
+src="${{@: -2:1}}"
+dst="${{@: -1:1}}"
 case "$src" in
   *:*)
-      rel="${src#*:}"
-      cp "$FAKE_REMOTE_ROOT/home/$rel" "$dst"
+      rel="${{src#*:}}"
+      cp "{root}/home/$rel" "$dst"
       ;;
   *)
-      rel="${dst#*:}"
-      mkdir -p "$FAKE_REMOTE_ROOT/home/$rel"
-      cp -R "$src" "$FAKE_REMOTE_ROOT/home/$rel/"
+      rel="${{dst#*:}}"
+      mkdir -p "{root}/home/$rel"
+      cp -R "$src" "{root}/home/$rel/"
       ;;
 esac
-"#
+"#,
+            log = log.display(),
+            root = remote_root.display(),
+        )
     }
 
-    fn write_static(root: &Path) {
-        let assets = root.join("assets");
-        fs::create_dir_all(&assets).expect("assets");
-        fs::write(root.join("index.html"), "<script src=\"./assets/app.js\"></script>\n")
-            .expect("index");
-        fs::write(assets.join("app.js"), "console.log('viewer')\n").expect("js");
-    }
-
-    #[test]
-    fn uploads_once_then_skips_a_complete_cache() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let root = std::env::temp_dir().join(format!(
-            "coperceive-static-test-{}-{}",
+    fn temp_root(label: &str) -> PathBuf {
+        std::env::temp_dir().join(format!(
+            "coperceive-static-{label}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .expect("time")
                 .as_nanos()
-        ));
-        let local = root.join("static");
-        let remote = root.join("remote");
-        fs::create_dir_all(&remote).expect("remote root");
-        write_static(&local);
-        let ssh = root.join("fake_ssh.sh");
-        let scp = root.join("fake_scp.sh");
-        write_script(&ssh, fake_ssh_script());
-        write_script(&scp, fake_scp_script());
-        let ssh_log = root.join("ssh.log");
-        let scp_log = root.join("scp.log");
+        ))
+    }
 
-        let guard = EnvGuard {
-            keys: vec![
-                "COPERCEIVE_SSH_BIN",
-                "COPERCEIVE_SCP_BIN",
-                "COPERCEIVE_STATIC_DIR",
-                "FAKE_REMOTE_ROOT",
-                "FAKE_SSH_LOG",
-                "FAKE_SCP_LOG",
-            ],
-        };
-        std::env::set_var("COPERCEIVE_SSH_BIN", &ssh);
-        std::env::set_var("COPERCEIVE_SCP_BIN", &scp);
-        std::env::set_var("COPERCEIVE_STATIC_DIR", &local);
-        std::env::set_var("FAKE_REMOTE_ROOT", &remote);
-        std::env::set_var("FAKE_SSH_LOG", &ssh_log);
-        std::env::set_var("FAKE_SCP_LOG", &scp_log);
+    fn uploads(scp_log: &Path) -> usize {
+        fs::read_to_string(scp_log)
+            .unwrap_or_default()
+            .lines()
+            .filter(|line| line.starts_with("-r "))
+            .count()
+    }
 
-        let first = prepare_remote_static("cluster-a", "0.1.0").expect("first upload");
+    fn ssh_writes(ssh_log: &Path) -> usize {
+        fs::read_to_string(ssh_log).unwrap_or_default().lines().count()
+    }
+
+    #[test]
+    fn uploads_once_then_skips_a_complete_cache() {
+        let (root, local, remote, ssh, scp, ssh_log, scp_log) = setup_with_logs("complete");
+        let first = prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
+            .expect("first upload");
         assert_eq!(first, "~/.cache/coperceive/static/0.1.0");
         let cached = remote.join("home/.cache/coperceive/static/0.1.0");
         assert!(cached.join("index.html").is_file());
         assert!(cached.join("assets/app.js").is_file());
         assert!(cached.join(MANIFEST_NAME).is_file());
-        let scp_calls = fs::read_to_string(&scp_log).unwrap_or_default();
-        assert_eq!(
-            scp_calls.matches(" -r ").count(),
-            1,
-            "first start uploads once: {scp_calls}"
-        );
-        let ssh_calls = fs::read_to_string(&ssh_log).unwrap_or_default();
-        assert_eq!(ssh_calls.lines().count(), 2, "mkdir + manifest: {ssh_calls}");
+        assert_eq!(uploads(&scp_log), 1, "first start uploads once");
+        assert_eq!(ssh_writes(&ssh_log), 2, "mkdir + manifest");
 
-        let second = prepare_remote_static("cluster-a", "0.1.0").expect("second start");
+        let second = prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
+            .expect("second start");
         assert_eq!(second, first);
-        let scp_calls = fs::read_to_string(&scp_log).unwrap_or_default();
-        assert_eq!(
-            scp_calls.matches(" -r ").count(),
-            1,
-            "a complete cache must not be uploaded again: {scp_calls}"
-        );
-        let ssh_calls = fs::read_to_string(&ssh_log).unwrap_or_default();
-        assert_eq!(
-            ssh_calls.lines().count(),
-            2,
-            "a complete cache needs no ssh writes: {ssh_calls}"
-        );
-
+        assert_eq!(uploads(&scp_log), 1, "a complete cache is not uploaded again");
+        assert_eq!(ssh_writes(&ssh_log), 2, "a complete cache needs no ssh writes");
         let _ = fs::remove_dir_all(&root);
-        drop(guard);
     }
 
     #[test]
     fn a_partial_cache_is_uploaded_again() {
-        let _lock = ENV_LOCK.lock().unwrap_or_else(|error| error.into_inner());
-        let root = std::env::temp_dir().join(format!(
-            "coperceive-static-partial-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
-        let local = root.join("static");
-        let remote = root.join("remote");
-        fs::create_dir_all(&remote).expect("remote root");
-        write_static(&local);
-        let ssh = root.join("fake_ssh.sh");
-        let scp = root.join("fake_scp.sh");
-        write_script(&ssh, fake_ssh_script());
-        write_script(&scp, fake_scp_script());
-        let ssh_log = root.join("ssh.log");
-        let scp_log = root.join("scp.log");
-        let guard = EnvGuard {
-            keys: vec![
-                "COPERCEIVE_SSH_BIN",
-                "COPERCEIVE_SCP_BIN",
-                "COPERCEIVE_STATIC_DIR",
-                "FAKE_REMOTE_ROOT",
-                "FAKE_SSH_LOG",
-                "FAKE_SCP_LOG",
-            ],
-        };
-        std::env::set_var("COPERCEIVE_SSH_BIN", &ssh);
-        std::env::set_var("COPERCEIVE_SCP_BIN", &scp);
-        std::env::set_var("COPERCEIVE_STATIC_DIR", &local);
-        std::env::set_var("FAKE_REMOTE_ROOT", &remote);
-        std::env::set_var("FAKE_SSH_LOG", &ssh_log);
-        std::env::set_var("FAKE_SCP_LOG", &scp_log);
-
-        prepare_remote_static("cluster-a", "0.1.0").expect("upload");
+        let (root, local, remote, ssh, scp, _ssh_log, scp_log) = setup_with_logs("partial");
+        prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
+            .expect("upload");
         let cached = remote.join("home/.cache/coperceive/static/0.1.0");
-        // A stale file (or a previous app build) invalidates the manifest.
         fs::write(cached.join("assets/app.js"), "console.log('stale')\n").expect("stale");
-        prepare_remote_static("cluster-a", "0.1.0").expect("re-upload");
-        let scp_calls = fs::read_to_string(&scp_log).unwrap_or_default();
-        assert_eq!(
-            scp_calls.matches(" -r ").count(),
-            2,
-            "a stale cache must be uploaded again: {scp_calls}"
-        );
+        prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
+            .expect("re-upload");
+        assert_eq!(uploads(&scp_log), 2, "a stale cache is uploaded again");
         let current = fs::read_to_string(cached.join("assets/app.js")).expect("js");
         assert!(current.contains("viewer"), "{current}");
-
         let _ = fs::remove_dir_all(&root);
-        drop(guard);
     }
 
     #[test]
@@ -458,14 +401,7 @@ esac
 
     #[test]
     fn manifest_lists_files_with_sizes_sorted() {
-        let root = std::env::temp_dir().join(format!(
-            "coperceive-static-manifest-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
+        let root = temp_root("manifest");
         write_static(&root);
         let manifest = manifest_for(&root).expect("manifest");
         assert!(manifest.contains("assets/app.js"));
@@ -475,24 +411,20 @@ esac
         let _ = fs::remove_dir_all(&root);
     }
 
-    #[test]
-    fn a_static_dir_without_a_manifest_sized_file_upload_is_still_complete() {
-        // The unpacked static dir itself has no index -> static_bundle_dir errors.
-        let root = std::env::temp_dir().join(format!(
-            "coperceive-static-missing-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ));
-        fs::create_dir_all(&root).expect("root");
-        let guard = EnvGuard {
-            keys: vec!["COPERCEIVE_STATIC_DIR"],
-        };
-        std::env::set_var("COPERCEIVE_STATIC_DIR", &root);
-        assert!(static_bundle_dir().is_err());
-        drop(guard);
-        let _ = fs::remove_dir_all(&root);
+    fn setup_with_logs(
+        label: &str,
+    ) -> (PathBuf, PathBuf, PathBuf, PathBuf, PathBuf, PathBuf, PathBuf) {
+        let root = temp_root(label);
+        let local = root.join("static");
+        let remote = root.join("remote");
+        fs::create_dir_all(&remote).expect("remote root");
+        write_static(&local);
+        let ssh = root.join("fake_ssh.sh");
+        let scp = root.join("fake_scp.sh");
+        let ssh_log = root.join("ssh.log");
+        let scp_log = root.join("scp.log");
+        write_script(&ssh, &fake_ssh_script(&remote, &ssh_log));
+        write_script(&scp, &fake_scp_script(&remote, &scp_log));
+        (root, local, remote, ssh, scp, ssh_log, scp_log)
     }
 }
