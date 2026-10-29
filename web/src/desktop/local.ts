@@ -55,6 +55,7 @@ export interface AppPersistentState {
   last_sample_index?: number;
   last_timestamp_ns?: number;
   last_viewpoint?: string;
+  theme_override?: string;
   last_theme?: string;
   recent_roots: string[];
 }

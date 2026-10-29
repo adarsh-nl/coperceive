@@ -93,9 +93,19 @@ chmod 0700 "${STATE_DIR}"
 APP_PID=""
 UPDATE_SERVER_PID=""
 
+INITIAL_DARK_MODE="false"
+if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null)" = "Dark" ]; then
+    INITIAL_DARK_MODE="true"
+fi
+
 cleanup() {
     local status=$?
     echo "Cleaning up test harness (exit status: ${status})..."
+    if [ "${INITIAL_DARK_MODE:-}" = "true" ]; then
+        osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true' 2>/dev/null || defaults write -g AppleInterfaceStyle "Dark" 2>/dev/null || true
+    elif [ -n "${INITIAL_DARK_MODE:-}" ]; then
+        osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to false' 2>/dev/null || defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+    fi
     if [ "${status}" -ne 0 ]; then
         echo "=== App STDOUT on failure ==="
         cat "${APP_STDOUT}" 2>/dev/null || true
@@ -140,9 +150,16 @@ pkill -f "coperceive serve" 2>/dev/null || true
 pkill -f "coperceive-desktop" 2>/dev/null || true
 pkill -f "Coperceive" 2>/dev/null || true
 
-# Clear previous state
+# Force macOS appearance to light to verify migration from legacy last_theme: "dark"
+osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to false' 2>/dev/null || defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+
+# Clear previous state and seed state.json with old-style state containing legacy last_theme: "dark"
 rm -f "${STATE_FILE}"
 rm -f "${HOME}/Library/Application Support/coperceive/state.json"
+mkdir -p "${STATE_DIR}"
+cat << 'EOF' > "${STATE_FILE}"
+{"last_theme": "dark", "reopen_last_session": true}
+EOF
 
 echo ""
 echo "--- Step 1: Launch App with Fixture 1 (Multi-Scene Root) ---"
@@ -274,6 +291,11 @@ assert empty_desc.endswith("."), f"Description must end with period: {empty_desc
 assert empty_action == "", f"Empty inspector should have no action button: {empty_action}"
 print(f"Verified: Inspector empty state rendered correctly ({empty_title})")
 
+print("Asserting legacy last_theme migration: system appearance is light, app must follow system...")
+theme_val = eval_js("document.documentElement.dataset.theme")
+print(f"Current document theme: {theme_val}")
+assert theme_val == "light", f"Expected theme to follow light system appearance despite legacy last_theme: 'dark', got '{theme_val}'"
+
 print("Driving real UI: clicking Drone viewpoint button...")
 eval_js("""(() => {
     const btn = document.querySelector(\x27button[aria-keyshortcuts="3"]\x27);
@@ -344,6 +366,8 @@ while time.monotonic() < deadline:
 print(f"Step 1 verified state.json content: {saved}", flush=True)
 assert saved.get("last_viewpoint") == "chase", f"Expected last_viewpoint chase in state.json, got {saved}"
 assert saved.get("last_sample_index") == 148, f"Expected last_sample_index 148 in state.json, got {saved}"
+assert saved.get("theme_override") is None, f"Expected theme_override to be None, got {saved.get('theme_override')}"
+assert "last_theme" not in saved, f"Expected legacy last_theme to be pruned from state.json, got {saved}"
 '
 
 # Test Help -> Copy Diagnostics menu item

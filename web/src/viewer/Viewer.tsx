@@ -885,6 +885,7 @@ declare global {
       last_timestamp_us?: number;
       last_timestamp_ns?: number;
       last_viewpoint?: string;
+      theme_override?: string;
       last_theme?: string;
       reopen_last_session?: boolean;
       agent_visibility?: Record<string, boolean>;
@@ -1140,7 +1141,7 @@ export default function Viewer({
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
   const userThemeOverrideRef = useRef<boolean>(
-    typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.last_theme)
+    typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.theme_override)
   );
 
   useEffect(() => {
@@ -2090,9 +2091,9 @@ export default function Viewer({
             setViewpoint(vp);
           }
         }
-        if (init.last_theme && (init.last_theme === "dark" || init.last_theme === "light")) {
-          onTheme?.(init.last_theme);
-          setAppearance((curr) => ({ ...curr, theme: init.last_theme as "dark" | "light" }));
+        if (init.theme_override && (init.theme_override === "dark" || init.theme_override === "light")) {
+          onTheme?.(init.theme_override);
+          setAppearance((curr) => ({ ...curr, theme: init.theme_override as "dark" | "light" }));
         } else {
           const sys = systemTheme();
           onTheme?.(sys);
@@ -2255,7 +2256,7 @@ export default function Viewer({
           sample_index: frameIndex,
           timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
           viewpoint,
-          theme: appearance.theme,
+          theme_override: userThemeOverrideRef.current ? appearance.theme : null,
           agent_visibility: hidden,
           layer_toggles: {
             points: appearance.points,
@@ -3412,7 +3413,7 @@ export default function Viewer({
           setThemeOverride(next);
           setAppearance((current) => ({ ...current, theme: next }));
           onTheme?.(next);
-          postControllerState({ theme: next });
+          postControllerState({ theme_override: next });
         }}
       >
         {appearance.theme === "dark" ? <IconMoon /> : <IconSun />}

@@ -47,7 +47,7 @@ export const THEME_OVERRIDE_KEY = "coperceive-theme-override";
 
 export function getThemeOverride(): ThemeName | null {
   if (typeof window === "undefined") return null;
-  const initTheme = (window as unknown as { __COPERCEIVE_INITIAL_STATE__?: { last_theme?: string } }).__COPERCEIVE_INITIAL_STATE__?.last_theme;
+  const initTheme = (window as unknown as { __COPERCEIVE_INITIAL_STATE__?: { theme_override?: string } }).__COPERCEIVE_INITIAL_STATE__?.theme_override;
   if (initTheme === "dark" || initTheme === "light") {
     return initTheme;
   }

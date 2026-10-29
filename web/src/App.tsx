@@ -179,8 +179,8 @@ export default function App() {
   );
   const [token, setToken] = useState(storedToken);
   const [theme, setTheme] = useState<ThemeName>(() => {
-    if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_theme) {
-      const saved = window.__COPERCEIVE_INITIAL_STATE__.last_theme;
+    if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.theme_override) {
+      const saved = window.__COPERCEIVE_INITIAL_STATE__.theme_override;
       if (saved === "dark" || saved === "light") {
         return saved;
       }
@@ -188,7 +188,7 @@ export default function App() {
     return systemTheme();
   });
   const [hasThemeOverride, setHasThemeOverride] = useState<boolean>(() => {
-    return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.last_theme);
+    return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.theme_override);
   });
 
   useEffect(() => {
@@ -384,7 +384,7 @@ export default function App() {
                 "Content-Type": "application/json",
                 Authorization: `Bearer ${secret}`,
               },
-              body: JSON.stringify({ theme: next }),
+              body: JSON.stringify({ theme_override: next }),
             }).catch(() => {});
           }
         }}
