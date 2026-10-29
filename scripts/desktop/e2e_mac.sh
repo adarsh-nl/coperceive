@@ -257,12 +257,12 @@ assert counts.get("boxes", 0) > 0, f"Expected boxes > 0, got {counts}"
 
 print("Asserting Inspector empty state in UI...")
 inspector_empty = eval_js("""(() => {
-    const el = document.querySelector('.side-card[aria-label="Selected object"] .panel-state-empty');
+    const el = document.querySelector(\x27.side-card[aria-label="Selected object"] .panel-state-empty\x27);
     if (!el) return null;
     return {
-        title: el.querySelector('.panel-state-title')?.textContent?.trim() || "",
-        desc: el.querySelector('.panel-state-description')?.textContent?.trim() || "",
-        action: el.querySelector('.panel-state-action')?.textContent?.trim() || ""
+        title: el.querySelector(\x27.panel-state-title\x27)?.textContent?.trim() || "",
+        desc: el.querySelector(\x27.panel-state-description\x27)?.textContent?.trim() || "",
+        action: el.querySelector(\x27.panel-state-action\x27)?.textContent?.trim() || ""
     };
 })()""")
 assert inspector_empty, "Expected Inspector empty state in sidebar"
