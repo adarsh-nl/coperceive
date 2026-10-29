@@ -383,7 +383,10 @@ make_watch_request() {
     local action="$2"
     local stream="$3"
     local confirmed="$4"
-    local extra_json="${5:-{\}}"
+    local extra_json="${5:-}"
+    if [ -z "${extra_json}" ]; then
+        extra_json='{}'
+    fi
     local request_file="${TMP_DIR}/${name}-watch-request.json"
     python3 - "${request_file}" "${FIXTURES_DIR}/cluster-b.json" "${PLAN_ID}" "${action}" "${stream}" "${confirmed}" "${extra_json}" <<'PY'
 import json
