@@ -25,6 +25,8 @@ fi
 cd "${WEB_DIR}"
 if [ ! -d node_modules ] || [ package-lock.json -nt node_modules/.package-lock.json ]; then
     echo "build_web_static.sh: installing web dependencies"
+    # --legacy-peer-deps: openapi-typescript's peer range predates TypeScript 6
+    # (see web/package.json); npm 10+ refuses the install without this.
     npm ci --legacy-peer-deps
 fi
 echo "build_web_static.sh: building coperceive/app/static"

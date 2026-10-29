@@ -210,6 +210,7 @@ def start_session(
     cpus: int | None = None,
     mem: str | None = None,
     python: str | None = None,
+    static_dir: str | Path | None = None,
     session_uuid: str | None = None,
     sbatch_script: str | Path | None = None,
     wait_timeout: int = 45,
@@ -235,6 +236,21 @@ def start_session(
             "status": "error",
             "error": f"Data root directory does not exist: {data_root}",
         }
+
+    static_path: Path | None = None
+    if static_dir is not None:
+        # The desktop app uploads its built viewer bundle to the login home;
+        # `~` is expanded here, on the server, not in the app. Refuse before a
+        # job is submitted rather than starting a Remote session with a 404.
+        static_path = Path(static_dir).expanduser().resolve()
+        if not (static_path / "index.html").is_file():
+            return {
+                "status": "error",
+                "error": (
+                    f"Viewer page directory has no index.html: {static_path}. "
+                    "Reconnect from the desktop app so it uploads the page again."
+                ),
+            }
 
     uuid_val = session_uuid or secrets.token_hex(8)
     token = generate_secure_token()
@@ -286,6 +302,8 @@ def start_session(
         env["COPERCEIVE_REMOTE_PYTHON"] = python
     if extra_args:
         env["COPERCEIVE_EXTRA_ARGS"] = " ".join(extra_args)
+    if static_path is not None:
+        env["COPERCEIVE_REMOTE_STATIC"] = str(static_path)
 
     # Only the values the profile chose are passed; omitted flags fall back to
     # the cluster's own partition defaults, not to a Coperceive guess.

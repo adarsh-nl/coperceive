@@ -66,6 +66,14 @@ def add_parser(
         help="Python interpreter on the compute node from the server profile.",
     )
     start_parser.add_argument(
+        "--static",
+        default=None,
+        help=(
+            "Viewer page directory on the server (the desktop app uploads its "
+            "built bundle to ~/.cache/coperceive/static/<app-version>)."
+        ),
+    )
+    start_parser.add_argument(
         "--uuid", default=None, help="Explicit session UUID (auto-generated if omitted)."
     )
     start_parser.add_argument(
@@ -182,6 +190,7 @@ def _remote_start(args: argparse.Namespace) -> None:
         cpus=args.cpus,
         mem=args.mem,
         python=args.python,
+        static_dir=args.static,
         session_uuid=args.uuid,
         sbatch_script=args.sbatch_script,
         wait_timeout=args.wait_timeout,

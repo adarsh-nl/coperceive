@@ -21,6 +21,8 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # --legacy-peer-deps: openapi-typescript's peer range predates TypeScript 6
+      # (see web/package.json); npm 10+ refuses the install without this.
       - run: npm ci --legacy-peer-deps
         working-directory: web
       - run: bash scripts/build_web_static.sh

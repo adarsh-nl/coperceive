@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -59,6 +59,20 @@ _IMAGE_TYPES = {
 }
 
 _STATIC = Path(__file__).resolve().parent / "static"
+
+_MISSING_VIEWER_PAGE = """<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>coperceive — viewer not built</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 40rem;
+             margin: 4rem auto; padding: 0 1rem;">
+<h1>The viewer isn’t built in this checkout</h1>
+<p>This is a source checkout, so the web page was not built. The HTTP API keeps working.</p>
+<p>Build it once:</p>
+<pre><code>bash scripts/build_web_static.sh</code></pre>
+<p>or install a release wheel, which already contains the built viewer.</p>
+</body>
+</html>
+"""
 
 
 class JobRequest(BaseModel):
@@ -433,6 +447,18 @@ def create_app(
 
     if (static_dir / "index.html").is_file():
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    else:
+        # A source checkout has no built viewer (coperceive/app/static is built,
+        # not committed). Keep the API usable and say what to run instead of a
+        # bare 404 on the page.
+        @app.get("/", include_in_schema=False)
+        def missing_viewer() -> HTMLResponse:
+            return HTMLResponse(_MISSING_VIEWER_PAGE)
+
+        @app.get("/index.html", include_in_schema=False)
+        def missing_viewer_index() -> HTMLResponse:
+            return HTMLResponse(_MISSING_VIEWER_PAGE)
+
     return app
 
 
