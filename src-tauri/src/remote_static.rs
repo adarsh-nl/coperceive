@@ -97,7 +97,25 @@ fn validate_alias(alias: &str) -> Result<(), String> {
     Ok(())
 }
 
-fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, u64)>) -> Result<(), String> {
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in bytes {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash
+}
+
+fn hash_file(path: &Path) -> Result<u64, String> {
+    let bytes = fs::read(path).map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+    Ok(fnv1a(&bytes))
+}
+
+fn collect_files(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, u64, u64)>,
+) -> Result<(), String> {
     for entry in fs::read_dir(dir).map_err(|error| {
         format!("Could not read {}: {error}", dir.display())
     })? {
@@ -124,20 +142,24 @@ fn collect_files(root: &Path, dir: &Path, out: &mut Vec<(String, u64)>) -> Resul
                 .metadata()
                 .map_err(|error| format!("Could not stat {}: {error}", path.display()))?
                 .len();
-            out.push((relative, size));
+            let hash = hash_file(&path)?;
+            out.push((relative, size, hash));
         }
     }
     Ok(())
 }
 
-/// A deterministic `size relative/path` line per file, sorted by path.
+/// A deterministic `hash size relative/path` line per file, sorted by path.
+///
+/// The content hash (FNV-1a, local only) is what makes the cache skip safe: a
+/// same-size but different file re-uploads instead of being served.
 pub fn manifest_for(root: &Path) -> Result<String, String> {
-    let mut files: Vec<(String, u64)> = Vec::new();
+    let mut files: Vec<(String, u64, u64)> = Vec::new();
     collect_files(root, root, &mut files)?;
     files.sort_by(|left, right| left.0.cmp(&right.0));
     let mut text = String::new();
-    for (relative, size) in files {
-        text.push_str(&format!("{size} {relative}\n"));
+    for (relative, size, hash) in files {
+        text.push_str(&format!("{hash:016x} {size} {relative}\n"));
     }
     Ok(text)
 }
@@ -407,7 +429,7 @@ esac
         assert!(manifest.contains("assets/app.js"));
         assert!(manifest.contains("index.html"));
         let lines: Vec<&str> = manifest.lines().collect();
-        assert_eq!(lines[0].split(' ').nth(1), Some("assets/app.js"));
+        assert_eq!(lines[0].split(' ').nth(2), Some("assets/app.js"));
         let _ = fs::remove_dir_all(&root);
     }
 
