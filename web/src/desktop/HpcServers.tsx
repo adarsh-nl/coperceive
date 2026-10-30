@@ -805,6 +805,12 @@ export default function HpcServers() {
                 placeholder="/path/to/python"
                 onChange={(event) => updateEnvironment({ interpreter: event.target.value || null })}
               />
+              <p style={{ color: "#8b949e", fontSize: "0.72rem", margin: "0.25rem 0 0" }}>
+                Runs:{" "}
+                {draft.profile.environment.coperceive_command.length > 0
+                  ? draft.profile.environment.coperceive_command.join(" ")
+                  : "(no coperceive command yet)"}
+              </p>
             </div>
           </div>
 

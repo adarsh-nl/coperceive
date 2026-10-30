@@ -264,7 +264,8 @@ test("a kind-none cluster with infinite walltimes saves after detection, no manu
     environment: {
       kind: "none",
       modules: [],
-      interpreter,
+      // Detection sees plain python3; the user typed the venv interpreter.
+      interpreter: "/usr/bin/python3",
       container_image: null,
       coperceive_command: ["coperceive"],
       wheelhouse: null,

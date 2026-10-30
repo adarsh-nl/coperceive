@@ -25,8 +25,6 @@ use coperceive_desktop::controller::{self, ControllerConfig};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::detect::{self, DetectOptions, DetectionReport};
 #[cfg(target_os = "macos")]
-use coperceive_desktop::hpc::EnvironmentKind;
-#[cfg(target_os = "macos")]
 use coperceive_desktop::run_plan::{self, PipelineEntry, RunPlan, RunPlanRequest};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::job_submit::{
@@ -2750,9 +2748,13 @@ fn main() {
                         let mut detected_time_limit = None;
                         let mut detected_command: Vec<String> = Vec::new();
                         if let Some(interpreter) = &probe.typed_interpreter {
-                            // The real order: type the interpreter first, then press
-                            // "Use detected settings". Detection sees the typed value,
-                            // so the coperceive probe uses that interpreter.
+                            // E2E-only minimal projection of the web's
+                            // applyDiscovery (the source of truth). It reproduces
+                            // the order "type interpreter, then detected
+                            // settings" for this fixture: detection now supplies
+                            // the exact coperceive argv when it succeeded through
+                            // that interpreter, so the seam only applies the
+                            // detected scheduler/partition/walltime and command.
                             entry.profile.environment.interpreter = Some(interpreter.clone());
                             typed_interpreter = Some(interpreter.clone());
                             let report = detect::detect_server(
@@ -2760,6 +2762,7 @@ fn main() {
                                 &DetectOptions { ssh_bin: ssh_bin() },
                             );
                             detected_scheduler = Some(report.scheduler);
+                            entry.profile.scheduler = report.scheduler;
                             let up = report
                                 .partitions
                                 .iter()
@@ -2769,71 +2772,23 @@ fn main() {
                                 entry.profile.defaults.partition =
                                     up.map(|partition| partition.name.clone());
                             }
-                            let chosen = report
-                                .partitions
-                                .iter()
-                                .find(|partition| {
-                                    Some(&partition.name) == entry.profile.defaults.partition.as_ref()
-                                })
-                                .or(up);
-                            if let Some(chosen) = chosen {
-                                if entry.profile.defaults.gres.is_none() {
-                                    entry.profile.defaults.gres =
-                                        chosen.gpu_types.first().map(|gpu| {
-                                            if gpu == "gpu" {
-                                                "gpu:1".to_string()
-                                            } else {
-                                                format!("gpu:{gpu}:1")
-                                            }
-                                        });
-                                }
-                                if entry.profile.defaults.time_limit.is_none() {
-                                    let walltime = chosen
-                                        .max_time
-                                        .as_deref()
-                                        .map(str::trim)
-                                        .filter(|text| {
-                                            !text.is_empty()
-                                                && !["infinite", "unlimited", "unknown", "n/a"]
-                                                    .iter()
-                                                    .any(|word| text.eq_ignore_ascii_case(word))
-                                        });
-                                    detected_time_limit =
-                                        walltime.map(|text| text.to_string());
-                                    entry.profile.defaults.time_limit = detected_time_limit.clone();
-                                }
+                            if entry.profile.defaults.time_limit.is_none() {
+                                detected_time_limit = up
+                                    .and_then(|partition| partition.max_time.as_deref())
+                                    .map(str::trim)
+                                    .filter(|text| {
+                                        !text.is_empty()
+                                            && !["infinite", "unlimited", "unknown", "n/a"]
+                                                .iter()
+                                                .any(|word| text.eq_ignore_ascii_case(word))
+                                    })
+                                    .map(str::to_string);
+                                entry.profile.defaults.time_limit = detected_time_limit.clone();
                             }
-                            if entry.profile.environment.kind == EnvironmentKind::None
-                                && report.environment.kind != EnvironmentKind::None
-                            {
-                                entry.profile.environment = report.environment.clone();
-                            } else if entry.profile.environment.interpreter.is_none() {
-                                entry.profile.environment.interpreter =
-                                    report.environment.interpreter.clone();
-                            }
-                            let command = &mut entry.profile.environment.coperceive_command;
-                            let bare_default =
-                                command.len() == 1 && command[0] == "coperceive";
-                            if command.is_empty() || bare_default {
-                                let suggested = &report.environment.coperceive_command;
-                                let suggested_bare =
-                                    suggested.len() == 1 && suggested[0] == "coperceive";
-                                if !suggested.is_empty() && !suggested_bare {
-                                    *command = suggested.clone();
-                                } else if let Some(path) =
-                                    report.discovered.environment.coperceive_path.clone()
-                                {
-                                    *command = vec![path];
-                                } else if let Some(interpreter) =
-                                    entry.profile.environment.interpreter.clone()
-                                {
-                                    *command =
-                                        vec![interpreter, "-m".to_string(), "coperceive".to_string()];
-                                } else {
-                                    *command = vec!["coperceive".to_string()];
-                                }
-                            }
-                            detected_command = command.clone();
+                            entry.profile.environment.coperceive_command =
+                                report.environment.coperceive_command.clone();
+                            detected_command =
+                                entry.profile.environment.coperceive_command.clone();
                         }
                         let mut servers = server_profiles::load_servers();
                         let saved = server_profiles::upsert_server(&mut servers, entry)?;

@@ -957,7 +957,26 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     if let Some(env) = &environment {
         discovered.environment = env.clone();
     }
-    let (proposed, _) = (proposed_environment(&discovered.environment), 0);
+    let mut proposed = proposed_environment(&discovered.environment);
+    // If the version probe succeeded through the interpreter the user chose
+    // (and coperceive is not a separate PATH executable), the exact argv is
+    // `<interpreter> -m coperceive`. The UI takes this detected argv instead
+    // of rebuilding it from whatever python the environment probe found.
+    if proposed.coperceive_command == vec!["coperceive".to_string()] {
+        if let Some(interpreter) = entry
+            .profile
+            .environment
+            .interpreter
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if discovered.environment.coperceive_version.is_some() {
+                proposed.coperceive_command =
+                    vec![interpreter.to_string(), "-m".to_string(), "coperceive".to_string()];
+            }
+        }
+    }
     report.environment = proposed;
     if scheduler_kind == SchedulerKind::Slurm && report.environment.interpreter.is_none() {
         // SINFO discovery succeeded but no interpreter: leave it to the user.
@@ -1117,7 +1136,10 @@ mod tests {
             Some("0.0.0")
         );
         assert!(report.discovered.environment.coperceive_path.is_none());
-        assert_eq!(report.environment.coperceive_command, vec!["coperceive".to_string()]);
+        assert_eq!(
+            report.environment.coperceive_command,
+            vec![interpreter.to_string(), "-m".to_string(), "coperceive".to_string()]
+        );
     }
 
     #[test]

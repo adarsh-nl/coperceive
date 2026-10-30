@@ -453,6 +453,15 @@ export function applyDiscovery(entry: ServerEntry, report: DetectionReport): Ser
       profile.environment.coperceive_command = [
         report.discovered.environment.coperceive_path.trim(),
       ];
+    } else if (profile.environment.interpreter?.trim()) {
+      // Prefer the interpreter the USER typed. Detection's environment may be
+      // plain python3, where coperceive is not installed; using that would save
+      // and then fail on the cluster.
+      profile.environment.coperceive_command = [
+        profile.environment.interpreter.trim(),
+        "-m",
+        "coperceive",
+      ];
     } else if (detected.interpreter?.trim()) {
       profile.environment.coperceive_command = [detected.interpreter.trim(), "-m", "coperceive"];
     } else {
