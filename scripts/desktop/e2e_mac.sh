@@ -1956,12 +1956,31 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         with open(log_file, "a", encoding="utf-8") as handle:
             handle.write(self.path + "\n")
+        if ".tar.gz" in self.path or ".app" in self.path:
+            pkg = b"mock update archive payload content for minisign verification failure"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(pkg)))
+            self.end_headers()
+            self.wfile.write(pkg)
+            return
         if "404" in self.path:
             self.send_response(404)
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             return
         if "bad-sig" in self.path:
+            import base64
+            raw_minisign = (
+                "untrusted comment: signature from minisign secret key\n"
+                "RUTX5qZvdPSepPF2zsjvP/L/TQtBLRnWRvaq+4omK1UEugtQp/USrGiI1v762sDy3id3aor7bRC9ETyeot6lMHHrWoZ5hjUM1Qc=\n"
+                "trusted comment: timestamp:1791649051\tfile:payload\tversion:0.2.0\n"
+                "DDq2CLOEl5cQmC2eJRHlnZPVViOZsu1CjpPKQoei4A/XBfkDqGO0B+QMrcrHgEQ5qV3mne75tdFWhJpqUXh9AA=="
+            )
+            sig_b64 = base64.b64encode(raw_minisign.encode("utf-8")).decode("ascii")
+            my_port = self.server.server_address[1]
             bad_body = json.dumps(
                 {
                     "version": "0.2.0",
@@ -1969,8 +1988,8 @@ class Handler(BaseHTTPRequestHandler):
                     "pub_date": "2026-10-24T00:00:00Z",
                     "platforms": {
                         "darwin-aarch64": {
-                            "signature": "bad-signature",
-                            "url": "http://127.0.0.1:9/Coperceive.app.tar.gz",
+                            "signature": sig_b64,
+                            "url": f"http://127.0.0.1:{my_port}/bad-sig-package.tar.gz",
                         }
                     },
                 }
@@ -2154,9 +2173,11 @@ time.sleep(0.8)
 txt_bad_banner = eval_js("document.body ? document.body.innerText : ''") or ""
 assert "coperceive 0.2.0 is ready" in txt_bad_banner, f"Expected banner before restart click, got: {txt_bad_banner}"
 click_button("Restart now")
-time.sleep(0.5)
+time.sleep(1.0)
 txt_bad_err = eval_js("document.body ? document.body.innerText : ''") or ""
 assert "Retry" in txt_bad_err, f"Bad signature must show error with Retry button, got: {txt_bad_err}"
+assert any(term in txt_bad_err.lower() for term in ["signature", "verification", "minisign", "invalid", "decode"]), f"Expected signature verification error, got: {txt_bad_err}"
+assert "could not check for updates" not in txt_bad_err.lower(), f"Must not be generic network failure: {txt_bad_err}"
 restarted_bad = eval_js("window.__COPERCEIVE_UPDATE_RESTART__ === true ? 'yes' : 'no'")
 assert restarted_bad == "no", "Manifest with bad signature must NOT be installed"
 print("Step 5d notices: manifest with bad signature is rejected with error and not installed")

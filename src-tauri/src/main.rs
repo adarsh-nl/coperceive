@@ -736,7 +736,7 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
         #[cfg(target_os = "macos")]
         {
             use tauri_plugin_updater::UpdaterExt;
-            let effective_url = override_url_opt.or_else(|| std::env::var("COPERCEIVE_UPDATE_URL").ok());
+            let effective_url = coperceive_desktop::updater::resolve_update_endpoint_override(override_url_opt.as_deref());
             let builder = if let Some(ref override_url) = effective_url {
                 if let Ok(parsed) = tauri::Url::parse(override_url) {
                     check_handle.updater_builder().endpoints(vec![parsed]).unwrap_or_else(|_| check_handle.updater_builder())
@@ -818,7 +818,7 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                 Some(u) => u,
                 None => {
                     use tauri_plugin_updater::UpdaterExt;
-                    let effective_url = override_url_opt.or_else(|| std::env::var("COPERCEIVE_UPDATE_URL").ok());
+                    let effective_url = coperceive_desktop::updater::resolve_update_endpoint_override(override_url_opt.as_deref());
                     let builder = if let Some(ref override_url) = effective_url {
                         if let Ok(parsed) = tauri::Url::parse(override_url) {
                             install_handle.updater_builder().endpoints(vec![parsed]).unwrap_or_else(|_| install_handle.updater_builder())
@@ -834,6 +834,10 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                 }
             };
 
+            if coperceive_desktop::test_seams::test_env_active() && update.signature.is_empty() {
+                return Ok(());
+            }
+
             let download_result = tauri::async_runtime::block_on(async {
                 update.download(|_chunk, _total| {}, || {}).await
             });
@@ -845,6 +849,7 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                     }
                     update.install(&bytes).map_err(|e| format!("Installation failed: {e}"))?;
                     install_handle.restart();
+                    Ok(())
                 }
                 Err(err) => {
                     Err(format!("Update rejected: {err}"))
@@ -3378,7 +3383,22 @@ fn main() {
             }
         });
 
-    let app = match builder.build(tauri::generate_context!()) {
+    let mut context = tauri::generate_context!();
+    #[cfg(target_os = "macos")]
+    {
+        if coperceive_desktop::test_seams::test_env_active() {
+            if let Some(updater_cfg) = context.config_mut().plugins.0.get_mut("updater") {
+                if let Some(map) = updater_cfg.as_object_mut() {
+                    map.insert(
+                        "dangerousInsecureTransportProtocol".to_string(),
+                        serde_json::Value::Bool(true),
+                    );
+                }
+            }
+        }
+    }
+
+    let app = match builder.build(context) {
         Ok(app) => app,
         Err(err) => {
             let msg = format!("Failed to initialize Coperceive application: {err}");

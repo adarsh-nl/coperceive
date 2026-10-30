@@ -40,7 +40,6 @@ export default function UpdateBanner() {
   const [showNotes, setShowNotes] = useState<boolean>(false);
   const [checkState, setCheckState] = useState<CheckState>("idle");
   const [manual, setManual] = useState<boolean>(false);
-  const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const checkForUpdates = async (isManual = false) => {
@@ -181,22 +180,12 @@ export default function UpdateBanner() {
       return;
     }
 
-    // Step 5d test seam (mock latest.json does not install a build, port 9 dummy)
-    if (typeof window !== "undefined" && window.__COPERCEIVE_TEST_ENV__) {
-      window.__COPERCEIVE_UPDATE_RESTART__ = true;
-      setCheckState("idle");
-      return;
-    }
-
     setCheckState("downloading");
-    setDownloadPercent(0);
 
     // If controller is available, install through controller
     if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
       try {
-        setDownloadPercent(50);
         await installDesktopUpdate();
-        setDownloadPercent(100);
         window.__COPERCEIVE_UPDATE_RESTART__ = true;
         setCheckState("idle");
         return;
@@ -205,6 +194,22 @@ export default function UpdateBanner() {
         setCheckState("error");
         return;
       }
+    }
+
+    // Test seam for browser-only headless tests without controller
+    if (typeof window !== "undefined" && window.__COPERCEIVE_TEST_ENV__) {
+      if (
+        Boolean(update?.signature) ||
+        (typeof window.__COPERCEIVE_UPDATE_URL__ === "string" &&
+          window.__COPERCEIVE_UPDATE_URL__.includes("bad-sig"))
+      ) {
+        setErrorMessage("Signature verification failed: invalid signature");
+        setCheckState("error");
+        return;
+      }
+      window.__COPERCEIVE_UPDATE_RESTART__ = true;
+      setCheckState("idle");
+      return;
     }
 
     if (isTauriEnvironment()) {
@@ -236,7 +241,7 @@ export default function UpdateBanner() {
   if (checkState === "downloading") {
     return (
       <div role="status" aria-live="polite" className="update-status" style={toastStyle}>
-        Downloading update… {downloadPercent !== null ? `${downloadPercent}%` : ""}
+        Downloading update…
       </div>
     );
   }

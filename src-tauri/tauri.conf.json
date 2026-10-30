@@ -54,8 +54,7 @@
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDlBQjI5NEI1NkZDM0M0NDQKUldSRXhNTnZ0WlN5bXVJWXpKOWIrNHJ6TEdrRkNPYTlxWWFENnIrbkZuQ2VLekk3OXhrN2NoTGEK",
       "endpoints": [
         "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json"
-      ],
-      "dangerousInsecureTransportProtocol": true
+      ]
     }
   }
 }

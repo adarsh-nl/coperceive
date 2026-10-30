@@ -1299,24 +1299,44 @@ def test_updater_bad_signature_is_rejected_with_error(
 ) -> None:
     """A manifest with a bad signature is rejected with an error on install and
     never marked installed."""
+    import base64
     import threading
     from http.server import BaseHTTPRequestHandler, HTTPServer
 
-    body = json.dumps(
-        {
-            "version": "0.2.0",
-            "notes": "Bad signature test",
-            "platforms": {
-                "darwin-aarch64": {
-                    "signature": "bad-signature",
-                    "url": "http://127.0.0.1:9/Coperceive.app.tar.gz",
-                }
-            },
-        }
-    ).encode("utf-8")
+    raw_minisign = (
+        "untrusted comment: signature from minisign secret key\n"
+        "RUTX5qZvdPSepPF2zsjvP/L/TQtBLRnWRvaq+4omK1UEugtQp/USrGiI1v762sDy3id3aor7bRC9ETyeot6lMHHrWoZ5hjUM1Qc=\n"
+        "trusted comment: timestamp:1791649051\tfile:payload\tversion:0.2.0\n"
+        "DDq2CLOEl5cQmC2eJRHlnZPVViOZsu1CjpPKQoei4A/XBfkDqGO0B+QMrcrHgEQ5qV3mne75tdFWhJpqUXh9AA=="
+    )
+    sig_b64 = base64.b64encode(raw_minisign.encode("utf-8")).decode("ascii")
 
     class _H(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
+            if ".tar.gz" in self.path or ".app" in self.path:
+                pkg = b"mock update archive payload content for minisign verification failure"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(pkg)))
+                self.end_headers()
+                self.wfile.write(pkg)
+                return
+            addr = self.server.server_address
+            server_port = addr[1] if isinstance(addr, tuple) else 0
+            body = json.dumps(
+                {
+                    "version": "0.2.0",
+                    "notes": "Bad signature test",
+                    "platforms": {
+                        "darwin-aarch64": {
+                            "signature": sig_b64,
+                            "url": f"http://127.0.0.1:{server_port}/Coperceive.app.tar.gz",
+                        }
+                    },
+                }
+            ).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Access-Control-Allow-Origin", "*")
@@ -1360,6 +1380,11 @@ def test_updater_bad_signature_is_rejected_with_error(
         session.page.wait_for_selector("div[role='alert']", timeout=5000)
         alert_text = session.page.locator("div[role='alert']").inner_text() or ""
         assert "Retry" in alert_text
+        assert any(
+            term in alert_text.lower()
+            for term in ["signature", "verification", "minisign", "invalid", "decode"]
+        )
+        assert "could not check for updates" not in alert_text.lower()
 
         # Assert restart flag was NOT recorded
         restarted = session.page.evaluate("() => Boolean(window.__COPERCEIVE_UPDATE_RESTART__)")

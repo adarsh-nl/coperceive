@@ -25,5 +25,3 @@ tauri-build = { version = "2.0.0", features = [] }
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-dialog = "2.0.0"
 tauri-plugin-updater = "2"
-minisign-verify = "0.3.0"
-base64 = "0.22"

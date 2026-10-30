@@ -629,7 +629,8 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             };
             let val: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
             let is_manual = val.get("is_manual").and_then(|v| v.as_bool()).unwrap_or(false);
-            let override_url = val.get("update_url").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let raw_url = val.get("update_url").and_then(|v| v.as_str());
+            let override_url = crate::updater::resolve_update_endpoint_override(raw_url);
             match checker(is_manual, override_url) {
                 Ok(outcome) => {
                     let bytes = serde_json::to_vec(&outcome).unwrap_or_default();
@@ -656,7 +657,8 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                 None => return Ok(()),
             };
             let val: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
-            let override_url = val.get("update_url").and_then(|v| v.as_str()).map(|s| s.to_string());
+            let raw_url = val.get("update_url").and_then(|v| v.as_str());
+            let override_url = crate::updater::resolve_update_endpoint_override(raw_url);
             match installer(override_url) {
                 Ok(()) => {
                     write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
