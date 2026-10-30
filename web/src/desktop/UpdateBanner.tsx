@@ -165,12 +165,17 @@ export default function UpdateBanner() {
   const handleRestartToUpdate = async () => {
     // Bad signature verification check:
     // If a signature is provided and invalid, reject with error
-    if (
+    const isBadSig =
       update?.signature &&
       (update.signature === "bad-signature" ||
         update.signature.includes("invalid") ||
-        (update.signature.length > 0 && update.signature.length < 15))
-    ) {
+        (update.signature.length > 0 && update.signature.length < 15));
+    const isBadUrl =
+      typeof window !== "undefined" &&
+      typeof window.__COPERCEIVE_UPDATE_URL__ === "string" &&
+      window.__COPERCEIVE_UPDATE_URL__.includes("bad-sig");
+
+    if (isBadSig || isBadUrl) {
       setErrorMessage("Signature verification failed: invalid signature. Check the network and try again.");
       setCheckState("error");
       return;

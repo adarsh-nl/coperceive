@@ -26,8 +26,8 @@ pub type EvalSender = std::sync::mpsc::Sender<serde_json::Value>;
 pub type ExportPicker = Arc<dyn Fn(&str, &str) -> Result<Option<String>, String> + Send + Sync>;
 pub type ExportSaver = Arc<dyn Fn(Option<&str>, Option<&[u8]>) -> Result<String, String> + Send + Sync>;
 pub type FinderRevealer = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
-pub type UpdaterChecker = Arc<dyn Fn(bool) -> Result<serde_json::Value, String> + Send + Sync>;
-pub type UpdaterInstaller = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+pub type UpdaterChecker = Arc<dyn Fn(bool, Option<String>) -> Result<serde_json::Value, String> + Send + Sync>;
+pub type UpdaterInstaller = Arc<dyn Fn(Option<String>) -> Result<(), String> + Send + Sync>;
 
 /// Configuration for the loopback controller.
 #[derive(Clone)]
@@ -629,7 +629,8 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             };
             let val: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
             let is_manual = val.get("is_manual").and_then(|v| v.as_bool()).unwrap_or(false);
-            match checker(is_manual) {
+            let override_url = val.get("update_url").and_then(|v| v.as_str()).map(|s| s.to_string());
+            match checker(is_manual, override_url) {
                 Ok(outcome) => {
                     let bytes = serde_json::to_vec(&outcome).unwrap_or_default();
                     write_json_response(writer, 200, "OK", cors_origin.as_deref(), &bytes)?;
@@ -650,7 +651,13 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
 
     if method == "POST" && path == "/updater-install" {
         if let Some(ref installer) = config.updater_installer {
-            match installer() {
+            let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+                Some(b) => b,
+                None => return Ok(()),
+            };
+            let val: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+            let override_url = val.get("update_url").and_then(|v| v.as_str()).map(|s| s.to_string());
+            match installer(override_url) {
                 Ok(()) => {
                     write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
                 }

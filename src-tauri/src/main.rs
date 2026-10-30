@@ -732,12 +732,13 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
 
     let check_handle = app_handle.clone();
     let check_state = app_state.clone();
-    cfg.updater_checker = Some(Arc::new(move |_is_manual: bool| {
+    cfg.updater_checker = Some(Arc::new(move |_is_manual: bool, override_url_opt: Option<String>| {
         #[cfg(target_os = "macos")]
         {
             use tauri_plugin_updater::UpdaterExt;
-            let builder = if let Ok(override_url) = std::env::var("COPERCEIVE_UPDATE_URL") {
-                if let Ok(parsed) = tauri::Url::parse(&override_url) {
+            let effective_url = override_url_opt.or_else(|| std::env::var("COPERCEIVE_UPDATE_URL").ok());
+            let builder = if let Some(ref override_url) = effective_url {
+                if let Ok(parsed) = tauri::Url::parse(override_url) {
                     check_handle.updater_builder().endpoints(vec![parsed]).unwrap_or_else(|_| check_handle.updater_builder())
                 } else {
                     check_handle.updater_builder()
@@ -806,7 +807,7 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
 
     let install_handle = app_handle.clone();
     let install_state = app_state.clone();
-    cfg.updater_installer = Some(Arc::new(move || {
+    cfg.updater_installer = Some(Arc::new(move |override_url_opt: Option<String>| {
         #[cfg(target_os = "macos")]
         {
             let update_opt = {
@@ -817,8 +818,9 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                 Some(u) => u,
                 None => {
                     use tauri_plugin_updater::UpdaterExt;
-                    let builder = if let Ok(override_url) = std::env::var("COPERCEIVE_UPDATE_URL") {
-                        if let Ok(parsed) = tauri::Url::parse(&override_url) {
+                    let effective_url = override_url_opt.or_else(|| std::env::var("COPERCEIVE_UPDATE_URL").ok());
+                    let builder = if let Some(ref override_url) = effective_url {
+                        if let Ok(parsed) = tauri::Url::parse(override_url) {
                             install_handle.updater_builder().endpoints(vec![parsed]).unwrap_or_else(|_| install_handle.updater_builder())
                         } else {
                             install_handle.updater_builder()
