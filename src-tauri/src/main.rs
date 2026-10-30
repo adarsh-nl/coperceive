@@ -2743,6 +2743,53 @@ fn main() {
                         let mut entry: ServerEntry = serde_json::from_str(&json)
                             .map_err(|error| format!("Server fixture is not valid: {error}"))?;
                         entry.id = String::new();
+                        let mut typed_interpreter = None;
+                        let mut detected_scheduler = None;
+                        let mut detected_time_limit = None;
+                        let mut detected_command: Vec<String> = Vec::new();
+                        if let Some(interpreter) = &probe.typed_interpreter {
+                            // E2E-only minimal projection of the web's
+                            // applyDiscovery (the source of truth). It reproduces
+                            // the order "type interpreter, then detected
+                            // settings" for this fixture: detection now supplies
+                            // the exact coperceive argv when it succeeded through
+                            // that interpreter, so the seam only applies the
+                            // detected scheduler/partition/walltime and command.
+                            entry.profile.environment.interpreter = Some(interpreter.clone());
+                            typed_interpreter = Some(interpreter.clone());
+                            let report = detect::detect_server(
+                                &entry,
+                                &DetectOptions { ssh_bin: ssh_bin() },
+                            );
+                            detected_scheduler = Some(report.scheduler);
+                            entry.profile.scheduler = report.scheduler;
+                            let up = report
+                                .partitions
+                                .iter()
+                                .find(|partition| partition.state.as_deref() != Some("down"))
+                                .or_else(|| report.partitions.first());
+                            if entry.profile.defaults.partition.is_none() {
+                                entry.profile.defaults.partition =
+                                    up.map(|partition| partition.name.clone());
+                            }
+                            if entry.profile.defaults.time_limit.is_none() {
+                                detected_time_limit = up
+                                    .and_then(|partition| partition.max_time.as_deref())
+                                    .map(str::trim)
+                                    .filter(|text| {
+                                        !text.is_empty()
+                                            && !["infinite", "unlimited", "unknown", "n/a"]
+                                                .iter()
+                                                .any(|word| text.eq_ignore_ascii_case(word))
+                                    })
+                                    .map(str::to_string);
+                                entry.profile.defaults.time_limit = detected_time_limit.clone();
+                            }
+                            entry.profile.environment.coperceive_command =
+                                report.environment.coperceive_command.clone();
+                            detected_command =
+                                entry.profile.environment.coperceive_command.clone();
+                        }
                         let mut servers = server_profiles::load_servers();
                         let saved = server_profiles::upsert_server(&mut servers, entry)?;
                         let listed = server_profiles::load_servers();
@@ -2771,6 +2818,12 @@ fn main() {
                             "edited_name": edited_saved.profile.name,
                             "persisted_name": persisted.profile.name,
                             "persisted_cpus": persisted.profile.defaults.cpus_per_task,
+                            "typed_interpreter": typed_interpreter,
+                            "detected_scheduler": detected_scheduler,
+                            "detected_time_limit": detected_time_limit,
+                            "detected_command": detected_command,
+                            "persisted_time_limit": persisted.profile.defaults.time_limit,
+                            "persisted_command": persisted.profile.environment.coperceive_command,
                             "store_path": server_profiles::servers_file_path().display().to_string(),
                         }))
                     })();

@@ -957,7 +957,26 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     if let Some(env) = &environment {
         discovered.environment = env.clone();
     }
-    let (proposed, _) = (proposed_environment(&discovered.environment), 0);
+    let mut proposed = proposed_environment(&discovered.environment);
+    // If the version probe succeeded through the interpreter the user chose
+    // (and coperceive is not a separate PATH executable), the exact argv is
+    // `<interpreter> -m coperceive`. The UI takes this detected argv instead
+    // of rebuilding it from whatever python the environment probe found.
+    if proposed.coperceive_command == vec!["coperceive".to_string()] {
+        if let Some(interpreter) = entry
+            .profile
+            .environment
+            .interpreter
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            if discovered.environment.coperceive_version.is_some() {
+                proposed.coperceive_command =
+                    vec![interpreter.to_string(), "-m".to_string(), "coperceive".to_string()];
+            }
+        }
+    }
     report.environment = proposed;
     if scheduler_kind == SchedulerKind::Slurm && report.environment.interpreter.is_none() {
         // SINFO discovery succeeded but no interpreter: leave it to the user.
@@ -999,6 +1018,10 @@ mod tests {
     const CLUSTER_NONE: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/hpc/cluster-none.json"
+    ));
+    const CLUSTER_SAVE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/hpc/cluster-save.json"
     ));
 
     struct FakeSsh {
@@ -1095,6 +1118,28 @@ mod tests {
         assert_eq!(report.scratch.path.as_deref(), Some("/scratch/alice"));
         assert!(report.scratch.free_bytes.unwrap() > 0);
         assert!(report.total_ms < 60_000);
+    }
+
+    #[test]
+    fn cluster_save_typed_interpreter_finds_coperceive_and_infinite_walltime() {
+        let fake = FakeSsh::create();
+        let mut entry = entry_from_fixture(CLUSTER_SAVE);
+        let interpreter = "/home/dana/coperceive-app/.venv/bin/python";
+        entry.profile.environment.interpreter = Some(interpreter.to_string());
+        let report = detect_server(&entry, &options(&fake));
+        assert!(report.reachable && report.signed_in);
+        assert_eq!(report.scheduler, SchedulerKind::Slurm);
+        assert!(report.partitions.iter().all(|p| p.max_time.as_deref() == Some("infinite")));
+        assert_eq!(report.environment.kind, crate::hpc::EnvironmentKind::None);
+        assert_eq!(
+            report.discovered.environment.coperceive_version.as_deref(),
+            Some("0.0.0")
+        );
+        assert!(report.discovered.environment.coperceive_path.is_none());
+        assert_eq!(
+            report.environment.coperceive_command,
+            vec![interpreter.to_string(), "-m".to_string(), "coperceive".to_string()]
+        );
     }
 
     #[test]

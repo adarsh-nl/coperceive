@@ -356,7 +356,8 @@ PY
 }
 
 run_save_roundtrip() {
-    local fixture="${FIXTURES_DIR}/cluster-b.json"
+    local fixture="${FIXTURES_DIR}/cluster-save.json"
+    local typed_interpreter="/home/dana/coperceive-app/.venv/bin/python"
     local result_file="${TMP_DIR}/server-save.json"
     local state_dir="${TMP_DIR}/server-state"
     local stdout_log="${TMP_DIR}/server-save.stdout.log"
@@ -369,6 +370,7 @@ run_save_roundtrip() {
     COPERCEIVE_STATE_DIR="${state_dir}" \
     COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
     COPERCEIVE_TEST_HPC_SERVER="${fixture}" \
+    COPERCEIVE_TEST_HPC_SAVE_INTERPRETER="${typed_interpreter}" \
     COPERCEIVE_TEST_HPC_SAVE_RESULT="${result_file}" \
     "${APP_EXE}" >"${stdout_log}" 2>"${stderr_log}" &
     APP_PID=$!
@@ -388,12 +390,12 @@ run_save_roundtrip() {
     wait "${APP_PID}" 2>/dev/null || true
     APP_PID=""
 
-    python3 - "${result_file}" "${state_dir}" <<'PY'
+    python3 - "${result_file}" "${state_dir}" "${typed_interpreter}" <<'PY'
 import json
 import sys
 from pathlib import Path
 
-result_file, state_dir = sys.argv[1], sys.argv[2]
+result_file, state_dir, typed_interpreter = sys.argv[1], sys.argv[2], sys.argv[3]
 with open(result_file, encoding="utf-8") as handle:
     data = json.load(handle)
 if not data.get("ok"):
@@ -415,6 +417,25 @@ if data.get("persisted_name") != data.get("edited_name"):
 if data.get("persisted_cpus") != 8:
     print(f"E2E_SAVE_FAIL: edited resources not on disk: {data}", file=sys.stderr)
     sys.exit(1)
+# The real order: the user types the interpreter, then applies detection.
+if data.get("typed_interpreter") != typed_interpreter:
+    print(f"E2E_SAVE_FAIL: interpreter was not typed first: {data}", file=sys.stderr)
+    sys.exit(1)
+if data.get("detected_scheduler") != "slurm":
+    print(f"E2E_SAVE_FAIL: detection did not run/see Slurm: {data}", file=sys.stderr)
+    sys.exit(1)
+expected_command = [typed_interpreter, "-m", "coperceive"]
+if data.get("detected_command") != expected_command:
+    print(f"E2E_SAVE_FAIL: detected coperceive command {data.get('detected_command')!r}", file=sys.stderr)
+    sys.exit(1)
+if data.get("persisted_command") != expected_command:
+    print(f"E2E_SAVE_FAIL: coperceive command not saved: {data}", file=sys.stderr)
+    sys.exit(1)
+# The fake cluster reports every partition max_time "infinite"; that must not be
+# copied into the saved walltime (the validator would reject it).
+if data.get("detected_time_limit") is not None or data.get("persisted_time_limit") is not None:
+    print(f"E2E_SAVE_FAIL: infinite walltime was copied: {data}", file=sys.stderr)
+    sys.exit(1)
 store = Path(state_dir) / "servers.json"
 if not store.is_file():
     print(f"E2E_SAVE_FAIL: server store missing at {store}", file=sys.stderr)
@@ -424,8 +445,10 @@ if saved_id not in text or "(edited)" not in text:
     print("E2E_SAVE_FAIL: server store does not contain the saved/edited entry", file=sys.stderr)
     sys.exit(1)
 print(
-    f"E2E_SAVE_MARK: server save/reload/edit verified (id={saved_id}, "
-    f"name={data['persisted_name']}, cpus={data['persisted_cpus']})"
+    f"E2E_SAVE_MARK: server save/reload/edit verified after typing the interpreter "
+    f"then applying discovery (id={saved_id}, name={data['persisted_name']}, "
+    f"cpus={data['persisted_cpus']}, command={' '.join(data['persisted_command'])}, "
+    f"walltime={data['persisted_time_limit']})"
 )
 PY
     echo "Step verified: HPC server save, reload, list and edit."

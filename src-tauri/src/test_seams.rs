@@ -177,6 +177,8 @@ pub fn hpc_watch_probe_request() -> Option<HpcWatchProbe> {
 pub struct HpcServerSaveProbe {
     pub server: std::path::PathBuf,
     pub result: std::path::PathBuf,
+    /// When set, the user "types" this interpreter before applying discovery.
+    pub typed_interpreter: Option<String>,
 }
 
 /// `COPERCEIVE_TEST_HPC_SERVER` (a committed ServerEntry fixture) plus
@@ -193,6 +195,10 @@ pub fn hpc_server_save_probe_request() -> Option<HpcServerSaveProbe> {
     Some(HpcServerSaveProbe {
         server: std::path::PathBuf::from(server),
         result: std::path::PathBuf::from(result),
+        typed_interpreter: std::env::var("COPERCEIVE_TEST_HPC_SAVE_INTERPRETER")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty()),
     })
 }
 

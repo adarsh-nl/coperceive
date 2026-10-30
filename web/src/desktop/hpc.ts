@@ -187,7 +187,9 @@ export function emptyEnvironment(): EnvironmentSetup {
     modules: [],
     interpreter: null,
     container_image: null,
-    coperceive_command: [],
+    // Matches the Rust default and the CLI name. Discovery replaces it with a
+    // discovered path or `<interpreter> -m coperceive` when one is available.
+    coperceive_command: ["coperceive"],
     wheelhouse: null,
     compute_has_internet: false,
   };
@@ -304,6 +306,12 @@ export function validateDraft(entry: ServerEntry): string[] {
   if (profile.environment.kind === "container" && !profile.environment.container_image?.trim()) {
     errors.push("A container environment needs an image path (for example a .sif file).");
   }
+  const command = profile.environment.coperceive_command;
+  if (command.length === 0 || command.some((part) => !part.trim())) {
+    errors.push(
+      "The command that starts coperceive is empty. Choose the Python interpreter under Environment, or use the discovered settings.",
+    );
+  }
   return errors;
 }
 
@@ -368,6 +376,18 @@ export function gpuTypesFor(entry: ServerEntry, partitionName: string | null): s
 }
 
 /**
+ * A walltime the form can save. Slurm's `sinfo` says "infinite"/"unlimited" (or
+ * may say "unknown") when a partition has no limit; those are not HH:MM:SS and
+ * must not be copied into the field the validator checks.
+ */
+export function discoveredWalltime(value: string | null | undefined): string | null {
+  const text = value?.trim();
+  if (!text) return null;
+  if (/^(infinite|unlimited|unknown|n\/a)$/i.test(text)) return null;
+  return text;
+}
+
+/**
  * Applies read-only discovery to a draft profile without overwriting anything
  * the user chose. Returns a new entry; the stored `discovered` snapshot is kept
  * so the partition/GPU choices survive a restart.
@@ -406,15 +426,47 @@ export function applyDiscovery(entry: ServerEntry, report: DetectionReport): Ser
       } else if (!profile.defaults.gres?.trim() && chosen.gres) {
         profile.defaults.gres = chosen.gres;
       }
-      if (!profile.defaults.time_limit && chosen.max_time) {
-        profile.defaults.time_limit = chosen.max_time;
+      const walltime = discoveredWalltime(chosen.max_time);
+      if (!profile.defaults.time_limit && walltime) {
+        profile.defaults.time_limit = walltime;
       }
     }
   }
-  if (profile.environment.kind === "none" && report.environment.kind !== "none") {
-    profile.environment = { ...report.environment, modules: [...report.environment.modules] };
-  } else if (!profile.environment.interpreter?.trim() && report.environment.interpreter) {
-    profile.environment.interpreter = report.environment.interpreter;
+  const detected = report.environment;
+  if (profile.environment.kind === "none" && detected.kind !== "none") {
+    profile.environment = { ...detected, modules: [...detected.modules] };
+  } else if (!profile.environment.interpreter?.trim() && detected.interpreter) {
+    profile.environment.interpreter = detected.interpreter;
+  }
+  // Saving needs a non-empty argv. Fill it independently of the environment
+  // kind: on a cluster where both sides are "none", the kind-equality branch
+  // above never runs, which used to leave [] and make saving impossible.
+  const command = profile.environment.coperceive_command;
+  const isBareDefault = command.length === 1 && command[0] === "coperceive";
+  if (command.length === 0 || isBareDefault) {
+    const detectedCommand = detected.coperceive_command ?? [];
+    const detectedIsBareDefault =
+      detectedCommand.length === 1 && detectedCommand[0] === "coperceive";
+    if (detectedCommand.length > 0 && !detectedIsBareDefault) {
+      profile.environment.coperceive_command = [...detectedCommand];
+    } else if (report.discovered?.environment.coperceive_path?.trim()) {
+      profile.environment.coperceive_command = [
+        report.discovered.environment.coperceive_path.trim(),
+      ];
+    } else if (profile.environment.interpreter?.trim()) {
+      // Prefer the interpreter the USER typed. Detection's environment may be
+      // plain python3, where coperceive is not installed; using that would save
+      // and then fail on the cluster.
+      profile.environment.coperceive_command = [
+        profile.environment.interpreter.trim(),
+        "-m",
+        "coperceive",
+      ];
+    } else if (detected.interpreter?.trim()) {
+      profile.environment.coperceive_command = [detected.interpreter.trim(), "-m", "coperceive"];
+    } else {
+      profile.environment.coperceive_command = ["coperceive"];
+    }
   }
   if (!profile.environment.wheelhouse?.trim()) {
     profile.environment.wheelhouse = null;
