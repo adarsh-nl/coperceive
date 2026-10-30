@@ -4,6 +4,7 @@ import assert from "node:assert";
 import { readFileSync } from "node:fs";
 import {
   applyDiscovery,
+  discoveredWalltime,
   emptyEntry,
   environmentLabel,
   formatBytes,
@@ -246,4 +247,64 @@ test("partitions are grouped one chip per name with GPU types inside", () => {
   assert.strictEqual(groups[0].nodes, 12);
   assert.strictEqual(groups[1].down, true);
   assert.deepStrictEqual(groups[1].gpuTypes, []);
+});
+
+test("a kind-none cluster with infinite walltimes saves after detection, no manual edits", () => {
+  // The real hpc-head1 shape: Slurm, every partition reports max_time "infinite",
+  // detection finds coperceive only through the interpreter the user typed first.
+  const interpreter = "/home/alice/coperceive-app/.venv/bin/python";
+  const infinitePartitions: DiscoveredPartition[] = [
+    { name: "main-cpu", nodes: 50, state: "up", max_time: "infinite", gres: null, gpu_types: [] },
+    { name: "gpu-a100", nodes: 10, state: "up", max_time: "infinite", gres: "gpu:a100:2", gpu_types: ["a100"] },
+  ];
+  const cluster = report({
+    scheduler: "slurm",
+    partitions: infinitePartitions,
+    gpu_types: ["a100"],
+    environment: {
+      kind: "none",
+      modules: [],
+      interpreter,
+      container_image: null,
+      coperceive_command: ["coperceive"],
+      wheelhouse: null,
+      compute_has_internet: false,
+    },
+    discovered: {
+      partitions: infinitePartitions,
+      gpu_types: ["a100"],
+      environment: {
+        module_system: false,
+        conda: null,
+        virtualenv: interpreter,
+        python: interpreter,
+        container_runtime: null,
+        coperceive_path: null,
+        coperceive_version: "0.0.0",
+        scratch_candidates: ["/local/alice"],
+      },
+      checked_unix: 1,
+    },
+    scratch: { path: "/local/alice", writable: true, free_bytes: null, quota: null, detail: "" },
+  });
+
+  const entry = emptyEntry("hpc-head1");
+  entry.profile.ssh_alias = "hpc-head1";
+  // The user types the interpreter BEFORE pressing "Use detected settings".
+  entry.profile.environment.interpreter = interpreter;
+  entry.profile.data_roots = ["/home/alice/data"];
+  entry.profile.scratch_template = "/local/alice";
+  entry.profile.results_root = "/home/alice/results";
+
+  const applied = applyDiscovery(entry, cluster);
+  assert.strictEqual(applied.profile.defaults.time_limit, null);
+  assert.deepStrictEqual(applied.profile.environment.coperceive_command, [
+    interpreter,
+    "-m",
+    "coperceive",
+  ]);
+  assert.deepStrictEqual(validateDraft(applied), []);
+  assert.strictEqual(discoveredWalltime("infinite"), null);
+  assert.strictEqual(discoveredWalltime("UNLIMITED"), null);
+  assert.strictEqual(discoveredWalltime("02:30:00"), "02:30:00");
 });

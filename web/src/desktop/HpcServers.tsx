@@ -503,7 +503,12 @@ export default function HpcServers() {
                 </option>
               ))}
             </select>
-            {draft.ssh ? (
+            {draft.ssh &&
+            (draft.ssh.hostname ||
+              draft.ssh.alias ||
+              draft.ssh.user ||
+              draft.ssh.port ||
+              draft.ssh.proxy_jump) ? (
               <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
                 Read from your SSH config: {draft.ssh.hostname ?? draft.ssh.alias}
                 {draft.ssh.user ? ` as ${draft.ssh.user}` : ""}
@@ -584,10 +589,12 @@ export default function HpcServers() {
                 placeholder="your cluster's scratch path, for example /scratch/$USER"
                 onChange={(event) => updateProfile({ scratch_template: event.target.value })}
               />
-              <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
-                This is a hint, not a saved value. Enter the per-user scratch folder your cluster
-                gives you.
-              </p>
+              {!draft.profile.scratch_template.trim() ? (
+                <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
+                  This is a hint, not a saved value. Enter the per-user scratch folder your cluster
+                  gives you.
+                </p>
+              ) : null}
             </div>
           </div>
 
@@ -714,6 +721,12 @@ export default function HpcServers() {
                 placeholder="from the cluster, e.g. 2-00:00:00"
                 onChange={(event) => updateDefaults({ time_limit: event.target.value || null })}
               />
+              {!draft.profile.defaults.time_limit ? (
+                <p style={{ color: "#8b949e", fontSize: "0.72rem", margin: "0.25rem 0 0" }}>
+                  Leave empty for the partition default. Use HH:MM:SS or D-HH:MM:SS; discovery does
+                  not copy “infinite”.
+                </p>
+              ) : null}
             </div>
             <div style={{ ...field, flex: 1 }}>
               <label style={labelStyle} htmlFor="hpc-cpus">

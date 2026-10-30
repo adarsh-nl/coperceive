@@ -53,6 +53,10 @@ case "${all_args}" in
         printf 'host cluster-none\nuser carol\nhostname cluster-none.example.org\nport 2222\nproxyjump none\nproxycommand none\n'
         exit 0
         ;;
+    *"-G cluster-save"*)
+        printf 'host cluster-save\nuser dana\nhostname cluster-save.example.org\nport 22\nproxyjump none\nproxycommand none\n'
+        exit 0
+        ;;
 esac
 
 case "${remote}" in
@@ -93,7 +97,7 @@ case "${remote}" in
         ;;
     *"coperceive-check:scheduler"*)
         case "${all_args}" in
-            *cluster-b*|*cluster-a*) echo slurm ;;
+            *cluster-b*|*cluster-a*|*cluster-save*) echo slurm ;;
             *) echo none ;;
         esac
         exit 0
@@ -105,6 +109,9 @@ case "${remote}" in
                 ;;
             *cluster-b*)
                 printf 'main-cpu*|up|2-00:00:00|64|(null)\ngpu-h100|up|1-00:00:00|32|gpu:h100:2\n'
+                ;;
+            *cluster-save*)
+                printf 'main-cpu*|up|infinite|50|(null)\ngpu-a100|up|infinite|10|gpu:a100:2\n'
                 ;;
             *)
                 printf ''
@@ -129,6 +136,23 @@ SCRATCH=/scratch/alice
 WORK=
 TMPDIR=/tmp
 HOME=/home/alice
+EOF
+                ;;
+            *cluster-save*)
+                cat <<'EOF'
+MODULE=
+LMOD=
+CONDA=
+CONDA_ENV=
+VIRTUAL_ENV=
+PYTHON=/usr/bin/python3
+APPTAINER=
+SINGULARITY=
+COPERCEIVE=
+SCRATCH=
+WORK=
+TMPDIR=/tmp
+HOME=/home/dana
 EOF
                 ;;
             *cluster-b*)
@@ -172,6 +196,7 @@ EOF
         case "${all_args}" in
             *cluster-a*) echo "coperceive 0.4.0" ;;
             *cluster-b*) echo "coperceive 0.4.1" ;;
+            *cluster-save*) echo "coperceive 0.0.0" ;;
             *) exit 1 ;;
         esac
         exit 0
@@ -180,6 +205,9 @@ EOF
         case "${all_args}" in
             *"/scratch/alice"*)
                 printf 'WRITABLE\n/dev/sdb1 1024 10 500000 1%% /scratch\nDisk quotas for user alice (uid 1001):\n     Filesystem  blocks   quota   limit   grace   files   quota   limit   grace\n'
+                ;;
+            *"/local/alice"*)
+                printf 'NOT_WRITABLE\n'
                 ;;
             *"/work/alice"*)
                 printf 'WRITABLE\n/dev/sdc1 1024 20 250000 1%% /work\n'

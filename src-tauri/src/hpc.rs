@@ -336,19 +336,19 @@ fn validate_slurm_time_limit(text: &str) -> Result<(), String> {
     }
     if text.chars().any(|ch| ch.is_whitespace() || ch.is_control()) {
         return Err(
-            "defaults.time_limit must not contain spaces, newlines or control characters.".into(),
+            "Walltime must not contain spaces, newlines or control characters.".into(),
         );
     }
     let (days, clock) = match text.split_once('-') {
         Some((days, clock)) => {
             if days.is_empty() || !days.chars().all(|ch| ch.is_ascii_digit()) {
                 return Err(format!(
-                    "defaults.time_limit {text:?} is not a Slurm time; use HH:MM:SS or D-HH:MM:SS."
+                    "Walltime {text:?} is not a Slurm time; use HH:MM:SS or D-HH:MM:SS."
                 ));
             }
             (
                 days.parse::<u64>()
-                    .map_err(|_| format!("defaults.time_limit {text:?} has too many days."))?,
+                    .map_err(|_| format!("Walltime {text:?} has too many days."))?,
                 clock,
             )
         }
@@ -361,7 +361,7 @@ fn validate_slurm_time_limit(text: &str) -> Result<(), String> {
             .any(|part| part.is_empty() || !part.chars().all(|ch| ch.is_ascii_digit()))
     {
         return Err(format!(
-            "defaults.time_limit {text:?} is not a Slurm time; use HH:MM:SS or D-HH:MM:SS."
+            "Walltime {text:?} is not a Slurm time; use HH:MM:SS or D-HH:MM:SS."
         ));
     }
     let hours = parts[0]
@@ -375,13 +375,12 @@ fn validate_slurm_time_limit(text: &str) -> Result<(), String> {
         .map_err(|_| "Invalid time seconds.".to_string())?;
     if days == 0 && hours > 23 {
         return Err(format!(
-            "defaults.time_limit {text:?} has more than 23 hours; use D-HH:MM:SS for multi-day \
-             limits."
+            "Walltime {text:?} has more than 23 hours; use D-HH:MM:SS for multi-day limits."
         ));
     }
     if minutes > 59 || seconds > 59 {
         return Err(format!(
-            "defaults.time_limit {text:?} is not a Slurm time; minutes and seconds must be 0-59."
+            "Walltime {text:?} is not a Slurm time; minutes and seconds must be 0-59."
         ));
     }
     Ok(())
@@ -470,7 +469,7 @@ impl EnvironmentSetup {
         if self.coperceive_command.is_empty()
             || self.coperceive_command.iter().any(|part| part.is_empty())
         {
-            return Err("coperceive_command must be non-empty argv elements.".into());
+            return Err("The command that starts coperceive is empty. Choose the Python interpreter under Environment, or use the discovered settings.".into());
         }
         Ok(())
     }
@@ -770,7 +769,7 @@ mod tests {
                     time_limit: Some("two hours".into()),
                     ..JobDefaults::default()
                 },
-                "time_limit",
+                "Walltime",
             ),
             (
                 JobDefaults {
@@ -835,6 +834,18 @@ mod tests {
                 "message {error:?} should mention {needle:?}"
             );
         }
+    }
+
+    #[test]
+    fn empty_coperceive_command_names_the_field_a_user_can_fix() {
+        let environment = EnvironmentSetup {
+            coperceive_command: Vec::new(),
+            ..EnvironmentSetup::default()
+        };
+        let error = environment.validate().expect_err("empty command must be refused");
+        assert!(error.contains("command that starts coperceive"), "{error}");
+        assert!(error.contains("Python interpreter"), "{error}");
+        assert!(!error.contains("coperceive_command"), "{error}");
     }
 
     #[test]
