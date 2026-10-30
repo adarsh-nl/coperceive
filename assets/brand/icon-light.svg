@@ -8,6 +8,6 @@
   <!-- Lowercase monospace 'c' in dark (#141414) -->
   <path d="M 548 376 C 524 330, 482 296, 420 296 C 324 296, 252 384, 252 512 C 252 640, 324 728, 420 728 C 482 728, 524 694, 548 648 L 488 616 C 470 648, 446 666, 418 666 C 356 666, 316 600, 316 512 C 316 424, 356 358, 418 358 C 446 358, 470 376, 488 408 Z" fill="#141414"/>
 
-  <!-- Solid orange-red block cursor (#D9482B) -->
-  <rect x="600" y="296" width="160" height="432" rx="4" ry="4" fill="#D9482B"/>
+  <!-- Solid orange-red horizontal bar (#D9482B) sitting on the baseline like an underscore -->
+  <rect x="600" y="656" width="220" height="72" rx="12" ry="12" fill="#D9482B"/>
 </svg>

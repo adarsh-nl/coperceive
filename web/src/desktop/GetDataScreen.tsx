@@ -205,7 +205,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
   return (
     <div style={{ padding: "1.5rem", maxWidth: "980px", margin: "0 auto" }}>
       {catalogError && (
-        <p role="alert" style={{ color: "#ff6b6b", marginBottom: "1rem" }}>
+        <p role="alert" style={{ color: "var(--danger)", marginBottom: "1rem" }}>
           {catalogError}
         </p>
       )}
@@ -223,10 +223,10 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
           }}
         >
           <div>
-            <strong style={{ color: "#f5f5f7", display: "block" }}>
+            <strong style={{ color: "var(--text)", display: "block" }}>
               Resume download of {resumableJob.datasetId} ({resumableJob.presetId})?
             </strong>
-            <span style={{ fontSize: "0.85rem", color: "#a1a1a6" }}>
+            <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
               Previous download was interrupted before completion.
             </span>
           </div>
@@ -254,8 +254,8 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
               }}
               style={{
                 background: "transparent",
-                color: "#a1a1a6",
-                border: "1px solid rgba(255, 255, 255, 0.2)",
+                color: "var(--muted)",
+                border: "1px solid var(--line)",
                 borderRadius: "6px",
                 padding: "0.4rem 0.8rem",
                 cursor: "pointer",
@@ -268,10 +268,10 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
       )}
 
       <div style={{ marginBottom: "2rem" }}>
-        <h2 style={{ fontSize: "1.4rem", fontWeight: 600, color: "#f5f5f7", marginBottom: "0.4rem" }}>
+        <h2 style={{ fontSize: "1.4rem", fontWeight: 600, color: "var(--text)", marginBottom: "0.4rem" }}>
           Dataset Catalog
         </h2>
-        <p style={{ color: "#a1a1a6", fontSize: "0.9rem", margin: 0 }}>
+        <p style={{ color: "var(--muted)", fontSize: "0.9rem", margin: 0 }}>
           Download verified cooperative-perception benchmarks directly into your local library.
         </p>
       </div>
@@ -315,8 +315,8 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             <div
               key={ds.id}
               style={{
-                background: isPlanned ? "rgba(255, 255, 255, 0.02)" : "rgba(255, 255, 255, 0.05)",
-                border: "1px solid rgba(255, 255, 255, 0.1)",
+                background: isPlanned ? "var(--sunken)" : "var(--panel)",
+                border: "1px solid var(--line)",
                 borderRadius: "10px",
                 padding: "1.2rem",
                 display: "flex",
@@ -327,14 +327,14 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             >
               <div>
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-                  <h3 style={{ margin: 0, fontSize: "1.15rem", color: "#f5f5f7", fontWeight: 600 }}>{ds.name}</h3>
+                  <h3 style={{ margin: 0, fontSize: "1.15rem", color: "var(--text)", fontWeight: 600 }}>{ds.name}</h3>
                   <span
                     style={{
                       fontSize: "0.75rem",
                       padding: "0.15rem 0.5rem",
                       borderRadius: "12px",
-                      background: isReady ? "rgba(40, 120, 220, 0.2)" : isLocal ? "rgba(255, 180, 0, 0.15)" : "rgba(255, 255, 255, 0.1)",
-                      color: isReady ? "#58a6ff" : isLocal ? "#e3b341" : "#8b949e",
+                      background: isReady ? "rgba(40, 120, 220, 0.2)" : isLocal ? "rgba(255, 180, 0, 0.15)" : "var(--sunken)",
+                      color: isReady ? "var(--ok)" : isLocal ? "var(--vehicle)" : "var(--muted)",
                       fontWeight: 500,
                     }}
                   >
@@ -342,17 +342,17 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                   </span>
                 </div>
 
-                <p style={{ fontSize: "0.85rem", color: "#a1a1a6", marginBottom: "0.8rem", lineHeight: 1.4 }}>
+                <p style={{ fontSize: "0.85rem", color: "var(--muted)", marginBottom: "0.8rem", lineHeight: 1.4 }}>
                   {ds.description}
                 </p>
 
-                <div style={{ fontSize: "0.8rem", color: "#8b949e", display: "flex", flexDirection: "column", gap: "0.3rem", marginBottom: "1rem" }}>
+                <div style={{ fontSize: "0.8rem", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "0.3rem", marginBottom: "1rem" }}>
                   <div><strong>Agents:</strong> {ds.agents}</div>
                   <div><strong>Modalities:</strong> {ds.modalities.join(", ")}</div>
                   <div>
                     <strong>Licence:</strong>{" "}
                     {ds.licence_url ? (
-                      <a href={ds.licence_url} target="_blank" rel="noreferrer" style={{ color: "#58a6ff", textDecoration: "none" }}>
+                      <a href={ds.licence_url} target="_blank" rel="noreferrer" style={{ color: "var(--text)", textDecoration: "underline" }}>
                         {ds.licence}
                       </a>
                     ) : (
@@ -361,12 +361,12 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                   </div>
                   <div style={{ display: "flex", gap: "0.8rem", marginTop: "0.2rem" }}>
                     {ds.paper_url && (
-                      <a href={ds.paper_url} target="_blank" rel="noreferrer" style={{ color: "#58a6ff", textDecoration: "none" }}>
+                      <a href={ds.paper_url} target="_blank" rel="noreferrer" style={{ color: "var(--text)", textDecoration: "underline" }}>
                         Paper ↗
                       </a>
                     )}
                     {ds.source_url && (
-                      <a href={ds.source_url} target="_blank" rel="noreferrer" style={{ color: "#58a6ff", textDecoration: "none" }}>
+                      <a href={ds.source_url} target="_blank" rel="noreferrer" style={{ color: "var(--text)", textDecoration: "underline" }}>
                         Source ↗
                       </a>
                     )}
@@ -374,17 +374,17 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                 </div>
 
                 {ds.notice && (
-                  <p style={{ fontSize: "0.75rem", color: "#8b949e", background: "rgba(0, 0, 0, 0.2)", padding: "0.5rem", borderRadius: "6px" }}>
+                  <p style={{ fontSize: "0.75rem", color: "var(--muted)", background: "var(--sunken)", padding: "0.5rem", borderRadius: "6px" }}>
                     {ds.notice}
                   </p>
                 )}
               </div>
 
-              <div style={{ marginTop: "1rem", paddingTop: "0.8rem", borderTop: "1px solid rgba(255, 255, 255, 0.08)" }}>
+              <div style={{ marginTop: "1rem", paddingTop: "0.8rem", borderTop: "1px solid var(--line)" }}>
                 {isReady && ds.presets && (
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                     <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ fontSize: "0.8rem", color: "#a1a1a6" }}>Presets:</span>
+                      <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Presets:</span>
                     </div>
                     {ds.presets.map((preset) => (
                       <button
@@ -392,11 +392,11 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                         type="button"
                         onClick={() => handleSelectPreset(ds, preset.id)}
                         style={{
-                          background: "rgba(255, 255, 255, 0.08)",
-                          border: "1px solid rgba(255, 255, 255, 0.12)",
+                          background: "var(--sunken)",
+                          border: "1px solid var(--line)",
                           borderRadius: "6px",
                           padding: "0.5rem 0.75rem",
-                          color: "#f5f5f7",
+                          color: "var(--text)",
                           cursor: "pointer",
                           display: "flex",
                           alignItems: "center",
@@ -407,8 +407,8 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       >
                         <div>
                           <strong>{preset.name}</strong>
-                          <div style={{ fontSize: "0.75rem", color: "#8b949e" }}>{preset.description}</div>
-                          <div style={{ fontSize: "0.75rem", color: "#f5f5f7", marginTop: "0.2rem" }}>
+                          <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{preset.description}</div>
+                          <div style={{ fontSize: "0.75rem", color: "var(--text)", marginTop: "0.2rem" }}>
                             {presetBytes[`${ds.id}:${preset.id}`] != null
                               ? formatBytes(presetBytes[`${ds.id}:${preset.id}`])
                               : presetSizeNote[`${ds.id}:${preset.id}`] || "Size is checked when you choose this preset."}
@@ -433,9 +433,9 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       width: "100%",
                       padding: "0.5rem",
                       borderRadius: "6px",
-                      background: "rgba(255, 255, 255, 0.08)",
-                      border: "1px solid rgba(255, 255, 255, 0.15)",
-                      color: "#f5f5f7",
+                      background: "var(--sunken)",
+                      border: "1px solid var(--line)",
+                      color: "var(--text)",
                       cursor: "pointer",
                       fontSize: "0.85rem",
                       fontWeight: 500,
@@ -446,7 +446,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                 )}
 
                 {isPlanned && (
-                  <div style={{ textAlign: "center", fontSize: "0.8rem", color: "#8b949e", padding: "0.4rem" }}>
+                  <div style={{ textAlign: "center", fontSize: "0.8rem", color: "var(--muted)", padding: "0.4rem" }}>
                     Coming later
                   </div>
                 )}
@@ -476,21 +476,21 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
         >
           <div
             style={{
-              background: "#1c1c1e",
+              background: "var(--panel)",
               borderRadius: "12px",
-              border: "1px solid rgba(255, 255, 255, 0.15)",
+              border: "1px solid var(--line)",
               maxWidth: "540px",
               width: "100%",
               padding: "1.5rem",
-              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.5)",
+              boxShadow: "var(--shadow)",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1rem" }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: "1.2rem", color: "#f5f5f7" }}>
+                <h3 style={{ margin: 0, fontSize: "1.2rem", color: "var(--text)" }}>
                   Download {selectedDataset.name} ({selectedPresetId})
                 </h3>
-                <span style={{ fontSize: "0.85rem", color: "#8b949e" }}>
+                <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
                   Schema 1 converted dataset download
                 </span>
               </div>
@@ -504,7 +504,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                 style={{
                   background: "transparent",
                   border: "none",
-                  color: "#8b949e",
+                  color: "var(--muted)",
                   fontSize: "1.2rem",
                   cursor: "pointer",
                 }}
@@ -514,31 +514,31 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             </div>
 
             {estimating && (
-              <div style={{ padding: "2rem", textAlign: "center", color: "#a1a1a6" }}>
+              <div style={{ padding: "2rem", textAlign: "center", color: "var(--muted)" }}>
                 Estimating archive sizes and checking volume headroom…
               </div>
             )}
 
             {dryRunError && (
-              <div style={{ padding: "1rem", borderRadius: "8px", background: "rgba(255, 60, 60, 0.15)", color: "#ff6b6b", marginBottom: "1rem" }}>
+              <div style={{ padding: "1rem", borderRadius: "8px", background: "rgba(255, 60, 60, 0.15)", color: "var(--danger)", marginBottom: "1rem" }}>
                 {dryRunError}
               </div>
             )}
 
             {dryRun && !estimating && !jobRunning && (
               <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                <div style={{ background: "rgba(255, 255, 255, 0.04)", borderRadius: "8px", padding: "1rem" }}>
+                <div style={{ background: "var(--sunken)", borderRadius: "8px", padding: "1rem" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.4rem", fontSize: "0.9rem" }}>
-                    <span style={{ color: "#a1a1a6" }}>Download size:</span>
-                    <strong style={{ color: "#f5f5f7" }}>{formatBytes(dryRun.download_bytes)}</strong>
+                    <span style={{ color: "var(--muted)" }}>Download size:</span>
+                    <strong style={{ color: "var(--text)" }}>{formatBytes(dryRun.download_bytes)}</strong>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.4rem", fontSize: "0.9rem" }}>
-                    <span style={{ color: "#a1a1a6" }}>Disk space required:</span>
-                    <strong style={{ color: "#f5f5f7" }}>{formatBytes(dryRun.disk_bytes)}</strong>
+                    <span style={{ color: "var(--muted)" }}>Disk space required:</span>
+                    <strong style={{ color: "var(--text)" }}>{formatBytes(dryRun.disk_bytes)}</strong>
                   </div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.9rem" }}>
-                    <span style={{ color: "#a1a1a6" }}>Free space after:</span>
-                    <strong style={{ color: dryRun.has_headroom ? "#58a6ff" : "#ff6b6b" }}>
+                    <span style={{ color: "var(--muted)" }}>Free space after:</span>
+                    <strong style={{ color: dryRun.has_headroom ? "var(--ok)" : "var(--danger)" }}>
                       {formatBytes(dryRun.free_bytes - dryRun.disk_bytes)}
                     </strong>
                   </div>
@@ -551,7 +551,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       borderRadius: "6px",
                       background: "rgba(255, 69, 58, 0.15)",
                       border: "1px solid rgba(255, 69, 58, 0.3)",
-                      color: "#ff6b6b",
+                      color: "var(--danger)",
                       fontSize: "0.85rem",
                     }}
                   >
@@ -566,7 +566,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       alignItems: "flex-start",
                       gap: "0.5rem",
                       fontSize: "0.85rem",
-                      color: "#f5f5f7",
+                      color: "var(--text)",
                       cursor: "pointer",
                       padding: "0.5rem 0",
                     }}
@@ -593,9 +593,9 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     style={{
                       padding: "0.5rem 1rem",
                       borderRadius: "6px",
-                      border: "1px solid rgba(255, 255, 255, 0.2)",
+                      border: "1px solid var(--line)",
                       background: "transparent",
-                      color: "#f5f5f7",
+                      color: "var(--text)",
                       cursor: "pointer",
                     }}
                   >
@@ -610,9 +610,11 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       borderRadius: "6px",
                       border: "none",
                       background: !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
-                        ? "rgba(255, 255, 255, 0.1)"
+                        ? "var(--sunken)"
                         : "#1f6feb",
-                      color: "#fff",
+                      color: !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
+                        ? "var(--muted)"
+                        : "#fff",
                       cursor: !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
                         ? "not-allowed"
                         : "pointer",
@@ -630,17 +632,17 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
               <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
                 <div>
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", marginBottom: "0.4rem" }}>
-                    <span style={{ color: "#a1a1a6" }}>
+                    <span style={{ color: "var(--muted)" }}>
                       Stage: <strong>{jobStage}</strong>
                     </span>
-                    <span style={{ color: "#f5f5f7", fontWeight: 600 }}>{jobPercent}%</span>
+                    <span style={{ color: "var(--text)", fontWeight: 600 }}>{jobPercent}%</span>
                   </div>
                   <div
                     role="progressbar"
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={jobPercent}
-                    style={{ height: "8px", background: "rgba(255, 255, 255, 0.1)", borderRadius: "4px", overflow: "hidden" }}
+                    style={{ height: "8px", background: "var(--line)", borderRadius: "4px", overflow: "hidden" }}
                   >
                     <div
                       style={{
@@ -651,7 +653,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       }}
                     />
                   </div>
-                  <p style={{ fontSize: "0.8rem", color: "#8b949e", marginTop: "0.4rem" }}>{jobNote}</p>
+                  <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.4rem" }}>{jobNote}</p>
                 </div>
 
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -661,7 +663,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     style={{
                       background: "transparent",
                       border: "none",
-                      color: "#58a6ff",
+                      color: "var(--accent)",
                       fontSize: "0.85rem",
                       cursor: "pointer",
                       padding: 0,
@@ -675,9 +677,9 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     style={{
                       padding: "0.4rem 0.8rem",
                       borderRadius: "6px",
-                      border: "1px solid rgba(255, 255, 255, 0.2)",
+                      border: "1px solid var(--line)",
                       background: "transparent",
-                      color: "#f5f5f7",
+                      color: "var(--text)",
                       cursor: "pointer",
                       fontSize: "0.85rem",
                       marginRight: "0.5rem",
@@ -691,9 +693,9 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     style={{
                       padding: "0.4rem 0.8rem",
                       borderRadius: "6px",
-                      border: "1px solid rgba(255, 255, 255, 0.2)",
+                      border: "1px solid var(--line)",
                       background: "transparent",
-                      color: "#ff6b6b",
+                      color: "var(--danger)",
                       cursor: "pointer",
                       fontSize: "0.85rem",
                     }}
@@ -712,7 +714,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     borderRadius: "6px",
                     background: "rgba(255, 69, 58, 0.15)",
                     border: "1px solid rgba(255, 69, 58, 0.3)",
-                    color: "#ff6b6b",
+                    color: "var(--danger)",
                     fontSize: "0.85rem",
                     marginBottom: "0.8rem",
                   }}
@@ -726,9 +728,9 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     style={{
                       padding: "0.4rem 0.8rem",
                       borderRadius: "6px",
-                      border: "1px solid rgba(255, 255, 255, 0.2)",
+                      border: "1px solid var(--line)",
                       background: "transparent",
-                      color: "#f5f5f7",
+                      color: "var(--text)",
                       cursor: "pointer",
                     }}
                   >
@@ -774,9 +776,9 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
         >
           <div
             style={{
-              background: "#141414",
+              background: "var(--panel)",
               borderRadius: "10px",
-              border: "1px solid rgba(255, 255, 255, 0.15)",
+              border: "1px solid var(--line)",
               maxWidth: "680px",
               width: "100%",
               maxHeight: "80vh",
@@ -786,11 +788,11 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.8rem" }}>
-              <h4 style={{ margin: 0, color: "#f5f5f7" }}>Dataset Job Logs</h4>
+              <h4 style={{ margin: 0, color: "var(--text)" }}>Dataset Job Logs</h4>
               <button
                 type="button"
                 onClick={() => setShowLogModal(false)}
-                style={{ background: "transparent", border: "none", color: "#a1a1a6", cursor: "pointer" }}
+                style={{ background: "transparent", border: "none", color: "var(--muted)", cursor: "pointer" }}
               >
                 ✕
               </button>
@@ -799,11 +801,11 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
               style={{
                 flex: 1,
                 overflowY: "auto",
-                background: "#0a0a0a",
+                background: "var(--sunken)",
                 padding: "0.75rem",
                 borderRadius: "6px",
                 fontSize: "0.8rem",
-                color: "#e6edf3",
+                color: "var(--text)",
                 fontFamily: "'Geist Mono', monospace",
                 margin: 0,
               }}

@@ -280,26 +280,6 @@ jobs:
             done || true
           fi
 
-      - name: Sample Connect backdrop CPU for 60s at 1280x800
-        run: bash scripts/desktop/measure_backdrop_cpu.sh 2>&1 | tee /tmp/backdrop_cpu.log
-      - name: Report backdrop CPU samples
-        if: always()
-        run: |
-          if [ -f /tmp/backdrop_cpu.log ]; then
-            echo "### Connect backdrop CPU (animated, warm-up dropped)" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat /tmp/backdrop_cpu.log >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -f docs/media/measurements/backdrop-cpu.md ]; then
-            echo "### backdrop-cpu.md" >> $GITHUB_STEP_SUMMARY
-            cat docs/media/measurements/backdrop-cpu.md >> $GITHUB_STEP_SUMMARY
-          fi
-          if [ -f /tmp/backdrop_cpu.log ]; then
-            grep -E '^(backdrop_motion|backdrop_cpu_(median|p95|samples|n))=' /tmp/backdrop_cpu.log | while IFS= read -r line; do
-              echo "::notice title=backdrop-cpu::${line}"
-            done || true
-          fi
       - name: Locate and Measure Single Built DMG
         run: |
           DMG_FILE=$(find src-tauri/target -iname "*.dmg" -type f 2>/dev/null | head -n 1)

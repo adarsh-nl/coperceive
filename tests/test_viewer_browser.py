@@ -911,48 +911,12 @@ def test_playback_updates_status_line_every_frame(session: _Session) -> None:
         pause.click()
 
 
-def test_connect_backdrop_animation_and_reduced_motion(session: _Session) -> None:
-    """The Connect backdrop is non-blank, animates, and stays static under reduced motion."""
+def test_connect_screen_accessibility_and_navigation(session: _Session) -> None:
+    """The Connect screen has no animated canvas backdrop and passes a11y across tabs."""
     session.page.goto(f"{session.base}/#/connect", wait_until="networkidle")
-    canvas = session.page.locator("canvas")
-    session.page.wait_for_selector("canvas", timeout=5000)
+    assert session.page.locator("canvas").count() == 0, "Expected no canvas backdrop on Connect"
 
-    # 1. Non-blank: check that pixels are drawn
-    non_black = canvas.evaluate(
-        "c => { const ctx = c.getContext('2d'); "
-        "const d = ctx.getImageData(0, 0, c.width, c.height).data; "
-        "let count = 0; "
-        "for (let i = 0; i < d.length; i += 4) { "
-        "if (d[i] > 10 || d[i + 1] > 10 || d[i + 2] > 10) count++; } "
-        "return count; }"
-    )
-    assert non_black > 50, f"Connect backdrop canvas was blank (non_black={non_black})"
-
-    # 2. Canvas animates: pixels change between two frames 500ms apart
-    sample_hash = (
-        "c => { const ctx = c.getContext('2d'); "
-        "const d = ctx.getImageData(0, 0, c.width, c.height).data; "
-        "let s = 0; "
-        "for (let i = 0; i < d.length; i += 16) s += d[i] + d[i + 1] + d[i + 2]; "
-        "return s; }"
-    )
-    h1 = canvas.evaluate(sample_hash)
-    time.sleep(0.5)
-    h2 = canvas.evaluate(sample_hash)
-    assert h1 != h2, "Connect backdrop canvas did not animate over 500ms"
-
-    # 3. Reduced motion: frame stays static
-    session.page.emulate_media(reduced_motion="reduce")
-    session.page.goto(f"{session.base}/#/connect", wait_until="networkidle")
-    canvas_rm = session.page.locator("canvas")
-    session.page.wait_for_selector("canvas", timeout=5000)
-    time.sleep(0.1)
-    rm1 = canvas_rm.evaluate(sample_hash)
-    time.sleep(0.5)
-    rm2 = canvas_rm.evaluate(sample_hash)
-    assert rm1 == rm2, "Under prefers-reduced-motion, backdrop frame changed"
-
-    # 4. Accessibility audit with axe-core
+    # Accessibility audit with axe-core
     session.page.emulate_media(reduced_motion="no-preference")
     repo_root = Path(__file__).resolve().parents[1]
     axe_path = repo_root / "web" / "node_modules" / "axe-core" / "axe.min.js"

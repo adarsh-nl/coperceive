@@ -11,7 +11,7 @@
 # 3. Quit app cleanly, relaunch without autoconnect env var -> asserts full session restored from DOM & scene-graph.
 # 4. Switch dataset via UI button to second valid root -> asserts new scene rendered, old scene cleared.
 # 5. Switch to invalid folder -> asserts persistent error banner ("Choose another folder" button, does NOT auto-dismiss).
-# 6. Close viewer window (Cmd+W) -> returns to Connect screen, asserts animated backdrop exists.
+# 6. Close viewer window (Cmd+W) -> returns to Connect screen.
 # 7. Quit application -> asserts ZERO orphan coperceive serve processes remain.
 # 8. Get data: start a dataset job, Pause, Resume, Cancel (step 5e; test-mode local job, no network).
 # 9. Library: Move library relocates a scene to a new root (step 5f; temp library from the fixture).
@@ -1702,7 +1702,7 @@ if ! kill -0 "${APP_PID}" 2>/dev/null; then
 fi
 echo "Verified: App process is still running after closing viewer window."
 
-echo "Connect backdrop is on screen. The 60 s 1280x800 CPU sample is scripts/desktop/measure_backdrop_cpu.sh."
+echo "Connect screen is on screen."
 
 screencapture -x "${SCREENSHOT_DIR}/05-connect-window.png" 2>/dev/null || true
 
