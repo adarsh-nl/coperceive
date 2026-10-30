@@ -33,6 +33,26 @@ jobs:
         run: bash scripts/desktop/bundle_python.sh
       - name: Sync Desktop Bundle Version
         run: bash scripts/desktop/sync_version.sh
+      # Updater artifacts (Coperceive.app.tar.gz + .sig) need the signing key, which
+      # only release builds have. Enable them here, in the CI workspace only, so
+      # ordinary CI builds keep building without the secret.
+      - name: Enable updater artifacts for the release build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "::error title=UpdaterKey::TAURI_SIGNING_PRIVATE_KEY is not set; see docs/desktop/updates.md" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          path = "src-tauri/tauri.conf.json"
+          with open(path) as f:
+              conf = json.load(f)
+          conf["bundle"]["createUpdaterArtifacts"] = True
+          with open(path, "w") as f:
+              json.dump(conf, f, indent=2)
+          PY
       - name: Build Tauri Desktop & Updater Bundle
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -58,8 +78,22 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release-assets
-          find src-tauri/target/aarch64-apple-darwin/release/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" -o -name "latest.json" \) -exec cp {} release-assets/ \;
+          find src-tauri/target/aarch64-apple-darwin/release/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" \) -exec cp {} release-assets/ \;
           ls -la release-assets/
+      # The Tauri bundler writes the .tar.gz and .sig but not latest.json (that file
+      # normally comes from tauri-action). Write it here from the signature and the
+      # bundle version, and refuse a tag that does not match the app version: an
+      # app that reports the old version after updating would offer the same
+      # update forever.
+      - name: Write latest.json for the updater
+        run: |
+          python3 scripts/desktop/write_latest_json.py \
+            --conf src-tauri/tauri.conf.json \
+            --tag "${GITHUB_REF_NAME}" \
+            --assets release-assets \
+            --repo "${GITHUB_REPOSITORY}" \
+            --out release-assets/latest.json
+          cat release-assets/latest.json
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
