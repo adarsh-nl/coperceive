@@ -1956,6 +1956,52 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         with open(log_file, "a", encoding="utf-8") as handle:
             handle.write(self.path + "\n")
+        if ".tar.gz" in self.path or ".app" in self.path:
+            pkg = b"mock update archive payload content for minisign verification failure"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(pkg)))
+            self.end_headers()
+            self.wfile.write(pkg)
+            return
+        if "404" in self.path:
+            self.send_response(404)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            return
+        if "bad-sig" in self.path:
+            import base64
+            raw_minisign = (
+                "untrusted comment: signature from minisign secret key\n"
+                "RUTX5qZvdPSepPF2zsjvP/L/TQtBLRnWRvaq+4omK1UEugtQp/USrGiI1v762sDy3id3aor7bRC9ETyeot6lMHHrWoZ5hjUM1Qc=\n"
+                "trusted comment: timestamp:1791649051\tfile:payload\tversion:0.2.0\n"
+                "DDq2CLOEl5cQmC2eJRHlnZPVViOZsu1CjpPKQoei4A/XBfkDqGO0B+QMrcrHgEQ5qV3mne75tdFWhJpqUXh9AA=="
+            )
+            sig_b64 = base64.b64encode(raw_minisign.encode("utf-8")).decode("ascii")
+            my_port = self.server.server_address[1]
+            bad_body = json.dumps(
+                {
+                    "version": "0.2.0",
+                    "notes": "Bad signature notes.",
+                    "pub_date": "2026-10-24T00:00:00Z",
+                    "platforms": {
+                        "darwin-aarch64": {
+                            "signature": sig_b64,
+                            "url": f"http://127.0.0.1:{my_port}/bad-sig-package.tar.gz",
+                        }
+                    },
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(bad_body)))
+            self.end_headers()
+            self.wfile.write(bad_body)
+            return
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -2038,6 +2084,7 @@ import json, time, urllib.request, urllib.error
 
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
+update_port = "${UPDATE_PORT}"
 
 def eval_js(script, timeout=15):
     req = urllib.request.Request(
@@ -2102,6 +2149,39 @@ time.sleep(0.4)
 after = eval_js("document.body.innerText") or ""
 assert "is ready" not in after, after[-500:]
 print("Step 5d notices: Later hid the banner")
+
+# Verify 404 is quiet on launch but shows 'You're up to date' on manual check
+eval_js("window.__COPERCEIVE_UPDATE_URL__ = 'http://127.0.0.1:%s/404.json'" % update_port)
+eval_js("window.__COPERCEIVE_CHECK_UPDATES__(false)")
+time.sleep(0.5)
+txt_404_quiet = eval_js("document.body ? document.body.innerText : ''") or ""
+assert "Could not check for updates" not in txt_404_quiet, f"404 background check must be quiet: {txt_404_quiet}"
+assert "You're up to date" not in txt_404_quiet, f"404 background check must not toast: {txt_404_quiet}"
+print("Step 5d notices: 404 background check is quiet")
+
+eval_js("window.__COPERCEIVE_CHECK_UPDATES__(true)")
+time.sleep(0.5)
+txt_404_manual = eval_js("document.body ? document.body.innerText : ''") or ""
+assert "You're up to date" in txt_404_manual, f"404 manual check must show You're up to date, got: {txt_404_manual}"
+print("Step 5d notices: 404 manual check showed You're up to date")
+
+# Verify manifest with bad signature is rejected with error, not installed
+eval_js("window.__COPERCEIVE_UPDATE_RESTART__ = false")
+eval_js("window.__COPERCEIVE_UPDATE_URL__ = 'http://127.0.0.1:%s/bad-sig.json'" % update_port)
+eval_js("window.__COPERCEIVE_CHECK_UPDATES__(true)")
+time.sleep(0.8)
+txt_bad_banner = eval_js("document.body ? document.body.innerText : ''") or ""
+assert "coperceive 0.2.0 is ready" in txt_bad_banner, f"Expected banner before restart click, got: {txt_bad_banner}"
+click_button("Restart now")
+time.sleep(1.0)
+txt_bad_err = eval_js("document.body ? document.body.innerText : ''") or ""
+assert "Retry" in txt_bad_err, f"Bad signature must show error with Retry button, got: {txt_bad_err}"
+assert any(term in txt_bad_err.lower() for term in ["signature", "verification", "minisign", "invalid", "decode"]), f"Expected signature verification error, got: {txt_bad_err}"
+assert "could not check for updates" not in txt_bad_err.lower(), f"Must not be generic network failure: {txt_bad_err}"
+restarted_bad = eval_js("window.__COPERCEIVE_UPDATE_RESTART__ === true ? 'yes' : 'no'")
+assert restarted_bad == "no", "Manifest with bad signature must NOT be installed"
+print("Step 5d notices: manifest with bad signature is rejected with error and not installed")
+
 print("Step 5d verified: banner, Later, and Restart.")
 EOF
 if ! grep -q "latest.json" "${UPDATE_LOG_FILE}"; then

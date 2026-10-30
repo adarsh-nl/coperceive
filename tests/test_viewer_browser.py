@@ -1236,3 +1236,159 @@ def test_identifier_inputs_have_autocapitalize_and_autocorrect_disabled(
     partition_input.fill("")
     partition_input.press_sequentially("ps")
     assert partition_input.input_value() == "ps"
+
+
+def test_updater_quiet_on_404_launch_and_shows_uptodate_on_manual_check(
+    browser: Browser,
+    viewer_url: str,
+) -> None:
+    """A 404 on latest.json is quiet on launch (no error toast, no banner), but
+    shows 'You're up to date' on a manual check."""
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(404)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), _H)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    context = browser.new_context(viewport={"width": 1440, "height": 900})
+    page = context.new_page()
+    page.add_init_script(
+        f"""
+        window.__COPERCEIVE_DESKTOP__ = true;
+        window.__COPERCEIVE_TEST_ENV__ = true;
+        window.__COPERCEIVE_UPDATE_URL__ = "http://127.0.0.1:{port}/latest.json";
+        """
+    )
+    session = _Session(page, viewer_url)
+
+    try:
+        session.open()
+        session.wait_status(SCENE_FULL)
+
+        # On launch, wait 1.5s for initial background check to finish
+        time.sleep(1.5)
+        # Verify no error toast and no update banner
+        body_text = session.page.locator("body").inner_text() or ""
+        assert "Could not check for updates" not in body_text
+        assert "is ready" not in body_text
+
+        # Trigger manual check
+        session.page.evaluate("() => window.__COPERCEIVE_CHECK_UPDATES__(true)")
+        session.page.wait_for_selector(".update-status", timeout=5000)
+        status_text = session.page.locator(".update-status").inner_text() or ""
+        assert "You're up to date" in status_text
+    finally:
+        context.close()
+        server.shutdown()
+
+
+def test_updater_bad_signature_is_rejected_with_error(
+    browser: Browser,
+    viewer_url: str,
+) -> None:
+    """A manifest with a bad signature is rejected with an error on install and
+    never marked installed."""
+    import base64
+    import threading
+    from http.server import BaseHTTPRequestHandler, HTTPServer
+
+    raw_minisign = (
+        "untrusted comment: signature from minisign secret key\n"
+        "RUTX5qZvdPSepPF2zsjvP/L/TQtBLRnWRvaq+4omK1UEugtQp/USrGiI1v762sDy3id3aor7bRC9ETyeot6lMHHrWoZ5hjUM1Qc=\n"
+        "trusted comment: timestamp:1791649051\tfile:payload\tversion:0.2.0\n"
+        "DDq2CLOEl5cQmC2eJRHlnZPVViOZsu1CjpPKQoei4A/XBfkDqGO0B+QMrcrHgEQ5qV3mne75tdFWhJpqUXh9AA=="
+    )
+    sig_b64 = base64.b64encode(raw_minisign.encode("utf-8")).decode("ascii")
+
+    class _H(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if ".tar.gz" in self.path or ".app" in self.path:
+                pkg = b"mock update archive payload content for minisign verification failure"
+                self.send_response(200)
+                self.send_header("Content-Type", "application/gzip")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "no-store")
+                self.send_header("Content-Length", str(len(pkg)))
+                self.end_headers()
+                self.wfile.write(pkg)
+                return
+            addr = self.server.server_address
+            server_port = addr[1] if isinstance(addr, tuple) else 0
+            body = json.dumps(
+                {
+                    "version": "0.2.0",
+                    "notes": "Bad signature test",
+                    "platforms": {
+                        "darwin-aarch64": {
+                            "signature": sig_b64,
+                            "url": f"http://127.0.0.1:{server_port}/Coperceive.app.tar.gz",
+                        }
+                    },
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = HTTPServer(("127.0.0.1", 0), _H)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    context = browser.new_context(viewport={"width": 1440, "height": 900})
+    page = context.new_page()
+    page.add_init_script(
+        f"""
+        window.__COPERCEIVE_DESKTOP__ = true;
+        window.__COPERCEIVE_TEST_ENV__ = true;
+        window.__COPERCEIVE_UPDATE_URL__ = "http://127.0.0.1:{port}/latest.json";
+        """
+    )
+    session = _Session(page, viewer_url)
+
+    try:
+        session.open()
+        session.wait_status(SCENE_FULL)
+
+        # Update banner appears
+        session.page.wait_for_selector("div[role='banner']", timeout=10000)
+        banner_text = session.page.locator("div[role='banner']").inner_text() or ""
+        assert "coperceive 0.2.0 is ready" in banner_text
+
+        # Click Restart now
+        session.page.click("button:has-text('Restart now')")
+
+        # Expect error alert to appear with Retry button
+        session.page.wait_for_selector("div[role='alert']", timeout=5000)
+        alert_text = session.page.locator("div[role='alert']").inner_text() or ""
+        assert "Retry" in alert_text
+        assert any(
+            term in alert_text.lower()
+            for term in ["signature", "verification", "minisign", "invalid", "decode"]
+        )
+        assert "could not check for updates" not in alert_text.lower()
+
+        # Assert restart flag was NOT recorded
+        restarted = session.page.evaluate("() => Boolean(window.__COPERCEIVE_UPDATE_RESTART__)")
+        assert not restarted, "Update with bad signature must not be installed"
+    finally:
+        context.close()
+        server.shutdown()

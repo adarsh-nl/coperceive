@@ -27,3 +27,4 @@ pub mod ssh;
 pub mod state;
 pub mod test_seams;
 pub mod token;
+pub mod updater;

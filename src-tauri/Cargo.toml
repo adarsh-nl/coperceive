@@ -24,3 +24,4 @@ tauri-build = { version = "2.0.0", features = [] }
 [target.'cfg(target_os = "macos")'.dependencies]
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-dialog = "2.0.0"
+tauri-plugin-updater = "2"

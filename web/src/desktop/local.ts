@@ -804,3 +804,37 @@ export async function onTownMapProgress(
   }
   return () => {};
 }
+
+export interface DesktopUpdateCheckResult {
+  status: "available" | "uptodate" | "error";
+  version?: string;
+  notes?: string;
+  pub_date?: string;
+  error?: string;
+  is_network?: boolean;
+}
+
+/** Checks for application updates via the loopback controller. */
+export async function checkDesktopUpdate(isManual = false, updateUrl?: string): Promise<DesktopUpdateCheckResult> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const override = updateUrl || (typeof window !== "undefined" ? window.__COPERCEIVE_UPDATE_URL__ : undefined);
+    return await controllerPost<DesktopUpdateCheckResult>("/updater-check", {
+      is_manual: isManual,
+      update_url: override,
+    });
+  }
+  throw new Error("Controller not available");
+}
+
+/** Downloads, verifies signature and installs the pending update via the loopback controller. */
+export async function installDesktopUpdate(updateUrl?: string): Promise<void> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const override = updateUrl || (typeof window !== "undefined" ? window.__COPERCEIVE_UPDATE_URL__ : undefined);
+    await controllerPost<{ status: string }>("/updater-install", {
+      update_url: override,
+    });
+    return;
+  }
+  throw new Error("Controller not available");
+}
+

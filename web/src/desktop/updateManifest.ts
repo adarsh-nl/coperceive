@@ -25,6 +25,7 @@ export interface UpdateOffer {
   readonly version: string;
   readonly notes: string;
   readonly url: string;
+  readonly signature?: string;
 }
 
 export function parseUpdateManifest(data: unknown, currentVersion: string): UpdateOffer | null {
@@ -41,5 +42,9 @@ export function parseUpdateManifest(data: unknown, currentVersion: string): Upda
   if (!darwin || typeof darwin !== "object") return null;
   const url = (darwin as Record<string, unknown>).url;
   if (typeof url !== "string" || url.length === 0) return null;
-  return { version, notes, url };
+  const signature =
+    typeof (darwin as Record<string, unknown>).signature === "string"
+      ? ((darwin as Record<string, unknown>).signature as string)
+      : undefined;
+  return { version, notes, url, signature };
 }
