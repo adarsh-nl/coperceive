@@ -1253,7 +1253,7 @@ def test_updater_quiet_on_404_launch_and_shows_uptodate_on_manual_check(
             self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
 
-        def log_message(self, fmt: str, *args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             return
 
     server = HTTPServer(("127.0.0.1", 0), _H)
@@ -1325,7 +1325,7 @@ def test_updater_bad_signature_is_rejected_with_error(
             self.end_headers()
             self.wfile.write(body)
 
-        def log_message(self, fmt: str, *args: object) -> None:
+        def log_message(self, format: str, *args: object) -> None:
             return
 
     server = HTTPServer(("127.0.0.1", 0), _H)
