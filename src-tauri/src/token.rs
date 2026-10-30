@@ -1,10 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-#[cfg(unix)]
-use std::fs::File;
 use std::fs::OpenOptions;
-#[cfg(unix)]
-use std::io::Read;
 use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -33,23 +29,8 @@ impl std::error::Error for TokenSecurityError {}
 
 /// Generates a cryptographically secure 128-bit hex token (32 lowercase hex characters).
 pub fn generate_secure_token() -> std::io::Result<String> {
-    #[cfg(unix)]
-    let bytes = {
-        let mut b = [0u8; 16];
-        let mut file = File::open("/dev/urandom")?;
-        file.read_exact(&mut b)?;
-        b
-    };
-    #[cfg(not(unix))]
-    let bytes = {
-        let seed = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos())
-            .unwrap_or(0);
-        let pid = std::process::id() as u128;
-        let mixed = seed ^ (pid << 64);
-        mixed.to_le_bytes()
-    };
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let mut hex = String::with_capacity(32);
     for b in bytes {
         use std::fmt::Write as _;
@@ -84,6 +65,8 @@ pub fn verify_token_file_permissions(path: &Path) -> Result<(), TokenSecurityErr
             return Err(TokenSecurityError::LoosePermissions(mode));
         }
     }
+    // On non-Unix platforms (e.g. Windows), POSIX file permission modes do not apply.
+    // Windows relies on the per-user profile directory's ACLs; there is no mode check there.
     Ok(())
 }
 
