@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import hmac
+import io
 import json
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -15,6 +17,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
@@ -59,6 +62,19 @@ _IMAGE_TYPES = {
 }
 
 _STATIC = Path(__file__).resolve().parent / "static"
+_THUMBNAIL_WIDTH_MAX = 1280
+
+
+@functools.lru_cache(maxsize=256)
+def _thumbnail_bytes(path: str, mtime_ns: int, width: int) -> bytes:
+    """A small JPEG for the camera strip/split pane; full resolution stays on disk."""
+    with Image.open(path) as opened:
+        image = opened.convert("RGB")
+        image.thumbnail((width, width), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=80)
+        return buffer.getvalue()
+
 
 _MISSING_VIEWER_PAGE = """<!doctype html>
 <html lang="en">
@@ -286,7 +302,13 @@ def create_app(
         return FileResponse(svg, media_type="image/svg+xml")
 
     @app.get("/api/scenes/{scene_id}/image")
-    def scene_image(scene_id: str, time_us: int, agent_id: str, sensor_id: str) -> FileResponse:
+    def scene_image(
+        scene_id: str,
+        time_us: int,
+        agent_id: str,
+        sensor_id: str,
+        width: int | None = None,
+    ) -> Response:
         scene = _cached_scene(app, scene_id)
         relative = image_path(scene, time_us, agent_id, sensor_id)
         if relative is None:
@@ -303,6 +325,16 @@ def create_app(
             present = False
         if not present:
             raise HTTPException(status_code=404, detail="image not found")
+        if width is not None:
+            # The strip and split pane ask for a display width; resizing here keeps
+            # a 3 MB 1920x1080 PNG from crossing HTTP and the decoder on every tick.
+            clamped = max(16, min(int(width), _THUMBNAIL_WIDTH_MAX))
+            try:
+                payload = _thumbnail_bytes(str(target), target.stat().st_mtime_ns, clamped)
+            except (OSError, ValueError, Image.UnidentifiedImageError):
+                media = _IMAGE_TYPES.get(target.suffix.lower(), "application/octet-stream")
+                return FileResponse(target, media_type=media)
+            return Response(content=payload, media_type="image/jpeg")
         media = _IMAGE_TYPES.get(target.suffix.lower(), "application/octet-stream")
         return FileResponse(target, media_type=media)
 

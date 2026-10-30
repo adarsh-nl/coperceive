@@ -226,7 +226,7 @@ async function fetchImage(
   token: string,
   width: number,
 ): Promise<ImageBitmap | null> {
-  const url = `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}`;
+  const url = `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}&width=${width}`;
   const entry = await fetchBytes(url, token);
   if (entry === null) {
     missing.add(key);
@@ -464,6 +464,7 @@ function Thumb({
   onOpen,
   imageOn,
   onToggleImage,
+  playing = false,
 }: {
   camera: FrameFrustum;
   agentLabel: string;
@@ -476,12 +477,14 @@ function Thumb({
   onOpen: () => void;
   imageOn: boolean;
   onToggleImage: () => void;
+  playing?: boolean;
 }) {
   const hostRef = useRef<HTMLButtonElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Without IntersectionObserver every thumbnail counts as visible.
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
   const [bitmap, setBitmap] = useState<ImageBitmap | null | undefined>(undefined);
+  const lastLoadRef = useRef(0);
   const key = cameraKey(camera.agent_id, camera.sensor_id);
   const picture = imagesAvailable ? bitmap : null;
 
@@ -503,6 +506,13 @@ function Thumb({
     if (!visible || !imagesAvailable) {
       return;
     }
+    // During playback a 10 Hz full strip would ask for six images every tick and
+    // queue the render thread behind decode/canvas work; refresh at most ~3 Hz.
+    const now = performance.now();
+    if (playing && now - lastLoadRef.current < 300) {
+      return;
+    }
+    lastLoadRef.current = now;
     let cancelled = false;
     void (async () => {
       try {
@@ -515,14 +525,11 @@ function Thumb({
           setBitmap(null);
         }
       }
-      if (nextTimeUs !== null) {
-        void loadImage(sceneId, nextTimeUs, camera.agent_id, camera.sensor_id, token, THUMB_WIDTH).catch(() => undefined);
-      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [visible, imagesAvailable, sceneId, timeUs, nextTimeUs, token, camera.agent_id, camera.sensor_id]);
+  }, [visible, imagesAvailable, sceneId, timeUs, nextTimeUs, token, camera.agent_id, camera.sensor_id, playing]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -583,6 +590,7 @@ export default function CameraStrip({
   onToggleImage,
   imagesAvailable = true,
   missingText = "No image file for this sample.",
+  playing = false,
 }: {
   token: string;
   sceneId: string;
@@ -603,6 +611,8 @@ export default function CameraStrip({
   /** False when the scene summary says no image file is staged: nothing is requested. */
   imagesAvailable?: boolean;
   missingText?: string;
+  /** While playing, refresh thumbnails at most a few times per second. */
+  playing?: boolean;
 }) {
   const sceneRef = useRef(sceneId);
   useEffect(() => {
@@ -656,6 +666,7 @@ export default function CameraStrip({
                       nextTimeUs={nextTimeUs}
                       token={token}
                       imagesAvailable={imagesAvailable}
+                      playing={playing}
                       open={splitKey === key}
                       onOpen={() => onSplit(key)}
                       imageOn={imageOn(key)}
@@ -760,9 +771,6 @@ export function CameraSplit({
       }
       setShown({ timeUs, bitmap, boxes: sampleBoxes });
       setNote("");
-      if (nextTimeUs !== null) {
-        void loadImage(sceneId, nextTimeUs, camera.agent_id, camera.sensor_id, token, SPLIT_WIDTH).catch(() => undefined);
-      }
     })();
     return () => {
       cancelled = true;

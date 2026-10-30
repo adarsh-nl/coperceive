@@ -349,6 +349,7 @@ class _Session:
 @pytest.fixture
 def session(browser: Browser, viewer_url: str) -> Iterator[_Session]:
     page = browser.new_page(viewport={"width": 1400, "height": 900})
+    page.add_init_script("window.__COPERCEIVE_TEST_ENV__ = true;")
     session = _Session(page, viewer_url)
     session.open()
     yield session
@@ -391,6 +392,27 @@ def test_play_advances_the_timeline_at_the_recorded_pace(session: _Session, shot
     )
     assert session.slider("aria-valuenow") == BARE_SAMPLES - 1
     assert "sample 30 / 30" in session.page.locator(".clock").inner_text()
+
+
+def test_playback_has_no_render_stall(session: _Session) -> None:
+    """At 1x on the synthetic 10 Hz scene, no rendered-frame gap may exceed 350 ms.
+
+    This catches a main-thread stall (shader recompilation, image decode, layout)
+    while playing. The first two gaps after Play are ignored: one-off shader
+    compilation/warm-up happens on the first frames, not mid-playback.
+    """
+    session.choose_scene(SCENE_BARE)
+    session.wait_for(lambda: session.slider("aria-valuenow") == 0, "initial sample")
+    page = session.page
+    page.locator("button[aria-label=Play]").click()
+    play_start = page.evaluate("performance.now()")
+    page.wait_for_timeout(2200)
+    stats = page.evaluate("window.__COPERCEIVE_FRAME_STATS__ || []")
+    played = [stat for stat in stats if stat["at"] >= play_start]
+    assert len(played) >= 8, played
+    gaps = [played[index]["at"] - played[index - 1]["at"] for index in range(1, len(played))][2:]
+    assert gaps, played
+    assert max(gaps) <= 350, gaps
 
 
 def test_choosing_a_scene_reloads_frames_timeline_and_map(session: _Session, shots: Path) -> None:
@@ -498,7 +520,7 @@ def test_scene_list_shows_every_scene_without_scrolling(session: _Session) -> No
 
 def _image_requests(session: _Session, time_us: int) -> list[str]:
     return [
-        url.split("sensor_id=")[-1]
+        url.split("sensor_id=")[-1].split("&")[0]
         for url in session.requests
         if "/image?" in url and f"time_us={time_us}&" in url
     ]
@@ -523,9 +545,10 @@ def _strip_open(session: _Session) -> bool:
 def test_camera_strip_fetches_visible_thumbnails_once_and_nothing_when_collapsed(
     session: _Session,
 ) -> None:
-    """Open strip at the sample with two camera files: one request per camera, shared with
-    the split pane. Collapsed (C), the next sample with files is not requested; opening the
-    strip again fetches it."""
+    """Open strip at the sample with two camera files: one thumbnail request per camera;
+    opening the split pane asks for that camera at the split width (a second, larger thumbnail).
+    Collapsed (C), the next sample with files is not requested; opening the strip again fetches
+    it."""
     step = session.page.locator("button[aria-label='Step forward']")
     step.click()
     step.click()
@@ -537,7 +560,9 @@ def test_camera_strip_fetches_visible_thumbnails_once_and_nothing_when_collapsed
     session.wait_for(lambda: session.page.locator(".cam-thumb canvas").count() == 2, "thumbnails")
     session.page.locator(".cam-thumb[data-camera='vehicle/cam_front']").click()
     session.wait_for(lambda: session.page.locator(".camera-split canvas").count() == 1, "split")
-    assert sorted(_image_requests(session, 100000)) == ["cam_front", "cam_rear"]  # no refetch
+    # The split pane asks for the same camera at its display width; the strip itself did not
+    # refetch either thumbnail (no duplicate 160 px requests).
+    assert sorted(_image_requests(session, 100000)) == ["cam_front", "cam_front", "cam_rear"]
     session.page.keyboard.press("Escape")
     session.page.keyboard.press("c")
     session.wait_for(lambda: not _strip_open(session), "collapsed")

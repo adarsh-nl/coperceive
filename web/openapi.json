@@ -523,6 +523,22 @@
               "type": "string",
               "title": "Sensor Id"
             }
+          },
+          {
+            "name": "width",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Width"
+            }
           }
         ],
         "responses": {
