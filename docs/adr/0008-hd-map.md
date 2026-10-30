@@ -119,12 +119,18 @@ OpenDRIVE file — never the CARLA tarball — into a temporary file, verifies t
 the pinned SHA-256 above, ingests it with `parse_opendrive`/`write_map`, aligns it with
 `align_maps`, and stores the result under `<library_root>/maps/Town03`.
 
-Source used by the installer (public mirror; checked 2026-10-30):
-<https://raw.githubusercontent.com/hihuaweizhu/scenic-carla/master/maps/CARLA/Town03.xodr>.
+Source used by the installer (public mirror, pinned to commit `13d68ba8e9ea7c45f13250c37f6c2350829146f6`;
+checked 2026-10-30):
+<https://raw.githubusercontent.com/hihuaweizhu/scenic-carla/13d68ba8e9ea7c45f13250c37f6c2350829146f6/maps/CARLA/Town03.xodr>.
 Downloaded bytes: 4,589,872, SHA-256
 `abf177bcd9b66cfefb7ac4919f6456815f1384f4229f1343c8a6a90bbb7713c9`, equal to the
 Town03 row above. The manifest records the source URL, SHA-256, licence, licence URL and
-attribution.
+attribution. If the pinned source cannot be fetched or the bytes do not match, the
+app shows "Map source unavailable; install from a CARLA package with coperceive
+maps ingest" instead of a hash comparison. The map is parsed and aligned in a
+staging directory; it is moved to `<library_root>/maps/Town03` only after the
+alignment is measured, so a failed alignment leaves neither a partial nor an
+unaligned map behind.
 
 Licence, verified against the official **CARLA 0.9.15 README**
 (<https://github.com/carla-simulator/carla/blob/0.9.15/README.md>): CARLA-specific code is
