@@ -119,10 +119,39 @@ def dry_run_preset(
                 dry_run=True,
                 hub=hub,
             )
-        except Exception as exc:
+        except ImportError as exc:
             raise RuntimeError(
-                "Could not read the Griffin file sizes from the dataset host. "
-                "Check the network connection and try again."
+                "The Griffin size check needs the Hugging Face client, which this app build is "
+                "missing. Next: update the desktop app, then try again."
+            ) from exc
+        except Exception as exc:
+            name = type(exc).__name__
+            detail = " ".join(str(exc).split())[:160]
+            lowered = detail.lower()
+            if any(
+                word in lowered
+                for word in ("401", "403", "unauthori", "forbidden", "token", "gated")
+            ):
+                next_step = "check HF_TOKEN access to the dataset, then try again"
+            elif any(
+                word in lowered
+                for word in (
+                    "network",
+                    "vpn",
+                    "timed out",
+                    "timeout",
+                    "connect",
+                    "resolve",
+                    "ssl",
+                    "offline",
+                )
+            ):
+                next_step = "check the network or VPN connection, then try again"
+            else:
+                next_step = "try again; if it keeps failing, check the dataset host status"
+            raise RuntimeError(
+                f"Could not read the Griffin file sizes from the dataset host "
+                f"({name}: {detail}). Next: {next_step}."
             ) from exc
         download_bytes = sum(item.size for item in report.files)
         disk_bytes = report.required_free_bytes

@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import type { CatalogDataset, DryRunResult, DatasetProgressEvent } from "./types";
 import PanelState from "./PanelState";
+import { dryRunFailureText } from "./dryRun";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   datasetDryRun,
@@ -66,10 +67,10 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             const measured = await datasetDryRun("griffin", preset.id);
             setPresetBytes((prev) => ({ ...prev, [key]: measured.download_bytes }));
             setPresetSizeNote((prev) => ({ ...prev, [key]: "" }));
-          } catch {
+          } catch (err) {
             setPresetSizeNote((prev) => ({
               ...prev,
-              [key]: "Could not check the size. Choose this preset to try again.",
+              [key]: dryRunFailureText(err),
             }));
           }
         }
