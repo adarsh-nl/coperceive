@@ -4,7 +4,7 @@
  * detected, and override anything. Sign-in uses the user's own ssh-agent and
  * ~/.ssh/config; there is no password or key field anywhere.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
@@ -21,6 +21,7 @@ import {
   emptyEntry,
   environmentLabel,
   formatBytes,
+  groupPartitions,
   gpuTypesFor,
   missingExplanations,
   partitionNames,
@@ -115,6 +116,7 @@ export default function HpcServers() {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
+  const formErrorRef = useRef<HTMLDivElement | null>(null);
 
   const refreshServers = async () => {
     setLoading(true);
@@ -236,9 +238,12 @@ export default function HpcServers() {
     const validation = validateDraft(draft);
     if (validation.length > 0) {
       setError(validation.join(" "));
+      setNote("");
+      requestAnimationFrame(() => formErrorRef.current?.scrollIntoView({ block: "center" }));
       return;
     }
     setError("");
+    setNote("");
     setBusy("save");
     try {
       const saved = await saveServerProfile(draft);
@@ -247,6 +252,8 @@ export default function HpcServers() {
       setNote(`Saved “${saved.profile.name}”.`);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
+      setNote("");
+      requestAnimationFrame(() => formErrorRef.current?.scrollIntoView({ block: "center" }));
     } finally {
       setBusy(null);
     }
@@ -305,7 +312,7 @@ export default function HpcServers() {
         </div>
       </div>
 
-      {error ? (
+      {error && !draft ? (
         <div
           role="alert"
           style={{
@@ -554,9 +561,13 @@ export default function HpcServers() {
                 id="hpc-scratch"
                 style={input}
                 value={draft.profile.scratch_template}
-                placeholder="/scratch/$USER"
+                placeholder="your cluster's scratch path, for example /scratch/$USER"
                 onChange={(event) => updateProfile({ scratch_template: event.target.value })}
               />
+              <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
+                This is a hint, not a saved value. Enter the per-user scratch folder your cluster
+                gives you.
+              </p>
             </div>
           </div>
 
@@ -800,6 +811,23 @@ export default function HpcServers() {
             can; Coperceive never installs anything on offline nodes.
           </label>
 
+          {error ? (
+            <div
+              ref={formErrorRef}
+              role="alert"
+              style={{
+                marginTop: "0.5rem",
+                padding: "0.55rem 0.75rem",
+                borderRadius: "8px",
+                backgroundColor: "rgba(255, 98, 89, 0.12)",
+                border: "1px solid rgba(255, 98, 89, 0.35)",
+                color: "#ff6259",
+                fontSize: "0.82rem",
+              }}
+            >
+              {error}
+            </div>
+          ) : null}
           <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
             <button
               type="button"
@@ -834,17 +862,17 @@ export default function HpcServers() {
                 <div style={{ marginTop: "0.6rem" }}>
                   <div style={{ ...labelStyle, marginBottom: "0.3rem" }}>Partitions offered</div>
                   <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
-                    {report.partitions.map((partition) => (
+                    {groupPartitions(report.partitions).map((partition) => (
                       <button
                         key={partition.name}
                         type="button"
                         onClick={() =>
                           updateDefaults({
                             partition: partition.name,
-                            gres: partition.gpu_types[0]
-                              ? partition.gpu_types[0] === "gpu"
+                            gres: partition.gpuTypes[0]
+                              ? partition.gpuTypes[0] === "gpu"
                                 ? "gpu:1"
-                                : `gpu:${partition.gpu_types[0]}:1`
+                                : `gpu:${partition.gpuTypes[0]}:1`
                               : (partition.gres ?? null),
                           })
                         }
@@ -864,11 +892,28 @@ export default function HpcServers() {
                           color: "#f5f5f7",
                         }}
                       >
-                        {partition.name}
-                        {partition.gpu_types.length > 0 ? ` · ${partition.gpu_types.join(", ")}` : ""}
-                        {partition.max_time ? ` · max ${partition.max_time}` : ""}
+                        <span>{partition.name}</span>
+                        {partition.gpuTypes.length > 0 ? (
+                          <span style={{ marginLeft: "0.35rem", opacity: 0.8 }}>
+                            {partition.gpuTypes.map((gpu) => (
+                              <span
+                                key={gpu}
+                                style={{
+                                  marginLeft: "0.2rem",
+                                  padding: "0 0.3rem",
+                                  borderRadius: "999px",
+                                  backgroundColor: "rgba(255,255,255,0.12)",
+                                  fontSize: "0.68rem",
+                                }}
+                              >
+                                {gpu}
+                              </span>
+                            ))}
+                          </span>
+                        ) : null}
+                        {partition.maxTime ? ` · max ${partition.maxTime}` : ""}
                         {partition.nodes ? ` · ${partition.nodes} nodes` : ""}
-                        {partition.state === "down" ? " · unavailable" : ""}
+                        {partition.down ? " · unavailable" : ""}
                       </button>
                     ))}
                   </div>
