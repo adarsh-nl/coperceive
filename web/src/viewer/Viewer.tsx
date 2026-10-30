@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import { createPortal } from "react-dom";
+import { downloadTownMap, onTownMapProgress } from "../desktop/local";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
@@ -1137,6 +1138,12 @@ export default function Viewer({
   const [mapNote, setMapNote] = useState("");
   const [webglError, setWebglError] = useState("");
   const [mapInfoFor, setMapInfoFor] = useState<{ sceneId: string; info: MapInfo | null } | null>(null);
+  const [mapInstall, setMapInstall] = useState<{
+    busy: boolean;
+    percent: number;
+    message: string;
+    error: string;
+  } | null>(null);
   const [exportNote, setExportNote] = useState("");
   const [exportSource, setExportSource] = useState("view");
   const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | "png">("mp4");
@@ -2606,6 +2613,35 @@ export default function Viewer({
   const sceneKey = summary?.scene_id ?? "";
   // Keyed by scene like the run list, so a switch never shows the previous town's map note.
   const mapInfo = mapInfoFor && mapInfoFor.sceneId === sceneKey ? mapInfoFor.info : null;
+
+  const installTown03Map = async () => {
+    if (!summary || typeof window === "undefined" || !window.__COPERCEIVE_DESKTOP__) return;
+    const root = (window.__COPERCEIVE_DATA_ROOT__ ?? "").replace(/\/+$/, "");
+    if (!root) return;
+    setMapInstall({ busy: true, percent: 0, message: "Starting…", error: "" });
+    const unlisten = await onTownMapProgress((event) => {
+      setMapInstall((current) => ({
+        busy: true,
+        percent: typeof event.percent === "number" ? event.percent : current?.percent ?? 0,
+        message: typeof event.message === "string" ? event.message : current?.message ?? "",
+        error: "",
+      }));
+    });
+    try {
+      await downloadTownMap(`${root}/${summary.scene_id}`);
+      setMapInstall({ busy: true, percent: 100, message: "Map installed and aligned.", error: "" });
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      setMapInstall({
+        busy: false,
+        percent: 0,
+        message: "",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      unlisten();
+    }
+  };
   const runs = runList && runList.sceneId === sceneKey ? runList.runs : null;
   const runNote = runList && runList.sceneId === sceneKey ? runList.note : "";
   const run = runs?.find((item) => item.run_id === runId) ?? null;
@@ -2882,7 +2918,7 @@ export default function Viewer({
     const controller = new AbortController();
     void (async () => {
       const base = `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}`;
-      const which = await fetch(`${base}/map`, { headers: authHeaders(effectiveToken), signal: controller.signal });
+      const which = await fetch(`${base}/map?refresh=1`, { headers: authHeaders(effectiveToken), signal: controller.signal });
       if (!stillWanted()) {
         return;
       }
@@ -3621,7 +3657,43 @@ export default function Viewer({
                 />
               ))}
               {lidarNote(summary) ? <p className="muted empty-state">Points: {lidarNote(summary)}</p> : null}
-              {mapInfo && !mapInfo.available ? <p className="muted empty-state">Map: {mapNoteFor(mapInfo)}</p> : null}
+              {mapInfo && !mapInfo.available ? (
+                <div className="muted empty-state">
+                  <p style={{ margin: 0 }}>Map: {mapNoteFor(mapInfo)}</p>
+                  {typeof window !== "undefined" &&
+                  window.__COPERCEIVE_DESKTOP__ &&
+                  mapInfo.map_name === "Carla/Maps/Town03" ? (
+                    <div style={{ marginTop: "0.35rem" }}>
+                      <button
+                        type="button"
+                        onClick={() => void installTown03Map()}
+                        disabled={mapInstall?.busy === true}
+                        title="Downloads the official CARLA 0.9.15 Town03 OpenDRIVE (pinned SHA-256), ingests it and aligns it to this scene. Licence: CARLA 0.9.15 README says the town assets are CC-BY (no version stated)."
+                        style={{ marginTop: "0.2rem" }}
+                      >
+                        Download map for Town03 (CARLA 0.9.15, CC-BY)
+                      </button>
+                      <div style={{ fontSize: "0.68rem", marginTop: "0.2rem" }}>
+                        <a
+                          href="https://github.com/carla-simulator/carla/blob/0.9.15/README.md"
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "inherit" }}
+                        >
+                          Licence: CC-BY (CARLA 0.9.15 README; version not stated)
+                        </a>
+                        {mapInstall ? (
+                          <div style={{ marginTop: "0.2rem" }}>
+                            {mapInstall.error
+                              ? `Could not install the map: ${mapInstall.error}`
+                              : `${mapInstall.percent}% · ${mapInstall.message}`}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <EyeToggle
                 on={appearance.frustumImages}
                 label="Frustum images"

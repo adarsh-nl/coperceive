@@ -19,6 +19,7 @@ from coperceive.hdmap.identify import (
     identify_towns,
     write_town_table,
 )
+from coperceive.hdmap.install import Progress, install_town03
 from coperceive.hdmap.opendrive import parse_opendrive
 from coperceive.hdmap.store import map_slug, write_map
 
@@ -70,6 +71,20 @@ def add_parser(sub: Any) -> None:
     align.add_argument("--maps", required=True, help="Maps root written by ingest.")
     align.add_argument("--scenes", required=True, help="Directory of schema 1 scenes.")
     align.set_defaults(func=align_command)
+
+    install = maps_sub.add_parser(
+        "install-town03",
+        help="Download, verify, ingest and align Town03 (CARLA 0.9.15 assets).",
+    )
+    install.add_argument("--maps", required=True, help="Maps root (library_root/maps).")
+    install.add_argument("--scenes", required=True, help="Library/data root with scenes.")
+    install.add_argument("--url", default=None, help="Override the pinned mirror (tests).")
+    install.add_argument(
+        "--progress-json",
+        action="store_true",
+        help="Print one JSON progress event per line for the desktop app.",
+    )
+    install.set_defaults(func=install_command)
 
     identify = maps_sub.add_parser(
         "identify",
@@ -169,6 +184,42 @@ def align_command(args: argparse.Namespace) -> None:
             f"heading_deg {report.get('heading_median_deg')} "
             f"translation {report.get('translation_applied')}"
         )
+
+
+def install_command(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.hdmap.install import TOWN03_SHA256, TOWN03_URL
+
+    progress: Progress | None = None
+    if args.progress_json:
+
+        def emit_progress(stage: str, percent: int, message: str) -> None:
+            print(
+                json.dumps(
+                    {"stage": stage, "percent": percent, "message": message},
+                    ensure_ascii=False,
+                ),
+                flush=True,
+            )
+
+        progress = emit_progress
+
+    try:
+        report = install_town03(
+            Path(args.maps),
+            Path(args.scenes),
+            url=args.url or TOWN03_URL,
+            expected_sha256=TOWN03_SHA256,
+            progress=progress,
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    if args.progress_json:
+        print(json.dumps({"event": "result", "report": report}), flush=True)
+    else:
+        print(json.dumps(report, indent=2))
 
 
 def identify_command(args: argparse.Namespace) -> None:

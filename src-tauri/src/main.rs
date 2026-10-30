@@ -447,7 +447,12 @@ async fn switch_data_root(
     };
 
     let python_bin = resolve_python_binary(app);
-    let mut new_session = SidecarSession::spawn(&python_bin, &new_path, current_viewer_origin.as_deref())
+    let mut new_session = SidecarSession::spawn_with_maps(
+        &python_bin,
+        &new_path,
+        library_maps_root().as_deref(),
+        current_viewer_origin.as_deref(),
+    )
         .map_err(|e| format!("Failed to spawn new sidecar: {}", e))?;
 
     let new_origin = format!("http://127.0.0.1:{}", new_session.port);
@@ -847,6 +852,24 @@ fn build_app_menu(
         .build()
 }
 
+/// The library's shared maps root, passed to the local server so maps installed
+/// from the Library card (library_root/maps) are found even when the server root
+/// is a single scene directory.
+#[cfg(target_os = "macos")]
+fn library_maps_root() -> Option<PathBuf> {
+    let persistent = state::load_state();
+    let root = persistent
+        .library_root
+        .map(PathBuf::from)
+        .or_else(|| {
+            let default = state::default_library_root();
+            default.is_dir().then_some(default)
+        })?;
+    // Pass it even before the directory exists: the server resolves it lazily,
+    // and an install during this session must be visible without a restart.
+    Some(root.join("maps"))
+}
+
 #[cfg(target_os = "macos")]
 async fn start_local_session(
     app: &tauri::AppHandle,
@@ -867,7 +890,8 @@ async fn start_local_session(
     }
 
     let python_bin = resolve_python_binary(app);
-    let mut session = SidecarSession::spawn(&python_bin, &root_path, None)
+    let mut session =
+        SidecarSession::spawn_with_maps(&python_bin, &root_path, library_maps_root().as_deref(), None)
         .map_err(|e| format!("Failed to spawn local sidecar: {}", e))?;
 
     let origin = format!("http://127.0.0.1:{}", session.port);
@@ -1147,6 +1171,111 @@ fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::St
     p.library_root = Some(new_root.clone());
     let _ = state::save_state(&p);
     Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root), true))
+}
+
+/// One-click install of the official Town03 OpenDRIVE for a library scene:
+/// download (pinned mirror + SHA), ingest as a shared map, align to the scene
+/// poses, store under library_root/maps. Progress events are streamed as
+/// `town-map-progress` payloads.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn download_town_map(
+    app: tauri::AppHandle,
+    scene_path: String,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{BufRead, BufReader, Read};
+        use std::process::{Command, Stdio};
+        use tauri::Emitter;
+
+        let persistent = state::load_state();
+        let library_root = persistent
+            .library_root
+            .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+        let library_root = PathBuf::from(library_root)
+            .canonicalize()
+            .map_err(|error| format!("Could not open the library root: {error}"))?;
+        let scene = PathBuf::from(&scene_path)
+            .canonicalize()
+            .map_err(|error| format!("Could not open the scene: {error}"))?;
+        if !scene.starts_with(&library_root) {
+            return Err("The scene is not inside the library root.".to_string());
+        }
+        let map_name = coperceive_desktop::library::scene_map_name(&scene)
+            .ok_or_else(|| "This scene does not declare a CARLA map name.".to_string())?;
+        if map_name != "Carla/Maps/Town03" {
+            return Err(format!(
+                "One-click download is implemented for Town03 only; this scene names {map_name}."
+            ));
+        }
+        let maps_root = library_root.join("maps");
+        let python = resolve_python_binary(&app);
+        let mut child = Command::new(&python)
+            .args([
+                "-m",
+                "coperceive.cli",
+                "maps",
+                "install-town03",
+                "--maps",
+                &maps_root.to_string_lossy(),
+                "--scenes",
+                &library_root.to_string_lossy(),
+                "--progress-json",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("Could not start the map installer: {error}"))?;
+        let stderr = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let mut reader = BufReader::new(stderr);
+                let _ = reader.read_to_string(&mut text);
+                text
+            })
+        });
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Could not read the map installer output.".to_string())?;
+        let mut report: Option<serde_json::Value> = None;
+        for line in BufReader::new(stdout).lines() {
+            let line = line.map_err(|error| format!("Could not read map progress: {error}"))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let event: serde_json::Value = match serde_json::from_str(&line) {
+                Ok(value) => value,
+                Err(_) => {
+                    let _ = app.emit(
+                        "town-map-progress",
+                        serde_json::json!({"event": "log", "message": line}),
+                    );
+                    continue;
+                }
+            };
+            if event.get("event").and_then(|value| value.as_str()) == Some("result") {
+                report = event.get("report").cloned();
+            } else {
+                let _ = app.emit("town-map-progress", event);
+            }
+        }
+        let status = child
+            .wait()
+            .map_err(|error| format!("The map installer did not finish: {error}"))?;
+        let stderr = stderr
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_default();
+        if !status.success() {
+            return Err(format!(
+                "Town03 map install failed: {}",
+                stderr.trim().lines().last().unwrap_or("unknown error")
+            ));
+        }
+        report.ok_or_else(|| "The map installer returned no result.".to_string())
+    })
+    .await
+    .map_err(|error| format!("Town03 map install failed: {error}"))?
 }
 
 #[cfg(target_os = "macos")]
@@ -2154,6 +2283,7 @@ fn main() {
             set_library_root,
             move_library_root,
             get_library_scenes,
+            download_town_map,
             library_thumbnail,
             delete_library_scene,
             reveal_in_finder,

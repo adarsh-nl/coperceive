@@ -42,6 +42,9 @@ pub struct LibrarySceneInfo {
     /// A 640 px preview was written at import time (`thumbnail.jpg`).
     #[serde(default)]
     pub has_thumbnail: bool,
+    /// The scene's agreed `map_name` (e.g. `Carla/Maps/Town03`), if any.
+    #[serde(default)]
+    pub map_name: Option<String>,
     pub has_map: bool,
     pub is_valid: Option<bool>,
 }
@@ -176,7 +179,7 @@ pub fn scan_library_scenes_with_cache(
         if p.is_dir() {
             // Check if this directory directly is a scene (contains manifest.json and COMPLETE.json)
             if p.join("manifest.json").exists() && p.join("COMPLETE.json").exists() {
-                if let Some(info) = parse_scene_info_with_cache(&p, cache) {
+                if let Some(info) = parse_scene_info_with_cache(&p, cache, library_root) {
                     scenes.push(info);
                 }
             } else {
@@ -189,7 +192,7 @@ pub fn scan_library_scenes_with_cache(
                             continue;
                         }
                         if sub_p.is_dir() && sub_p.join("manifest.json").exists() && sub_p.join("COMPLETE.json").exists() {
-                            if let Some(info) = parse_scene_info_with_cache(&sub_p, cache) {
+                            if let Some(info) = parse_scene_info_with_cache(&sub_p, cache, library_root) {
                                 scenes.push(info);
                             }
                         }
@@ -206,6 +209,7 @@ pub fn scan_library_scenes_with_cache(
 fn parse_scene_info_with_cache(
     scene_dir: &Path,
     cache: &HashMap<String, ValidationRecord>,
+    library_root: &Path,
 ) -> Option<LibrarySceneInfo> {
     let manifest_path = scene_dir.join("manifest.json");
     let content = fs::read_to_string(&manifest_path).ok()?;
@@ -229,18 +233,30 @@ fn parse_scene_info_with_cache(
         .unwrap_or_else(|| "Griffin".to_string());
 
     let mut town = None;
+    let mut map_name: Option<String> = None;
     let mut agent_count = 0;
+    let mut disagreeing_map = false;
     if let Some(agents) = manifest.get("agents").and_then(|a| a.as_array()) {
         agent_count = agents.len();
         for agent in agents {
-            if let Some(map_name) = agent.pointer("/platform/map_name").and_then(|m| m.as_str()) {
-                let parts: Vec<&str> = map_name.split('/').collect();
-                if let Some(last) = parts.last() {
-                    town = Some(last.to_string());
-                    break;
+            if let Some(name) = agent.pointer("/platform/map_name").and_then(|m| m.as_str()) {
+                if name.is_empty() {
+                    continue;
+                }
+                if let Some(existing) = &map_name {
+                    if existing != name {
+                        disagreeing_map = true;
+                    }
+                } else {
+                    map_name = Some(name.to_string());
+                    town = name.split('/').last().map(str::to_string);
                 }
             }
         }
+    }
+    if disagreeing_map {
+        map_name = None;
+        town = None;
     }
 
     let mut modalities = HashSet::new();
@@ -256,7 +272,12 @@ fn parse_scene_info_with_cache(
 
     let has_map = scene_dir.join("map.geojson").exists()
         || scene_dir.join("map_lines.json").exists()
-        || scene_dir.join("map").exists();
+        || scene_dir.join("map").exists()
+        || map_name
+            .as_deref()
+            .and_then(map_slug)
+            .map(|slug| library_root.join("maps").join(slug).join("manifest.json").is_file())
+            .unwrap_or(false);
 
     // Check images
     let has_images = if scene_dir.join("images.parquet").exists() || scene_dir.join("images").is_dir() {
@@ -289,9 +310,45 @@ fn parse_scene_info_with_cache(
         size_bytes,
         has_images,
         has_thumbnail,
+        map_name,
         has_map,
         is_valid: cached_validation(scene_dir, cache),
     })
+}
+
+/// The scene's agreed `platform.map_name`, if every agent that sets one agrees.
+pub fn scene_map_name(scene_dir: &Path) -> Option<String> {
+    let manifest: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(scene_dir.join("manifest.json")).ok()?).ok()?;
+    let mut found: Option<String> = None;
+    for agent in manifest.get("agents")?.as_array()? {
+        let Some(name) = agent.pointer("/platform/map_name").and_then(|value| value.as_str()) else {
+            continue;
+        };
+        if name.is_empty() {
+            continue;
+        }
+        match &found {
+            Some(existing) if existing != name => return None,
+            None => found = Some(name.to_string()),
+            _ => {}
+        }
+    }
+    found
+}
+
+/// The last path segment of a map name, with the same rules as the Python store.
+pub fn map_slug(map_name: &str) -> Option<String> {
+    let slug = map_name.trim().split('/').last().unwrap_or("");
+    if slug.is_empty()
+        || slug == "."
+        || slug == ".."
+        || slug.contains('\\')
+        || slug.starts_with('.')
+    {
+        return None;
+    }
+    Some(slug.to_string())
 }
 
 /// Modification time of `manifest.json` in milliseconds since the epoch.
@@ -526,6 +583,36 @@ mod tests {
         assert!(!scene.exists());
         assert!(dst.join("scene_1").join("COMPLETE.json").exists());
 
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_shared_library_map_marks_the_scene_as_mapped() {
+        let tmp = std::env::temp_dir().join(format!(
+            "coperceive-test-lib-map-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&tmp);
+        let scene = tmp.join("Town03-000");
+        fs::create_dir_all(&scene).expect("scene");
+        fs::write(
+            scene.join("manifest.json"),
+            r#"{"schema_version":1,"scene_id":"Town03-000","agents":[{"agent_id":"veh1","agent_type":"vehicle","platform":{"map_name":"Carla/Maps/Town03"}}],"sensors":[]}"#,
+        )
+        .expect("manifest");
+        fs::write(scene.join("COMPLETE.json"), "{}").expect("complete");
+        // No scene-local map yet: the library maps root decides.
+        let maps = tmp.join("maps").join("Town03");
+        fs::create_dir_all(&maps).expect("maps");
+        fs::write(maps.join("manifest.json"), r#"{"map_name":"Carla/Maps/Town03"}"#)
+            .expect("map manifest");
+        let scenes = scan_library_scenes(&tmp);
+        assert_eq!(scenes.len(), 1);
+        assert_eq!(scenes[0].map_name.as_deref(), Some("Carla/Maps/Town03"));
+        assert!(scenes[0].has_map);
+        assert_eq!(map_slug("Carla/Maps/Town03").as_deref(), Some("Town03"));
+        assert_eq!(map_slug("Carla/../Town03"), Some("Town03".to_string()));
+        assert_eq!(map_slug("Carla/.hidden"), None);
         let _ = fs::remove_dir_all(&tmp);
     }
 

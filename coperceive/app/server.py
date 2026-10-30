@@ -260,8 +260,14 @@ def create_app(
         return frame_document(_cached_scene(app, scene_id), time_us)
 
     @app.get("/api/scenes/{scene_id}/map")
-    def scene_map(scene_id: str) -> dict[str, object]:
+    def scene_map(scene_id: str, refresh: bool = False) -> dict[str, object]:
         scene = _cached_scene(app, scene_id)
+        if refresh:
+            # A map can be installed while the app runs; drop the cached "missing"
+            # answer so the next request sees the new maps root.
+            name = scene_map_name(scene)
+            if name is not None and isinstance(app.state.map_cache, dict):
+                app.state.map_cache.pop(name, None)
         return _map_summary(app, scene)
 
     @app.get("/api/scenes/{scene_id}/map/lines")
