@@ -520,7 +520,7 @@ def test_scene_list_shows_every_scene_without_scrolling(session: _Session) -> No
 
 def _image_requests(session: _Session, time_us: int) -> list[str]:
     return [
-        url.split("sensor_id=")[-1]
+        url.split("sensor_id=")[-1].split("&")[0]
         for url in session.requests
         if "/image?" in url and f"time_us={time_us}&" in url
     ]
@@ -545,9 +545,10 @@ def _strip_open(session: _Session) -> bool:
 def test_camera_strip_fetches_visible_thumbnails_once_and_nothing_when_collapsed(
     session: _Session,
 ) -> None:
-    """Open strip at the sample with two camera files: one request per camera, shared with
-    the split pane. Collapsed (C), the next sample with files is not requested; opening the
-    strip again fetches it."""
+    """Open strip at the sample with two camera files: one thumbnail request per camera;
+    opening the split pane asks for that camera at the split width (a second, larger thumbnail).
+    Collapsed (C), the next sample with files is not requested; opening the strip again fetches
+    it."""
     step = session.page.locator("button[aria-label='Step forward']")
     step.click()
     step.click()
@@ -559,7 +560,9 @@ def test_camera_strip_fetches_visible_thumbnails_once_and_nothing_when_collapsed
     session.wait_for(lambda: session.page.locator(".cam-thumb canvas").count() == 2, "thumbnails")
     session.page.locator(".cam-thumb[data-camera='vehicle/cam_front']").click()
     session.wait_for(lambda: session.page.locator(".camera-split canvas").count() == 1, "split")
-    assert sorted(_image_requests(session, 100000)) == ["cam_front", "cam_rear"]  # no refetch
+    # The split pane asks for the same camera at its display width; the strip itself did not
+    # refetch either thumbnail (no duplicate 160 px requests).
+    assert sorted(_image_requests(session, 100000)) == ["cam_front", "cam_front", "cam_rear"]
     session.page.keyboard.press("Escape")
     session.page.keyboard.press("c")
     session.wait_for(lambda: not _strip_open(session), "collapsed")

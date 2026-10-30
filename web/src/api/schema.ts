@@ -864,6 +864,7 @@ export interface operations {
                 time_us: number;
                 agent_id: string;
                 sensor_id: string;
+                width?: number | null;
             };
             header?: never;
             path: {
