@@ -8,6 +8,7 @@
  * results_root; the next step submits it after the user has seen the script.
  */
 import { useEffect, useState } from "react";
+import IdentifierInput from "./IdentifierInput";
 import JobWatch from "./JobWatch";
 import {
   buildRunPlan,
@@ -413,7 +414,7 @@ export default function NewEvaluation() {
               <label style={labelStyle} htmlFor="plan-custom">
                 Custom pipeline script on the cluster (reads coperceive-pipeline.json beside it)
               </label>
-              <input
+              <IdentifierInput
                 id="plan-custom"
                 style={input}
                 value={customScript}
@@ -438,7 +439,7 @@ export default function NewEvaluation() {
                   <label style={labelStyle} htmlFor="plan-checkpoint">
                     Checkpoint (inside data/code folders)
                   </label>
-                  <input
+                  <IdentifierInput
                     id="plan-checkpoint"
                     style={input}
                     value={checkpoint}
@@ -453,7 +454,7 @@ export default function NewEvaluation() {
                   <label style={labelStyle} htmlFor="plan-split">
                     Test split (inside data/code folders)
                   </label>
-                  <input
+                  <IdentifierInput
                     id="plan-split"
                     style={input}
                     value={split}
@@ -506,7 +507,7 @@ export default function NewEvaluation() {
                             ))}
                           </select>
                         ) : argument.multiple ? (
-                          <input
+                          <IdentifierInput
                             id={id}
                             style={input}
                             value={Array.isArray(value) ? value.join(", ") : ""}
@@ -522,7 +523,7 @@ export default function NewEvaluation() {
                             }
                           />
                         ) : (
-                          <input
+                          <IdentifierInput
                             id={id}
                             style={input}
                             type={argument.kind === "int" || argument.kind === "float" ? "number" : "text"}
@@ -572,7 +573,7 @@ export default function NewEvaluation() {
                       <label style={labelStyle} htmlFor="plan-env-image">
                         Container image
                       </label>
-                      <input
+                      <IdentifierInput
                         id="plan-env-image"
                         style={input}
                         value={environment.container_image ?? ""}
@@ -585,7 +586,7 @@ export default function NewEvaluation() {
                       <label style={labelStyle} htmlFor="plan-env-interp">
                         {environment.kind === "modules" ? "Modules (comma separated)" : "Python path"}
                       </label>
-                      <input
+                      <IdentifierInput
                         id="plan-env-interp"
                         style={input}
                         value={
@@ -724,7 +725,7 @@ export default function NewEvaluation() {
                     <label style={labelStyle} htmlFor="submit-walltime">
                       Walltime
                     </label>
-                    <input
+                    <IdentifierInput
                       id="submit-walltime"
                       style={input}
                       value={submitWalltime}
@@ -739,7 +740,7 @@ export default function NewEvaluation() {
                     <label style={labelStyle} htmlFor="submit-cpus">
                       CPUs per task
                     </label>
-                    <input
+                    <IdentifierInput
                       id="submit-cpus"
                       type="number"
                       min={1}

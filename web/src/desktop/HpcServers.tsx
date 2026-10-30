@@ -468,6 +468,10 @@ export default function HpcServers() {
             </label>
             <input
               id="hpc-name"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="off"
               style={input}
               value={draft.profile.name}
               placeholder="My cluster"
@@ -510,6 +514,10 @@ export default function HpcServers() {
                 </label>
                 <input
                   id="hpc-host"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete="off"
                   style={input}
                   value={draft.profile.host ?? ""}
                   placeholder="cluster.example.org"
@@ -522,6 +530,10 @@ export default function HpcServers() {
                 </label>
                 <input
                   id="hpc-user"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  autoComplete="off"
                   style={input}
                   value={draft.profile.user ?? ""}
                   placeholder="your account"
@@ -538,6 +550,10 @@ export default function HpcServers() {
               </label>
               <input
                 id="hpc-data-root"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 style={input}
                 value={draft.profile.data_roots[0] ?? ""}
                 placeholder="/path/your/account/owns"
@@ -552,6 +568,10 @@ export default function HpcServers() {
               </label>
               <input
                 id="hpc-scratch"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 style={input}
                 value={draft.profile.scratch_template}
                 placeholder="/scratch/$USER"
@@ -566,6 +586,10 @@ export default function HpcServers() {
             </label>
             <input
               id="hpc-results-root"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="off"
               style={input}
               value={draft.profile.results_root}
               placeholder="/path/your/account/can/write (not scratch)"
@@ -582,6 +606,10 @@ export default function HpcServers() {
             </label>
             <input
               id="hpc-code-roots"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="off"
               style={input}
               value={draft.profile.code_roots.join(", ")}
               placeholder="/project/you/code, /project/you/tools"
@@ -616,6 +644,10 @@ export default function HpcServers() {
               </label>
               <input
                 id="hpc-partition"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 list="hpc-partition-choices"
                 style={input}
                 disabled={draft.profile.scheduler !== "slurm"}
@@ -662,6 +694,10 @@ export default function HpcServers() {
               </label>
               <input
                 id="hpc-time"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 style={input}
                 value={draft.profile.defaults.time_limit ?? ""}
                 placeholder="from the cluster, e.g. 2-00:00:00"
@@ -676,6 +712,10 @@ export default function HpcServers() {
                 id="hpc-cpus"
                 type="number"
                 min={1}
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 style={input}
                 value={draft.profile.defaults.cpus_per_task ?? ""}
                 placeholder="from the profile"
@@ -692,6 +732,10 @@ export default function HpcServers() {
               </label>
               <input
                 id="hpc-mem"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 style={input}
                 value={draft.profile.defaults.memory ?? ""}
                 placeholder="e.g. 16G"
@@ -728,6 +772,10 @@ export default function HpcServers() {
               </label>
               <input
                 id="hpc-interpreter"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 style={input}
                 value={draft.profile.environment.interpreter ?? ""}
                 placeholder="/path/to/python"
@@ -743,6 +791,10 @@ export default function HpcServers() {
               </label>
               <input
                 id="hpc-modules"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 style={input}
                 value={draft.profile.environment.modules.join(", ")}
                 placeholder="python/3.12"
@@ -765,6 +817,10 @@ export default function HpcServers() {
               </label>
               <input
                 id="hpc-image"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 style={input}
                 value={draft.profile.environment.container_image ?? ""}
                 placeholder="/path/to/coperceive.sif"
@@ -781,6 +837,10 @@ export default function HpcServers() {
             </label>
             <input
               id="hpc-wheelhouse"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="off"
               style={input}
               value={draft.profile.environment.wheelhouse ?? ""}
               placeholder="/path/to/wheelhouse"
