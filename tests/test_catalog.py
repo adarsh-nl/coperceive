@@ -111,6 +111,45 @@ def test_dry_run_does_not_invent_a_size_when_the_listing_fails(tmp_path: Path) -
             dry_run_preset("griffin", "dev", tmp_path)
 
 
+def test_dry_run_reports_the_real_cause_when_the_hf_client_is_missing(tmp_path: Path) -> None:
+    """The packaged app used to hide this as 'could not check the size'."""
+    with patch(
+        "coperceive.catalog.runner.download_griffin",
+        side_effect=ImportError("No module named 'huggingface_hub'"),
+    ):
+        with pytest.raises(RuntimeError) as excinfo:
+            dry_run_preset("griffin", "dev", tmp_path)
+    message = str(excinfo.value)
+    assert "Hugging Face client" in message
+    assert "update the desktop app" in message
+
+
+def test_dry_run_reports_a_mock_host_failure_with_a_next_step(tmp_path: Path) -> None:
+    """A host/network failure from the mock dataset host keeps the cause and one next step."""
+    with patch(
+        "coperceive.catalog.runner.download_griffin",
+        side_effect=TimeoutError("mock host timed out after 10 s"),
+    ):
+        with pytest.raises(RuntimeError) as excinfo:
+            dry_run_preset("griffin", "dev", tmp_path)
+    message = str(excinfo.value)
+    assert "TimeoutError" in message
+    assert "mock host timed out" in message
+    assert "Next: check the network or VPN" in message
+
+
+def test_dry_run_reports_an_auth_failure_with_the_token_step(tmp_path: Path) -> None:
+    with patch(
+        "coperceive.catalog.runner.download_griffin",
+        side_effect=RuntimeError("HTTP 401 Unauthorized"),
+    ):
+        with pytest.raises(RuntimeError) as excinfo:
+            dry_run_preset("griffin", "dev", tmp_path)
+    message = str(excinfo.value)
+    assert "HTTP 401" in message
+    assert "Next: check HF_TOKEN access" in message
+
+
 def test_cli_dataset_catalog(capsys: pytest.CaptureFixture[str]) -> None:
     main(["dataset", "catalog"])
     captured = capsys.readouterr()
