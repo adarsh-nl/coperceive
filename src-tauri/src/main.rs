@@ -736,12 +736,15 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
         #[cfg(target_os = "macos")]
         {
             use tauri_plugin_updater::UpdaterExt;
-            let mut builder = check_handle.updater_builder();
-            if let Ok(override_url) = std::env::var("COPERCEIVE_UPDATE_URL") {
+            let builder = if let Ok(override_url) = std::env::var("COPERCEIVE_UPDATE_URL") {
                 if let Ok(parsed) = tauri::Url::parse(&override_url) {
-                    let _ = builder.endpoints(vec![parsed]);
+                    check_handle.updater_builder().endpoints(vec![parsed]).unwrap_or_else(|_| check_handle.updater_builder())
+                } else {
+                    check_handle.updater_builder()
                 }
-            }
+            } else {
+                check_handle.updater_builder()
+            };
             let updater = match builder.build() {
                 Ok(u) => u,
                 Err(err) => {
@@ -814,12 +817,15 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                 Some(u) => u,
                 None => {
                     use tauri_plugin_updater::UpdaterExt;
-                    let mut builder = install_handle.updater_builder();
-                    if let Ok(override_url) = std::env::var("COPERCEIVE_UPDATE_URL") {
+                    let builder = if let Ok(override_url) = std::env::var("COPERCEIVE_UPDATE_URL") {
                         if let Ok(parsed) = tauri::Url::parse(&override_url) {
-                            let _ = builder.endpoints(vec![parsed]);
+                            install_handle.updater_builder().endpoints(vec![parsed]).unwrap_or_else(|_| install_handle.updater_builder())
+                        } else {
+                            install_handle.updater_builder()
                         }
-                    }
+                    } else {
+                        install_handle.updater_builder()
+                    };
                     let updater = builder.build().map_err(|e| e.to_string())?;
                     let u = tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())?;
                     u.ok_or_else(|| "No update available to install".to_string())?
