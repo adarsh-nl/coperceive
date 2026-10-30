@@ -39,6 +39,8 @@ use coperceive_desktop::job_report::{
     self as job_report, ImportedPredictions, MetricsReport, PredictionTail,
 };
 #[cfg(target_os = "macos")]
+use coperceive_desktop::job_history::{self as job_history, RunHistoryEntry};
+#[cfg(target_os = "macos")]
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
 #[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{
@@ -1898,6 +1900,26 @@ async fn open_predictions(
     Ok(imported)
 }
 
+/// The app's submitted runs from Slurm accounting, newest first.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn list_run_history(
+    profile_id: String,
+    limit: Option<u32>,
+) -> Result<Vec<RunHistoryEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        job_history::list_run_history(
+            &runner,
+            &entry.profile,
+            limit.unwrap_or(job_history::DEFAULT_HISTORY_LIMIT),
+        )
+    })
+    .await
+    .map_err(|error| format!("Could not read the run history: {error}"))?
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
@@ -2162,6 +2184,7 @@ fn main() {
             prediction_stream,
             run_metrics,
             open_predictions,
+            list_run_history,
             remote_connect,
             remote_status,
             remote_disconnect,
@@ -2442,6 +2465,15 @@ fn main() {
                                     &plan.output_dir,
                                 )?;
                                 Ok(serde_json::json!({"ok": true, "metrics": metrics}))
+                            }
+                            "history" => {
+                                let limit = payload
+                                    .get("limit")
+                                    .and_then(serde_json::Value::as_u64)
+                                    .unwrap_or(50) as u32;
+                                let entries =
+                                    job_history::list_run_history(&runner, &entry.profile, limit)?;
+                                Ok(serde_json::json!({"ok": true, "history": entries}))
                             }
                             "import" => {
                                 let plan =

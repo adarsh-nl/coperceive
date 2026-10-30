@@ -9,6 +9,9 @@ import {
   environmentSummary,
   failureNextAction,
   formatArgv,
+  historyCanRerun,
+  historyStateLabel,
+  historyTiming,
   isJobActive,
   jobStateLabel,
   metricsRows,
@@ -229,4 +232,26 @@ test("a failed run has one concrete next action", () => {
   const action = failureNextAction();
   assert.ok(action.includes("stderr"));
   assert.ok(action.includes("submit a new run"));
+});
+
+test("history rows show state, timing and whether re-run is possible", () => {
+  const entry = {
+    job_id: "424242",
+    plan_id: "plan-1",
+    state: "completed",
+    active: false,
+    elapsed: "01:02:03",
+    time_limit: "04:00:00",
+    partition: "main-cpu",
+    started: "2026-10-28T10:00:00",
+    ended: "2026-10-28T11:02:03",
+    plan_available: true,
+  };
+  assert.strictEqual(historyStateLabel(entry), "COMPLETED");
+  assert.strictEqual(historyTiming(entry), "01:02:03 elapsed · 04:00:00 limit");
+  assert.strictEqual(historyCanRerun(entry), true);
+  const running = { ...entry, state: "running", active: true, plan_available: false };
+  assert.strictEqual(historyStateLabel(running), "RUNNING");
+  assert.strictEqual(historyCanRerun(running), false);
+  assert.strictEqual(historyTiming({ ...entry, elapsed: null, time_limit: null }), "—");
 });
