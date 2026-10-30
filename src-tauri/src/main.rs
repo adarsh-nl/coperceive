@@ -852,7 +852,6 @@ fn build_app_menu(
         .build()
 }
 
-#[cfg(target_os = "macos")]
 /// The library's shared maps root, passed to the local server so maps installed
 /// from the Library card (library_root/maps) are found even when the server root
 /// is a single scene directory.
@@ -871,6 +870,7 @@ fn library_maps_root() -> Option<PathBuf> {
     Some(root.join("maps"))
 }
 
+#[cfg(target_os = "macos")]
 async fn start_local_session(
     app: &tauri::AppHandle,
     state: &AppState,
