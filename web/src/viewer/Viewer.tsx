@@ -1118,12 +1118,11 @@ export default function Viewer({
   const effectiveToken = activeToken || token;
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
-  const [sceneId, setSceneId] = useState<string>(() => {
-    if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id) {
-      return window.__COPERCEIVE_INITIAL_STATE__.last_scene_id;
-    }
-    return "";
-  });
+  // Never trust a restored scene id before the live scene list: it may name a
+  // scene that is no longer in this library. The list effect below selects the
+  // saved scene only when it exists, otherwise the first current scene (and says
+  // so), so restore can never fetch a missing scene and show "not found".
+  const [sceneId, setSceneId] = useState<string>("");
   const sceneIdRef = useRef(sceneId);
   sceneIdRef.current = sceneId;
   const [summary, setSummary] = useState<SceneSummary | null>(null);
@@ -2067,16 +2066,21 @@ export default function Viewer({
         return [];
       });
       let initialScene = "";
-      if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id) {
-        const saved = window.__COPERCEIVE_INITIAL_STATE__.last_scene_id;
-        if (ids.includes(saved)) {
-          initialScene = saved;
-        }
+      const saved =
+        typeof window !== "undefined"
+          ? window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id
+          : undefined;
+      if (saved && ids.includes(saved)) {
+        initialScene = saved;
       }
       setScenes(ids);
       setSceneId((current) => current || initialScene || ids[0] || "");
       if (ids.length === 0) {
         setStatus("No scene directories under the server root.");
+      } else if (saved && !ids.includes(saved)) {
+        setStatus(
+          `The last scene (${saved}) is no longer in this library; showing ${initialScene || ids[0]}.`,
+        );
       }
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) {

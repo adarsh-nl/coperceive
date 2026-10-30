@@ -357,6 +357,33 @@ def session(browser: Browser, viewer_url: str) -> Iterator[_Session]:
     page.close()
 
 
+def test_a_stale_restored_scene_falls_back_and_layers_default_on(
+    browser: Browser, viewer_url: str
+) -> None:
+    """A saved session from a removed scene must open an existing scene, not "not found";
+    Points and Boxes default on when no explicit layer choice was stored."""
+    page = browser.new_page(viewport={"width": 1400, "height": 900})
+    page.add_init_script(
+        "window.__COPERCEIVE_INITIAL_STATE__ = {last_scene_id: 'synth_001', last_sample_index: 3};"
+    )
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.goto(f"{viewer_url}/#/viewer", wait_until="networkidle")
+    page.wait_for_selector("#scene-id", timeout=30000)
+    session = _Session(page, viewer_url)
+    session.wait_for(
+        lambda: session.page.locator("#scene-id").inner_text() == SCENE_FULL,
+        "the first existing scene",
+    )
+    text = page.locator("body").inner_text().lower()
+    assert "not found" not in text, text
+    assert "synth_001" not in text, text
+    for layer in ("Points", "Boxes"):
+        assert page.get_by_role("switch", name=layer).get_attribute("aria-checked") == "true"
+    assert errors == [], errors
+    page.close()
+
+
 def test_play_advances_the_timeline_at_the_recorded_pace(session: _Session, shots: Path) -> None:
     """Play on a 30-sample, 10 Hz scene: the sample index climbs with the clock and the
     button reads Pause meanwhile. Around 3 s the last sample pauses playback again."""
