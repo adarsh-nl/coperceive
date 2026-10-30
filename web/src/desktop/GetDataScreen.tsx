@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import type { CatalogDataset, DryRunResult, DatasetProgressEvent } from "./types";
 import PanelState from "./PanelState";
+import { dryRunFailureText } from "./dryRun";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   datasetDryRun,
