@@ -815,7 +815,7 @@ def test_committed_portability_fixtures_are_generic_and_distinct() -> None:
         Path(__file__).resolve().parent.parent / "src-tauri" / "tests" / "fixtures" / "hpc"
     )
     names = sorted(p.name for p in fixtures_dir.glob("cluster-*.json"))
-    assert names == ["cluster-a.json", "cluster-b.json", "cluster-none.json"]
+    assert names == ["cluster-a.json", "cluster-b.json", "cluster-none.json", "cluster-save.json"]
 
     profiles = []
     for name in names:

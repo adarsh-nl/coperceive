@@ -1000,6 +1000,10 @@ mod tests {
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/hpc/cluster-none.json"
     ));
+    const CLUSTER_SAVE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/hpc/cluster-save.json"
+    ));
 
     struct FakeSsh {
         dir: PathBuf,
@@ -1095,6 +1099,25 @@ mod tests {
         assert_eq!(report.scratch.path.as_deref(), Some("/scratch/alice"));
         assert!(report.scratch.free_bytes.unwrap() > 0);
         assert!(report.total_ms < 60_000);
+    }
+
+    #[test]
+    fn cluster_save_typed_interpreter_finds_coperceive_and_infinite_walltime() {
+        let fake = FakeSsh::create();
+        let mut entry = entry_from_fixture(CLUSTER_SAVE);
+        let interpreter = "/home/dana/coperceive-app/.venv/bin/python";
+        entry.profile.environment.interpreter = Some(interpreter.to_string());
+        let report = detect_server(&entry, &options(&fake));
+        assert!(report.reachable && report.signed_in);
+        assert_eq!(report.scheduler, SchedulerKind::Slurm);
+        assert!(report.partitions.iter().all(|p| p.max_time.as_deref() == Some("infinite")));
+        assert_eq!(report.environment.kind, crate::hpc::EnvironmentKind::None);
+        assert_eq!(
+            report.discovered.environment.coperceive_version.as_deref(),
+            Some("0.0.0")
+        );
+        assert!(report.discovered.environment.coperceive_path.is_none());
+        assert_eq!(report.environment.coperceive_command, vec!["coperceive".to_string()]);
     }
 
     #[test]

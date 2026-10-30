@@ -10,7 +10,7 @@
     "scratch_template": "/local/alice",
     "results_root": "/home/dana/results",
     "code_roots": [],
-    "scheduler": "none",
+    "scheduler": "slurm",
     "defaults": {
       "partition": null,
       "account": null,

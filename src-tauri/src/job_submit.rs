@@ -621,7 +621,7 @@ mod tests {
             ..SubmitOptions::default()
         };
         let error = render_run_script(&profile, &plan, &options).expect_err("bad time");
-        assert!(error.contains("time_limit"), "{error}");
+        assert!(error.contains("Walltime"), "{error}");
     }
 
     #[test]
