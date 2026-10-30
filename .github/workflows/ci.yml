@@ -149,6 +149,20 @@ jobs:
             exit 1
           }
 
+  desktop-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-gnu, x86_64-pc-windows-msvc
+      - name: Cargo check Linux
+        run: cargo check --target x86_64-unknown-linux-gnu
+        working-directory: src-tauri
+      - name: Cargo check Windows
+        run: cargo check --target x86_64-pc-windows-msvc
+        working-directory: src-tauri
+
   desktop-macos:
     runs-on: macos-14
     defaults:
