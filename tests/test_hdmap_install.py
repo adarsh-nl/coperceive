@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """One-click Town03 map install against a mock server and a tiny .xodr fixture."""
 
+# pyright: reportPrivateUsage=false
 from __future__ import annotations
 
 import hashlib
@@ -31,7 +32,7 @@ class _MockMapServer:
                 self.end_headers()
                 self.wfile.write(outer.payload)
 
-            def log_message(self, *args: object) -> None:
+            def log_message(self, format: str, *args: object) -> None:
                 return None
 
         self.httpd = ThreadingHTTPServer(("127.0.0.1", 0), Handler)

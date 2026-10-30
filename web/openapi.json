@@ -236,6 +236,16 @@
               "type": "string",
               "title": "Scene Id"
             }
+          },
+          {
+            "name": "refresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Refresh"
+            }
           }
         ],
         "responses": {

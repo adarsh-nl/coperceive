@@ -19,7 +19,7 @@ from coperceive.hdmap.identify import (
     identify_towns,
     write_town_table,
 )
-from coperceive.hdmap.install import install_town03
+from coperceive.hdmap.install import Progress, install_town03
 from coperceive.hdmap.opendrive import parse_opendrive
 from coperceive.hdmap.store import map_slug, write_map
 
@@ -191,7 +191,7 @@ def install_command(args: argparse.Namespace) -> None:
 
     from coperceive.hdmap.install import TOWN03_SHA256, TOWN03_URL
 
-    progress = None
+    progress: Progress | None = None
     if args.progress_json:
 
         def progress(stage: str, percent: int, message: str) -> None:

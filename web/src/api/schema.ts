@@ -690,7 +690,9 @@ export interface operations {
     };
     scene_map_api_scenes__scene_id__map_get: {
         parameters: {
-            query?: never;
+            query?: {
+                refresh?: boolean;
+            };
             header?: never;
             path: {
                 scene_id: string;
