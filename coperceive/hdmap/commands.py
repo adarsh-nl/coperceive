@@ -194,7 +194,7 @@ def install_command(args: argparse.Namespace) -> None:
     progress: Progress | None = None
     if args.progress_json:
 
-        def progress(stage: str, percent: int, message: str) -> None:
+        def emit_progress(stage: str, percent: int, message: str) -> None:
             print(
                 json.dumps(
                     {"stage": stage, "percent": percent, "message": message},
@@ -202,6 +202,8 @@ def install_command(args: argparse.Namespace) -> None:
                 ),
                 flush=True,
             )
+
+        progress = emit_progress
 
     try:
         report = install_town03(
