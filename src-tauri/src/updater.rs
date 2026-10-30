@@ -35,12 +35,24 @@ pub enum UpdateCheckOutcome {
 /// In normal runs, any override is ignored and `None` is returned so the configured
 /// production endpoint in `tauri.conf.json` is used.
 pub fn resolve_update_endpoint_override(override_url_opt: Option<&str>) -> Option<String> {
-    if !crate::test_seams::test_env_active() {
+    resolve_update_endpoint_override_with_env(
+        override_url_opt,
+        crate::test_seams::test_env_active(),
+        std::env::var("COPERCEIVE_UPDATE_URL").ok().as_deref(),
+    )
+}
+
+pub fn resolve_update_endpoint_override_with_env(
+    override_url_opt: Option<&str>,
+    test_env_active: bool,
+    env_update_url: Option<&str>,
+) -> Option<String> {
+    if !test_env_active {
         return None;
     }
     override_url_opt
         .map(|s| s.trim().to_string())
-        .or_else(|| std::env::var("COPERCEIVE_UPDATE_URL").ok().map(|s| s.trim().to_string()))
+        .or_else(|| env_update_url.map(|s| s.trim().to_string()))
         .filter(|s| !s.is_empty())
 }
 
@@ -60,28 +72,47 @@ mod tests {
 
     #[test]
     fn test_endpoint_overrides_honoured_only_when_test_env_active() {
-        std::env::remove_var("COPERCEIVE_TEST_ENV");
-        std::env::remove_var("COPERCEIVE_TEST_MARKER_FILE");
-        std::env::set_var("COPERCEIVE_UPDATE_URL", "http://evil.example.com/manifest.json");
-
         assert_eq!(
-            resolve_update_endpoint_override(Some("http://override.example.com/manifest.json")),
+            resolve_update_endpoint_override_with_env(
+                Some("http://override.example.com/manifest.json"),
+                false,
+                Some("http://evil.example.com/manifest.json"),
+            ),
             None
         );
-        assert_eq!(resolve_update_endpoint_override(None), None);
-
-        std::env::set_var("COPERCEIVE_TEST_ENV", "1");
         assert_eq!(
-            resolve_update_endpoint_override(Some("http://127.0.0.1:8080/latest.json")),
+            resolve_update_endpoint_override_with_env(
+                None,
+                false,
+                Some("http://evil.example.com/manifest.json"),
+            ),
+            None
+        );
+
+        assert_eq!(
+            resolve_update_endpoint_override_with_env(
+                Some("http://127.0.0.1:8080/latest.json"),
+                true,
+                None,
+            ),
             Some("http://127.0.0.1:8080/latest.json".to_string())
         );
-        std::env::set_var("COPERCEIVE_UPDATE_URL", "http://127.0.0.1:9090/latest.json");
         assert_eq!(
-            resolve_update_endpoint_override(None),
+            resolve_update_endpoint_override_with_env(
+                None,
+                true,
+                Some("http://127.0.0.1:9090/latest.json"),
+            ),
             Some("http://127.0.0.1:9090/latest.json".to_string())
         );
-        std::env::remove_var("COPERCEIVE_UPDATE_URL");
-        std::env::remove_var("COPERCEIVE_TEST_ENV");
+        assert_eq!(
+            resolve_update_endpoint_override_with_env(
+                Some("   "),
+                true,
+                Some("   "),
+            ),
+            None
+        );
     }
 
     #[test]

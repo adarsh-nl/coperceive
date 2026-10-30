@@ -1,13 +1,17 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
-  <!-- Background: light rounded square (#F4F4ED) -->
-  <rect width="1024" height="1024" rx="224" ry="224" fill="#F4F4ED"/>
+  <!-- Standard macOS icon grid: 1024x1024 canvas with 100px inset margin and rounded-rect body -->
+  <!-- Background: light rounded square (#F4F4ED) inset by 100px with standard corner radius (185px) -->
+  <rect x="100" y="100" width="824" height="824" rx="185" ry="185" fill="#F4F4ED"/>
 
   <!-- Subtle inner border for contrast -->
-  <rect x="1" y="1" width="1022" height="1022" rx="223" ry="223" fill="none" stroke="rgba(0,0,0,0.08)" stroke-width="2"/>
+  <rect x="101" y="101" width="822" height="822" rx="184" ry="184" fill="none" stroke="rgba(0,0,0,0.08)" stroke-width="2"/>
 
-  <!-- Lowercase monospace 'c' in dark (#141414) -->
-  <path d="M 548 376 C 524 330, 482 296, 420 296 C 324 296, 252 384, 252 512 C 252 640, 324 728, 420 728 C 482 728, 524 694, 548 648 L 488 616 C 470 648, 446 666, 418 666 C 356 666, 316 600, 316 512 C 316 424, 356 358, 418 358 C 446 358, 470 376, 488 408 Z" fill="#141414"/>
+  <!-- Brand mark centered inside the body: monospace 'c' + horizontal bar -->
+  <g transform="translate(512, 512) scale(0.82) translate(-536, -512)">
+    <!-- Lowercase monospace 'c' in dark (#141414) -->
+    <path d="M 548 376 C 524 330, 482 296, 420 296 C 324 296, 252 384, 252 512 C 252 640, 324 728, 420 728 C 482 728, 524 694, 548 648 L 488 616 C 470 648, 446 666, 418 666 C 356 666, 316 600, 316 512 C 316 424, 356 358, 418 358 C 446 358, 470 376, 488 408 Z" fill="#141414"/>
 
-  <!-- Solid orange-red horizontal bar (#D9482B) sitting on the baseline like an underscore -->
-  <rect x="600" y="656" width="220" height="72" rx="12" ry="12" fill="#D9482B"/>
+    <!-- Solid orange-red horizontal bar (#D9482B) sitting on the baseline like an underscore -->
+    <rect x="600" y="656" width="220" height="72" rx="12" ry="12" fill="#D9482B"/>
+  </g>
 </svg>

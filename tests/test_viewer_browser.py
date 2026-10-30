@@ -1382,7 +1382,10 @@ def test_updater_bad_signature_is_rejected_with_error(
         assert "Retry" in alert_text
         assert any(
             term in alert_text.lower()
-            for term in ["signature", "verification", "minisign", "invalid", "decode"]
+            for term in [
+                "different key than the one provided",
+                "signature verification failed",
+            ]
         )
         assert "could not check for updates" not in alert_text.lower()
 

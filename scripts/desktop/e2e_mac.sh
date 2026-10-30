@@ -2176,7 +2176,7 @@ click_button("Restart now")
 time.sleep(1.0)
 txt_bad_err = eval_js("document.body ? document.body.innerText : ''") or ""
 assert "Retry" in txt_bad_err, f"Bad signature must show error with Retry button, got: {txt_bad_err}"
-assert any(term in txt_bad_err.lower() for term in ["signature", "verification", "minisign", "invalid", "decode"]), f"Expected signature verification error, got: {txt_bad_err}"
+assert any(term in txt_bad_err.lower() for term in ["different key than the one provided", "signature verification failed"]), f"Expected signature verification error, got: {txt_bad_err}"
 assert "could not check for updates" not in txt_bad_err.lower(), f"Must not be generic network failure: {txt_bad_err}"
 restarted_bad = eval_js("window.__COPERCEIVE_UPDATE_RESTART__ === true ? 'yes' : 'no'")
 assert restarted_bad == "no", "Manifest with bad signature must NOT be installed"
