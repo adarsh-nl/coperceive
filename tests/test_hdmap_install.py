@@ -11,22 +11,29 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
-from coperceive.hdmap.install import LICENCE, install_town03
+from coperceive.hdmap.install import (
+    LICENCE,
+    MAP_SOURCE_UNAVAILABLE,
+    TOWN03_MIRROR_COMMIT,
+    TOWN03_URL,
+    install_town03,
+)
 from coperceive.hdmap.store import load_map
 
 from tests.test_hdmap import _scene_on_lane, _straight
 
 
 class _MockMapServer:
-    def __init__(self, payload: bytes) -> None:
+    def __init__(self, payload: bytes, status: int = 200) -> None:
         self.payload = payload
+        self.status = status
         self.requests: list[str] = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
                 outer.requests.append(self.path)
-                self.send_response(200)
+                self.send_response(outer.status)
                 self.send_header("Content-Type", "application/xml")
                 self.send_header("Content-Length", str(len(outer.payload)))
                 self.end_headers()
@@ -102,14 +109,34 @@ def test_install_downloads_verifies_ingests_and_aligns_town03(tmp_path: Path) ->
 def test_install_refuses_a_tampered_download(tmp_path: Path) -> None:
     payload = _fixture_xodr(tmp_path)
     with _MockMapServer(payload) as server:
-        with pytest.raises(ValueError, match="does not match"):
+        with pytest.raises(ValueError, match="Map source unavailable"):
             install_town03(
                 tmp_path / "maps",
                 tmp_path / "scenes",
                 url=server.url,
                 expected_sha256="0" * 64,
             )
-    assert not (tmp_path / "maps").exists() or not any((tmp_path / "maps").iterdir())
+    assert not (tmp_path / "maps" / "Town03").exists()
+
+
+def test_install_reports_a_missing_source_without_jargon(tmp_path: Path) -> None:
+    payload = _fixture_xodr(tmp_path)
+    with _MockMapServer(payload, status=404) as server:
+        with pytest.raises(ValueError) as caught:
+            install_town03(
+                tmp_path / "maps",
+                tmp_path / "scenes",
+                url=server.url,
+                expected_sha256=hashlib.sha256(payload).hexdigest(),
+            )
+    assert str(caught.value) == MAP_SOURCE_UNAVAILABLE
+    assert not (tmp_path / "maps" / "Town03").exists()
+
+
+def test_the_mirror_is_pinned_to_a_commit_and_not_master() -> None:
+    assert TOWN03_MIRROR_COMMIT in TOWN03_URL
+    assert "/master/" not in TOWN03_URL
+    assert len(TOWN03_MIRROR_COMMIT) == 40
 
 
 def test_install_requires_a_scene_that_names_the_map(tmp_path: Path) -> None:
@@ -125,3 +152,5 @@ def test_install_requires_a_scene_that_names_the_map(tmp_path: Path) -> None:
                 url=server.url,
                 expected_sha256=digest,
             )
+    # Ingest and alignment were staged; failure leaves no unaligned maps/Town03.
+    assert not (scenes / "maps" / "Town03").exists()
