@@ -2,7 +2,7 @@
 export const BRAND_CURSOR = "#D9482B";
 
 export interface BrandWordmarkProps {
-  /** When true, the block cursor blinks on a 1s step cadence (Connect screen). */
+  /** When true, the mark blinks on a 1s step cadence. */
   blink?: boolean;
   /** Size override if not inherited. */
   fontSize?: string;

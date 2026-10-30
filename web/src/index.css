@@ -9,7 +9,7 @@
   --sunken: #ecece3;
   --line: #d8d8c7;
   --text: #1c1c1c;
-  --muted: #6b6b6b;
+  --muted: #5e5e5e;
   --accent: #de3b21;
   --accent-ink: #fffdf8;
   --danger: #a33b34;
@@ -107,7 +107,7 @@ kbd {
 }
 .brand-wordmark {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   font-family: 'Geist Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
   font-weight: 500;
   letter-spacing: -0.03em;
@@ -116,11 +116,12 @@ kbd {
 }
 .brand-cursor {
   display: inline-block;
-  width: 0.52em;
-  height: 1.05em;
+  width: 0.55em;
+  height: 0.15em;
   margin-left: 0.15em;
   background-color: var(--brand-cursor);
-  vertical-align: middle;
+  vertical-align: baseline;
+  border-radius: 1px;
 }
 .brand-cursor-blink .brand-cursor {
   animation: brand-cursor-pulse 1s steps(2, start) infinite;

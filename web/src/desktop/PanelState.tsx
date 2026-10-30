@@ -45,13 +45,10 @@ export default function PanelState({
         borderRadius: "10px",
         border:
           kind === "error"
-            ? "1px solid rgba(255, 107, 107, 0.35)"
-            : "1px dashed rgba(255, 255, 255, 0.15)",
-        backgroundColor:
-          kind === "error"
-            ? "rgba(255, 80, 80, 0.05)"
-            : "rgba(255, 255, 255, 0.02)",
-        color: "#f5f5f7",
+            ? "1px solid var(--danger)"
+            : "1px dashed var(--line)",
+        backgroundColor: "var(--sunken)",
+        color: "var(--text)",
         margin: compact ? "0.4rem 0" : "1rem 0",
       }}
     >
@@ -72,7 +69,7 @@ export default function PanelState({
           fontSize: compact ? "0.95rem" : "1.15rem",
           fontWeight: 600,
           margin: "0 0 0.35rem 0",
-          color: kind === "error" ? "#ff7b72" : "#f5f5f7",
+          color: kind === "error" ? "var(--danger)" : "var(--text)",
         }}
       >
         {title}
@@ -81,7 +78,7 @@ export default function PanelState({
         className="panel-state-description"
         style={{
           fontSize: compact ? "0.8rem" : "0.88rem",
-          color: "#a1a1a6",
+          color: "var(--muted)",
           margin: "0 0 1rem 0",
           maxWidth: compact ? "280px" : "420px",
           lineHeight: 1.45,
@@ -96,9 +93,9 @@ export default function PanelState({
           onClick={onAction}
           disabled={actionDisabled}
           style={{
-            background: kind === "error" ? "rgba(255, 80, 80, 0.2)" : "#1f6feb",
-            border: kind === "error" ? "1px solid rgba(255, 107, 107, 0.4)" : "none",
-            color: "#ffffff",
+            background: kind === "error" ? "transparent" : "#1f6feb",
+            border: kind === "error" ? "1px solid var(--danger)" : "none",
+            color: kind === "error" ? "var(--danger)" : "#ffffff",
             padding: compact ? "0.35rem 0.75rem" : "0.5rem 1.1rem",
             borderRadius: "6px",
             fontSize: compact ? "0.8rem" : "0.85rem",

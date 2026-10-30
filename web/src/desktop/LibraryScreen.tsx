@@ -189,8 +189,8 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
       {storage && (
         <div
           style={{
-            background: "rgba(255, 255, 255, 0.04)",
-            border: "1px solid rgba(255, 255, 255, 0.1)",
+            background: "var(--panel)",
+            border: "1px solid var(--line)",
             borderRadius: "8px",
             padding: "0.75rem 1rem",
             display: "flex",
@@ -201,12 +201,12 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
           }}
         >
           <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-            <span style={{ color: "#a1a1a6" }}>Library:</span>
-            <span style={{ color: "#f5f5f7", fontFamily: "'Geist Mono', monospace" }}>{storage.library_root}</span>
-            <span style={{ color: "rgba(255, 255, 255, 0.2)" }}>·</span>
-            <span style={{ color: "#f5f5f7" }}>{formatBytes(storage.used_bytes)} used</span>
-            <span style={{ color: "rgba(255, 255, 255, 0.2)" }}>·</span>
-            <span style={{ color: "#8b949e" }}>
+            <span style={{ color: "var(--muted)" }}>Library:</span>
+            <span style={{ color: "var(--text)", fontFamily: "'Geist Mono', monospace" }}>{storage.library_root}</span>
+            <span style={{ color: "var(--line)" }}>·</span>
+            <span style={{ color: "var(--text)" }}>{formatBytes(storage.used_bytes)} used</span>
+            <span style={{ color: "var(--line)" }}>·</span>
+            <span style={{ color: "var(--muted)" }}>
               {formatBytes(storage.free_bytes)} free on {storage.volume_name}
             </span>
           </div>
@@ -216,10 +216,10 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
               type="button"
               onClick={() => revealInFinder(storage.library_root)}
               style={{
-                background: "transparent",
-                border: "1px solid rgba(255, 255, 255, 0.15)",
+                background: "var(--sunken)",
+                border: "1px solid var(--line)",
                 borderRadius: "6px",
-                color: "#f5f5f7",
+                color: "var(--text)",
                 padding: "0.3rem 0.6rem",
                 fontSize: "0.8rem",
                 cursor: "pointer",
@@ -231,10 +231,10 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
               type="button"
               onClick={() => setShowSettingsModal(true)}
               style={{
-                background: "transparent",
-                border: "1px solid rgba(255, 255, 255, 0.15)",
+                background: "var(--sunken)",
+                border: "1px solid var(--line)",
                 borderRadius: "6px",
-                color: "#f5f5f7",
+                color: "var(--text)",
                 padding: "0.3rem 0.6rem",
                 fontSize: "0.8rem",
                 cursor: "pointer",
@@ -249,8 +249,8 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
       {/* Screen Title & Quick Action */}
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "1.2rem" }}>
         <div>
-          <h2 style={{ fontSize: "1.4rem", fontWeight: 600, color: "#f5f5f7", margin: 0 }}>Library</h2>
-          <span style={{ fontSize: "0.85rem", color: "#8b949e" }}>
+          <h2 style={{ fontSize: "1.4rem", fontWeight: 600, color: "var(--text)", margin: 0 }}>Library</h2>
+          <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
             {scenes.length} scene{scenes.length === 1 ? "" : "s"} ready for cooperative playback and evaluation
           </span>
         </div>
@@ -329,8 +329,8 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                 }}
                 className="library-scene-card"
                 style={{
-                  background: "rgba(255, 255, 255, 0.04)",
-                  border: "1px solid rgba(255, 255, 255, 0.1)",
+                  background: "var(--panel)",
+                  border: "1px solid var(--line)",
                   borderRadius: "10px",
                   padding: "1.2rem",
                   display: "flex",
@@ -349,7 +349,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                         objectFit: "cover",
                         borderRadius: "7px",
                         marginBottom: "0.7rem",
-                        backgroundColor: "rgba(255,255,255,0.06)",
+                        backgroundColor: "var(--sunken)",
                       }}
                     />
                   ) : (
@@ -363,8 +363,8 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "center",
-                        background: "linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
-                        color: "#8b949e",
+                        background: "var(--sunken)",
+                        color: "var(--muted)",
                         fontSize: "0.78rem",
                       }}
                     >
@@ -373,10 +373,10 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                   )}
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "0.5rem" }}>
                     <div>
-                      <h4 style={{ margin: 0, fontSize: "1.05rem", color: "#f5f5f7", fontWeight: 600 }}>
+                      <h4 style={{ margin: 0, fontSize: "1.05rem", color: "var(--text)", fontWeight: 600 }}>
                         {scene.scene_id}
                       </h4>
-                      <span style={{ fontSize: "0.75rem", color: "#8b949e" }}>
+                      <span style={{ fontSize: "0.75rem", color: "var(--muted)" }}>
                         {scene.dataset_name || "Cooperative Scene"}
                         {scene.town ? ` · ${scene.town}` : ""}
                       </span>
@@ -392,13 +392,13 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                             ? "rgba(46, 160, 67, 0.2)"
                             : validateStatus === "invalid"
                             ? "rgba(255, 69, 58, 0.2)"
-                            : "rgba(255, 255, 255, 0.1)",
+                            : "var(--sunken)",
                         color:
                           validateStatus === "valid"
-                            ? "#3fb950"
+                            ? "var(--ok)"
                             : validateStatus === "invalid"
-                            ? "#ff6b6b"
-                            : "#8b949e",
+                            ? "var(--danger)"
+                            : "var(--muted)",
                         fontWeight: 500,
                       }}
                     >
@@ -422,22 +422,22 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                     }}
                   >
                     {scene.duration_s != null && (
-                      <span style={{ background: "rgba(255, 255, 255, 0.08)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "#f5f5f7" }}>
+                      <span style={{ background: "var(--sunken)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "var(--text)" }}>
                         ⏱ {scene.duration_s.toFixed(1)}s
                       </span>
                     )}
                     {scene.agent_count != null && (
-                      <span style={{ background: "rgba(255, 255, 255, 0.08)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "#f5f5f7" }}>
+                      <span style={{ background: "var(--sunken)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "var(--text)" }}>
                         👥 {scene.agent_count} agents
                       </span>
                     )}
-                    <span style={{ background: "rgba(255, 255, 255, 0.08)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "#f5f5f7" }}>
+                    <span style={{ background: "var(--sunken)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "var(--text)" }}>
                       📷 images: {scene.has_images}
                     </span>
-                    <span style={{ background: "rgba(255, 255, 255, 0.08)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "#f5f5f7" }}>
+                    <span style={{ background: "var(--sunken)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "var(--text)" }}>
                       🗺 map: {scene.has_map ? "yes" : "no"}
                     </span>
-                    <span style={{ background: "rgba(255, 255, 255, 0.08)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "#a1a1a6" }}>
+                    <span style={{ background: "var(--sunken)", padding: "0.2rem 0.4rem", borderRadius: "4px", color: "var(--muted)" }}>
                       💾 {formatBytes(scene.size_bytes)}
                     </span>
                   </div>
@@ -450,7 +450,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                     alignItems: "center",
                     marginTop: "0.8rem",
                     paddingTop: "0.8rem",
-                    borderTop: "1px solid rgba(255, 255, 255, 0.08)",
+                    borderTop: "1px solid var(--line)",
                   }}
                 >
                   <div style={{ display: "flex", gap: "0.4rem" }}>
@@ -477,9 +477,9 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                       title="Show in Finder"
                       aria-label={`Show ${scene.scene_id} in Finder`}
                       style={{
-                        background: "rgba(255, 255, 255, 0.08)",
-                        color: "#f5f5f7",
-                        border: "1px solid rgba(255, 255, 255, 0.12)",
+                        background: "var(--sunken)",
+                        color: "var(--text)",
+                        border: "1px solid var(--line)",
                         borderRadius: "5px",
                         padding: "0.35rem 0.6rem",
                         fontSize: "0.8rem",
@@ -499,7 +499,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                       aria-label={`Validate scene ${scene.scene_id}`}
                       style={{
                         background: "transparent",
-                        color: "#8b949e",
+                        color: "var(--muted)",
                         border: "none",
                         fontSize: "0.75rem",
                         cursor: isValidating ? "wait" : "pointer",
@@ -514,7 +514,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                       aria-label={`Delete scene ${scene.scene_id}`}
                       style={{
                         background: "transparent",
-                        color: "#ff6b6b",
+                        color: "var(--danger)",
                         border: "none",
                         fontSize: "0.75rem",
                         cursor: "pointer",
@@ -549,19 +549,19 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
         >
           <div
             style={{
-              background: "#1c1c1e",
+              background: "var(--panel)",
               borderRadius: "12px",
-              border: "1px solid rgba(255, 255, 255, 0.15)",
+              border: "1px solid var(--line)",
               maxWidth: "480px",
               width: "100%",
               padding: "1.5rem",
-              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.5)",
+              boxShadow: "var(--shadow)",
             }}
           >
-            <h3 style={{ margin: "0 0 0.5rem 0", color: "#f5f5f7" }}>
+            <h3 style={{ margin: "0 0 0.5rem 0", color: "var(--text)" }}>
               Where should coperceive keep datasets?
             </h3>
-            <p style={{ color: "#a1a1a6", fontSize: "0.85rem", lineHeight: 1.5, marginBottom: "1.2rem" }}>
+            <p style={{ color: "var(--muted)", fontSize: "0.85rem", lineHeight: 1.5, marginBottom: "1.2rem" }}>
               Coperceive stores downloaded benchmarks and converted multi-agent scenes in your library folder.
               The default location is <code>~/coperceive-data</code>.
             </p>
@@ -580,9 +580,9 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                 style={{
                   padding: "0.5rem 1rem",
                   borderRadius: "6px",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
+                  border: "1px solid var(--line)",
                   background: "transparent",
-                  color: "#f5f5f7",
+                  color: "var(--text)",
                   cursor: "pointer",
                 }}
               >
@@ -627,28 +627,28 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
         >
           <div
             style={{
-              background: "#1c1c1e",
+              background: "var(--panel)",
               borderRadius: "12px",
-              border: "1px solid rgba(255, 255, 255, 0.15)",
+              border: "1px solid var(--line)",
               maxWidth: "480px",
               width: "100%",
               padding: "1.5rem",
-              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.5)",
+              boxShadow: "var(--shadow)",
             }}
           >
-            <h3 style={{ margin: "0 0 0.5rem 0", color: "#f5f5f7" }}>Change Library Location</h3>
-            <p style={{ color: "#a1a1a6", fontSize: "0.85rem", lineHeight: 1.5, marginBottom: "1rem" }}>
+            <h3 style={{ margin: "0 0 0.5rem 0", color: "var(--text)" }}>Change Library Location</h3>
+            <p style={{ color: "var(--muted)", fontSize: "0.85rem", lineHeight: 1.5, marginBottom: "1rem" }}>
               Moving your library will automatically transfer existing converted scenes into the new directory.
             </p>
             {storage && (
               <div
                 style={{
-                  background: "rgba(0, 0, 0, 0.3)",
+                  background: "var(--sunken)",
                   padding: "0.75rem",
                   borderRadius: "6px",
                   fontFamily: "'Geist Mono', monospace",
                   fontSize: "0.8rem",
-                  color: "#8b949e",
+                  color: "var(--muted)",
                   marginBottom: "1.2rem",
                 }}
               >
@@ -657,7 +657,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
             )}
 
             {movingStorage && (
-              <div style={{ color: "#58a6ff", fontSize: "0.85rem", marginBottom: "1rem" }}>
+              <div style={{ color: "var(--text)", fontSize: "0.85rem", marginBottom: "1rem" }}>
                 Moving scenes to new storage location…
               </div>
             )}
@@ -670,9 +670,9 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                 style={{
                   padding: "0.5rem 1rem",
                   borderRadius: "6px",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
+                  border: "1px solid var(--line)",
                   background: "transparent",
-                  color: "#f5f5f7",
+                  color: "var(--text)",
                   cursor: "pointer",
                 }}
               >
@@ -718,17 +718,17 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
         >
           <div
             style={{
-              background: "#1c1c1e",
+              background: "var(--panel)",
               borderRadius: "12px",
-              border: "1px solid rgba(255, 255, 255, 0.15)",
+              border: "1px solid var(--line)",
               maxWidth: "440px",
               width: "100%",
               padding: "1.5rem",
-              boxShadow: "0 20px 40px rgba(0, 0, 0, 0.5)",
+              boxShadow: "var(--shadow)",
             }}
           >
-            <h3 style={{ margin: "0 0 0.5rem 0", color: "#f5f5f7" }}>Delete Scene?</h3>
-            <p style={{ color: "#a1a1a6", fontSize: "0.85rem", lineHeight: 1.5, marginBottom: "1.2rem" }}>
+            <h3 style={{ margin: "0 0 0.5rem 0", color: "var(--text)" }}>Delete Scene?</h3>
+            <p style={{ color: "var(--muted)", fontSize: "0.85rem", lineHeight: 1.5, marginBottom: "1.2rem" }}>
               Are you sure you want to delete <strong>{deleteConfirmScene.scene_id}</strong>? The scene directory will be moved to your Trash.
             </p>
 
@@ -739,9 +739,9 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                 style={{
                   padding: "0.5rem 1rem",
                   borderRadius: "6px",
-                  border: "1px solid rgba(255, 255, 255, 0.2)",
+                  border: "1px solid var(--line)",
                   background: "transparent",
-                  color: "#f5f5f7",
+                  color: "var(--text)",
                   cursor: "pointer",
                 }}
               >

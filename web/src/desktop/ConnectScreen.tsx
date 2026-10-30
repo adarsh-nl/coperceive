@@ -13,7 +13,6 @@ import {
 } from "./local";
 import type { ConnectionSession } from "./types";
 import { BrandWordmark } from "./Brand";
-import ConnectBackdrop from "./backdrop/ConnectBackdrop";
 import HpcWorkspace from "./HpcWorkspace";
 import LibraryScreen from "./LibraryScreen";
 import GetDataScreen from "./GetDataScreen";
@@ -224,13 +223,12 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         display: "flex",
         flexDirection: "column",
         minHeight: "100vh",
-        backgroundColor: "#000000",
-        color: "#f5f5f7",
+        backgroundColor: "var(--bg)",
+        color: "var(--text)",
         fontFamily: "'Geist', system-ui, -apple-system, sans-serif",
       }}
     >
       <UpdateBanner />
-      <ConnectBackdrop hasRecent={recentRoots.length > 0} />
 
       {/* Top Header & Tab Navigation */}
       <header
@@ -238,9 +236,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           position: "sticky",
           top: 0,
           zIndex: 10,
-          background: "rgba(20, 20, 20, 0.8)",
-          backdropFilter: "blur(20px)",
-          borderBottom: "1px solid rgba(255, 255, 255, 0.1)",
+          background: "var(--panel)",
+          borderBottom: "1px solid var(--line)",
           padding: "0.8rem 2rem",
           display: "flex",
           alignItems: "center",
@@ -248,8 +245,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         }}
       >
         <div style={{ display: "flex", alignItems: "center", gap: "2rem" }}>
-          <h1 style={{ fontSize: "1.3rem", margin: 0, fontWeight: 600, color: "#f5f5f7" }}>
-            <BrandWordmark blink />
+          <h1 style={{ fontSize: "1.3rem", margin: 0, fontWeight: 600, color: "var(--text)" }}>
+            <BrandWordmark />
           </h1>
 
           <nav style={{ display: "flex", gap: "0.5rem" }} role="tablist" aria-label="Connect navigation">
@@ -259,9 +256,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               aria-selected={activeTab === "library"}
               onClick={() => setActiveTab("library")}
               style={{
-                background: activeTab === "library" ? "rgba(255, 255, 255, 0.12)" : "transparent",
-                color: activeTab === "library" ? "#fff" : "#a1a1a6",
-                border: "none",
+                background: activeTab === "library" ? "var(--sunken)" : "transparent",
+                color: activeTab === "library" ? "var(--text)" : "var(--muted)",
+                border: activeTab === "library" ? "1px solid var(--line)" : "1px solid transparent",
                 borderRadius: "6px",
                 padding: "0.4rem 0.8rem",
                 fontSize: "0.85rem",
@@ -277,9 +274,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               aria-selected={activeTab === "get_data"}
               onClick={() => setActiveTab("get_data")}
               style={{
-                background: activeTab === "get_data" ? "rgba(255, 255, 255, 0.12)" : "transparent",
-                color: activeTab === "get_data" ? "#fff" : "#a1a1a6",
-                border: "none",
+                background: activeTab === "get_data" ? "var(--sunken)" : "transparent",
+                color: activeTab === "get_data" ? "var(--text)" : "var(--muted)",
+                border: activeTab === "get_data" ? "1px solid var(--line)" : "1px solid transparent",
                 borderRadius: "6px",
                 padding: "0.4rem 0.8rem",
                 fontSize: "0.85rem",
@@ -295,9 +292,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               aria-selected={activeTab === "local"}
               onClick={() => setActiveTab("local")}
               style={{
-                background: activeTab === "local" ? "rgba(255, 255, 255, 0.12)" : "transparent",
-                color: activeTab === "local" ? "#fff" : "#a1a1a6",
-                border: "none",
+                background: activeTab === "local" ? "var(--sunken)" : "transparent",
+                color: activeTab === "local" ? "var(--text)" : "var(--muted)",
+                border: activeTab === "local" ? "1px solid var(--line)" : "1px solid transparent",
                 borderRadius: "6px",
                 padding: "0.4rem 0.8rem",
                 fontSize: "0.85rem",
@@ -308,23 +305,23 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               Open Folder
             </button>
             <button
-                type="button"
-                role="tab"
-                aria-selected={activeTab === "remote"}
-                onClick={() => setActiveTab("remote")}
-                style={{
-                  background: activeTab === "remote" ? "rgba(255, 255, 255, 0.12)" : "transparent",
-                  color: activeTab === "remote" ? "#fff" : "#a1a1a6",
-                  border: "none",
-                  borderRadius: "6px",
-                  padding: "0.4rem 0.8rem",
-                  fontSize: "0.85rem",
-                  fontWeight: activeTab === "remote" ? 600 : 400,
-                  cursor: "pointer",
-                }}
-              >
-                HPC Workspace
-              </button>
+              type="button"
+              role="tab"
+              aria-selected={activeTab === "remote"}
+              onClick={() => setActiveTab("remote")}
+              style={{
+                background: activeTab === "remote" ? "var(--sunken)" : "transparent",
+                color: activeTab === "remote" ? "var(--text)" : "var(--muted)",
+                border: activeTab === "remote" ? "1px solid var(--line)" : "1px solid transparent",
+                borderRadius: "6px",
+                padding: "0.4rem 0.8rem",
+                fontSize: "0.85rem",
+                fontWeight: activeTab === "remote" ? 600 : 400,
+                cursor: "pointer",
+              }}
+            >
+              HPC Workspace
+            </button>
           </nav>
         </div>
 
@@ -369,18 +366,17 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               style={{
                 maxWidth: "520px",
                 width: "100%",
-                backgroundColor: "rgba(28, 28, 30, 0.85)",
-                backdropFilter: "blur(22px)",
+                backgroundColor: "var(--panel)",
                 borderRadius: "14px",
-                border: "1px solid rgba(255, 255, 255, 0.14)",
+                border: "1px solid var(--line)",
                 padding: "2rem",
-                boxShadow: "0 20px 50px rgba(0, 0, 0, 0.6)",
+                boxShadow: "var(--shadow)",
               }}
             >
-              <h2 style={{ fontSize: "1.2rem", marginBottom: "0.5rem", color: "#f5f5f7", fontWeight: 600 }}>
+              <h2 style={{ fontSize: "1.2rem", marginBottom: "0.5rem", color: "var(--text)", fontWeight: 600 }}>
                 Open Local Folder
               </h2>
-              <p style={{ fontSize: "0.85rem", color: "#86868b", marginBottom: "1.2rem" }}>
+              <p style={{ fontSize: "0.85rem", color: "var(--muted)", marginBottom: "1.2rem" }}>
                 Browse directly to any folder holding schema 1 scenes or datasets.
               </p>
 
@@ -418,9 +414,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     padding: "0.5rem 0.75rem",
                     fontSize: "0.85rem",
                     borderRadius: "6px",
-                    border: "1px solid rgba(255, 255, 255, 0.14)",
-                    backgroundColor: "rgba(0, 0, 0, 0.5)",
-                    color: "#f5f5f7",
+                    border: "1px solid var(--line)",
+                    backgroundColor: "var(--sunken)",
+                    color: "var(--text)",
                     fontFamily: "'Geist Mono', ui-monospace, monospace",
                   }}
                 />
@@ -434,9 +430,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     fontSize: "0.85rem",
                     borderRadius: "6px",
                     cursor: "pointer",
-                    border: "1px solid rgba(255, 255, 255, 0.14)",
-                    backgroundColor: "rgba(255, 255, 255, 0.08)",
-                    color: "#f5f5f7",
+                    border: "1px solid var(--line)",
+                    backgroundColor: "var(--sunken)",
+                    color: "var(--text)",
                     fontWeight: 500,
                   }}
                 >
@@ -458,8 +454,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     borderRadius: "6px",
                     cursor: busy || !dataRoot ? "not-allowed" : "pointer",
                     border: "none",
-                    backgroundColor: busy || !dataRoot ? "rgba(255, 255, 255, 0.1)" : "#1f6feb",
-                    color: "#fff",
+                    backgroundColor: busy || !dataRoot ? "var(--sunken)" : "var(--accent)",
+                    color: busy || !dataRoot ? "var(--muted)" : "var(--accent-ink)",
                   }}
                 >
                   {busy ? "Connecting…" : "Open Local Viewer"}
@@ -476,9 +472,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     fontWeight: 500,
                     borderRadius: "6px",
                     cursor: busy || !dataRoot ? "not-allowed" : "pointer",
-                    border: "1px solid rgba(255, 255, 255, 0.14)",
-                    backgroundColor: "rgba(0, 0, 0, 0.3)",
-                    color: "#a1a1a6",
+                    border: "1px solid var(--line)",
+                    backgroundColor: "var(--sunken)",
+                    color: "var(--text)",
                     whiteSpace: "nowrap",
                   }}
                 >
@@ -487,17 +483,17 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               </div>
 
               {/* Import from folder section */}
-              <div style={{ borderTop: "1px solid rgba(255, 255, 255, 0.1)", paddingTop: "1rem" }}>
+              <div style={{ borderTop: "1px solid var(--line)", paddingTop: "1rem" }}>
                 <button
                   type="button"
                   onClick={() => setImportOpen((open) => !open)}
                   disabled={busy}
                   style={{
                     background: "transparent",
-                    border: "1px solid rgba(255, 255, 255, 0.15)",
+                    border: "1px solid var(--line)",
                     borderRadius: "6px",
                     padding: "0.4rem 0.8rem",
-                    color: "#f5f5f7",
+                    color: "var(--text)",
                     fontSize: "0.85rem",
                     cursor: "pointer",
                     width: "100%",
@@ -507,7 +503,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                 </button>
                 {importOpen && (
                   <div style={{ marginTop: "1rem", display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-                    <p style={{ fontSize: "0.8rem", color: "#a1a1a6", margin: 0 }}>
+                    <p style={{ fontSize: "0.8rem", color: "var(--muted)", margin: 0 }}>
                       Copies and packages the scene directly into your library folder.
                     </p>
                     <button
@@ -519,10 +515,10 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       style={{
                         padding: "0.4rem 0.6rem",
                         textAlign: "left",
-                        background: "rgba(0, 0, 0, 0.3)",
-                        border: "1px solid rgba(255, 255, 255, 0.1)",
+                        background: "var(--sunken)",
+                        border: "1px solid var(--line)",
                         borderRadius: "5px",
-                        color: "#f5f5f7",
+                        color: "var(--text)",
                         fontSize: "0.8rem",
                         cursor: "pointer",
                       }}
@@ -538,10 +534,10 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       style={{
                         padding: "0.4rem 0.6rem",
                         textAlign: "left",
-                        background: "rgba(0, 0, 0, 0.3)",
-                        border: "1px solid rgba(255, 255, 255, 0.1)",
+                        background: "var(--sunken)",
+                        border: "1px solid var(--line)",
                         borderRadius: "5px",
-                        color: "#f5f5f7",
+                        color: "var(--text)",
                         fontSize: "0.8rem",
                         cursor: "pointer",
                       }}
@@ -557,10 +553,10 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       style={{
                         padding: "0.4rem 0.6rem",
                         textAlign: "left",
-                        background: "rgba(0, 0, 0, 0.3)",
-                        border: "1px solid rgba(255, 255, 255, 0.1)",
+                        background: "var(--sunken)",
+                        border: "1px solid var(--line)",
                         borderRadius: "5px",
-                        color: "#f5f5f7",
+                        color: "var(--text)",
                         fontSize: "0.8rem",
                         cursor: "pointer",
                       }}
@@ -576,17 +572,17 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       style={{
                         padding: "0.4rem 0.6rem",
                         textAlign: "left",
-                        background: "rgba(0, 0, 0, 0.3)",
-                        border: "1px solid rgba(255, 255, 255, 0.1)",
+                        background: "var(--sunken)",
+                        border: "1px solid var(--line)",
                         borderRadius: "5px",
-                        color: "#f5f5f7",
+                        color: "var(--text)",
                         fontSize: "0.8rem",
                         cursor: "pointer",
                       }}
                     >
                       Griffin root: {importGriffin || "optional"}
                     </button>
-                    <label style={{ fontSize: "0.8rem", color: "#a1a1a6", display: "flex", alignItems: "center" }}>
+                    <label style={{ fontSize: "0.8rem", color: "var(--muted)", display: "flex", alignItems: "center" }}>
                       Images:
                       <select
                         aria-label="Image copy mode"
@@ -594,9 +590,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                         onChange={(event) => setImportImages(event.target.value as ImportImages)}
                         style={{
                           marginLeft: "0.5rem",
-                          background: "rgba(0,0,0,0.5)",
-                          color: "#f5f5f7",
-                          border: "1px solid rgba(255,255,255,0.2)",
+                          background: "var(--sunken)",
+                          color: "var(--text)",
+                          border: "1px solid var(--line)",
                           borderRadius: "4px",
                           padding: "0.2rem 0.4rem",
                         }}
@@ -613,11 +609,11 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       aria-valuemax={100}
                       aria-valuenow={importPercent}
                       aria-label="Import progress"
-                      style={{ height: "6px", background: "rgba(255,255,255,0.12)", borderRadius: "3px" }}
+                      style={{ height: "6px", background: "var(--sunken)", borderRadius: "3px" }}
                     >
-                      <div style={{ width: `${importPercent}%`, height: "100%", background: "#1f6feb", borderRadius: "3px" }} />
+                      <div style={{ width: `${importPercent}%`, height: "100%", background: "var(--accent)", borderRadius: "3px" }} />
                     </div>
-                    <p style={{ fontSize: "0.75rem", color: "#86868b", margin: 0 }}>{importNote}</p>
+                    <p style={{ fontSize: "0.75rem", color: "var(--muted)", margin: 0 }}>{importNote}</p>
 
                     <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.2rem" }}>
                       <button
@@ -629,8 +625,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                           padding: "0.4rem",
                           borderRadius: "5px",
                           border: "none",
-                          background: importing || !importSource ? "rgba(255,255,255,0.1)" : "#1f6feb",
-                          color: "#fff",
+                          background: importing || !importSource ? "var(--sunken)" : "var(--accent)",
+                          color: importing || !importSource ? "var(--muted)" : "var(--accent-ink)",
                           fontWeight: 500,
                           cursor: importing || !importSource ? "not-allowed" : "pointer",
                           fontSize: "0.8rem",
@@ -645,9 +641,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                         style={{
                           padding: "0.4rem 0.8rem",
                           borderRadius: "5px",
-                          border: "1px solid rgba(255,255,255,0.2)",
+                          border: "1px solid var(--line)",
                           background: "transparent",
-                          color: "#ff6b6b",
+                          color: "var(--danger)",
                           cursor: !importing ? "not-allowed" : "pointer",
                           fontSize: "0.8rem",
                         }}
@@ -661,8 +657,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
               {/* Recent Datasets */}
               {recentRoots.length > 0 && (
-                <div style={{ marginTop: "1.2rem", borderTop: "1px solid rgba(255, 255, 255, 0.08)", paddingTop: "0.8rem" }}>
-                  <p style={{ fontSize: "0.75rem", color: "#86868b", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                <div style={{ marginTop: "1.2rem", borderTop: "1px solid var(--line)", paddingTop: "0.8rem" }}>
+                  <p style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
                     Recent Datasets
                   </p>
                   <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
@@ -684,15 +680,15 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                             textAlign: "left",
                             padding: "0.4rem 0.6rem",
                             fontSize: "0.8rem",
-                            backgroundColor: dataRoot === root ? "rgba(40, 120, 220, 0.2)" : "rgba(255, 255, 255, 0.04)",
-                            color: "#f5f5f7",
-                            border: `1px solid ${dataRoot === root ? "#1f6feb" : "rgba(255, 255, 255, 0.08)"}`,
+                            backgroundColor: dataRoot === root ? "var(--sunken)" : "transparent",
+                            color: "var(--text)",
+                            border: `1px solid ${dataRoot === root ? "var(--accent)" : "var(--line)"}`,
                             borderRadius: "6px",
                             cursor: "pointer",
                           }}
                         >
                           <span style={{ fontWeight: 500 }}>📁 {base}</span>
-                          <span style={{ color: "#86868b", fontSize: "0.72rem", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "'Geist Mono', monospace" }}>
+                          <span style={{ color: "var(--muted)", fontSize: "0.72rem", maxWidth: "200px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "'Geist Mono', monospace" }}>
                             {root}
                           </span>
                         </button>
