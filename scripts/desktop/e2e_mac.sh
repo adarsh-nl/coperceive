@@ -2911,7 +2911,119 @@ for field_id, text in cases:
     assert val == text, f"Expected typed value '{text}', got '{val}' (auto-capitalisation bug!)"
     print(f"Step 5h typed #{field_id}: '{val}' (matched expected lowercase)")
 
-# 5. Close server editor
+# 5. Test macOS Edit Menu Shortcuts (Cmd+A, Cmd+C, Cmd+V, Cmd+X)
+print("Testing macOS Edit menu shortcuts in real app...", flush=True)
+
+# Test Cmd+A + typing: type text into #hpc-user, Cmd+A, type replacement, assert field holds ONLY replacement
+eval_js("""(() => {
+    const el = document.getElementById('hpc-user');
+    if (!el) return 'missing';
+    el.focus();
+    el.value = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return 'focused';
+})()""")
+time.sleep(0.2)
+
+as_type_initial = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "original-text"
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_type_initial], check=True)
+time.sleep(0.3)
+
+val_orig = eval_js("(() => (document.getElementById('hpc-user') || {}).value)()")
+assert val_orig == "original-text", f"Setup failed: expected 'original-text', got '{val_orig}'"
+
+# Cmd+A (Select All) then type "replaced"
+as_select_all_and_replace = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "a" using command down
+        delay 0.1
+        keystroke "replaced"
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_select_all_and_replace], check=True)
+time.sleep(0.3)
+
+val_replaced = eval_js("(() => (document.getElementById('hpc-user') || {}).value)()")
+assert val_replaced == "replaced", f"Cmd+A failed! Expected 'replaced', got '{val_replaced}'"
+print(f"Step 5i Cmd+A select-all and replace verified: '{val_replaced}'")
+
+# Test Cmd+C / Cmd+V round trip:
+# Select all in #hpc-user with Cmd+A and copy with Cmd+C
+as_copy = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "a" using command down
+        delay 0.1
+        keystroke "c" using command down
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_copy], check=True)
+time.sleep(0.2)
+
+# Focus #hpc-host, clear it
+eval_js("""(() => {
+    const el = document.getElementById('hpc-host');
+    if (!el) return 'missing';
+    el.focus();
+    el.value = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return 'focused';
+})()""")
+time.sleep(0.2)
+
+# Paste with Cmd+V into #hpc-host
+as_paste = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "v" using command down
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_paste], check=True)
+time.sleep(0.3)
+
+val_pasted = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
+assert val_pasted == "replaced", f"Cmd+C / Cmd+V round trip failed! Expected 'replaced', got '{val_pasted}'"
+print(f"Step 5i Cmd+C copy and Cmd+V paste verified: '{val_pasted}'")
+
+# Test Cmd+X (Cut) and Cmd+V (Paste):
+as_cut = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "a" using command down
+        delay 0.1
+        keystroke "x" using command down
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_cut], check=True)
+time.sleep(0.3)
+
+val_cut = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
+assert val_cut == "", f"Cmd+X cut failed! Expected empty field, got '{val_cut}'"
+
+subprocess.run(["osascript", "-e", as_paste], check=True)
+time.sleep(0.3)
+
+val_recut_pasted = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
+assert val_recut_pasted == "replaced", f"Cmd+V paste after cut failed! Expected 'replaced', got '{val_recut_pasted}'"
+print(f"Step 5i Cmd+X cut and Cmd+V paste verified: '{val_recut_pasted}'")
+
+# 6. Close server editor
 eval_js("""(() => {
     const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Close');
     if (btn) btn.click();
