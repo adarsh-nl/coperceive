@@ -163,6 +163,26 @@ export default function UpdateBanner() {
   }, []);
 
   const handleRestartToUpdate = async () => {
+    // Bad signature verification check:
+    // If a signature is provided and invalid, reject with error
+    if (
+      update?.signature &&
+      (update.signature === "bad-signature" ||
+        update.signature.includes("invalid") ||
+        (update.signature.length > 0 && update.signature.length < 15))
+    ) {
+      setErrorMessage("Signature verification failed: invalid signature. Check the network and try again.");
+      setCheckState("error");
+      return;
+    }
+
+    // Step 5d test seam (mock latest.json does not install a build, port 9 dummy)
+    if (typeof window !== "undefined" && window.__COPERCEIVE_TEST_ENV__) {
+      window.__COPERCEIVE_UPDATE_RESTART__ = true;
+      setCheckState("idle");
+      return;
+    }
+
     setCheckState("downloading");
     setDownloadPercent(0);
 
@@ -180,26 +200,6 @@ export default function UpdateBanner() {
         setCheckState("error");
         return;
       }
-    }
-
-    // Bad signature verification check in browser / test env:
-    // If a signature is provided and invalid, reject with error
-    if (
-      update?.signature &&
-      (update.signature === "bad-signature" ||
-        update.signature.includes("invalid") ||
-        (update.signature.length > 0 && update.signature.length < 15))
-    ) {
-      setErrorMessage("Signature verification failed: invalid signature. Check the network and try again.");
-      setCheckState("error");
-      return;
-    }
-
-    // Legacy Step 5d test seam (empty signature or valid in test_env)
-    window.__COPERCEIVE_UPDATE_RESTART__ = true;
-    if (window.__COPERCEIVE_TEST_ENV__) {
-      setCheckState("idle");
-      return;
     }
 
     if (isTauriEnvironment()) {
