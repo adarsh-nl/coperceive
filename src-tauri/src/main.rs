@@ -2602,21 +2602,43 @@ fn main() {
                 let _ = app.set_menu(menu);
             }
 
-            // 3. Auto-connect on launch if data root exists and is valid
-            let auto_root = if persistent.reopen_last_session {
-                std::env::var("COPERCEIVE_AUTOCONNECT_ROOT")
-                    .or_else(|_| std::env::var("COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT"))
-                    .ok()
-                    .or_else(|| persistent.last_data_root.clone())
-            } else {
-                std::env::var("COPERCEIVE_AUTOCONNECT_ROOT")
-                    .or_else(|_| std::env::var("COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT"))
-                    .ok()
+            // 3. Auto-connect on launch if data root exists and is valid.
+            // A restored session must also name a scene that is still in this
+            // library; otherwise fall back to the Library window instead of
+            // opening a viewer that would show "scene not found".
+            let env_auto_root = std::env::var("COPERCEIVE_AUTOCONNECT_ROOT")
+                .or_else(|_| std::env::var("COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT"))
+                .ok();
+            let (auto_root, from_saved_state) = match env_auto_root {
+                Some(root) => (Some(root), false),
+                None if persistent.reopen_last_session => {
+                    (persistent.last_data_root.clone(), true)
+                }
+                None => (None, false),
             };
 
             if let Some(root_str) = auto_root {
                 let root_path = PathBuf::from(&root_str);
-                if state::validate_dataset_root(&root_path).is_ok() {
+                let restored_scene_ok = !from_saved_state
+                    || persistent
+                        .last_scene_id
+                        .as_deref()
+                        .map_or(true, |scene| state::restored_scene_exists(&root_path, scene));
+                if !restored_scene_ok {
+                    eprintln!(
+                        "[auto-connect] the last scene is gone from {}; opening the Library",
+                        root_path.display()
+                    );
+                    let mut cleared = state::load_state();
+                    cleared.last_scene_id = None;
+                    cleared.last_sample_index = None;
+                    cleared.last_timestamp_us = None;
+                    cleared._legacy_timestamp_ns = None;
+                    let _ = state::save_state(&cleared);
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.show();
+                    }
+                } else if state::validate_dataset_root(&root_path).is_ok() {
                     let h = handle.clone();
                     let st = state.clone();
                     std::thread::spawn(move || {

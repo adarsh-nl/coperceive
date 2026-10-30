@@ -438,6 +438,22 @@ fn name_ends_with_partial(path: &Path) -> bool {
 /// A valid dataset root is an existing directory that either:
 /// 1. Directly contains `manifest.json` and `COMPLETE.json` (single scene root), or
 /// 2. Contains at least one direct subdirectory containing `manifest.json` and `COMPLETE.json` (multi-scene root).
+/// A restored scene id is usable only when it is a plain name and that scene is
+/// still present under the current library/data root.
+pub fn restored_scene_exists(root: &Path, scene_id: &str) -> bool {
+    let trimmed = scene_id.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.starts_with('.')
+    {
+        return false;
+    }
+    root.join(trimmed).is_dir()
+}
+
 pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("Dataset directory does not exist: {}", path.display()));
@@ -567,6 +583,39 @@ pub fn save_state_to_path(state: &AppPersistentState, path: &Path) -> Result<(),
 #[cfg(test)]
 pub mod tests {
     use super::*;
+
+    #[test]
+    fn restored_scene_must_still_be_under_the_library_root() {
+        let root = std::env::temp_dir().join(format!(
+            "coperceive-restore-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("Town03-000")).expect("scene dir");
+        assert!(restored_scene_exists(&root, "Town03-000"));
+        assert!(!restored_scene_exists(&root, "synth_001"));
+        assert!(!restored_scene_exists(&root, "../Town03-000"));
+        assert!(!restored_scene_exists(&root, "Town03-000/.."));
+        assert!(!restored_scene_exists(&root, "../Town03-000"));
+        assert!(!restored_scene_exists(&root, ".hidden"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn layer_defaults_keep_points_and_boxes_on() {
+        let defaults = LayerToggles::default();
+        assert!(defaults.points);
+        assert!(defaults.boxes);
+        let parsed: LayerToggles = serde_json::from_str("{}").expect("empty layer toggles");
+        assert!(parsed.points);
+        assert!(parsed.boxes);
+        let explicit: LayerToggles =
+            serde_json::from_str(r#"{"points":false,"boxes":false}"#).expect("explicit");
+        assert!(!explicit.points && !explicit.boxes);
+    }
 
     #[test]
     fn test_state_serialize_deserialize() {
