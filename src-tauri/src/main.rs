@@ -810,6 +810,17 @@ fn build_app_menu(
         .close_window();
     let file_submenu = file_builder.build()?;
 
+    // Edit Submenu
+    let edit_submenu = SubmenuBuilder::new(app, "Edit")
+        .item(&PredefinedMenuItem::undo(app, None::<&str>)?)
+        .item(&PredefinedMenuItem::redo(app, None::<&str>)?)
+        .separator()
+        .item(&PredefinedMenuItem::cut(app, None::<&str>)?)
+        .item(&PredefinedMenuItem::copy(app, None::<&str>)?)
+        .item(&PredefinedMenuItem::paste(app, None::<&str>)?)
+        .item(&PredefinedMenuItem::select_all(app, None::<&str>)?)
+        .build()?;
+
     // View Submenu
     let view_submenu = SubmenuBuilder::new(app, "View")
         .item(&MenuItem::with_id(app, "viewpoint_orbit", "Orbit", true, Some("1"))?)
@@ -848,7 +859,14 @@ fn build_app_menu(
         .build()?;
 
     MenuBuilder::new(app)
-        .items(&[&app_submenu, &file_submenu, &view_submenu, &playback_submenu, &help_submenu])
+        .items(&[
+            &app_submenu,
+            &file_submenu,
+            &edit_submenu,
+            &view_submenu,
+            &playback_submenu,
+            &help_submenu,
+        ])
         .build()
 }
 
