@@ -4,6 +4,13 @@ import { isFrame, type FrameDocument } from "./types";
 const FRAME_LIMIT = 16;
 const POINT_LIMIT = 48;
 
+export type FrameCacheStats = {
+  frame_hits: number;
+  frame_misses: number;
+  point_hits: number;
+  point_misses: number;
+};
+
 export type FrameCache = {
   loadFrame: (sceneId: string, timeUs: number, token: string) => Promise<FrameDocument>;
   loadPoints: (
@@ -14,6 +21,7 @@ export type FrameCache = {
     token: string,
   ) => Promise<ArrayBuffer>;
   clear: () => void;
+  stats: FrameCacheStats;
 };
 
 /** A load that `clear()` cancelled; callers stay quiet instead of reporting it as a failure. */
@@ -46,8 +54,15 @@ export function createFrameCache(): FrameCache {
   // the abort resolve as stale instead of being remembered under the old scene's key.
   const controllers = new Set<AbortController>();
   let generation = 0;
+  const stats: FrameCacheStats = {
+    frame_hits: 0,
+    frame_misses: 0,
+    point_hits: 0,
+    point_misses: 0,
+  };
 
   return {
+    stats,
     clear() {
       generation += 1;
       for (const controller of controllers) {
@@ -63,13 +78,16 @@ export function createFrameCache(): FrameCache {
       const key = `${sceneId}|${timeUs}`;
       const cached = frames.get(key);
       if (cached) {
+        stats.frame_hits += 1;
         remember(frames, key, cached, FRAME_LIMIT);
         return Promise.resolve(cached);
       }
       const pending = frameInflight.get(key);
       if (pending) {
+        stats.frame_hits += 1;
         return pending;
       }
+      stats.frame_misses += 1;
       const mine = generation;
       const controller = new AbortController();
       controllers.add(controller);
@@ -101,13 +119,16 @@ export function createFrameCache(): FrameCache {
       const key = `${sceneId}|${timeUs}|${agentId}|${sensorId}`;
       const cached = points.get(key);
       if (cached) {
+        stats.point_hits += 1;
         remember(points, key, cached, POINT_LIMIT);
         return Promise.resolve(cached);
       }
       const pending = pointInflight.get(key);
       if (pending) {
+        stats.point_hits += 1;
         return pending;
       }
+      stats.point_misses += 1;
       const mine = generation;
       const controller = new AbortController();
       controllers.add(controller);

@@ -721,6 +721,49 @@ def test_static_option_serves_another_bundle(tmp_path: Path) -> None:
     assert exc.value.code == 2
 
 
+def test_image_route_serves_a_small_jpeg_for_a_display_width(tmp_path: Path) -> None:
+    """The camera strip asks for a display width; the server resizes instead of sending a
+    full-resolution photo over HTTP on every playback tick."""
+    pose = StampedPose(0, SE3.identity())
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    camera = Sensor(
+        "front",
+        "vehicle",
+        Modality.CAMERA,
+        SE3.identity(),
+        1,
+        1,
+        1.0,
+        1.0,
+        0.5,
+        0.5,
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="desk",
+        world_frame="ENU",
+        clock=Clock("us", "image fixture"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, "camera/front/000000.png"),),
+    )
+    image = tmp_path / "desk" / "camera" / "front" / "000000.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    stamp_scene(scene, tmp_path / "desk")
+    app = create_app(root=tmp_path, token=None)
+    client = TestClient(app)
+    thumb = client.get(
+        "/api/scenes/desk/image",
+        params={"time_us": 0, "agent_id": "vehicle", "sensor_id": "front", "width": 160},
+    )
+    assert thumb.status_code == 200
+    assert thumb.headers["content-type"] == "image/jpeg"
+    assert thumb.content.startswith(b"\xff\xd8")
+
+
 def test_image_route_follows_a_symlink_only_into_a_media_root(tmp_path: Path) -> None:
     """Staged Griffin scenes link ``<side>/camera`` to the dataset copy. The image route
     serves such a file only when it resolves under a ``--media-root``; a link elsewhere

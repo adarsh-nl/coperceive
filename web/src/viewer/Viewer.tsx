@@ -451,18 +451,15 @@ function sceneGraphAudit(stage: Stage | null) {
 }
 
 function clearGroup(group: THREE.Group) {
+  // These groups are rebuilt every frame (axes, frustums, solids). Disposing the
+  // materials here releases their compiled shader programs, so the next frame
+  // recompiles them; on a software/ANGLE WebGL backend that can stall playback for
+  // seconds mid-run. Keep the materials cached (the driver program stays warm);
+  // only the per-frame geometry is released.
   for (const child of [...group.children]) {
     group.remove(child);
     const object = child as THREE.LineSegments;
     object.geometry?.dispose();
-    const material = object.material;
-    if (Array.isArray(material)) {
-      for (const item of material) {
-        item.dispose();
-      }
-    } else {
-      material?.dispose();
-    }
   }
 }
 
@@ -744,6 +741,24 @@ function replaceMap(stage: Stage, buffer: ArrayBuffer) {
   stage.mapLines.geometry = next;
 }
 
+export type FrameRenderStat = {
+  at: number;
+  index: number;
+  load_ms: number;
+  draw_ms: number;
+  render_ms: number;
+  frame_hits: number;
+  frame_misses: number;
+};
+
+/** Test-only frame telemetry (window.__COPERCEIVE_TEST_ENV__); bounded. */
+function recordFrameStat(stat: FrameRenderStat) {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_TEST_ENV__) return;
+  const list = window.__COPERCEIVE_FRAME_STATS__ ?? (window.__COPERCEIVE_FRAME_STATS__ = []);
+  list.push(stat);
+  if (list.length > 1000) list.splice(0, list.length - 1000);
+}
+
 function prefetchAhead(
   cache: FrameCache,
   summary: SceneSummary,
@@ -928,6 +943,13 @@ declare global {
     __COPERCEIVE_DATASET_ERROR__?: (error: string) => void;
     __COPERCEIVE_SCENES__?: () => string[];
     __COPERCEIVE_TEST_ENV__?: boolean;
+    __COPERCEIVE_FRAME_STATS__?: FrameRenderStat[];
+    __COPERCEIVE_CACHE_STATS__?: {
+      frame_hits: number;
+      frame_misses: number;
+      point_hits: number;
+      point_misses: number;
+    };
     __COPERCEIVE_FORCE_MOTION__?: boolean;
     __COPERCEIVE_VIEW_SETTINGS__?: () => {
       sceneId: string;
@@ -2411,19 +2433,34 @@ export default function Viewer({
       stage.renderNow();
     }
 
+    const frameStarted = performance.now();
     void (async () => {
       const body = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
+      const frameLoaded = performance.now();
       if (stale()) {
         return;
       }
       latestRef.current = { frame: body, types };
       const drawn = await drawFrame(stage, body, types, hidden, appearance, effectiveToken, cacheRef.current, () => dimmedRef.current, stale);
+      const frameDrawn = performance.now();
       if (!drawn || stale()) {
         return;
       }
       syncMotion(stage, body, types, hidden);
       syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
       stage.renderNow();
+      const frameRendered = performance.now();
+      const cacheStats = cacheRef.current.stats;
+      window.__COPERCEIVE_CACHE_STATS__ = { ...cacheStats };
+      recordFrameStat({
+        at: frameRendered,
+        index: frameIndex,
+        load_ms: frameLoaded - frameStarted,
+        draw_ms: frameDrawn - frameLoaded,
+        render_ms: frameRendered - frameDrawn,
+        frame_hits: cacheStats.frame_hits,
+        frame_misses: cacheStats.frame_misses,
+      });
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
         orbitHomeRef.current = home;
@@ -3865,6 +3902,7 @@ export default function Viewer({
               types={agentTypes}
               names={agentNames}
               open={appearance.stripOpen}
+              playing={playing}
               onToggleOpen={() => setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }))}
               splitKey={appearance.splitCamera}
               onSplit={toggleSplit}

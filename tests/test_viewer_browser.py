@@ -349,6 +349,7 @@ class _Session:
 @pytest.fixture
 def session(browser: Browser, viewer_url: str) -> Iterator[_Session]:
     page = browser.new_page(viewport={"width": 1400, "height": 900})
+    page.add_init_script("window.__COPERCEIVE_TEST_ENV__ = true;")
     session = _Session(page, viewer_url)
     session.open()
     yield session
@@ -391,6 +392,27 @@ def test_play_advances_the_timeline_at_the_recorded_pace(session: _Session, shot
     )
     assert session.slider("aria-valuenow") == BARE_SAMPLES - 1
     assert "sample 30 / 30" in session.page.locator(".clock").inner_text()
+
+
+def test_playback_has_no_render_stall(session: _Session) -> None:
+    """At 1x on the synthetic 10 Hz scene, no rendered-frame gap may exceed 350 ms.
+
+    This catches a main-thread stall (shader recompilation, image decode, layout)
+    while playing. The first two gaps after Play are ignored: one-off shader
+    compilation/warm-up happens on the first frames, not mid-playback.
+    """
+    session.choose_scene(SCENE_BARE)
+    session.wait_for(lambda: session.slider("aria-valuenow") == 0, "initial sample")
+    page = session.page
+    page.locator("button[aria-label=Play]").click()
+    play_start = page.evaluate("performance.now()")
+    page.wait_for_timeout(2200)
+    stats = page.evaluate("window.__COPERCEIVE_FRAME_STATS__ || []")
+    played = [stat for stat in stats if stat["at"] >= play_start]
+    assert len(played) >= 8, played
+    gaps = [played[index]["at"] - played[index - 1]["at"] for index in range(1, len(played))][2:]
+    assert gaps, played
+    assert max(gaps) <= 350, gaps
 
 
 def test_choosing_a_scene_reloads_frames_timeline_and_map(session: _Session, shots: Path) -> None:
