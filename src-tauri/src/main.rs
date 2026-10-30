@@ -2583,6 +2583,60 @@ fn main() {
                 });
             }
 
+            // Test-only server save/reload/edit round trip for the HPC e2e. Uses
+            // COPERCEIVE_STATE_DIR (set by the harness) so the real store is untouched.
+            if let Some(probe) =
+                coperceive_desktop::test_seams::hpc_server_save_probe_request()
+            {
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<serde_json::Value, String> {
+                        let json = fs::read_to_string(&probe.server)
+                            .map_err(|error| format!("Could not read the server fixture: {error}"))?;
+                        let mut entry: ServerEntry = serde_json::from_str(&json)
+                            .map_err(|error| format!("Server fixture is not valid: {error}"))?;
+                        entry.id = String::new();
+                        let mut servers = server_profiles::load_servers();
+                        let saved = server_profiles::upsert_server(&mut servers, entry)?;
+                        let listed = server_profiles::load_servers();
+                        let listed_ids: Vec<String> =
+                            listed.iter().map(|item| item.id.clone()).collect();
+                        let mut edited = listed
+                            .iter()
+                            .find(|item| item.id == saved.id)
+                            .cloned()
+                            .ok_or_else(|| "Saved server is missing after reload.".to_string())?;
+                        edited.profile.name = format!("{} (edited)", edited.profile.name);
+                        edited.profile.defaults.cpus_per_task = Some(8);
+                        let mut servers = server_profiles::load_servers();
+                        let edited_saved = server_profiles::upsert_server(&mut servers, edited)?;
+                        let after = server_profiles::load_servers();
+                        let persisted = after
+                            .iter()
+                            .find(|item| item.id == saved.id)
+                            .cloned()
+                            .ok_or_else(|| "Edited server is missing after reload.".to_string())?;
+                        Ok(serde_json::json!({
+                            "ok": true,
+                            "saved_id": saved.id,
+                            "listed_ids": listed_ids,
+                            "listed_before_edit": listed.iter().any(|item| item.id == saved.id),
+                            "edited_name": edited_saved.profile.name,
+                            "persisted_name": persisted.profile.name,
+                            "persisted_cpus": persisted.profile.defaults.cpus_per_task,
+                            "store_path": server_profiles::servers_file_path().display().to_string(),
+                        }))
+                    })();
+                    let document = match result {
+                        Ok(value) => value,
+                        Err(error) => serde_json::json!({"ok": false, "error": error}),
+                    };
+                    let _ = fs::write(
+                        &probe.result,
+                        serde_json::to_string_pretty(&document).unwrap_or_default(),
+                    );
+                });
+            }
+
             // 1. Start loopback desktop controller
             match start_desktop_controller(handle.clone(), state.clone()) {
                 Ok(port) => {

@@ -316,6 +316,46 @@ export function partitionNames(entry: ServerEntry): string[] {
   return (entry.discovered?.partitions ?? []).map((partition) => partition.name);
 }
 
+export type PartitionGroup = {
+  name: string;
+  gpuTypes: string[];
+  maxTime: string | null;
+  nodes: number | null;
+  down: boolean;
+  gres: string | null;
+};
+
+/** One chip per partition: sinfo can list the same partition once per node GRES. */
+export function groupPartitions(partitions: DiscoveredPartition[]): PartitionGroup[] {
+  const groups = new Map<string, PartitionGroup>();
+  for (const partition of partitions) {
+    const existing = groups.get(partition.name);
+    if (!existing) {
+      groups.set(partition.name, {
+        name: partition.name,
+        gpuTypes: [...partition.gpu_types],
+        maxTime: partition.max_time ?? null,
+        nodes: partition.nodes ?? null,
+        down: partition.state === "down",
+        gres: partition.gres ?? null,
+      });
+      continue;
+    }
+    for (const gpu of partition.gpu_types) {
+      if (!existing.gpuTypes.includes(gpu)) existing.gpuTypes.push(gpu);
+    }
+    if (existing.nodes !== null && partition.nodes !== undefined && partition.nodes !== null) {
+      existing.nodes += partition.nodes;
+    } else if (existing.nodes === null && partition.nodes !== undefined) {
+      existing.nodes = partition.nodes ?? null;
+    }
+    existing.maxTime ??= partition.max_time ?? null;
+    existing.gres ??= partition.gres ?? null;
+    existing.down ||= partition.state === "down";
+  }
+  return [...groups.values()];
+}
+
 export function gpuTypesFor(entry: ServerEntry, partitionName: string | null): string[] {
   const partitions = entry.discovered?.partitions ?? [];
   const chosen = partitionName ? partitions.find((p) => p.name === partitionName) : undefined;

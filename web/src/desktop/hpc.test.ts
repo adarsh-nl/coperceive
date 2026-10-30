@@ -9,6 +9,7 @@ import {
   formatBytes,
   gpuTypesFor,
   missingExplanations,
+  groupPartitions,
   partitionNames,
   profileSummary,
   reportSummary,
@@ -232,4 +233,17 @@ test("the HPC tab source has no site-specific values or false connection claim",
     assert.ok(!source.includes(forbidden), `hpc.ts must not contain ${forbidden}`);
   }
   assert.ok(!source.includes("cloud gpu partitions"));
+});
+
+test("partitions are grouped one chip per name with GPU types inside", () => {
+  const groups = groupPartitions([
+    { name: "main-cpu", nodes: 8, state: "up", max_time: "4:00:00", gres: "gpu:a100:2", gpu_types: ["a100"] },
+    { name: "main-cpu", nodes: 4, state: "up", max_time: null, gres: "gpu:h100:1", gpu_types: ["h100"] },
+    { name: "cpu", nodes: 32, state: "down", max_time: null, gres: null, gpu_types: [] },
+  ]);
+  assert.strictEqual(groups.length, 2);
+  assert.deepStrictEqual(groups[0].gpuTypes, ["a100", "h100"]);
+  assert.strictEqual(groups[0].nodes, 12);
+  assert.strictEqual(groups[1].down, true);
+  assert.deepStrictEqual(groups[1].gpuTypes, []);
 });

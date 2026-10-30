@@ -172,6 +172,30 @@ pub fn hpc_watch_probe_request() -> Option<HpcWatchProbe> {
     })
 }
 
+/// Test-only server save/reload/edit round trip for the HPC e2e.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HpcServerSaveProbe {
+    pub server: std::path::PathBuf,
+    pub result: std::path::PathBuf,
+}
+
+/// `COPERCEIVE_TEST_HPC_SERVER` (a committed ServerEntry fixture) plus
+/// `COPERCEIVE_TEST_HPC_SAVE_RESULT`, read only in test mode.
+pub fn hpc_server_save_probe_request() -> Option<HpcServerSaveProbe> {
+    if !test_env_active() {
+        return None;
+    }
+    let server = std::env::var("COPERCEIVE_TEST_HPC_SERVER").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_HPC_SAVE_RESULT").ok()?;
+    if server.trim().is_empty() || result.trim().is_empty() {
+        return None;
+    }
+    Some(HpcServerSaveProbe {
+        server: std::path::PathBuf::from(server),
+        result: std::path::PathBuf::from(result),
+    })
+}
+
 /// Test-only request for the packaged-app Browse step: run one real
 /// `coperceive remote scan` against the committed fake-ssh profile and write the
 /// parsed result for `scripts/desktop/e2e_hpc_fake_ssh.sh`.

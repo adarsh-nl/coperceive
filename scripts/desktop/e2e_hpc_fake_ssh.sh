@@ -355,6 +355,82 @@ print(f"E2E_HPC_MARK: scan {case} lists Files-001 as a scene (no datasets)")
 PY
 }
 
+run_save_roundtrip() {
+    local fixture="${FIXTURES_DIR}/cluster-b.json"
+    local result_file="${TMP_DIR}/server-save.json"
+    local state_dir="${TMP_DIR}/server-state"
+    local stdout_log="${TMP_DIR}/server-save.stdout.log"
+    local stderr_log="${TMP_DIR}/server-save.stderr.log"
+    [ -f "${fixture}" ] || fail "fixture missing: ${fixture}"
+    rm -rf "${state_dir}" "${result_file}"
+
+    echo "--- HPC server save/reload/edit round trip ---"
+    COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_STATE_DIR="${state_dir}" \
+    COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
+    COPERCEIVE_TEST_HPC_SERVER="${fixture}" \
+    COPERCEIVE_TEST_HPC_SAVE_RESULT="${result_file}" \
+    "${APP_EXE}" >"${stdout_log}" 2>"${stderr_log}" &
+    APP_PID=$!
+
+    local waited=0
+    while [ ! -s "${result_file}" ]; do
+        if ! kill -0 "${APP_PID}" 2>/dev/null; then
+            fail "app exited before writing the server save result"
+        fi
+        if [ "${waited}" -ge 300 ]; then
+            fail "timed out waiting for the server save result"
+        fi
+        sleep 0.2
+        waited=$((waited + 1))
+    done
+    kill -9 "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+    APP_PID=""
+
+    python3 - "${result_file}" "${state_dir}" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+result_file, state_dir = sys.argv[1], sys.argv[2]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+if not data.get("ok"):
+    print(f"E2E_SAVE_FAIL: {data.get('error')}", file=sys.stderr)
+    sys.exit(1)
+saved_id = data.get("saved_id") or ""
+if not saved_id or saved_id not in (data.get("listed_ids") or []):
+    print(f"E2E_SAVE_FAIL: saved server missing from reload: {data}", file=sys.stderr)
+    sys.exit(1)
+if not data.get("listed_before_edit"):
+    print(f"E2E_SAVE_FAIL: server not listed before edit: {data}", file=sys.stderr)
+    sys.exit(1)
+if not str(data.get("edited_name", "")).endswith("(edited)"):
+    print(f"E2E_SAVE_FAIL: edit not saved: {data}", file=sys.stderr)
+    sys.exit(1)
+if data.get("persisted_name") != data.get("edited_name"):
+    print(f"E2E_SAVE_FAIL: edited name not on disk: {data}", file=sys.stderr)
+    sys.exit(1)
+if data.get("persisted_cpus") != 8:
+    print(f"E2E_SAVE_FAIL: edited resources not on disk: {data}", file=sys.stderr)
+    sys.exit(1)
+store = Path(state_dir) / "servers.json"
+if not store.is_file():
+    print(f"E2E_SAVE_FAIL: server store missing at {store}", file=sys.stderr)
+    sys.exit(1)
+text = store.read_text(encoding="utf-8")
+if saved_id not in text or "(edited)" not in text:
+    print("E2E_SAVE_FAIL: server store does not contain the saved/edited entry", file=sys.stderr)
+    sys.exit(1)
+print(
+    f"E2E_SAVE_MARK: server save/reload/edit verified (id={saved_id}, "
+    f"name={data['persisted_name']}, cpus={data['persisted_cpus']})"
+)
+PY
+    echo "Step verified: HPC server save, reload, list and edit."
+}
+
 # Repo-relative app path is easier to find when CI builds from a subdirectory;
 # run from the repository root so relative fixtures resolve the same way.
 run_profile cluster-a
@@ -384,4 +460,6 @@ scan_ok "cluster-none root" "${SCAN_FILE}" /data/files
 scan_none "cluster-none root" "${SCAN_FILE}"
 echo "Step verified: HPC browse read the no-scheduler server's folders."
 
-echo "HPC e2e verified: profiles, detection, ProxyJump alias, no-scheduler path, run plans and Browse."
+run_save_roundtrip
+
+echo "HPC e2e verified: profiles, detection, ProxyJump alias, no-scheduler path, run plans, Browse, and server save/reload/edit."

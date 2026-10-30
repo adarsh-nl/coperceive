@@ -64,6 +64,38 @@ pub const SCHEDULER_DETECT_SCRIPT: &str = "sh -c '# coperceive-check:scheduler\n
 pub const SINFO_PARTITIONS_SCRIPT: &str = "sh -c '# coperceive-check:sinfo\nsinfo -h -o \"%P|%a|%l|%D|%G\" 2>/dev/null'";
 pub const SCONTROL_PARTITIONS_SCRIPT: &str = "sh -c '# coperceive-check:scontrol\nscontrol show partition 2>/dev/null'";
 
+/// `sinfo -h` can print one row per (partition, node-GRES) combination. The UI
+/// offers one choice per partition, so merge rows with the same name: union the
+/// GPU types and sum the node counts for that partition.
+fn merge_partitions(partitions: Vec<DiscoveredPartition>) -> Vec<DiscoveredPartition> {
+    let mut merged: Vec<DiscoveredPartition> = Vec::new();
+    for partition in partitions {
+        if let Some(existing) = merged.iter_mut().find(|item| item.name == partition.name) {
+            for gpu in partition.gpu_types {
+                if !existing.gpu_types.contains(&gpu) {
+                    existing.gpu_types.push(gpu);
+                }
+            }
+            existing.nodes = match (existing.nodes, partition.nodes) {
+                (Some(left), Some(right)) => Some(left + right),
+                (left, right) => left.or(right),
+            };
+            if existing.max_time.is_none() {
+                existing.max_time = partition.max_time;
+            }
+            if existing.gres.is_none() {
+                existing.gres = partition.gres;
+            }
+            if partition.state.as_deref() == Some("down") {
+                existing.state = Some("down".to_string());
+            }
+        } else {
+            merged.push(partition);
+        }
+    }
+    merged
+}
+
 fn parse_sinfo_line(line: &str) -> Option<DiscoveredPartition> {
     let parts: Vec<&str> = line.split('|').map(str::trim).collect();
     if parts.len() < 5 || parts[0].is_empty() {
@@ -273,7 +305,7 @@ impl SchedulerAdapter for SlurmAdapter {
         let sinfo = self
             .runner
             .run(SINFO_PARTITIONS_SCRIPT, Duration::from_secs(10), None)?;
-        let mut partitions = parse_sinfo_output(&sinfo.stdout);
+        let mut partitions = merge_partitions(parse_sinfo_output(&sinfo.stdout));
         if partitions.is_empty() {
             // `sinfo` can be unavailable on a gateway node; `scontrol show
             // partition` is the documented read-only fallback.
@@ -727,6 +759,22 @@ mod tests {
         assert_eq!(discovery.partitions[1].gpu_types, vec!["h100"]);
         assert!(discovery.partitions[2].gpu_types.is_empty());
         assert_eq!(discovery.partitions[3].state.as_deref(), Some("down"));
+        assert_eq!(discovery.gpu_types, vec!["a100", "h100"]);
+    }
+
+    #[test]
+    fn discover_merges_rows_for_one_partition_and_unions_gpu_types() {
+        let runner = FakeRunner::default().with(
+            "coperceive-check:sinfo",
+            "main-cpu|up|4:00:00|8|gpu:a100:2\nmain-cpu|up|4:00:00|4|gpu:h100:1\ncpu|up|4:00:00|32|(null)\n",
+        );
+        let adapter = SlurmAdapter::new(Box::new(runner));
+        let discovery = adapter.discover().expect("discover");
+        assert_eq!(discovery.partitions.len(), 2);
+        let main = &discovery.partitions[0];
+        assert_eq!(main.name, "main-cpu");
+        assert_eq!(main.gpu_types, vec!["a100", "h100"]);
+        assert_eq!(main.nodes, Some(12));
         assert_eq!(discovery.gpu_types, vec!["a100", "h100"]);
     }
 
