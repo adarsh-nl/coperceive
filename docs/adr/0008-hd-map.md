@@ -110,3 +110,25 @@ Polyline counts at 1.0 m: Town03 1,097 (42,748 vertices), Town06 847 (46,009), T
 - Re-alignment rewrites the manifest transform. It does not rewrite `vertices.bin`.
 - Town07's median, 0.165 m, is larger than the other three towns. Identity still wins by metres. A different CARLA package was not tried.
 - The package SHA-256 above is `sha256sum` of the file downloaded on this machine.
+
+## One-click Town03 install
+
+The desktop app can install Town03 from the Library card or the viewer's "no map" notice
+(`coperceive maps install-town03`, Tauri command `download_town_map`). It downloads one
+OpenDRIVE file — never the CARLA tarball — into a temporary file, verifies the bytes against
+the pinned SHA-256 above, ingests it with `parse_opendrive`/`write_map`, aligns it with
+`align_maps`, and stores the result under `<library_root>/maps/Town03`.
+
+Source used by the installer (public mirror; checked 2026-10-30):
+<https://raw.githubusercontent.com/hihuaweizhu/scenic-carla/master/maps/CARLA/Town03.xodr>.
+Downloaded bytes: 4,589,872, SHA-256
+`abf177bcd9b66cfefb7ac4919f6456815f1384f4229f1343c8a6a90bbb7713c9`, equal to the
+Town03 row above. The manifest records the source URL, SHA-256, licence, licence URL and
+attribution.
+
+Licence, verified against the official **CARLA 0.9.15 README**
+(<https://github.com/carla-simulator/carla/blob/0.9.15/README.md>): CARLA-specific code is
+MIT and the open digital assets (including the town files) are **CC-BY**. That README does
+**not** state a CC-BY version, so the app says "CC-BY", not "CC-BY 4.0", and the manifest
+records `licence: "CC-BY"` with the README URL. The mirror's own README claims MIT for the
+directory; because these bytes are CARLA assets, that claim is not used.

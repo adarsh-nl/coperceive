@@ -63,6 +63,15 @@ impl SidecarSession {
         data_root: &Path,
         allow_origin: Option<&str>,
     ) -> io::Result<Self> {
+        Self::spawn_with_maps(python_bin, data_root, None, allow_origin)
+    }
+
+    pub fn spawn_with_maps(
+        python_bin: &Path,
+        data_root: &Path,
+        maps_root: Option<&Path>,
+        allow_origin: Option<&str>,
+    ) -> io::Result<Self> {
         let port = find_free_loopback_port()?;
         let token = generate_secure_token()?;
 
@@ -91,6 +100,9 @@ impl SidecarSession {
             .arg("--root")
             .arg(data_root);
 
+        if let Some(maps_root) = maps_root {
+            cmd.arg("--maps").arg(maps_root);
+        }
         if let Some(origin) = allow_origin {
             cmd.arg("--allow-origin").arg(origin);
         }

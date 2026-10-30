@@ -766,3 +766,41 @@ export async function listRunHistory(profileId: string, limit = 50): Promise<Run
   }
   throw new Error("The run history is only available in the desktop app.");
 }
+
+export interface TownMapProgress {
+  event?: string;
+  stage?: string;
+  percent?: number;
+  message?: string;
+}
+
+export interface TownMapResult {
+  map_name: string;
+  maps_root: string;
+  directory: string;
+  source: string;
+  licence: string;
+  licence_url: string;
+  sha256: string;
+  alignment: { measured: boolean; chosen?: string; residual_median_m?: number | null };
+}
+
+/** Download, ingest and align the official Town03 map for a library scene. */
+export async function downloadTownMap(scenePath: string): Promise<TownMapResult> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<TownMapResult>("download_town_map", { scenePath });
+  }
+  throw new Error("Map download is only available in the desktop app.");
+}
+
+/** Progress events emitted while the map is downloaded, parsed and aligned. */
+export async function onTownMapProgress(
+  callback: (event: TownMapProgress) => void,
+): Promise<() => void> {
+  if (isTauriEnvironment()) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<TownMapProgress>("town-map-progress", (event) => callback(event.payload));
+  }
+  return () => {};
+}
