@@ -22,6 +22,7 @@ use crate::ssh::{shell_quote, SshTarget};
 const MANIFEST_NAME: &str = ".coperceive-static-manifest";
 const STATIC_REL: &str = ".cache/coperceive/static";
 const SSH_TIMEOUT: Duration = Duration::from_secs(20);
+#[allow(unused)]
 const SCP_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn ssh_bin() -> String {

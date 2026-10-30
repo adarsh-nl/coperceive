@@ -26,6 +26,8 @@ pub type EvalSender = std::sync::mpsc::Sender<serde_json::Value>;
 pub type ExportPicker = Arc<dyn Fn(&str, &str) -> Result<Option<String>, String> + Send + Sync>;
 pub type ExportSaver = Arc<dyn Fn(Option<&str>, Option<&[u8]>) -> Result<String, String> + Send + Sync>;
 pub type FinderRevealer = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+pub type UpdaterChecker = Arc<dyn Fn(bool) -> Result<serde_json::Value, String> + Send + Sync>;
+pub type UpdaterInstaller = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
 
 /// Configuration for the loopback controller.
 #[derive(Clone)]
@@ -41,6 +43,8 @@ pub struct ControllerConfig {
     pub export_picker: Option<ExportPicker>,
     pub export_saver: Option<ExportSaver>,
     pub finder_revealer: Option<FinderRevealer>,
+    pub updater_checker: Option<UpdaterChecker>,
+    pub updater_installer: Option<UpdaterInstaller>,
 }
 
 impl ControllerConfig {
@@ -57,6 +61,8 @@ impl ControllerConfig {
             export_picker: None,
             export_saver: None,
             finder_revealer: None,
+            updater_checker: None,
+            updater_installer: None,
         }
     }
 
@@ -611,6 +617,53 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             }
         } else {
             write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No finder revealer registered\"}")?;
+        }
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/updater-check" {
+        if let Some(ref checker) = config.updater_checker {
+            let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+                Some(b) => b,
+                None => return Ok(()),
+            };
+            let val: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+            let is_manual = val.get("is_manual").and_then(|v| v.as_bool()).unwrap_or(false);
+            match checker(is_manual) {
+                Ok(outcome) => {
+                    let bytes = serde_json::to_vec(&outcome).unwrap_or_default();
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), &bytes)?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 500, "Internal Server Error", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No updater checker registered\"}")?;
+        }
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/updater-install" {
+        if let Some(ref installer) = config.updater_installer {
+            match installer() {
+                Ok(()) => {
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No updater installer registered\"}")?;
         }
         return Ok(());
     }

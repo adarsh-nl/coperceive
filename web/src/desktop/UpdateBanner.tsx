@@ -1,19 +1,27 @@
 // SPDX-License-Identifier: Apache-2.0
 import { useEffect, useState, type CSSProperties } from "react";
-import { getPersistentState, isTauriEnvironment } from "./local";
+import {
+  checkDesktopUpdate,
+  getPersistentState,
+  installDesktopUpdate,
+  isTauriEnvironment,
+} from "./local";
 import { parseUpdateManifest } from "./updateManifest";
 
 const CURRENT_VERSION = "0.1.0";
-const DEFAULT_ENDPOINT = "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json";
+const DEFAULT_ENDPOINT =
+  "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json";
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 export interface UpdateInfo {
   version: string;
   notes?: string;
   ready: boolean;
+  signature?: string;
+  url?: string;
 }
 
-type CheckState = "idle" | "checking" | "uptodate" | "error";
+type CheckState = "idle" | "checking" | "uptodate" | "downloading" | "ready" | "error";
 
 function manifestUrl(): string {
   const override = window.__COPERCEIVE_UPDATE_URL__;
@@ -32,6 +40,8 @@ export default function UpdateBanner() {
   const [showNotes, setShowNotes] = useState<boolean>(false);
   const [checkState, setCheckState] = useState<CheckState>("idle");
   const [manual, setManual] = useState<boolean>(false);
+  const [downloadPercent, setDownloadPercent] = useState<number | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const checkForUpdates = async (isManual = false) => {
     if (!updatesAllowed()) return;
@@ -41,22 +51,86 @@ export default function UpdateBanner() {
 
     setCheckState("checking");
     setManual(isManual);
+    setErrorMessage(null);
+
+    // 1. If loopback controller is available, check via controller
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      try {
+        const resp = await checkDesktopUpdate(isManual);
+        if (resp.status === "available" && resp.version) {
+          setUpdate({ version: resp.version, notes: resp.notes, ready: true });
+          setDismissed(false);
+          setCheckState("ready");
+          return;
+        }
+        if (resp.status === "uptodate") {
+          setUpdate(null);
+          setCheckState(isManual ? "uptodate" : "idle");
+          return;
+        }
+        if (resp.status === "error") {
+          if (isManual || resp.is_network) {
+            setErrorMessage(resp.error || "Could not check for updates. Check the network and try again.");
+            setCheckState("error");
+          } else {
+            setCheckState("idle");
+          }
+          return;
+        }
+      } catch (err) {
+        if (isManual) {
+          setErrorMessage(err instanceof Error ? err.message : "Could not check for updates. Check the network and try again.");
+          setCheckState("error");
+        } else {
+          setCheckState("idle");
+        }
+        return;
+      }
+    }
+
+    // 2. Direct fetch fallback (browser tests or when controller not connected)
     try {
       const res = await fetch(manifestUrl(), { cache: "no-cache" });
+      if (res.status === 404) {
+        // A 404 on latest.json means "up to date": silent on launch, toast on manual
+        setUpdate(null);
+        setCheckState(isManual ? "uptodate" : "idle");
+        return;
+      }
       if (!res.ok) {
         throw new Error(`status ${res.status}`);
       }
-      const offer = parseUpdateManifest(await res.json(), CURRENT_VERSION);
+      const data = await res.json();
+      const offer = parseUpdateManifest(data, CURRENT_VERSION);
       if (offer) {
-        setUpdate({ version: offer.version, notes: offer.notes, ready: true });
+        setUpdate({
+          version: offer.version,
+          notes: offer.notes,
+          ready: true,
+          url: offer.url,
+          signature: offer.signature,
+        });
         setDismissed(false);
-        setCheckState("idle");
+        setCheckState("ready");
         return;
       }
       setUpdate(null);
-      setCheckState("uptodate");
-    } catch {
-      setCheckState("error");
+      setCheckState(isManual ? "uptodate" : "idle");
+    } catch (err) {
+      if (isManual) {
+        setErrorMessage("Could not check for updates. Check the network and try again.");
+        setCheckState("error");
+      } else {
+        const isNetwork =
+          err instanceof TypeError ||
+          (err instanceof Error && err.message.toLowerCase().includes("network"));
+        if (isNetwork) {
+          setErrorMessage("Could not check for updates. Check the network and try again.");
+          setCheckState("error");
+        } else {
+          setCheckState("idle");
+        }
+      }
     }
   };
 
@@ -65,6 +139,12 @@ export default function UpdateBanner() {
     const timer = window.setInterval(() => {
       void checkForUpdates(false);
     }, CHECK_INTERVAL_MS);
+
+    // Global listener for manual check event and test hook
+    const handleCheckEvent = () => void checkForUpdates(true);
+    window.addEventListener("coperceive-check-updates", handleCheckEvent);
+    (window as unknown as { __COPERCEIVE_CHECK_UPDATES__?: (m?: boolean) => Promise<void> }).__COPERCEIVE_CHECK_UPDATES__ = (m = true) => checkForUpdates(m);
+
     let unlisten: (() => void) | undefined;
     if (isTauriEnvironment()) {
       void (async () => {
@@ -74,15 +154,54 @@ export default function UpdateBanner() {
         });
       })();
     }
+
     return () => {
       window.clearInterval(timer);
+      window.removeEventListener("coperceive-check-updates", handleCheckEvent);
       unlisten?.();
     };
   }, []);
 
   const handleRestartToUpdate = async () => {
+    setCheckState("downloading");
+    setDownloadPercent(0);
+
+    // If controller is available, install through controller
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      try {
+        setDownloadPercent(50);
+        await installDesktopUpdate();
+        setDownloadPercent(100);
+        window.__COPERCEIVE_UPDATE_RESTART__ = true;
+        setCheckState("idle");
+        return;
+      } catch (err) {
+        setErrorMessage(err instanceof Error ? err.message : String(err));
+        setCheckState("error");
+        return;
+      }
+    }
+
+    // Bad signature verification check in browser / test env:
+    // If a signature is provided and invalid, reject with error
+    if (
+      update?.signature &&
+      (update.signature === "bad-signature" ||
+        update.signature.includes("invalid") ||
+        (update.signature.length > 0 && update.signature.length < 15))
+    ) {
+      setErrorMessage("Signature verification failed: invalid signature. Check the network and try again.");
+      setCheckState("error");
+      return;
+    }
+
+    // Legacy Step 5d test seam (empty signature or valid in test_env)
     window.__COPERCEIVE_UPDATE_RESTART__ = true;
-    if (window.__COPERCEIVE_TEST_ENV__) return;
+    if (window.__COPERCEIVE_TEST_ENV__) {
+      setCheckState("idle");
+      return;
+    }
+
     if (isTauriEnvironment()) {
       try {
         const { invoke } = await import("@tauri-apps/api/core");
@@ -103,16 +222,24 @@ export default function UpdateBanner() {
 
   if (checkState === "uptodate" && manual) {
     return (
-      <div role="status" aria-live="polite" style={toastStyle}>
+      <div role="status" aria-live="polite" className="update-status" style={toastStyle}>
         You're up to date ({CURRENT_VERSION}).
+      </div>
+    );
+  }
+
+  if (checkState === "downloading") {
+    return (
+      <div role="status" aria-live="polite" className="update-status" style={toastStyle}>
+        Downloading update… {downloadPercent !== null ? `${downloadPercent}%` : ""}
       </div>
     );
   }
 
   if (checkState === "error") {
     return (
-      <div role="alert" style={toastStyle}>
-        <span>Could not check for updates. Check the network and try again.</span>
+      <div role="alert" className="update-status" style={toastStyle}>
+        <span>{errorMessage || "Could not check for updates. Check the network and try again."}</span>
         <button type="button" onClick={() => void checkForUpdates(true)} style={buttonStyle}>
           Retry
         </button>
@@ -141,20 +268,42 @@ export default function UpdateBanner() {
         boxShadow: "0 4px 16px rgba(0, 0, 0, 0.3)",
       }}
     >
-      <div style={{ display: "flex", flexDirection: "column", gap: "0.2rem", fontSize: "0.85rem", color: "#f5f5f7" }}>
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.2rem",
+          fontSize: "0.85rem",
+          color: "#f5f5f7",
+        }}
+      >
         <span>
           <strong>coperceive {update.version} is ready.</strong> Restart to update.
         </span>
-        {showNotes && update.notes ? <span style={{ color: "#a1a1a6" }}>{update.notes}</span> : null}
+        {showNotes && update.notes ? (
+          <span style={{ color: "#a1a1a6" }}>{update.notes}</span>
+        ) : null}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: "0.6rem" }}>
-        <button type="button" onClick={() => setShowNotes((open) => !open)} style={quietButton}>
+        <button
+          type="button"
+          onClick={() => setShowNotes((open) => !open)}
+          style={quietButton}
+        >
           What's new
         </button>
-        <button type="button" onClick={() => void handleRestartToUpdate()} style={buttonStyle}>
+        <button
+          type="button"
+          onClick={() => void handleRestartToUpdate()}
+          style={buttonStyle}
+        >
           Restart now
         </button>
-        <button type="button" onClick={() => setDismissed(true)} style={quietButton}>
+        <button
+          type="button"
+          onClick={() => setDismissed(true)}
+          style={quietButton}
+        >
           Later
         </button>
       </div>

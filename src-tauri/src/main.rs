@@ -67,6 +67,7 @@ pub struct AppState {
     pub viewer_build: Mutex<()>,
     pub replacing_viewer: AtomicBool,
     pub pending_export: coperceive_desktop::export::PendingExportDestination,
+    pub pending_update: Mutex<Option<tauri_plugin_updater::Update>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -84,6 +85,7 @@ impl Default for AppState {
             viewer_build: Mutex::new(()),
             replacing_viewer: AtomicBool::new(false),
             pending_export: coperceive_desktop::export::PendingExportDestination::new(),
+            pending_update: Mutex::new(None),
         }
     }
 }
@@ -726,6 +728,125 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
             let _ = dest_path;
         }
         Ok(())
+    }));
+
+    let check_handle = app_handle.clone();
+    let check_state = app_state.clone();
+    cfg.updater_checker = Some(Arc::new(move |_is_manual: bool| {
+        #[cfg(target_os = "macos")]
+        {
+            use tauri_plugin_updater::UpdaterExt;
+            let mut builder = check_handle.updater_builder();
+            if let Ok(override_url) = std::env::var("COPERCEIVE_UPDATE_URL") {
+                if let Ok(parsed) = tauri::Url::parse(&override_url) {
+                    let _ = builder.endpoints(vec![parsed]);
+                }
+            }
+            let updater = match builder.build() {
+                Ok(u) => u,
+                Err(err) => {
+                    let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Error {
+                        error: err.to_string(),
+                        is_network: false,
+                    };
+                    return Ok(serde_json::to_value(&outcome).unwrap_or_default());
+                }
+            };
+            match tauri::async_runtime::block_on(updater.check()) {
+                Ok(Some(update)) => {
+                    let date_str = update.date.map(|d| d.to_string());
+                    let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Available {
+                        version: update.version.clone(),
+                        current_version: update.current_version.clone(),
+                        notes: update.body.clone(),
+                        pub_date: date_str,
+                    };
+                    if let Ok(mut lock) = check_state.pending_update.lock() {
+                        *lock = Some(update);
+                    }
+                    Ok(serde_json::to_value(&outcome).unwrap_or_default())
+                }
+                Ok(None) => {
+                    let outcome = coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
+                        current_version: env!("CARGO_PKG_VERSION").to_string(),
+                    };
+                    Ok(serde_json::to_value(&outcome).unwrap_or_default())
+                }
+                Err(err) => {
+                    match &err {
+                        tauri_plugin_updater::Error::ReleaseNotFound => {
+                            let outcome = coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
+                                current_version: env!("CARGO_PKG_VERSION").to_string(),
+                            };
+                            Ok(serde_json::to_value(&outcome).unwrap_or_default())
+                        }
+                        _ => {
+                            let is_network = matches!(
+                                err,
+                                tauri_plugin_updater::Error::Reqwest(_) | tauri_plugin_updater::Error::Network(_)
+                            );
+                            let outcome = coperceive_desktop::updater::UpdateCheckOutcome::Error {
+                                error: err.to_string(),
+                                is_network,
+                            };
+                            Ok(serde_json::to_value(&outcome).unwrap_or_default())
+                        }
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(serde_json::json!({"status": "uptodate", "current_version": env!("CARGO_PKG_VERSION")}))
+        }
+    }));
+
+    let install_handle = app_handle.clone();
+    let install_state = app_state.clone();
+    cfg.updater_installer = Some(Arc::new(move || {
+        #[cfg(target_os = "macos")]
+        {
+            let update_opt = {
+                let lock = install_state.pending_update.lock().map_err(|e| e.to_string())?;
+                lock.clone()
+            };
+            let update = match update_opt {
+                Some(u) => u,
+                None => {
+                    use tauri_plugin_updater::UpdaterExt;
+                    let mut builder = install_handle.updater_builder();
+                    if let Ok(override_url) = std::env::var("COPERCEIVE_UPDATE_URL") {
+                        if let Ok(parsed) = tauri::Url::parse(&override_url) {
+                            let _ = builder.endpoints(vec![parsed]);
+                        }
+                    }
+                    let updater = builder.build().map_err(|e| e.to_string())?;
+                    let u = tauri::async_runtime::block_on(updater.check()).map_err(|e| e.to_string())?;
+                    u.ok_or_else(|| "No update available to install".to_string())?
+                }
+            };
+
+            let download_result = tauri::async_runtime::block_on(async {
+                update.download(|_chunk, _total| {}, || {}).await
+            });
+
+            match download_result {
+                Ok(bytes) => {
+                    if coperceive_desktop::test_seams::test_env_active() {
+                        return Ok(());
+                    }
+                    update.install(&bytes).map_err(|e| format!("Installation failed: {e}"))?;
+                    install_handle.restart();
+                }
+                Err(err) => {
+                    Err(format!("Update rejected: {err}"))
+                }
+            }
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            Ok(())
+        }
     }));
 
     let cfg_clone = cfg.clone();
@@ -2288,6 +2409,7 @@ fn main() {
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             get_persistent_state,
