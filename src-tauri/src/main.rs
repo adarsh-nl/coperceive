@@ -856,6 +856,7 @@ fn build_app_menu(
 /// The library's shared maps root, passed to the local server so maps installed
 /// from the Library card (library_root/maps) are found even when the server root
 /// is a single scene directory.
+#[cfg(target_os = "macos")]
 fn library_maps_root() -> Option<PathBuf> {
     let persistent = state::load_state();
     let root = persistent

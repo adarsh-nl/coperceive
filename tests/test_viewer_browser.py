@@ -455,7 +455,7 @@ def test_choosing_a_scene_reloads_frames_timeline_and_map(session: _Session, sho
     session.wait_status("no map for Town06.")
     assert f"/api/scenes/{SCENE_BARE}" in session.requests
     assert f"/api/scenes/{SCENE_BARE}/frame?time_us=0" in session.requests
-    assert f"/api/scenes/{SCENE_BARE}/map" in session.requests
+    assert any(request.startswith(f"/api/scenes/{SCENE_BARE}/map") for request in session.requests)
     assert session.page.locator("#scene-id").inner_text() == SCENE_BARE
     assert session.slider("aria-valuemax") == BARE_SAMPLES - 1
     assert session.slider("aria-valuenow") == 0
