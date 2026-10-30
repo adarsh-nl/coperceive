@@ -66,6 +66,78 @@ pub(crate) fn is_under(child: &str, root: &str) -> bool {
     child == root || child.starts_with(&format!("{root}/"))
 }
 
+/// Scratch templates are expanded inside a job script, so they may contain only
+/// plain path characters plus the four literal tokens Coperceive controls.
+pub fn validate_scratch_template(template: &str) -> Result<(), String> {
+    let text = template.trim();
+    if text.is_empty() {
+        return Err(
+            "A per-user scratch path is required for job work, for example \
+             /scratch/$USER/$SLURM_JOB_ID."
+                .into(),
+        );
+    }
+    if !text.starts_with('/') {
+        return Err(format!(
+            "The scratch folder {text:?} must be an absolute path on the cluster."
+        ));
+    }
+    let mut rest = text;
+    while let Some(index) = rest.find('$') {
+        validate_scratch_plain(&rest[..index])?;
+        let after = &rest[index + 1..];
+        if let Some(stripped) = after.strip_prefix('{') {
+            let Some(end) = stripped.find('}') else {
+                return Err(
+                    "The scratch folder has an unterminated ${...} token; close it with '}'."
+                        .to_string(),
+                );
+            };
+            let name = &stripped[..end];
+            if !matches!(name, "USER" | "SLURM_JOB_ID") {
+                return Err(format!(
+                    "The scratch folder uses ${{{name}}}, which Coperceive does not expand. \
+                     Use $USER or $SLURM_JOB_ID."
+                ));
+            }
+            rest = &stripped[end + 1..];
+        } else {
+            let length = after
+                .char_indices()
+                .take_while(|(_, ch)| ch.is_ascii_alphanumeric() || *ch == '_')
+                .map(|(offset, ch)| offset + ch.len_utf8())
+                .last()
+                .unwrap_or(0);
+            let name = &after[..length];
+            if !matches!(name, "USER" | "SLURM_JOB_ID") {
+                return Err(format!(
+                    "The scratch folder uses ${name}, which Coperceive does not expand. \
+                     Use $USER or $SLURM_JOB_ID."
+                ));
+            }
+            rest = &after[length..];
+        }
+    }
+    validate_scratch_plain(rest)?;
+    if text.split('/').any(|segment| segment == "..") {
+        return Err("The scratch folder may not contain a '..' segment.".to_string());
+    }
+    Ok(())
+}
+
+fn validate_scratch_plain(text: &str) -> Result<(), String> {
+    for ch in text.chars() {
+        if ch.is_ascii_alphanumeric() || matches!(ch, '_' | '.' | '/' | '-') {
+            continue;
+        }
+        return Err(format!(
+            "The scratch folder contains {ch:?}; use only letters, digits, '_', '.', '/', '-' \
+             and the tokens $USER, ${{USER}}, $SLURM_JOB_ID, ${{SLURM_JOB_ID}}."
+        ));
+    }
+    Ok(())
+}
+
 fn static_scratch_prefix(template: &str) -> String {
     let prefix = template.split('$').next().unwrap_or("").trim_end_matches('/');
     if prefix.is_empty() {
@@ -144,13 +216,7 @@ impl ServerProfile {
                 ));
             }
         }
-        if self.scratch_template.trim().is_empty() {
-            return Err(
-                "A per-user scratch path is required for job work, for example \
-                 /scratch/$USER/$SLURM_JOB_ID."
-                    .into(),
-            );
-        }
+        validate_scratch_template(&self.scratch_template)?;
         if self.results_root.trim().is_empty() {
             return Err(
                 "A results root is required: the shared filesystem where run outputs and \
@@ -846,6 +912,36 @@ mod tests {
         assert!(error.contains("command that starts coperceive"), "{error}");
         assert!(error.contains("Python interpreter"), "{error}");
         assert!(!error.contains("coperceive_command"), "{error}");
+    }
+
+    #[test]
+    fn scratch_templates_allow_only_plain_paths_and_known_tokens() {
+        for good in [
+            "/scratch/$USER/$SLURM_JOB_ID",
+            "/scratch/${USER}/${SLURM_JOB_ID}/work",
+            "/local/alice",
+            "/data/scratch_1/run-2",
+        ] {
+            validate_scratch_template(good).unwrap_or_else(|error| panic!("{good}: {error}"));
+        }
+        for bad in [
+            "/scratch/$USER/\"quoted\"",
+            "/scratch/$(id)",
+            "/scratch/`whoami`",
+            "/scratch/$OTHER",
+            "/scratch/${USER",
+            "/scratch/a b",
+            "/scratch/../etc",
+            "scratch/$USER",
+        ] {
+            assert!(
+                validate_scratch_template(bad).is_err(),
+                "{bad} must be refused"
+            );
+        }
+        let error = validate_scratch_template("/scratch/$(id)").expect_err("subshell");
+        assert!(error.contains("scratch folder"), "{error}");
+        assert!(!error.contains("defaults."), "{error}");
     }
 
     #[test]

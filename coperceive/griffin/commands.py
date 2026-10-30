@@ -40,9 +40,16 @@ def download_command(args: object) -> None:
 
 def convert_command(args: object) -> None:
     workers = args.workers  # type: ignore[attr-defined]
+    raw_root = Path(args.raw_root)  # type: ignore[attr-defined]
+    if not raw_root.exists():
+        print(f"Griffin raw root does not exist: {raw_root}", file=sys.stderr)
+        raise SystemExit(1) from None
+    if not raw_root.is_dir():
+        print(f"Griffin raw root is not a directory: {raw_root}", file=sys.stderr)
+        raise SystemExit(1) from None
     try:
         report = convert_griffin(
-            Path(args.raw_root),  # type: ignore[attr-defined]
+            raw_root,
             Path(args.out),  # type: ignore[attr-defined]
             subset=args.subset,  # type: ignore[attr-defined]
             workers=None if workers == 0 else workers,

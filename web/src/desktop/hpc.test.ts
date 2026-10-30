@@ -15,6 +15,7 @@ import {
   profileSummary,
   reportSummary,
   schedulerLabel,
+  scratchTemplateError,
   validateConnectionShape,
   validateDraft,
   type DetectionReport,
@@ -308,4 +309,19 @@ test("a kind-none cluster with infinite walltimes saves after detection, no manu
   assert.strictEqual(discoveredWalltime("infinite"), null);
   assert.strictEqual(discoveredWalltime("UNLIMITED"), null);
   assert.strictEqual(discoveredWalltime("02:30:00"), "02:30:00");
+});
+
+test("scratch templates reject shell syntax but keep the known tokens", () => {
+  for (const good of [
+    "/scratch/$USER/$SLURM_JOB_ID",
+    "/scratch/${USER}/${SLURM_JOB_ID}/work",
+    "/local/alice",
+  ]) {
+    assert.strictEqual(scratchTemplateError(good), null);
+  }
+  for (const bad of ['/scratch/$USER/"quoted"', "/scratch/$(id)", "/scratch/$OTHER", "/scratch/a b"]) {
+    assert.notStrictEqual(scratchTemplateError(bad), null, bad);
+  }
+  const error = scratchTemplateError("/scratch/$(id)");
+  assert.ok(error?.includes("scratch folder"));
 });

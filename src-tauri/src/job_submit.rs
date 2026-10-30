@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::hpc::{EnvironmentKind, JobState, ServerProfile};
-use crate::run_plan::{RunPlan, validate_plan_id};
+use crate::run_plan::{RunPlan, strip_output_dir, validate_plan_id};
 use crate::slurm_adapter::{RemoteRunner, map_slurm_state};
 use crate::ssh::shell_quote;
 
@@ -138,6 +138,19 @@ pub fn load_saved_plan(
     Ok(plan)
 }
 
+/// Always give a job its own scratch subdirectory. The profile template may be a
+/// per-user folder such as `/local/alice`; removing that on exit would delete the
+/// user's whole scratch. A template that already ends in SLURM_JOB_ID is used
+/// as-is because it is already job-owned.
+fn job_scratch_dir(template: &str) -> String {
+    let trimmed = template.trim_end_matches('/');
+    if trimmed.ends_with("$SLURM_JOB_ID") || trimmed.ends_with("${SLURM_JOB_ID}") {
+        trimmed.to_string()
+    } else {
+        format!("{trimmed}/coperceive-${{SLURM_JOB_ID}}")
+    }
+}
+
 /// Renders the complete Slurm job for the full run described by `plan`.
 ///
 /// Deterministic: the same plan and options render the same script, so the
@@ -215,7 +228,7 @@ pub fn render_run_script(
     lines.push("set -euo pipefail".to_string());
     lines.push(format!(
         "SCRATCH_DIR=\"{}\"",
-        profile.scratch_template
+        job_scratch_dir(&profile.scratch_template)
     ));
     lines.push("mkdir -p -m 0700 -- \"$SCRATCH_DIR\"".to_string());
     lines.push("trap 'rm -rf -- \"$SCRATCH_DIR\"' EXIT".to_string());
@@ -231,9 +244,9 @@ pub fn render_run_script(
     ));
 
     let mut command = plan.argv.clone();
-    if command.len() >= 2 && command[command.len() - 2] == "--output-dir" {
-        command.truncate(command.len() - 2);
-    }
+    // The app appends its own --output-dir; remove the plan's copy in either
+    // form so the script cannot contain two different output directories.
+    strip_output_dir(&mut command);
     let run_command = format!("{} --output-dir \"$OUT_DIR\"", quoted_command(&command));
     match plan.environment.kind {
         EnvironmentKind::Container => {
@@ -594,6 +607,63 @@ mod tests {
         assert!(preview.script.contains("--output-dir \"$OUT_DIR\""));
         assert!(!preview.script.contains("--max-frames"));
         assert!(!preview.script.contains("sbatch "));
+    }
+
+    #[test]
+    fn the_exit_trap_only_removes_a_job_owned_scratch_directory() {
+        let mut profile = profile("ps");
+        profile.scratch_template = "/local/alice".to_string();
+        let plan = plan(&profile);
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(
+            preview
+                .script
+                .contains("SCRATCH_DIR=\"/local/alice/coperceive-${SLURM_JOB_ID}\""),
+            "{}",
+            preview.script
+        );
+        assert!(preview
+            .script
+            .contains("trap 'rm -rf -- \"$SCRATCH_DIR\"' EXIT"));
+        assert!(!preview.script.contains("rm -rf -- \"/local/alice\""));
+        assert!(!preview.script.contains("rm -rf -- /local/alice"));
+
+        profile.scratch_template = "/local/alice/$SLURM_JOB_ID".to_string();
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(preview
+            .script
+            .contains("SCRATCH_DIR=\"/local/alice/$SLURM_JOB_ID\""));
+        assert!(!preview.script.contains("coperceive-${SLURM_JOB_ID}"));
+    }
+
+    #[test]
+    fn a_scratch_template_with_quotes_or_a_subshell_is_refused_before_rendering() {
+        let mut profile = profile("ps");
+        let plan = plan(&profile);
+        for bad in ["/scratch/\"quoted\"", "/scratch/$(id)"] {
+            profile.scratch_template = bad.to_string();
+            let error = render_run_script(&profile, &plan, &SubmitOptions::default())
+                .expect_err("unsafe scratch template");
+            assert!(error.contains("scratch folder"), "{bad}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_equals_form_output_dir_is_not_duplicated() {
+        let profile = profile("ps");
+        let mut plan = plan(&profile);
+        plan.argv = vec![
+            "/usr/bin/python3".to_string(),
+            "/data/code/pipelines/contract_pipeline.py".to_string(),
+            "--output-dir=/tmp/elsewhere".to_string(),
+        ];
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(preview.script.contains("--output-dir \"$OUT_DIR\""));
+        assert!(!preview.script.contains("/tmp/elsewhere"));
+        assert_eq!(preview.script.matches("--output-dir").count(), 1);
     }
 
     #[test]
