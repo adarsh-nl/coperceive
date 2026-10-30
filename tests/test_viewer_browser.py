@@ -1136,3 +1136,76 @@ def test_export_dialog_native_flow(session: _Session, tmp_path: Path) -> None:
     assert "pick_save_path" in cmds
     assert "save_exported_file" in cmds
     assert "reveal_in_finder" in cmds
+
+
+def test_identifier_inputs_have_autocapitalize_and_autocorrect_disabled(
+    session: _Session,
+) -> None:
+    """Identifier, host, user, path and partition inputs disable auto-capitalisation."""
+    session.page.goto(f"{session.base}/#/connect", wait_until="networkidle")
+
+    # 1. Connect screen storage path input (under Open Folder tab)
+    session.page.click("button:has-text('Open Folder')")
+    data_root = session.page.locator("input[aria-label='Selected dataset folder']")
+    assert data_root.count() == 1
+    assert data_root.get_attribute("autocapitalize") == "off"
+    assert data_root.get_attribute("autocorrect") == "off"
+    assert data_root.get_attribute("spellcheck") == "false"
+    assert data_root.get_attribute("autocomplete") == "off"
+
+    # 2. HPC Workspace Add server inputs
+    session.page.click("button:has-text('HPC Workspace')")
+    add_btn = session.page.locator("button:has-text('Add server')").first
+    add_btn.click()
+
+    expected_ids = [
+        "hpc-name",
+        "hpc-host",
+        "hpc-user",
+        "hpc-data-root",
+        "hpc-scratch",
+        "hpc-results-root",
+        "hpc-code-roots",
+        "hpc-partition",
+        "hpc-time",
+        "hpc-cpus",
+        "hpc-mem",
+        "hpc-interpreter",
+        "hpc-wheelhouse",
+    ]
+    for field_id in expected_ids:
+        inp = session.page.locator(f"#{field_id}")
+        assert inp.count() == 1, f"Missing #{field_id}"
+        assert inp.get_attribute("autocapitalize") == "off", f"{field_id} autocapitalize"
+        assert inp.get_attribute("autocorrect") == "off", f"{field_id} autocorrect"
+        assert inp.get_attribute("spellcheck") == "false", f"{field_id} spellcheck"
+        assert inp.get_attribute("autocomplete") == "off", f"{field_id} autocomplete"
+
+    # Conditional environment inputs
+    session.page.select_option("#hpc-env-kind", "modules")
+    modules_inp = session.page.locator("#hpc-modules")
+    assert modules_inp.count() == 1
+    assert modules_inp.get_attribute("autocapitalize") == "off"
+    assert modules_inp.get_attribute("autocorrect") == "off"
+    assert modules_inp.get_attribute("spellcheck") == "false"
+    assert modules_inp.get_attribute("autocomplete") == "off"
+
+    session.page.select_option("#hpc-env-kind", "container")
+    img_inp = session.page.locator("#hpc-image")
+    assert img_inp.count() == 1
+    assert img_inp.get_attribute("autocapitalize") == "off"
+    assert img_inp.get_attribute("autocorrect") == "off"
+    assert img_inp.get_attribute("spellcheck") == "false"
+    assert img_inp.get_attribute("autocomplete") == "off"
+
+    # 3. Typing lowercase values retains them without transformation
+    user_input = session.page.locator("#hpc-user")
+    user_input.fill("")
+    user_input.press_sequentially("nanjaiyalatha")
+    assert user_input.input_value() == "nanjaiyalatha"
+
+    session.page.select_option("#hpc-scheduler", "slurm")
+    partition_input = session.page.locator("#hpc-partition")
+    partition_input.fill("")
+    partition_input.press_sequentially("ps")
+    assert partition_input.input_value() == "ps"

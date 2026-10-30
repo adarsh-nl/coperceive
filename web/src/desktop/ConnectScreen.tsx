@@ -13,6 +13,7 @@ import {
 } from "./local";
 import type { ConnectionSession } from "./types";
 import { BrandWordmark } from "./Brand";
+import IdentifierInput from "./IdentifierInput";
 import HpcWorkspace from "./HpcWorkspace";
 import LibraryScreen from "./LibraryScreen";
 import GetDataScreen from "./GetDataScreen";
@@ -403,7 +404,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               )}
 
               <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
-                <input
+                <IdentifierInput
                   type="text"
                   readOnly
                   placeholder="No directory selected..."

@@ -2790,6 +2790,137 @@ print("Step 5g verified: Library badge ran in the background and its answer is c
 EOF
 
 echo ""
+echo "--- Step 5h: macOS Auto-capitalization Disabled in Real App ---"
+python3 - <<EOF
+import json
+import time
+import urllib.request
+import subprocess
+
+port = ${RELAUNCH_PORT}
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+# 1. Click HPC Workspace tab
+res = eval_js("""(() => {
+    const tab = Array.from(document.querySelectorAll('nav button')).find(b => (b.textContent || '').trim() === 'HPC Workspace');
+    if (!tab) return 'missing_hpc_tab';
+    tab.click();
+    return 'clicked';
+})()""")
+print(f"Step 5h HPC tab navigation: {res}")
+time.sleep(0.5)
+
+# 2. Click Add server button if editor is not open
+res = eval_js("""(() => {
+    if (document.getElementById('hpc-user')) return 'already_open';
+    const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Add server');
+    if (!btn) return 'missing_add_server';
+    btn.click();
+    return 'clicked';
+})()""")
+print(f"Step 5h Add server button: {res}")
+time.sleep(0.5)
+
+# 3. Assert HTML attributes disable platform autocorrect and autocapitalize
+attrs = json.loads(eval_js("""(() => {
+    const ids = [
+        'hpc-name', 'hpc-host', 'hpc-user', 'hpc-data-root', 'hpc-scratch',
+        'hpc-results-root', 'hpc-code-roots', 'hpc-partition', 'hpc-time',
+        'hpc-cpus', 'hpc-mem', 'hpc-interpreter', 'hpc-wheelhouse'
+    ];
+    const out = {};
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (!el) {
+            out[id] = null;
+            continue;
+        }
+        out[id] = {
+            autocapitalize: el.getAttribute('autocapitalize'),
+            autocorrect: el.getAttribute('autocorrect'),
+            spellcheck: el.getAttribute('spellcheck'),
+            autocomplete: el.getAttribute('autocomplete'),
+        };
+    }
+    return JSON.stringify(out);
+})()"""))
+
+for field_id, field_attrs in attrs.items():
+    assert field_attrs is not None, f"Input #{field_id} not found in DOM"
+    assert field_attrs["autocapitalize"] == "off", f"#{field_id} autocapitalize != off: {field_attrs}"
+    assert field_attrs["autocorrect"] == "off", f"#{field_id} autocorrect != off: {field_attrs}"
+    assert field_attrs["spellcheck"] == "false", f"#{field_id} spellcheck != false: {field_attrs}"
+    assert field_attrs["autocomplete"] == "off", f"#{field_id} autocomplete != off: {field_attrs}"
+
+print("Step 5h verified: all HPC form inputs specify autocapitalize=off, autocorrect=off, spellcheck=false, autocomplete=off.")
+
+# 4. Type lowercase values via System Events and assert they remain unchanged (not auto-capitalized by macOS)
+# Select Slurm scheduler so partition field is enabled
+eval_js("""(() => {
+    const sel = document.getElementById('hpc-scheduler');
+    if (sel) {
+        sel.value = 'slurm';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+})()""")
+time.sleep(0.2)
+
+cases = [
+    ("hpc-user", "nanjaiyalatha"),
+    ("hpc-partition", "ps"),
+    ("hpc-host", "hpc-head1"),
+]
+
+for field_id, text in cases:
+    # Focus field and clear it
+    eval_js(f"""(() => {{
+        const el = document.getElementById('{field_id}');
+        if (!el) return 'missing';
+        el.focus();
+        el.value = '';
+        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        return 'focused';
+    }})()""")
+    time.sleep(0.2)
+
+    # Use AppleScript System Events to keystroke the text into the focused field
+    as_script = f'''
+    tell application "System Events"
+        tell process "Coperceive"
+            set frontmost to true
+            keystroke "{text}"
+        end tell
+    end tell
+    '''
+    subprocess.run(["osascript", "-e", as_script], check=True)
+    time.sleep(0.3)
+
+    val = eval_js(f"(() => (document.getElementById('{field_id}') || {{}}).value)()")
+    assert val == text, f"Expected typed value '{text}', got '{val}' (auto-capitalisation bug!)"
+    print(f"Step 5h typed #{field_id}: '{val}' (matched expected lowercase)")
+
+# 5. Close server editor
+eval_js("""(() => {
+    const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Close');
+    if (btn) btn.click();
+})()""")
+
+print("Step 5h verified: text inputs disable macOS auto-capitalisation, typed lowercase values stay unchanged.")
+EOF
+
+echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"
 osascript <<EOF || true
 tell application "System Events"

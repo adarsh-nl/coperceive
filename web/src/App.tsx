@@ -441,6 +441,9 @@ export default function App() {
                     <input
                       id="token-global"
                       type="password"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
                       autoComplete="off"
                       value={token}
                       onChange={(event) => setToken(event.target.value)}
@@ -473,6 +476,10 @@ export default function App() {
             <Label htmlFor="echo-arg">Text for echo</Label>
             <input
               id="echo-arg"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="off"
               value={argument}
               onChange={(event) => setArgument(event.target.value)}
             />
@@ -526,6 +533,9 @@ export default function App() {
             <input
               id="token"
               type="password"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               autoComplete="off"
               value={token}
               onChange={(event) => setToken(event.target.value)}
@@ -542,6 +552,10 @@ export default function App() {
               <Label htmlFor="file-path">Relative path</Label>
               <input
                 id="file-path"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 value={filePath}
                 onChange={(event) => setFilePath(event.target.value)}
                 placeholder="note.txt"
