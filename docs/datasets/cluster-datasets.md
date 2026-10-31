@@ -248,12 +248,12 @@ return JSON and use the saved server profile and `coperceive_command`.
 
 | Tauri command | arguments | returns |
 | --- | --- | --- |
-| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": number, "gres": null, "estimated_cache_bytes": number, "script": string, "preview_hash": string }` |
+| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": number, "gres": null, "estimated_cache_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
 | `dataset_prepare_submit` | `{ "profileId": string, "previewHash": string, "confirmed": boolean }` | `{ "job_id": string, "state": "pending"\|"running"\|"completed"\|"failed"\|"cancelled"\|"unknown", "queue_reason": string \| null, "plan_id": string }` |
 | `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null }` | `coperceive-cluster-scene-status-1` document |
 | `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
 
-`scenes` omitted means all scenes, same as `"all"`. `split` is `null` only for
+`scenes` omitted means all scenes, same as `"all"`. `workers` is optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview's `cpus_per_task` is exactly the workers actually used, and the script passes the same `--workers`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
 Griffin. `dataset_prepare` renders the full script but submits nothing.
 `dataset_prepare_submit` requires the exact `preview_hash`; a changed preview or
 an unconfirmed call submits nothing and returns a plain error. The preview is
