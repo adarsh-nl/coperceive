@@ -30,6 +30,7 @@ pub trait RemoteRunner: Send + Sync {
 
 /// SSH-backed runner. The remote command line is built locally with quoted
 /// arguments (or fixed scripts), never from raw user input.
+#[derive(Clone)]
 pub struct SshRunner {
     pub ssh_bin: String,
     pub target: SshTarget,

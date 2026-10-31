@@ -149,7 +149,7 @@ pub fn load_saved_plan(
 /// per-user folder such as `/local/alice`; removing that on exit would delete the
 /// user's whole scratch. A template that already ends in SLURM_JOB_ID is used
 /// as-is because it is already job-owned.
-fn job_scratch_dir(template: &str) -> String {
+pub(crate) fn job_scratch_dir(template: &str) -> String {
     let trimmed = template.trim_end_matches('/');
     if trimmed.ends_with("$SLURM_JOB_ID") || trimmed.ends_with("${SLURM_JOB_ID}") {
         trimmed.to_string()
@@ -368,7 +368,7 @@ fn validate_plan_destinations(profile: &ServerProfile) -> Result<(), String> {
 }
 
 /// Parses `sbatch --parsable` output and requires a numeric job id.
-fn parse_job_id(stdout: &str) -> Result<String, String> {
+pub(crate) fn parse_job_id(stdout: &str) -> Result<String, String> {
     let first = stdout
         .split_whitespace()
         .next()

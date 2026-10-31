@@ -88,6 +88,8 @@ against them.
     "truncated": false
   },
   "cache": {"relative_path": "coperceive-cache/opv2v/3b1e2f0a9c77/test"},
+  "estimated_cache_bytes": 2147483648,
+  "estimated_cache_bytes_method": "sum of file sizes under each scene directory, metadata only",
   "scene_count": 16,
   "scenes": [
     {
@@ -112,6 +114,10 @@ against them.
   the split directory (or the raw root when there is no split): relative path,
   type, size and `mtime_ns`, sorted, SHA-1. `entries` counts metadata entries
   visited; `truncated` is true when `--max-entries`/`--timeout` stopped it.
+- `estimated_cache_bytes` is additive: cached scene files are approximately the
+  raw scene files, so it is the sum of file sizes under each scene directory
+  (metadata only, no file contents). `estimated_cache_bytes_method` records that
+  rule. It is an estimate, not a promise.
 - `cache.relative_path` is relative to `results_root` and is exactly the layout
   above; the full cache is `<results_root>/<relative_path>`.
 - `duration_s` is cheap: `sample_count × adapter clock scale`, not measured from
@@ -216,7 +222,8 @@ scene to its Slurm job.
 - Preparation is scheduled: CPU only (no GRES), `--cpus-per-task` equal to
   `--workers`, a per-job scratch subdirectory, the existing preview/confirm
   hash, and a per-scene temporary directory moved into the cache atomically.
-- One failed scene does not stop the rest; its `reason` is kept.
+- One failed scene does not stop the rest; its `reason` is kept. The claim takeover threshold is a fixed four hours, so the prepare
+  job walltime must stay at or below four hours (the default is four hours).
 - Nothing derived from licensed/unknown raw data is written to this repository;
   fixtures are synthetic.
 
@@ -233,3 +240,31 @@ documents above unchanged (they do not re-shape them):
 Both are read-only and use the profile's saved `coperceive_command` argv. A
 failed remote command returns a plain error string; a successful `detect` with
 no match returns `status:"none"` (not an error).
+
+
+## Desktop prepare/status/open commands (frozen)
+
+These names and argument shapes are the second half of the UI contract. All
+return JSON and use the saved server profile and `coperceive_command`.
+
+| Tauri command | arguments | returns |
+| --- | --- | --- |
+| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": number, "gres": null, "estimated_cache_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
+| `dataset_prepare_submit` | `{ "profileId": string, "previewHash": string, "confirmed": boolean }` | `{ "job_id": string, "state": "pending"\|"running"\|"completed"\|"failed"\|"cancelled"\|"unknown", "queue_reason": string \| null, "plan_id": string }` |
+| `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null }` | `coperceive-cluster-scene-status-1` document |
+| `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
+
+`scenes` omitted means all scenes, same as `"all"`. `workers` is optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview's `cpus_per_task` is exactly the workers actually used, and the script passes the same `--workers`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
+Griffin. `dataset_prepare` renders the full script but submits nothing.
+`dataset_prepare_submit` requires the exact `preview_hash`; a changed preview or
+an unconfirmed call submits nothing and returns a plain error. The preview is
+the existing job-submit preview shape plus the additive
+`estimated_cache_bytes`, and its script contains a `# No GPU requested
+(CPU-only job).` line, the job-owned scratch subdirectory trap, and
+`--cpus-per-task` equal to `--workers`.
+
+`dataset_open` serves the **cache split directory**, not the raw root, so the
+viewer's scene list is exactly the ready cache scenes. It reuses an existing
+remote session for the same cache directory when one is running; `sceneId` is
+the requested first scene and does not prepare anything by itself (the UI calls
+`dataset_prepare` for a priority scene first).

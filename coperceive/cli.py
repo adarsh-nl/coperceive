@@ -303,6 +303,23 @@ def build_parser() -> argparse.ArgumentParser:
     dry_run_parser.add_argument("--dest", required=True, help="Destination directory.")
     dry_run_parser.set_defaults(func=_dataset_dry_run)
 
+    prepare_parser = dataset_sub.add_parser(
+        "prepare", help="Prepare selected scenes into the cluster cache (CPU-only)."
+    )
+    prepare_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
+    prepare_parser.add_argument("--raw-root", required=True)
+    prepare_parser.add_argument("--cache", required=True, help="The split cache directory.")
+    prepare_parser.add_argument("--scenes", default=None, help="Comma-separated scene ids.")
+    prepare_parser.add_argument("--all", action="store_true", help="Prepare every scene.")
+    prepare_parser.add_argument("--workers", type=int, default=1)
+    prepare_parser.set_defaults(func=_dataset_prepare)
+
+    status_parser = dataset_sub.add_parser(
+        "status", help="Per-scene states from a cache directory."
+    )
+    status_parser.add_argument("--cache", required=True)
+    status_parser.set_defaults(func=_dataset_status)
+
     detect_parser = dataset_sub.add_parser(
         "detect", help="Identify a raw cluster dataset's built-in adapter and split."
     )
@@ -563,6 +580,58 @@ def _export_rerun(args: argparse.Namespace) -> None:
         raise SystemExit(2) from exc
     print(f"wrote {args.out}")
     print(f"samples {samples}")
+
+
+def _dataset_prepare(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.cluster_datasets import DatasetError, prepare_cluster_dataset
+
+    scenes = (
+        None if args.all or not args.scenes else [part for part in args.scenes.split(",") if part]
+    )
+
+    def progress(event: dict[str, object]) -> None:
+        print(json.dumps(event), flush=True)
+
+    try:
+        status = prepare_cluster_dataset(
+            args.adapter,
+            args.raw_root,
+            args.cache,
+            scenes=scenes,
+            workers=max(1, args.workers),
+            progress=progress,
+        )
+    except (DatasetError, ValueError, OSError) as exc:
+        print(
+            json.dumps(
+                {"schema": "coperceive-cluster-scene-status-1", "error": str(exc)},
+                indent=2,
+            )
+        )
+        raise SystemExit(1) from None
+    print(json.dumps(status, indent=2))
+    if any(scene["state"] == "failed" for scene in status.get("scenes", [])):
+        raise SystemExit(2)
+
+
+def _dataset_status(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.cluster_datasets import DatasetError, dataset_status_document
+
+    try:
+        status = dataset_status_document(args.cache)
+    except (DatasetError, ValueError, OSError) as exc:
+        print(
+            json.dumps(
+                {"schema": "coperceive-cluster-scene-status-1", "error": str(exc)},
+                indent=2,
+            )
+        )
+        raise SystemExit(1) from None
+    print(json.dumps(status, indent=2))
 
 
 def _dataset_detect(args: argparse.Namespace) -> None:
