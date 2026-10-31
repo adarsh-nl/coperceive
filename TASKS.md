@@ -1,7 +1,7 @@
 ---
 tags: [tasks, coperceive]
 created: 2026-10-21
-updated: 2026-10-23
+updated: 2026-10-31
 repo: https://github.com/adarsh-nl/coperceive
 ---
 # coperceive: master task list
@@ -20,26 +20,28 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-10-26 |
+| Last updated | 2026-10-31 |
 | `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
-| `feat/desktop` | `5d5c98b`. 79 commits ahead of `main`, 1 behind. Not merged. Do not rebase `feat/m2-import` onto `main` until Adarsh merges this. |
-| `feat/m2-import` | `8056ef6` (merge of PR #24). Last pre-merge green run [40311840281](https://github.com/adarsh-nl/coperceive/actions/runs/40311840281) (9/9) at `a6d51ca`; the merge-tip run is CI 40324034567. |
+| `feat/desktop` | Merged into `feat/m2-import`. |
+| `feat/m2-import` | `0d0865e` (merge of PR #86). Last pre-merge green run [41229196435](https://github.com/adarsh-nl/coperceive/actions/runs/41229196435) (11/11) at `a1f5d35`. |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
-| Current milestone | **M2: data without the terminal** |
-| Top blocker | **M1-6 merge `feat/desktop` → `main`** (Adarsh). Do not rebase `feat/m2-import` until that merge. |
-| Open agent branch | `agent/deepseek-hdiutil-flake` (desktop-macos `hdiutil: create failed - Resource busy` CI flake, round 4). Draft PR to `feat/m2-import`; CI proof below. |
-| Last merged agent branch | `agent/deepseek-library-validation-badge` (cached background validation badge in Library). Draft PR #25; green run [40313946425](https://github.com/adarsh-nl/coperceive/actions/runs/40313946425) (9/9) at `2e3343c`; this branch now carries the `8056ef6` base (#24 merged). |
+| Current milestone | **M2 completion & cluster dataset visualization** |
+| Top blocker | Cluster datasets merge (PR #87 backend + PR #88 UI), then `feat/m2-import` → `main` merge (Adarsh). |
+| Open agent branches / PRs | #87 (`agent/deepseek-cluster-datasets-2`), #88 (`agent/agy-cluster-datasets-ui`), this docs PR (`agent/agy-tasks-refresh`). |
+| Last merged agent branch | `agent/agy-ci-speed` (CI acceleration, warm cache 5m55s, path filtering, PR-scoped concurrency). PR #86, merge `0d0865e`. |
 
 ## Key docs in the repo
-- `HANDOVER.md`: long engineering log (cleanup task below)
+- `HANDOVER.md`: long engineering log
+- `docs/ci.md`: CI pipeline architecture, caching hit rates, and empirical wall-clock metrics
+- `docs/datasets/cluster-datasets.md`: cluster datasets JSON schemas and frozen desktop command contract
 - `docs/spec/format.md`: Schema 1 scene format (the contract)
 - `docs/adr/`: decisions 0001–0014. Desktop is `0014-desktop-app.md`
 - `docs/design/griffin-verification.md`: verified Griffin facts
 - `docs/design/viewer-directions-2026-10-18/`: Claude Design source for the Connect backdrop (1b Ledger)
-- `scripts/desktop/`: `bundle_python.sh`, `smoke_test.sh`, `e2e_mac.sh` (real-app UI test)
-- `src-tauri/src/`: `main.rs`, `sidecar.rs`, `controller.rs`, `state.rs`
+- `scripts/desktop/`: `bundle_python.sh`, `smoke_test.sh`, `e2e_mac.sh` (real-app UI test), `build_dmg.sh`
+- `src-tauri/src/`: `main.rs`, `sidecar.rs`, `controller.rs`, `state.rs`, `cluster_datasets.rs`, `job_submit.rs`, `updater.rs`
 - `web/src/`: `App.tsx`, `desktop/`, `viewer/Viewer.tsx`, `viewer/playback.ts`, `desktop/backdrop/`
 
 ## Rules (non-negotiable)
@@ -73,7 +75,7 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~Eval engine step A and step B (ADR 0010), live model plugins over NDJSON on stdio (ADR 0011), Griffin with 4 models~~
 - [x] ~~Real Griffin eval run (Task 12). Drone and fusion match the paper within 0.001~~
 
-## ✅ Done: desktop app (on `feat/desktop`)
+## ✅ Done: desktop app (on `feat/desktop` & merged to `feat/m2-import`)
 - [x] ~~ADR 0014: Tauri v2; local mode plus HPC-over-SSH mode; python-build-standalone; unsigned dmg for now~~
 - [x] ~~Real Tauri v2 app (not a console stub): window, folder picker, invoke commands, `tauri build` in CI~~
 - [x] ~~Bundled Python 3.13.1 (pinned SHA-256) with hash-locked dependencies (`requirements-darwin-arm64.lock`, `--require-hashes`)~~
@@ -103,85 +105,57 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~CI uploads the dmg only (80.1 MB, down from 353 MB)~~
 - [x] ~~Animated Connect backdrop from design 1b "Ledger": 60 s, 3-chapter seamless loop, reduced-motion still frame, 30 fps cap, DPR ≤ 2, pause when hidden, media committed~~
 
+## ✅ Done: M2 & Desktop Polish (merged through PR #86 on `feat/m2-import`)
+- [x] ~~Storage & Library location: prompt on first use, save `library_root` in `state.json`, show volume free/used space, Settings → Storage (relocate with progress, Show in Finder).~~
+- [x] ~~M2a `coperceive scene pack`: self-contained scene, reject path traversal, `.partial` staging, resume on size+sha256, write `COMPLETE.json` last then rename. `--images full|preview|none`. Headroom check.~~
+- [x] ~~M2b Import from folder in desktop app: imported scene lands in `library_root`. Cancel leaves resumable `.partial`.~~
+- [x] ~~Dataset catalog ("Get data"): versioned `catalog/datasets.yaml`, preset dry-run, headroom check, license checkbox, Pause/Resume/Cancel, auto-open on completion.~~
+- [x] ~~Library screen: scene table/grid, metadata, cached background validation badge (`validation_cache` in `state.json`), Open, Finder, Validate now, Delete.~~
+- [x] ~~Brand & Icon: lowercase monospace wordmark `coperceive` + orange-red cursor token `#D9482B`. App icon redrawn on standard macOS grid with rounded-rect body and margin (#78 `3c47b36`). Site favicon aligned.~~
+- [x] ~~Native Edit menu: Undo, Redo, Cut, Copy, Paste, Select All with keyboard shortcuts (#74 `1c713b3`).~~
+- [x] ~~Auto-update: Tauri v2 updater plugin with minisign verification, quiet 404, prompt banner/toast ("Restart to update"), Help → Check for Updates… (#77 `7212bff`). Stripped insecure transport protocol, gated endpoint overrides behind test seams.~~
+- [x] ~~Viewer layout & resizable panels: drag handles with clamping and reset, `state.json` persistence, full-screen 3D view (`F` / Esc), wordmark navigation to Library, playback stall bounded to ≤ 350 ms (#80 `eb93acd`).~~
+- [x] ~~Town03 map: button layout formatted as full-width secondary button above row actions (#80 `eb93acd`).~~
+- [x] ~~Input field hygiene: autocapitalize/autocorrect disabled on all identifier/server inputs (#72 `1c713b3`).~~
+- [x] ~~CI pipeline acceleration: Rust cache (`Swatinem/rust-cache@v2`), bundled Python standalone caching, pip wheels cache, path filtering for docs/python-only PRs, PR-scoped concurrency cancellation, warm-cache `desktop-macos` down to 5m 55s (#86 `0d0865e`).~~
+- [x] ~~Pre-push hook: `scripts/install_git_hooks.sh` catches ruff/pyright/lint errors locally prior to push (#86 `0d0865e`).~~
+
+## ✅ Done: M3 HPC Foundation (merged through PR #86 on `feat/m2-import`)
+- [x] ~~HPC Server Profiles: remote server profiles, read-only bounded detection, path normalization, safe containment, secret-free persistence in `state.json` (#40, #41, #70, #76, #79).~~
+- [x] ~~Remote Browse: non-blocking remote folder traversal with symlink handling and directory listing (#39, #83).~~
+- [x] ~~Run-Plan Builder & Job Submit: CPU-only and GPU selection per job type, `# No GPU requested`, preview hash + confirm required, sbatch stdin (#42, #52, #81, #82).~~
+- [x] ~~Job Monitor & Watch: squeue polling, queue reason in plain language, log streaming, auto-stop on job completion (#52, #84).~~
+- [x] ~~Results View & Cache Synchronization: partial-cache serving, remote static artifact serving over SSH tunnel (#60, #84).~~
+- [x] ~~Cluster Datasets Specification & Contract: `docs/datasets/cluster-datasets.md` defining JSON schemas and frozen desktop command contract; read-only `dataset_detect` and `dataset_index` Tauri commands (#85 `30d2a82`).~~
+
 ---
 
-## 🔴 NOW: M1 close-out (do in this order)
-- [x] ~~**M1-0 · P0 · Play "starts then stops".**~~ (`6ec22ad` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
-  - [x] ~~Play within the end zone (last 5% or 2 s, whichever is larger) rewinds to 0. One helper shared by the button and Space.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
-  - [x] ~~Resume never restores into the end zone.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
-  - [x] ~~Loop defaults ON for scenes under 60 s; the user's choice persists in `state.json` `last_loop`. e2e step 2b: loop off, quit, relaunch, still off.~~ (`f3820a0` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
-  - [x] ~~Loop off at the end shows a Replay state on the play button.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
-  - [x] ~~Playback never pauses while images load.~~ The clock is `setTimeout` from `indexAfter` (`Viewer.tsx` playback effect). Image decode is a separate effect. `paintWait` is only used by export. (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
-  - [x] ~~e2e: resume at 148/149 → Play → still playing 3 s later (≥25 samples); Replay flow; 15 s across the wrap with no gap over 300 ms.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
-- [x] ~~**M1-1 · P1 · Tighten serve CORS** (c4358b4/2c90678 allow any localhost port plus credentials). Use the exact viewer origin via `--allow-origin`, `allow_credentials=False`, minimal methods and headers. Or navigate the viewer to the new sidecar origin on switch and drop CORS. Add tests for a foreign origin and the real origin.~~ (`bf36d0d` · [39688720618](https://github.com/adarsh-nl/coperceive/actions/runs/39688720618))
-- [x] ~~**M1-2 · P1 · e2e for scene → multi-scene root switch** (the case that failed on the Mac).~~ Step 3b asserts the layer flags, agent visibility, and viewpoint from before the switch, and that every tagged mesh or point cloud belongs to the new scene's load and matches that scene's frame 0 counts. The desktop job is green, so those asserts passed. (`d35dddd` · [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622))
-- [x] ~~**M1-3 · P2 · Validation requires `COMPLETE.json`** next to `manifest.json`.~~ Rust `validate_dataset_root` and Python `serve` / `GET /api/scenes` both require the pair. (`f3820a0` · [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428))
-- [x] ~~**M1-4 · P2 · Report the backdrop's measured CPU** (target: median under 5% of one core at 1280×800, animated).~~ `COPERCEIVE_FORCE_MOTION=1` with `COPERCEIVE_TEST_ENV`, first 5 s dropped, 60 samples. Median 0.6, p95 0.8, motion `animated`. Numbers in `docs/media/measurements/backdrop-cpu.md`. The [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) samples do not count (`reduceMotion=1`). (`d35dddd` · [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622))
-- [x] ~~**M1-5 · Mac acceptance (Adarsh, or Claude via computer use):**~~ (`5cadd1b` · [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680))
-  - [x] ~~Demo flow: reopen → Play → keeps playing and looping~~
-  - [x] ~~10 consecutive cold starts with no timeout~~
-  - [x] ~~Resume across quit and relaunch (all settings)~~
-  - [x] ~~Wrong folder → recover without restarting; switch scene ↔ root~~
-  - [x] ~~Help → Copy Diagnostics: version, commit, token redacted~~
-  - [x] ~~`ps aux | grep -i "coperceive serve" | grep -v grep` is empty after Quit~~
-  - [x] ~~Backdrop looks right and loops seamlessly~~
-  - [x] ~~Window frame invariance across 3 relaunches without physical/logical coordinate doubling~~
-- [ ] **M1-6 · Merge `feat/desktop` → `main`** (Adarsh), after M1-5 passes.
+## 🔴 NOW: Cluster Datasets & Milestone Close-Out (In Order)
 
-## 🟡 NEXT: M2, data without the terminal
-- [x] ~~P0 · **Storage & Library location:** prompt on first use ("Where should coperceive keep datasets?", default `~/coperceive-data`), save `library_root` in `state.json`, show volume free space & used space, Settings → Storage (relocate with progress, Show in Finder).~~
-- [x] ~~P0 · **M2a · `coperceive scene pack`:** self-contained scene (every scene file, plus every `images.parquet` path materialised as a real file). Reject absolute paths and `..`. Symlink targets must stay inside scene dir, media root, or raw Griffin root. Dangling links are per-file errors. Write `<dest>/<scene>.partial/` with `IMPORT.json`, resume on size+sha256, write `COMPLETE.json` last, then rename. `--images full|preview|none`. Dry-run byte count. Free-space check (10% margin). Progress NDJSON.~~
-- [x] ~~P0 · **M2b · Import from folder…** in desktop app: imported scene lands in `library_root`. Cancel leaves resumable `.partial` (hidden from scene list).~~
-- [x] ~~P0 · **Dataset catalog ("Get data"):** prominent on Connect when library is empty, File → Get Data….~~
-  - [x] ~~Versioned `coperceive/catalog/datasets.yaml` (Griffin, OPV2V, V2XSet, V2V4Real).~~
-  - [x] ~~Cards: name, description, modalities, agents, linked licence/source/paper, preset sizes via dry-run, download button.~~
-  - [x] ~~Griffin presets: Dev tier (~240 MB), One scene with images, Full 25 m (~167 GB). MIT licence acknowledgement checkbox (`--accept-griffin-terms`).~~
-  - [x] ~~OPV2V / V2XSet: honest status, "Import a local copy" folder picker + convert.~~
-  - [x] ~~Download flow: preset dry-run → 10% headroom check → licence terms → sidecar NDJSON progress (download → md5 verify → extract → convert → validate) with Pause / Resume / Cancel → auto-open first scene on completion. Quit-resumable.~~
-- [x] ~~P0 · **Library screen:** scene list/grid in `library_root`: dataset, town, duration, agents, sensors, size, has-images, has-map, validate badge. Actions: Open, Show in Finder, Validate now, Delete (to Trash).~~
-- [x] ~~P0 · **Brand / Icon ("4c Cursor"):** lowercase monospace wordmark `coperceive` + orange-red cursor token `#D9482B`. App icon `#141414` with white `c` and block cursor. Generate `.icns` and Tauri icons from SVG master in `assets/brand/`. Replace blue-dot everywhere. Cursor blinks (1 s steps) on Connect screen; static under reduced motion.~~
-- [x] ~~P1 · **Auto-update:** Tauri v2 updater with minisign keypair. Prompted like Claude app: background download, non-blocking banner/toast ("Restart to update"), Later/Restart, Help → Check for Updates…, Settings toggle. `release.yml` for `v*` tags.~~
-- [ ] P1 · **Maps in one click:** not started. See the correction below before writing a licence on the button.
-- [ ] P1 · Image thumbnails at import (640 px JPEG/WebP), full resolution on demand.
-- [x] ~~P0 · **Real-data import check on the local Griffin Town03** (`~/coperceive-data/Town03-000`: 6.9 GB, 149 samples, 2 agents, 9 cameras; MacBook Air M3, 16 GB, macOS 26.5.2). Before the fix `scene pack` planned 2,521 files / 7,379,734,227 bytes, including 1,170 PNGs (3,380,385,023 bytes) under `drone-side/camera/right` that no `images.parquet` row names: frames from other scenes. `coperceive scene pack` now copies only the image files a scene lists, inside a listed frame directory. Measured on the real scene: full import 1,351 files / 3,999,349,204 bytes in 8.85 s (2.00 s user, 1.78 s sys, 97 MB peak RSS); `--images none` 10 files / 7,578,865 bytes; dry-run reports the 1,170 skipped frames in a note. `coperceive validate` on the packed scene: 1 scene, 0 failed, 0 missing frames, 0 warnings, 0 hard failures, 0.70 s. The packed scene opens in the app: 149 samples, 2 agents, 9 frustums, 55 boxes and 2,911 points at 111.85 s, playback advances at 1× with loop on. e2e step 5c now imports a copy with one unlisted frame beside a listed frame directory and asserts it is not copied (`IMPORT.json` note). e2e step 5c printed `skipped 1 image files not listed in images.parquet`. (`a6d51ca` · [40311840281](https://github.com/adarsh-nl/coperceive/actions/runs/40311840281))~~
-- [ ] P1 · **Flaky desktop e2e controller evals:** steps 4 and 5c wrap `eval_js` in a bounded retry (5 attempts, 0.5–4 s backoff) that retries only transient failures (HTTP 500/502/503/504, timeout, reset) and logs each attempt as `E2E_RETRY`; a real page error still fails on the first attempt. Actions are attempted once and noted (`E2E_NOTE`) because a repeated click or toggle can act twice: the step 4 picker click, step 5c buttons, and the step 2 loop-on toggle (read first, toggle only if off, bounded). Step 4 polls up to 20 s for the error banner instead of a fixed 1.5 s sleep. Step 5b now reads the running app's controller (`RELAUNCH_PORT`) instead of the dead first-launch `CTRL_PORT`, and asserts the Library/Get Data tabs instead of warning. Acceptance: three consecutive green `desktop-macos` runs. Branch `agent/deepseek-e2e-eval-retry`; PR/CI not yet recorded.
-- [x] ~~P0 · **Cached background validation badge in Library:** the badge now comes from a stored `coperceive validate` answer, not only from the Validate now button. `validation_cache` in `state.json` maps a scene directory to `{valid, manifest_mtime_ms}`; listing the library fills `is_valid` from the cache and asks for a background check of the scenes that have no fresh answer, one check at a time. The answer is reused while `manifest.json` is unchanged. This also fixes the single-scene bug that made the old button always report valid: `coperceive validate <scene dir>` now reads that scene (it used to find zero scenes and exit 0). CI printed `Step 5g cache={'valid': True, 'manifest_mtime_ms': ...}` and `Step 5g verified: Library badge ran in the background and its answer is cached.` (`2e3343c` · [40313946425](https://github.com/adarsh-nl/coperceive/actions/runs/40313946425))~~
+1. **Cluster datasets backend (PR 2, DeepSeek):**
+   - [ ] Cache staging under `<cache>/.partial/<scene>`, atomic rename, dataset.json index, idempotent, never writes under raw root.
+   - [ ] Scheduled CPU prepare job with Slurm preview hash + confirm, status polling document (`coperceive-cluster-scene-status-1`), partial cache serving.
+   - PR #87 open on `agent/deepseek-cluster-datasets-2`.
 
-- [ ] P2 · **`scene pack` skips macOS and database cruft:** `.DS_Store`, `._*` AppleDouble files and `jobs.sqlite` plus `-wal`/`-shm` sidecars are skipped and reported in one pack note instead of becoming scene files. On the local Town03-000, full import drops from 1,351 files / 3,999,349,204 bytes to 1,348 files / 3,999,324,620 bytes, and `--images none` from 10 files / 7,578,865 bytes to 7 files / 7,554,281 bytes. The test copies `tests/fixtures/synthetic_scene/synth_001` and seeds the cruft. Branch `agent/deepseek-pack-cruft`; PR/CI not yet recorded.
+2. **Cluster datasets UI (Antigravity):**
+   - [ ] Browse banner (`OPV2V · test · 16 scenes`, licence status notice and links, "Open dataset").
+   - [ ] Dataset view: scene table, status chips (`ready`, `preparing`, `not_prepared`, `stale`, `failed`), status polling every ~5s.
+   - [ ] Slurm CPU prepare script preview with confirm checkbox, single-scene prepare & auto-open.
+   - [ ] Viewer scene dropdown disabling non-ready scenes with `(preparing…)`.
+   - PR #88 open on `agent/agy-cluster-datasets-ui` (rebased on `0d0865e`, all Tauri stubs removed, tests green).
 
-- [ ] Acceptance: from an empty Mac, Get data → Griffin "One scene with images" → Town03-000 plays with images and map, **without Terminal**. Update prompt verified.
+3. **End-to-End Verification:**
+   - [ ] Real-app e2e against fake-SSH cluster fixtures covering detect → index → prepare single scene → ready → viewer open.
+   - [ ] Real `ssh -L` tunnel verification from the Mac over eduVPN on `hpc-head1`.
 
-### Correction, 2026-10-24
+4. **Milestone Close-Out & Release:**
+   - [ ] Merge `feat/m2-import` → `main` (Adarsh).
+   - [ ] Tag `v0.1.0` and publish desktop release with DMG on GitHub Releases (Adarsh).
 
-The strikes above describe code that is in the tree. They were written before a green run of the new real-app steps. Do not read them as e2e-verified. These stay open until `desktop-macos` is green on this checkpoint:
-
-- [x] ~~P0 · e2e step 5c: import, cancel, resume, open.~~ (`7404f0b` · [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227)) Notice: `Step 5c verified: import, cancel, resume, open.`
-- [x] ~~P1 · e2e step 2d: one viewer window after relaunch.~~ (`7404f0b` · [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227)) Notice: `Step 2d verified: one viewer window after relaunch.`
-- [x] ~~P1 · e2e step 5d: mock `latest.json`, banner, What's new, Later, Restart now.~~ (`7404f0b` · [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227)) Notices: `Step 5d notices: banner coperceive 0.2.0 is ready`, `What's new showed the mock notes`, `Restart now stayed in the test app`, `Later hid the banner`, `mock server received latest.json`.
-- [ ] P1 · Tauri updater plugin is not a Cargo dependency. `src-tauri/tauri.conf.json` `plugins.updater.pubkey` is the placeholder `PASTE_THE_PUBLIC_KEY_FROM_A_NEW_TAURI_SIGNER_KEYPAIR`. `docs/updater-secrets.md` is removed. The keypair committed in `e7f6fef` is public. Adarsh generates a new pair and pastes it as `docs/desktop/updates.md` says. Do not reuse the old key.
-- [ ] P1 · **Maps in one click** is not started. Checked 2026-10-25: the CARLA 0.9.15 README (`https://github.com/carla-simulator/carla/blob/0.9.15/README.md`) says code is MIT and assets are CC-BY, with no version. `docs/adr/0008-hd-map.md` and `coperceive maps ingest` now record CC-BY for the town files. Do not write "CC-BY 4.0" on the button: the README does not say 4.0. Do not download the CARLA tarball or commit a `.xodr`.
-- [ ] P0 · Mac acceptance (Adarsh): empty library → Get data → Griffin "One scene with images" → Town03-000 with images and a map, no Terminal. A test release shows the banner and installs on Restart.
-
-Griffin byte counts are not stored as UI text. A dry-run on 2026-10-24 of `https://huggingface.co/api/datasets/wjh-svm/Griffin/tree/main/datasets/griffin_50scenes_25m` listed 15 files summing to 167,190,016,122 bytes (same total as `docs/design/griffin-verification.md`, tree API, 2026-10-15). Dev tier (`md5.txt` + `drone_metadata.zip` + `vehicle_metadata.zip` + `vehicle_lidar.zip`) was 239,749,191 bytes. RGB cameras plus those four files, excluding the two instance-segmentation zips, was 162,515,011,954 bytes. The on-disk check uses `required_free_bytes` from the live dry-run, not these integers. Licence: toolkit `LICENSE.txt` fetched 2026-10-24 starts "MIT License" / "Copyright (c) [2025] [Jiahao Wang]"; the dataset card YAML says `license: mit`. Paper `https://arxiv.org/abs/2503.06983`.
-
-Loop preference (M1 leftover): the desktop viewer already stores `last_loop` in Rust `state.json` (`web/src/viewer/Viewer.tsx` `savedLoopChoice` / `handleToggleLoop`, `src-tauri/src/controller.rs`, `src-tauri/src/state.rs`). e2e step 2b already quits and relaunches with loop off. The fixed-port web app still uses `localStorage`. No further change in this checkpoint.
-
-### Correction, 2026-10-26
-
-Two M2 flows have code and UI but no real-app coverage. Steps 5e and 5f below drive them through the real UI. Struck against the green `desktop-macos` job in run [40318211323](https://github.com/adarsh-nl/coperceive/actions/runs/40318211323) at `737794e` (all 9 jobs green; log: `Step 5e verified` / `Step 5f verified` / `Real-App macOS E2E Test PASSED`). Both use runtime-gated Rust seams (`src-tauri/src/test_seams.rs`) that are inert unless `COPERCEIVE_TEST_ENV` / `COPERCEIVE_TEST_MARKER_FILE` is set; the app is never driven with network data in these steps.
-
-- [x] ~~P1 · e2e step 5e: Get data Pause / Resume / Cancel of a dataset download job. Asserts the real labels and notes from `GetDataScreen.tsx` (`Pause`, `Resume`, `Cancel`, `Download paused.`, `Download resumed.`), that progress freezes while paused and advances after resume, and that the job child is stopped (SIGSTOP) and gone after Cancel (SIGTERM). Dry-run and the job are local in test mode; no Hugging Face request.~~ (`737794e` · [40318211323](https://github.com/adarsh-nl/coperceive/actions/runs/40318211323)) Notices: `Step 5e notices: Pause -> 'Download paused.', progress frozen at 7%`, `fake job pid 13384 state after Pause: T<`, `Resume -> 'Download resumed.'`, `resume restored the Pause button, progress advanced 7% -> 8%`, `Cancel removed the progress panel and returned to Start Download`, `Step 5e verified: Pause, Resume and Cancel of a dataset download job in Get data.`
-- [x] ~~P1 · e2e step 5f: Settings → Change location (Move library). Seeds a temp library from `tests/fixtures/synthetic_scene/synth_001`, moves it to a second temp root through the real "Select New Folder…" picker seam, then asserts the scene moved, the old root is empty with no `.partial` left behind, `state.json` `library_root` updated, and the Library screen still lists the scene. `state.json` is restored afterwards; a real `~/coperceive-data` library is never the source.~~ (`737794e` · [40318211323](https://github.com/adarsh-nl/coperceive/actions/runs/40318211323)) Notices: `Step 5f notices: Library now lists synth_001 under /tmp/coperceive-e2e-*/e2e-library-b`, `Step 5f notices: state.json library_root=/tmp/coperceive-e2e-*/e2e-library-b`, `Step 5f verified: Move library relocated synth_001 to the new root, left the old root empty, and updated state.json.`
-
-## 🟡 LATER: M3, HPC mode in the app
-- [ ] P0 · Connect screen HPC target: saved hosts, queue status ("Waiting for a CPU node: Priority, 0:42"), heartbeat and reattach, walltime warning, orphan cleanup on launch
-- [ ] P0 · **Real `ssh -L` tunnel test from the Mac over eduVPN**, including a VPN drop and recovery (never tested; the login node can't self-SSH)
-- [ ] P1 · Run validate and eval jobs on the cluster from the app; read-only `squeue` status
-- [ ] Acceptance: open Griffin on `/datasets/...` from the Mac without copying; survive a VPN drop; no job left after Quit
+---
 
 ## 🟡 LATER: M4, ship 1.0
 - [ ] Decision-dependent: code signing and notarisation (see Decisions)
-- [ ] Auto-update (Tauri updater, signed manifest on GitHub Releases)
 - [ ] P2 · App size: 271 MB installed. Drop matplotlib if only export uses it, strip tests and `__pycache__`
 - [ ] P2 · Follow system light/dark; desktop-shell accessibility (keyboard flow, VoiceOver labels, axe on Connect)
 - [ ] P2 · Designed empty, loading and error states for every panel
@@ -202,9 +176,8 @@ Two M2 flows have code and UI but no real-app coverage. Steps 5e and 5f below dr
 ## 🟡 Platform and research follow-ups
 - [ ] P1 · **v0.1 release of the Python package/CLI** (Phase 7 never completed; check branch `cursor/phase7-release-0452`). CHANGELOG, version bump, README quick start (not on PyPI; name-squat check before publishing)
 - [ ] P1 · Vehicle-side mAP gap: ours 0.1985 vs paper 0.1682 (drone and fusion match). Time-boxed: tables over all 47 scenes, then check the root `vehicle-side.pth`
-- [ ] P2 · Fix flaky `test_cancel_is_answered` properly
-- [ ] P1 · **`desktop-macos`: `hdiutil: create failed - Resource busy`** while Tauri bundles the DMG. Evidence: run [40353170969](https://github.com/adarsh-nl/coperceive/actions/runs/40353170969) attempt 1, `desktop-macos` job `121678453379` failed at `Creating disk image...` (`hdiutil create -srcfolder Coperceive.app -volname Coperceive -fs HFS+`, generated `bundle_dmg.sh`) after 10.4 s of the ~78 s the same create takes when it succeeds; the job ends with an orphaned `diskimages-helper` (pid 6467) that the passing job does not have, and the same commit/image passed in the PR run [40353178046](https://github.com/adarsh-nl/coperceive/actions/runs/40353178046) and on the attempt-2 rerun. No step in the repo mounts a DMG before the build (grep: no `hdiutil`/`attach` in `scripts/`, `ci.yml` or `src-tauri/src`; smoke test and e2e run the `.app`). The runner-images maintainers attribute this exact error on macOS 13/14 runners to `XProtectBehaviorService` locking a freshly created image and recommend a retry ([actions/runner-images#7522](https://github.com/actions/runner-images/issues/7522)); the service cannot be disabled safely on a CI runner. Fix: `scripts/desktop/build_dmg.sh` (new) detaches stale `/Volumes/Coperceive*` mounts, removes stale `rw.*.dmg` temp images, logs `hdiutil info` / `XProtect` / disk on every attempt, and retries the Tauri build once — only when that attempt's output contains `hdiutil: create failed - Resource busy`; any other failure is reported on the first attempt. `ci.yml` `Build Tauri Desktop (.app and .dmg)` runs the script. No product code changed. The attempt count is hard-capped at three (`COPERCEIVE_DMG_ATTEMPTS`, default 2, clamped to 1..3 with the clamp logged, non-integers rejected before any build), and `tests/test_build_dmg.py` proves the retry, the cap and the no-retry path with a fake `npm` on the Linux pytest runners. (Branch `agent/deepseek-hdiutil-flake`; green `desktop-macos` jobs are linked in PR #31.)
-- [ ] P2 · Fix flaky `test_cancel_is_answered` properly — root cause found and fixed in `tests/fake_model_plugin/worker.py`: the worker mixed a buffered `sys.stdin.readline()` with `select.select([sys.stdin], ...)`, so a cancel that arrived in the same pipe write as the frame was pulled into Python's stdin buffer, where `select()` on the descriptor cannot see it. The worker then slept the full 5 s and the parent's `receive(timeout_s=5.0)` hit the same boundary as the sleep, so the test failed with `RunnerTimeout`. The worker now reads stdin through its own unbuffered line reader and checks that buffer before waiting on the descriptor (event-driven on real state; no retries, no extra sleeps, no longer timeouts). `test_cancel_written_with_the_frame_is_read` pins the worst case deterministically. CI evidence (three consecutive green `test (3.12)` and `test (3.13)` jobs) is recorded in the PR; strike after Lead confirms.
+- [x] ~~P2 · Fix flaky `test_cancel_is_answered` properly~~ (Merged in PR #30 `0b44bd9`)
+- [x] ~~P1 · `desktop-macos`: `hdiutil: create failed - Resource busy` retry fix~~ (Merged in PR #31 / #86)
 - [ ] P2 · `HANDOVER.md` cleanup: 500+ lines of logs. Move the logs to `docs/log/`, keep a 1-page state; point to this file for tasks
 - [ ] P2 · Triage stale branches: `chore/post-step-b`, `cursor/handover-roadmap-0452`, `cursor/phase7-release-0452`, `docs/*`, `feat/eval-step-*`, `feat/phase4-validate`, `feat/adapter-opencood` (merge, close or delete; Adarsh approves)
 - [ ] P2 · Answer the 25 open questions in `HANDOVER.md` § "Open questions for Adarsh" (thresholds, visibility null vs 1.0, drone lidar calibs, map sample step, …)
@@ -229,27 +202,21 @@ Two M2 flows have code and UI but no real-app coverage. Steps 5e and 5f below dr
 ---
 
 ## Change log of this file
-- 2026-10-27: The `desktop-macos` DMG retry is now capped and tested. `COPERCEIVE_DMG_ATTEMPTS` takes a whole number only (non-integers are rejected before any build with `exit 64`), is clamped to 1..3 with the clamp logged, and defaults to 2; the exact-signature gating is unchanged. New `tests/test_build_dmg.py` copies the script into a temp tree with a fake `npm` first on `PATH` and proves (a) the `Resource busy` signature retries exactly once and exits 0, (b) `COPERCEIVE_DMG_ATTEMPTS=9` stops at exactly 3 builds and exits non-zero, (c) a non-signature failure is not retried and keeps its exit code, (d) a non-integer value is rejected with 0 builds. The preflight tolerates hosts without `sw_vers`/`hdiutil`, so the retry logic runs in the Linux `test` matrix (3.10-3.13). The TASKS hdiutil item stays unticked on purpose, consistent with #30. Branch `agent/deepseek-hdiutil-flake`.
-- 2026-10-27: `desktop-macos` DMG flake fixed in CI only, branch `agent/deepseek-hdiutil-flake`. Job `121678453379` (run [40353170969](https://github.com/adarsh-nl/coperceive/actions/runs/40353170969) attempt 1) failed with `hdiutil: create failed - Resource busy` inside Tauri's generated `bundle_dmg.sh` after 10.4 s of copying; the same commit/image passed in run [40353178046](https://github.com/adarsh-nl/coperceive/actions/runs/40353178046) and on the attempt-2 rerun, and the failed job is left with an orphaned `diskimages-helper`. The repo mounts no DMG before the build, and runner-images#7522 attributes this to `XProtectBehaviorService` locking a fresh image on macOS 13/14 runners. `scripts/desktop/build_dmg.sh` pre-detaches stale `Coperceive` volumes, clears stale `rw.*.dmg` images, logs `hdiutil info`/`XProtect`/disk, and retries the build once only on that exact signature; `ci.yml` calls it instead of the bare `tauri build`. No product code changed.
-- 2026-10-27: Fixed the `test_cancel_is_answered` flake at its source, not with a retry or a longer timeout. The fake plugin's worker read stdin with buffered `readline()` and then waited with `select.select([sys.stdin], ...)`; when the parent put the frame and its cancel in the pipe together (`tests/test_model_runner.py:214-215`), the cancel was already in Python's stdin buffer, `select()` saw no readable descriptor, the worker slept its full 5 s and the parent's 5 s `receive` timed out (`coperceive/models/runner.py:277`). The worker now owns an unbuffered line reader and checks buffered lines before `select()`, answering a back-to-back cancel immediately; a regression test writes frame + cancel in one `write()`. No production runner change was needed. Branch `agent/deepseek-cancel-flake`.
-- 2026-10-26: Added real-app e2e steps 5e (Get data Pause / Resume / Cancel, test-mode local job, no network) and 5f (Settings → Change location moves a scene between two temp libraries and updates `state.json`). New runtime-gated seams live in `src-tauri/src/test_seams.rs` and are inert unless `COPERCEIVE_TEST_ENV` / `COPERCEIVE_TEST_MARKER_FILE` is set. Step 5e/5f notices are surfaced in CI. Struck against the green `desktop-macos` job in run [40318211323](https://github.com/adarsh-nl/coperceive/actions/runs/40318211323) at `737794e` (9/9 jobs green).
-- 2026-10-26: Desktop e2e eval hardening. Steps 4 and 5c retry transient controller failures (504/timeout/reset) up to four times with backoff and log `E2E_RETRY step=... attempt=n/5`; step 5b reads `RELAUNCH_PORT`/`RELAUNCH_SECRET` and asserts the Connect nav tabs. Branch `agent/deepseek-e2e-eval-retry`.
-- 2026-10-26: `scene pack` skips `.DS_Store`, `._*` AppleDouble files and `jobs.sqlite`/`-wal`/`-shm`, and reports the count, bytes and names in one pack note. Town03-000 full dry-run drops 3 files / 24,584 bytes. Branch `agent/deepseek-pack-cruft`.
-- 2026-10-26: Green run [40313946425](https://github.com/adarsh-nl/coperceive/actions/runs/40313946425) (9/9) at `2e3343c` on `agent/deepseek-library-validation-badge`. The desktop job printed `Step 5g verified: Library badge ran in the background and its answer is cached.` and `Step 5g cache={'valid': True, 'manifest_mtime_ms': ...}`, so the cached badge runs in the real app. The run built the app from the Rust changes.
-- 2026-10-26: Cached background validation badge in Library. `coperceive validate` now accepts a scene directory as its root (it found zero scenes and exited 0 before). The desktop app stores `{valid, manifest_mtime_ms}` per scene in `state.json` and validates stale scenes in the background; the Library badge reads the cached answer and shows `Validating…` until it lands. e2e step 5g opens Library and asserts the badge becomes `Valid ✓` without clicking Validate now and that `state.json` holds the cached answer. Branch `agent/deepseek-library-validation-badge`.
-
-- 2026-10-26: Green run [40311840281](https://github.com/adarsh-nl/coperceive/actions/runs/40311840281) (9/9) at `a6d51ca` on `agent/deepseek-realdata-import-check` (based on `feat/m2-import`), real-data import fix. The desktop job built the app and printed `Step 5c skipped the unlisted frame (['skipped 1 image files not listed in images.parquet (61 bytes) in: vehicle/cam_front'])`, so the new import guard runs in the real app. Artifact `coperceive-desktop-macos-arm64` uploaded.
-- 2026-10-26: Real-data import check on the local Griffin Town03-000. `coperceive scene pack` no longer copies unlisted image files that sit in a listed frame directory: the local scene had 1,170 such PNGs (3,380,385,023 bytes) in `drone-side/camera/right`, frames 11472–28340 from other scenes. Full import fell from 7,379,734,227 to 3,999,349,204 bytes (1,351 files, 8.85 s). `coperceive validate` on the packed scene: 0 failed, 0 missing frames, 0 warnings in 0.70 s. Real-data note: `point_index.parquet` has only `vehicle/lidar_top` (149 samples, 2,918–2,929 points per frame); the three drone lidar sensors return HTTP 200 with an empty body, and the 9 cameras each have all 149 frames. e2e step 5c now imports a copy with one unlisted frame and asserts it is not copied. Branch `agent/deepseek-realdata-import-check`.
-
+- 2026-10-31: Refreshed master task list through PR #86 (`0d0865e`). Struck merged HPC workspace milestones (profiles, browsing, run-plan builder, Slurm submit/watch, results sync, cluster datasets detect/index contract PR #85), desktop updater (#77), icon polish (#78), viewer layout with panel resize and full screen (#80), and CI acceleration (#86). Recorded open PRs #87 (cluster datasets backend PR 2) and #88 (cluster datasets UI), and updated milestone roadmap towards M2→main merge and v0.1.0 release.
+- 2026-10-27: The `desktop-macos` DMG retry is now capped and tested. `COPERCEIVE_DMG_ATTEMPTS` takes a whole number only (non-integers are rejected before any build with `exit 64`), is clamped to 1..3 with the clamp logged, and defaults to 2; the exact-signature gating is unchanged. Branch `agent/deepseek-hdiutil-flake`.
+- 2026-10-27: `desktop-macos` DMG flake fixed in CI only, branch `agent/deepseek-hdiutil-flake`. `scripts/desktop/build_dmg.sh` pre-detaches stale `Coperceive` volumes, clears stale `rw.*.dmg` images, logs `hdiutil info`/`XProtect`/disk, and retries the build once only on that exact signature; `ci.yml` calls it instead of the bare `tauri build`. No product code changed.
+- 2026-10-27: Fixed the `test_cancel_is_answered` flake at its source, not with a retry or a longer timeout. The fake plugin's worker owns an unbuffered line reader and checks buffered lines before `select()`, answering a back-to-back cancel immediately. Branch `agent/deepseek-cancel-flake`.
+- 2026-10-26: Added real-app e2e steps 5e (Get data Pause / Resume / Cancel, test-mode local job, no network) and 5f (Settings → Change location moves a scene between two temp libraries and updates `state.json`). Struck against the green `desktop-macos` job in run [40318211323](https://github.com/adarsh-nl/coperceive/actions/runs/40318211323) at `737794e` (9/9 jobs green).
+- 2026-10-26: Desktop e2e eval hardening. Steps 4 and 5c retry transient controller failures (504/timeout/reset) up to four times with backoff. Branch `agent/deepseek-e2e-eval-retry`.
+- 2026-10-26: `scene pack` skips `.DS_Store`, `._*` AppleDouble files and `jobs.sqlite`/`-wal`/`-shm`, and reports the count, bytes and names in one pack note. Branch `agent/deepseek-pack-cruft`.
+- 2026-10-26: Green run [40313946425](https://github.com/adarsh-nl/coperceive/actions/runs/40313946425) (9/9) at `2e3343c` on `agent/deepseek-library-validation-badge`.
+- 2026-10-26: Cached background validation badge in Library. `coperceive validate` now accepts a scene directory as its root. Branch `agent/deepseek-library-validation-badge`.
+- 2026-10-26: Green run [40311840281](https://github.com/adarsh-nl/coperceive/actions/runs/40311840281) (9/9) at `a6d51ca` on `agent/deepseek-realdata-import-check`.
+- 2026-10-26: Real-data import check on the local Griffin Town03-000. `coperceive scene pack` no longer copies unlisted image files that sit in a listed frame directory.
 - 2026-10-25: CARLA town-file licence checked against the 0.9.15 README. Code is MIT. Assets are CC-BY, with no version in that README. `maps ingest` now records CC-BY. "CC-BY 4.0" stays off the maps button.
-- 2026-10-24: Struck e2e steps 2d, 5c, and 5d against green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) at `7404f0b` (9/9). Artifact `coperceive-desktop-macos-arm64` 84,127,425 bytes. DMG `Coperceive_0.1.0_aarch64.dmg` 84,439,707 bytes.
-- 2026-10-24: Run [40136895416](https://github.com/adarsh-nl/coperceive/actions/runs/40136895416) at `1ee6a8c` verified step 5c in the log and failed step 5d with an eval HTTP 504. Lint, web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.
-- 2026-10-24: Run [40136197303](https://github.com/adarsh-nl/coperceive/actions/runs/40136197303) at `acaae7f` failed lint (`ruff format`) and desktop e2e step 5c (cancel before the first copied file). Step 2d passed in that log. Web, pytest, gitleaks, and browser e2e passed. No dmg uploaded.
-- 2026-10-24: Snapshot corrected to `main` `0ee039d`, `feat/desktop` `5d5c98b` (not merged), `feat/m2-import` `db8aa3b` (parent `bc23b26`). Recorded that the M2 strikes were ahead of e2e. Griffin sizes cited from the Hugging Face tree API on 2026-10-24. Removed `docs/updater-secrets.md` and replaced the burned updater public key with a placeholder. New e2e steps 2d, 5c, and 5d are written and not yet green. Last green run remains [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) at `c50f568`.
-- 2026-10-24: Verified M2 on `feat/m2-import` with all 9 CI jobs green on run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) (`c50f568`). Synchronously initialized viewpoint, appearance, scene ID and hidden agents from initial state to prevent premature state overwrite; verified real-app macOS UI e2e and backdrop CPU measurement with dmg artifact `coperceive-desktop-macos-arm64` (80.19 MB).
-- 2026-10-24: Struck M1-5 against green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) at `5cadd1b`. Fixed window position/size Retina scale doubling bug by saving/restoring in logical points with monitor visible frame clamping, added round-trip/clamping unit tests, and verified window frame unchanged across 3 relaunches in e2e step 2c.
-- 2026-10-23: Struck M1-2 and M1-4 against [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) at `d35dddd`. Animated backdrop median 0.6%cpu, p95 0.8. Recorded in `docs/media/measurements/backdrop-cpu.md`.
-- 2026-10-23: Un-struck M1-4. Run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) sampled the static frame (`reduceMotion=1`). Split Import scene into M2a (`scene pack`), M2b (Import from folder), and M2c (Import from HPC, plan only until M2b).
-- 2026-10-22: Struck M1-0, M1-3, and M1-4 against green run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) at `6ec22ad`. M1-2, M1-5, and M1-6 stay open.
-- 2026-10-22: Checked the 2026-10-21 list against `feat/desktop` `bf36d0d` and CI run 39688720618. Struck M1-0 sub-items and M1-1 that the green run already covers. Loop persistence, the Python `COMPLETE.json` check, and the 60 s CPU sampler are in `f3820a0` and stay open until that run is green. M1-2 stays open. Corrected the snapshot (`b99c732` / 55 commits / run 39650235620 were stale).
-- 2026-10-21: Created from the full project history (py123d check → standalone coperceive → desktop Phases 1–2 → M1 → backdrop → b99c732 review).
+- 2026-10-24: Struck e2e steps 2d, 5c, and 5d against green run [40137604227](https://github.com/adarsh-nl/coperceive/actions/runs/40137604227) at `7404f0b` (9/9).
+- 2026-10-24: Verified M2 on `feat/m2-import` with all 9 CI jobs green on run [40100332994](https://github.com/adarsh-nl/coperceive/actions/runs/40100332994) (`c50f568`).
+- 2026-10-24: Struck M1-5 against green run [40045726680](https://github.com/adarsh-nl/coperceive/actions/runs/40045726680) at `5cadd1b`.
+- 2026-10-23: Struck M1-2 and M1-4 against [39923652622](https://github.com/adarsh-nl/coperceive/actions/runs/39923652622) at `d35dddd`.
+- 2026-10-22: Struck M1-0, M1-3, and M1-4 against green run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) at `6ec22ad`.
+- 2026-10-21: Created from the full project history.
