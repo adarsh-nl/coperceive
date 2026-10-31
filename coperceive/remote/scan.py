@@ -146,13 +146,6 @@ def _requested_relative(raw: Path) -> str:
     return "/".join(parts) if parts else "."
 
 
-def _readable_directory(path: Path) -> bool:
-    try:
-        return path.is_dir() and os.access(path, os.R_OK | os.X_OK)
-    except OSError:
-        return False
-
-
 def _relative(root: Path, path: Path) -> str:
     try:
         parts = path.relative_to(root).parts
