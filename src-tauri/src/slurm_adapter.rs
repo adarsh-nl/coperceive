@@ -355,7 +355,7 @@ impl SchedulerAdapter for SlurmAdapter {
             })?;
         let account = request.account.clone().or_else(|| defaults.account.clone());
         let qos = request.qos.clone().or_else(|| defaults.qos.clone());
-        let gres = request.gres.clone().or_else(|| defaults.gres.clone());
+        let gres = request.gres.clone();
         let time_limit = request
             .time_limit
             .clone()
@@ -708,7 +708,7 @@ mod tests {
             scheduler: SchedulerKind::Slurm,
             defaults: JobDefaults {
                 partition: Some("gpu-a100".to_string()),
-                gres: Some("gpu:a100:1".to_string()),
+                gres: None,
                 time_limit: Some("02:00:00".to_string()),
                 memory: Some("16G".to_string()),
                 cpus_per_task: Some(4),
@@ -736,7 +736,7 @@ mod tests {
             partition: None,
             account: None,
             qos: None,
-            gres: None,
+            gres: Some("gpu:a100:1".to_string()),
             time_limit: None,
             memory: None,
             cpus_per_task: None,

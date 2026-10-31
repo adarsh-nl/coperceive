@@ -131,6 +131,7 @@ export default function NewEvaluation() {
   const [showSubmitAdvanced, setShowSubmitAdvanced] = useState(false);
   const [submitWalltime, setSubmitWalltime] = useState("04:00:00");
   const [submitCpus, setSubmitCpus] = useState("");
+  const [submitGres, setSubmitGres] = useState("");
   const [submitPreview, setSubmitPreview] = useState<SubmissionPreview | null>(null);
   const [submitConfirmed, setSubmitConfirmed] = useState(false);
   const [submitBusy, setSubmitBusy] = useState<"preview" | "submit" | null>(null);
@@ -139,6 +140,15 @@ export default function NewEvaluation() {
 
   const selectedProfile = profiles.find((entry) => entry.id === profileId) ?? null;
   const selectedPipeline = pipelines.find((entry) => entry.id === pipelineId) ?? null;
+  const selectedPartition = selectedProfile?.discovered?.partitions.find(
+    (partition) => partition.name === selectedProfile.profile.defaults.partition,
+  );
+  const partitionGpuTypes = selectedPartition?.gpu_types ?? [];
+  const gpuChoices = plan?.gres && !partitionGpuTypes.some(
+    (type) => (type === "gpu" ? "gpu:1" : `gpu:${type}:1`) === plan.gres,
+  )
+    ? [...partitionGpuTypes, plan.gres]
+    : partitionGpuTypes;
 
   useEffect(() => {
     void (async () => {
@@ -223,7 +233,12 @@ export default function NewEvaluation() {
     cpus_per_task: submitCpus.trim() ? Number(submitCpus.trim()) : null,
     account: null,
     qos: null,
+    gres: submitGres,
   });
+
+  useEffect(() => {
+    setSubmitGres(plan?.gres ?? "");
+  }, [plan]);
 
   const invalidateSubmitPreview = () => {
     setSubmitPreview(null);
@@ -753,6 +768,35 @@ export default function NewEvaluation() {
                       }}
                     />
                   </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={labelStyle} htmlFor="submit-gres">
+                      GPU
+                    </label>
+                    <select
+                      id="submit-gres"
+                      style={input}
+                      value={submitGres}
+                      onChange={(event) => {
+                        setSubmitGres(event.target.value);
+                        invalidateSubmitPreview();
+                      }}
+                    >
+                      <option value="">No GPU (CPU-only)</option>
+                      {gpuChoices.map((type) => {
+                        const value = type.includes(":") ? type : type === "gpu" ? "gpu:1" : `gpu:${type}:1`;
+                        return (
+                          <option key={value} value={value}>
+                            {value}
+                          </option>
+                        );
+                      })}
+                    </select>
+                    {selectedPartition && partitionGpuTypes.length === 0 ? (
+                      <p style={{ margin: "0.25rem 0 0", color: "#8b949e", fontSize: "0.72rem" }}>
+                        This partition has no GPUs; the job will not request one.
+                      </p>
+                    ) : null}
+                  </div>
                 </div>
               ) : null}
               <div style={{ marginTop: "0.6rem" }}>
@@ -773,8 +817,9 @@ export default function NewEvaluation() {
               {submitPreview ? (
                 <div style={{ marginTop: "0.6rem" }}>
                   <div style={{ fontSize: "0.78rem", color: "#c9d1d9" }}>
-                    Partition {submitPreview.partition} · walltime {submitPreview.walltime} ·{" "}
-                    {submitPreview.job_name}
+                    Partition {submitPreview.partition} · walltime {submitPreview.walltime} · GPU:{" "}
+                    {submitPreview.gres && submitPreview.gres.trim() ? submitPreview.gres : "no GPU requested"}{" "}
+                    · {submitPreview.job_name}
                   </div>
                   <pre
                     aria-label="Submission job script"

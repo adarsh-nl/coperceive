@@ -100,7 +100,8 @@ make_request() {
     local local_registration="$2"
     local remote_script="$3"
     local request_file="${TMP_DIR}/${name}-request.json"
-    python3 - "${request_file}" "${FIXTURES_DIR}/cluster-b.json" \
+    local server_file="${4:-${FIXTURES_DIR}/cluster-b.json}"
+    python3 - "${request_file}" "${server_file}" \
         "${local_registration}" "${remote_script}" <<'PY'
 import json
 import os
@@ -142,6 +143,8 @@ PY
 run_plan() {
     local name="$1"
     local request_file="$2"
+    local expected_partition="${3:-main-cpu}"
+    local expected_gres="${4:-}"
     local result_file="${TMP_DIR}/${name}-result.json"
     local ssh_log="${TMP_DIR}/fake-ssh-${name}.log"
     local stdout_log="${TMP_DIR}/${name}.stdout.log"
@@ -174,14 +177,14 @@ run_plan() {
     wait "${APP_PID}" 2>/dev/null || true
     APP_PID=""
 
-    python3 - "${name}" "${result_file}" "${ssh_log}" "${PLAN_ROOT}" <<'PY'
+    python3 - "${name}" "${result_file}" "${ssh_log}" "${PLAN_ROOT}" "${expected_partition}" "${expected_gres}" <<'PY'
 import hashlib
 import json
 import os
 import stat
 import sys
 
-name, result_file, ssh_log, plan_root = sys.argv[1:5]
+name, result_file, ssh_log, plan_root, expected_partition, expected_gres = sys.argv[1:7]
 with open(result_file, encoding="utf-8") as handle:
     data = json.load(handle)
 if not data.get("ok"):
@@ -248,8 +251,20 @@ if argv[len(argv) - 2] != "--output-dir":
     sys.exit(1)
 
 contract = plan["contract_check_script"]
-if "#SBATCH --partition=main-cpu" not in contract or "--max-frames 3" not in contract:
+if f"#SBATCH --partition={expected_partition}" not in contract or "--max-frames 3" not in contract:
     print(f"E2E_PLAN_FAIL: {name}: contract-check script is incomplete", file=sys.stderr)
+    sys.exit(1)
+if expected_gres:
+    if plan.get("gres") != expected_gres:
+        print(f"E2E_PLAN_FAIL: {name}: plan gres {plan.get('gres')!r}", file=sys.stderr)
+        sys.exit(1)
+else:
+    if plan.get("gres") is not None:
+        print(f"E2E_PLAN_FAIL: {name}: CPU-only plan has gres {plan.get('gres')!r}", file=sys.stderr)
+        sys.exit(1)
+# Contract check is light: never a GPU line, even for a GPU eval plan.
+if "--gres" in contract:
+    print(f"E2E_PLAN_FAIL: {name}: contract check requested a GPU", file=sys.stderr)
     sys.exit(1)
 expected = "apptainer exec" if name.endswith("container") else "module load python/3.12"
 if expected not in contract:
@@ -281,8 +296,9 @@ make_submit_request() {
     local plan_id="$2"
     local confirmed="$3"
     local options_json="$4"
+    local server_file="${5:-${FIXTURES_DIR}/cluster-b.json}"
     local request_file="${TMP_DIR}/${name}-submit-request.json"
-    python3 - "${request_file}" "${FIXTURES_DIR}/cluster-b.json" "${plan_id}" "${confirmed}" "${options_json}" <<'PY'
+    python3 - "${request_file}" "${server_file}" "${plan_id}" "${confirmed}" "${options_json}" <<'PY'
 import json
 import sys
 
@@ -303,6 +319,8 @@ run_submit() {
     local name="$1"
     local request_file="$2"
     local confirmed="$3"
+    local expected_partition="${4:-main-cpu}"
+    local expected_gres="${5:-}"
     local result_file="${TMP_DIR}/${name}-submit-result.json"
     local ssh_log="${TMP_DIR}/fake-ssh-${name}.log"
     local stdout_log="${TMP_DIR}/${name}.stdout.log"
@@ -335,15 +353,15 @@ run_submit() {
     wait "${APP_PID}" 2>/dev/null || true
     APP_PID=""
 
-    python3 - "${name}" "${result_file}" "${ssh_log}" "${confirmed}" <<'PY'
+    python3 - "${name}" "${result_file}" "${ssh_log}" "${confirmed}" "${expected_partition}" "${expected_gres}" <<'PY'
 import json
 import sys
 
-name, result_file, ssh_log, confirmed = sys.argv[1:5]
+name, result_file, ssh_log, confirmed, expected_partition, expected_gres = sys.argv[1:7]
 with open(result_file, encoding="utf-8") as handle:
     data = json.load(handle)
 script = data.get("script", "")
-for needle in ("#SBATCH --partition=main-cpu", "--output-dir"):
+for needle in (f"#SBATCH --partition={expected_partition}", "--output-dir"):
     if needle not in script:
         print(f"E2E_SUBMIT_FAIL: {name}: script lacks {needle!r}", file=sys.stderr)
         sys.exit(1)
@@ -363,6 +381,13 @@ if confirmed == "true":
     if outcome.get("state") != "pending" or outcome.get("queue_reason") != "Resources":
         print(f"E2E_SUBMIT_FAIL: {name}: state/reason {outcome.get('state')!r}/{outcome.get('queue_reason')!r}", file=sys.stderr)
         sys.exit(1)
+    if expected_gres:
+        if f"#SBATCH --gres={expected_gres}" not in script:
+            print(f"E2E_SUBMIT_FAIL: {name}: script lacks gres {expected_gres!r}", file=sys.stderr)
+            sys.exit(1)
+    elif "--gres=" in script:
+        print(f"E2E_SUBMIT_FAIL: {name}: CPU-only preview contains --gres", file=sys.stderr)
+        sys.exit(1)
     if log.count("sbatch") != 1:
         print(f"E2E_SUBMIT_FAIL: {name}: expected exactly one sbatch, log={log!r}", file=sys.stderr)
         sys.exit(1)
@@ -372,7 +397,7 @@ if confirmed == "true":
     print(
         f"E2E_SUBMIT_MARK: {name} verified (confirmed=True, job_id={outcome['job_id']}, "
         f"state={outcome['state']}, queue_reason={outcome['queue_reason']}, "
-        f"script_partition=main-cpu)"
+        f"script_partition={expected_partition}, gres={expected_gres or 'none'})"
     )
 else:
     if data.get("ok"):
@@ -383,6 +408,13 @@ else:
         sys.exit(1)
     if "sbatch" in log:
         print(f"E2E_SUBMIT_FAIL: {name}: unconfirmed submit called sbatch", file=sys.stderr)
+        sys.exit(1)
+    if expected_gres:
+        if f"#SBATCH --gres={expected_gres}" not in script:
+            print(f"E2E_SUBMIT_FAIL: {name}: preview lacks gres {expected_gres!r}", file=sys.stderr)
+            sys.exit(1)
+    elif "--gres=" in script:
+        print(f"E2E_SUBMIT_FAIL: {name}: CPU-only preview contains --gres", file=sys.stderr)
         sys.exit(1)
     print(f"E2E_SUBMIT_MARK: {name} refused without confirmation (no sbatch)")
 PY
@@ -569,6 +601,39 @@ REQUEST_CONTAINER="$(make_request plan-container \
     "${PLAN_ROOT}/data/code/pipelines/container/coperceive-pipeline.json" \
     "/data/code/pipelines/container/contract_pipeline.py")"
 run_plan plan-container "${REQUEST_CONTAINER}"
+
+# GPU decision (Adarsh 2026-10-31): a model-evaluation plan on a GPU partition
+# starts with one GPU of the partition's detected type; the user can clear it.
+GPU_SERVER="${TMP_DIR}/cluster-gpu.json"
+python3 - "${FIXTURES_DIR}/cluster-b.json" "${GPU_SERVER}" <<'GPUPY'
+import json
+import sys
+
+src, dest = sys.argv[1:3]
+entry = json.load(open(src, encoding="utf-8"))
+entry["profile"]["defaults"]["partition"] = "gpu-h100"
+entry["discovered"] = {
+    "partitions": [
+        {"name": "main-cpu", "nodes": 64, "state": "up", "gpu_types": []},
+        {"name": "gpu-h100", "nodes": 32, "state": "up", "gres": "gpu:h100:2", "gpu_types": ["h100"]},
+    ],
+    "gpu_types": ["h100"],
+    "environment": {},
+    "checked_unix": 1,
+}
+with open(dest, "w", encoding="utf-8") as handle:
+    json.dump(entry, handle)
+GPUPY
+REQUEST_GPU="$(make_request plan-gpu \
+    "${PLAN_ROOT}/data/code/pipelines/coperceive-pipeline.json" \
+    "/data/code/pipelines/contract_pipeline.py" \
+    "${GPU_SERVER}")"
+run_plan plan-gpu "${REQUEST_GPU}" gpu-h100 gpu:h100:1
+GPU_PLAN_ID="$(python3 -c "import json; print(json.load(open('${TMP_DIR}/plan-gpu-result.json'))['plan']['id'])")"
+SUBMIT_GPU="$(make_submit_request plan-gpu-preview "${GPU_PLAN_ID}" false '{}' "${GPU_SERVER}")"
+run_submit plan-gpu-preview "${SUBMIT_GPU}" false gpu-h100 gpu:h100:1
+SUBMIT_NO_GPU="$(make_submit_request plan-gpu-no-gpu "${GPU_PLAN_ID}" false '{"gres":""}' "${GPU_SERVER}")"
+run_submit plan-gpu-no-gpu "${SUBMIT_NO_GPU}" false gpu-h100 ""
 
 PLAN_ID="$(python3 -c "import json; print(json.load(open('${TMP_DIR}/plan-module-result.json'))['plan']['id'])")"
 UNCONFIRMED="$(make_submit_request plan-submit-unconfirmed "${PLAN_ID}" false '{}')"

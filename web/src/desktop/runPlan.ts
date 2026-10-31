@@ -93,6 +93,8 @@ export interface RunPlan {
   split: PlanArtifact;
   output_dir: string;
   scratch_dir: string;
+  /** Model-evaluation GPU default, e.g. gpu:lovelace:1; null for CPU-only. */
+  gres?: string | null;
   checks: PlanCheck[];
   contract_check_script: string;
   nothing_submitted: boolean;
@@ -243,6 +245,8 @@ export interface SubmitOptions {
   cpus_per_task: number | null;
   account: string | null;
   qos: string | null;
+  /** "" explicitly requests no GPU; a value requests that GRES; null keeps the plan default. */
+  gres?: string | null;
 }
 
 /** The complete job script the user reviews before an explicit confirm. */
@@ -252,6 +256,7 @@ export interface SubmissionPreview {
   partition: string;
   walltime: string;
   cpus_per_task: number | null;
+  gres?: string | null;
   script: string;
   preview_hash: string;
 }

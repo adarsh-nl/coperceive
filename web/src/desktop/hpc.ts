@@ -459,13 +459,9 @@ export function applyDiscovery(entry: ServerEntry, report: DetectionReport): Ser
     const chosen =
       partitions.find((p) => p.name === profile.defaults.partition) ?? partitionDefault;
     if (chosen) {
-      // Default to a single GPU of the detected type, not the whole node.
-      const firstGpu = chosen.gpu_types[0];
-      if (!profile.defaults.gres?.trim() && firstGpu) {
-        profile.defaults.gres = firstGpu === "gpu" ? "gpu:1" : `gpu:${firstGpu}:1`;
-      } else if (!profile.defaults.gres?.trim() && chosen.gres) {
-        profile.defaults.gres = chosen.gres;
-      }
+      // No GPU default is stored on the profile. A model-evaluation plan picks
+      // one GPU of the partition's detected type; the user can choose no GPU at
+      // submit time. Detected GPU types remain choices in the form.
       const walltime = discoveredWalltime(chosen.max_time);
       if (!profile.defaults.time_limit && walltime) {
         profile.defaults.time_limit = walltime;

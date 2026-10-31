@@ -133,6 +133,10 @@ pub struct RunPlan {
     /// Scratch directory the contract-check job uses (profile template, expanded
     /// by the job at run time).
     pub scratch_dir: String,
+    /// GPU default for a model evaluation on the chosen partition, or None for a
+    /// CPU-only partition. The user can override it at submit time.
+    #[serde(default)]
+    pub gres: Option<String>,
     pub checks: Vec<PlanCheck>,
     pub contract_check_script: String,
     /// Always true in this step: the app never submits from a plan.
@@ -569,9 +573,8 @@ pub fn render_contract_check_script(
     if let Some(cpus) = profile.defaults.cpus_per_task {
         lines.push(format!("#SBATCH --cpus-per-task={cpus}"));
     }
-    if let Some(gres) = profile.defaults.gres.as_deref() {
-        lines.push(format!("#SBATCH --gres={gres}"));
-    }
+    // Contract check is a light job: never request a GPU from the profile.
+    lines.push("# No GPU requested for this contract check.".to_string());
     if let Some(account) = profile.defaults.account.as_deref() {
         lines.push(format!("#SBATCH --account={account}"));
     }
@@ -971,6 +974,28 @@ pub fn validate_environment_roots(
         EnvironmentKind::Modules | EnvironmentKind::None => {}
     }
     Ok(())
+}
+
+/// One GPU of the partition's detected type for a model evaluation. Light jobs
+/// (contract check, viewer, scan) never use this. A CPU-only partition gets no
+/// GRES; the UI says so.
+fn default_eval_gres(entry: &ServerEntry) -> Option<String> {
+    let partition_name = entry.profile.defaults.partition.as_deref()?.trim();
+    if partition_name.is_empty() {
+        return None;
+    }
+    let partition = entry
+        .discovered
+        .as_ref()?
+        .partitions
+        .iter()
+        .find(|partition| partition.name == partition_name)?;
+    let gpu = partition.gpu_types.first()?;
+    Some(if gpu == "gpu" {
+        "gpu:1".to_string()
+    } else {
+        format!("gpu:{gpu}:1")
+    })
 }
 
 /// Builds and checks a run plan. Remote work is read-only and bounded; nothing is
@@ -1500,6 +1525,7 @@ pub fn build_run_plan(
         split,
         output_dir,
         scratch_dir: profile.scratch_template.clone(),
+        gres: default_eval_gres(entry),
         checks,
         contract_check_script,
         nothing_submitted: true,
@@ -2275,6 +2301,7 @@ pub fn save_run_plan(
     validated.checks = checks;
     validated.output_dir = output_dir;
     validated.scratch_dir = profile.scratch_template.clone();
+    validated.gres = default_eval_gres(entry);
     validated.contract_check_script = contract_check_script;
     validated.saved_path = None;
 
@@ -3249,6 +3276,59 @@ mod tests {
         let error = render_contract_check_script(&profile, &EnvironmentSetup::default(), &[], "p")
             .expect_err("must refuse");
         assert!(error.contains("Choose a partition"));
+    }
+
+    fn entry_with_discovered(partition: &str, gpu_types: &[&str]) -> ServerEntry {
+        let mut entry = entry();
+        entry.profile.defaults.partition = Some(partition.to_string());
+        entry.discovered = Some(crate::server_profiles::DiscoveredServer {
+            partitions: vec![crate::hpc::DiscoveredPartition {
+                name: partition.to_string(),
+                nodes: Some(8),
+                state: Some("up".to_string()),
+                max_time: None,
+                gres: gpu_types.first().map(|gpu| format!("gpu:{gpu}:1")),
+                gpu_types: gpu_types.iter().map(|gpu| gpu.to_string()).collect(),
+            }],
+            gpu_types: gpu_types.iter().map(|gpu| gpu.to_string()).collect(),
+            ..Default::default()
+        });
+        entry
+    }
+
+    #[test]
+    fn an_eval_plan_on_a_gpu_partition_has_one_gpu_by_default() {
+        let entry = entry_with_discovered("gpu-h100", &["h100"]);
+        let plan = build_run_plan(&checked_runner(), &entry, &request()).expect("plan");
+        assert_eq!(plan.gres.as_deref(), Some("gpu:h100:1"));
+        // The light contract check never requests that GPU.
+        assert!(!plan.contract_check_script.contains("--gres"));
+        assert!(plan
+            .contract_check_script
+            .contains("No GPU requested for this contract check"));
+    }
+
+    #[test]
+    fn an_eval_plan_on_a_cpu_only_partition_has_no_gres() {
+        let entry = entry_with_discovered("main-cpu", &[]);
+        let plan = build_run_plan(&checked_runner(), &entry, &request()).expect("plan");
+        assert!(plan.gres.is_none());
+        assert!(!plan.contract_check_script.contains("--gres"));
+    }
+
+    #[test]
+    fn contract_check_ignores_an_old_profile_gpu_default() {
+        let mut profile = entry().profile;
+        profile.defaults.gres = Some("gpu:a100:1".to_string());
+        let script = render_contract_check_script(
+            &profile,
+            &EnvironmentSetup::default(),
+            &[],
+            "plan-1793222864-c5af819dbd2b",
+        )
+        .expect("script");
+        assert!(!script.contains("--gres"));
+        assert!(script.contains("No GPU requested for this contract check"));
     }
 
     #[test]

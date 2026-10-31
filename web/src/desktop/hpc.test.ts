@@ -163,7 +163,7 @@ test("applyDiscovery fills blanks from detection without inventing site defaults
   const applied = applyDiscovery(entry, report());
   assert.strictEqual(applied.profile.scheduler, "slurm");
   assert.strictEqual(applied.profile.defaults.partition, "gpu-a100");
-  assert.strictEqual(applied.profile.defaults.gres, "gpu:a100:1");
+  assert.strictEqual(applied.profile.defaults.gres, null);
   assert.strictEqual(applied.profile.defaults.time_limit, "2-00:00:00");
   assert.strictEqual(applied.profile.defaults.memory, null);
   assert.strictEqual(applied.profile.defaults.cpus_per_task, null);
