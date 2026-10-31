@@ -64,7 +64,9 @@ pub struct RunPlanRequest {
     pub plugin_manifest: Option<String>,
     #[serde(default)]
     pub values: BTreeMap<String, serde_json::Value>,
+    #[serde(default)]
     pub checkpoint: String,
+    #[serde(default)]
     pub split: String,
     #[serde(default)]
     pub environment_override: Option<EnvironmentSetup>,
@@ -126,7 +128,9 @@ pub struct RunPlan {
     pub environment_from_override: bool,
     #[serde(default)]
     pub environment_note: String,
+    #[serde(default)]
     pub checkpoint: PlanArtifact,
+    #[serde(default)]
     pub split: PlanArtifact,
     /// Where a later submission would write the run (`results_root/runs/<id>`).
     pub output_dir: String,
@@ -149,8 +153,8 @@ impl RunPlan {
     /// Every check passed, so the plan may be saved and later submitted.
     pub fn is_saveable(&self) -> bool {
         self.checks.iter().all(|check| check.ok)
-            && self.checkpoint.sha256.is_some()
-            && self.split.sha256.is_some()
+            && (self.checkpoint.path.is_empty() || self.checkpoint.sha256.is_some())
+            && (self.split.path.is_empty() || self.split.sha256.is_some())
     }
 }
 
@@ -998,6 +1002,24 @@ fn default_eval_gres(entry: &ServerEntry) -> Option<String> {
     })
 }
 
+/// Which of the two dedicated pickers a pipeline needs. Builtin model plugins
+/// always need a checkpoint and a split; a custom pipeline only when its own
+/// registration declares the matching argument role.
+fn required_plan_artifacts(source: &str, pipeline: &PipelineSpec) -> (bool, bool) {
+    let builtin = source == "builtin";
+    let checkpoint = builtin
+        || pipeline
+            .arguments
+            .iter()
+            .any(|argument| argument.role == ArgumentRole::Checkpoint);
+    let split = builtin
+        || pipeline
+            .arguments
+            .iter()
+            .any(|argument| argument.role == ArgumentRole::TestData);
+    (checkpoint, split)
+}
+
 /// Builds and checks a run plan. Remote work is read-only and bounded; nothing is
 /// submitted.
 pub fn build_run_plan(
@@ -1026,8 +1048,14 @@ pub fn build_run_plan(
     pipeline.validate()?;
     profile.validate_pipeline_script(&pipeline.script)?;
     validate_path_arguments(profile, &pipeline, &request.values)?;
-    validate_path_in_roots(profile, &request.checkpoint, "checkpoint")?;
-    validate_path_in_roots(profile, &request.split, "split")?;
+    let (needs_checkpoint, needs_split) =
+        required_plan_artifacts(&request.pipeline_source, &pipeline);
+    if needs_checkpoint {
+        validate_path_in_roots(profile, &request.checkpoint, "checkpoint")?;
+    }
+    if needs_split {
+        validate_path_in_roots(profile, &request.split, "split")?;
+    }
     validate_plan_destinations(profile)?;
 
     let plan_id = new_plan_id();
@@ -1041,22 +1069,30 @@ pub fn build_run_plan(
     let mut checks: Vec<PlanCheck> = Vec::new();
 
     // 1. Checkpoint and split: existence, readability, sha256 and symlink escape.
-    let checkpoint_values = run_check(
-        runner,
-        &mut checks,
-        "checkpoint",
-        "Checkpoint",
-        &path_check_script(&request.checkpoint),
-        CHECK_TIMEOUT,
-    )?;
-    let split_values = run_check(
-        runner,
-        &mut checks,
-        "split",
-        "Test split",
-        &path_check_script(&request.split),
-        CHECK_TIMEOUT,
-    )?;
+    let checkpoint_values = if needs_checkpoint {
+        run_check(
+            runner,
+            &mut checks,
+            "checkpoint",
+            "Checkpoint",
+            &path_check_script(&request.checkpoint),
+            CHECK_TIMEOUT,
+        )?
+    } else {
+        None
+    };
+    let split_values = if needs_split {
+        run_check(
+            runner,
+            &mut checks,
+            "split",
+            "Test split",
+            &path_check_script(&request.split),
+            CHECK_TIMEOUT,
+        )?
+    } else {
+        None
+    };
     for values in [checkpoint_values.as_ref(), split_values.as_ref()]
         .into_iter()
         .flatten()
@@ -1065,18 +1101,26 @@ pub fn build_run_plan(
             return Err(error);
         }
     }
-    let checkpoint = artifact_from_check(
-        &request.checkpoint,
-        checkpoint_values.as_ref().unwrap_or(&BTreeMap::new()),
-    );
-    let split = artifact_from_check(
-        &request.split,
-        split_values.as_ref().unwrap_or(&BTreeMap::new()),
-    );
+    let checkpoint = if needs_checkpoint {
+        artifact_from_check(
+            &request.checkpoint,
+            checkpoint_values.as_ref().unwrap_or(&BTreeMap::new()),
+        )
+    } else {
+        PlanArtifact::default()
+    };
+    let split = if needs_split {
+        artifact_from_check(
+            &request.split,
+            split_values.as_ref().unwrap_or(&BTreeMap::new()),
+        )
+    } else {
+        PlanArtifact::default()
+    };
     // Fail closed when the cluster cannot resolve the real path: a symlink escape
     // must never be waved through because realpath/readlink was missing.
     for (artifact, what) in [(&checkpoint, "checkpoint"), (&split, "test split")] {
-        if artifact.kind != "missing" && artifact.real_path.is_none() {
+        if !artifact.path.is_empty() && artifact.kind != "missing" && artifact.real_path.is_none() {
             return Err(format!(
                 "The cluster did not report where the {what} resolves to, so coperceive cannot \
                  check that it stays inside your folders. Choose a path inside the profile's \
@@ -1085,6 +1129,8 @@ pub fn build_run_plan(
         }
     }
 
+    let remote_home = remote_home(runner);
+    if needs_checkpoint {
     if checkpoint.kind == "missing" {
         checks.push(check(
             "checkpoint-exists",
@@ -1125,7 +1171,6 @@ pub fn build_run_plan(
         ));
     }
 
-    let remote_home = remote_home(runner);
     if let Some(real_path) = &checkpoint.real_path {
         let ok = real_path_inside_roots(profile, real_path, remote_home.as_deref());
         checks.push(with_hint(
@@ -1149,6 +1194,9 @@ pub fn build_run_plan(
         }
     }
 
+    }
+
+    if needs_split {
     if split.kind == "missing" {
         checks.push(check(
             "split-exists",
@@ -1199,6 +1247,8 @@ pub fn build_run_plan(
                  code folders. Pick a split inside them."
             ));
         }
+    }
+
     }
 
     // 2. Environment pieces available on the login node (light).
@@ -1914,15 +1964,27 @@ fn revalidate_plan_on_server(
     plan: &RunPlan,
     environment: &EnvironmentSetup,
     remote_home: Option<&str>,
+    needs_checkpoint: bool,
+    needs_split: bool,
 ) -> Result<(PlanArtifact, PlanArtifact, Vec<PlanCheck>), String> {
-    validate_path_in_roots(profile, &plan.checkpoint.path, "checkpoint")?;
-    validate_path_in_roots(profile, &plan.split.path, "test split")?;
+    if needs_checkpoint {
+        validate_path_in_roots(profile, &plan.checkpoint.path, "checkpoint")?;
+    }
+    if needs_split {
+        validate_path_in_roots(profile, &plan.split.path, "test split")?;
+    }
     let mut checks: Vec<PlanCheck> = Vec::new();
-    let mut artifacts: Vec<PlanArtifact> = Vec::new();
-    for (path, name, label, what) in [
-        (&plan.checkpoint.path, "checkpoint", "Checkpoint", "checkpoint"),
-        (&plan.split.path, "split", "Test split", "test split"),
-    ] {
+    let mut artifacts: [Option<PlanArtifact>; 2] = [None, None];
+    for (index, (needed, path, name, label, what)) in [
+        (needs_checkpoint, &plan.checkpoint.path, "checkpoint", "Checkpoint", "checkpoint"),
+        (needs_split, &plan.split.path, "split", "Test split", "test split"),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        if !needed {
+            continue;
+        }
         let values = run_check(
             runner,
             &mut checks,
@@ -1968,9 +2030,10 @@ fn revalidate_plan_on_server(
                  saved and later verified."
             ));
         }
-        artifacts.push(artifact);
+        artifacts[index] = Some(artifact);
     }
-    let (checkpoint, split) = (artifacts[0].clone(), artifacts[1].clone());
+    let checkpoint = artifacts[0].clone().unwrap_or_default();
+    let split = artifacts[1].clone().unwrap_or_default();
 
     // Environment pieces are re-checked instead of trusting the client's checks.
     let env_values = run_check(
@@ -2182,12 +2245,16 @@ pub fn save_run_plan(
     let final_path = format!("{plans_dir}/{}.json", plan.id);
 
     // The client's checks and hashes are deliberately ignored: recompute them.
+    let (needs_checkpoint, needs_split) =
+        required_plan_artifacts(&save_pipeline.source, &save_pipeline.spec);
     let (checkpoint, split, mut checks) = revalidate_plan_on_server(
         runner,
         profile,
         plan,
         &save_pipeline.environment,
         remote_home.as_deref(),
+        needs_checkpoint,
+        needs_split,
     )?;
     let output_dir = format!(
         "{}/runs/{}",
@@ -2690,6 +2757,46 @@ mod tests {
         assert!(validate_scratch_template("/scratch/$(rm -rf /)").is_err());
         assert!(validate_scratch_template("/scratch/`whoami`").is_err());
         assert!(validate_scratch_template("/scratch/$OTHER").is_err());
+    }
+
+    #[test]
+    fn a_custom_pipeline_without_generic_roles_needs_no_checkpoint_or_split() {
+        let mut req = request();
+        req.checkpoint = String::new();
+        req.split = String::new();
+        req.values.clear();
+        req.values.insert(
+            "input".to_string(),
+            serde_json::json!("/data/code/inputs/scene.txt"),
+        );
+        req.pipeline.arguments = vec![crate::hpc::ArgumentSpec {
+            name: "input".to_string(),
+            kind: ArgumentKind::Path,
+            help: "the pipeline's own input".to_string(),
+            required: true,
+            default: None,
+            choices: Vec::new(),
+            multiple: false,
+            role: ArgumentRole::Other,
+        }];
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("roleless plan");
+        assert!(plan.checkpoint.path.is_empty());
+        assert!(plan.split.path.is_empty());
+        assert!(plan.is_saveable(), "checks: {:?}", plan.checks);
+        for name in ["checkpoint", "checkpoint-sha", "split", "split-sha"] {
+            assert!(!plan.checks.iter().any(|check| check.name == name), "{name}");
+        }
+        assert!(plan.argv.contains(&"--input".to_string()));
+    }
+
+    #[test]
+    fn a_builtin_plugin_still_requires_the_checkpoint_and_split() {
+        let mut req = request();
+        req.pipeline_source = "builtin".to_string();
+        req.plugin_manifest = Some("/data/code/griffin/manifest.yaml".to_string());
+        req.checkpoint = String::new();
+        let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("builtin");
+        assert!(error.contains("Choose a checkpoint path"), "{error}");
     }
 
     #[test]

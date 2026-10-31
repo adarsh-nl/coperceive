@@ -10,7 +10,7 @@
     {
       "name": "split",
       "kind": "path",
-      "role": "test_data",
+      "role": "other",
       "required": true,
       "help": "Scene or split file. The first non-empty line names the scene."
     },

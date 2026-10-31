@@ -140,6 +140,15 @@ export default function NewEvaluation() {
 
   const selectedProfile = profiles.find((entry) => entry.id === profileId) ?? null;
   const selectedPipeline = pipelines.find((entry) => entry.id === pipelineId) ?? null;
+  // Builtin model plugins always take a checkpoint and a scene/split. A custom
+  // pipeline only gets these fields when its registration declares the role;
+  // otherwise its own typed arguments are the complete input set.
+  const needsCheckpoint =
+    selectedPipeline?.source === "builtin" ||
+    Boolean(selectedPipeline?.spec.arguments.some((argument) => argument.role === "checkpoint"));
+  const needsSplit =
+    selectedPipeline?.source === "builtin" ||
+    Boolean(selectedPipeline?.spec.arguments.some((argument) => argument.role === "test_data"));
   const selectedPartition = selectedProfile?.discovered?.partitions.find(
     (partition) => partition.name === selectedProfile.profile.defaults.partition,
   );
@@ -300,8 +309,10 @@ export default function NewEvaluation() {
       setError(localErrors.join(" "));
       return;
     }
-    if (!checkpoint.trim() || !split.trim()) {
-      setError("Choose the checkpoint and the test split on the cluster.");
+    if ((needsCheckpoint && !checkpoint.trim()) || (needsSplit && !split.trim())) {
+      setError(
+        "Choose the checkpoint and the test split on the cluster for this pipeline.",
+      );
       return;
     }
     setError("");
@@ -449,38 +460,44 @@ export default function NewEvaluation() {
                 {selectedPipeline.plugin_manifest ? ` Manifest: ${selectedPipeline.plugin_manifest}.` : ""}
               </p>
 
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <div style={{ ...field, flex: 1 }}>
-                  <label style={labelStyle} htmlFor="plan-checkpoint">
-                    Checkpoint (inside data/code folders)
-                  </label>
-                  <IdentifierInput
-                    id="plan-checkpoint"
-                    style={input}
-                    value={checkpoint}
-                    placeholder="/data/code/checkpoints/model.pt"
-                    onChange={(event) => {
-                      setCheckpoint(event.target.value);
-                      syncRoleValue("checkpoint", event.target.value);
-                    }}
-                  />
+              {needsCheckpoint || needsSplit ? (
+                <div style={{ display: "flex", gap: "0.5rem" }}>
+                  {needsCheckpoint ? (
+                    <div style={{ ...field, flex: 1 }}>
+                    <label style={labelStyle} htmlFor="plan-checkpoint">
+                      Checkpoint (inside data/code folders)
+                    </label>
+                    <IdentifierInput
+                      id="plan-checkpoint"
+                      style={input}
+                      value={checkpoint}
+                      placeholder="/data/code/checkpoints/model.pt"
+                      onChange={(event) => {
+                        setCheckpoint(event.target.value);
+                        syncRoleValue("checkpoint", event.target.value);
+                      }}
+                    />
+                  </div>
+                  ) : null}
+                  {needsSplit ? (
+                    <div style={{ ...field, flex: 1 }}>
+                    <label style={labelStyle} htmlFor="plan-split">
+                      Test split (inside data/code folders)
+                    </label>
+                    <IdentifierInput
+                      id="plan-split"
+                      style={input}
+                      value={split}
+                      placeholder="/data/scenes or /data/code/splits/test.txt"
+                      onChange={(event) => {
+                        setSplit(event.target.value);
+                        syncRoleValue("test_data", event.target.value);
+                      }}
+                    />
+                  </div>
+                  ) : null}
                 </div>
-                <div style={{ ...field, flex: 1 }}>
-                  <label style={labelStyle} htmlFor="plan-split">
-                    Test split (inside data/code folders)
-                  </label>
-                  <IdentifierInput
-                    id="plan-split"
-                    style={input}
-                    value={split}
-                    placeholder="/data/scenes or /data/code/splits/test.txt"
-                    onChange={(event) => {
-                      setSplit(event.target.value);
-                      syncRoleValue("test_data", event.target.value);
-                    }}
-                  />
-                </div>
-              </div>
+              ) : null}
 
               {selectedPipeline.spec.arguments.length > 0 ? (
                 <div style={{ marginTop: "0.25rem" }}>
@@ -676,20 +693,22 @@ export default function NewEvaluation() {
             ))}
           </div>
 
-          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-            <div style={{ flex: 1 }}>
-              <div style={labelStyle}>Checkpoint sha256</div>
-              <code style={{ fontSize: "0.75rem", color: "#f5f5f7", wordBreak: "break-all" }}>
-                {plan.checkpoint.sha256 ?? "not recorded"} · {plan.checkpoint.path}
-              </code>
+          {plan.checkpoint.path || plan.split.path ? (
+            <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Checkpoint sha256</div>
+                <code style={{ fontSize: "0.75rem", color: "#f5f5f7", wordBreak: "break-all" }}>
+                  {plan.checkpoint.sha256 ?? "not recorded"} · {plan.checkpoint.path}
+                </code>
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={labelStyle}>Split sha256</div>
+                <code style={{ fontSize: "0.75rem", color: "#f5f5f7", wordBreak: "break-all" }}>
+                  {plan.split.sha256 ?? "not recorded"} · {plan.split.path}
+                </code>
+              </div>
             </div>
-            <div style={{ flex: 1 }}>
-              <div style={labelStyle}>Split sha256</div>
-              <code style={{ fontSize: "0.75rem", color: "#f5f5f7", wordBreak: "break-all" }}>
-                {plan.split.sha256 ?? "not recorded"} · {plan.split.path}
-              </code>
-            </div>
-          </div>
+          ) : null}
 
           <div style={{ marginTop: "0.75rem" }}>
             <div style={labelStyle}>Typed argv — one element per line, never a shell string</div>

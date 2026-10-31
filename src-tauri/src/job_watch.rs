@@ -87,28 +87,60 @@ pub fn is_active(state: JobState) -> bool {
     matches!(state, JobState::Pending | JobState::Running)
 }
 
+fn expected_user(profile: &ServerProfile) -> Option<String> {
+    profile.user.clone().or_else(|| {
+        profile
+            .ssh_target()
+            .ok()
+            .and_then(|target| target.rsplit_once('@').map(|(user, _)| user.to_string()))
+    })
+}
+
+fn check_owner(
+    raw_name: &str,
+    raw_user: &str,
+    job_id: &str,
+    expected_name: &str,
+    expected_user: Option<&str>,
+) -> Result<(), String> {
+    // Slurm truncates fixed-width fields with a trailing '+'. Even if the
+    // prefix happens to match, a marked name is not proof of ownership.
+    if raw_name.contains('+') || raw_name != expected_name {
+        return Err(format!(
+            "Job {job_id} is {raw_name:?}, not this app's job ({expected_name:?}); refusing to watch it."
+        ));
+    }
+    if let (Some(expected), false) = (expected_user, raw_user.trim().is_empty()) {
+        if raw_user.trim() != expected {
+            return Err(format!(
+                "Job {job_id} belongs to user {:?}, not {expected:?}; refusing to watch it.",
+                raw_user.trim()
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn parse_status_line(
     line: &str,
     plan_id: &str,
     job_id: &str,
     expected_name: &str,
+    expected_user: Option<&str>,
 ) -> Result<JobWatchStatus, String> {
-    let mut fields = line.split('|');
-    let raw_name = fields.next().unwrap_or("").trim();
-    if raw_name != expected_name {
-        return Err(format!(
-            "Job {job_id} is {raw_name:?}, not this app's job ({expected_name:?}); refusing to watch it."
-        ));
-    }
-    let raw_state = fields.next().unwrap_or("").trim();
+    let fields: Vec<&str> = line.split('|').collect();
+    let raw_name = fields.first().copied().unwrap_or("").trim();
+    let raw_user = fields.get(6).copied().unwrap_or("").trim();
+    check_owner(raw_name, raw_user, job_id, expected_name, expected_user)?;
+    let raw_state = fields.get(1).copied().unwrap_or("").trim();
     if raw_state.is_empty() {
         return Err("Slurm returned no state for the job.".to_string());
     }
     let state = map_slurm_state(raw_state.split_whitespace().next().unwrap_or(raw_state));
-    let reason = fields.next().unwrap_or("").trim();
-    let elapsed = fields.next().unwrap_or("").trim();
-    let time_left = fields.next().unwrap_or("").trim();
-    let node = fields.next().unwrap_or("").trim();
+    let reason = fields.get(2).copied().unwrap_or("").trim();
+    let elapsed = fields.get(3).copied().unwrap_or("").trim();
+    let time_left = fields.get(4).copied().unwrap_or("").trim();
+    let node = fields.get(5).copied().unwrap_or("").trim();
     Ok(JobWatchStatus {
         job_id: job_id.to_string(),
         plan_id: plan_id.to_string(),
@@ -142,21 +174,19 @@ fn status_from_accounting(
     plan_id: &str,
     job_id: &str,
     expected_name: &str,
+    expected_user: Option<&str>,
 ) -> Result<Option<JobWatchStatus>, String> {
     let trimmed = line.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
-    let mut fields = trimmed.split_whitespace();
-    let raw_name = fields.next().unwrap_or("");
-    if raw_name != expected_name {
-        return Err(format!(
-            "Job {job_id} is {raw_name:?}, not this app's job ({expected_name:?}); refusing to watch it."
-        ));
-    }
-    let raw_state = fields.next().unwrap_or("");
+    let fields: Vec<&str> = trimmed.split_whitespace().collect();
+    let raw_name = fields.first().copied().unwrap_or("");
+    let raw_user = fields.get(4).copied().unwrap_or("");
+    check_owner(raw_name, raw_user, job_id, expected_name, expected_user)?;
+    let raw_state = fields.get(1).copied().unwrap_or("");
     let state = map_slurm_state(raw_state.split_whitespace().next().unwrap_or(raw_state));
-    let elapsed = fields.next().unwrap_or("");
+    let elapsed = fields.get(2).copied().unwrap_or("");
     Ok(Some(JobWatchStatus {
         job_id: job_id.to_string(),
         plan_id: plan_id.to_string(),
@@ -176,30 +206,43 @@ fn status_from_accounting(
 /// Reads the current state, elapsed time and remaining wall time of a run.
 pub fn watch_status(
     runner: &dyn RemoteRunner,
-    _profile: &ServerProfile,
+    profile: &ServerProfile,
     plan_id: &str,
     job_id: &str,
 ) -> Result<JobWatchStatus, String> {
     validate_job_id(job_id)?;
     let expected_name = expected_job_name(plan_id)?;
+    let expected_user = expected_user(profile);
     let squeue = format!(
-        "squeue -h -j {job_id} -o '%j|%T|%r|%M|%L|%N' 2>/dev/null"
+        "squeue -h -j {job_id} -o '%.256j|%T|%r|%M|%L|%N|%u' 2>/dev/null"
     );
     if let Ok(result) = runner.run(&squeue, STATUS_TIMEOUT, None) {
         if result.success {
             if let Some(line) = result.stdout.lines().find(|line| !line.trim().is_empty()) {
-                return parse_status_line(line, plan_id, job_id, &expected_name);
+                return parse_status_line(
+                    line,
+                    plan_id,
+                    job_id,
+                    &expected_name,
+                    expected_user.as_deref(),
+                );
             }
         }
     }
     let sacct = format!(
-        "sacct -j {job_id} -n -X -o JobName%40,State%20,Elapsed%20,TimeLimit%20 2>/dev/null"
+        "sacct -j {job_id} -n -X -o JobName%256,State%20,Elapsed%20,TimeLimit%20,User%32 2>/dev/null"
     );
     if let Ok(result) = runner.run(&sacct, STATUS_TIMEOUT, None) {
         if result.success {
             if let Some(line) = result.stdout.lines().find(|line| !line.trim().is_empty()) {
                 if let Some(status) =
-                    status_from_accounting(line, plan_id, job_id, &expected_name)?
+                    status_from_accounting(
+                        line,
+                        plan_id,
+                        job_id,
+                        &expected_name,
+                        expected_user.as_deref(),
+                    )?
                 {
                     return Ok(status);
                 }
@@ -484,6 +527,52 @@ mod tests {
             assert_eq!(status.state, expected, "raw {raw}");
             assert_eq!(status.elapsed.as_deref(), Some("04:00:00"));
         }
+    }
+
+    #[test]
+    fn full_name_formats_are_requested_and_a_plus_marker_never_matches() {
+        let runner = FakeRunner::default().with(
+            "squeue -h -j 424242",
+            &format!("{}|RUNNING|None|00:01:00|03:00:00|node1|bob\n", expected_name()),
+        );
+        let status = watch_status(&runner, &profile(), plan_id(), "424242").expect("status");
+        assert_eq!(status.state, JobState::Running);
+        let squeue = runner.calls().lock().unwrap()[0].0.clone();
+        assert!(squeue.contains("%.256j"), "{squeue}");
+        assert!(squeue.contains("%u"), "{squeue}");
+
+        let truncated = format!(
+            "{}+|RUNNING|None|00:01:00|03:00:00|node1|bob\n",
+            &expected_name()[..40]
+        );
+        let runner = FakeRunner::default().with("squeue -h -j 424242", &truncated);
+        let error = watch_status(&runner, &profile(), plan_id(), "424242").expect_err("truncated");
+        assert!(error.contains("not this app's job"), "{error}");
+
+        let runner = FakeRunner::default().without("squeue -h -j 424242").with(
+            "sacct -j 424242",
+            &format!("{} COMPLETED 00:01:00 04:00:00 bob\n", expected_name()),
+        );
+        let status = watch_status(&runner, &profile(), plan_id(), "424242").expect("sacct");
+        assert_eq!(status.state, JobState::Completed);
+        let calls = runner.calls();
+        let calls = calls.lock().unwrap();
+        assert!(
+            calls.iter().any(|(command, _)| command.contains("JobName%256")),
+            "{calls:?}"
+        );
+    }
+
+    #[test]
+    fn a_different_user_is_refused_when_the_profile_names_one() {
+        let mut profile = profile();
+        profile.user = Some("alice".to_string());
+        let runner = FakeRunner::default().with(
+            "squeue -h -j 424242",
+            &format!("{}|RUNNING|None|00:01:00|03:00:00|node1|bob\n", expected_name()),
+        );
+        let error = watch_status(&runner, &profile, plan_id(), "424242").expect_err("user");
+        assert!(error.contains("belongs to user"), "{error}");
     }
 
     #[test]

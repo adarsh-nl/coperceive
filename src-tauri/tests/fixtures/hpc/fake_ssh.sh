@@ -538,18 +538,19 @@ case "${remote}" in
         cat "${local_path}"
         exit 0
         ;;
-    *"squeue -h -j 424242 -o '%j|%T|%r|%M|%L|%N'"*)
+    *"squeue -h -j 424242 -o '%.256j"*)
         log_command "squeue-watch"
-        printf '%s|%s|%s|00:00:12|03:59:48|%s\n' \
+        printf '%s|%s|%s|00:00:12|03:59:48|%s|%s\n' \
             "${FAKE_JOB_NAME:-coperceive-run-plan}" \
             "${FAKE_JOB_STATE:-PENDING}" \
             "${FAKE_JOB_REASON:-Resources}" \
-            "${FAKE_JOB_NODE:-node00}"
+            "${FAKE_JOB_NODE:-node00}" \
+            "bob"
         exit 0
         ;;
     *"sacct -j 424242 -n -X -o JobName"*)
         log_command "sacct-watch"
-        printf '%s %s 01:00:00 04:00:00\n' \
+        printf '%s %s 01:00:00 04:00:00 bob\n' \
             "${FAKE_JOB_NAME:-coperceive-run-plan}" \
             "${FAKE_JOB_STATE:-COMPLETED}"
         exit 0
