@@ -1220,6 +1220,8 @@ export default function Viewer({
     startPos: number;
     startSize: number;
   } | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
+  const pendingLayoutRef = useRef<Partial<LayoutSizes>>({});
 
   const userThemeOverrideRef = useRef<boolean>(
     typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.theme_override)
@@ -1452,6 +1454,10 @@ export default function Viewer({
     };
 
     return () => {
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+      }
       delete window.__COPERCEIVE_SHOW_TOAST__;
       delete window.__COPERCEIVE_SET_VIEWPOINT__;
       delete window.__COPERCEIVE_TOGGLE_THEME__;
@@ -3615,6 +3621,18 @@ export default function Viewer({
     setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current));
   };
 
+  const scheduleLayout = (update: Partial<LayoutSizes>) => {
+    pendingLayoutRef.current = { ...pendingLayoutRef.current, ...update };
+    if (resizeRafRef.current === null) {
+      resizeRafRef.current = window.requestAnimationFrame(() => {
+        resizeRafRef.current = null;
+        const pending = pendingLayoutRef.current;
+        pendingLayoutRef.current = {};
+        setLayout((curr) => ({ ...curr, ...pending }));
+      });
+    }
+  };
+
   const onLeftResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -3631,7 +3649,7 @@ export default function Viewer({
     const delta = e.clientX - dragStartRef.current.startPos;
     const containerW = workspaceRef.current?.clientWidth;
     const next = clampLeft(dragStartRef.current.startSize + delta, containerW, layout.right_px);
-    setLayout((curr) => ({ ...curr, left_px: next }));
+    scheduleLayout({ left_px: next });
   };
 
   const onRightResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -3650,7 +3668,7 @@ export default function Viewer({
     const delta = dragStartRef.current.startPos - e.clientX;
     const containerW = workspaceRef.current?.clientWidth;
     const next = clampRight(dragStartRef.current.startSize + delta, containerW, layout.left_px);
-    setLayout((curr) => ({ ...curr, right_px: next }));
+    scheduleLayout({ right_px: next });
   };
 
   const onStripResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
@@ -3669,12 +3687,19 @@ export default function Viewer({
     const delta = dragStartRef.current.startPos - e.clientY;
     const containerH = stageDomRef.current?.clientHeight;
     const next = clampStrip(dragStartRef.current.startSize + delta, containerH);
-    setLayout((curr) => ({ ...curr, strip_px: next }));
+    scheduleLayout({ strip_px: next });
   };
 
   const onResizeUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (dragStartRef.current) {
       dragStartRef.current = null;
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+        const pending = pendingLayoutRef.current;
+        pendingLayoutRef.current = {};
+        setLayout((curr) => ({ ...curr, ...pending }));
+      }
       try {
         e.currentTarget.releasePointerCapture(e.pointerId);
       } catch {}
@@ -3896,9 +3921,7 @@ export default function Viewer({
       {slot ? createPortal(crumb, slot) : null}
       {actions ? createPortal(actionTools, actions) : null}
       <div ref={workspaceRef} className={isFullScreen ? "workspace is-fullscreen" : "workspace"}>
-        {!isFullScreen ? (
-          <>
-            <aside className="panel" aria-label="Layers and agents" style={{ width: `${layout.left_px}px` }}>
+        <aside className="panel" aria-label="Layers and agents" style={{ width: `${layout.left_px}px` }}>
           <details open>
             <summary>Layers</summary>
             <div className="checks">
@@ -4140,9 +4163,7 @@ export default function Viewer({
           onDoubleClick={onLeftReset}
           onKeyDown={onLeftKeyDown}
         />
-      </>
-    ) : null}
-    <div ref={stageDomRef} className="stage">
+        <div ref={stageDomRef} className="stage">
       <div className={splitCamera ? "stage-row split" : "stage-row"} style={{ ["--split" as string]: appearance.splitRatio }}>
       <div className="viewport">
         <canvas
@@ -4259,7 +4280,7 @@ export default function Viewer({
             </>
           ) : null}
           </div>
-          {!isFullScreen && cameraFrame && summary && appearance.stripOpen ? (
+          {cameraFrame && summary && appearance.stripOpen ? (
             <div
               className="panel-resizer panel-resizer-horizontal panel-resizer-strip"
               role="separator"
@@ -4276,7 +4297,7 @@ export default function Viewer({
               onKeyDown={onStripKeyDown}
             />
           ) : null}
-          {!isFullScreen && cameraFrame && summary ? (
+          {cameraFrame && summary ? (
             <CameraStrip
               token={effectiveToken}
               sceneId={summary.scene_id}
@@ -4301,24 +4322,22 @@ export default function Viewer({
           ) : null}
           <p className="status-line">{status}</p>
         </div>
-        {!isFullScreen ? (
-          <>
-            <div
-              className="panel-resizer panel-resizer-vertical panel-resizer-right"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize telemetry panel"
-              aria-valuenow={Math.round(layout.right_px)}
-              aria-valuemin={MIN_RIGHT_PX}
-              aria-valuemax={MAX_RIGHT_PX}
-              tabIndex={0}
-              onPointerDown={onRightResizeDown}
-              onPointerMove={onRightResizeMove}
-              onPointerUp={onResizeUp}
-              onDoubleClick={onRightReset}
-              onKeyDown={onRightKeyDown}
-            />
-            <aside className="panel panel-right" aria-label="Agent telemetry" style={{ width: `${layout.right_px}px` }}>
+        <div
+          className="panel-resizer panel-resizer-vertical panel-resizer-right"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize telemetry panel"
+          aria-valuenow={Math.round(layout.right_px)}
+          aria-valuemin={MIN_RIGHT_PX}
+          aria-valuemax={MAX_RIGHT_PX}
+          tabIndex={0}
+          onPointerDown={onRightResizeDown}
+          onPointerMove={onRightResizeMove}
+          onPointerUp={onResizeUp}
+          onDoubleClick={onRightReset}
+          onKeyDown={onRightKeyDown}
+        />
+        <aside className="panel panel-right" aria-label="Agent telemetry" style={{ width: `${layout.right_px}px` }}>
               <h2>Telemetry</h2>
               {(!summary || (summary.agents ?? []).filter((agent) => !hidden[agent.agent_id]).length === 0) ? (
                 <PanelState
@@ -4386,8 +4405,6 @@ export default function Viewer({
               />
               <Radar frame={cameraFrame} pick={pick} types={agentTypes} />
             </aside>
-          </>
-        ) : null}
       </div>
       <Timeline
         length={summary?.times_us.length ?? 0}
