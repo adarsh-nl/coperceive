@@ -56,6 +56,7 @@ mkdir -p "${PLAN_ROOT}/data/code/pipelines" \
 printf 'checkpoint-bytes\n' > "${PLAN_ROOT}/data/code/checkpoints/model.pt"
 printf 'scene-a\nscene-b\n' > "${PLAN_ROOT}/data/code/splits/test.txt"
 printf 'fake container image for the contract-check render\n' > "${PLAN_ROOT}/data/code/containers/pipeline.sif"
+cp -R "${ROOT_DIR}/examples/pipelines/smoke" "${PLAN_ROOT}/data/code/pipelines/smoke"
 printf '#!/usr/bin/env python3\n' > "${PLAN_ROOT}/data/code/pipelines/contract_pipeline.py"
 
 cat > "${PLAN_ROOT}/data/code/pipelines/coperceive-pipeline.json" <<'JSON'
@@ -635,7 +636,28 @@ run_submit plan-gpu-preview "${SUBMIT_GPU}" false gpu-h100 gpu:h100:1
 SUBMIT_NO_GPU="$(make_submit_request plan-gpu-no-gpu "${GPU_PLAN_ID}" false '{"gres":""}' "${GPU_SERVER}")"
 run_submit plan-gpu-no-gpu "${SUBMIT_NO_GPU}" false gpu-h100 ""
 
-PLAN_ID="$(python3 -c "import json; print(json.load(open('${TMP_DIR}/plan-module-result.json'))['plan']['id'])")"
+# Smoke pipeline: dependency-free example that can go through the full flow on a
+# cluster with no installed model plugin.
+REQUEST_SMOKE="$(make_request plan-smoke \
+    "${PLAN_ROOT}/data/code/pipelines/smoke/coperceive-pipeline.json" \
+    "/data/code/pipelines/smoke/smoke_pipeline.py")"
+run_plan plan-smoke "${REQUEST_SMOKE}"
+if ! grep -q "smoke_pipeline.py" "${TMP_DIR}/plan-smoke-result.json"; then
+    fail "smoke plan does not contain the smoke pipeline argv"
+fi
+SMOKE_OUT="${TMP_DIR}/smoke-out"
+python3 "${PLAN_ROOT}/data/code/pipelines/smoke/smoke_pipeline.py" \
+    --split "${PLAN_ROOT}/data/code/splits/test.txt" \
+    --sleep-seconds 0 --max-frames 3 --output-dir "${SMOKE_OUT}"
+test -s "${SMOKE_OUT}/predictions.jsonl" ||
+    fail "smoke pipeline wrote no predictions.jsonl"
+test -s "${SMOKE_OUT}/metrics.json" ||
+    fail "smoke pipeline wrote no metrics.json"
+grep -q '"schema"[[:space:]]*:[[:space:]]*"coperceive-pipeline-metrics"' "${SMOKE_OUT}/metrics.json" ||
+    fail "smoke metrics.json has no metrics schema"
+echo "Step verified: smoke pipeline loaded, planned and produced both contract files."
+
+PLAN_ID="$(python3 -c "import json; print(json.load(open('${TMP_DIR}/plan-smoke-result.json'))['plan']['id'])")"
 UNCONFIRMED="$(make_submit_request plan-submit-unconfirmed "${PLAN_ID}" false '{}')"
 run_submit plan-submit-unconfirmed "${UNCONFIRMED}" false
 CONFIRMED="$(make_submit_request plan-submit \

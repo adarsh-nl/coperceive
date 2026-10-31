@@ -123,6 +123,19 @@ test("breadcrumbs, parent and child paths never climb above the data root", () =
   assert.strictEqual(parentBrowsePath("datasets"), "");
   assert.strictEqual(parentBrowsePath("../etc"), "");
   assert.strictEqual(parentBrowsePath("a/../../etc"), "");
+  const nested = browseRows({
+    ...document(),
+    relative_path: ".",
+    folders: [
+      { path: ".", depth: 0, is_scene: false, scene_id: null, dataset: false, scene_count: 0, has_manifest: false, has_complete: false, subfolder_count: 1, file_count: 0 },
+      { path: "griffin", depth: 1, is_scene: false, scene_id: null, dataset: false, scene_count: 0, has_manifest: false, has_complete: false, subfolder_count: 1, file_count: 0 },
+      { path: "griffin/child", depth: 2, is_scene: false, scene_id: null, dataset: false, scene_count: 0, has_manifest: false, has_complete: false, subfolder_count: 0, file_count: 1 },
+    ],
+  });
+  assert.deepStrictEqual(
+    nested.map((row) => row.path).sort(),
+    ["griffin", "griffin/child"],
+  );
   assert.strictEqual(childBrowsePath("datasets", "Town03-007"), "datasets/Town03-007");
   assert.strictEqual(childBrowsePath("", "datasets"), "datasets");
   assert.strictEqual(childBrowsePath("datasets", "../escape"), "datasets");

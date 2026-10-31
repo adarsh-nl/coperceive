@@ -298,6 +298,32 @@ print(
 PY
 }
 
+scan_linked_children() {
+    python3 - "$1" "$2" <<'SCANPY'
+import json
+import sys
+
+case, result_file = sys.argv[1], sys.argv[2]
+with open(result_file, encoding="utf-8") as handle:
+    data = json.load(handle)
+if not data.get("ok"):
+    print(f"E2E_HPC_FAIL: {case} scan failed: {data.get('error')}", file=sys.stderr)
+    sys.exit(1)
+scan = data["scan"]
+if scan["relative_path"] != "linked":
+    print(f"E2E_HPC_FAIL: {case} relative_path {scan['relative_path']!r}", file=sys.stderr)
+    sys.exit(1)
+folders = {folder["path"] for folder in scan["folders"]}
+if folders != {"linked", "linked/child"}:
+    print(f"E2E_HPC_FAIL: {case} folders {sorted(folders)}", file=sys.stderr)
+    sys.exit(1)
+if any(folder.startswith("/") for folder in folders):
+    print(f"E2E_HPC_FAIL: {case} absolute folder path", file=sys.stderr)
+    sys.exit(1)
+print(f"E2E_HPC_MARK: scan {case} opened the symlinked folder and listed linked/child")
+SCANPY
+}
+
 scan_truncated() {
     python3 - "$1" "$2" <<'PY'
 import json
@@ -475,6 +501,11 @@ SCAN_FILE="$(run_scan cluster-b /data/scenes "" | tail -n 1)"
 scan_ok "cluster-b root" "${SCAN_FILE}" /data/scenes
 scan_root_one "cluster-b root" "${SCAN_FILE}"
 echo "Step verified: HPC browse used cluster-b's non-PATH venv coperceive command."
+
+SCAN_FILE="$(run_scan cluster-a /data/scenes linked | tail -n 1)"
+scan_ok "cluster-a linked" "${SCAN_FILE}" /data/scenes
+scan_linked_children "cluster-a linked" "${SCAN_FILE}"
+echo "Step verified: HPC browse opened a symlinked folder and listed its children."
 
 SCAN_FILE="$(run_scan cluster-a /data/scenes datasets | tail -n 1)"
 scan_ok "cluster-a datasets" "${SCAN_FILE}" /data/scenes

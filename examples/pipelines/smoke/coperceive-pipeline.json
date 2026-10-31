@@ -1,0 +1,25 @@
+{
+  "name": "smoke",
+  "description": "Dependency-free smoke pipeline for exercising plan, submit, watch and history on a cluster. Writes a progress line and a valid metrics.json; no model or GPU.",
+  "script": "smoke_pipeline.py",
+  "interpreter": ["python3"],
+  "environment": {
+    "kind": "none"
+  },
+  "arguments": [
+    {
+      "name": "split",
+      "kind": "path",
+      "role": "test_data",
+      "required": true,
+      "help": "Scene or split file. The first non-empty line names the scene."
+    },
+    {
+      "name": "sleep_seconds",
+      "kind": "int",
+      "default": 30,
+      "help": "Seconds to sleep before writing metrics. The contract check caps this at one second."
+    }
+  ],
+  "output_contract": "coperceive-pipeline-1"
+}

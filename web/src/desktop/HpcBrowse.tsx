@@ -12,7 +12,6 @@ import { useEffect, useState } from "react";
 import {
   browseCrumbs,
   browseRows,
-  childBrowsePath,
   OPEN_BLOCKED_REASON,
   parentBrowsePath,
   relativeBrowsePath,
@@ -284,7 +283,11 @@ export default function HpcBrowse({
                     aria-label={`${row.kind} ${row.name}`}
                     onClick={() => {
                       if (row.kind === "folder" || row.kind === "dataset") {
-                        void load(root, childBrowsePath(current, row.name));
+                        // row.path is already relative to the data root (the scan
+                        // reports root-relative paths even for nested rows), so
+                        // send it unchanged; using the basename here would drop
+                        // the parent for a folder listed below the current one.
+                        void load(root, row.path);
                       } else {
                         setSelected(row.path);
                       }

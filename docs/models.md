@@ -254,3 +254,26 @@ Live mode (`coperceive serve --model <plugin>` streaming per-frame matches over 
 - `tests/test_model_cache.py` and `tests/test_model_dependencies.py` test cache hits without starting a child, on-disk checkpoint re-hashing when bytes change, `depends_on` automatic `<run_id>-<model>` runs, `--artifacts`, and `transient_artifacts` exclusion.
 - `tests/test_model_check.py`, `tests/test_model_cli.py`, `tests/test_model_slurm.py` and `tests/test_model_end_to_end.py` test all ten conformance rules, CLI exit codes, Slurm script generation (`bash -n`, dependency closure, `rsync` filter), and the full chain from `model run` through `eval run`, `/api/scenes/{id}/predictions`, `eval compare` and `--slurm`.
 - On the HPC (NVIDIA A40), `griffin25m-vehicle-plugin` (job 629288) reproduced job 627093's `boxes.parquet` byte-for-byte across all 10 val scenes (7,930 boxes, `+0.000` across all four evaluation configs).
+
+## Custom pipelines on a cluster (the smoke example)
+
+A cluster without an installed model plugin still needs a way to exercise **plan → submit → watch → history**. `examples/pipelines/smoke/` is a dependency-free pipeline for that: one Python file and its `coperceive-pipeline.json`. It uses only the standard library, requests no GPU, declares a `path` argument (`--split`) and an `int` (`--sleep-seconds`, default 30), then writes:
+
+- `predictions.jsonl` with one valid progress line (no model, so no boxes), and
+- `metrics.json` with the `coperceive-pipeline-metrics` schema and version 1.
+
+The contract check passes `--max-frames 3`; the smoke pipeline caps its sleep at one second in that mode. The split file's first non-empty line is reported as the run's scene.
+
+Copy the directory under a code root the server profile already trusts (do not put cluster paths in the repository):
+
+```bash
+cp -R examples/pipelines/smoke /path/to/your/code-root/smoke
+```
+
+Then in **New evaluation**, choose **Custom pipeline script**, enter the registration path on the cluster, for example:
+
+```text
+/path/to/your/code-root/smoke/coperceive-pipeline.json
+```
+
+and press **Load**. Fill the smoke split argument with an existing scene/split path inside the profile's data roots, optionally change the sleep, build the plan, and submit it. The pipeline only sleeps and writes the two contract files; replace its body with your model when you have one.
