@@ -26,6 +26,7 @@ scenes = [
 write_release(root, "test", scenes)
 PY
 BEFORE="$(find "${RAW}" -type f | sort | xargs sha256sum)"
+echo "Step CD-1 verified: synthetic OPV2V tree with 3 scenes"
 
 "${PYTHON}" -m coperceive.cli dataset detect --path "${RAW}/test" > "${TMP_DIR}/detect.json"
 "${PYTHON}" - "${TMP_DIR}/detect.json" <<'PY'
@@ -69,7 +70,7 @@ from fastapi.testclient import TestClient
 from coperceive.app.server import create_app
 cache = sys.argv[1]
 client = TestClient(create_app(root=cache, token="e2e-token"))
-response = client.get("/api/scenes")
+response = client.get("/api/scenes", headers={"Authorization": "Bearer e2e-token"})
 assert response.status_code == 200, response.text
 scenes = {item["scene_id"] for item in response.json()}
 assert scenes == {"scene_0000", "scene_0001", "scene_0002"}, scenes
