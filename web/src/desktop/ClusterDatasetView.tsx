@@ -23,7 +23,6 @@ import {
   formatLicenceInfo,
   formatSensorsSummary,
   formatStorageEstimate,
-  _setStubSceneState,
   type ClusterDetectDocument,
   type ClusterIndexDocument,
   type ClusterIndexScene,
@@ -207,14 +206,12 @@ export default function ClusterDatasetView({
   // Poll status every 5 seconds while anything is preparing
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const fetchStatus = async (currentCacheRoot: string) => {
-    if (!currentCacheRoot) return;
+  const fetchStatus = async () => {
     try {
       const statusDoc = await datasetStatus(profile.id, {
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
-        cacheRoot: currentCacheRoot,
       });
       const nextMap = new Map<string, ClusterSceneStatusEntry>();
       for (const entry of statusDoc.scenes) {
@@ -230,7 +227,6 @@ export default function ClusterDatasetView({
           adapter: dataset.adapter || "opv2v",
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
-          cacheRoot: currentCacheRoot,
         });
       }
 
@@ -248,26 +244,24 @@ export default function ClusterDatasetView({
     }
   };
 
-  const startPolling = (currentCacheRoot: string) => {
+  const startPolling = () => {
     if (pollTimerRef.current) return;
     setIsPolling(true);
-    void fetchStatus(currentCacheRoot);
+    void fetchStatus();
     pollTimerRef.current = setInterval(() => {
-      void fetchStatus(currentCacheRoot);
+      void fetchStatus();
     }, 5000);
   };
 
   useEffect(() => {
-    if (cacheRoot) {
-      void fetchStatus(cacheRoot);
-    }
+    void fetchStatus();
     return () => {
       if (pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
       }
     };
-  }, [cacheRoot]);
+  }, []);
 
   // Check if any scene is currently preparing; if so, ensure polling is active
   const hasPreparingScenes = useMemo(() => {
@@ -275,10 +269,10 @@ export default function ClusterDatasetView({
   }, [statuses]);
 
   useEffect(() => {
-    if (hasPreparingScenes && cacheRoot && !pollTimerRef.current) {
-      startPolling(cacheRoot);
+    if (hasPreparingScenes && !pollTimerRef.current) {
+      startPolling();
     }
-  }, [hasPreparingScenes, cacheRoot]);
+  }, [hasPreparingScenes]);
 
   // Open a scene flow
   const handleOpenScene = async (sceneId: string) => {
@@ -290,7 +284,6 @@ export default function ClusterDatasetView({
           adapter: dataset.adapter || "opv2v",
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
-          cacheRoot,
         });
       } catch (err) {
         alert(err instanceof Error ? err.message : String(err));
@@ -306,10 +299,7 @@ export default function ClusterDatasetView({
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
-        cacheRoot,
         scenes: [sceneId],
-        workers: 2,
-        partition: profile.profile.defaults.partition,
       });
       setSinglePreparePreview(preview);
     } catch (err) {
@@ -320,12 +310,11 @@ export default function ClusterDatasetView({
   const handleConfirmSingleScenePrepare = async () => {
     if (!singleScenePrepare || !singlePreparePreview) return;
     try {
-      await datasetPrepareSubmit(profile.id, singlePreparePreview, [singleScenePrepare], true);
-      _setStubSceneState(cacheRoot, singleScenePrepare, "preparing");
+      await datasetPrepareSubmit(profile.id, singlePreparePreview.preview_hash, true);
       setAutoOpenSceneId(singleScenePrepare);
       setSingleScenePrepare(null);
       setSinglePreparePreview(null);
-      startPolling(cacheRoot);
+      startPolling();
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
     }
@@ -339,15 +328,11 @@ export default function ClusterDatasetView({
     setPrepareOutcome(null);
 
     try {
-      const workers = profile.profile.defaults.cpus_per_task || 4;
       const preview = await datasetPrepare(profile.id, {
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
-        cacheRoot,
-        all: true,
-        workers,
-        partition: profile.profile.defaults.partition,
+        scenes: "all",
       });
       setPreparePreview(preview);
     } catch (err) {
@@ -361,11 +346,10 @@ export default function ClusterDatasetView({
     setPrepareError(null);
 
     try {
-      const allSceneIds = indexDoc?.scenes.map((s) => s.scene_id) || [];
-      const res = await datasetPrepareSubmit(profile.id, preparePreview, allSceneIds, true);
+      const res = await datasetPrepareSubmit(profile.id, preparePreview.preview_hash, true);
       setPrepareOutcome(`Submitted preparation job ${res.job_id}. Ingesting scenes on compute node.`);
       setShowPrepareModal(false);
-      startPolling(cacheRoot);
+      startPolling();
     } catch (err) {
       setPrepareError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -490,7 +474,7 @@ export default function ClusterDatasetView({
           {preparePreview ? (
             <>
               <div style={{ fontSize: "0.78rem", color: "#c9d1d9", marginBottom: "0.3rem" }}>
-                Script preview (CPU only · No GPU requested · {preparePreview.workers} workers):
+                Script preview (CPU only · No GPU requested · {preparePreview.cpus_per_task} CPU{preparePreview.cpus_per_task === 1 ? "" : "s"} · partition: {preparePreview.partition}):
               </div>
               <pre
                 aria-label="Prepare job script"
@@ -622,7 +606,7 @@ export default function ClusterDatasetView({
           <button
             type="button"
             style={secondaryButton}
-            onClick={() => void fetchStatus(cacheRoot)}
+            onClick={() => void fetchStatus()}
           >
             Refresh
           </button>
