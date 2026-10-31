@@ -8,9 +8,6 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PYTHON="${ROOT_DIR}/.venv/bin/python"
 if [ ! -x "${PYTHON}" ]; then PYTHON="python3"; fi
-if ! "${PYTHON}" -c "import yaml" >/dev/null 2>&1; then
-    "${PYTHON}" -m pip install --quiet pyyaml || { echo "E2E_DATASET_FAIL: PyYAML is required for the synthetic tree" >&2; exit 1; }
-fi
 TMP_DIR="$(mktemp -d /tmp/coperceive-dataset-e2e-XXXXXX)"
 trap 'rm -rf "${TMP_DIR}"' EXIT INT TERM HUP
 fail() { echo "E2E_DATASET_FAIL: $*" >&2; exit 1; }
@@ -18,15 +15,32 @@ step() { echo "Step CD-$1 verified: $2"; }
 
 RAW="${TMP_DIR}/raw/opv2v"
 "${PYTHON}" - "${RAW}" <<'PY'
-import sys
+import json, sys
 from pathlib import Path
-from tests.opencood_release import AgentTrack, Box, SceneSpec, write_release
-root = Path(sys.argv[1])
-scenes = [
-    SceneSpec(f"scene_{i:04d}", [AgentTrack(str(a), poses=[((float(a), float(f), 1.9), (0.0, 90.0, 0.0)) for f in range(4)], boxes=[Box(1, location=(1.0, 2.0, 0.0))]) for a in (641, 650, 651)], stems=(0, 2, 4, 6))
-    for i in range(3)
-]
-write_release(root, "test", scenes)
+root = Path(sys.argv[1]); split = "test"
+extrinsic = [[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]]
+intrinsic = [[335.6,0.0,400.0],[0.0,335.6,300.0],[0.0,0.0,1.0]]
+pcd_head = ("# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z rgb\n"
+            "SIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nWIDTH 1\nHEIGHT 1\n"
+            "VIEWPOINT 0 0 0 1 0 0 0\nPOINTS 1\nDATA ascii\n0.000000 0.000000 0.000000 0\n")
+for scene in range(3):
+    base = root / split / f"scene_{scene:04d}"; base.mkdir(parents=True)
+    (base / "data_protocol.yaml").write_text('{"world": {"fixed_delta_seconds": 0.05, "sync_mode": true}}')
+    for agent in ("641", "650", "651"):
+        folder = base / agent; folder.mkdir()
+        for frame in (0, 2, 4, 6):
+            record = {
+                "ego_speed": 5.0,
+                "lidar_pose": [float(agent), float(frame), 1.9, 0.0, 90.0, 0.0],
+                "true_ego_pos": [float(agent), float(frame), 0.0, 0.0, 90.0, 0.0],
+                "vehicles": {"650": {"angle": [0.0, 90.0, 0.0], "center": [0.0, 0.0, 0.75],
+                                      "extent": [2.4, 1.0, 0.75], "location": [float(agent), float(frame), 0.0],
+                                      "speed": 0.0}},
+                "camera0": {"cords": [float(agent), float(frame), 1.9, 0.0, 90.0, 0.0],
+                            "extrinsic": extrinsic, "intrinsic": intrinsic},
+            }
+            (folder / f"{frame:06d}.yaml").write_text(json.dumps(record))
+            (folder / f"{frame:06d}.pcd").write_text(pcd_head)
 PY
 BEFORE="$(find "${RAW}" -type f | sort | xargs sha256sum)"
 echo "Step CD-1 verified: synthetic OPV2V tree with 3 scenes"
