@@ -68,6 +68,8 @@ pub struct AppState {
     pub replacing_viewer: AtomicBool,
     pub pending_export: coperceive_desktop::export::PendingExportDestination,
     pub pending_update: Mutex<Option<tauri_plugin_updater::Update>>,
+    pub pending_dataset_prepare:
+        Mutex<Option<coperceive_desktop::dataset_jobs::PendingPrepare>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -86,6 +88,7 @@ impl Default for AppState {
             replacing_viewer: AtomicBool::new(false),
             pending_export: coperceive_desktop::export::PendingExportDestination::new(),
             pending_update: Mutex::new(None),
+            pending_dataset_prepare: Mutex::new(None),
         }
     }
 }
@@ -2245,6 +2248,204 @@ async fn list_run_history(
     .map_err(|error| format!("Could not read the run history: {error}"))?
 }
 
+/// Render the CPU-only Slurm script that prepares selected dataset scenes.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn dataset_prepare(
+    state: tauri::State<'_, Arc<AppState>>,
+    profile_id: String,
+    adapter: String,
+    raw_root: String,
+    split: Option<String>,
+    scenes: Option<serde_json::Value>,
+    workers: Option<u32>,
+) -> Result<serde_json::Value, String> {
+    let scenes: Option<Vec<String>> = match scenes {
+        None => None,
+        Some(serde_json::Value::String(text)) if text == "all" => None,
+        Some(serde_json::Value::Array(items)) => Some(
+            items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .map(str::to_string)
+                .collect(),
+        ),
+        Some(_) => return Err("scenes must be a list of scene ids or \"all\".".to_string()),
+    };
+    let (preview, pending) = tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        let index = coperceive_desktop::cluster_datasets::index(
+            &runner,
+            &entry.profile,
+            &adapter,
+            &raw_root,
+        )?;
+        if let Some(split) = split.as_deref() {
+            if index.get("split").and_then(serde_json::Value::as_str) != Some(split) {
+                return Err("The dataset split does not match the raw root.".to_string());
+            }
+        }
+        let cache_relative = index
+            .get("cache")
+            .and_then(|cache| cache.get("relative_path"))
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| "The dataset index did not return a cache path.".to_string())?
+            .to_string();
+        let estimated = index
+            .get("estimated_cache_bytes")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let request = coperceive_desktop::dataset_jobs::DatasetPrepareRequest {
+            adapter: adapter.clone(),
+            raw_root: raw_root.clone(),
+            split: index
+                .get("split")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+            scenes: scenes.clone(),
+            workers: workers.unwrap_or(1).max(1),
+        };
+        let preview = coperceive_desktop::dataset_jobs::render_prepare_script(
+            &entry.profile,
+            &request,
+            &cache_relative,
+            estimated,
+        )?;
+        let pending = coperceive_desktop::dataset_jobs::PendingPrepare {
+            profile_id: entry.id.clone(),
+            runner,
+            request,
+            preview: preview.clone(),
+            script: preview.script.clone(),
+        };
+        Ok((preview, pending))
+    })
+    .await
+    .map_err(|error| format!("Dataset preparation preview could not finish: {error}"))??;
+    if let Ok(mut lock) = state.pending_dataset_prepare.lock() {
+        *lock = Some(pending);
+    }
+    Ok(serde_json::json!({
+        "plan_id": preview.plan_id,
+        "job_name": preview.job_name,
+        "partition": preview.partition,
+        "walltime": preview.walltime,
+        "cpus_per_task": preview.cpus_per_task,
+        "gres": preview.gres,
+        "estimated_cache_bytes": preview.estimated_cache_bytes,
+        "script": preview.script,
+        "preview_hash": preview.preview_hash,
+    }))
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn dataset_prepare_submit(
+    state: tauri::State<'_, Arc<AppState>>,
+    profile_id: String,
+    preview_hash: String,
+    confirmed: bool,
+) -> Result<serde_json::Value, String> {
+    let pending = state
+        .pending_dataset_prepare
+        .lock()
+        .ok()
+        .and_then(|mut lock| lock.take());
+    let pending = pending.ok_or_else(|| {
+        "Generate the dataset preparation preview first. Nothing was submitted.".to_string()
+    })?;
+    if pending.profile_id != profile_id {
+        return Err("The preparation preview belongs to a different server profile.".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        coperceive_desktop::dataset_jobs::submit_prepared(
+            &pending.runner,
+            &entry,
+            &pending,
+            &preview_hash,
+            confirmed,
+        )
+    })
+    .await
+    .map_err(|error| format!("Dataset preparation submit could not finish: {error}"))?
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn dataset_status(
+    profile_id: String,
+    adapter: String,
+    raw_root: String,
+    split: Option<String>,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+            &entry.profile,
+            &adapter,
+            &raw_root,
+            split.as_deref(),
+        )?;
+        let command = coperceive_desktop::ssh::quote_remote_argv(
+            &coperceive_desktop::hpc::coperceive_argv(
+                &entry.profile,
+                &[
+                    "dataset".to_string(),
+                    "status".to_string(),
+                    "--cache".to_string(),
+                    cache,
+                ],
+            ),
+        );
+        let result = coperceive_desktop::slurm_adapter::RemoteRunner::run(
+            &runner,
+            &command,
+            std::time::Duration::from_secs(45),
+            None,
+        )?;
+        let text = result.stdout.trim();
+        if let Ok(document) = serde_json::from_str::<serde_json::Value>(text) {
+            if document.get("schema").and_then(serde_json::Value::as_str)
+                == Some("coperceive-cluster-scene-status-1")
+            {
+                return Ok(document);
+            }
+            if let Some(error) = document.get("error").and_then(serde_json::Value::as_str) {
+                return Err(error.to_string());
+            }
+        }
+        Err("The cluster returned an unexpected dataset status document.".to_string())
+    })
+    .await
+    .map_err(|error| format!("Dataset status could not finish: {error}"))?
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn dataset_open(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    profile_id: String,
+    adapter: String,
+    raw_root: String,
+    split: Option<String>,
+    scene_id: Option<String>,
+) -> Result<SessionPayload, String> {
+    let entry = find_server_entry(&profile_id)?;
+    let cache = coperceive_desktop::dataset_jobs::cache_absolute(
+        &entry.profile,
+        &adapter,
+        &raw_root,
+        split.as_deref(),
+    )?;
+    let _ = scene_id;
+    let alias = entry.profile.ssh_target()?;
+    remote_connect(app, state, alias, cache, None, Some(profile_id)).await
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
@@ -2522,6 +2723,10 @@ fn main() {
             read_custom_pipeline,
             dataset_detect,
             dataset_index,
+            dataset_prepare,
+            dataset_prepare_submit,
+            dataset_status,
+            dataset_open,
             build_run_plan,
             save_run_plan,
             preview_submission,

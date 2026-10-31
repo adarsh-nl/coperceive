@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 """Synthetic adapter layouts for cluster dataset detect/index. No dataset bytes."""
 
 from __future__ import annotations
@@ -7,14 +8,20 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
+import pytest
 from coperceive.cluster_datasets import (
     CACHE_DIR,
     DETECT_SCHEMA,
     INDEX_SCHEMA,
+    SCENE_STATUS_SCHEMA,
+    DatasetError,
     cache_relative_path,
+    dataset_status_document,
     detect_cluster_dataset,
     index_cluster_dataset,
+    prepare_cluster_dataset,
 )
 
 from tests.griffin_release import write_release as write_griffin
@@ -85,6 +92,8 @@ def test_index_reads_every_scene_and_leaves_the_raw_tree_alone(tmp_path: Path) -
         assert scene["sample_count"] == 3
         assert scene["duration_s"] == 0.15
         assert scene["sensors"]["sensors"] > 0
+    assert result["estimated_cache_bytes"] > 0
+    assert "sum of file sizes" in result["estimated_cache_bytes_method"]
     assert result["fingerprint"]["algorithm"] == "sha1-mtime-size-v1"
     assert len(result["fingerprint"]["digest"]) == 40
     assert result["fingerprint"]["entries"] > 0
@@ -136,3 +145,70 @@ def test_cache_relative_path_uses_realpath_hash_and_all_for_griffin(tmp_path: Pa
     assert relative.startswith(f"{CACHE_DIR}/griffin/")
     assert relative.endswith("/all")
     assert ".." not in relative
+
+
+def _cache(tmp_path: Path, raw: Path) -> Path:
+    return tmp_path / "cache" / "opv2v" / "hash" / "test"
+
+
+def test_prepare_one_scene_is_atomic_incremental_and_idempotent(tmp_path: Path) -> None:
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    first = prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0001"])
+    states = {scene["scene_id"]: scene["state"] for scene in first["scenes"]}
+    assert states == {"scene_0001": "ready"}
+    assert (cache / "scene_0001" / "manifest.json").is_file()
+    assert (cache / "scene_0001" / "COMPLETE.json").is_file()
+    assert not (cache / "scene_0002").exists()
+    assert (cache / "dataset.json").is_file()
+
+    second = prepare_cluster_dataset("opv2v", raw / "test", cache)
+    states = {scene["scene_id"]: scene["state"] for scene in second["scenes"]}
+    assert states == {"scene_0001": "ready", "scene_0002": "ready"}
+    status = dataset_status_document(cache)
+    assert status["schema"] == SCENE_STATUS_SCHEMA
+    assert {scene["scene_id"] for scene in status["scenes"]} == {"scene_0001", "scene_0002"}
+
+
+def test_one_failed_scene_does_not_stop_the_others(tmp_path: Path) -> None:
+    raw = tmp_path / "opv2v"
+    write_opencood(
+        raw,
+        "test",
+        [two_cav_scene("scene_0001"), two_cav_scene("scene_0002")],
+    )
+    (raw / "test" / "scene_0002" / "641" / "000069.yaml").write_text(
+        "not: [valid", encoding="utf-8"
+    )
+    cache = _cache(tmp_path, raw)
+    result = prepare_cluster_dataset("opv2v", raw / "test", cache)
+    states = {scene["scene_id"]: scene for scene in result["scenes"]}
+    assert states["scene_0001"]["state"] == "ready"
+    assert states["scene_0002"]["state"] == "failed"
+    assert states["scene_0002"]["reason"]
+    assert not (cache / "scene_0002").exists()
+
+
+def test_cache_inside_the_raw_root_is_refused(tmp_path: Path) -> None:
+    raw = _opv2v(tmp_path / "opv2v")
+    with pytest.raises(DatasetError, match="must not be inside"):
+        prepare_cluster_dataset("opv2v", raw / "test", raw / "cache")
+
+
+def test_a_partial_cache_lists_only_ready_scenes_to_the_viewer(tmp_path: Path) -> None:
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0001"])
+    (cache / "scene_9999").mkdir()  # a preparing/partial-looking directory
+    from coperceive.app.server import create_app
+    from fastapi.testclient import TestClient
+
+    client = TestClient(create_app(root=cache, token=None))
+    response = client.get("/api/scenes")
+    assert response.status_code == 200
+    payload: object = response.json()
+    assert isinstance(payload, list)
+    scenes = {
+        cast(dict[str, object], item)["scene_id"] for item in payload if isinstance(item, dict)
+    }
+    assert scenes == {"scene_0001"}

@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportArgumentType=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportIndexIssue=false, reportUnknownLambdaType=false
 """Read-only detection and indexing of raw datasets on a cluster.
 
 This is the login-node half of cluster datasets: it recognises a built-in raw
@@ -10,13 +11,16 @@ point clouds. The schemas are frozen in ``docs/datasets/cluster-datasets.md``.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import shutil
 import time
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, cast
 
 from coperceive.adapters.build import BuildError, ManifestAdapter
+from coperceive.adapters.ingest import IngestError, ingest
 from coperceive.adapters.registry import RegistryError, resolve_adapter
 from coperceive.adapters.spec import SpecError
 
@@ -24,6 +28,7 @@ DETECT_SCHEMA = "coperceive-cluster-detect-1"
 INDEX_SCHEMA = "coperceive-cluster-index-1"
 CACHE_SCHEMA = "coperceive-cluster-dataset-cache-1"
 SCENE_STATUS_SCHEMA = "coperceive-cluster-scene-status-1"
+PREPARE_PROGRESS_SCHEMA = "coperceive-cluster-prepare-progress-1"
 CACHE_DIR = "coperceive-cache"
 DEFAULT_MAX_ENTRIES = 200_000
 DEFAULT_MAX_SCENES = 5_000
@@ -164,6 +169,300 @@ def cache_relative_path(adapter: str, raw_root: str | Path, split: str | None) -
     return "/".join(pieces)
 
 
+def _inside(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+        return True
+    except ValueError:
+        return False
+
+
+def _directory_bytes(root: Path, *, max_entries: int) -> int:
+    total = 0
+    seen = 0
+    pending = [root]
+    while pending and seen < max_entries:
+        folder = pending.pop()
+        try:
+            with os.scandir(folder) as iterator:
+                for entry in iterator:
+                    if seen >= max_entries:
+                        break
+                    seen += 1
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            pending.append(Path(entry.path))
+                        elif entry.is_file(follow_symlinks=False):
+                            total += entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        continue
+        except OSError:
+            continue
+    return total
+
+
+def cache_split_dir(
+    results_root: str | Path, adapter: str, raw_root: str | Path, split: str | None
+) -> Path:
+    return Path(results_root) / cache_relative_path(adapter, raw_root, split)
+
+
+def _dataset_json_path(cache_dir: Path) -> Path:
+    return cache_dir / "dataset.json"
+
+
+def _read_dataset(cache_dir: Path) -> dict[str, Any]:
+    path = _dataset_json_path(cache_dir)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DatasetError(f"cannot read {path}: {exc}") from None
+    if payload.get("schema") != CACHE_SCHEMA:
+        raise DatasetError(f"{path} is not a {CACHE_SCHEMA} document")
+    return cast(dict[str, Any], payload)
+
+
+def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = _dataset_json_path(cache_dir)
+    temporary = cache_dir / f".dataset.json.{os.getpid()}.tmp"
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+
+
+def _scene_ready(cache_dir: Path, scene_id: str) -> bool:
+    folder = cache_dir / scene_id
+    return (folder / "manifest.json").is_file() and (folder / "COMPLETE.json").is_file()
+
+
+def _status_record(cache_dir: Path, record: Mapping[str, Any]) -> dict[str, Any]:
+    return {
+        "scene_id": record.get("scene_id"),
+        "state": record.get("state"),
+        "reason": record.get("reason"),
+        "job_id": record.get("job_id"),
+        "prepared_unix": record.get("prepared_unix"),
+        "scene_dir": record.get("scene_dir"),
+    }
+
+
+def prepare_progress(
+    stage: str,
+    *,
+    scene_id: str | None,
+    done: int,
+    total: int,
+    message: str,
+    state: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "schema": PREPARE_PROGRESS_SCHEMA,
+        "stage": stage,
+        "scene_id": scene_id,
+        "state": state,
+        "done": done,
+        "total": total,
+        "message": message,
+    }
+
+
+def prepare_cluster_dataset(
+    adapter_name: str,
+    raw_root: str | Path,
+    cache_dir: str | Path,
+    *,
+    scenes: list[str] | None = None,
+    workers: int = 1,
+    progress: Callable[[dict[str, Any]], None] | None = None,
+    timeout_s: float = DEFAULT_TIMEOUT_S,
+) -> dict[str, Any]:
+    """Prepare selected scenes into the cache, atomically and incrementally."""
+    if adapter_name not in _BUILTIN:
+        raise DatasetError(f"{adapter_name!r} is not a built-in cluster adapter")
+    raw = _real(raw_root)
+    cache = _real(cache_dir)
+    if not raw.is_dir():
+        raise DatasetError(f"raw root is not a directory: {raw}")
+    raw, split = _raw_and_split(adapter_name, raw)
+    if _inside(cache, raw):
+        raise DatasetError("the cache directory must not be inside the raw dataset root")
+    params = _params_for(adapter_name, raw, split)
+    adapter = resolve_adapter(adapter_name)
+    refs = list(adapter.scenes(raw, params))
+    wanted = set(scenes) if scenes else None
+    selected = [ref for ref in refs if wanted is None or ref.scene_id in wanted]
+    if wanted is not None:
+        missing = wanted - {ref.scene_id for ref in refs}
+        if missing:
+            raise DatasetError(f"unknown scene(s): {', '.join(sorted(missing))}")
+    if not selected:
+        raise DatasetError("no scenes selected")
+    fingerprint = _fingerprint(
+        raw / split if split else raw,
+        max_entries=DEFAULT_MAX_ENTRIES,
+        deadline=time.monotonic() + max(2.0, timeout_s),
+    )
+    notify = progress or (lambda _event: None)
+    try:
+        dataset = _read_dataset(cache)
+    except DatasetError:
+        dataset = {
+            "schema": CACHE_SCHEMA,
+            "adapter": adapter_name,
+            "raw_root": str(raw),
+            "split": split,
+            "params": params,
+            "cache_root": str(cache),
+            "raw_fingerprint": fingerprint,
+            "created_unix": int(time.time()),
+            "updated_unix": int(time.time()),
+            "scenes": {},
+        }
+    if dataset.get("raw_fingerprint", {}).get("digest") != fingerprint["digest"]:
+        for record in dataset.get("scenes", {}).values():
+            if record.get("state") == "ready":
+                record["state"] = "stale"
+                record["reason"] = "raw dataset fingerprint changed"
+    dataset["raw_fingerprint"] = fingerprint
+    dataset["updated_unix"] = int(time.time())
+    job_id = os.environ.get("SLURM_JOB_ID", "").strip() or None
+    total = len(selected)
+    done = 0
+    for ref in selected:
+        scene_id = ref.scene_id
+        record = dataset.setdefault("scenes", {}).setdefault(
+            scene_id,
+            {
+                "state": "not_prepared",
+                "reason": None,
+                "job_id": None,
+                "prepared_unix": None,
+                "scene_dir": scene_id,
+            },
+        )
+        record["job_id"] = job_id
+        if record.get("state") == "ready" and _scene_ready(cache, scene_id):
+            done += 1
+            notify(
+                prepare_progress(
+                    "scene",
+                    scene_id=scene_id,
+                    done=done,
+                    total=total,
+                    message="ready",
+                    state="ready",
+                )
+            )
+            continue
+        record["state"] = "preparing"
+        record["reason"] = None
+        dataset["updated_unix"] = int(time.time())
+        _write_dataset(cache, dataset)
+        notify(
+            prepare_progress(
+                "scene",
+                scene_id=scene_id,
+                done=done,
+                total=total,
+                message="preparing",
+                state="preparing",
+            )
+        )
+        partial_root = cache / ".partial"
+        partial_root.mkdir(parents=True, exist_ok=True)
+        temporary = partial_root / scene_id
+        if temporary.exists():
+            shutil.rmtree(temporary, ignore_errors=True)
+        try:
+            ingest(
+                adapter,
+                raw,
+                partial_root,
+                params=params,
+                workers=1,
+                scene_ids=[scene_id],
+            )
+            produced = partial_root / scene_id
+            if (
+                not (produced / "manifest.json").is_file()
+                or not (produced / "COMPLETE.json").is_file()
+            ):
+                raise DatasetError("ingest finished without a complete scene")
+            destination = cache / scene_id
+            if destination.exists():
+                shutil.rmtree(destination)
+            os.replace(produced, destination)
+            record["state"] = "ready"
+            record["reason"] = None
+            record["prepared_unix"] = int(time.time())
+        except (IngestError, BuildError, DatasetError, OSError, ValueError) as exc:
+            record["state"] = "failed"
+            record["reason"] = str(exc)
+        finally:
+            if temporary.exists():
+                shutil.rmtree(temporary, ignore_errors=True)
+            try:
+                partial_root.rmdir()
+            except OSError:
+                pass
+        done += 1
+        dataset["updated_unix"] = int(time.time())
+        _write_dataset(cache, dataset)
+        notify(
+            prepare_progress(
+                "scene",
+                scene_id=scene_id,
+                done=done,
+                total=total,
+                message=record["state"],
+                state=record["state"],
+            )
+        )
+    dataset["updated_unix"] = int(time.time())
+    _write_dataset(cache, dataset)
+    notify(
+        prepare_progress(
+            "done", scene_id=None, done=done, total=total, message="finished", state=None
+        )
+    )
+    return dataset_status_document(cache)
+
+
+def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True) -> dict[str, Any]:
+    cache = _real(cache_dir)
+    dataset = _read_dataset(cache)
+    fingerprint = dataset.get("raw_fingerprint", {})
+    if refresh_stale and isinstance(fingerprint, dict):
+        raw_root = dataset.get("raw_root")
+        split = dataset.get("split")
+        if isinstance(raw_root, str):
+            root = Path(raw_root) / split if split else Path(raw_root)
+            current = _fingerprint(
+                root,
+                max_entries=DEFAULT_MAX_ENTRIES,
+                deadline=time.monotonic() + max(2.0, DEFAULT_TIMEOUT_S),
+            )
+            if current["digest"] != fingerprint.get("digest"):
+                for record in dataset.get("scenes", {}).values():
+                    if record.get("state") == "ready":
+                        record["state"] = "stale"
+                        record["reason"] = "raw dataset fingerprint changed"
+    records = []
+    for scene_id, record in sorted(dataset.get("scenes", {}).items()):
+        item = _status_record(cache, record)
+        item["scene_id"] = scene_id
+        records.append(item)
+    return {
+        "schema": SCENE_STATUS_SCHEMA,
+        "cache_root": str(cache),
+        "adapter": dataset.get("adapter"),
+        "raw_root": dataset.get("raw_root"),
+        "split": dataset.get("split"),
+        "updated_unix": dataset.get("updated_unix"),
+        "scenes": records,
+    }
+
+
 def detect_cluster_dataset(
     path: str | Path, *, max_scenes: int = DEFAULT_MAX_SCENES
 ) -> dict[str, Any]:
@@ -283,6 +582,10 @@ def index_cluster_dataset(
                 "raw": {"scene_id": ref.scene_id},
             }
         )
+    estimated_cache_bytes = 0
+    for ref in refs:
+        scene_dir = raw / split / ref.scene_id if split else raw / ref.scene_id
+        estimated_cache_bytes += _directory_bytes(scene_dir, max_entries=50_000)
     errors = list(report.errors)
     return {
         "schema": INDEX_SCHEMA,
@@ -296,6 +599,10 @@ def index_cluster_dataset(
             "relative_path": cache_relative_path(adapter_name, raw, split),
         },
         "scene_count": len(scenes),
+        "estimated_cache_bytes": estimated_cache_bytes,
+        "estimated_cache_bytes_method": (
+            "sum of file sizes under each scene directory, metadata only"
+        ),
         "scenes": scenes,
         "errors": errors,
         "truncated": len(refs) >= max_scenes,
@@ -312,8 +619,12 @@ __all__ = [
     "DETECT_SCHEMA",
     "DatasetError",
     "INDEX_SCHEMA",
+    "PREPARE_PROGRESS_SCHEMA",
     "SCENE_STATUS_SCHEMA",
     "cache_relative_path",
+    "cache_split_dir",
+    "dataset_status_document",
     "detect_cluster_dataset",
     "index_cluster_dataset",
+    "prepare_cluster_dataset",
 ]
