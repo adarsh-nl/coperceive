@@ -1501,13 +1501,13 @@ def test_viewer_fullscreen_mode(session: _Session) -> None:
     assert page.locator("aside.panel-right").is_visible()
 
     # Toolbar button toggles full screen
-    fs_btn = page.locator("button:has-text('Full Screen')")
+    fs_btn = page.locator(".top-actions button:has-text('Full Screen')")
     fs_btn.click()
     assert _is_fullscreen(page)
-    assert page.locator("button:has-text('Exit Full Screen')").is_visible()
+    assert page.locator(".top-actions button:has-text('Exit Full Screen')").is_visible()
 
     # Click Exit Full Screen button
-    page.locator("button:has-text('Exit Full Screen')").click()
+    page.locator(".top-actions button:has-text('Exit Full Screen')").click()
     assert not _is_fullscreen(page)
 
     # Typing 'f' into an active text input must NOT toggle full screen

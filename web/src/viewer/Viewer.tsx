@@ -3698,6 +3698,7 @@ export default function Viewer({
   };
 
   const onLeftKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
     const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
     if (e.key === "ArrowLeft") {
       e.preventDefault();
@@ -3723,6 +3724,7 @@ export default function Viewer({
   };
 
   const onRightKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
     const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
     if (e.key === "ArrowLeft") {
       e.preventDefault();
@@ -3748,6 +3750,7 @@ export default function Viewer({
   };
 
   const onStripKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
     const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
     if (e.key === "ArrowUp") {
       e.preventDefault();

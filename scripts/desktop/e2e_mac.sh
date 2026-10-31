@@ -727,53 +727,6 @@ left_dom_w = eval_js("document.querySelector('aside.panel')?.getBoundingClientRe
 print(f"Relaunched left panel DOM width: {left_dom_w}")
 assert abs(left_dom_w - 320) < 2, f"Expected DOM width ~320, got {left_dom_w}"
 
-print("Testing double-click reset of left panel resizer...")
-eval_js("""(() => {
-    const resizer = document.querySelector('.panel-resizer-left');
-    if (!resizer) throw new Error("panel-resizer-left not found");
-    resizer.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-})()""")
-layout_after_reset = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
-assert layout_after_reset.get("left_px") == 248, f"Expected left_px reset to 248, got {layout_after_reset}"
-
-print("Testing keyboard resize on focused handle...")
-eval_js("""(() => {
-    const resizer = document.querySelector('.panel-resizer-left');
-    if (!resizer) throw new Error("panel-resizer-left not found");
-    resizer.focus();
-    resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
-})()""")
-layout_after_kb = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
-assert layout_after_kb.get("left_px") == 258, f"Expected left_px incremented by 10 to 258, got {layout_after_kb}"
-
-print("Testing full-screen 3D view toggle with F and Esc...")
-eval_js("""(() => {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F', bubbles: true }));
-})()""")
-time.sleep(0.3)
-is_fs = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
-ws_fs = eval_js("Boolean(document.querySelector('.workspace.is-fullscreen'))")
-left_panel_hidden = eval_js("document.querySelector('aside.panel:not(.panel-right)') === null")
-right_panel_hidden = eval_js("document.querySelector('aside.panel-right') === null")
-timeline_visible = eval_js("document.querySelector('.timeline') !== null")
-print(f"Full screen active: is_fs={is_fs}, ws_fs={ws_fs}, left_hidden={left_panel_hidden}, right_hidden={right_panel_hidden}, timeline_vis={timeline_visible}")
-assert is_fs and ws_fs and left_panel_hidden and right_panel_hidden and timeline_visible, "Full screen must hide panels and keep timeline"
-
-import subprocess
-screenshot_dir = "${SCREENSHOT_DIR}"
-subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03b-fullscreen.png"], check=False)
-
-eval_js("""(() => {
-    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-})()""")
-time.sleep(0.3)
-is_fs_after = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
-layout_restored = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
-print(f"Exited full screen: is_fs_after={is_fs_after}, layout_restored={layout_restored}")
-assert not is_fs_after, "Escape must exit full screen"
-assert layout_restored.get("left_px") == 258, f"Previous sizes must be preserved, got {layout_restored}"
-subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03c-resized-panels.png"], check=False)
-
 print("Verifying resume never restores into the end zone (must restore 0)...")
 pb_restored = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null")
 print(f"Relaunched playback state: {pb_restored}")
@@ -894,6 +847,53 @@ report = eval_retry("2-read-gaps", "window.__RECORD_GAPS__")
 print(f"Playback requirement (c) verified: max frame gap = {report['maxGapMs']:.1f}ms, loop wraps observed = {report['wraps']}, frames seen = {report['framesSeen']}")
 assert report["wraps"] >= 1, f"Expected at least 1 loop wrap over 15s, got {report['wraps']}"
 assert report["maxGapMs"] <= 300.0, f"Frame change gap exceeded 300ms: {report['maxGapMs']:.1f}ms"
+
+print("Testing double-click reset of left panel resizer...")
+eval_js("""(() => {
+    const resizer = document.querySelector('.panel-resizer-left');
+    if (!resizer) throw new Error("panel-resizer-left not found");
+    resizer.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+})()""")
+layout_after_reset = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+assert layout_after_reset.get("left_px") == 248, f"Expected left_px reset to 248, got {layout_after_reset}"
+
+print("Testing keyboard resize on focused handle...")
+eval_js("""(() => {
+    const resizer = document.querySelector('.panel-resizer-left');
+    if (!resizer) throw new Error("panel-resizer-left not found");
+    resizer.focus();
+    resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+})()""")
+layout_after_kb = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+assert layout_after_kb.get("left_px") == 258, f"Expected left_px incremented by 10 to 258, got {layout_after_kb}"
+
+print("Testing full-screen 3D view toggle with F and Esc...")
+eval_js("""(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F', bubbles: true }));
+})()""")
+time.sleep(0.3)
+is_fs = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
+ws_fs = eval_js("Boolean(document.querySelector('.workspace.is-fullscreen'))")
+left_panel_hidden = eval_js("document.querySelector('aside.panel:not(.panel-right)') === null")
+right_panel_hidden = eval_js("document.querySelector('aside.panel-right') === null")
+timeline_visible = eval_js("document.querySelector('.timeline') !== null")
+print(f"Full screen active: is_fs={is_fs}, ws_fs={ws_fs}, left_hidden={left_panel_hidden}, right_hidden={right_panel_hidden}, timeline_vis={timeline_visible}")
+assert is_fs and ws_fs and left_panel_hidden and right_panel_hidden and timeline_visible, "Full screen must hide panels and keep timeline"
+
+import subprocess
+screenshot_dir = "${SCREENSHOT_DIR}"
+subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03b-fullscreen.png"], check=False)
+
+eval_js("""(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+})()""")
+time.sleep(0.3)
+is_fs_after = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
+layout_restored = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+print(f"Exited full screen: is_fs_after={is_fs_after}, layout_restored={layout_restored}")
+assert not is_fs_after, "Escape must exit full screen"
+assert layout_restored.get("left_px") == 258, f"Previous sizes must be preserved, got {layout_restored}"
+subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03c-resized-panels.png"], check=False)
 
 print("Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.")
 EOF
