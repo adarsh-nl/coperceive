@@ -1426,12 +1426,12 @@ def test_viewer_resizable_panels_and_persistence(browser: Browser, viewer_url: s
         assert left_resizer.get_attribute("role") == "separator"
         assert left_resizer.get_attribute("aria-valuenow") == "310"
 
-        # 2. Keyboard resize on left resizer (ArrowRight increments by 16px)
+        # 2. Keyboard resize on left resizer (ArrowRight increments by 10px)
         left_resizer.focus()
         page.keyboard.press("ArrowRight")
         sizes = page.evaluate("() => window.__COPERCEIVE_LAYOUT_SIZES__()")
-        assert sizes["left_px"] == 326
-        assert left_resizer.get_attribute("aria-valuenow") == "326"
+        assert sizes["left_px"] == 320
+        assert left_resizer.get_attribute("aria-valuenow") == "320"
 
         page.keyboard.press("ArrowLeft")
         sizes = page.evaluate("() => window.__COPERCEIVE_LAYOUT_SIZES__()")
@@ -1449,8 +1449,8 @@ def test_viewer_resizable_panels_and_persistence(browser: Browser, viewer_url: s
         right_resizer.focus()
         page.keyboard.press("ArrowLeft")  # ArrowLeft widens right panel
         sizes = page.evaluate("() => window.__COPERCEIVE_LAYOUT_SIZES__()")
-        assert sizes["right_px"] == 346
-        assert right_resizer.get_attribute("aria-valuenow") == "346"
+        assert sizes["right_px"] == 340
+        assert right_resizer.get_attribute("aria-valuenow") == "340"
 
         right_resizer.dblclick()
         sizes = page.evaluate("() => window.__COPERCEIVE_LAYOUT_SIZES__()")
@@ -1462,7 +1462,7 @@ def test_viewer_resizable_panels_and_persistence(browser: Browser, viewer_url: s
             strip_resizer.focus()
             page.keyboard.press("ArrowUp")
             sizes = page.evaluate("() => window.__COPERCEIVE_LAYOUT_SIZES__()")
-            assert sizes["strip_px"] == 136
+            assert sizes["strip_px"] == 130
             strip_resizer.dblclick()
             sizes = page.evaluate("() => window.__COPERCEIVE_LAYOUT_SIZES__()")
             assert sizes["strip_px"] == 96  # DEFAULT_STRIP_PX
@@ -1481,7 +1481,7 @@ def test_viewer_fullscreen_mode(session: _Session) -> None:
     session.wait_status(SCENE_FULL)
 
     # Panels visible initially
-    assert page.locator("aside.panel").is_visible()
+    assert page.locator("aside.panel:not(.panel-right)").is_visible()
     assert page.locator("aside.panel-right").is_visible()
     assert not _is_fullscreen(page)
 
@@ -1489,7 +1489,7 @@ def test_viewer_fullscreen_mode(session: _Session) -> None:
     page.keyboard.press("f")
     assert _is_fullscreen(page)
     assert page.locator(".workspace.is-fullscreen").is_visible()
-    assert page.locator("aside.panel").count() == 0
+    assert page.locator("aside.panel:not(.panel-right)").count() == 0
     assert page.locator("aside.panel-right").count() == 0
     assert page.locator(".timeline").is_visible()
     assert page.locator("button.fullscreen-exit-btn").is_visible()
@@ -1497,7 +1497,7 @@ def test_viewer_fullscreen_mode(session: _Session) -> None:
     # Press 'Escape' to exit
     page.keyboard.press("Escape")
     assert not _is_fullscreen(page)
-    assert page.locator("aside.panel").is_visible()
+    assert page.locator("aside.panel:not(.panel-right)").is_visible()
     assert page.locator("aside.panel-right").is_visible()
 
     # Toolbar button toggles full screen
@@ -1533,27 +1533,27 @@ def test_playback_during_resize_and_fullscreen_has_no_stall(session: _Session) -
     page = session.page
     page.locator("button[aria-label=Play]").click()
     play_start = page.evaluate("performance.now()")
-    page.wait_for_timeout(300)
+    page.wait_for_timeout(200)
 
     # Perform panel resize while playing
     page.evaluate("() => window.__COPERCEIVE_RESIZE_PANEL__?.('left', 320)")
-    page.wait_for_timeout(300)
+    page.wait_for_timeout(200)
 
     # Toggle full screen with shortcut
     page.keyboard.press("f")
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(200)
     assert _is_fullscreen(page)
 
     # Exit full screen
     page.keyboard.press("Escape")
-    page.wait_for_timeout(400)
+    page.wait_for_timeout(200)
     assert not _is_fullscreen(page)
 
     # Confirm still playing
     st = page.evaluate("() => window.__COPERCEIVE_PLAYBACK_STATE__()")
     assert st["playing"] is True, f"Playback must remain playing, got {st}"
 
-    page.wait_for_timeout(1000)
+    page.wait_for_timeout(600)
     stats = page.evaluate("window.__COPERCEIVE_FRAME_STATS__ || []")
     played = [stat for stat in stats if stat["at"] >= play_start]
     assert len(played) >= 8, played

@@ -744,7 +744,7 @@ eval_js("""(() => {
     resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
 })()""")
 layout_after_kb = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
-assert layout_after_kb.get("left_px") == 264, f"Expected left_px incremented by 16 to 264, got {layout_after_kb}"
+assert layout_after_kb.get("left_px") == 258, f"Expected left_px incremented by 10 to 258, got {layout_after_kb}"
 
 print("Testing full-screen 3D view toggle with F and Esc...")
 eval_js("""(() => {
@@ -753,14 +753,14 @@ eval_js("""(() => {
 time.sleep(0.3)
 is_fs = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
 ws_fs = eval_js("Boolean(document.querySelector('.workspace.is-fullscreen'))")
-left_panel_hidden = eval_js("document.querySelector('aside.panel') === null")
+left_panel_hidden = eval_js("document.querySelector('aside.panel:not(.panel-right)') === null")
 right_panel_hidden = eval_js("document.querySelector('aside.panel-right') === null")
 timeline_visible = eval_js("document.querySelector('.timeline') !== null")
 print(f"Full screen active: is_fs={is_fs}, ws_fs={ws_fs}, left_hidden={left_panel_hidden}, right_hidden={right_panel_hidden}, timeline_vis={timeline_visible}")
 assert is_fs and ws_fs and left_panel_hidden and right_panel_hidden and timeline_visible, "Full screen must hide panels and keep timeline"
 
 import subprocess
-screenshot_dir = "'"${SCREENSHOT_DIR}"'"
+screenshot_dir = "${SCREENSHOT_DIR}"
 subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03b-fullscreen.png"], check=False)
 
 eval_js("""(() => {
@@ -771,7 +771,7 @@ is_fs_after = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__C
 layout_restored = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
 print(f"Exited full screen: is_fs_after={is_fs_after}, layout_restored={layout_restored}")
 assert not is_fs_after, "Escape must exit full screen"
-assert layout_restored.get("left_px") == 264, f"Previous sizes must be preserved, got {layout_restored}"
+assert layout_restored.get("left_px") == 258, f"Previous sizes must be preserved, got {layout_restored}"
 subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03c-resized-panels.png"], check=False)
 
 print("Verifying resume never restores into the end zone (must restore 0)...")
