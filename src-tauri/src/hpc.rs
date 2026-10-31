@@ -138,6 +138,18 @@ fn validate_scratch_plain(text: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// The saved coperceive command followed by one subcommand and its arguments.
+/// Every remote call must use this instead of a bare `coperceive`, because a
+/// per-user install may only be importable by its venv interpreter.
+pub fn coperceive_argv(profile: &ServerProfile, args: &[String]) -> Vec<String> {
+    let mut argv = profile.environment.coperceive_command.clone();
+    if argv.is_empty() {
+        argv.push("coperceive".to_string());
+    }
+    argv.extend(args.iter().cloned());
+    argv
+}
+
 fn static_scratch_prefix(template: &str) -> String {
     let prefix = template.split('$').next().unwrap_or("").trim_end_matches('/');
     if prefix.is_empty() {
@@ -912,6 +924,26 @@ mod tests {
         assert!(error.contains("command that starts coperceive"), "{error}");
         assert!(error.contains("Python interpreter"), "{error}");
         assert!(!error.contains("coperceive_command"), "{error}");
+    }
+
+    #[test]
+    fn coperceive_argv_prefixes_the_saved_command() {
+        let mut profile = alpha();
+        profile.environment.coperceive_command = vec![
+            "/home/u/venv/bin/python".to_string(),
+            "-m".to_string(),
+            "coperceive".to_string(),
+        ];
+        assert_eq!(
+            coperceive_argv(&profile, &["remote".to_string(), "scan".to_string()]),
+            vec![
+                "/home/u/venv/bin/python",
+                "-m",
+                "coperceive",
+                "remote",
+                "scan"
+            ]
+        );
     }
 
     #[test]

@@ -12,6 +12,17 @@ set -u
 all_args="$*"
 remote="${!#:-}"
 
+# The packaged-app e2e sets this so a regression back to bare `coperceive`
+# (ignoring the saved venv argv) fails loudly instead of being silently accepted.
+if [ "${COPERCEIVE_E2E_REQUIRE_PREFIX:-}" = "1" ]; then
+    case "${remote}" in
+        "coperceive"|"coperceive "*)
+            echo "fake_ssh: bare coperceive is not on PATH; use the saved argv" >&2
+            exit 127
+            ;;
+    esac
+fi
+
 # Optional simulated remote filesystem for the "New evaluation" plan flow.
 # Paths in the plan fixtures are absolute on the cluster; here they map under
 # $FAKE_REMOTE_ROOT so the packaged-app e2e can inspect what was written.
@@ -92,6 +103,15 @@ case "$*" in
 esac
 
 case "${remote}" in
+    *"coperceive --version"*)
+        case "${all_args}" in
+            *cluster-a*) echo "coperceive 0.4.0" ;;
+            *cluster-b*) echo "coperceive 0.4.1" ;;
+            *cluster-save*) echo "coperceive 0.0.0" ;;
+            *) echo "coperceive 0.0.0" ;;
+        esac
+        exit 0
+        ;;
     true)
         exit 0
         ;;

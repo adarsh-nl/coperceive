@@ -356,8 +356,7 @@ pub fn import_predictions(
     let scene_id_row = head.success && first_line_has_scene_id(head.stdout.trim_end());
     let metrics = read_metrics(runner, profile, output_dir)?;
     let scenes = metrics.as_ref().map(run_scenes).unwrap_or_default();
-    let mut command: Vec<String> = profile.environment.coperceive_command.clone();
-    command.extend([
+    let mut subcommand = vec![
         "predictions".to_string(),
         "import".to_string(),
         predictions_file.clone(),
@@ -372,7 +371,8 @@ pub fn import_predictions(
         "coperceive-desktop".to_string(),
         "--score-note".to_string(),
         "pipeline metrics report; imported by coperceive desktop".to_string(),
-    ]);
+    ];
+    let mut command = crate::hpc::coperceive_argv(profile, &subcommand);
     if !scene_id_row {
         match scenes.as_slice() {
             [scene] => {

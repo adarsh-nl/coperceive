@@ -80,6 +80,7 @@ run_profile() {
 
     echo "--- HPC connection test for ${alias_name} ---"
     COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
     COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
     COPERCEIVE_TEST_HPC_SERVER="${fixture}" \
     COPERCEIVE_TEST_HPC_RESULT="${result_file}" \
@@ -183,6 +184,7 @@ run_scan() {
 
     echo "--- HPC browse scan for ${alias_name}: ${root} ${scan_path} ---"
     COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
     COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
     COPERCEIVE_TEST_HPC_SCAN_PROFILE="${fixture}" \
     COPERCEIVE_TEST_HPC_SCAN_RESULT="${result_file}" \
@@ -468,6 +470,11 @@ SCAN_FILE="$(run_scan cluster-a /data/scenes "" | tail -n 1)"
 scan_ok "cluster-a root" "${SCAN_FILE}" /data/scenes
 scan_root_one "cluster-a root" "${SCAN_FILE}"
 echo "Step verified: HPC browse listed data folders on cluster-a."
+
+SCAN_FILE="$(run_scan cluster-b /data/scenes "" | tail -n 1)"
+scan_ok "cluster-b root" "${SCAN_FILE}" /data/scenes
+scan_root_one "cluster-b root" "${SCAN_FILE}"
+echo "Step verified: HPC browse used cluster-b's non-PATH venv coperceive command."
 
 SCAN_FILE="$(run_scan cluster-a /data/scenes datasets | tail -n 1)"
 scan_ok "cluster-a datasets" "${SCAN_FILE}" /data/scenes

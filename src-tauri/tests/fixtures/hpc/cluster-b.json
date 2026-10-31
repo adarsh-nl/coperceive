@@ -32,7 +32,9 @@
       "interpreter": "/apps/python/3.12/bin/python",
       "container_image": null,
       "coperceive_command": [
-        "/apps/coperceive/bin/coperceive"
+        "/home/bob/coperceive-app/.venv/bin/python",
+        "-m",
+        "coperceive"
       ],
       "wheelhouse": null,
       "compute_has_internet": false

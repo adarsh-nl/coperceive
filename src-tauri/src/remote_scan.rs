@@ -237,7 +237,12 @@ pub fn validate_target(profile: &ServerProfile, root: &str, path: &str) -> Resul
 }
 
 /// Builds the full `coperceive remote scan ...` argv (program name first).
-pub fn scan_argv(root: &str, path: &str, limits: ScanLimits) -> Vec<String> {
+pub fn scan_argv(
+    command: &[String],
+    root: &str,
+    path: &str,
+    limits: ScanLimits,
+) -> Vec<String> {
     let path = {
         let trimmed = path.trim();
         if trimmed.is_empty() {
@@ -246,8 +251,11 @@ pub fn scan_argv(root: &str, path: &str, limits: ScanLimits) -> Vec<String> {
             trimmed.to_string()
         }
     };
-    vec![
-        "coperceive".to_string(),
+    let mut argv = command.to_vec();
+    if argv.is_empty() {
+        argv.push("coperceive".to_string());
+    }
+    argv.extend([
         "remote".to_string(),
         "scan".to_string(),
         "--root".to_string(),
@@ -262,12 +270,18 @@ pub fn scan_argv(root: &str, path: &str, limits: ScanLimits) -> Vec<String> {
         limits.max_entries.to_string(),
         "--max-total".to_string(),
         limits.max_total.to_string(),
-    ]
+    ]);
+    argv
 }
 
 /// The one remote shell line SSH runs, every argument POSIX-quoted.
-pub fn scan_command_line(root: &str, path: &str, limits: ScanLimits) -> String {
-    quote_remote_argv(&scan_argv(root, path, limits))
+pub fn scan_command_line(
+    command: &[String],
+    root: &str,
+    path: &str,
+    limits: ScanLimits,
+) -> String {
+    quote_remote_argv(&scan_argv(command, root, path, limits))
 }
 
 /// Parses the command's stdout without ever replaying a large or secret reply.
@@ -322,11 +336,12 @@ pub fn parse_scan_output(
 pub fn run_scan(
     ssh_bin: &str,
     target: &SshTarget,
+    command: &[String],
     root: &str,
     path: &str,
     limits: ScanLimits,
 ) -> Result<ScanDocument, String> {
-    let remote_cmd = scan_command_line(root, path, limits);
+    let remote_cmd = scan_command_line(command, root, path, limits);
     let result = run_ssh_command(ssh_bin, target, &remote_cmd, limits.ssh_timeout(), None)
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::TimedOut {
@@ -423,7 +438,7 @@ mod tests {
     fn test_scan_argv_is_argv_only_and_keeps_each_value_whole() {
         let root = "/data/my scenes; touch /tmp/x";
         let limits = ScanLimits::default();
-        let argv = scan_argv(root, "sub folder", limits);
+        let argv = scan_argv(&["coperceive".to_string()], root, "sub folder", limits);
         assert_eq!(
             argv,
             vec![
@@ -447,11 +462,23 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<String>>()
         );
-        let line = scan_command_line(root, "sub folder", limits);
+        let line = scan_command_line(&["coperceive".to_string()], root, "sub folder", limits);
         assert!(
             line.contains("'/data/my scenes; touch /tmp/x'"),
             "the root must be one quoted argument: {line}"
         );
+    }
+
+    #[test]
+    fn test_scan_command_line_uses_the_saved_coperceive_argv() {
+        let limits = ScanLimits::default();
+        let command = vec![
+            "/home/u/venv/bin/python".to_string(),
+            "-m".to_string(),
+            "coperceive".to_string(),
+        ];
+        let line = scan_command_line(&command, "/data/scenes", "", limits);
+        assert!(line.starts_with("/home/u/venv/bin/python -m coperceive remote scan"), "{line}");
     }
 
     #[test]
@@ -477,7 +504,7 @@ mod tests {
         );
         // A value that would be a scan target if validation were skipped.
         let limits = ScanLimits::default();
-        let line = scan_command_line(&malicious_root, "it's", limits);
+        let line = scan_command_line(&["coperceive".to_string()], &malicious_root, "it's", limits);
         assert_eq!(
             line,
             format!(
@@ -618,7 +645,7 @@ mod tests {
         );
         let ssh = fake_ssh(&dir, &script);
         let target = SshTarget::alias("cluster-a");
-        let document = run_scan(&ssh, &target, root, ".", limits).expect("fake scan works");
+        let document = run_scan(&ssh, &target, &["coperceive".to_string()], root, ".", limits).expect("fake scan works");
         assert_eq!(document.scene_count, 1);
         assert!(document.truncated);
         let _ = fs::remove_dir_all(&dir);
@@ -630,7 +657,7 @@ mod tests {
         let refusal = r#"{"status": "error", "error": "the path is outside the data root: /etc"}"#;
         let ssh = fake_ssh(&dir, &format!("#!/bin/bash\nprintf '%s' '{}'\nexit 1\n", refusal));
         let target = SshTarget::alias("cluster-a");
-        let error = run_scan(&ssh, &target, "/data/scenes", "escape", ScanLimits::default())
+        let error = run_scan(&ssh, &target, &["coperceive".to_string()], "/data/scenes", "escape", ScanLimits::default())
             .expect_err("refusal is an error");
         assert!(error.contains("outside the data root"), "{error}");
         let _ = fs::remove_dir_all(&dir);

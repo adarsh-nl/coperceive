@@ -134,8 +134,12 @@ pub struct RemoteListResponse {
 /// Every argument is quoted POSIX-style: user values (data roots, partitions,
 /// UUIDs) may contain spaces, quotes or shell metacharacters and must reach the
 /// remote coperceive as one argument each.
-pub fn remote_command_line(args: &[String]) -> String {
-    let mut argv = vec!["coperceive".to_string(), "remote".to_string()];
+pub fn remote_command_line(command: &[String], args: &[String]) -> String {
+    let mut argv = command.to_vec();
+    if argv.is_empty() {
+        argv.push("coperceive".to_string());
+    }
+    argv.push("remote".to_string());
     argv.extend(args.iter().cloned());
     quote_remote_argv(&argv)
 }
@@ -167,6 +171,8 @@ struct RemoteTokenResponse {
 pub struct RemoteClient {
     pub alias: String,
     pub ssh_bin: String,
+    /// The profile's saved coperceive argv, e.g. a venv python plus `-m coperceive`.
+    pub coperceive_command: Vec<String>,
 }
 
 /// Everything needed to start a remote serve job, taken from the server profile.
@@ -181,6 +187,8 @@ pub struct RemoteStartOptions {
     pub uuid: Option<String>,
     /// Remote `coperceive/app/static` cache dir, uploaded before the session.
     pub static_dir: Option<String>,
+    /// Profile's saved coperceive argv; empty means the legacy `coperceive` name.
+    pub coperceive_command: Vec<String>,
 }
 
 impl RemoteClient {
@@ -188,6 +196,7 @@ impl RemoteClient {
         Self {
             alias: alias.to_string(),
             ssh_bin: "ssh".to_string(),
+            coperceive_command: vec!["coperceive".to_string()],
         }
     }
 
@@ -195,11 +204,19 @@ impl RemoteClient {
         Self {
             alias: alias.to_string(),
             ssh_bin: ssh_bin.to_string(),
+            coperceive_command: vec!["coperceive".to_string()],
         }
     }
 
+    pub fn with_coperceive_command(mut self, command: Vec<String>) -> Self {
+        if !command.is_empty() {
+            self.coperceive_command = command;
+        }
+        self
+    }
+
     fn run_remote_cmd(&self, args: &[String]) -> Result<String, SshErrorKind> {
-        let remote_cmd = remote_command_line(args);
+        let remote_cmd = remote_command_line(&self.coperceive_command, args);
         let ssh_args = build_ssh_command(&self.alias, &remote_cmd);
 
         let output = Command::new(&self.ssh_bin)
@@ -453,10 +470,13 @@ impl RemoteSessionManager {
     ) -> Result<Self, SshErrorKind> {
         let data_root = options.data_root.as_str();
         let existing_uuid = options.uuid.as_deref();
-        let client = match ssh_bin {
+        let mut client = match ssh_bin {
             Some(bin) => RemoteClient::with_ssh_bin(alias, bin),
             None => RemoteClient::new(alias),
         };
+        if !options.coperceive_command.is_empty() {
+            client.coperceive_command = options.coperceive_command.clone();
+        }
 
         let local_port = find_free_loopback_port()
             .map_err(|e| SshErrorKind::Other(format!("Failed to find free local port: {}", e)))?;
@@ -793,8 +813,22 @@ exit 1
             "/data/my scenes; touch /tmp/x".to_string(),
         ];
         assert_eq!(
-            remote_command_line(&args),
+            remote_command_line(&["coperceive".to_string()], &args),
             "coperceive remote start --root '/data/my scenes; touch /tmp/x'"
+        );
+    }
+
+    #[test]
+    fn test_remote_command_line_uses_the_saved_coperceive_argv() {
+        let command = vec![
+            "/home/u/venv/bin/python".to_string(),
+            "-m".to_string(),
+            "coperceive".to_string(),
+        ];
+        let args = vec!["status".to_string(), "--uuid".to_string(), "abc".to_string()];
+        assert_eq!(
+            remote_command_line(&command, &args),
+            "/home/u/venv/bin/python -m coperceive remote status --uuid abc"
         );
     }
 
@@ -826,7 +860,7 @@ exit 1
             "/data/my scenes/\"quoted\"; touch /tmp/x; touch {}",
             marker.display()
         );
-        let line = remote_command_line(&[
+        let line = remote_command_line(&["coperceive".to_string()], &[
             "start".to_string(),
             "--root".to_string(),
             malicious.clone(),
