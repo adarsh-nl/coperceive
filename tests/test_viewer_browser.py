@@ -1560,3 +1560,44 @@ def test_playback_during_resize_and_fullscreen_has_no_stall(session: _Session) -
     gaps = [played[index]["at"] - played[index - 1]["at"] for index in range(1, len(played))][2:]
     assert gaps, played
     assert max(gaps) <= 350, gaps
+
+
+def test_desktop_wordmark_navigates_to_connect_never_landing(
+    browser: Browser, viewer_url: str
+) -> None:
+    """In desktop runtime, clicking the wordmark in the viewer header navigates
+    to Connect (Library) and never loads the marketing landing page."""
+    context = browser.new_context(viewport={"width": 1400, "height": 900})
+    page = context.new_page()
+    page.add_init_script(
+        """
+        window.__COPERCEIVE_TEST_ENV__ = true;
+        window.__COPERCEIVE_DESKTOP__ = true;
+        """
+    )
+    session = _Session(page, viewer_url)
+    try:
+        session.open()
+        session.wait_status(SCENE_FULL)
+
+        brand_link = page.locator("header.topbar a.brand")
+        assert brand_link.get_attribute("aria-label") == "Return to Library"
+        assert brand_link.get_attribute("href") == "#/connect"
+
+        brand_link.click()
+        page.wait_for_timeout(300)
+
+        assert page.locator("nav[role=tablist][aria-label='Connect navigation']").is_visible()
+        lib_tab = page.locator("button[role=tab]", has_text="Library")
+        assert lib_tab.is_visible()
+        assert lib_tab.get_attribute("aria-selected") == "true"
+
+        assert page.locator(".hero").count() == 0
+        assert page.locator("text='Inspect both agents on one clock'").count() == 0
+
+        page.evaluate("() => { window.location.hash = '#/'; }")
+        page.wait_for_timeout(300)
+        assert page.locator("nav[role=tablist][aria-label='Connect navigation']").is_visible()
+        assert page.locator(".hero").count() == 0
+    finally:
+        context.close()

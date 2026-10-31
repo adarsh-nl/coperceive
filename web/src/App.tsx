@@ -12,13 +12,14 @@ import { systemTheme, type ThemeName } from "./viewer/appearance";
 import Viewer from "./viewer/Viewer";
 
 function useHashRoute(): "home" | "viewer" | "connect" {
-  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const isDesktop = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
   const isConnect = (raw: string) => raw === "/connect" || raw.startsWith("/connect/") || raw.startsWith("/connect?");
   const [route, setRoute] = useState<"home" | "viewer" | "connect">(() => {
     const raw = typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
     if (isConnect(raw)) return "connect";
+    if (raw === "/viewer") return "viewer";
     if (isDesktop) return "viewer";
-    return raw === "/viewer" ? "viewer" : "home";
+    return "home";
   });
   useEffect(() => {
     const onHash = () => {
@@ -27,15 +28,16 @@ function useHashRoute(): "home" | "viewer" | "connect" {
         setRoute("connect");
         return;
       }
-      const isDesktopNow = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
-      if (isDesktopNow) {
-        if (window.location.hash !== "#/viewer") {
-          window.location.hash = "#/viewer";
-        }
+      if (raw === "/viewer") {
         setRoute("viewer");
         return;
       }
-      setRoute(raw === "/viewer" ? "viewer" : "home");
+      const isDesktopNow = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
+      if (isDesktopNow) {
+        setRoute("connect");
+        return;
+      }
+      setRoute("home");
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -167,7 +169,7 @@ function DesktopPreferences() {
 }
 
 export default function App() {
-  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const isDesktop = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
   const queryClient = useQueryClient();
   const route = useHashRoute();
   const [isTauri] = useState(isTauriEnvironment);
@@ -214,10 +216,10 @@ export default function App() {
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    if (isDesktop && window.location.hash !== "#/viewer") {
-      window.location.hash = "#/viewer";
+    if (isDesktop && !window.location.hash) {
+      window.location.hash = connected ? "#/viewer" : "#/connect";
     }
-  }, [isDesktop]);
+  }, [isDesktop, connected]);
 
   useEffect(() => {
     if (token && typeof sessionStorage !== "undefined") {
@@ -366,7 +368,18 @@ export default function App() {
     );
   }
 
-  if (route === "home" && !isDesktop) {
+  if (route === "home") {
+    if (isDesktop) {
+      return (
+        <ConnectScreen
+          onConnected={(session) => {
+            setToken(session.token);
+            setConnected(true);
+            window.location.hash = "#/viewer";
+          }}
+        />
+      );
+    }
     return (
       <Landing
         token={token}
@@ -400,7 +413,17 @@ export default function App() {
       {isDesktop && <UpdateBanner />}
       <header className="topbar">
         <div className="top-cluster">
-          <a className="brand" href={isDesktop ? "#/viewer" : "#/"}>
+          <a
+            className="brand"
+            href={isDesktop ? "#/connect" : "#/"}
+            onClick={(e) => {
+              if (isDesktop) {
+                e.preventDefault();
+                window.location.hash = "#/connect";
+              }
+            }}
+            aria-label={isDesktop ? "Return to Library" : "coperceive"}
+          >
             <BrandWordmark />
           </a>
           <div className="top-slot" ref={setSlot} />

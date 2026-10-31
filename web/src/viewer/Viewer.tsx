@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { downloadTownMap, onTownMapProgress } from "../desktop/local";
+import { downloadTownMap, onTownMapProgress, isTauriEnvironment } from "../desktop/local";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
@@ -1255,7 +1255,7 @@ export default function Viewer({
   };
   const handleToggleLoopRef = useRef(handleToggleLoop);
   handleToggleLoopRef.current = handleToggleLoop;
-  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const isDesktop = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
   const [dataBasename, setDataBasename] = useState<string>(
     () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_BASENAME__) || "",
   );

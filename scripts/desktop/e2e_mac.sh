@@ -1990,7 +1990,29 @@ while time.monotonic() < deadline:
     time.sleep(0.5)
 else:
     raise RuntimeError(f"viewer did not open synth_001, last={scenes}")
-print("Step 5c verified: import, cancel, resume, open.")
+
+# Assert wordmark navigates to Connect / Library, never landing page
+print("Testing wordmark link in viewer returns to Connect/Library...")
+brand_href = eval_js("document.querySelector('header.topbar a.brand')?.getAttribute('href')")
+print(f"Step 5c wordmark href={brand_href}")
+assert brand_href == "#/connect", f"Expected href='#/connect', got {brand_href}"
+
+eval_js("document.querySelector('header.topbar a.brand')?.click()")
+time.sleep(1.0)
+
+is_connect = eval_js("Boolean(document.querySelector('nav[aria-label=\"Connect navigation\"]'))")
+active_tab = eval_js("document.querySelector('nav[aria-label=\"Connect navigation\"] button[aria-selected=\"true\"]')?.innerText")
+print(f"Step 5c after wordmark click: is_connect={is_connect}, active_tab={active_tab}")
+assert is_connect, "Clicking wordmark must show Connect screen"
+assert active_tab == "Library", f"Expected Library tab active, got {active_tab}"
+
+is_landing = eval_js("Boolean(document.querySelector('.hero'))")
+assert not is_landing, "Desktop runtime must never show marketing landing page"
+
+eval_js("window.location.hash = '#/viewer'")
+time.sleep(1.0)
+
+print("Step 5c verified: import, cancel, resume, open, wordmark returns to Library.")
 EOF
 
 echo ""
