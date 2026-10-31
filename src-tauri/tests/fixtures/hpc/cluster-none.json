@@ -29,7 +29,11 @@
       "modules": [],
       "interpreter": "/usr/bin/python3",
       "container_image": null,
-      "coperceive_command": [],
+      "coperceive_command": [
+        "/home/carol/coperceive-app/.venv/bin/python",
+        "-m",
+        "coperceive"
+      ],
       "wheelhouse": null,
       "compute_has_internet": false
     },
