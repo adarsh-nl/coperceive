@@ -44,6 +44,10 @@ pub struct SubmitOptions {
     pub account: Option<String>,
     #[serde(default)]
     pub qos: Option<String>,
+    /// `None` keeps the plan's GPU default; `Some("")` explicitly requests no
+    /// GPU; `Some(gres)` requests that GRES string.
+    #[serde(default)]
+    pub gres: Option<String>,
 }
 
 impl Default for SubmitOptions {
@@ -53,6 +57,7 @@ impl Default for SubmitOptions {
             cpus_per_task: None,
             account: None,
             qos: None,
+            gres: None,
         }
     }
 }
@@ -65,6 +70,8 @@ pub struct SubmissionPreview {
     pub partition: String,
     pub walltime: String,
     pub cpus_per_task: Option<u32>,
+    /// The GRES line in the preview, or None for a CPU-only job.
+    pub gres: Option<String>,
     pub script: String,
     /// Hash of `script`; the confirm call must send it back unchanged.
     pub preview_hash: String,
@@ -175,6 +182,14 @@ pub fn render_run_script(
     }
 
     let mut defaults = profile.defaults.clone();
+    // The profile never supplies a GPU default. A model evaluation uses the
+    // plan's default GPU (one of the partition's detected type); the user can
+    // explicitly choose no GPU with an empty string.
+    defaults.gres = match options.gres.as_deref() {
+        None => plan.gres.clone().filter(|value| !value.trim().is_empty()),
+        Some(value) if value.trim().is_empty() => None,
+        Some(value) => Some(value.trim().to_string()),
+    };
     defaults.time_limit = Some(options.walltime.clone());
     if let Some(cpus) = options.cpus_per_task {
         defaults.cpus_per_task = Some(cpus);
@@ -213,8 +228,9 @@ pub fn render_run_script(
     if let Some(cpus) = defaults.cpus_per_task {
         lines.push(format!("#SBATCH --cpus-per-task={cpus}"));
     }
-    if let Some(gres) = defaults.gres.as_deref() {
-        lines.push(format!("#SBATCH --gres={gres}"));
+    match defaults.gres.as_deref() {
+        Some(gres) => lines.push(format!("#SBATCH --gres={gres}")),
+        None => lines.push("# No GPU requested (CPU-only job).".to_string()),
     }
     if let Some(account) = defaults.account.as_deref() {
         lines.push(format!("#SBATCH --account={account}"));
@@ -289,6 +305,7 @@ pub fn render_run_script(
         partition: partition.to_string(),
         walltime: defaults.time_limit.clone().unwrap_or_default(),
         cpus_per_task: defaults.cpus_per_task,
+        gres: defaults.gres.clone(),
         script,
         preview_hash,
     })
@@ -577,6 +594,7 @@ mod tests {
                 profile.results_root.trim_end_matches('/')
             ),
             scratch_dir: profile.scratch_template.clone(),
+            gres: None,
             checks: Vec::new(),
             contract_check_script: String::new(),
             nothing_submitted: true,
@@ -687,6 +705,39 @@ mod tests {
         assert!(preview.script.contains("--output-dir \"$OUT_DIR\""));
         assert!(!preview.script.contains("/tmp/elsewhere"));
         assert_eq!(preview.script.matches("--output-dir").count(), 1);
+    }
+
+    #[test]
+    fn an_eval_plan_uses_one_gpu_from_its_partition_and_the_user_can_clear_it() {
+        let profile = profile("gpu-h100");
+        let mut plan = plan(&profile);
+        plan.gres = Some("gpu:h100:1".to_string());
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert_eq!(preview.gres.as_deref(), Some("gpu:h100:1"));
+        assert!(preview.script.contains("#SBATCH --gres=gpu:h100:1"));
+        assert!(!preview.script.contains("No GPU requested"));
+
+        let no_gpu = SubmitOptions {
+            gres: Some(String::new()),
+            ..SubmitOptions::default()
+        };
+        let preview = render_run_script(&profile, &plan, &no_gpu).expect("render");
+        assert!(preview.gres.is_none());
+        assert!(!preview.script.contains("--gres="));
+        assert!(preview.script.contains("No GPU requested (CPU-only job)."));
+    }
+
+    #[test]
+    fn a_cpu_only_plan_renders_no_gres() {
+        let profile = profile("main-cpu");
+        let plan = plan(&profile);
+        assert!(plan.gres.is_none());
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(preview.gres.is_none());
+        assert!(!preview.script.contains("--gres="));
+        assert!(preview.script.contains("No GPU requested (CPU-only job)."));
     }
 
     #[test]
