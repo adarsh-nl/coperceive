@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use crate::detect::COPERCEIVE_VERSION_SCRIPT;
 use crate::hpc::{
     ArgumentKind, ArgumentRole, EnvironmentKind, EnvironmentSetup, PipelineSpec, ServerProfile,
-    is_under, normalise_path,
+    is_under, normalise_path, validate_scratch_template,
 };
 use crate::server_profiles::ServerEntry;
 use crate::slurm_adapter::RemoteRunner;
@@ -200,65 +200,6 @@ pub fn resolve_environment(
     )
 }
 
-/// Scratch and results paths embedded in the contract-check script. The scratch
-/// template may hold only `$USER`/`${USER}`/`$SLURM_JOB_ID`/`${SLURM_JOB_ID}`,
-/// so expanding it in the job script cannot run arbitrary shell code.
-pub fn validate_scratch_template(template: &str) -> Result<(), String> {
-    let mut chars = template.chars().peekable();
-    while let Some(ch) = chars.next() {
-        match ch {
-            '$' => {
-                if chars.peek() == Some(&'{') {
-                    chars.next();
-                    let mut name = String::new();
-                    for inner in chars.by_ref() {
-                        if inner == '}' {
-                            break;
-                        }
-                        name.push(inner);
-                    }
-                    if !matches!(name.as_str(), "USER" | "SLURM_JOB_ID") {
-                        return Err(format!(
-                            "The scratch folder uses ${name}, which Coperceive does not expand. \
-                             Use $USER or $SLURM_JOB_ID."
-                        ));
-                    }
-                } else {
-                    let mut name = String::new();
-                    while let Some(inner) = chars.peek() {
-                        if inner.is_ascii_alphanumeric() || *inner == '_' {
-                            name.push(*inner);
-                            chars.next();
-                        } else {
-                            break;
-                        }
-                    }
-                    if !matches!(name.as_str(), "USER" | "SLURM_JOB_ID") {
-                        return Err(format!(
-                            "The scratch folder uses ${name}, which Coperceive does not expand. \
-                             Use $USER or $SLURM_JOB_ID."
-                        ));
-                    }
-                }
-            }
-            ';' | '|' | '&' | '`' | '\'' | '"' | '(' | ')' | '<' | '>' | '\\' => {
-                return Err(format!(
-                    "The scratch folder contains {ch:?}, which is not allowed in a server \
-                     profile. Use a plain path with $USER or $SLURM_JOB_ID."
-                ));
-            }
-            ch if ch.is_control() => {
-                return Err(
-                    "The scratch folder contains a control character, which is not allowed."
-                        .to_string(),
-                );
-            }
-            _ => {}
-        }
-    }
-    Ok(())
-}
-
 /// Normalised profile roots (data + code), using the shared containment helpers
 /// from `crate::hpc` (the same normalisation #45 introduced for server profiles).
 fn normalised_roots(profile: &ServerProfile) -> Result<Vec<String>, String> {
@@ -425,6 +366,51 @@ fn value_argv(value: &serde_json::Value) -> String {
         serde_json::Value::Bool(false) => "false".to_string(),
         other => other.to_string(),
     }
+}
+
+/// Remove any app-owned `--output-dir` argument, in both the separate and `=`
+/// forms, before appending the value the app computed.
+pub(crate) fn strip_output_dir(argv: &mut Vec<String>) {
+    let mut index = 0;
+    while index < argv.len() {
+        if argv[index] == "--output-dir" {
+            let end = (index + 2).min(argv.len());
+            argv.drain(index..end);
+        } else if argv[index].starts_with("--output-dir=") {
+            argv.remove(index);
+        } else {
+            index += 1;
+        }
+    }
+}
+
+/// Every `path`-typed pipeline argument must stay inside the profile roots, not
+/// only the checkpoint and split.
+fn validate_path_arguments(
+    profile: &ServerProfile,
+    pipeline: &PipelineSpec,
+    values: &BTreeMap<String, serde_json::Value>,
+) -> Result<(), String> {
+    for argument in &pipeline.arguments {
+        if argument.kind != ArgumentKind::Path {
+            continue;
+        }
+        let Some(value) = values.get(&argument.name).or(argument.default.as_ref()) else {
+            continue;
+        };
+        let texts: Vec<&str> = match value {
+            serde_json::Value::String(text) => vec![text.as_str()],
+            serde_json::Value::Array(items) => items
+                .iter()
+                .filter_map(serde_json::Value::as_str)
+                .collect(),
+            _ => Vec::new(),
+        };
+        for text in texts {
+            validate_path_in_roots(profile, text, &format!("--{} argument", argument.name))?;
+        }
+    }
+    Ok(())
 }
 
 /// Builds the full argv for one run. Values become separate argv elements; none
@@ -595,10 +581,9 @@ pub fn render_contract_check_script(
     lines.push(String::new());
 
     let mut command: Vec<String> = argv.to_vec();
-    // Drop the plan's output-dir pair; the contract check writes to scratch.
-    if command.len() >= 2 && command[command.len() - 2] == "--output-dir" {
-        command.truncate(command.len() - 2);
-    }
+    // Drop the plan's output-dir argument in either form; the contract check
+    // writes to scratch.
+    strip_output_dir(&mut command);
     match environment.kind {
         EnvironmentKind::Modules => {
             if !environment.modules.is_empty() {
@@ -1006,6 +991,7 @@ pub fn build_run_plan(
     }
     pipeline.validate()?;
     profile.validate_pipeline_script(&pipeline.script)?;
+    validate_path_arguments(profile, &pipeline, &request.values)?;
     validate_path_in_roots(profile, &request.checkpoint, "checkpoint")?;
     validate_path_in_roots(profile, &request.split, "split")?;
     validate_plan_destinations(profile)?;
@@ -1426,14 +1412,26 @@ pub fn build_run_plan(
 
     // 5. Typed argv, then the contract-check script rendered from it.
     let argv = match request.pipeline_source.as_str() {
-        "builtin" => build_builtin_argv(
-            request.plugin_manifest.as_deref().unwrap_or(""),
-            &plan_id,
-            &request.values,
-            &request.split,
-            &request.checkpoint,
-            &output_dir,
-        ),
+        "builtin" => {
+            let manifest = request
+                .plugin_manifest
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    "This built-in model has no pipeline manifest. Reinstall the model or choose a \
+                     custom pipeline."
+                        .to_string()
+                })?;
+            build_builtin_argv(
+                manifest,
+                &plan_id,
+                &request.values,
+                &request.split,
+                &request.checkpoint,
+                &output_dir,
+            )
+        }
         _ => build_pipeline_argv(&pipeline, &request.values, &output_dir)?,
     };
     checks.push(check(
@@ -2152,6 +2150,7 @@ pub fn save_run_plan(
     );
     profile.validate_output_dir(&output_dir)?;
 
+    validate_path_arguments(profile, &save_pipeline.spec, &request.values)?;
     // Rebuild the typed values and argv from the server pipeline, not the client's.
     let mut typed = typed_values(&save_pipeline.spec, &request.values)?;
     for argument in &save_pipeline.spec.arguments {
@@ -2172,8 +2171,18 @@ pub fn save_run_plan(
         }
     }
     let built_argv = if save_pipeline.source == "builtin" {
+        let manifest = save_pipeline
+            .plugin_manifest
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| {
+                "This built-in model has no pipeline manifest. Reinstall the model or choose a \
+                 custom pipeline."
+                    .to_string()
+            })?;
         build_builtin_argv(
-            save_pipeline.plugin_manifest.as_deref().unwrap_or(""),
+            manifest,
             &plan.id,
             &typed,
             &split.path,
@@ -2184,16 +2193,8 @@ pub fn save_run_plan(
         build_pipeline_argv(&save_pipeline.spec, &typed, &output_dir)?
     };
     // Force the output directory pair to the recomputed value.
-    let mut argv: Vec<String> = Vec::with_capacity(built_argv.len() + 2);
-    let mut index = 0;
-    while index < built_argv.len() {
-        if built_argv[index] == "--output-dir" {
-            index += 2;
-            continue;
-        }
-        argv.push(built_argv[index].clone());
-        index += 1;
-    }
+    let mut argv: Vec<String> = built_argv.clone();
+    strip_output_dir(&mut argv);
     argv.push("--output-dir".to_string());
     argv.push(output_dir.clone());
     if argv.is_empty() || argv.iter().any(|element| element.contains('\n')) {
@@ -2237,6 +2238,12 @@ pub fn save_run_plan(
         source: save_pipeline.source.clone(),
     };
     let mut validated = plan.clone();
+    // These identity fields come from the app at save time, never from the
+    // client-supplied plan JSON.
+    validated.schema = RUN_PLAN_SCHEMA.to_string();
+    validated.created_unix = now_unix();
+    validated.profile_id = entry.id.clone();
+    validated.profile_name = profile.name.clone();
     validated.pipeline = pipeline_ref;
     validated.argv = argv;
     validated.environment = save_pipeline.environment;
@@ -2641,13 +2648,66 @@ mod tests {
     }
 
     #[test]
+    fn path_typed_arguments_outside_profile_roots_are_refused() {
+        let mut req = request();
+        req.pipeline.arguments.push(crate::hpc::ArgumentSpec {
+            name: "config".to_string(),
+            kind: ArgumentKind::Path,
+            help: "config".to_string(),
+            required: true,
+            default: None,
+            choices: Vec::new(),
+            multiple: false,
+            role: ArgumentRole::Other,
+        });
+        req.values
+            .insert("config".to_string(), serde_json::json!("/etc/passwd"));
+        let error = build_run_plan(&checked_runner(), &entry(), &req)
+            .expect_err("path outside profile roots must be refused");
+        assert!(error.contains("--config argument"), "{error}");
+        assert!(error.contains("outside this server"), "{error}");
+    }
+
+    #[test]
+    fn a_builtin_plan_without_a_plugin_manifest_is_refused() {
+        let mut req = request();
+        req.pipeline_source = "builtin".to_string();
+        req.plugin_manifest = None;
+        let error = build_run_plan(&checked_runner(), &entry(), &req)
+            .expect_err("builtin without manifest");
+        assert!(error.contains("no pipeline manifest"), "{error}");
+    }
+
+    #[test]
+    fn output_dir_is_stripped_in_both_argument_forms() {
+        let mut argv = vec![
+            "coperceive".to_string(),
+            "model".to_string(),
+            "--output-dir=/tmp/a".to_string(),
+            "--output-dir".to_string(),
+            "/tmp/b".to_string(),
+            "--keep".to_string(),
+            "yes".to_string(),
+        ];
+        strip_output_dir(&mut argv);
+        assert_eq!(argv, vec!["coperceive", "model", "--keep", "yes"]);
+    }
+
+    #[test]
     fn save_writes_json_atomically_via_stdin_and_names_the_plan_path() {
         let echo = EchoRunner {
             written: Mutex::new(Vec::new()),
         };
-        let plan = build_run_plan(&checked_runner(), &entry(), &request()).expect("build");
+        let mut plan = build_run_plan(&checked_runner(), &entry(), &request()).expect("build");
         assert!(plan.is_saveable(), "checks: {:?}", plan.checks);
+        // Client-supplied identity must not survive the save.
+        plan.schema = "tampered-schema".to_string();
+        plan.created_unix = 1;
+        plan.profile_name = "tampered profile".to_string();
         let saved = save_run_plan(&echo, &entry(), &plan, &request()).expect("save plan");
+        assert_eq!(saved.schema, RUN_PLAN_SCHEMA);
+        assert_eq!(saved.profile_name, entry().profile.name);
+        assert!(saved.created_unix > 1, "save time must come from the app");
         assert!(saved
             .saved_path
             .as_deref()

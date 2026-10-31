@@ -176,6 +176,10 @@ def check_scratch(scratch: Path) -> Path:
 
 
 def default_scratch() -> Path | None:
+    """$COPERCEIVE_STAGE_ROOT, else /local/$SLURM_JOB_ID/coperceive-viewer."""
+    configured = os.environ.get("COPERCEIVE_STAGE_ROOT", "").strip()
+    if configured:
+        return Path(configured)
     job = os.environ.get("SLURM_JOB_ID", "")
     if job == "":
         return None
@@ -550,7 +554,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--scratch",
         type=Path,
         default=default_scratch(),
-        help="staging root; default /local/$SLURM_JOB_ID/coperceive-viewer inside a job",
+        help="staging root; default $COPERCEIVE_STAGE_ROOT or "
+        "/local/$SLURM_JOB_ID/coperceive-viewer inside a job",
     )
     parser.add_argument(
         "--xodr-dir",

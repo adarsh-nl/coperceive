@@ -254,6 +254,48 @@ export function validateConnectionShape(entry: ServerEntry): string[] {
   return errors;
 }
 
+/**
+ * The scratch template keeps `$USER` / `$SLURM_JOB_ID` expansion but may contain
+ * nothing else shell-special. Mirrors `validate_scratch_template` in Rust.
+ */
+export function scratchTemplateError(template: string): string | null {
+  const text = template.trim();
+  if (!text) {
+    return "Add the per-user scratch folder your cluster gives you.";
+  }
+  if (!text.startsWith("/")) {
+    return "The scratch folder must be an absolute path on the cluster.";
+  }
+  const invalid = (): string =>
+    "The scratch folder may contain only letters, digits, '_', '.', '/', '-' and the tokens $USER, ${USER}, $SLURM_JOB_ID, ${SLURM_JOB_ID}.";
+  let rest = text;
+  for (;;) {
+    const index = rest.indexOf("$");
+    if (index < 0) break;
+    if (/[^A-Za-z0-9_./-]/.test(rest.slice(0, index))) return invalid();
+    const after = rest.slice(index + 1);
+    let name: string;
+    if (after.startsWith("{")) {
+      const end = after.indexOf("}");
+      if (end < 0) return "The scratch folder has an unterminated ${...} token; close it with '}'.";
+      name = after.slice(1, end);
+      rest = after.slice(end + 1);
+    } else {
+      const match = /^[A-Za-z0-9_]+/.exec(after);
+      name = match?.[0] ?? "";
+      rest = after.slice(name.length);
+    }
+    if (name !== "USER" && name !== "SLURM_JOB_ID") {
+      return `The scratch folder uses $${name || "..."}, which Coperceive does not expand. Use $USER or $SLURM_JOB_ID.`;
+    }
+  }
+  if (/[^A-Za-z0-9_./-]/.test(rest)) return invalid();
+  if (text.split("/").includes("..")) {
+    return "The scratch folder may not contain a '..' segment.";
+  }
+  return null;
+}
+
 /** Full validation before saving, matching the shared slice-0 profile rules. */
 export function validateDraft(entry: ServerEntry): string[] {
   const errors = validateConnectionShape(entry);
@@ -267,11 +309,9 @@ export function validateDraft(entry: ServerEntry): string[] {
       errors.push("Data folders may not contain '..'. Paths must stay inside the folders you chose.");
     }
   }
-  if (!profile.scratch_template.trim()) {
-    errors.push("Add the per-user scratch folder your cluster gives you.");
-  }
-  if (profile.scratch_template.split("/").includes("..")) {
-    errors.push("The scratch folder may not contain '..'.");
+  const scratchError = scratchTemplateError(profile.scratch_template);
+  if (scratchError) {
+    errors.push(scratchError);
   }
   if (!profile.results_root.trim()) {
     errors.push(
