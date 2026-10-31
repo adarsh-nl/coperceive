@@ -298,9 +298,12 @@ if os.path.exists(ssh_log):
             print(f"E2E_PLAN_FAIL: {name}: the plan called {forbidden}", file=sys.stderr)
             sys.exit(1)
 
+checkpoint_mark = (
+    plan["checkpoint"]["sha256"][:12] if plan["checkpoint"]["sha256"] else "none"
+)
 print(
     f"E2E_PLAN_MARK: {name} verified (env={plan['environment']['kind']}, "
-    f"argv_elements={len(argv)}, checkpoint_sha256={plan['checkpoint']['sha256'][:12]}..., "
+    f"argv_elements={len(argv)}, checkpoint_sha256={checkpoint_mark}..., "
     f"saved={plan['saved_path']}, nothing_submitted={plan['nothing_submitted']})"
 )
 PY
