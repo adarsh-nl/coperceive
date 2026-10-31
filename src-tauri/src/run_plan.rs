@@ -16,10 +16,9 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::detect::COPERCEIVE_VERSION_SCRIPT;
 use crate::hpc::{
     ArgumentKind, ArgumentRole, EnvironmentKind, EnvironmentSetup, PipelineSpec, ServerProfile,
-    is_under, normalise_path, validate_scratch_template,
+    coperceive_argv, is_under, normalise_path, validate_scratch_template,
 };
 use crate::server_profiles::ServerEntry;
 use crate::slurm_adapter::RemoteRunner;
@@ -455,6 +454,7 @@ pub fn build_pipeline_argv(
 /// Built-in argv for an installed model plugin (the plugin owns its checkpoint
 /// handling, so a checkpoint is passed as a model option).
 pub fn build_builtin_argv(
+    profile: &ServerProfile,
     plugin_manifest: &str,
     plan_id: &str,
     values: &BTreeMap<String, serde_json::Value>,
@@ -462,21 +462,23 @@ pub fn build_builtin_argv(
     checkpoint: &str,
     output_dir: &str,
 ) -> Vec<String> {
-    let mut argv: Vec<String> = vec![
-        "coperceive".to_string(),
-        "model".to_string(),
-        "run".to_string(),
-        "--manifest".to_string(),
-        plugin_manifest.to_string(),
-        "--scenes".to_string(),
-        split.to_string(),
-        "--out".to_string(),
-        output_dir.to_string(),
-        "--run-id".to_string(),
-        plan_id.to_string(),
-        "--option".to_string(),
-        format!("checkpoint={checkpoint}"),
-    ];
+    let mut argv: Vec<String> = coperceive_argv(
+        profile,
+        &[
+            "model".to_string(),
+            "run".to_string(),
+            "--manifest".to_string(),
+            plugin_manifest.to_string(),
+            "--scenes".to_string(),
+            split.to_string(),
+            "--out".to_string(),
+            output_dir.to_string(),
+            "--run-id".to_string(),
+            plan_id.to_string(),
+            "--option".to_string(),
+            format!("checkpoint={checkpoint}"),
+        ],
+    );
     if let Some(serde_json::Value::Array(extras)) = values.get("extras") {
         for extra in extras {
             argv.push("--option".to_string());
@@ -484,6 +486,13 @@ pub fn build_builtin_argv(
         }
     }
     argv
+}
+
+fn coperceive_version_command(profile: &ServerProfile) -> String {
+    format!(
+        "{} --version 2>/dev/null | head -n 1",
+        quoted_command(&profile.environment.coperceive_command)
+    )
 }
 
 /// Quotes argv for a shell script, keeping `$OUT_DIR` as a runtime expansion only
@@ -1296,7 +1305,8 @@ pub fn build_run_plan(
 
     // 3. coperceive on the cluster.
     let started = std::time::Instant::now();
-    match runner.run(COPERCEIVE_VERSION_SCRIPT, READ_TIMEOUT, None) {
+    let version_command = coperceive_version_command(profile);
+    match runner.run(&version_command, READ_TIMEOUT, None) {
         Ok(result) if result.success => {
             let version = result
                 .stdout
@@ -1424,6 +1434,7 @@ pub fn build_run_plan(
                         .to_string()
                 })?;
             build_builtin_argv(
+                profile,
                 manifest,
                 &plan_id,
                 &request.values,
@@ -1496,8 +1507,12 @@ pub fn build_run_plan(
     })
 }
 
-pub const MODEL_LIST_SCRIPT: &str =
-    "sh -c '# coperceive-check:model-list\ncoperceive model list 2>/dev/null'";
+fn model_list_script(profile: &ServerProfile) -> String {
+    format!(
+        "sh -c '# coperceive-check:model-list\n{} model list 2>/dev/null'",
+        quoted_command(&profile.environment.coperceive_command)
+    )
+}
 
 /// Reads a custom pipeline registration (`coperceive-pipeline.json` beside the
 /// script) over SSH, read-only and bounded.
@@ -1586,8 +1601,12 @@ pub fn load_pipeline_registration(
 
 /// Lists installed model plugins as built-in pipelines. A cluster without
 /// plugins simply returns an empty list.
-pub fn list_builtin_pipelines(runner: &dyn RemoteRunner) -> Vec<PipelineEntry> {
-    let Ok(result) = runner.run(MODEL_LIST_SCRIPT, READ_TIMEOUT, None) else {
+pub fn list_builtin_pipelines(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+) -> Vec<PipelineEntry> {
+    let script = model_list_script(profile);
+    let Ok(result) = runner.run(&script, READ_TIMEOUT, None) else {
         return Vec::new();
     };
     if !result.success {
@@ -1815,7 +1834,7 @@ fn resolve_pipeline_for_save(
         if wanted.is_empty() {
             return Err("Choose the installed pipeline to run.".to_string());
         }
-        let entry = list_builtin_pipelines(runner)
+        let entry = list_builtin_pipelines(runner, profile)
             .into_iter()
             .find(|entry| entry.name == wanted || entry.id == wanted)
             .ok_or_else(|| {
@@ -2041,7 +2060,8 @@ fn revalidate_plan_on_server(
     }
 
     let started = std::time::Instant::now();
-    match runner.run(COPERCEIVE_VERSION_SCRIPT, READ_TIMEOUT, None) {
+    let version_command = coperceive_version_command(profile);
+    match runner.run(&version_command, READ_TIMEOUT, None) {
         Ok(result) if result.success => {
             let version = result.stdout.lines().next().unwrap_or("").trim().to_string();
             checks.push(check(
@@ -2182,6 +2202,7 @@ pub fn save_run_plan(
                     .to_string()
             })?;
         build_builtin_argv(
+            profile,
             manifest,
             &plan.id,
             &typed,
@@ -2410,7 +2431,7 @@ mod tests {
                 "EXISTS=1\nREADABLE=1\nEXEC=0\nISDIR=0\nREALPATH=/data/code/checkpoints/model.pt\nSHA256=abc123\n"
             } else if remote_cmd.contains("coperceive-check:plan-env") {
                 "MODULE=/usr/share/lmod/lmod/libexec/lmod\nLMOD=/usr/share/lmod/lmod/libexec/lmod\nAPPTAINER=\nSINGULARITY=\nPYTHON3=/usr/bin/python3\nCOPERCEIVE=/apps/coperceive/bin/coperceive\nHOME=/home/bob\n"
-            } else if remote_cmd.contains("coperceive-check:coperceive-version") {
+            } else if remote_cmd.contains("--version") {
                 "coperceive 0.4.1\n"
             } else if remote_cmd.contains("coperceive-check:plan-folders") {
                 "SCRATCH_OK=1\nRESULTS_OK=1\n"
@@ -2511,10 +2532,7 @@ mod tests {
                 "coperceive-check:plan-env",
                 "MODULE=/usr/share/lmod/lmod/libexec/lmod\nLMOD=/usr/share/lmod/lmod/libexec/lmod\nAPPTAINER=\nSINGULARITY=\nPYTHON3=/usr/bin/python3\nCOPERCEIVE=/apps/coperceive/bin/coperceive\nHOME=/home/bob\n",
             )
-            .with(
-                "coperceive-check:coperceive-version",
-                "coperceive 0.4.1\n",
-            )
+            .with("--version", "coperceive 0.4.1\n")
             .with(
                 "coperceive-check:plan-folders",
                 "SCRATCH_OK=1\nRESULTS_OK=1\n",
@@ -2765,7 +2783,7 @@ mod tests {
             "coperceive-check:model-list",
             "griffin  entry-point  /data/code/griffin/manifest.yaml\n",
         );
-        let pipelines = list_builtin_pipelines(&runner);
+        let pipelines = list_builtin_pipelines(&runner, &entry().profile);
         assert_eq!(pipelines.len(), 1);
         assert_eq!(pipelines[0].id, "griffin");
         assert_eq!(pipelines[0].source, "builtin");
@@ -2779,7 +2797,7 @@ mod tests {
     #[test]
     fn a_missing_plugin_list_is_not_an_error() {
         let runner = FakeRunner::default();
-        assert!(list_builtin_pipelines(&runner).is_empty());
+        assert!(list_builtin_pipelines(&runner, &entry().profile).is_empty());
     }
 
     #[test]
@@ -3234,6 +3252,39 @@ mod tests {
     }
 
     #[test]
+    fn builtin_argv_and_contract_script_prefix_the_saved_command() {
+        let profile = entry().profile;
+        let argv = build_builtin_argv(
+            &profile,
+            "/data/code/griffin/manifest.yaml",
+            "plan-1",
+            &BTreeMap::new(),
+            "/data/scenes",
+            "/data/code/checkpoints/model.pt",
+            "/data/results/runs/plan-1",
+        );
+        assert_eq!(
+            &argv[..3],
+            &[
+                "/home/bob/coperceive-app/.venv/bin/python",
+                "-m",
+                "coperceive"
+            ]
+        );
+        let script = render_contract_check_script(
+            &profile,
+            &profile.environment,
+            &argv,
+            "plan-1793222864-c5af819dbd2b",
+        )
+        .expect("contract script");
+        assert!(
+            script.contains("/home/bob/coperceive-app/.venv/bin/python -m coperceive model run"),
+            "{script}"
+        );
+    }
+
+    #[test]
     fn builtin_argv_uses_plugin_manifest_and_separate_option_elements() {
         let mut values = BTreeMap::new();
         values.insert(
@@ -3241,6 +3292,7 @@ mod tests {
             serde_json::json!(["epochs=2", "a b; touch /tmp/x"]),
         );
         let argv = build_builtin_argv(
+            &entry().profile,
             "/data/code/griffin/manifest.yaml",
             "plan-1",
             &values,
@@ -3248,7 +3300,9 @@ mod tests {
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
         );
-        assert_eq!(argv[0], "coperceive");
+        assert_eq!(argv[0], "/home/bob/coperceive-app/.venv/bin/python");
+        assert_eq!(argv[1], "-m");
+        assert_eq!(argv[2], "coperceive");
         assert!(argv.contains(&"--manifest".to_string()));
         assert!(argv.contains(&"/data/code/griffin/manifest.yaml".to_string()));
         assert!(argv.contains(&"checkpoint=/data/code/checkpoints/model.pt".to_string()));

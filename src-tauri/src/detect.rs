@@ -767,88 +767,93 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .or(env.python.as_deref());
-        match crate::ssh::run_ssh_command(
-            &opts.ssh_bin,
-            &target,
-            &coperceive_probe_script(configured_interpreter),
-            COPERCEIVE_TIMEOUT,
-            None,
-        ) {
-            Ok(result) if result.success => {
-                let version = result
-                    .stdout
-                    .lines()
-                    .next()
-                    .unwrap_or("")
-                    .trim()
-                    .trim_start_matches("coperceive")
-                    .trim()
-                    .to_string();
-                if version.is_empty() {
-                    let detail = if let Some(interpreter) = configured_interpreter {
-                        format!(
-                            "coperceive was not found through PATH or the interpreter {interpreter} \
-                             (-m coperceive). You can install it yourself, or ask your cluster \
-                             administrators for a preinstalled copy."
-                        )
-                    } else {
-                        "coperceive was not found on this server. You can install it yourself, or \
-                         ask your cluster administrators for a preinstalled copy."
-                            .to_string()
-                    };
-                    record(
-                        &mut checks,
-                        "coperceive",
-                        "Coperceive on the cluster",
-                        version_started,
-                        false,
-                        detail,
-                        Some(
-                            "Coperceive never installs anything on compute nodes. Add its location \
-                             in the server's environment settings once it is available."
-                                .to_string(),
-                        ),
-                    );
-                } else {
-                    env.coperceive_version = Some(version.clone());
-                    let app_version = env!("CARGO_PKG_VERSION");
-                    let detail = if version == app_version {
-                        format!("coperceive {version} is installed.")
-                    } else {
-                        format!(
-                            "coperceive {version} is installed (this desktop app is {app_version}); \
-                             the version difference is reported, not treated as a failure. \
-                             Job-submission compatibility was not checked."
-                        )
-                    };
-                    record(
-                        &mut checks,
-                        "coperceive",
-                        "Coperceive on the cluster",
-                        version_started,
-                        true,
-                        detail,
-                        if version == app_version {
-                            None
-                        } else {
-                            Some(
-                                "If job submission later fails on the cluster, align the app and \
-                                 cluster coperceive versions."
-                                    .to_string(),
-                            )
-                        },
-                    );
+        let mut version: Option<String> = None;
+        // First try the exact saved argv. This is what every remote call will
+        // use, so a venv install that is not on PATH reports the right version.
+        let saved_command = &entry.profile.environment.coperceive_command;
+        if !saved_command.is_empty() {
+            let quoted = saved_command
+                .iter()
+                .map(|part| shell_quote(part))
+                .collect::<Vec<_>>()
+                .join(" ");
+            let probe = format!("{quoted} --version 2>/dev/null | head -n 1");
+            if let Ok(result) =
+                crate::ssh::run_ssh_command(&opts.ssh_bin, &target, &probe, COPERCEIVE_TIMEOUT, None)
+            {
+                if result.success {
+                    version = parse_coperceive_version(&result.stdout);
                 }
             }
-            _ => record(
+        }
+        // Fallback for drafts that do not have a saved command yet.
+        if version.is_none() {
+            if let Ok(result) = crate::ssh::run_ssh_command(
+                &opts.ssh_bin,
+                &target,
+                &coperceive_probe_script(configured_interpreter),
+                COPERCEIVE_TIMEOUT,
+                None,
+            ) {
+                if result.success {
+                    version = parse_coperceive_version(&result.stdout);
+                }
+            }
+        }
+        if let Some(version) = version {
+            env.coperceive_version = Some(version.clone());
+            let app_version = env!("CARGO_PKG_VERSION");
+            let detail = if version == app_version {
+                format!("coperceive {version} is installed.")
+            } else {
+                format!(
+                    "coperceive {version} is installed (this desktop app is {app_version}); \
+                     the version difference is reported, not treated as a failure. \
+                     Job-submission compatibility was not checked."
+                )
+            };
+            record(
                 &mut checks,
                 "coperceive",
                 "Coperceive on the cluster",
                 version_started,
                 true,
-                "coperceive is installed, but its version could not be read.",
-                None,
-            ),
+                detail,
+                if version == app_version {
+                    None
+                } else {
+                    Some(
+                        "If job submission later fails on the cluster, align the app and \
+                         cluster coperceive versions."
+                            .to_string(),
+                    )
+                },
+            );
+        } else {
+            let detail = if let Some(interpreter) = configured_interpreter {
+                format!(
+                    "coperceive was not found through the saved command, PATH or the interpreter \
+                     {interpreter} (-m coperceive). You can install it yourself, or ask your \
+                     cluster administrators for a preinstalled copy."
+                )
+            } else {
+                "coperceive was not found on this server. You can install it yourself, or ask \
+                 your cluster administrators for a preinstalled copy."
+                    .to_string()
+            };
+            record(
+                &mut checks,
+                "coperceive",
+                "Coperceive on the cluster",
+                version_started,
+                false,
+                detail,
+                Some(
+                    "Coperceive never installs anything on compute nodes. Add its location in \
+                     the server's environment settings once it is available."
+                        .to_string(),
+                ),
+            );
         }
     }
 
@@ -962,7 +967,9 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     // (and coperceive is not a separate PATH executable), the exact argv is
     // `<interpreter> -m coperceive`. The UI takes this detected argv instead
     // of rebuilding it from whatever python the environment probe found.
-    if proposed.coperceive_command == vec!["coperceive".to_string()] {
+    if !entry.profile.environment.coperceive_command.is_empty() {
+        proposed.coperceive_command = entry.profile.environment.coperceive_command.clone();
+    } else if proposed.coperceive_command == vec!["coperceive".to_string()] {
         if let Some(interpreter) = entry
             .profile
             .environment
@@ -988,6 +995,23 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
     report.checks = checks;
     report.total_ms = started.elapsed().as_millis() as u64;
     report
+}
+
+/// Accept `0.0.0`, `coperceive 0.0.0`, and lines with trailing punctuation.
+fn parse_coperceive_version(stdout: &str) -> Option<String> {
+    for line in stdout.lines() {
+        for raw in line.split_whitespace() {
+            let token = raw.trim_matches(|ch: char| !ch.is_ascii_digit() && ch != '.');
+            if token.contains('.')
+                && !token.starts_with('.')
+                && !token.ends_with('.')
+                && token.chars().all(|ch| ch.is_ascii_digit() || ch == '.')
+            {
+                return Some(token.to_string());
+            }
+        }
+    }
+    None
 }
 
 fn now_unix() -> u64 {
@@ -1065,6 +1089,19 @@ mod tests {
         DetectOptions {
             ssh_bin: fake.bin.clone(),
         }
+    }
+
+    #[test]
+    fn version_parser_accepts_warnings_and_a_bare_version() {
+        assert_eq!(
+            parse_coperceive_version("some warning\n0.0.0\n"),
+            Some("0.0.0".to_string())
+        );
+        assert_eq!(
+            parse_coperceive_version("coperceive 0.4.1\n"),
+            Some("0.4.1".to_string())
+        );
+        assert_eq!(parse_coperceive_version("not a version"), None);
     }
 
     #[test]
@@ -1161,6 +1198,14 @@ mod tests {
         assert_eq!(
             report.environment.kind,
             crate::hpc::EnvironmentKind::Modules
+        );
+        assert_eq!(
+            report.discovered.environment.coperceive_version.as_deref(),
+            Some("0.4.1")
+        );
+        assert_eq!(
+            report.environment.coperceive_command,
+            entry.profile.environment.coperceive_command
         );
         assert!(report.scratch.writable);
         assert_eq!(report.scratch.path.as_deref(), Some("/work/alice"));

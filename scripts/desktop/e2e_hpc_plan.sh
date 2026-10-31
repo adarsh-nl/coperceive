@@ -152,6 +152,7 @@ run_plan() {
     FAKE_REMOTE_ROOT="${PLAN_ROOT}" \
     FAKE_SSH_LOG="${ssh_log}" \
     COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
     COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
     COPERCEIVE_TEST_HPC_PLAN_REQUEST="${request_file}" \
     COPERCEIVE_TEST_HPC_PLAN_RESULT="${result_file}" \
@@ -218,6 +219,15 @@ checkpoint_sha = hashlib.sha256(
 split_sha = hashlib.sha256(
     open(os.path.join(plan_root, "data/code/splits/test.txt"), "rb").read()
 ).hexdigest()
+coperceive_check = next(
+    (check for check in plan["checks"] if check["name"] == "coperceive"), None
+)
+if not coperceive_check or not coperceive_check.get("ok"):
+    print(
+        f"E2E_PLAN_FAIL: {name}: saved-command coperceive check failed: {coperceive_check}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
 if plan["checkpoint"]["sha256"] != checkpoint_sha:
     print(f"E2E_PLAN_FAIL: {name}: checkpoint sha256 mismatch", file=sys.stderr)
     sys.exit(1)
@@ -303,6 +313,7 @@ run_submit() {
     FAKE_REMOTE_ROOT="${PLAN_ROOT}" \
     FAKE_SSH_LOG="${ssh_log}" \
     COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
     COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
     COPERCEIVE_TEST_HPC_SUBMIT_REQUEST="${request_file}" \
     COPERCEIVE_TEST_HPC_SUBMIT_RESULT="${result_file}" \
@@ -429,6 +440,7 @@ run_watch() {
     FAKE_PREDICTIONS_PATH="${PREDICTIONS_FILE}" \
     FAKE_METRICS_PATH="${METRICS_FILE}" \
     COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
     COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
     COPERCEIVE_TEST_HPC_WATCH_REQUEST="${request_file}" \
     COPERCEIVE_TEST_HPC_WATCH_RESULT="${result_file}" \

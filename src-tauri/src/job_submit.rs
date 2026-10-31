@@ -651,6 +651,29 @@ mod tests {
     }
 
     #[test]
+    fn the_job_script_quotes_the_saved_coperceive_argv() {
+        let profile = profile("ps");
+        let mut plan = plan(&profile);
+        plan.argv = vec![
+            "/home/u/venv/bin/python".to_string(),
+            "-m".to_string(),
+            "coperceive".to_string(),
+            "eval".to_string(),
+            "--out".to_string(),
+            "$OUT_DIR".to_string(),
+        ];
+        let preview =
+            render_run_script(&profile, &plan, &SubmitOptions::default()).expect("render");
+        assert!(
+            preview
+                .script
+                .contains("/home/u/venv/bin/python -m coperceive eval"),
+            "{}",
+            preview.script
+        );
+    }
+
+    #[test]
     fn an_equals_form_output_dir_is_not_duplicated() {
         let profile = profile("ps");
         let mut plan = plan(&profile);

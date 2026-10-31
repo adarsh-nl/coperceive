@@ -1931,7 +1931,7 @@ async fn list_pipeline_options(profile_id: String) -> Result<Vec<PipelineEntry>,
     tauri::async_runtime::spawn_blocking(move || {
         let entry = find_server_entry(&profile_id)?;
         let runner = plan_runner(&entry)?;
-        Ok::<Vec<PipelineEntry>, String>(run_plan::list_builtin_pipelines(&runner))
+        Ok::<Vec<PipelineEntry>, String>(run_plan::list_builtin_pipelines(&runner, &entry.profile))
     })
     .await
     .map_err(|error| format!("Could not list pipelines: {error}"))?
@@ -2260,6 +2260,10 @@ async fn remote_connect(
             .and_then(|p| p.profile.environment.interpreter.clone()),
         uuid: uuid.clone(),
         static_dir: Some(static_dir),
+        coperceive_command: profile
+            .as_ref()
+            .map(|p| p.profile.environment.coperceive_command.clone())
+            .unwrap_or_default(),
     };
 
     let mgr = RemoteSessionManager::connect_with_options(&alias, &options, None)
@@ -2292,7 +2296,15 @@ async fn remote_status(
     uuid: Option<String>,
     job_id: Option<u64>,
 ) -> Result<RemoteStatusResponse, String> {
-    let client = RemoteClient::new(&alias);
+    let command = server_profiles::load_servers()
+        .into_iter()
+        .find(|entry| {
+            entry.profile.ssh_alias.as_deref() == Some(alias.as_str())
+                || entry.profile.ssh_target().ok().as_deref() == Some(alias.as_str())
+        })
+        .map(|entry| entry.profile.environment.coperceive_command)
+        .unwrap_or_else(|| vec!["coperceive".to_string()]);
+    let client = RemoteClient::new(&alias).with_coperceive_command(command);
     client.status(uuid.as_deref(), job_id).map_err(|e| e.to_string())
 }
 
@@ -2332,7 +2344,14 @@ async fn remote_scan(
         coperceive_desktop::remote_scan::validate_target(&entry.profile, &root, &path)?;
         let limits =
             coperceive_desktop::remote_scan::ScanLimits::resolve(depth, timeout_s, max_entries, max_total);
-        coperceive_desktop::remote_scan::run_scan(&ssh_bin(), &target, &root, &path, limits)
+        coperceive_desktop::remote_scan::run_scan(
+            &ssh_bin(),
+            &target,
+            &entry.profile.environment.coperceive_command,
+            &root,
+            &path,
+            limits,
+        )
     })
     .await
     .map_err(|e| format!("The folder scan could not finish: {e}"))?
@@ -2825,6 +2844,7 @@ fn main() {
                         match coperceive_desktop::remote_scan::run_scan(
                             &ssh_bin(),
                             &target,
+                            &entry.profile.environment.coperceive_command,
                             &request.root,
                             &request.path,
                             limits,
