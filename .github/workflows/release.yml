@@ -29,6 +29,19 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: "macos-tauri"
+      - name: Cache bundled Python runtime and pip downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coperceive-desktop
+            ~/Library/Caches/pip
+          key: bundled-python-${{ runner.os }}-${{ hashFiles('scripts/desktop/requirements-darwin-arm64.lock') }}
+          restore-keys: |
+            bundled-python-${{ runner.os }}-
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh
       - name: Sync Desktop Bundle Version
