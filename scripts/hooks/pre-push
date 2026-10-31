@@ -1,0 +1,170 @@
+#!/usr/bin/env bash
+# SPDX-License-Identifier: Apache-2.0
+# Pre-push hook: fast incremental checks (< 30s) on changed files only.
+# Runs:
+#  - ruff check & ruff format --check on changed Python files
+#  - pyright on changed Python files
+#  - tsc -b when web/ files change
+#  - cargo check when src-tauri/ files change
+
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "${REPO_ROOT}"
+
+# Find Python executables in virtualenv or PATH
+RUFF_BIN="${REPO_ROOT}/.venv/bin/ruff"
+if [ ! -x "${RUFF_BIN}" ]; then
+    RUFF_BIN="$(command -v ruff 2>/dev/null || true)"
+fi
+
+PYRIGHT_BIN="${REPO_ROOT}/.venv/bin/pyright"
+if [ ! -x "${PYRIGHT_BIN}" ]; then
+    PYRIGHT_BIN="$(command -v pyright 2>/dev/null || true)"
+fi
+
+# Ensure cargo is in PATH if installed in ~/.cargo/bin
+export PATH="${HOME}/.cargo/bin:${PATH}"
+
+# Parse stdin from git push: <local_ref> <local_oid> <remote_ref> <remote_oid>
+CHANGED_FILES=""
+STDIN_DATA=""
+if [ ! -t 0 ]; then
+    STDIN_DATA="$(cat || true)"
+fi
+
+if [ -n "${STDIN_DATA}" ]; then
+    while IFS=' ' read -r local_ref local_oid remote_ref remote_oid; do
+        [ -z "${local_oid}" ] && continue
+        if [ "${local_oid}" = "0000000000000000000000000000000000000000" ]; then
+            # Branch deletion: nothing to check
+            continue
+        fi
+        if [ "${remote_oid}" = "0000000000000000000000000000000000000000" ]; then
+            # New branch push: compare against merge-base with upstream integration branch
+            BASE_REF="origin/feat/m2-import"
+            if ! git rev-parse --verify "${BASE_REF}" >/dev/null 2>&1; then
+                BASE_REF="origin/main"
+            fi
+            if git rev-parse --verify "${BASE_REF}" >/dev/null 2>&1; then
+                MERGE_BASE="$(git merge-base "${local_oid}" "${BASE_REF}" 2>/dev/null || true)"
+                if [ -n "${MERGE_BASE}" ]; then
+                    DIFF_FILES="$(git diff --name-only "${MERGE_BASE}" "${local_oid}" 2>/dev/null || true)"
+                else
+                    DIFF_FILES="$(git diff --name-only "${local_oid}~1" "${local_oid}" 2>/dev/null || true)"
+                fi
+            else
+                DIFF_FILES="$(git diff --name-only "${local_oid}~1" "${local_oid}" 2>/dev/null || true)"
+            fi
+        else
+            DIFF_FILES="$(git diff --name-only "${remote_oid}" "${local_oid}" 2>/dev/null || true)"
+        fi
+        CHANGED_FILES="${CHANGED_FILES}"$'\n'"${DIFF_FILES}"
+    done <<< "${STDIN_DATA}"
+fi
+
+# Fallback if stdin was empty (manual invocation)
+if [ -z "${CHANGED_FILES//[[:space:]]/}" ]; then
+    UPSTREAM="$(git rev-parse --abbrev-ref '@{upstream}' 2>/dev/null || true)"
+    if [ -n "${UPSTREAM}" ]; then
+        CHANGED_FILES="$(git diff --name-only "${UPSTREAM}"...HEAD 2>/dev/null || true)"
+    else
+        CHANGED_FILES="$(git diff --name-only origin/feat/m2-import...HEAD 2>/dev/null || git diff --name-only origin/main...HEAD 2>/dev/null || git diff --name-only HEAD~1..HEAD 2>/dev/null || true)"
+    fi
+fi
+
+# Clean up empty lines and deduplicate
+FILES="$(echo "${CHANGED_FILES}" | sed '/^[[:space:]]*$/d' | sort -u || true)"
+
+if [ -z "${FILES}" ]; then
+    echo "[pre-push] No changed files detected. Push allowed."
+    exit 0
+fi
+
+START_TIME=$(date +%s)
+echo "[pre-push] Inspecting changed files before push..."
+
+# 1. Python checks
+PY_FILES=()
+while IFS= read -r f; do
+    if [[ "${f}" =~ \.py$ ]] && [ -f "${REPO_ROOT}/${f}" ]; then
+        PY_FILES+=("${f}")
+    fi
+done <<< "${FILES}"
+
+if [ "${#PY_FILES[@]}" -gt 0 ]; then
+    echo "  → Checking ${#PY_FILES[@]} Python file(s) with ruff and pyright..."
+    if [ -n "${RUFF_BIN}" ]; then
+        if ! "${RUFF_BIN}" check "${PY_FILES[@]}"; then
+            echo "[pre-push] ERROR: 'ruff check' failed on changed files." >&2
+            exit 1
+        fi
+        if ! "${RUFF_BIN}" format --check "${PY_FILES[@]}"; then
+            echo "[pre-push] ERROR: 'ruff format --check' failed on changed files." >&2
+            exit 1
+        fi
+    else
+        echo "  [pre-push] Warning: ruff not found in .venv or PATH; skipping ruff."
+    fi
+
+    if [ -n "${PYRIGHT_BIN}" ]; then
+        if ! "${PYRIGHT_BIN}" "${PY_FILES[@]}"; then
+            echo "[pre-push] ERROR: 'pyright' failed on changed Python files." >&2
+            exit 1
+        fi
+    else
+        echo "  [pre-push] Warning: pyright not found in .venv or PATH; skipping pyright."
+    fi
+fi
+
+# 2. Frontend web checks
+HAS_WEB_CHANGES=false
+while IFS= read -r f; do
+    if [[ "${f}" =~ ^web/ ]]; then
+        HAS_WEB_CHANGES=true
+        break
+    fi
+done <<< "${FILES}"
+
+if [ "${HAS_WEB_CHANGES}" = true ]; then
+    echo "  → Frontend changes detected in web/; running 'npx tsc -b'..."
+    if command -v npx >/dev/null 2>&1; then
+        (cd "${REPO_ROOT}/web" && npx tsc -b) || {
+            echo "[pre-push] ERROR: 'npx tsc -b' in web/ failed." >&2
+            exit 1
+        }
+    else
+        echo "  [pre-push] Warning: npx not found in PATH; skipping tsc check."
+    fi
+fi
+
+# 3. Rust / Tauri checks
+HAS_TAURI_CHANGES=false
+while IFS= read -r f; do
+    if [[ "${f}" =~ ^src-tauri/ ]]; then
+        HAS_TAURI_CHANGES=true
+        break
+    fi
+done <<< "${FILES}"
+
+if [ "${HAS_TAURI_CHANGES}" = true ]; then
+    echo "  → Rust desktop changes detected in src-tauri/; running 'cargo check'..."
+    if command -v cargo >/dev/null 2>&1; then
+        # Ensure dummy frontendDist exists so tauri::generate_context!() does not panic
+        if [ ! -d "${REPO_ROOT}/coperceive/app/static" ]; then
+            mkdir -p "${REPO_ROOT}/coperceive/app/static"
+            touch "${REPO_ROOT}/coperceive/app/static/index.html"
+        fi
+        (cd "${REPO_ROOT}/src-tauri" && cargo check --quiet) || {
+            echo "[pre-push] ERROR: 'cargo check' in src-tauri/ failed." >&2
+            exit 1
+        }
+    else
+        echo "  [pre-push] Warning: cargo not found in PATH; skipping cargo check."
+    fi
+fi
+
+END_TIME=$(date +%s)
+ELAPSED=$((END_TIME - START_TIME))
+echo "[pre-push] All checks passed in ${ELAPSED}s. Proceeding with push."
+exit 0
