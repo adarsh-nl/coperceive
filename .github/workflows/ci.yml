@@ -2,7 +2,14 @@ name: ci
 
 on:
   push:
+    branches:
+      - main
+      - feat/m2-import
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   lint:
