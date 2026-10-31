@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportPrivateUsage=false
 """Synthetic adapter layouts for cluster dataset detect/index. No dataset bytes."""
 
 from __future__ import annotations
@@ -244,3 +244,82 @@ def test_two_concurrent_prepare_processes_share_a_cache_without_losing_records(
     assert all(scene["state"] == "ready" for scene in status["scenes"])
     dataset = json.loads((cache / "dataset.json").read_text(encoding="utf-8"))
     assert set(dataset["scenes"]) == {"scene_0001", "scene_0002"}
+
+
+def _seed_cache(raw: Path, cache: Path, scene_id: str = "scene_0001") -> None:
+    import coperceive.cluster_datasets as cd
+
+    cache.mkdir(parents=True, exist_ok=True)
+    cd._write_dataset(
+        cache,
+        {
+            "schema": cd.CACHE_SCHEMA,
+            "adapter": "opv2v",
+            "raw_root": str(raw),
+            "split": "test",
+            "params": {"split": "test"},
+            "cache_root": str(cache),
+            "raw_fingerprint": {},
+            "created_unix": 0,
+            "updated_unix": 0,
+            "scenes": {
+                scene_id: {
+                    "state": "not_prepared",
+                    "reason": None,
+                    "job_id": None,
+                    "prepared_unix": None,
+                    "scene_dir": scene_id,
+                }
+            },
+        },
+    )
+
+
+def test_an_unexpected_worker_exception_is_a_per_scene_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import coperceive.cluster_datasets as cd
+
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    _seed_cache(raw, cache)
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cd, "ingest", explode)
+    scene_id, state, reason, _prepared = cd._claim_and_prepare_scene(
+        "opv2v", str(raw), str(cache), "scene_0001", {"split": "test"}, None
+    )
+    assert scene_id == "scene_0001"
+    assert state == "failed"
+    assert reason and "RuntimeError: boom" in reason
+
+
+def test_a_superseded_owner_does_not_overwrite_the_new_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import coperceive.cluster_datasets as cd
+
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    _seed_cache(raw, cache)
+
+    def takeover(_adapter: object, _raw: object, partial: Path, **_kwargs: object) -> None:
+        produced = Path(partial) / "scene_0001"
+        produced.mkdir(parents=True)
+        (produced / "manifest.json").write_text("{}", encoding="utf-8")
+        (produced / "COMPLETE.json").write_text("{}", encoding="utf-8")
+        with cd._cache_lock(cache):
+            dataset = cd._read_dataset(cache)
+            dataset["scenes"]["scene_0001"]["job_id"] = "new-owner"
+            cd._write_dataset(cache, dataset)
+
+    monkeypatch.setattr(cd, "ingest", takeover)
+    _scene_id, state, reason, _prepared = cd._claim_and_prepare_scene(
+        "opv2v", str(raw), str(cache), "scene_0001", {"split": "test"}, None
+    )
+    assert state == "preparing"
+    assert reason and "superseded" in reason
+    stored = json.loads((cache / "dataset.json").read_text(encoding="utf-8"))
+    assert stored["scenes"]["scene_0001"]["job_id"] == "new-owner"

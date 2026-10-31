@@ -222,7 +222,8 @@ scene to its Slurm job.
 - Preparation is scheduled: CPU only (no GRES), `--cpus-per-task` equal to
   `--workers`, a per-job scratch subdirectory, the existing preview/confirm
   hash, and a per-scene temporary directory moved into the cache atomically.
-- One failed scene does not stop the rest; its `reason` is kept.
+- One failed scene does not stop the rest; its `reason` is kept. The claim takeover threshold is a fixed four hours, so the prepare
+  job walltime must stay at or below four hours (the default is four hours).
 - Nothing derived from licensed/unknown raw data is written to this repository;
   fixtures are synthetic.
 

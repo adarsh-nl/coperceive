@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from coperceive.adapters.build import BuildError, ManifestAdapter
-from coperceive.adapters.ingest import IngestError, ingest
+from coperceive.adapters.ingest import ingest
 from coperceive.adapters.registry import RegistryError, resolve_adapter
 from coperceive.adapters.spec import SpecError
 
@@ -383,9 +383,9 @@ def _claim_and_prepare_scene(
             shutil.rmtree(old)
         state = "ready"
         prepared = int(time.time())
-    except (IngestError, BuildError, DatasetError, OSError, ValueError) as exc:
+    except Exception as exc:  # noqa: BLE001 - one bad scene must not abort the dataset
         state = "failed"
-        reason = str(exc)
+        reason = f"{type(exc).__name__}: {exc}"
     finally:
         shutil.rmtree(temporary, ignore_errors=True)
         try:
@@ -395,6 +395,15 @@ def _claim_and_prepare_scene(
     with _cache_lock(cache):
         dataset = _read_dataset(cache)
         record = dataset.setdefault("scenes", {}).setdefault(scene_id, {})
+        if record.get("job_id") != job_id:
+            # A newer owner took this scene over while we were finishing; never
+            # overwrite its state with our (superseded) result.
+            return (
+                scene_id,
+                str(record.get("state") or "preparing"),
+                "superseded by another prepare job",
+                None,
+            )
         record.update(
             {
                 "state": state,
