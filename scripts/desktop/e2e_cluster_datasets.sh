@@ -8,6 +8,9 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PYTHON="${ROOT_DIR}/.venv/bin/python"
 if [ ! -x "${PYTHON}" ]; then PYTHON="python3"; fi
+if ! "${PYTHON}" -c "import yaml" >/dev/null 2>&1; then
+    "${PYTHON}" -m pip install --quiet pyyaml || { echo "E2E_DATASET_FAIL: PyYAML is required for the synthetic tree" >&2; exit 1; }
+fi
 TMP_DIR="$(mktemp -d /tmp/coperceive-dataset-e2e-XXXXXX)"
 trap 'rm -rf "${TMP_DIR}"' EXIT INT TERM HUP
 fail() { echo "E2E_DATASET_FAIL: $*" >&2; exit 1; }
