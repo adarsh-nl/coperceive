@@ -237,4 +237,46 @@ test("opening a ready scene completes and emits open event", async () => {
   const openRes = await datasetOpen("profile-1", "scene_0001", cacheRoot);
   assert.strictEqual(openRes.scene_id, "scene_0001");
   assert.strictEqual(openRes.cache_root, cacheRoot);
+
+  // Test object-param overload matching frozen contract
+  const openResContract = await datasetOpen("profile-1", "scene_0001", {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opv2v",
+    split: "test",
+    cacheRoot,
+  });
+  assert.strictEqual(openResContract.scene_id, "scene_0001");
+  assert.strictEqual(openResContract.cache_root, cacheRoot);
+});
+
+test("datasetStatus and datasetPrepare accept frozen contract parameter objects", async () => {
+  _resetStubStore();
+  const cacheRoot = "/scratch/results/coperceive-cache/opv2v/test";
+  _setStubSceneState(cacheRoot, "scene_0001", "ready");
+
+  const statusDoc = await datasetStatus("profile-1", {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opv2v",
+    split: "test",
+    cacheRoot,
+  });
+  assert.strictEqual(statusDoc.schema, "coperceive-cluster-scene-status-1");
+  assert.strictEqual(statusDoc.scenes.length, 1);
+  assert.strictEqual(statusDoc.scenes[0]?.scene_id, "scene_0001");
+
+  const preview = await datasetPrepare("profile-1", {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opv2v",
+    split: "test",
+    cacheRoot,
+    scenes: ["scene_0001"],
+    workers: 2,
+  });
+  assert.strictEqual(preview.workers, 2);
+  assert.ok(preview.script.includes("# No GPU requested (CPU only)"));
+  assert.ok(preview.preview_hash?.length);
+
+  const submitRes = await datasetPrepareSubmit("profile-1", preview, ["scene_0001"], true);
+  assert.strictEqual(submitRes.status, "submitted");
+  assert.strictEqual(submitRes.state, "pending");
 });

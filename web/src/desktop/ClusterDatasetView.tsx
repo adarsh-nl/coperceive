@@ -210,7 +210,12 @@ export default function ClusterDatasetView({
   const fetchStatus = async (currentCacheRoot: string) => {
     if (!currentCacheRoot) return;
     try {
-      const statusDoc = await datasetStatus(profile.id, currentCacheRoot);
+      const statusDoc = await datasetStatus(profile.id, {
+        adapter: dataset.adapter || "opv2v",
+        rawRoot: dataset.raw_root || dataset.path,
+        split: dataset.split,
+        cacheRoot: currentCacheRoot,
+      });
       const nextMap = new Map<string, ClusterSceneStatusEntry>();
       for (const entry of statusDoc.scenes) {
         nextMap.set(entry.scene_id, entry);
@@ -221,7 +226,12 @@ export default function ClusterDatasetView({
       if (autoOpenSceneId && nextMap.get(autoOpenSceneId)?.state === "ready") {
         const idToOpen = autoOpenSceneId;
         setAutoOpenSceneId(null);
-        void datasetOpen(profile.id, idToOpen, currentCacheRoot);
+        void datasetOpen(profile.id, idToOpen, {
+          adapter: dataset.adapter || "opv2v",
+          rawRoot: dataset.raw_root || dataset.path,
+          split: dataset.split,
+          cacheRoot: currentCacheRoot,
+        });
       }
 
       // Check if anything is still preparing
@@ -276,7 +286,12 @@ export default function ClusterDatasetView({
 
     if (currentStatus === "ready") {
       try {
-        await datasetOpen(profile.id, sceneId, cacheRoot);
+        await datasetOpen(profile.id, sceneId, {
+          adapter: dataset.adapter || "opv2v",
+          rawRoot: dataset.raw_root || dataset.path,
+          split: dataset.split,
+          cacheRoot,
+        });
       } catch (err) {
         alert(err instanceof Error ? err.message : String(err));
       }
@@ -290,6 +305,7 @@ export default function ClusterDatasetView({
       const preview = await datasetPrepare(profile.id, {
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
+        split: dataset.split,
         cacheRoot,
         scenes: [sceneId],
         workers: 2,
@@ -304,7 +320,7 @@ export default function ClusterDatasetView({
   const handleConfirmSingleScenePrepare = async () => {
     if (!singleScenePrepare || !singlePreparePreview) return;
     try {
-      await datasetPrepareSubmit(profile.id, singlePreparePreview);
+      await datasetPrepareSubmit(profile.id, singlePreparePreview, [singleScenePrepare], true);
       _setStubSceneState(cacheRoot, singleScenePrepare, "preparing");
       setAutoOpenSceneId(singleScenePrepare);
       setSingleScenePrepare(null);
@@ -327,6 +343,7 @@ export default function ClusterDatasetView({
       const preview = await datasetPrepare(profile.id, {
         adapter: dataset.adapter || "opv2v",
         rawRoot: dataset.raw_root || dataset.path,
+        split: dataset.split,
         cacheRoot,
         all: true,
         workers,
@@ -345,7 +362,7 @@ export default function ClusterDatasetView({
 
     try {
       const allSceneIds = indexDoc?.scenes.map((s) => s.scene_id) || [];
-      const res = await datasetPrepareSubmit(profile.id, preparePreview, allSceneIds);
+      const res = await datasetPrepareSubmit(profile.id, preparePreview, allSceneIds, true);
       setPrepareOutcome(`Submitted preparation job ${res.job_id}. Ingesting scenes on compute node.`);
       setShowPrepareModal(false);
       startPolling(cacheRoot);

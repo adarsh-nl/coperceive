@@ -100,22 +100,36 @@ export interface ClusterSceneStatusDocument {
 }
 
 export interface DatasetPreparePreview {
-  script: string;
+  plan_id?: string;
   job_name: string;
-  workers: number;
-  cache_root: string;
-  scenes: string[];
   partition?: string | null;
+  walltime?: string;
+  cpus_per_task?: number;
+  gres?: string | null;
+  estimated_cache_bytes?: number;
+  script: string;
+  preview_hash?: string;
+  workers?: number;
+  cache_root?: string;
+  scenes?: string[] | "all";
 }
 
 export interface DatasetPrepareSubmitResult {
   job_id: string;
-  status: string;
+  state?: "pending" | "running" | "completed" | "failed" | "cancelled" | "unknown" | string;
+  queue_reason?: string | null;
+  plan_id?: string;
+  status?: string;
 }
 
 export interface DatasetOpenResult {
-  scene_id: string;
-  cache_root: string;
+  origin?: string;
+  token?: string;
+  server_version?: string;
+  data_root?: string;
+  target_type?: "remote" | string;
+  scene_id?: string;
+  cache_root?: string;
   url?: string;
 }
 
@@ -366,20 +380,42 @@ export async function datasetIndex(
 
 /**
  * Retrieve per-scene status from the dataset cache on the cluster.
- *
- * TODO(DeepSeek-PR2): Once DeepSeek registers `dataset_status` in Tauri,
- * this calls invoke("dataset_status", { profileId, cacheRoot }).
+ * Invokes Tauri command `dataset_status({ profileId, adapter, rawRoot, split })`.
  */
 export async function datasetStatus(
   profileId: string,
-  cacheRoot: string,
+  cacheRootOrParams:
+    | string
+    | {
+        adapter: string;
+        rawRoot: string;
+        split: string | null;
+        cacheRoot?: string;
+      },
 ): Promise<ClusterSceneStatusDocument> {
+  const params =
+    typeof cacheRootOrParams === "string"
+      ? {
+          adapter: "opv2v",
+          rawRoot: cacheRootOrParams,
+          split: "test",
+          cacheRoot: cacheRootOrParams,
+        }
+      : {
+          adapter: cacheRootOrParams.adapter,
+          rawRoot: cacheRootOrParams.rawRoot,
+          split: cacheRootOrParams.split,
+          cacheRoot: cacheRootOrParams.cacheRoot || cacheRootOrParams.rawRoot,
+        };
+
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       return await invoke<ClusterSceneStatusDocument>("dataset_status", {
         profileId,
-        cacheRoot,
+        adapter: params.adapter,
+        rawRoot: params.rawRoot,
+        split: params.split,
       });
     } catch {
       // Fall through to typed stub while PR 2 is being prepared
@@ -388,7 +424,9 @@ export async function datasetStatus(
 
   // Typed stub returning current tracked scene states
   const entries: ClusterSceneStatusEntry[] = [];
-  const cacheMap = stubSceneStatuses.get(cacheRoot);
+  const cacheMap =
+    stubSceneStatuses.get(params.cacheRoot) ||
+    stubSceneStatuses.get(params.rawRoot);
   if (cacheMap) {
     for (const entry of cacheMap.values()) {
       entries.push({ ...entry });
@@ -397,10 +435,10 @@ export async function datasetStatus(
 
   return {
     schema: "coperceive-cluster-scene-status-1",
-    cache_root: cacheRoot,
-    adapter: "opv2v",
-    raw_root: cacheRoot,
-    split: "test",
+    cache_root: params.cacheRoot,
+    adapter: params.adapter,
+    raw_root: params.rawRoot,
+    split: params.split,
     updated_unix: Math.floor(Date.now() / 1000),
     scenes: entries,
   };
@@ -408,17 +446,16 @@ export async function datasetStatus(
 
 /**
  * Generate preview script for preparing a dataset or single scene.
- *
- * TODO(DeepSeek-PR2): Once DeepSeek registers `dataset_prepare` in Tauri,
- * this calls invoke("dataset_prepare", { profileId, ... }).
+ * Invokes Tauri command `dataset_prepare({ profileId, adapter, rawRoot, split, scenes, workers })`.
  */
 export async function datasetPrepare(
   profileId: string,
   params: {
     adapter: string;
     rawRoot: string;
-    cacheRoot: string;
-    scenes?: string[];
+    split?: string | null;
+    cacheRoot?: string;
+    scenes?: string[] | "all";
     all?: boolean;
     workers?: number;
     partition?: string | null;
@@ -434,9 +471,8 @@ export async function datasetPrepare(
         profileId,
         adapter: params.adapter,
         rawRoot: params.rawRoot,
-        cacheRoot: params.cacheRoot,
-        scenes: params.scenes,
-        all: params.all,
+        split: params.split ?? null,
+        scenes: scenesList,
         workers,
       });
     } catch {
@@ -444,42 +480,49 @@ export async function datasetPrepare(
     }
   }
 
+  const cacheRoot = params.cacheRoot || `${params.rawRoot}/cache`;
   const script = generatePrepareScriptText({
     adapter: params.adapter,
     rawRoot: params.rawRoot,
-    cacheRoot: params.cacheRoot,
+    cacheRoot,
     scenes: scenesList,
     workers,
     partition: params.partition,
   });
 
   return {
-    script,
+    plan_id: `plan-${Date.now()}`,
     job_name: `prepare-${params.adapter}`,
+    partition: params.partition ?? "cpu-short",
+    walltime: "04:00:00",
+    cpus_per_task: workers,
+    gres: null,
+    estimated_cache_bytes: 0,
+    script,
+    preview_hash: `hash-${Date.now()}`,
     workers,
-    cache_root: params.cacheRoot,
+    cache_root: cacheRoot,
     scenes: Array.isArray(scenesList) ? scenesList : ["all"],
-    partition: params.partition,
   };
 }
 
 /**
  * Submit confirmed prepare job to Slurm on the cluster.
- *
- * TODO(DeepSeek-PR2): Once DeepSeek registers `dataset_prepare_submit`,
- * this calls invoke("dataset_prepare_submit", { profileId, preview }).
+ * Invokes Tauri command `dataset_prepare_submit({ profileId, previewHash, confirmed })`.
  */
 export async function datasetPrepareSubmit(
   profileId: string,
   preview: DatasetPreparePreview,
   allSceneIds?: string[],
+  confirmed: boolean = true,
 ): Promise<DatasetPrepareSubmitResult> {
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       return await invoke<DatasetPrepareSubmitResult>("dataset_prepare_submit", {
         profileId,
-        preview,
+        previewHash: preview.preview_hash || "mock-hash",
+        confirmed,
       });
     } catch {
       // Fall through to typed stub
@@ -488,14 +531,19 @@ export async function datasetPrepareSubmit(
 
   const fakeJobId = String(Math.floor(600000 + Math.random() * 100000));
   const scenesToMark =
-    preview.scenes.includes("all") && allSceneIds
+    preview.scenes &&
+    (preview.scenes === "all" || preview.scenes.includes("all")) &&
+    allSceneIds
       ? allSceneIds
-      : preview.scenes;
+      : Array.isArray(preview.scenes)
+        ? preview.scenes
+        : [];
 
+  const cacheKey = preview.cache_root || "";
   for (const sceneId of scenesToMark) {
     if (sceneId === "all") continue;
     _setStubSceneState(
-      preview.cache_root,
+      cacheKey,
       sceneId,
       "preparing",
       null,
@@ -505,29 +553,59 @@ export async function datasetPrepareSubmit(
 
   return {
     job_id: fakeJobId,
+    state: "pending",
+    queue_reason: null,
+    plan_id: preview.plan_id || `plan-${fakeJobId}`,
     status: "submitted",
   };
 }
 
 /**
  * Open a ready scene in the viewer via the remote viewer session.
- *
- * TODO(DeepSeek-PR2): Once DeepSeek registers `dataset_open`,
- * this calls invoke("dataset_open", { profileId, sceneId, cacheRoot }).
+ * Invokes Tauri command `dataset_open({ profileId, adapter, rawRoot, split, sceneId })`.
  */
 export async function datasetOpen(
   profileId: string,
   sceneId: string,
-  cacheRoot: string,
+  cacheRootOrParams:
+    | string
+    | {
+        adapter: string;
+        rawRoot: string;
+        split: string | null;
+        cacheRoot?: string;
+      },
 ): Promise<DatasetOpenResult> {
+  const params =
+    typeof cacheRootOrParams === "string"
+      ? {
+          adapter: "opv2v",
+          rawRoot: cacheRootOrParams,
+          split: "test",
+          cacheRoot: cacheRootOrParams,
+        }
+      : {
+          adapter: cacheRootOrParams.adapter,
+          rawRoot: cacheRootOrParams.rawRoot,
+          split: cacheRootOrParams.split,
+          cacheRoot: cacheRootOrParams.cacheRoot || cacheRootOrParams.rawRoot,
+        };
+
   if (isTauriEnvironment()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
-      return await invoke<DatasetOpenResult>("dataset_open", {
+      const session = await invoke<DatasetOpenResult>("dataset_open", {
         profileId,
+        adapter: params.adapter,
+        rawRoot: params.rawRoot,
+        split: params.split,
         sceneId,
-        cacheRoot,
       });
+      return {
+        ...session,
+        scene_id: sceneId,
+        cache_root: params.cacheRoot,
+      };
     } catch {
       // Fall through to typed stub
     }
@@ -537,13 +615,13 @@ export async function datasetOpen(
   if (typeof window !== "undefined") {
     window.dispatchEvent(
       new CustomEvent("coperceive-open-cluster-scene", {
-        detail: { profileId, sceneId, cacheRoot },
+        detail: { profileId, sceneId, cacheRoot: params.cacheRoot },
       }),
     );
   }
 
   return {
     scene_id: sceneId,
-    cache_root: cacheRoot,
+    cache_root: params.cacheRoot,
   };
 }
