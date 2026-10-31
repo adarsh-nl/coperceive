@@ -1572,17 +1572,17 @@ def test_playback_during_resize_and_fullscreen_has_no_stall(session: _Session) -
     # Check frame gaps. The first two warm-up gaps are ignored per project standard.
     # The one-off canvas buffer reallocation at the exact moment of full-screen toggle
     # (entry and exit) is excluded by timestamp; all other frames must satisfy <= 350 ms.
-    steady_gaps = []
-    transition_gaps = []
+    steady_gaps: list[float] = []
+    transition_gaps: list[float] = []
     for i in range(3, len(played)):
-        t_prev = played[i - 1]["at"]
-        t_curr = played[i]["at"]
-        gap = t_curr - t_prev
+        t_prev = float(played[i - 1]["at"])
+        t_curr = float(played[i]["at"])
+        gap = float(t_curr - t_prev)
         is_fs_toggle = (
-            (t_prev <= t_f_before <= t_curr)
-            or (t_prev <= t_f_after <= t_curr)
-            or (t_prev <= t_esc_before <= t_curr)
-            or (t_prev <= t_esc_after <= t_curr)
+            (t_prev <= float(t_f_before) <= t_curr)
+            or (t_prev <= float(t_f_after) <= t_curr)
+            or (t_prev <= float(t_esc_before) <= t_curr)
+            or (t_prev <= float(t_esc_after) <= t_curr)
         )
         if is_fs_toggle:
             transition_gaps.append(gap)

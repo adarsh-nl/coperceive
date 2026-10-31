@@ -874,8 +874,8 @@ eval_js("""(() => {
 time.sleep(0.3)
 is_fs = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
 ws_fs = eval_js("Boolean(document.querySelector('.workspace.is-fullscreen'))")
-left_panel_hidden = eval_js("document.querySelector('aside.panel:not(.panel-right)') === null")
-right_panel_hidden = eval_js("document.querySelector('aside.panel-right') === null")
+left_panel_hidden = eval_js("(() => { const el = document.querySelector('aside.panel:not(.panel-right)'); return el === null || getComputedStyle(el).display === 'none'; })()")
+right_panel_hidden = eval_js("(() => { const el = document.querySelector('aside.panel-right'); return el === null || getComputedStyle(el).display === 'none'; })()")
 timeline_visible = eval_js("document.querySelector('.timeline') !== null")
 print(f"Full screen active: is_fs={is_fs}, ws_fs={ws_fs}, left_hidden={left_panel_hidden}, right_hidden={right_panel_hidden}, timeline_vis={timeline_visible}")
 assert is_fs and ws_fs and left_panel_hidden and right_panel_hidden and timeline_visible, "Full screen must hide panels and keep timeline"
