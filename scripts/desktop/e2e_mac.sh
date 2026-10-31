@@ -2012,7 +2012,8 @@ assert not is_landing, "Desktop runtime must never show marketing landing page"
 eval_js("window.location.hash = '#/viewer'")
 time.sleep(1.0)
 
-print("Step 5c verified: import, cancel, resume, open, wordmark returns to Library.")
+print("Step 5c verified: wordmark returns to Library.")
+print("Step 5c verified: import, cancel, resume, open.")
 EOF
 
 echo ""

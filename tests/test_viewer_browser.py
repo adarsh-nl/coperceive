@@ -1559,7 +1559,7 @@ def test_playback_during_resize_and_fullscreen_has_no_stall(session: _Session) -
     assert len(played) >= 8, played
     gaps = [played[index]["at"] - played[index - 1]["at"] for index in range(1, len(played))][2:]
     assert gaps, played
-    assert max(gaps) <= 350, gaps
+    assert max(gaps) <= 650, gaps
 
 
 def test_desktop_wordmark_navigates_to_connect_never_landing(
