@@ -1592,6 +1592,12 @@ def test_playback_during_resize_and_fullscreen_has_no_stall(session: _Session) -
     assert steady_gaps, played
     assert max(steady_gaps) <= 350, f"Steady gaps exceeded 350 ms: {steady_gaps}"
 
+    # Bounded transition frames: full-screen toggle causes a one-off WebGL backing-buffer
+    # reallocation and bloom target resize in Chromium (measured ~614 ms on entry,
+    # ~1121 ms on exit in CI). Bound them <= 1500 ms so this transition cannot silently regress.
+    assert transition_gaps, f"Expected full-screen transition frames, got {played}"
+    assert max(transition_gaps) <= 1500, f"Transition gap exceeded 1500 ms: {transition_gaps}"
+
 
 def test_desktop_wordmark_navigates_to_connect_never_landing(
     browser: Browser, viewer_url: str
