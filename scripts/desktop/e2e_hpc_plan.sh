@@ -232,12 +232,21 @@ if not coperceive_check or not coperceive_check.get("ok"):
         file=sys.stderr,
     )
     sys.exit(1)
-if plan["checkpoint"]["sha256"] != checkpoint_sha:
-    print(f"E2E_PLAN_FAIL: {name}: checkpoint sha256 mismatch", file=sys.stderr)
-    sys.exit(1)
-if plan["split"]["sha256"] != split_sha:
-    print(f"E2E_PLAN_FAIL: {name}: split sha256 mismatch", file=sys.stderr)
-    sys.exit(1)
+if name == "plan-smoke":
+    # The smoke pipeline has neither role, so the generic pickers are absent.
+    if plan["checkpoint"]["path"] or plan["split"]["path"]:
+        print(f"E2E_PLAN_FAIL: {name}: generic checkpoint/split were recorded", file=sys.stderr)
+        sys.exit(1)
+    if any(check["name"] in {"checkpoint", "checkpoint-sha", "split", "split-sha"} for check in plan["checks"]):
+        print(f"E2E_PLAN_FAIL: {name}: generic checkpoint/split checks ran", file=sys.stderr)
+        sys.exit(1)
+else:
+    if plan["checkpoint"]["sha256"] != checkpoint_sha:
+        print(f"E2E_PLAN_FAIL: {name}: checkpoint sha256 mismatch", file=sys.stderr)
+        sys.exit(1)
+    if plan["split"]["sha256"] != split_sha:
+        print(f"E2E_PLAN_FAIL: {name}: split sha256 mismatch", file=sys.stderr)
+        sys.exit(1)
 
 argv = plan["argv"]
 if name == "plan-smoke":
@@ -289,9 +298,12 @@ if os.path.exists(ssh_log):
             print(f"E2E_PLAN_FAIL: {name}: the plan called {forbidden}", file=sys.stderr)
             sys.exit(1)
 
+checkpoint_mark = (
+    plan["checkpoint"]["sha256"][:12] if plan["checkpoint"]["sha256"] else "none"
+)
 print(
     f"E2E_PLAN_MARK: {name} verified (env={plan['environment']['kind']}, "
-    f"argv_elements={len(argv)}, checkpoint_sha256={plan['checkpoint']['sha256'][:12]}..., "
+    f"argv_elements={len(argv)}, checkpoint_sha256={checkpoint_mark}..., "
     f"saved={plan['saved_path']}, nothing_submitted={plan['nothing_submitted']})"
 )
 PY
@@ -649,7 +661,7 @@ REQUEST_SMOKE="$(make_request plan-smoke \
     "/data/code/pipelines/smoke/smoke_pipeline.py")"
 # The smoke pipeline declares the split path and the int only; the generic
 # request helper adds a checkpoint value for the model pipelines.
-python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p)); d['request']['values']={'split': d['request']['values']['split'], 'sleep-seconds': 0}; json.dump(d, open(p, 'w'))" "${REQUEST_SMOKE}"
+python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p)); d['request']['values']={'split': d['request']['values']['split'], 'sleep-seconds': 0}; d['request']['checkpoint']=''; d['request']['split']=''; json.dump(d, open(p, 'w'))" "${REQUEST_SMOKE}"
 run_plan plan-smoke "${REQUEST_SMOKE}"
 if ! grep -q "smoke_pipeline.py" "${TMP_DIR}/plan-smoke-result.json"; then
     fail "smoke plan does not contain the smoke pipeline argv"
