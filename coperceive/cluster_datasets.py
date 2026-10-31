@@ -10,12 +10,16 @@ point clouds. The schemas are frozen in ``docs/datasets/cluster-datasets.md``.
 
 from __future__ import annotations
 
+import fcntl
 import hashlib
 import json
 import os
 import shutil
+import subprocess
 import time
 from collections.abc import Callable, Mapping
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -266,6 +270,145 @@ def prepare_progress(
     }
 
 
+@contextmanager
+def _cache_lock(cache: Path):
+    cache.mkdir(parents=True, exist_ok=True)
+    lock_path = cache / ".dataset.json.lock"
+    with open(lock_path, "a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+def _job_alive(job_id: str) -> bool | None:
+    """True/False from squeue, or None when squeue is unavailable."""
+    try:
+        result = subprocess.run(
+            ["squeue", "-h", "-j", job_id, "-o", "%T"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return result.returncode == 0 and bool(result.stdout.strip())
+
+
+def _claim_still_live(record: Mapping[str, Any], current_job: str | None, now: float) -> bool:
+    if record.get("state") != "preparing":
+        return False
+    owner = record.get("job_id")
+    if current_job and owner == current_job:
+        return True
+    claimed = record.get("claimed_unix")
+    if not isinstance(claimed, (int, float)):
+        return True
+    if now - float(claimed) >= 4 * 3600:
+        return False
+    if isinstance(owner, str) and owner:
+        alive = _job_alive(owner)
+        if alive is False:
+            return False
+    return True
+
+
+def _claim_and_prepare_scene(
+    adapter_name: str,
+    raw_root: str,
+    cache_root: str,
+    scene_id: str,
+    params: Mapping[str, str],
+    job_id: str | None,
+) -> tuple[str, str, str | None, int | None]:
+    raw = Path(raw_root)
+    cache = Path(cache_root)
+    adapter = resolve_adapter(adapter_name)
+    now = time.time()
+    with _cache_lock(cache):
+        dataset = _read_dataset(cache)
+        record = dataset.setdefault("scenes", {}).setdefault(
+            scene_id,
+            {
+                "state": "not_prepared",
+                "reason": None,
+                "job_id": None,
+                "prepared_unix": None,
+                "scene_dir": scene_id,
+            },
+        )
+        if record.get("state") == "ready" and _scene_ready(cache, scene_id):
+            return scene_id, "ready", None, record.get("prepared_unix")
+        if _claim_still_live(record, job_id, now):
+            return scene_id, "preparing", "another prepare job claimed this scene", None
+        record.update(
+            {
+                "state": "preparing",
+                "reason": None,
+                "job_id": job_id,
+                "claimed_unix": int(now),
+                "prepared_unix": None,
+            }
+        )
+        dataset["updated_unix"] = int(now)
+        _write_dataset(cache, dataset)
+    partial_root = cache / ".partial"
+    partial_root.mkdir(parents=True, exist_ok=True)
+    temporary = partial_root / scene_id
+    shutil.rmtree(temporary, ignore_errors=True)
+    state = "failed"
+    reason: str | None = None
+    prepared: int | None = None
+    try:
+        ingest(
+            adapter,
+            raw,
+            partial_root,
+            params=params,
+            workers=1,
+            scene_ids=[scene_id],
+        )
+        produced = partial_root / scene_id
+        if not (produced / "manifest.json").is_file() or not (produced / "COMPLETE.json").is_file():
+            raise DatasetError("ingest finished without a complete scene")
+        destination = cache / scene_id
+        old = cache / f".old-{scene_id}"
+        if old.exists():
+            shutil.rmtree(old)
+        if destination.exists():
+            destination.rename(old)
+        os.replace(produced, destination)
+        if old.exists():
+            shutil.rmtree(old)
+        state = "ready"
+        prepared = int(time.time())
+    except (IngestError, BuildError, DatasetError, OSError, ValueError) as exc:
+        state = "failed"
+        reason = str(exc)
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+        try:
+            partial_root.rmdir()
+        except OSError:
+            pass
+    with _cache_lock(cache):
+        dataset = _read_dataset(cache)
+        record = dataset.setdefault("scenes", {}).setdefault(scene_id, {})
+        record.update(
+            {
+                "state": state,
+                "reason": reason,
+                "job_id": job_id,
+                "prepared_unix": prepared,
+                "scene_dir": scene_id,
+            }
+        )
+        dataset["updated_unix"] = int(time.time())
+        _write_dataset(cache, dataset)
+    return scene_id, state, reason, prepared
+
+
 def prepare_cluster_dataset(
     adapter_name: str,
     raw_root: str | Path,
@@ -276,7 +419,7 @@ def prepare_cluster_dataset(
     progress: Callable[[dict[str, Any]], None] | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
 ) -> dict[str, Any]:
-    """Prepare selected scenes into the cache, atomically and incrementally."""
+    """Prepare selected scenes in parallel, with per-scene atomic staging."""
     if adapter_name not in _BUILTIN:
         raise DatasetError(f"{adapter_name!r} is not a built-in cluster adapter")
     raw = _real(raw_root)
@@ -303,45 +446,51 @@ def prepare_cluster_dataset(
         deadline=time.monotonic() + max(2.0, timeout_s),
     )
     notify = progress or (lambda _event: None)
-    try:
-        dataset = _read_dataset(cache)
-    except DatasetError:
-        dataset = {
-            "schema": CACHE_SCHEMA,
-            "adapter": adapter_name,
-            "raw_root": str(raw),
-            "split": split,
-            "params": params,
-            "cache_root": str(cache),
-            "raw_fingerprint": fingerprint,
-            "created_unix": int(time.time()),
-            "updated_unix": int(time.time()),
-            "scenes": {},
-        }
-    if dataset.get("raw_fingerprint", {}).get("digest") != fingerprint["digest"]:
-        for record in dataset.get("scenes", {}).values():
-            if record.get("state") == "ready":
-                record["state"] = "stale"
-                record["reason"] = "raw dataset fingerprint changed"
-    dataset["raw_fingerprint"] = fingerprint
-    dataset["updated_unix"] = int(time.time())
+    with _cache_lock(cache):
+        try:
+            dataset = _read_dataset(cache)
+        except DatasetError:
+            dataset = {
+                "schema": CACHE_SCHEMA,
+                "adapter": adapter_name,
+                "raw_root": str(raw),
+                "split": split,
+                "params": params,
+                "cache_root": str(cache),
+                "raw_fingerprint": fingerprint,
+                "created_unix": int(time.time()),
+                "updated_unix": int(time.time()),
+                "scenes": {},
+            }
+        if dataset.get("raw_fingerprint", {}).get("digest") != fingerprint["digest"]:
+            for record in dataset.get("scenes", {}).values():
+                if record.get("state") == "ready":
+                    record["state"] = "stale"
+                    record["reason"] = "raw dataset fingerprint changed"
+        dataset["raw_fingerprint"] = fingerprint
+        dataset["updated_unix"] = int(time.time())
+        _write_dataset(cache, dataset)
     job_id = os.environ.get("SLURM_JOB_ID", "").strip() or None
     total = len(selected)
     done = 0
-    for ref in selected:
-        scene_id = ref.scene_id
-        record = dataset.setdefault("scenes", {}).setdefault(
-            scene_id,
-            {
-                "state": "not_prepared",
-                "reason": None,
-                "job_id": None,
-                "prepared_unix": None,
-                "scene_dir": scene_id,
-            },
-        )
-        record["job_id"] = job_id
-        if record.get("state") == "ready" and _scene_ready(cache, scene_id):
+    pool_size = max(1, min(workers, total))
+    results: dict[str, tuple[str, str | None]] = {}
+    with ProcessPoolExecutor(max_workers=pool_size) as pool:
+        futures = {
+            pool.submit(
+                _claim_and_prepare_scene,
+                adapter_name,
+                str(raw),
+                str(cache),
+                ref.scene_id,
+                params,
+                job_id,
+            ): ref.scene_id
+            for ref in selected
+        }
+        for future in as_completed(futures):
+            scene_id, state, reason, _prepared = future.result()
+            results[scene_id] = (state, reason)
             done += 1
             notify(
                 prepare_progress(
@@ -349,77 +498,10 @@ def prepare_cluster_dataset(
                     scene_id=scene_id,
                     done=done,
                     total=total,
-                    message="ready",
-                    state="ready",
+                    message=state,
+                    state=state,
                 )
             )
-            continue
-        record["state"] = "preparing"
-        record["reason"] = None
-        dataset["updated_unix"] = int(time.time())
-        _write_dataset(cache, dataset)
-        notify(
-            prepare_progress(
-                "scene",
-                scene_id=scene_id,
-                done=done,
-                total=total,
-                message="preparing",
-                state="preparing",
-            )
-        )
-        partial_root = cache / ".partial"
-        partial_root.mkdir(parents=True, exist_ok=True)
-        temporary = partial_root / scene_id
-        if temporary.exists():
-            shutil.rmtree(temporary, ignore_errors=True)
-        try:
-            ingest(
-                adapter,
-                raw,
-                partial_root,
-                params=params,
-                workers=1,
-                scene_ids=[scene_id],
-            )
-            produced = partial_root / scene_id
-            if (
-                not (produced / "manifest.json").is_file()
-                or not (produced / "COMPLETE.json").is_file()
-            ):
-                raise DatasetError("ingest finished without a complete scene")
-            destination = cache / scene_id
-            if destination.exists():
-                shutil.rmtree(destination)
-            os.replace(produced, destination)
-            record["state"] = "ready"
-            record["reason"] = None
-            record["prepared_unix"] = int(time.time())
-        except (IngestError, BuildError, DatasetError, OSError, ValueError) as exc:
-            record["state"] = "failed"
-            record["reason"] = str(exc)
-        finally:
-            if temporary.exists():
-                shutil.rmtree(temporary, ignore_errors=True)
-            try:
-                partial_root.rmdir()
-            except OSError:
-                pass
-        done += 1
-        dataset["updated_unix"] = int(time.time())
-        _write_dataset(cache, dataset)
-        notify(
-            prepare_progress(
-                "scene",
-                scene_id=scene_id,
-                done=done,
-                total=total,
-                message=record["state"],
-                state=record["state"],
-            )
-        )
-    dataset["updated_unix"] = int(time.time())
-    _write_dataset(cache, dataset)
     notify(
         prepare_progress(
             "done", scene_id=None, done=done, total=total, message="finished", state=None

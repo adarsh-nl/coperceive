@@ -212,3 +212,35 @@ def test_a_partial_cache_lists_only_ready_scenes_to_the_viewer(tmp_path: Path) -
         cast(dict[str, object], item)["scene_id"] for item in payload if isinstance(item, dict)
     }
     assert scenes == {"scene_0001"}
+
+
+def test_two_concurrent_prepare_processes_share_a_cache_without_losing_records(
+    tmp_path: Path,
+) -> None:
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    command = [
+        sys.executable,
+        "-m",
+        "coperceive.cli",
+        "dataset",
+        "prepare",
+        "--adapter",
+        "opv2v",
+        "--raw-root",
+        str(raw / "test"),
+        "--cache",
+        str(cache),
+        "--all",
+        "--workers",
+        "2",
+    ]
+    first = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    second = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    first.communicate(timeout=120)
+    second.communicate(timeout=120)
+    status = dataset_status_document(cache)
+    assert {scene["scene_id"] for scene in status["scenes"]} == {"scene_0001", "scene_0002"}
+    assert all(scene["state"] == "ready" for scene in status["scenes"])
+    dataset = json.loads((cache / "dataset.json").read_text(encoding="utf-8"))
+    assert set(dataset["scenes"]) == {"scene_0001", "scene_0002"}
