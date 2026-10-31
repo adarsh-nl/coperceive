@@ -45,8 +45,9 @@ def test_ci_workflow_triggers_and_concurrency() -> None:
 
     # Concurrency
     concurrency = cast(dict[str, Any], data.get("concurrency", {}))
-    assert concurrency.get("cancel-in-progress") is True, (
-        "concurrency must set cancel-in-progress: true"
+    cip = concurrency.get("cancel-in-progress")
+    assert cip is True or "pull_request" in str(cip), (
+        f"concurrency must enable cancel-in-progress on pull_request, got {cip}"
     )
     assert "group" in concurrency, "concurrency must define group"
 

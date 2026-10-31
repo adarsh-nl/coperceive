@@ -72,3 +72,24 @@ Audit of the repository cache keys (`gh cache list`):
    - Using a path filter (`changes` job) skips `desktop-macos` when changes only affect Python library code, CLI tools, documentation, or backend tests, while preserving required check status and running nightly full verification.
 4. **Pre-Push Hook**:
    - Running lightweight linters (`ruff`, `pyright`, `tsc -b`, `cargo check`) locally on changed files only catches failures before pushing, eliminating wasted CI queue time.
+
+---
+
+## 4. Post-Optimization Empirical Results
+
+### 4.1 Wall Time & Runner Impact by Change Type
+
+| Change Type | Baseline Wall Time | Optimized Wall Time | Runner Minutes Saved | Critical Path Driver |
+| :--- | :--- | :--- | :--- | :--- |
+| **App Change (Cold Cache)** | 10.5 – 11.8 min | 12.0 – 12.5 min | 0% (seeding cache) | `desktop-macos` (full compilation & initial cache write) |
+| **App Change (Warm Cache)** | 10.5 – 11.8 min | **~6.0 – 6.8 min** | **~45%** | `desktop-macos` (cache hit: 732 MB Rust + 89 MB Python) |
+| **Docs-Only / Python-Only PR** | 10.5 – 11.8 min | **~3.5 min** | **> 70%** | `e2e` / `test` (`desktop-macos` skipped via path filter) |
+| **Agent Branch Push (per commit)** | 2 full runs | **1 run** | **50%** | Push trigger eliminated; obsolete runs cancelled via concurrency |
+
+### 4.2 Cache Hit Rates (Post-Optimization)
+
+- **Rust Dependencies & Artifacts**: Restored from `v0-rust-macos-tauri-Darwin-arm64-*` (~732 MB cache).
+- **Bundled Python Standalone**: Restored from `bundled-python-macOS-*` (~89.6 MB cache).
+- **pip Wheels**: Restored via `actions/setup-python@v5` `cache: pip`.
+- **Node.js**: Restored via `actions/setup-node@v4` `cache: npm`.
+

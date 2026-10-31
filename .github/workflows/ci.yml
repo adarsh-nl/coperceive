@@ -11,7 +11,7 @@ on:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   changes:
@@ -20,6 +20,8 @@ jobs:
       desktop: ${{ steps.filter.outputs.desktop }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: dorny/paths-filter@v3
         id: filter
         with:
@@ -37,14 +39,20 @@ jobs:
         run: |
           DESKTOP_FILTER="${{ steps.filter.outputs.desktop }}"
           BASE_SHA="${{ github.event.pull_request.base.sha }}"
-          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
-            CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/app/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
-            if [ -n "${CHANGED_CRITICAL}" ] && [ "${DESKTOP_FILTER}" != "true" ]; then
-              echo "::error title=FilterGuard::Critical desktop paths changed but filter reported skip!"
-              echo "Changed critical files:"
-              echo "${CHANGED_CRITICAL}"
-              exit 1
-            fi
+          if [ -z "${BASE_SHA}" ]; then
+            echo "::error title=FilterGuard::BASE_SHA is empty"
+            exit 1
+          fi
+          if ! git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
+            echo "::error title=FilterGuard::BASE_SHA ${BASE_SHA} not found in git history"
+            exit 1
+          fi
+          CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/app/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
+          if [ -n "${CHANGED_CRITICAL}" ] && [ "${DESKTOP_FILTER}" != "true" ]; then
+            echo "::error title=FilterGuard::Critical desktop paths changed but filter reported skip!"
+            echo "Changed critical files:"
+            echo "${CHANGED_CRITICAL}"
+            exit 1
           fi
 
   lint:
