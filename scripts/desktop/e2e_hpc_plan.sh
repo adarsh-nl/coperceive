@@ -649,7 +649,7 @@ REQUEST_SMOKE="$(make_request plan-smoke \
     "/data/code/pipelines/smoke/smoke_pipeline.py")"
 # The smoke pipeline declares the split path and the int only; the generic
 # request helper adds a checkpoint value for the model pipelines.
-python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p)); d['request']['values']={'split': d['request']['values']['split'], 'sleep_seconds': 0}; json.dump(d, open(p, 'w'))" "${REQUEST_SMOKE}"
+python3 -c "import json,sys; p=sys.argv[1]; d=json.load(open(p)); d['request']['values']={'split': d['request']['values']['split'], 'sleep-seconds': 0}; json.dump(d, open(p, 'w'))" "${REQUEST_SMOKE}"
 run_plan plan-smoke "${REQUEST_SMOKE}"
 if ! grep -q "smoke_pipeline.py" "${TMP_DIR}/plan-smoke-result.json"; then
     fail "smoke plan does not contain the smoke pipeline argv"

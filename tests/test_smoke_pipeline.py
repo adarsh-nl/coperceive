@@ -22,7 +22,7 @@ def test_smoke_registration_declares_a_path_and_an_int() -> None:
     assert pipeline.environment.kind.value == "none"
     assert [(argument.name, argument.kind.value) for argument in pipeline.arguments] == [
         ("split", "path"),
-        ("sleep_seconds", "int"),
+        ("sleep-seconds", "int"),
     ]
     assert pipeline.output_contract == "coperceive-pipeline-1"
 

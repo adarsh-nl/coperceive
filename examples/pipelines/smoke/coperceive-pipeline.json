@@ -15,7 +15,7 @@
       "help": "Scene or split file. The first non-empty line names the scene."
     },
     {
-      "name": "sleep_seconds",
+      "name": "sleep-seconds",
       "kind": "int",
       "default": 30,
       "help": "Seconds to sleep before writing metrics. The contract check caps this at one second."
