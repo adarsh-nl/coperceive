@@ -240,13 +240,19 @@ if plan["split"]["sha256"] != split_sha:
     sys.exit(1)
 
 argv = plan["argv"]
-if "a b; touch /tmp/x" not in argv:
-    print(f"E2E_PLAN_FAIL: {name}: hostile value is not one argv element", file=sys.stderr)
-    sys.exit(1)
-for flag in ("--extra", "--checkpoint", "--split", "--frame_stride", "--half"):
-    if argv.count(flag) != 1:
-        print(f"E2E_PLAN_FAIL: {name}: typed argv flag {flag} appears {argv.count(flag)} times", file=sys.stderr)
+if name == "plan-smoke":
+    for flag in ("--split", "--sleep-seconds"):
+        if argv.count(flag) != 1:
+            print(f"E2E_PLAN_FAIL: {name}: smoke flag {flag} appears {argv.count(flag)} times", file=sys.stderr)
+            sys.exit(1)
+else:
+    if "a b; touch /tmp/x" not in argv:
+        print(f"E2E_PLAN_FAIL: {name}: hostile value is not one argv element", file=sys.stderr)
         sys.exit(1)
+    for flag in ("--extra", "--checkpoint", "--split", "--frame_stride", "--half"):
+        if argv.count(flag) != 1:
+            print(f"E2E_PLAN_FAIL: {name}: typed argv flag {flag} appears {argv.count(flag)} times", file=sys.stderr)
+            sys.exit(1)
 if argv[len(argv) - 2] != "--output-dir":
     print(f"E2E_PLAN_FAIL: {name}: argv does not end with --output-dir", file=sys.stderr)
     sys.exit(1)
