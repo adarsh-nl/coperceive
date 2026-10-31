@@ -1924,6 +1924,48 @@ fn plan_runner(entry: &ServerEntry) -> Result<SshRunner, String> {
     Ok(SshRunner::new(ssh_bin(), entry.ssh_target()?))
 }
 
+/// Read-only dataset detection for a raw path on the cluster.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn dataset_detect(
+    profile_id: String,
+    path: String,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        coperceive_desktop::cluster_datasets::detect(
+            &runner,
+            &entry.profile,
+            &path,
+        )
+    })
+    .await
+    .map_err(|error| format!("Dataset detection could not finish: {error}"))?
+}
+
+/// Read-only scene index for a detected raw dataset.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn dataset_index(
+    profile_id: String,
+    adapter: String,
+    raw_root: String,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        coperceive_desktop::cluster_datasets::index(
+            &runner,
+            &entry.profile,
+            &adapter,
+            &raw_root,
+        )
+    })
+    .await
+    .map_err(|error| format!("Dataset indexing could not finish: {error}"))?
+}
+
 /// Installed model plugins on the cluster, offered as built-in pipelines. A
 /// cluster without plugins returns an empty list; the UI also accepts a custom
 /// `coperceive-pipeline.json` script path.
@@ -2478,6 +2520,8 @@ fn main() {
             test_server_connection,
             list_pipeline_options,
             read_custom_pipeline,
+            dataset_detect,
+            dataset_index,
             build_run_plan,
             save_run_plan,
             preview_submission,
