@@ -126,20 +126,7 @@ def test_scan_refuses_a_path_outside_the_root(tmp_path: Path) -> None:
         scan_tree(root, "../outside")
 
 
-def test_scan_refuses_a_path_symlink_that_leaves_the_root(tmp_path: Path) -> None:
-    root = tmp_path / "data"
-    root.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    (root / "escape").symlink_to(outside, target_is_directory=True)
-
-    with pytest.raises(ScanError, match="symlink that points outside the data root"):
-        scan_tree(root, root / "escape")
-    with pytest.raises(ScanError, match="symlink that points outside the data root"):
-        scan_tree(root, "escape")
-
-
-def test_scan_skips_a_symlink_that_leaves_the_root(tmp_path: Path) -> None:
+def test_scan_follows_a_readable_symlink_directory_outside_the_root(tmp_path: Path) -> None:
     root = tmp_path / "data"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -150,12 +137,35 @@ def test_scan_skips_a_symlink_that_leaves_the_root(tmp_path: Path) -> None:
     result = _scan(root, depth=2)
     assert result["status"] == "ok"
     assert result["truncated"] is False
-    skipped = result["skipped"]
-    assert isinstance(skipped, list)
-    assert [item["path"] for item in skipped] == ["escape"]
-    assert "symlink target is outside the data root" in skipped[0]["reason"]
-    assert "escape" not in _paths(result)
-    assert result["scene_count"] == 0
+    assert "escape" in _paths(result)
+    assert result["scene_count"] == 1
+    assert result["scenes"][0]["path"].startswith("escape/")
+
+
+def test_scan_still_refuses_an_absolute_path_outside_the_root(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (root / "escape").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(ScanError, match="outside the data root"):
+        scan_tree(root, outside)
+
+
+def test_a_listed_symlink_folder_can_be_opened_and_keeps_its_alias(tmp_path: Path) -> None:
+    root = tmp_path / "data"
+    root.mkdir()
+    outside = tmp_path / "shared"
+    (outside / "child" / "leaf").mkdir(parents=True)
+    (root / "griffin").symlink_to(outside, target_is_directory=True)
+
+    listing = _scan(root, depth=2)
+    assert "griffin" in _paths(listing)
+    assert "griffin/child" in _paths(listing)
+    opened = scan_tree(root, "griffin")
+    assert opened["relative_path"] == "griffin"
+    assert "griffin/child" in {folder["path"] for folder in opened["folders"]}
 
 
 def test_scan_follows_a_symlink_that_stays_inside_the_root(tmp_path: Path) -> None:

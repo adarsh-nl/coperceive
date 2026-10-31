@@ -363,6 +363,38 @@ case "${remote}" in
 JSON
                 exit 0
                 ;;
+            *"--root /data/scenes"*"--path linked"*)
+                cat <<'JSON'
+{
+  "status": "ok",
+  "root": "/data/scenes",
+  "path": "/data/scenes/linked",
+  "relative_path": "linked",
+  "depth": 2,
+  "timeout_s": 10.0,
+  "max_entries": 200,
+  "max_total": 2000,
+  "elapsed_ms": 2.0,
+  "truncated": false,
+  "truncated_reason": null,
+  "folder_count": 2,
+  "scene_count": 0,
+  "dataset_count": 0,
+  "folders": [
+    {"path": "linked", "depth": 0, "is_scene": false, "scene_id": null,
+     "dataset": false, "scene_count": 0, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 1, "file_count": 0},
+    {"path": "linked/child", "depth": 1, "is_scene": false, "scene_id": null,
+     "dataset": false, "scene_count": 0, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 0, "file_count": 1}
+  ],
+  "scenes": [],
+  "datasets": [],
+  "skipped": []
+}
+JSON
+                exit 0
+                ;;
             *"--root /data/scenes"*"--path datasets"*)
                 cat <<'JSON'
 {
@@ -465,7 +497,10 @@ JSON
      "subfolder_count": 0, "file_count": 7},
     {"path": "datasets", "depth": 1, "is_scene": false, "scene_id": null, "dataset": true,
      "scene_count": 1, "has_manifest": false, "has_complete": false,
-     "subfolder_count": 3, "file_count": 0}
+     "subfolder_count": 3, "file_count": 0},
+    {"path": "linked", "depth": 1, "is_scene": false, "scene_id": null, "dataset": false,
+     "scene_count": 0, "has_manifest": false, "has_complete": false,
+     "subfolder_count": 1, "file_count": 0}
   ],
   "scenes": [{"path": "Town03-000", "scene_id": "Town03-000", "folder_name": "Town03-000"}],
   "datasets": [{"path": ".", "scene_count": 1}, {"path": "datasets", "scene_count": 1}],

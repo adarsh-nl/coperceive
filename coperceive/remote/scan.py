@@ -140,6 +140,12 @@ def _inside(root: Path, candidate: Path) -> bool:
     return candidate == root or root in candidate.parents
 
 
+def _requested_relative(raw: Path) -> str:
+    """Keep the name the user navigated through, even for a symlinked directory."""
+    parts = [part for part in raw.parts if part not in ("", ".", "/")]
+    return "/".join(parts) if parts else "."
+
+
 def _relative(root: Path, path: Path) -> str:
     try:
         parts = path.relative_to(root).parts
@@ -180,15 +186,18 @@ def resolve_request(root: str | Path, path: str | Path) -> tuple[Path, Path, str
         raise ScanError(f"the data root is not a directory: {root}")
     candidate = raw if raw.is_absolute() else root_real / raw
     target_real = _real(candidate)
-    if not _inside(root_real, target_real):
-        if candidate.is_symlink():
-            raise ScanError(
-                f"the path is a symlink that points outside the data root: {path} -> {target_real}"
-            )
+    if raw.is_absolute() and not _inside(root_real, target_real):
         raise ScanError(f"the path is outside the data root: {path}")
+    # A symlinked directory is followed when its target is a readable directory,
+    # including a shared dataset outside the selected root. The listing follows
+    # the same rule, so a folder that appears can always be opened.
     if not target_real.is_dir():
         raise ScanError(f"the path is not a directory: {path}")
-    return root_real, target_real, _relative(root_real, target_real)
+    if not os.access(target_real, os.R_OK | os.X_OK):
+        raise ScanError(f"the path is not a readable directory: {path}")
+    if raw.is_absolute():
+        return root_real, target_real, _relative(root_real, target_real)
+    return root_real, target_real, _requested_relative(raw)
 
 
 def _manifest_scene_id(manifest: Path) -> str | None:
@@ -232,18 +241,28 @@ def _scan_dir(state: _State, real_dir: Path, rel_dir: str, depth: int) -> None:
                 if is_link:
                     link_path = Path(entry.path)
                     target = _real(link_path)
-                    if not _inside(state.root, target):
+                    # Follow a readable directory even when the target is outside
+                    # the selected root (shared dataset trees often do this); the
+                    # resolver above applies the same rule on navigation.
+                    if target.is_dir():
+                        if os.access(target, os.R_OK | os.X_OK):
+                            dirs.append((entry.name, target))
+                        else:
+                            state.skipped.append(
+                                {
+                                    "path": _relative(state.root, link_path),
+                                    "reason": "symlink target is not a readable directory",
+                                }
+                            )
+                    elif os.access(target, os.R_OK):
+                        files.append(entry.name)
+                    else:
                         state.skipped.append(
                             {
                                 "path": _relative(state.root, link_path),
-                                "reason": "symlink target is outside the data root",
+                                "reason": "symlink target is not readable",
                             }
                         )
-                        continue
-                    if target.is_dir():
-                        dirs.append((entry.name, target))
-                    else:
-                        files.append(entry.name)
                 elif entry.is_dir(follow_symlinks=False):
                     dirs.append((entry.name, Path(entry.path)))
                 else:
