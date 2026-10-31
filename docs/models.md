@@ -276,4 +276,4 @@ Then in **New evaluation**, choose **Custom pipeline script**, enter the registr
 /path/to/your/code-root/smoke/coperceive-pipeline.json
 ```
 
-and press **Load**. Fill the smoke split argument with an existing scene/split path inside the profile's data roots, optionally change the sleep, build the plan, and submit it. The pipeline only sleeps and writes the two contract files; replace its body with your model when you have one.
+and press **Load**. Fill the smoke split argument with an existing scene/split path inside the profile's data roots, optionally change the sleep, build the plan, and submit it. The generic Checkpoint and Test split fields are not shown for this pipeline: it declares neither role, so they are neither required nor recorded. The pipeline only sleeps and writes the two contract files; replace its body with your model when you have one.
