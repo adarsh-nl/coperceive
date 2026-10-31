@@ -303,6 +303,23 @@ def build_parser() -> argparse.ArgumentParser:
     dry_run_parser.add_argument("--dest", required=True, help="Destination directory.")
     dry_run_parser.set_defaults(func=_dataset_dry_run)
 
+    detect_parser = dataset_sub.add_parser(
+        "detect", help="Identify a raw cluster dataset's built-in adapter and split."
+    )
+    detect_parser.add_argument("--path", required=True, help="A raw dataset or split directory.")
+    detect_parser.add_argument("--max-scenes", type=int, default=5000)
+    detect_parser.set_defaults(func=_dataset_detect)
+
+    index_parser = dataset_sub.add_parser(
+        "index", help="List every scene of a raw cluster dataset (metadata only)."
+    )
+    index_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
+    index_parser.add_argument("--raw-root", required=True)
+    index_parser.add_argument("--max-scenes", type=int, default=5000)
+    index_parser.add_argument("--max-entries", type=int, default=200000)
+    index_parser.add_argument("--timeout", type=float, default=30.0)
+    index_parser.set_defaults(func=_dataset_index)
+
     job_parser = dataset_sub.add_parser("download", help="Download and convert dataset preset.")
     job_parser.add_argument("dataset", help="Dataset ID (e.g. griffin).")
     job_parser.add_argument("preset", help="Preset ID (e.g. dev, one-scene, full).")
@@ -546,6 +563,52 @@ def _export_rerun(args: argparse.Namespace) -> None:
         raise SystemExit(2) from exc
     print(f"wrote {args.out}")
     print(f"samples {samples}")
+
+
+def _dataset_detect(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.cluster_datasets import DatasetError, detect_cluster_dataset
+
+    try:
+        result = detect_cluster_dataset(args.path, max_scenes=args.max_scenes)
+    except (DatasetError, ValueError, OSError) as exc:
+        result = {
+            "schema": "coperceive-cluster-detect-1",
+            "status": "error",
+            "reason": str(exc),
+        }
+        print(json.dumps(result, indent=2))
+        raise SystemExit(1) from None
+    print(json.dumps(result, indent=2))
+
+
+def _dataset_index(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.cluster_datasets import DatasetError, index_cluster_dataset
+
+    try:
+        result = index_cluster_dataset(
+            args.adapter,
+            args.raw_root,
+            max_scenes=args.max_scenes,
+            max_entries=args.max_entries,
+            timeout_s=args.timeout,
+        )
+    except (DatasetError, ValueError, OSError) as exc:
+        print(
+            json.dumps(
+                {
+                    "schema": "coperceive-cluster-index-1",
+                    "status": "error",
+                    "error": str(exc),
+                },
+                indent=2,
+            )
+        )
+        raise SystemExit(1) from None
+    print(json.dumps(result, indent=2))
 
 
 def _dataset_catalog(_args: argparse.Namespace) -> None:

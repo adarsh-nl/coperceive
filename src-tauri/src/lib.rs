@@ -4,6 +4,7 @@
 //! Provides native process, port discovery, token generation, SSH tunneling,
 //! and Slurm session management for the Coperceive Tauri desktop application.
 
+pub mod cluster_datasets;
 pub mod controller;
 pub mod detect;
 pub mod export;
