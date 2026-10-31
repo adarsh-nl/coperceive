@@ -465,6 +465,12 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                     persistent.panel_collapse = Some(pcs);
                 }
             }
+            if let Some(l) = val.get("layout") {
+                if let Ok(mut layout) = serde_json::from_value::<state::LayoutSizes>(l.clone()) {
+                    layout.clamp();
+                    persistent.layout = Some(layout);
+                }
+            }
             if let Some(win) = val.get("window_state") {
                 if let Ok(ws) = serde_json::from_value::<WindowState>(win.clone()) {
                     persistent.window_state = Some(ws);

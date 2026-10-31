@@ -491,6 +491,56 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                   </div>
                 </div>
 
+                {!scene.has_map && scene.map_name === "Carla/Maps/Town03" ? (
+                  <div style={{ marginTop: "0.6rem" }}>
+                    <button
+                      type="button"
+                      onClick={() => void installTown03Map(scene)}
+                      disabled={mapInstall[scene.path] !== undefined && !mapInstall[scene.path]?.done && !mapInstall[scene.path]?.error}
+                      title="Downloads the official CARLA 0.9.15 Town03 OpenDRIVE (pinned SHA-256), ingests it and aligns it to this scene. Licence: CARLA 0.9.15 README says the town assets are CC-BY (no version stated)."
+                      aria-label={`Download map for ${scene.scene_id}`}
+                      style={{
+                        width: "100%",
+                        background: "var(--sunken)",
+                        color: "var(--text)",
+                        border: "1px solid var(--line)",
+                        borderRadius: "5px",
+                        padding: "0.4rem 0.6rem",
+                        fontSize: "0.75rem",
+                        fontWeight: 500,
+                        cursor: "pointer",
+                      }}
+                    >
+                      Download map for Town03 (CARLA 0.9.15, CC-BY)
+                    </button>
+                    <div
+                      style={{
+                        marginTop: "0.3rem",
+                        fontSize: "0.7rem",
+                        color: "var(--muted)",
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                        whiteSpace: "nowrap",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                      }}
+                    >
+                      <a href="https://github.com/carla-simulator/carla/blob/0.9.15/README.md" target="_blank" rel="noreferrer">
+                        Licence: CARLA 0.9.15 assets are CC-BY (README; version not stated)
+                      </a>
+                      {mapInstall[scene.path] ? (
+                        <span style={{ flexShrink: 0 }}>
+                          {mapInstall[scene.path]?.error
+                            ? `Could not install: ${mapInstall[scene.path]?.error}`
+                            : `${mapInstall[scene.path]?.percent ?? 0}% · ${mapInstall[scene.path]?.message ?? ""}`}
+                        </span>
+                      ) : null}
+                    </div>
+                  </div>
+                ) : null}
+
                 <div
                   style={{
                     display: "flex",
@@ -538,40 +588,6 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                     </button>
                   </div>
 
-                  {!scene.has_map && scene.map_name === "Carla/Maps/Town03" ? (
-                    <div style={{ marginTop: "0.55rem" }}>
-                      <button
-                        type="button"
-                        onClick={() => void installTown03Map(scene)}
-                        disabled={mapInstall[scene.path] !== undefined && !mapInstall[scene.path]?.done && !mapInstall[scene.path]?.error}
-                        title="Downloads the official CARLA 0.9.15 Town03 OpenDRIVE (pinned SHA-256), ingests it and aligns it to this scene. Licence: CARLA 0.9.15 README says the town assets are CC-BY (no version stated)."
-                        aria-label={`Download map for ${scene.scene_id}`}
-                        style={{
-                          background: "var(--sunken)",
-                          color: "var(--text)",
-                          border: "1px solid var(--line)",
-                          borderRadius: "5px",
-                          padding: "0.35rem 0.6rem",
-                          fontSize: "0.75rem",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Download map for Town03 (CARLA 0.9.15, CC-BY)
-                      </button>
-                      <div style={{ marginTop: "0.3rem", fontSize: "0.7rem", color: "var(--muted)" }}>
-                        <a href="https://github.com/carla-simulator/carla/blob/0.9.15/README.md" target="_blank" rel="noreferrer">
-                          Licence: CARLA 0.9.15 assets are CC-BY (README; version not stated)
-                        </a>
-                        {mapInstall[scene.path] ? (
-                          <div style={{ marginTop: "0.2rem" }}>
-                            {mapInstall[scene.path]?.error
-                              ? `Could not install the map: ${mapInstall[scene.path]?.error}`
-                              : `${mapInstall[scene.path]?.percent ?? 0}% · ${mapInstall[scene.path]?.message ?? ""}`}
-                          </div>
-                        ) : null}
-                      </div>
-                    </div>
-                  ) : null}
                   <div style={{ display: "flex", gap: "0.4rem" }}>
                     <button
                       type="button"

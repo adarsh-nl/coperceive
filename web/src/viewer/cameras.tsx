@@ -591,6 +591,7 @@ export default function CameraStrip({
   imagesAvailable = true,
   missingText = "No image file for this sample.",
   playing = false,
+  heightPx,
 }: {
   token: string;
   sceneId: string;
@@ -613,6 +614,8 @@ export default function CameraStrip({
   missingText?: string;
   /** While playing, refresh thumbnails at most a few times per second. */
   playing?: boolean;
+  /** Optional custom open height in pixels when resized. */
+  heightPx?: number;
 }) {
   const sceneRef = useRef(sceneId);
   useEffect(() => {
@@ -628,7 +631,12 @@ export default function CameraStrip({
   }
   const groups = agentOrder(frustums);
   return (
-    <section className="cam-strip" data-open={open ? "true" : "false"} aria-label="Cameras">
+    <section
+      className="cam-strip"
+      data-open={open ? "true" : "false"}
+      aria-label="Cameras"
+      style={{ height: open && typeof heightPx === "number" ? `${heightPx}px` : undefined }}
+    >
       <button
         type="button"
         className="cam-strip-toggle"

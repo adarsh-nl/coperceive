@@ -332,6 +332,13 @@ eval_js("""(() => {
     }
 })()""")
 
+print("Driving real UI: resizing left panel to 320px...")
+eval_js("""(() => {
+    if (window.__COPERCEIVE_RESIZE_PANEL__) {
+        window.__COPERCEIVE_RESIZE_PANEL__("left", 320);
+    }
+})()""")
+
 print("Asserting immediate scene-graph counts after UI interactions...")
 updated_counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__()")
 print(f"Updated scene counts: {updated_counts}")
@@ -357,7 +364,11 @@ while time.monotonic() < deadline:
     try:
         with open(state_file, "r", encoding="utf-8") as f:
             saved = json.load(f)
-        if saved.get("last_viewpoint") == "chase" and saved.get("last_sample_index") == 148:
+        if (
+            saved.get("last_viewpoint") == "chase"
+            and saved.get("last_sample_index") == 148
+            and (saved.get("layout") or {}).get("left_px") == 320
+        ):
             break
     except Exception:
         pass
@@ -366,6 +377,7 @@ while time.monotonic() < deadline:
 print(f"Step 1 verified state.json content: {saved}", flush=True)
 assert saved.get("last_viewpoint") == "chase", f"Expected last_viewpoint chase in state.json, got {saved}"
 assert saved.get("last_sample_index") == 148, f"Expected last_sample_index 148 in state.json, got {saved}"
+assert (saved.get("layout") or {}).get("left_px") == 320, f"Expected layout.left_px 320 in state.json, got {saved}"
 assert saved.get("theme_override") is None, f"Expected theme_override to be None, got {saved.get('theme_override')}"
 assert "last_theme" not in saved, f"Expected legacy last_theme to be pruned from state.json, got {saved}"
 '
@@ -706,6 +718,15 @@ assert counts["boxes"] == 0, f"Expected restored boxes == 0, got {counts}"
 assert counts["frustums"] == 4, f"Expected restored frustums == 4 (UAV hidden), got {counts}"
 assert counts["points"] > 0, f"Expected restored points > 0, got {counts}"
 
+print("Checking restored layout sizes from state.json...")
+layout = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__ ? window.__COPERCEIVE_LAYOUT_SIZES__() : null")
+print(f"Relaunched layout: {layout}")
+assert layout is not None, "window.__COPERCEIVE_LAYOUT_SIZES__ must exist"
+assert layout.get("left_px") == 320, f"Expected restored left_px == 320, got {layout}"
+left_dom_w = eval_js("document.querySelector('aside.panel')?.getBoundingClientRect().width")
+print(f"Relaunched left panel DOM width: {left_dom_w}")
+assert abs(left_dom_w - 320) < 2, f"Expected DOM width ~320, got {left_dom_w}"
+
 print("Verifying resume never restores into the end zone (must restore 0)...")
 pb_restored = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null")
 print(f"Relaunched playback state: {pb_restored}")
@@ -826,6 +847,53 @@ report = eval_retry("2-read-gaps", "window.__RECORD_GAPS__")
 print(f"Playback requirement (c) verified: max frame gap = {report['maxGapMs']:.1f}ms, loop wraps observed = {report['wraps']}, frames seen = {report['framesSeen']}")
 assert report["wraps"] >= 1, f"Expected at least 1 loop wrap over 15s, got {report['wraps']}"
 assert report["maxGapMs"] <= 300.0, f"Frame change gap exceeded 300ms: {report['maxGapMs']:.1f}ms"
+
+print("Testing double-click reset of left panel resizer...")
+eval_js("""(() => {
+    const resizer = document.querySelector('.panel-resizer-left');
+    if (!resizer) throw new Error("panel-resizer-left not found");
+    resizer.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+})()""")
+layout_after_reset = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+assert layout_after_reset.get("left_px") == 248, f"Expected left_px reset to 248, got {layout_after_reset}"
+
+print("Testing keyboard resize on focused handle...")
+eval_js("""(() => {
+    const resizer = document.querySelector('.panel-resizer-left');
+    if (!resizer) throw new Error("panel-resizer-left not found");
+    resizer.focus();
+    resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+})()""")
+layout_after_kb = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+assert layout_after_kb.get("left_px") == 258, f"Expected left_px incremented by 10 to 258, got {layout_after_kb}"
+
+print("Testing full-screen 3D view toggle with F and Esc...")
+eval_js("""(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F', bubbles: true }));
+})()""")
+time.sleep(0.3)
+is_fs = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
+ws_fs = eval_js("Boolean(document.querySelector('.workspace.is-fullscreen'))")
+left_panel_hidden = eval_js("(() => { const el = document.querySelector('aside.panel:not(.panel-right)'); return el === null || getComputedStyle(el).display === 'none'; })()")
+right_panel_hidden = eval_js("(() => { const el = document.querySelector('aside.panel-right'); return el === null || getComputedStyle(el).display === 'none'; })()")
+timeline_visible = eval_js("document.querySelector('.timeline') !== null")
+print(f"Full screen active: is_fs={is_fs}, ws_fs={ws_fs}, left_hidden={left_panel_hidden}, right_hidden={right_panel_hidden}, timeline_vis={timeline_visible}")
+assert is_fs and ws_fs and left_panel_hidden and right_panel_hidden and timeline_visible, "Full screen must hide panels and keep timeline"
+
+import subprocess
+screenshot_dir = "${SCREENSHOT_DIR}"
+subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03b-fullscreen.png"], check=False)
+
+eval_js("""(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+})()""")
+time.sleep(0.3)
+is_fs_after = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
+layout_restored = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+print(f"Exited full screen: is_fs_after={is_fs_after}, layout_restored={layout_restored}")
+assert not is_fs_after, "Escape must exit full screen"
+assert layout_restored.get("left_px") == 258, f"Previous sizes must be preserved, got {layout_restored}"
+subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03c-resized-panels.png"], check=False)
 
 print("Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.")
 EOF
@@ -1922,6 +1990,29 @@ while time.monotonic() < deadline:
     time.sleep(0.5)
 else:
     raise RuntimeError(f"viewer did not open synth_001, last={scenes}")
+
+# Assert wordmark navigates to Connect / Library, never landing page
+print("Testing wordmark link in viewer returns to Connect/Library...")
+brand_href = eval_js("document.querySelector('header.topbar a.brand')?.getAttribute('href')")
+print(f"Step 5c wordmark href={brand_href}")
+assert brand_href == "#/connect", f"Expected href='#/connect', got {brand_href}"
+
+eval_js("document.querySelector('header.topbar a.brand')?.click()")
+time.sleep(1.0)
+
+is_connect = eval_js("Boolean(document.querySelector('nav[aria-label=\"Connect navigation\"]'))")
+active_tab = eval_js("document.querySelector('nav[aria-label=\"Connect navigation\"] button[aria-selected=\"true\"]')?.innerText")
+print(f"Step 5c after wordmark click: is_connect={is_connect}, active_tab={active_tab}")
+assert is_connect, "Clicking wordmark must show Connect screen"
+assert active_tab == "Library", f"Expected Library tab active, got {active_tab}"
+
+is_landing = eval_js("Boolean(document.querySelector('.hero'))")
+assert not is_landing, "Desktop runtime must never show marketing landing page"
+
+eval_js("window.location.hash = '#/viewer'")
+time.sleep(1.0)
+
+print("Step 5c verified: wordmark returns to Library.")
 print("Step 5c verified: import, cancel, resume, open.")
 EOF
 

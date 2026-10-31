@@ -962,6 +962,8 @@ fn build_app_menu(
         .item(&MenuItem::with_id(app, "viewpoint_drone", "Drone", true, Some("3"))?)
         .item(&MenuItem::with_id(app, "viewpoint_bird", "Bird", true, Some("4"))?)
         .separator()
+        .item(&MenuItem::with_id(app, "toggle_fullscreen", "Enter Full Screen", true, Some("F"))?)
+        .separator()
         .item(&MenuItem::with_id(app, "toggle_theme", "Toggle Theme", true, Some("CmdOrControl+T"))?)
         .separator()
         .item(&MenuItem::with_id(app, "zoom_reset", "Actual Size", true, Some("CmdOrControl+0"))?)
@@ -3182,6 +3184,11 @@ fn main() {
                 "viewpoint_bird" => {
                     if let Some(v) = app.get_webview_window("viewer") {
                         let _ = v.eval("if (window.__COPERCEIVE_SET_VIEWPOINT__) window.__COPERCEIVE_SET_VIEWPOINT__('bird');");
+                    }
+                }
+                "toggle_fullscreen" => {
+                    if let Some(v) = app.get_webview_window("viewer") {
+                        let _ = v.eval("if (window.__COPERCEIVE_TOGGLE_FULLSCREEN__) window.__COPERCEIVE_TOGGLE_FULLSCREEN__();");
                     }
                 }
                 "toggle_theme" => {

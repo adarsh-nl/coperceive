@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
-import { downloadTownMap, onTownMapProgress } from "../desktop/local";
+import { downloadTownMap, onTownMapProgress, isTauriEnvironment } from "../desktop/local";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
@@ -30,6 +30,23 @@ import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
 import { pickSavePath, revealInFinder, saveExportedFile } from "../desktop/local";
 import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
+import {
+  clampLeft,
+  clampRight,
+  clampStrip,
+  DEFAULT_LEFT_PX,
+  DEFAULT_RIGHT_PX,
+  DEFAULT_STRIP_PX,
+  MIN_LEFT_PX,
+  MAX_LEFT_PX,
+  MIN_RIGHT_PX,
+  MAX_RIGHT_PX,
+  MIN_STRIP_PX,
+  MAX_STRIP_PX,
+  RESIZE_STEP_PX,
+  RESIZE_STEP_LARGE_PX,
+  type LayoutSizes,
+} from "./layout";
 import {
   buildPredictionObjects,
   disposePredictionGroup,
@@ -921,12 +938,21 @@ declare global {
       panel_collapse?: {
         camera_strip_open?: boolean;
       };
+      layout?: {
+        left_px?: number;
+        right_px?: number;
+        strip_px?: number;
+      };
       last_loop?: boolean;
     };
     __COPERCEIVE_VIEWER_STATE__?: unknown;
     __COPERCEIVE_SHOW_TOAST__?: (text: string, type?: "error" | "info") => void;
     __COPERCEIVE_SET_VIEWPOINT__?: (vp: string) => void;
     __COPERCEIVE_TOGGLE_THEME__?: () => void;
+    __COPERCEIVE_TOGGLE_FULLSCREEN__?: () => void;
+    __COPERCEIVE_IS_FULLSCREEN__?: () => boolean;
+    __COPERCEIVE_LAYOUT_SIZES__?: () => LayoutSizes;
+    __COPERCEIVE_RESIZE_PANEL__?: (panel: "left" | "right" | "strip", px: number) => void;
     __COPERCEIVE_PLAYBACK__?: (action: string, value?: number) => void;
     __COPERCEIVE_PLAYBACK_STATE__?: () => {
       playing: boolean;
@@ -1170,6 +1196,33 @@ export default function Viewer({
   const [appearance, setAppearance] = useState<Appearance>(initialSavedAppearance);
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
+
+  const [layout, setLayout] = useState<LayoutSizes>(() => {
+    const init = (window as unknown as { __COPERCEIVE_INITIAL_STATE__?: { layout?: Partial<LayoutSizes> } })
+      .__COPERCEIVE_INITIAL_STATE__?.layout;
+    return {
+      left_px: clampLeft(init?.left_px ?? DEFAULT_LEFT_PX),
+      right_px: clampRight(init?.right_px ?? DEFAULT_RIGHT_PX),
+      strip_px: clampStrip(init?.strip_px ?? DEFAULT_STRIP_PX),
+    };
+  });
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const isFullScreenRef = useRef(false);
+  isFullScreenRef.current = isFullScreen;
+
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const stageDomRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{
+    panel: "left" | "right" | "strip";
+    startPos: number;
+    startSize: number;
+  } | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
+  const pendingLayoutRef = useRef<Partial<LayoutSizes>>({});
+
   const userThemeOverrideRef = useRef<boolean>(
     typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.theme_override)
   );
@@ -1204,7 +1257,7 @@ export default function Viewer({
   };
   const handleToggleLoopRef = useRef(handleToggleLoop);
   handleToggleLoopRef.current = handleToggleLoop;
-  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const isDesktop = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
   const [dataBasename, setDataBasename] = useState<string>(
     () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_BASENAME__) || "",
   );
@@ -1255,6 +1308,22 @@ export default function Viewer({
         onTheme?.(next);
         return { ...curr, theme: next };
       });
+    };
+    window.__COPERCEIVE_TOGGLE_FULLSCREEN__ = () => {
+      setIsFullScreen((prev) => !prev);
+    };
+    window.__COPERCEIVE_IS_FULLSCREEN__ = () => isFullScreenRef.current;
+    window.__COPERCEIVE_LAYOUT_SIZES__ = () => layoutRef.current;
+    window.__COPERCEIVE_RESIZE_PANEL__ = (panel: "left" | "right" | "strip", px: number) => {
+      setLayout((curr) => {
+        const next = { ...curr };
+        if (panel === "left") next.left_px = clampLeft(px);
+        else if (panel === "right") next.right_px = clampRight(px);
+        else if (panel === "strip") next.strip_px = clampStrip(px);
+        layoutRef.current = next;
+        return next;
+      });
+      void sendStateRef.current();
     };
     window.__COPERCEIVE_DATASET_CHANGED__ = async (
       newOrigin: string,
@@ -1385,9 +1454,17 @@ export default function Viewer({
     };
 
     return () => {
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+      }
       delete window.__COPERCEIVE_SHOW_TOAST__;
       delete window.__COPERCEIVE_SET_VIEWPOINT__;
       delete window.__COPERCEIVE_TOGGLE_THEME__;
+      delete window.__COPERCEIVE_TOGGLE_FULLSCREEN__;
+      delete window.__COPERCEIVE_IS_FULLSCREEN__;
+      delete window.__COPERCEIVE_LAYOUT_SIZES__;
+      delete window.__COPERCEIVE_RESIZE_PANEL__;
       delete window.__COPERCEIVE_DATASET_CHANGED__;
       delete window.__COPERCEIVE_DATASET_ERROR__;
     };
@@ -1966,8 +2043,16 @@ export default function Viewer({
         handleToggleLoopRef.current();
       } else if (event.key === "c" || event.key === "C") {
         setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }));
+      } else if (event.key === "f" || event.key === "F") {
+        event.preventDefault();
+        setIsFullScreen((prev) => !prev);
       } else if (event.key === "Escape") {
-        setAppearance((current) => (current.splitCamera === null ? current : { ...current, splitCamera: null }));
+        if (isFullScreenRef.current) {
+          event.preventDefault();
+          setIsFullScreen(false);
+        } else {
+          setAppearance((current) => (current.splitCamera === null ? current : { ...current, splitCamera: null }));
+        }
       } else if (event.key === "[" || event.key === "]") {
         const direction = event.key === "]" ? 1 : -1;
         setSpeed((current) => neighborSpeed(current, direction));
@@ -2173,6 +2258,13 @@ export default function Viewer({
         if (init.selected_camera) {
           setCameraId(init.selected_camera);
         }
+        if (init.layout) {
+          setLayout({
+            left_px: clampLeft(init.layout.left_px ?? DEFAULT_LEFT_PX),
+            right_px: clampRight(init.layout.right_px ?? DEFAULT_RIGHT_PX),
+            strip_px: clampStrip(init.layout.strip_px ?? DEFAULT_STRIP_PX),
+          });
+        }
         if (init.split_view !== undefined) {
           setAppearance((curr) => ({
             ...curr,
@@ -2322,11 +2414,16 @@ export default function Viewer({
           panel_collapse: {
             camera_strip_open: appearance.stripOpen,
           },
+          layout: {
+            left_px: layoutRef.current.left_px,
+            right_px: layoutRef.current.right_px,
+            strip_px: layoutRef.current.strip_px,
+          },
           ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
         }),
       });
     } catch {}
-  }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop]);
+  }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop, layout]);
 
   const sendStateRef = useRef(sendState);
   sendStateRef.current = sendState;
@@ -3524,6 +3621,185 @@ export default function Viewer({
     setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current));
   };
 
+  const scheduleLayout = (update: Partial<LayoutSizes>) => {
+    pendingLayoutRef.current = { ...pendingLayoutRef.current, ...update };
+    if (resizeRafRef.current === null) {
+      resizeRafRef.current = window.requestAnimationFrame(() => {
+        resizeRafRef.current = null;
+        const pending = pendingLayoutRef.current;
+        pendingLayoutRef.current = {};
+        setLayout((curr) => ({ ...curr, ...pending }));
+      });
+    }
+  };
+
+  const onLeftResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      panel: "left",
+      startPos: e.clientX,
+      startSize: layout.left_px,
+    };
+  };
+
+  const onLeftResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || dragStartRef.current.panel !== "left") return;
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const delta = e.clientX - dragStartRef.current.startPos;
+    const containerW = workspaceRef.current?.clientWidth;
+    const next = clampLeft(dragStartRef.current.startSize + delta, containerW, layout.right_px);
+    scheduleLayout({ left_px: next });
+  };
+
+  const onRightResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      panel: "right",
+      startPos: e.clientX,
+      startSize: layout.right_px,
+    };
+  };
+
+  const onRightResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || dragStartRef.current.panel !== "right") return;
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const delta = dragStartRef.current.startPos - e.clientX;
+    const containerW = workspaceRef.current?.clientWidth;
+    const next = clampRight(dragStartRef.current.startSize + delta, containerW, layout.left_px);
+    scheduleLayout({ right_px: next });
+  };
+
+  const onStripResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      panel: "strip",
+      startPos: e.clientY,
+      startSize: layout.strip_px,
+    };
+  };
+
+  const onStripResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || dragStartRef.current.panel !== "strip") return;
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const delta = dragStartRef.current.startPos - e.clientY;
+    const containerH = stageDomRef.current?.clientHeight;
+    const next = clampStrip(dragStartRef.current.startSize + delta, containerH);
+    scheduleLayout({ strip_px: next });
+  };
+
+  const onResizeUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartRef.current) {
+      dragStartRef.current = null;
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+        const pending = pendingLayoutRef.current;
+        pendingLayoutRef.current = {};
+        setLayout((curr) => ({ ...curr, ...pending }));
+      }
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+      void sendStateRef.current();
+    }
+  };
+
+  const onLeftReset = () => {
+    setLayout((curr) => ({ ...curr, left_px: DEFAULT_LEFT_PX }));
+    void sendStateRef.current();
+  };
+
+  const onRightReset = () => {
+    setLayout((curr) => ({ ...curr, right_px: DEFAULT_RIGHT_PX }));
+    void sendStateRef.current();
+  };
+
+  const onStripReset = () => {
+    setLayout((curr) => ({ ...curr, strip_px: DEFAULT_STRIP_PX }));
+    void sendStateRef.current();
+  };
+
+  const onLeftKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, left_px: clampLeft(curr.left_px - step) }));
+      void sendStateRef.current();
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      const containerW = workspaceRef.current?.clientWidth;
+      setLayout((curr) => ({ ...curr, left_px: clampLeft(curr.left_px + step, containerW, layout.right_px) }));
+      void sendStateRef.current();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, left_px: MIN_LEFT_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, left_px: MAX_LEFT_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      onLeftReset();
+    }
+  };
+
+  const onRightKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      const containerW = workspaceRef.current?.clientWidth;
+      setLayout((curr) => ({ ...curr, right_px: clampRight(curr.right_px + step, containerW, layout.left_px) }));
+      void sendStateRef.current();
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, right_px: clampRight(curr.right_px - step) }));
+      void sendStateRef.current();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, right_px: MIN_RIGHT_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, right_px: MAX_RIGHT_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      onRightReset();
+    }
+  };
+
+  const onStripKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const containerH = stageDomRef.current?.clientHeight;
+      setLayout((curr) => ({ ...curr, strip_px: clampStrip(curr.strip_px + step, containerH) }));
+      void sendStateRef.current();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, strip_px: clampStrip(curr.strip_px - step) }));
+      void sendStateRef.current();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, strip_px: MIN_STRIP_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, strip_px: MAX_STRIP_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      onStripReset();
+    }
+  };
+
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (
     <div className="crumb">
@@ -3568,6 +3844,15 @@ export default function Viewer({
   );
   const actionTools = (
     <div className="top-actions">
+      <button
+        type="button"
+        className="ghost"
+        aria-label={isFullScreen ? "Exit full screen (Esc or F)" : "Enter full screen (F)"}
+        title={isFullScreen ? "Exit full screen (Esc or F)" : "Enter full screen (F)"}
+        onClick={() => setIsFullScreen((prev) => !prev)}
+      >
+        {isFullScreen ? "Exit Full Screen" : "Full Screen"}
+      </button>
       <button type="button" className="ghost" onClick={() => setExportOpen(true)} disabled={!summary}>
         Export
       </button>
@@ -3635,8 +3920,8 @@ export default function Viewer({
       )}
       {slot ? createPortal(crumb, slot) : null}
       {actions ? createPortal(actionTools, actions) : null}
-      <div className="workspace">
-        <aside className="panel" aria-label="Layers and agents">
+      <div ref={workspaceRef} className={isFullScreen ? "workspace is-fullscreen" : "workspace"}>
+        <aside className="panel" aria-label="Layers and agents" style={{ width: `${layout.left_px}px` }}>
           <details open>
             <summary>Layers</summary>
             <div className="checks">
@@ -3863,28 +4148,55 @@ export default function Viewer({
             </div>
           </details>
         </aside>
-        <div className="stage">
-          <div className={splitCamera ? "stage-row split" : "stage-row"} style={{ ["--split" as string]: appearance.splitRatio }}>
-          <div className="viewport">
-            <canvas
-              ref={canvasRef}
-              className="viewer-canvas"
-              tabIndex={0}
-              aria-label="Scene view. Click here, then use Space to play and 1 through 5 for viewpoints."
-              onPointerDown={() => canvasRef.current?.focus()}
-            />
-            <div className="label-host" />
-            <div className="vignette" aria-hidden="true" />
-            {webglError ? (
-              <div className="webgl-missing" role="alert">
-                <strong>The 3D view needs WebGL, which this browser did not provide.</strong>
-                <p>
-                  Boxes, points and the map cannot be drawn. The scene list, the timeline and the tables still
-                  work. Turn on hardware acceleration or open the page in another browser.
-                </p>
-                <p className="mono">{webglError}</p>
-              </div>
-            ) : null}
+        <div
+          className="panel-resizer panel-resizer-vertical panel-resizer-left"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize layers panel"
+          aria-valuenow={Math.round(layout.left_px)}
+          aria-valuemin={MIN_LEFT_PX}
+          aria-valuemax={MAX_LEFT_PX}
+          tabIndex={0}
+          onPointerDown={onLeftResizeDown}
+          onPointerMove={onLeftResizeMove}
+          onPointerUp={onResizeUp}
+          onDoubleClick={onLeftReset}
+          onKeyDown={onLeftKeyDown}
+        />
+        <div ref={stageDomRef} className="stage">
+      <div className={splitCamera ? "stage-row split" : "stage-row"} style={{ ["--split" as string]: appearance.splitRatio }}>
+      <div className="viewport">
+        <canvas
+          ref={canvasRef}
+          className="viewer-canvas"
+          tabIndex={0}
+          aria-label="Scene view. Click here, then use Space to play and 1 through 5 for viewpoints."
+          onPointerDown={() => canvasRef.current?.focus()}
+        />
+        <div className="label-host" />
+        <div className="vignette" aria-hidden="true" />
+        {webglError ? (
+          <div className="webgl-missing" role="alert">
+            <strong>The 3D view needs WebGL, which this browser did not provide.</strong>
+            <p>
+              Boxes, points and the map cannot be drawn. The scene list, the timeline and the tables still
+              work. Turn on hardware acceleration or open the page in another browser.
+            </p>
+            <p className="mono">{webglError}</p>
+          </div>
+        ) : null}
+        {isFullScreen ? (
+          <div className="glass status-pill" style={{ right: "12px", left: "auto" }}>
+            <button
+              type="button"
+              className="fullscreen-exit-btn"
+              onClick={() => setIsFullScreen(false)}
+              aria-label="Exit full screen (Esc or F)"
+            >
+              Exit full screen <kbd>Esc</kbd>
+            </button>
+          </div>
+        ) : null}
             <div className="glass status-pill">
               <i className={tone} aria-hidden="true" />
               <span>
@@ -3968,6 +4280,23 @@ export default function Viewer({
             </>
           ) : null}
           </div>
+          {cameraFrame && summary && appearance.stripOpen ? (
+            <div
+              className="panel-resizer panel-resizer-horizontal panel-resizer-strip"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize camera strip"
+              aria-valuenow={Math.round(layout.strip_px)}
+              aria-valuemin={MIN_STRIP_PX}
+              aria-valuemax={MAX_STRIP_PX}
+              tabIndex={0}
+              onPointerDown={onStripResizeDown}
+              onPointerMove={onStripResizeMove}
+              onPointerUp={onResizeUp}
+              onDoubleClick={onStripReset}
+              onKeyDown={onStripKeyDown}
+            />
+          ) : null}
           {cameraFrame && summary ? (
             <CameraStrip
               token={effectiveToken}
@@ -3988,78 +4317,94 @@ export default function Viewer({
               onToggleImage={(key) =>
                 setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
               }
+              heightPx={layout.strip_px}
             />
           ) : null}
           <p className="status-line">{status}</p>
         </div>
-        <aside className="panel panel-right" aria-label="Agent telemetry">
-          <h2>Telemetry</h2>
-          {(!summary || (summary.agents ?? []).filter((agent) => !hidden[agent.agent_id]).length === 0) ? (
-            <PanelState
-              compact
-              kind="empty"
-              title={PANEL_DEFINITIONS.telemetry.empty.title}
-              description={PANEL_DEFINITIONS.telemetry.empty.description}
-              actionLabel={PANEL_DEFINITIONS.telemetry.empty.actionLabel}
-              onAction={() => setHidden({})}
-            />
-          ) : (
-            (summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).map((agent) => {
-            const pose = cameraFrame?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
-            const sampleSpeed = agentSpeed(agent.agent_id);
-            const history = series.agentSpeed[agent.agent_id] ?? [];
-            const paths = sparkPaths(history, 22);
-            const points =
-              cameraFrame?.point_sensors
-                .filter((sensor) => sensor.agent_id === agent.agent_id)
-                .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
-            const ink = AGENT_INK[agent.agent_type] ?? "#b7b1a6";
-            return (
-              <article key={agent.agent_id} className="tele">
-                <header>
-                  <i style={{ background: ink }} aria-hidden="true" />
-                  <strong title={agent.agent_id}>{agentNames.get(agent.agent_id) ?? agent.agent_id}</strong>
-                  <span>{agent.agent_type}</span>
-                </header>
-                <dl>
-                  <div className="span-2">
-                    <dt>Speed</dt>
-                    <dd className="num">{formatSpeed(sampleSpeed)}</dd>
-                  </div>
-                  <div>
-                    <dt>Heading</dt>
-                    <dd className="num">{formatHeading(isPose(pose) ? headingDeg(pose) : null)}</dd>
-                  </div>
-                  {agent.agent_type === "uav" && isPose(pose) ? (
-                    <div>
-                      <dt>Altitude</dt>
-                      <dd className="num">{pose.tz.toFixed(1)} m</dd>
-                    </div>
-                  ) : null}
-                  <div>
-                    <dt>Points</dt>
-                    <dd className="num">{points}</dd>
-                  </div>
-                </dl>
-                <svg className="tele-spark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
-                  <path d={paths.area} fill={ink} opacity="0.18" />
-                  <path d={paths.line} stroke={ink} />
-                </svg>
-              </article>
-            );
-          }))}
-          <SceneCard summary={summary} frame={cameraFrame} evalSummary={evalSummary} />
-          <Inspector
-            pick={pick}
-            frame={cameraFrame}
-            summary={summary}
-            token={effectiveToken}
-            cache={cacheRef.current}
-            evalPick={liveEvalPick}
-            gtDetail={gtDetail}
-          />
-          <Radar frame={cameraFrame} pick={pick} types={agentTypes} />
-        </aside>
+        <div
+          className="panel-resizer panel-resizer-vertical panel-resizer-right"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize telemetry panel"
+          aria-valuenow={Math.round(layout.right_px)}
+          aria-valuemin={MIN_RIGHT_PX}
+          aria-valuemax={MAX_RIGHT_PX}
+          tabIndex={0}
+          onPointerDown={onRightResizeDown}
+          onPointerMove={onRightResizeMove}
+          onPointerUp={onResizeUp}
+          onDoubleClick={onRightReset}
+          onKeyDown={onRightKeyDown}
+        />
+        <aside className="panel panel-right" aria-label="Agent telemetry" style={{ width: `${layout.right_px}px` }}>
+              <h2>Telemetry</h2>
+              {(!summary || (summary.agents ?? []).filter((agent) => !hidden[agent.agent_id]).length === 0) ? (
+                <PanelState
+                  compact
+                  kind="empty"
+                  title={PANEL_DEFINITIONS.telemetry.empty.title}
+                  description={PANEL_DEFINITIONS.telemetry.empty.description}
+                  actionLabel={PANEL_DEFINITIONS.telemetry.empty.actionLabel}
+                  onAction={() => setHidden({})}
+                />
+              ) : (
+                (summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).map((agent) => {
+                const pose = cameraFrame?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+                const sampleSpeed = agentSpeed(agent.agent_id);
+                const history = series.agentSpeed[agent.agent_id] ?? [];
+                const paths = sparkPaths(history, 22);
+                const points =
+                  cameraFrame?.point_sensors
+                    .filter((sensor) => sensor.agent_id === agent.agent_id)
+                    .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
+                const ink = AGENT_INK[agent.agent_type] ?? "#b7b1a6";
+                return (
+                  <article key={agent.agent_id} className="tele">
+                    <header>
+                      <i style={{ background: ink }} aria-hidden="true" />
+                      <strong title={agent.agent_id}>{agentNames.get(agent.agent_id) ?? agent.agent_id}</strong>
+                      <span>{agent.agent_type}</span>
+                    </header>
+                    <dl>
+                      <div className="span-2">
+                        <dt>Speed</dt>
+                        <dd className="num">{formatSpeed(sampleSpeed)}</dd>
+                      </div>
+                      <div>
+                        <dt>Heading</dt>
+                        <dd className="num">{formatHeading(isPose(pose) ? headingDeg(pose) : null)}</dd>
+                      </div>
+                      {agent.agent_type === "uav" && isPose(pose) ? (
+                        <div>
+                          <dt>Altitude</dt>
+                          <dd className="num">{pose.tz.toFixed(1)} m</dd>
+                        </div>
+                      ) : null}
+                      <div>
+                        <dt>Points</dt>
+                        <dd className="num">{points}</dd>
+                      </div>
+                    </dl>
+                    <svg className="tele-spark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
+                      <path d={paths.area} fill={ink} opacity="0.18" />
+                      <path d={paths.line} stroke={ink} />
+                    </svg>
+                  </article>
+                );
+              }))}
+              <SceneCard summary={summary} frame={cameraFrame} evalSummary={evalSummary} />
+              <Inspector
+                pick={pick}
+                frame={cameraFrame}
+                summary={summary}
+                token={effectiveToken}
+                cache={cacheRef.current}
+                evalPick={liveEvalPick}
+                gtDetail={gtDetail}
+              />
+              <Radar frame={cameraFrame} pick={pick} types={agentTypes} />
+            </aside>
       </div>
       <Timeline
         length={summary?.times_us.length ?? 0}
