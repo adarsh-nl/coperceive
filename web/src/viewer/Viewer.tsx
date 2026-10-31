@@ -1145,6 +1145,7 @@ export default function Viewer({
   const effectiveToken = activeToken || token;
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
+  const [datasetSceneStatuses, setDatasetSceneStatuses] = useState<Record<string, string>>({});
   // Never trust a restored scene id before the live scene list: it may name a
   // scene that is no longer in this library. The list effect below selects the
   // saved scene only when it exists, otherwise the first current scene (and says
@@ -1185,6 +1186,17 @@ export default function Viewer({
   const [plotting, setPlotting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [lastSavedPath, setLastSavedPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onSceneStatuses = (event: Event) => {
+      const custom = event as CustomEvent<{ statuses?: Record<string, string> }>;
+      if (custom.detail?.statuses) {
+        setDatasetSceneStatuses(custom.detail.statuses);
+      }
+    };
+    window.addEventListener("coperceive-dataset-scene-statuses", onSceneStatuses);
+    return () => window.removeEventListener("coperceive-dataset-scene-statuses", onSceneStatuses);
+  }, []);
   const [series, setSeries] = useState<{
     points: number[];
     speeds: number[];
@@ -3827,7 +3839,15 @@ export default function Viewer({
         options={
           scenes.length === 0
             ? [{ value: "", label: "No scenes" }]
-            : scenes.map((id) => ({ value: id, label: id }))
+            : scenes.map((id) => {
+                const status = datasetSceneStatuses[id];
+                const isNonReady = status && status !== "ready";
+                return {
+                  value: id,
+                  label: isNonReady ? `${id} (preparing…)` : id,
+                  disabled: Boolean(isNonReady),
+                };
+              })
         }
         onChange={(id) => {
           if (id === sceneId) {

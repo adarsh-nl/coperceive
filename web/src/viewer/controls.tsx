@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-export type MenuOption = { value: string; label: string };
+export type MenuOption = { value: string; label: string; disabled?: boolean };
 
 export function Menu({
   id,
@@ -69,11 +69,15 @@ export function Menu({
               <button
                 type="button"
                 role="option"
+                disabled={option.disabled}
+                aria-disabled={option.disabled}
                 aria-selected={option.value === value}
                 onClick={() => {
+                  if (option.disabled) return;
                   onChange(option.value);
                   setOpen(false);
                 }}
+                style={option.disabled ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
               >
                 {option.label}
               </button>
