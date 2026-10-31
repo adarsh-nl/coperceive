@@ -6,12 +6,47 @@ on:
       - main
       - feat/m2-import
   pull_request:
+  schedule:
+    - cron: "0 3 * * *"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
   cancel-in-progress: true
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.filter.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            desktop:
+              - 'src-tauri/**'
+              - 'web/**'
+              - 'coperceive/app/**'
+              - 'scripts/desktop/**'
+              - 'pyproject.toml'
+              - '**/*lock*'
+              - '.github/workflows/**'
+      - name: Guard check filter accuracy
+        if: github.event_name == 'pull_request'
+        run: |
+          DESKTOP_FILTER="${{ steps.filter.outputs.desktop }}"
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          if [ -n "${BASE_SHA}" ] && git rev-parse --verify "${BASE_SHA}" >/dev/null 2>&1; then
+            CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/app/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
+            if [ -n "${CHANGED_CRITICAL}" ] && [ "${DESKTOP_FILTER}" != "true" ]; then
+              echo "::error title=FilterGuard::Critical desktop paths changed but filter reported skip!"
+              echo "Changed critical files:"
+              echo "${CHANGED_CRITICAL}"
+              exit 1
+            fi
+          fi
+
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -184,6 +219,8 @@ jobs:
 
   desktop-macos:
     runs-on: macos-15
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true'
     defaults:
       run:
         shell: bash
