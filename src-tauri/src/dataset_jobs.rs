@@ -38,6 +38,7 @@ pub struct DatasetPreparePreview {
     pub walltime: String,
     pub cpus_per_task: u32,
     pub gres: Option<String>,
+    pub cache_root: String,
     pub estimated_cache_bytes: u64,
     pub script: String,
     pub preview_hash: String,
@@ -50,6 +51,14 @@ pub struct PendingPrepare {
     pub request: DatasetPrepareRequest,
     pub preview: DatasetPreparePreview,
     pub script: String,
+}
+
+/// The workers a prepare job actually uses: omitted = min(selected scenes, 8),
+/// always clamped to 1..=16.
+pub fn resolve_workers(requested: Option<u32>, selected_scenes: usize) -> u32 {
+    requested
+        .unwrap_or(selected_scenes.min(8) as u32)
+        .clamp(1, 16)
 }
 
 pub fn cache_slug(adapter: &str, raw_root: &str, split: Option<&str>) -> String {
@@ -174,6 +183,7 @@ pub fn render_prepare_script(
         walltime,
         cpus_per_task: request.workers,
         gres: None,
+        cache_root: cache.clone(),
         estimated_cache_bytes,
         preview_hash: preview_hash(&script),
         script,
@@ -260,6 +270,7 @@ mod tests {
         assert_eq!(preview.cpus_per_task, 4);
         assert_eq!(preview.gres, None);
         assert_eq!(preview.estimated_cache_bytes, 12_345);
+        assert!(preview.cache_root.ends_with("coperceive-cache/opv2v/abc123/test"));
         assert!(preview.script.contains("# No GPU requested (CPU-only job)."));
         assert!(preview.script.contains("/coperceive-${SLURM_JOB_ID}"));
         assert!(preview.script.contains("trap 'rm -rf -- \"$SCRATCH_DIR\"' EXIT"));
@@ -268,6 +279,14 @@ mod tests {
         assert!(preview.script.contains("--scenes scene_0001"));
         assert!(preview.script.contains("'/home/bob/coperceive-app/.venv/bin/python' -m coperceive")
             || preview.script.contains("/home/bob/coperceive-app/.venv/bin/python -m coperceive"));
+    }
+
+    #[test]
+    fn workers_default_to_the_scene_count_capped_and_clamp_to_sixteen() {
+        assert_eq!(resolve_workers(None, 3), 3);
+        assert_eq!(resolve_workers(None, 40), 8);
+        assert_eq!(resolve_workers(Some(0), 4), 1);
+        assert_eq!(resolve_workers(Some(99), 4), 16);
     }
 
     #[test]

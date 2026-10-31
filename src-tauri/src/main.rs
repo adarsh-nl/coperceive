@@ -2296,6 +2296,17 @@ async fn dataset_prepare(
             .get("estimated_cache_bytes")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
+        let selected_count = scenes
+            .as_ref()
+            .map(|items| items.len())
+            .or_else(|| {
+                index
+                    .get("scene_count")
+                    .and_then(serde_json::Value::as_u64)
+                    .map(|count| count as usize)
+            })
+            .unwrap_or(0);
+        let workers = coperceive_desktop::dataset_jobs::resolve_workers(workers, selected_count);
         let request = coperceive_desktop::dataset_jobs::DatasetPrepareRequest {
             adapter: adapter.clone(),
             raw_root: raw_root.clone(),
@@ -2304,7 +2315,7 @@ async fn dataset_prepare(
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_string),
             scenes: scenes.clone(),
-            workers: workers.unwrap_or(1).max(1),
+            workers,
         };
         let preview = coperceive_desktop::dataset_jobs::render_prepare_script(
             &entry.profile,
