@@ -83,7 +83,7 @@ Audit of the repository cache keys (`gh cache list`):
 | :--- | :--- | :--- | :--- | :--- |
 | **App Change (Cold Cache)** | 10.5 – 11.8 min | 12.0 – 12.5 min | 0% (seeding cache) | `desktop-macos` (full compilation & initial cache write) |
 | **App Change (Warm Cache)** | 10.5 – 11.8 min | **~6.0 – 6.8 min** | **~45%** | `desktop-macos` (cache hit: 732 MB Rust + 89 MB Python) |
-| **Docs-Only / Python-Only PR** | 10.5 – 11.8 min | **~2.3 – 3.3 min** (measured **2m 16s** in run [41235785636](https://github.com/adarsh-nl/coperceive/actions/runs/41235785636)) | **> 75%** | `test` / `e2e` (`desktop-macos` skipped via path filter) |
+| **Docs-Only / Python-Only PR** | 10.5 – 11.8 min | **2m16s–3m00s, runs 41235785636 and 41236087152** | **> 75%** | `test` / `e2e` (`desktop-macos` skipped via path filter) |
 | **Agent Branch Push (per commit)** | 2 full runs | **1 run** | **50%** | Push trigger eliminated; obsolete runs cancelled via concurrency |
 
 ### 4.2 Cache Hit Rates (Post-Optimization)
