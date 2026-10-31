@@ -244,6 +244,60 @@ impl Default for PanelCollapseState {
     }
 }
 
+pub const DEFAULT_LEFT_PX: f64 = 248.0;
+pub const DEFAULT_RIGHT_PX: f64 = 268.0;
+pub const DEFAULT_STRIP_PX: f64 = 96.0;
+
+pub const MIN_LEFT_PX: f64 = 180.0;
+pub const MAX_LEFT_PX: f64 = 480.0;
+
+pub const MIN_RIGHT_PX: f64 = 200.0;
+pub const MAX_RIGHT_PX: f64 = 480.0;
+
+pub const MIN_STRIP_PX: f64 = 64.0;
+pub const MAX_STRIP_PX: f64 = 240.0;
+
+fn default_left_px() -> f64 {
+    DEFAULT_LEFT_PX
+}
+
+fn default_right_px() -> f64 {
+    DEFAULT_RIGHT_PX
+}
+
+fn default_strip_px() -> f64 {
+    DEFAULT_STRIP_PX
+}
+
+/// Panel and camera strip layout sizes in pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayoutSizes {
+    #[serde(default = "default_left_px")]
+    pub left_px: f64,
+    #[serde(default = "default_right_px")]
+    pub right_px: f64,
+    #[serde(default = "default_strip_px")]
+    pub strip_px: f64,
+}
+
+impl Default for LayoutSizes {
+    fn default() -> Self {
+        Self {
+            left_px: DEFAULT_LEFT_PX,
+            right_px: DEFAULT_RIGHT_PX,
+            strip_px: DEFAULT_STRIP_PX,
+        }
+    }
+}
+
+impl LayoutSizes {
+    pub fn clamp(&mut self) {
+        self.left_px = self.left_px.clamp(MIN_LEFT_PX, MAX_LEFT_PX);
+        self.right_px = self.right_px.clamp(MIN_RIGHT_PX, MAX_RIGHT_PX);
+        self.strip_px = self.strip_px.clamp(MIN_STRIP_PX, MAX_STRIP_PX);
+    }
+}
+
 /// A Griffin download that stopped before it finished.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PendingDownload {
@@ -337,6 +391,10 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel_collapse: Option<PanelCollapseState>,
 
+    /// Resizable panel and camera strip layout sizes in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<LayoutSizes>,
+
     /// Window geometry and state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_state: Option<WindowState>,
@@ -376,6 +434,7 @@ impl Default for AppPersistentState {
             selected_camera: None,
             split_view: None,
             panel_collapse: Some(PanelCollapseState::default()),
+            layout: None,
             window_state: None,
             recent_roots: Vec::new(),
         }
@@ -655,6 +714,11 @@ pub mod tests {
                 left_collapsed: true,
                 right_collapsed: false,
                 camera_strip_open: false,
+            }),
+            layout: Some(LayoutSizes {
+                left_px: 300.0,
+                right_px: 320.0,
+                strip_px: 110.0,
             }),
             window_state: Some(WindowState {
                 width: 1400.0,
@@ -1079,5 +1143,52 @@ pub mod tests {
             assert_eq!(resolved.height, 800.0);
             assert_eq!(resolved.monitor, primary.name);
         }
+    }
+
+    #[test]
+    fn test_layout_sizes_default_and_clamp() {
+        let mut layout = LayoutSizes::default();
+        assert_eq!(layout.left_px, DEFAULT_LEFT_PX);
+        assert_eq!(layout.right_px, DEFAULT_RIGHT_PX);
+        assert_eq!(layout.strip_px, DEFAULT_STRIP_PX);
+
+        // Clamping lower bounds
+        layout.left_px = 50.0;
+        layout.right_px = 100.0;
+        layout.strip_px = 20.0;
+        layout.clamp();
+        assert_eq!(layout.left_px, MIN_LEFT_PX);
+        assert_eq!(layout.right_px, MIN_RIGHT_PX);
+        assert_eq!(layout.strip_px, MIN_STRIP_PX);
+
+        // Clamping upper bounds
+        layout.left_px = 999.0;
+        layout.right_px = 999.0;
+        layout.strip_px = 999.0;
+        layout.clamp();
+        assert_eq!(layout.left_px, MAX_LEFT_PX);
+        assert_eq!(layout.right_px, MAX_RIGHT_PX);
+        assert_eq!(layout.strip_px, MAX_STRIP_PX);
+    }
+
+    #[test]
+    fn test_layout_sizes_state_round_trip() {
+        let json_data = serde_json::json!({
+            "layout": {
+                "left_px": 310.0,
+                "right_px": 350.0,
+                "strip_px": 120.0
+            }
+        });
+        let state: AppPersistentState = serde_json::from_value(json_data).unwrap();
+        assert!(state.layout.is_some());
+        let layout = state.layout.unwrap();
+        assert_eq!(layout.left_px, 310.0);
+        assert_eq!(layout.right_px, 350.0);
+        assert_eq!(layout.strip_px, 120.0);
+
+        let serialized = serde_json::to_string(&layout).unwrap();
+        let deserialized: LayoutSizes = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, layout);
     }
 }
