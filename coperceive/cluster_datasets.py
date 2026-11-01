@@ -476,6 +476,17 @@ def prepare_cluster_dataset(
                 if record.get("state") == "ready":
                     record["state"] = "stale"
                     record["reason"] = "raw dataset fingerprint changed"
+        for ref in refs:
+            dataset.setdefault("scenes", {}).setdefault(
+                ref.scene_id,
+                {
+                    "state": "not_prepared",
+                    "reason": None,
+                    "job_id": None,
+                    "prepared_unix": None,
+                    "scene_dir": ref.scene_id,
+                },
+            )
         dataset["raw_fingerprint"] = fingerprint
         dataset["updated_unix"] = int(time.time())
         _write_dataset(cache, dataset)
