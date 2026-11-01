@@ -2344,6 +2344,7 @@ async fn dataset_prepare(
         "walltime": preview.walltime,
         "cpus_per_task": preview.cpus_per_task,
         "gres": preview.gres,
+        "cache_root": preview.cache_root,
         "estimated_cache_bytes": preview.estimated_cache_bytes,
         "script": preview.script,
         "preview_hash": preview.preview_hash,

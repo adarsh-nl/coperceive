@@ -134,6 +134,19 @@ test("datasetPrepare returns preview matching the backend contract", async () =>
   assert.ok(preview.preview_hash.length > 0);
   assert.strictEqual(preview.gres, null);
   assert.ok(preview.cpus_per_task >= 1);
+  assert.ok(preview.cache_root.length > 0);
+
+  // Test optional workers
+  const previewWorkers = await datasetPrepare("profile-1", {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opv2v",
+    split: "test",
+    scenes: ["scene_0001", "scene_0002"],
+    workers: 2,
+  });
+  assert.strictEqual(previewWorkers.cpus_per_task, 2);
+  assert.ok(previewWorkers.script.includes("--workers 2"));
+  assert.ok(previewWorkers.script.includes("--scenes scene_0001 scene_0002"));
 });
 
 test("datasetDetect and datasetIndex provide typed cluster contract shapes", async () => {

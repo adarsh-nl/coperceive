@@ -122,6 +122,7 @@ export interface DatasetPreparePreview {
   walltime: string;
   cpus_per_task: number;
   gres: string | null;
+  cache_root: string;
   estimated_cache_bytes: number;
   script: string;
   preview_hash: string;
@@ -279,7 +280,7 @@ export async function datasetDetect(
     });
   }
 
-  // TODO(DeepSeek-PR2): Web / mocked development fallback outside Tauri
+  // Web / browser test fallback outside Tauri
   return {
     schema: "coperceive-cluster-detect-1",
     path,
@@ -316,7 +317,7 @@ export async function datasetIndex(
     });
   }
 
-  // TODO(DeepSeek-PR2): Web / mocked development fallback outside Tauri
+  // Web / browser test fallback outside Tauri
   return {
     schema: "coperceive-cluster-index-1",
     adapter,
@@ -377,7 +378,7 @@ export async function datasetStatus(
     });
   }
 
-  // TODO(DeepSeek-PR2): Web / mocked development fallback outside Tauri
+  // Web / browser test fallback outside Tauri
   const key = datasetStubKey(params.adapter, params.rawRoot, params.split);
   const entries: ClusterSceneStatusEntry[] = [];
   const cacheMap = stubSceneStatuses.get(key);
@@ -400,7 +401,7 @@ export async function datasetStatus(
 
 /**
  * Generate preview script for preparing a dataset or single scene.
- * Invokes Tauri command `dataset_prepare({ profileId, adapter, rawRoot, split, scenes })`.
+ * Invokes Tauri command `dataset_prepare({ profileId, adapter, rawRoot, split, scenes, workers })`.
  */
 export async function datasetPrepare(
   profileId: string,
@@ -409,25 +410,31 @@ export async function datasetPrepare(
     rawRoot: string;
     split: string | null;
     scenes?: string[] | "all";
+    workers?: number;
   },
 ): Promise<DatasetPreparePreview> {
   const scenes = params.scenes ?? "all";
 
   if (isTauriEnvironment()) {
-    return await tauriInvoke<DatasetPreparePreview>("dataset_prepare", {
+    const args: Record<string, unknown> = {
       profileId,
       adapter: params.adapter,
       rawRoot: params.rawRoot,
       split: params.split,
       scenes,
-    });
+    };
+    if (params.workers != null) {
+      args.workers = params.workers;
+    }
+    return await tauriInvoke<DatasetPreparePreview>("dataset_prepare", args);
   }
 
-  // TODO(DeepSeek-PR2): Web / mocked development fallback outside Tauri
+  // Web / browser test fallback outside Tauri
   const sceneArg = Array.isArray(scenes) ? `--scenes ${scenes.join(" ")}` : "--all";
+  const workers = params.workers ?? (Array.isArray(scenes) ? Math.min(scenes.length, 8) : 8);
   const script = `#!/bin/bash
 #SBATCH --job-name=coperceive-prepare-${params.adapter}
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=${workers}
 #SBATCH --nodes=1
 #SBATCH --time=02:00:00
 # No GPU requested (CPU-only job).
@@ -438,6 +445,7 @@ echo "Starting dataset preparation: adapter=${params.adapter}"
 coperceive dataset prepare \\
   --adapter "${params.adapter}" \\
   --raw-root "${params.rawRoot}" \\
+  --workers ${workers} \\
   ${sceneArg}
 `;
 
@@ -446,8 +454,9 @@ coperceive dataset prepare \\
     job_name: `coperceive-prepare-${params.adapter}`,
     partition: "cpu",
     walltime: "02:00:00",
-    cpus_per_task: 1,
+    cpus_per_task: workers,
     gres: null,
+    cache_root: `<results_root>/coperceive-cache/${params.adapter}/mockdigest/${params.split ?? "all"}`,
     estimated_cache_bytes: 1024 * 1024 * 50,
     script,
     preview_hash: `hash-stub-${Date.now()}`,
@@ -475,7 +484,7 @@ export async function datasetPrepareSubmit(
     });
   }
 
-  // TODO(DeepSeek-PR2): Web / mocked development fallback outside Tauri
+  // Web / browser test fallback outside Tauri
   if (!confirmed) {
     throw new Error("Preparation submission was not confirmed.");
   }
@@ -512,7 +521,7 @@ export async function datasetOpen(
     });
   }
 
-  // TODO(DeepSeek-PR2): Web / mocked development fallback outside Tauri
+  // Web / browser test fallback outside Tauri
   if (typeof window !== "undefined") {
     window.dispatchEvent(
       new CustomEvent("coperceive-open-cluster-scene", {
