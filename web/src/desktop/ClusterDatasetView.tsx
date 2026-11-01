@@ -171,11 +171,7 @@ export default function ClusterDatasetView({
   const [page, setPage] = useState(1);
   const PAGE_SIZE = 50;
 
-  const resultsRoot = profile.profile.results_root.replace(/\/+$/, "");
-  const cacheRoot = useMemo(() => {
-    if (!indexDoc?.cache?.relative_path) return "";
-    return `${resultsRoot}/${indexDoc.cache.relative_path.replace(/^\/+/, "")}`;
-  }, [resultsRoot, indexDoc?.cache?.relative_path]);
+  const [serverCacheRoot, setServerCacheRoot] = useState<string>("");
 
   // Load index document on mount
   useEffect(() => {
@@ -213,6 +209,9 @@ export default function ClusterDatasetView({
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
       });
+      if (statusDoc.cache_root) {
+        setServerCacheRoot(statusDoc.cache_root);
+      }
       const nextMap = new Map<string, ClusterSceneStatusEntry>();
       for (const entry of statusDoc.scenes) {
         nextMap.set(entry.scene_id, entry);
@@ -301,6 +300,9 @@ export default function ClusterDatasetView({
         split: dataset.split,
         scenes: [sceneId],
       });
+      if (preview.cache_root) {
+        setServerCacheRoot(preview.cache_root);
+      }
       setSinglePreparePreview(preview);
     } catch (err) {
       alert(err instanceof Error ? err.message : String(err));
@@ -334,6 +336,9 @@ export default function ClusterDatasetView({
         split: dataset.split,
         scenes: "all",
       });
+      if (preview.cache_root) {
+        setServerCacheRoot(preview.cache_root);
+      }
       setPreparePreview(preview);
     } catch (err) {
       setPrepareError(err instanceof Error ? err.message : String(err));
@@ -408,7 +413,7 @@ export default function ClusterDatasetView({
         </div>
         <div>
           <span style={{ color: "#8b949e" }}>Cache path: </span>
-          <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{cacheRoot || "Calculating…"}</span>
+          <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{serverCacheRoot || "Loading…"}</span>
         </div>
         <div>
           <span style={{ color: "#8b949e" }}>Storage estimate: </span>
@@ -473,8 +478,11 @@ export default function ClusterDatasetView({
 
           {preparePreview ? (
             <>
-              <div style={{ fontSize: "0.78rem", color: "#c9d1d9", marginBottom: "0.3rem" }}>
+              <div style={{ fontSize: "0.78rem", color: "#c9d1d9", marginBottom: "0.25rem" }}>
                 Script preview (CPU only · No GPU requested · {preparePreview.cpus_per_task} CPU{preparePreview.cpus_per_task === 1 ? "" : "s"} · partition: {preparePreview.partition}):
+              </div>
+              <div style={{ fontSize: "0.75rem", color: "#8b949e", marginBottom: "0.5rem" }}>
+                Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{preparePreview.cache_root}</span>
               </div>
               <pre
                 aria-label="Prepare job script"
@@ -536,9 +544,12 @@ export default function ClusterDatasetView({
           <h4 style={{ margin: "0 0 0.25rem", color: "#f5f5f7", fontSize: "0.9rem" }}>
             Prepare scene: {singleScenePrepare}
           </h4>
-          <p style={{ margin: "0 0 0.5rem", fontSize: "0.76rem", color: "#8b949e" }}>
+          <p style={{ margin: "0 0 0.35rem", fontSize: "0.76rem", color: "#8b949e" }}>
             This scene is not ready yet. Prepare it now? Once preparation finishes, the viewer will open automatically.
           </p>
+          <div style={{ fontSize: "0.74rem", color: "#8b949e", marginBottom: "0.4rem" }}>
+            Workers: {singlePreparePreview.cpus_per_task} CPU · Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{singlePreparePreview.cache_root}</span>
+          </div>
           <pre style={{ margin: "0 0 0.5rem", padding: "0.5rem", borderRadius: "6px", backgroundColor: "rgba(0,0,0,0.5)", fontSize: "0.7rem", color: "#c9d1d9", maxHeight: "100px", overflowY: "auto" }}>
             {singlePreparePreview.script}
           </pre>
