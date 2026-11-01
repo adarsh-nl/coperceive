@@ -7,6 +7,12 @@
 set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PYTHON="${ROOT_DIR}/.venv/bin/python"
+if [ ! -x "${PYTHON}" ]; then
+    APP="$(find "${ROOT_DIR}/src-tauri/target" -type d -name Coperceive.app 2>/dev/null | head -n 1)"
+    for candidate in "${APP}/Contents/Resources/resources/python/bin/python3" "${ROOT_DIR}/src-tauri/resources/python/bin/python3"; do
+        if [ -n "${candidate}" ] && [ -x "${candidate}" ]; then PYTHON="${candidate}"; break; fi
+    done
+fi
 if [ ! -x "${PYTHON}" ]; then PYTHON="python3"; fi
 TMP_DIR="$(mktemp -d /tmp/coperceive-dataset-e2e-XXXXXX)"
 trap 'rm -rf "${TMP_DIR}"' EXIT INT TERM HUP
