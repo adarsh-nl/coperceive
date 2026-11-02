@@ -448,6 +448,90 @@ export function historyCanRerun(entry: RunHistoryEntry): boolean {
   return entry.plan_available;
 }
 
+function reproText(value: unknown): string | null {
+  return typeof value === "string" && value ? value : null;
+}
+
+function reproObject(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+/** Plain-language lines for the repro-card preview. */
+export function reproPreviewLines(card: Record<string, unknown>): { included: string[]; missing: string[] } {
+  const datasetObj = reproObject(card.dataset);
+  const datasetId = reproText(datasetObj?.id);
+  const datasetVersion = reproText(datasetObj?.version);
+  const dataset = datasetId
+    ? `Dataset ${datasetId}${datasetVersion ? ` ${datasetVersion}` : ""}.`
+    : "The dataset name was not recorded.";
+  const splitObj = reproObject(card.split);
+  const sceneIds = Array.isArray(splitObj?.scene_ids) ? splitObj.scene_ids : [];
+  const scenes = sceneIds.length;
+  const splitName = reproText(splitObj?.name);
+  const split = splitName
+    ? `Split ${splitName}, ${scenes} scene${scenes === 1 ? "" : "s"}.`
+    : scenes
+      ? `Split name was not recorded. ${scenes} scene${scenes === 1 ? "" : "s"} are listed.`
+      : "The split was not recorded.";
+  const pipelineName = reproText(reproObject(card.pipeline)?.name);
+  const pipeline = pipelineName ? `Pipeline ${pipelineName}.` : "The pipeline name was not recorded.";
+  const checkpointObj = reproObject(card.checkpoint);
+  const checkpointName = reproText(checkpointObj?.file_name);
+  const checkpoint = checkpointName
+    ? `Checkpoint ${checkpointName}${reproText(checkpointObj?.sha256) ? ", with its hash." : "."}`
+    : "The checkpoint file name was not recorded.";
+  const codeCommit = reproText(reproObject(card.code)?.git_commit);
+  const code = codeCommit
+    ? `Code version ${codeCommit.slice(0, 12)}.`
+    : "The code version was not recorded.";
+  const appVersion = reproText(reproObject(card.coperceive)?.version);
+  const version = appVersion ? `coperceive ${appVersion}.` : "The coperceive version was not recorded.";
+  const python = reproText(reproObject(card.environment)?.python);
+  const environment = python
+    ? `Python ${python}.`
+    : "The environment was not captured for this run.";
+  const scores = card.metrics
+    ? "Scores are the ones coperceive computed for this run."
+    : "coperceive has not scored this run yet, so the card has no score.";
+  const phrases: Record<string, string> = {
+    "dataset.id": "The dataset name was not recorded.",
+    "dataset.version": "The dataset version was not recorded.",
+    "dataset.manifest_sha256": "The dataset manifest hash was not recorded.",
+    "split.name": "The split name was not recorded.",
+    "split.scene_ids": "The scene list was not recorded.",
+    "split.split_file_sha256": "The split file hash was not recorded.",
+    "pipeline.name": "The pipeline name was not recorded.",
+    "pipeline.registration_sha256": "The pipeline registration hash was not recorded.",
+    "checkpoint.file_name": "The checkpoint file name was not recorded.",
+    "checkpoint.sha256": "The checkpoint hash was not recorded.",
+    "checkpoint.size_bytes": "The checkpoint size was not recorded.",
+    "code.git_commit": "The code version was not recorded.",
+    "coperceive.git_commit": "The coperceive git commit was not recorded.",
+    "environment.python": "The Python version was not captured.",
+    "environment.pip_freeze_sha256": "The package list hash was not captured.",
+    "environment.container_image_digest": "The container digest was not recorded.",
+    "environment.cuda": "The CUDA version was not captured.",
+    "environment.driver": "The driver version was not captured.",
+    "environment.modules": "The module list was not recorded.",
+    "resources.gpus": "The requested GPUs were not recorded.",
+    "resources.time": "The requested time limit was not recorded.",
+    "resources.memory": "The requested memory was not recorded.",
+    metrics: "coperceive has not scored this run yet, so the card has no score.",
+    predictions_sha256: "The predictions file hash was not recorded.",
+  };
+  const missing: string[] = [];
+  const unknownFields = Array.isArray(card.unknown) ? card.unknown : [];
+  for (const field of unknownFields) {
+    if (typeof field !== "string") continue;
+    const phrase = phrases[field] ?? `${field} was not recorded.`;
+    if (!missing.includes(phrase)) missing.push(phrase);
+  }
+  return {
+    included: [dataset, split, pipeline, checkpoint, code, version, environment, scores],
+    missing,
+  };
+}
+
 /** A compact "elapsed / limit" column. */
 export function historyTiming(entry: RunHistoryEntry): string {
   const elapsed = entry.elapsed ? `${entry.elapsed} elapsed` : "";

@@ -6,7 +6,11 @@ import {
   listRunHistory,
   listServerProfiles,
   openPredictions,
+  pickSavePath,
+  previewReproCard,
   previewSubmission,
+  revealInFinder,
+  saveExportedFile,
   submitRunPlan,
 } from "./local";
 import type { ServerEntry } from "./hpc";
@@ -14,12 +18,26 @@ import {
   historyCanRerun,
   historyStateLabel,
   historyTiming,
+  reproPreviewLines,
   type JobSubmitOutcome,
   type RunHistoryEntry,
   type SubmissionPreview,
   type SubmitOptions,
 } from "./runPlan";
 import { errorText } from "./errors";
+
+const TEST_REPRO_ENTRY: RunHistoryEntry = {
+  job_id: "1001",
+  plan_id: "plan-1790000000-aabbccddeeff",
+  state: "completed",
+  active: false,
+  elapsed: null,
+  time_limit: "01:00:00",
+  partition: null,
+  started: null,
+  ended: null,
+  plan_available: true,
+};
 
 const card = {
   backgroundColor: "rgba(28, 28, 30, 0.85)",
@@ -56,6 +74,16 @@ export default function RunHistory() {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [opened, setOpened] = useState("");
+  const [savedCard, setSavedCard] = useState("");
+  const [repro, setRepro] = useState<{
+    planId: string;
+    included: string[];
+    missing: string[];
+    card: Record<string, unknown>;
+    error: string;
+  } | null>(null);
+  const testRepro =
+    typeof window !== "undefined" && window.__COPERCEIVE_TEST_REPRO__ === true;
   const [rerun, setRerun] = useState<{
     entry: RunHistoryEntry;
     preview: SubmissionPreview;
@@ -142,6 +170,42 @@ export default function RunHistory() {
     }
   };
 
+  const exportCard = async (entry: RunHistoryEntry) => {
+    setBusy(entry.job_id);
+    setError("");
+    setSavedCard("");
+    try {
+      const card = await previewReproCard(profileId, entry.plan_id, entry.time_limit);
+      const lines = reproPreviewLines(card);
+      setRepro({ planId: entry.plan_id, ...lines, card, error: "" });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveCard = async () => {
+    if (!repro) return;
+    setBusy("save-card");
+    setRepro({ ...repro, error: "" });
+    try {
+      const name = `repro-${typeof repro.card.id === "string" ? repro.card.id : repro.planId}.json`;
+      const chosen = await pickSavePath(name, "json");
+      if (!chosen) {
+        setBusy(null);
+        return;
+      }
+      const bytes = new TextEncoder().encode(`${JSON.stringify(repro.card, null, 2)}\n`);
+      const saved = await saveExportedFile(undefined, bytes);
+      setSavedCard(saved);
+    } catch (e) {
+      setRepro({ ...repro, error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const open = async (entry: RunHistoryEntry) => {
     setBusy(entry.job_id);
     setError("");
@@ -155,6 +219,11 @@ export default function RunHistory() {
       setBusy(null);
     }
   };
+
+  const fixtureRows = (entries ?? []).filter(
+    (entry) => entry.plan_id !== TEST_REPRO_ENTRY.plan_id,
+  );
+  const rows = entries === null && !testRepro ? null : testRepro ? [TEST_REPRO_ENTRY, ...fixtureRows] : entries;
 
   return (
     <div style={card}>
@@ -178,9 +247,9 @@ export default function RunHistory() {
       </div>
       {error ? <div style={{ marginTop: "0.5rem", color: "#ff7b72" }}>{error}</div> : null}
       {opened ? <div style={{ marginTop: "0.5rem", color: "#7ee787" }}>{opened}</div> : null}
-      {entries === null ? (
+      {rows === null ? (
         <div style={{ marginTop: "0.75rem", opacity: 0.75 }}>Loading submitted runs…</div>
-      ) : entries.length === 0 ? (
+      ) : rows.length === 0 ? (
         <div style={{ marginTop: "0.75rem", opacity: 0.75 }}>
           No submitted runs in the last 30 days for this server.
         </div>
@@ -197,7 +266,7 @@ export default function RunHistory() {
             </tr>
           </thead>
           <tbody>
-            {entries.map((entry) => (
+            {rows.map((entry) => (
               <tr key={entry.job_id} style={{ borderTop: "1px solid rgba(255,255,255,0.08)", verticalAlign: "top" }}>
                 <td style={{ padding: "0.35rem 0.5rem 0.35rem 0" }}>{entry.job_id}</td>
                 <td style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.75rem" }}>{entry.plan_id}</td>
@@ -237,6 +306,11 @@ export default function RunHistory() {
                         Open predictions
                       </button>
                     ) : null}
+                    {entry.plan_available && (entry.state === "completed" || entry.state === "failed") ? (
+                      <button type="button" style={button} disabled={busy !== null} onClick={() => void exportCard(entry)}>
+                        Export repro card
+                      </button>
+                    ) : null}
                     {!entry.plan_available ? <span style={{ opacity: 0.6 }}>saved plan gone</span> : null}
                   </div>
                 </td>
@@ -245,6 +319,46 @@ export default function RunHistory() {
           </tbody>
         </table>
       )}
+      {repro ? (
+        <div style={{ marginTop: "0.9rem", borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: "0.75rem" }}>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <strong>Repro card</strong>
+            <button type="button" style={button} onClick={() => setRepro(null)}>
+              Close
+            </button>
+          </div>
+          <div style={{ marginTop: "0.35rem" }}>
+            This file describes the run so someone else can repeat it. It stays on this computer.
+          </div>
+          <ul style={{ margin: "0.4rem 0", paddingLeft: "1.1rem" }}>
+            {repro.included.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          {repro.missing.length > 0 ? (
+            <div>
+              <div>Not recorded, and left blank in the file:</div>
+              <ul style={{ margin: "0.35rem 0", paddingLeft: "1.1rem" }}>
+                {repro.missing.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <button type="button" style={button} disabled={busy !== null} onClick={() => void saveCard()}>
+            {busy === "save-card" ? "Saving…" : "Save repro card"}
+          </button>
+          {repro.error ? <div style={{ marginTop: "0.4rem", color: "#ff7b72" }}>{repro.error}</div> : null}
+        </div>
+      ) : null}
+      {savedCard ? (
+        <div style={{ marginTop: "0.5rem", color: "#7ee787" }}>
+          Saved the repro card.{" "}
+          <button type="button" style={button} onClick={() => void revealInFinder(savedCard)}>
+            Show in Finder
+          </button>
+        </div>
+      ) : null}
       {rerun ? (
         <div style={{ marginTop: "0.9rem", borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: "0.75rem" }}>
           <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>

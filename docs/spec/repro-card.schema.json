@@ -1,0 +1,411 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coperceive.dev/spec/repro-card.schema.json",
+  "title": "coperceive repro card",
+  "description": "One portable description of a coperceive run: what was evaluated, with which code and weights, and the scores coperceive itself computed. schema_version 1 is strict. A later schema_version may add fields; readers that only know version 1 still accept the envelope and ignore fields they do not understand. See docs/spec/repro-card.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "schema_version",
+    "id",
+    "created_utc",
+    "coperceive",
+    "dataset",
+    "split",
+    "pipeline",
+    "checkpoint",
+    "code",
+    "environment",
+    "resources",
+    "paths",
+    "metrics",
+    "predictions_sha256",
+    "pipeline_report",
+    "perturbation",
+    "unknown"
+  ],
+  "properties": {
+    "schema": {
+      "const": "coperceive-repro-card"
+    },
+    "schema_version": {
+      "const": 1
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^card-[a-f0-9]{12}$"
+    },
+    "created_utc": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$"
+    },
+    "coperceive": {
+      "$ref": "#/$defs/coperceive"
+    },
+    "dataset": {
+      "$ref": "#/$defs/dataset"
+    },
+    "split": {
+      "$ref": "#/$defs/split"
+    },
+    "pipeline": {
+      "$ref": "#/$defs/pipeline"
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/checkpoint"
+    },
+    "code": {
+      "$ref": "#/$defs/code"
+    },
+    "environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "resources": {
+      "$ref": "#/$defs/resources"
+    },
+    "paths": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/path"
+      }
+    },
+    "metrics": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/metrics"
+        }
+      ]
+    },
+    "predictions_sha256": {
+      "$ref": "#/$defs/sha256_or_null"
+    },
+    "pipeline_report": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/pipeline_report"
+        }
+      ]
+    },
+    "perturbation": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object"
+        }
+      ]
+    },
+    "unknown": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    }
+  },
+  "$defs": {
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+    "sha256_or_null": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "$ref": "#/$defs/sha256"
+        }
+      ]
+    },
+    "text_or_null": {
+      "anyOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "string"
+        }
+      ]
+    },
+    "coperceive": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "git_commit"],
+      "properties": {
+        "version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "git_commit": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          ]
+        }
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "version", "manifest_sha256"],
+      "properties": {
+        "id": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "version": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "manifest_sha256": {
+          "$ref": "#/$defs/sha256_or_null"
+        }
+      }
+    },
+    "split": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "scene_ids", "split_file_sha256"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "scene_ids": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          ]
+        },
+        "split_file_sha256": {
+          "$ref": "#/$defs/sha256_or_null"
+        }
+      }
+    },
+    "argument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "role", "value"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "role": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "enum": ["checkpoint", "test_data", "config", "output", "other"]
+            }
+          ]
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            }
+          ]
+        }
+      }
+    },
+    "pipeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "registration_sha256", "arguments"],
+      "properties": {
+        "name": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "registration_sha256": {
+          "$ref": "#/$defs/sha256_or_null"
+        },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/argument"
+          }
+        }
+      }
+    },
+    "checkpoint": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["file_name", "sha256", "size_bytes"],
+      "properties": {
+        "file_name": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "sha256": {
+          "$ref": "#/$defs/sha256_or_null"
+        },
+        "size_bytes": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "integer",
+              "minimum": 0
+            }
+          ]
+        }
+      }
+    },
+    "code": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["git_commit"],
+      "properties": {
+        "git_commit": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^[a-f0-9]{40}$"
+            }
+          ]
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "python",
+        "key_packages",
+        "pip_freeze_sha256",
+        "container_image_digest",
+        "modules",
+        "cuda",
+        "driver"
+      ],
+      "properties": {
+        "python": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "key_packages": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "pip_freeze_sha256": {
+          "$ref": "#/$defs/sha256_or_null"
+        },
+        "container_image_digest": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cuda": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "driver": {
+          "$ref": "#/$defs/text_or_null"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["gpus", "time", "memory"],
+      "properties": {
+        "gpus": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "time": {
+          "$ref": "#/$defs/text_or_null"
+        },
+        "memory": {
+          "$ref": "#/$defs/text_or_null"
+        }
+      }
+    },
+    "path": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["role", "relative"],
+      "properties": {
+        "role": {
+          "enum": ["data_roots", "code_roots", "results_root"]
+        },
+        "relative": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
+        }
+      }
+    },
+    "metrics": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source", "authoritative", "by_scene"],
+      "properties": {
+        "source": {
+          "const": "coperceive eval run"
+        },
+        "authoritative": {
+          "const": true
+        },
+        "by_scene": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    "pipeline_report": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["authoritative", "label", "content"],
+      "properties": {
+        "authoritative": {
+          "const": false
+        },
+        "label": {
+          "const": "Pipeline report. Not the coperceive score."
+        },
+        "content": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

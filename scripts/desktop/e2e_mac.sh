@@ -168,6 +168,67 @@ cat << 'EOF' > "${STATE_FILE}"
 EOF
 
 echo ""
+echo "--- Prepare a local repro-card fixture (no cluster, synthetic files only) ---"
+REPRO_DIR="${TMP_DIR}/repro"
+python3 - "${REPRO_DIR}" <<'PY'
+import hashlib, json, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+data = root / "data"
+code = root / "code" / "pipelines"
+results = root / "results"
+run_id = "plan-1790000000-aabbccddeeff"
+for path in (data / "weights", code, results / "plans", results / "runs" / run_id):
+    path.mkdir(parents=True)
+weights = data / "weights" / "model.pt"
+weights.write_bytes(b"weights")
+(results / "runs" / run_id / "predictions.jsonl").write_text(
+    '{"scene_id":"scene-a","score":0.2}\n', encoding="utf-8"
+)
+plan = {
+    "id": run_id,
+    "pipeline": {"name": "synthetic", "source": "custom"},
+    "argv": ["python3", str(code / "run.py"), "--checkpoint", str(weights)],
+    "environment": {"kind": "none"},
+    "checkpoint": {
+        "path": str(weights),
+        "sha256": hashlib.sha256(weights.read_bytes()).hexdigest(),
+        "kind": "file",
+    },
+    "split": {"path": "", "kind": ""},
+    "output_dir": str(results / "runs" / run_id),
+    "gres": None,
+    "nothing_submitted": True,
+}
+(results / "plans" / f"{run_id}.json").write_text(json.dumps(plan), encoding="utf-8")
+profile = {
+    "name": "Repro fixture",
+    "ssh_alias": "repro-fixture",
+    "host": None,
+    "user": None,
+    "data_roots": [str(data)],
+    "scratch_template": str(root / "scratch") + "/$USER/$SLURM_JOB_ID",
+    "results_root": str(results),
+    "code_roots": [str(root / "code")],
+    "scheduler": "slurm",
+    "defaults": {},
+    "environment": {
+        "kind": "none",
+        "modules": [],
+        "interpreter": None,
+        "container_image": None,
+        "coperceive_command": ["coperceive"],
+        "wheelhouse": None,
+        "compute_has_internet": False,
+    },
+    "notes": None,
+}
+(root / "profile.json").write_text(json.dumps(profile), encoding="utf-8")
+(code / "run.py").write_text("print('synthetic')\n", encoding="utf-8")
+PY
+export COPERCEIVE_TEST_REPRO_DIR="${REPRO_DIR}"
+
+echo ""
 echo "--- Step 1: Launch App with Fixture 1 (Multi-Scene Root) ---"
 export COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_1}"
 export COPERCEIVE_TEST_ENV="1"
@@ -3270,6 +3331,98 @@ eval_js("""(() => {
 
 print("Step 5h verified: text inputs disable macOS auto-capitalisation, typed lowercase values stay unchanged.")
 EOF
+
+echo ""
+echo "--- Step 5j: Export a repro card from run history ---"
+REPRO_CARD="${TMP_DIR}/repro-card.json"
+rm -f "${REPRO_CARD}"
+printf '%s\n' "${REPRO_CARD}" > "${MOCK_DIALOG_FILE}"
+python3 - <<EOF
+import json
+import time
+import urllib.request
+
+port = ${RELAUNCH_PORT}
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=20):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+clicked = eval_js("""(() => {
+    const tab = Array.from(document.querySelectorAll('nav button, [role="tab"]')).find(
+        (button) => (button.textContent || '').trim() === 'HPC Workspace'
+    );
+    if (tab) tab.click();
+    const history = Array.from(document.querySelectorAll('[role="tab"], button')).find(
+        (button) => (button.textContent || '').trim() === 'Run history'
+    );
+    if (!history) return 'missing_history_tab';
+    history.click();
+    return 'clicked';
+})()""")
+print(f"Step 5j history tab: {clicked}")
+time.sleep(0.4)
+opened = eval_js("""(() => {
+    const button = Array.from(document.querySelectorAll('button')).find(
+        (item) => (item.textContent || '').trim() === 'Export repro card'
+    );
+    if (!button) return 'missing_export_button';
+    button.click();
+    return 'clicked';
+})()""")
+print(f"Step 5j export button: {opened}")
+preview = ""
+for _ in range(40):
+    time.sleep(0.25)
+    preview = eval_js("document.body.innerText") or ""
+    if "Not recorded" in preview or "was not" in preview or "has not scored" in preview:
+        break
+if "Not recorded" not in preview and "was not" not in preview and "has not scored" not in preview:
+    raise SystemExit("repro card preview did not say what is missing:\\n" + preview[-1500:])
+saved = eval_js("""(() => {
+    const button = Array.from(document.querySelectorAll('button')).find(
+        (item) => (item.textContent || '').trim() === 'Save repro card'
+    );
+    if (!button) return 'missing_save_button';
+    button.click();
+    return 'clicked';
+})()""")
+print(f"Step 5j save button: {saved}")
+finder = ""
+for _ in range(40):
+    time.sleep(0.25)
+    finder = eval_js("document.body.innerText") or ""
+    if "Show in Finder" in finder:
+        break
+if "Show in Finder" not in finder:
+    raise SystemExit("repro card save did not offer Show in Finder:\\n" + finder[-1500:])
+print("Step 5j preview listed the missing fields and offered Show in Finder.")
+EOF
+python3 - "${REPRO_CARD}" <<'PY'
+import json, sys
+from pathlib import Path
+path = Path(sys.argv[1])
+if not path.is_file() or path.stat().st_size == 0:
+    raise SystemExit(f"repro card was not written to {path}")
+card = json.loads(path.read_text(encoding="utf-8"))
+if card.get("schema") != "coperceive-repro-card":
+    raise SystemExit(f"saved file is not a repro card: {card.get('schema')!r}")
+text = path.read_text(encoding="utf-8")
+for forbidden in ("ghp_", "/home/", "example.edu"):
+    if forbidden in text:
+        raise SystemExit(f"repro card contains {forbidden}")
+print(f"Step 5j card bytes: {path.stat().st_size}")
+print("Step 5j verified: Export repro card showed missing fields and saved the card.")
+PY
 
 echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"
