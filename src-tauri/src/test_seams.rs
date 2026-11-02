@@ -237,6 +237,38 @@ pub fn hpc_scan_probe_request() -> Option<HpcScanProbe> {
     })
 }
 
+/// Test-only request for the packaged-app cluster-dataset flow: read
+/// `{"server": <ServerEntry fixture path>, "steps": [{"command": "dataset_detect",
+/// "args": {...}}, ...]}`, save the server, call the real Tauri dataset commands
+/// in order with the UI's camelCase arguments, and write every response or
+/// error for `scripts/desktop/e2e_cluster_datasets_app.sh`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DatasetFlowProbe {
+    pub request: std::path::PathBuf,
+    pub result: std::path::PathBuf,
+}
+
+/// A step's `previewHash` may be this placeholder: the seam substitutes the
+/// `preview_hash` of the most recent `dataset_prepare` response, as the UI does
+/// when it confirms the preview it just showed.
+pub const LAST_PREVIEW_HASH: &str = "@last_preview_hash";
+
+/// `COPERCEIVE_TEST_DATASET_FLOW_REQUEST` + `_RESULT`, read only in test mode.
+pub fn dataset_flow_probe_request() -> Option<DatasetFlowProbe> {
+    if !test_env_active() {
+        return None;
+    }
+    let request = std::env::var("COPERCEIVE_TEST_DATASET_FLOW_REQUEST").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_DATASET_FLOW_RESULT").ok()?;
+    if request.trim().is_empty() || result.trim().is_empty() {
+        return None;
+    }
+    Some(DatasetFlowProbe {
+        request: std::path::PathBuf::from(request),
+        result: std::path::PathBuf::from(result),
+    })
+}
+
 /// Canned dry-run answer used only in fake job mode. Mirrors the JSON shape of
 /// `coperceive.catalog.runner.dry_run_preset` so the Get data UI renders the
 /// size panel and enables "Start Download" without contacting the dataset host.
@@ -354,5 +386,10 @@ mod tests {
     fn hpc_probe_request_is_inert_outside_test_mode() {
         // The parent test process does not set test mode, so the seam is inert.
         assert!(hpc_probe_request().is_none());
+    }
+
+    #[test]
+    fn dataset_flow_probe_request_is_inert_outside_test_mode() {
+        assert!(dataset_flow_probe_request().is_none());
     }
 }

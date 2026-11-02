@@ -2345,6 +2345,7 @@ async fn dataset_prepare(
         "cpus_per_task": preview.cpus_per_task,
         "gres": preview.gres,
         "estimated_cache_bytes": preview.estimated_cache_bytes,
+        "cache_root": preview.cache_root,
         "script": preview.script,
         "preview_hash": preview.preview_hash,
     }))
@@ -2457,6 +2458,129 @@ async fn dataset_open(
     remote_connect(app, state, alias, cache, None, Some(profile_id)).await
 }
 
+/// Runs the test-only dataset flow (see `test_seams::DatasetFlowProbe`): saves
+/// the fixture server, then calls the real `dataset_*` commands in order and
+/// records each response or error. A failing step does not stop the flow; the
+/// e2e asserts on every recorded outcome.
+#[cfg(target_os = "macos")]
+fn run_dataset_flow_probe(
+    app: &tauri::AppHandle,
+    request_path: &Path,
+) -> Result<serde_json::Value, String> {
+    use tauri::Manager;
+    let request_text = fs::read_to_string(request_path)
+        .map_err(|error| format!("Could not read the dataset flow request: {error}"))?;
+    let payload: serde_json::Value = serde_json::from_str(&request_text)
+        .map_err(|error| format!("Dataset flow request is not JSON: {error}"))?;
+    let server_path = payload
+        .get("server")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| "Dataset flow request needs a server fixture path.".to_string())?;
+    let server_text = fs::read_to_string(server_path)
+        .map_err(|error| format!("Could not read the server fixture: {error}"))?;
+    let entry: ServerEntry = serde_json::from_str(&server_text)
+        .map_err(|error| format!("Server fixture is not valid: {error}"))?;
+    let mut servers = server_profiles::load_servers();
+    server_profiles::upsert_server(&mut servers, entry)?;
+    let steps = payload
+        .get("steps")
+        .and_then(serde_json::Value::as_array)
+        .cloned()
+        .ok_or_else(|| "Dataset flow request needs a steps list.".to_string())?;
+
+    fn arg_text(args: &serde_json::Value, key: &str) -> Result<String, String> {
+        args.get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .ok_or_else(|| format!("Step argument {key} is missing."))
+    }
+    fn optional_text(args: &serde_json::Value, key: &str) -> Option<String> {
+        args.get(key).and_then(serde_json::Value::as_str).map(str::to_string)
+    }
+
+    let mut last_preview_hash: Option<String> = None;
+    let mut records = Vec::new();
+    for step in steps {
+        let command = step
+            .get("command")
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string();
+        let args = step.get("args").cloned().unwrap_or(serde_json::json!({}));
+        let state = app.state::<Arc<AppState>>();
+        let outcome: Result<serde_json::Value, String> = (|| {
+            match command.as_str() {
+                "dataset_detect" => tauri::async_runtime::block_on(dataset_detect(
+                    arg_text(&args, "profileId")?,
+                    arg_text(&args, "path")?,
+                )),
+                "dataset_index" => tauri::async_runtime::block_on(dataset_index(
+                    arg_text(&args, "profileId")?,
+                    arg_text(&args, "adapter")?,
+                    arg_text(&args, "rawRoot")?,
+                )),
+                "dataset_prepare" => tauri::async_runtime::block_on(dataset_prepare(
+                    state,
+                    arg_text(&args, "profileId")?,
+                    arg_text(&args, "adapter")?,
+                    arg_text(&args, "rawRoot")?,
+                    optional_text(&args, "split"),
+                    args.get("scenes").cloned(),
+                    args.get("workers")
+                        .and_then(serde_json::Value::as_u64)
+                        .map(|workers| workers as u32),
+                )),
+                "dataset_prepare_submit" => {
+                    let mut hash = arg_text(&args, "previewHash")?;
+                    if hash == coperceive_desktop::test_seams::LAST_PREVIEW_HASH {
+                        hash = last_preview_hash.clone().unwrap_or_default();
+                    }
+                    tauri::async_runtime::block_on(dataset_prepare_submit(
+                        state,
+                        arg_text(&args, "profileId")?,
+                        hash,
+                        args.get("confirmed")
+                            .and_then(serde_json::Value::as_bool)
+                            .unwrap_or(false),
+                    ))
+                }
+                "dataset_status" => tauri::async_runtime::block_on(dataset_status(
+                    arg_text(&args, "profileId")?,
+                    arg_text(&args, "adapter")?,
+                    arg_text(&args, "rawRoot")?,
+                    optional_text(&args, "split"),
+                )),
+                "dataset_open" => tauri::async_runtime::block_on(dataset_open(
+                    app.clone(),
+                    state,
+                    arg_text(&args, "profileId")?,
+                    arg_text(&args, "adapter")?,
+                    arg_text(&args, "rawRoot")?,
+                    optional_text(&args, "split"),
+                    optional_text(&args, "sceneId"),
+                ))
+                .and_then(|payload| {
+                    serde_json::to_value(payload).map_err(|error| error.to_string())
+                }),
+                other => Err(format!("{other:?} is not a dataset command.")),
+            }
+        })();
+        if command == "dataset_prepare" {
+            if let Ok(preview) = &outcome {
+                last_preview_hash = preview
+                    .get("preview_hash")
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_string);
+            }
+        }
+        records.push(match outcome {
+            Ok(value) => serde_json::json!({"command": command, "ok": true, "value": value}),
+            Err(error) => serde_json::json!({"command": command, "ok": false, "error": error}),
+        });
+    }
+    Ok(serde_json::json!({"ok": true, "steps": records}))
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_connect(
@@ -2522,7 +2646,7 @@ async fn remote_connect(
             .unwrap_or_default(),
     };
 
-    let mgr = RemoteSessionManager::connect_with_options(&alias, &options, None)
+    let mgr = RemoteSessionManager::connect_with_options(&alias, &options, Some(&ssh_bin()))
         .map_err(|e| e.to_string())?;
 
     let origin = mgr.origin();
@@ -3146,6 +3270,22 @@ fn main() {
                     let _ = fs::write(
                         &result_path,
                         serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    );
+                });
+            }
+
+            // Test-only cluster-dataset flow: call the same Tauri commands the
+            // Dataset view invokes, in the listed order, against the fake cluster.
+            if let Some(probe) = coperceive_desktop::test_seams::dataset_flow_probe_request() {
+                let handle = handle.clone();
+                std::thread::spawn(move || {
+                    let document = match run_dataset_flow_probe(&handle, &probe.request) {
+                        Ok(value) => value,
+                        Err(error) => serde_json::json!({"ok": false, "error": error}),
+                    };
+                    let _ = fs::write(
+                        &probe.result,
+                        serde_json::to_string_pretty(&document).unwrap_or_default(),
                     );
                 });
             }
