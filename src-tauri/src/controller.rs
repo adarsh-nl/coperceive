@@ -319,7 +319,12 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
     // The viewer window has no Tauri IPC: its wordmark asks for the main
     // window's Library here instead of rendering the shell itself.
     if method == "POST" && path == "/show-library" {
+        let started = std::time::Instant::now();
         let shown = config.library_shower.as_ref().map(|show| show()).unwrap_or(false);
+        eprintln!(
+            "[viewer] show-library -> shown={shown} ({} ms)",
+            started.elapsed().as_millis()
+        );
         let payload = serde_json::to_vec(&serde_json::json!({ "shown": shown }))
             .unwrap_or_else(|_| b"{}".to_vec());
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;

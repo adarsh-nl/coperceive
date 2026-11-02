@@ -445,11 +445,14 @@ export default function App() {
         <div className="top-cluster">
           <a
             className="brand"
-            href={isDesktop ? "#/connect" : "#/"}
+            href={isViewerWindow() ? "#/viewer" : isDesktop ? "#/connect" : "#/"}
             onClick={(e) => {
               if (isViewerWindow()) {
+                // No navigation here: the main window shows its Library instead.
                 e.preventDefault();
-                void showLibrary().catch(() => {});
+                void showLibrary().catch((err: unknown) => {
+                  console.warn("show-library failed", err);
+                });
               } else if (isDesktop) {
                 e.preventDefault();
                 window.location.hash = "#/connect";

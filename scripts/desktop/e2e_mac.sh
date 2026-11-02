@@ -119,6 +119,12 @@ cleanup() {
             echo "=== Relaunch STDERR ==="
             cat "${TMP_DIR}/relaunch_stderr.log" 2>/dev/null || true
         fi
+        # The geometry relaunches; step 5c drives the third one.
+        for log in "${TMP_DIR}"/geom_relaunch_*_stderr.log; do
+            [ -f "${log}" ] || continue
+            echo "=== $(basename "${log}") ==="
+            cat "${log}" 2>/dev/null || true
+        done
         if [ -d "${HOME}/Library/Logs/Coperceive" ]; then
             echo "=== Coperceive logs ==="
             cat "${HOME}/Library/Logs/Coperceive/"*.log 2>/dev/null || true
@@ -1977,11 +1983,32 @@ notes = import_record.get("notes") or []
 assert any("not listed in images.parquet" in note for note in notes), notes
 print(f"Step 5c skipped the unlisted frame ({notes})")
 
+def eval_in(window, script, timeout=15):
+    """One eval in the named window. After a scene opens, the main window also
+    renders a (hidden) viewer, so an unnamed eval can land in either."""
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout, "window": window}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+app_log = Path("${TMP_DIR}/geom_relaunch_3_stderr.log")
+log_mark = len(app_log.read_bytes())
+
+def new_log_lines():
+    return app_log.read_bytes()[log_mark:].decode("utf-8", "replace").splitlines()
+
 click_button("Open Local Viewer")
 deadline = time.monotonic() + 40
+scenes = None
 while time.monotonic() < deadline:
     try:
-        scenes = eval_js("window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null")
+        scenes = eval_in("viewer", "window.__COPERCEIVE_VIEWER_WINDOW__ && window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null")
     except Exception:
         scenes = None
     if scenes and "synth_001" in scenes:
@@ -1991,58 +2018,35 @@ while time.monotonic() < deadline:
 else:
     raise RuntimeError(f"viewer did not open synth_001, last={scenes}")
 
+# Opening the scene replaces the viewer this app already had. The old window
+# must be gone before the new one is built, never "reused" while it closes
+# (that left no viewer and sent every later eval to the main window).
+lines = new_log_lines()
+opened = sum("[viewer] opened viewer window" in line for line in lines)
+reused = sum("[viewer] reusing existing viewer window" in line for line in lines)
+print(f"Step 5c viewer notices since Open Local Viewer: opened={opened}, reused={reused}")
+assert opened == 1 and reused == 0, (opened, reused)
+
 # The viewer window has no Tauri IPC. Its wordmark must bring the main
 # window forward on its Library (which lists the scene), never render the
 # Library shell inside the viewer window (where every backend call fails).
 print("Testing wordmark link in viewer brings the main window's Library forward...")
-brand_label = eval_js("document.querySelector('header.topbar a.brand')?.getAttribute('aria-label')")
-assert brand_label == "Return to Library", f"Expected the wordmark to say Return to Library, got {brand_label}"
-
-shown = eval_js("""(async () => {
-    const original = window.fetch;
-    let answer = null;
-    window.fetch = async (...args) => {
-        const response = await original(...args);
-        if (String(args[0]).endsWith('/show-library')) answer = await response.clone().json();
-        return response;
-    };
-    try {
-        document.querySelector('header.topbar a.brand').click();
-        for (let i = 0; i < 50 && answer === null; i++) await new Promise((r) => setTimeout(r, 100));
-    } finally {
-        window.fetch = original;
-    }
-    return JSON.stringify(answer);
-})()""")
-print(f"Step 5c wordmark click -> /show-library {shown}")
-assert json.loads(shown or "null") == {"shown": True}, f"wordmark did not show the main window: {shown}"
-
-viewer_state = eval_js("""JSON.stringify({
-    hash: window.location.hash,
-    connectShell: Boolean(document.querySelector('nav[aria-label="Connect navigation"]')),
-    landing: Boolean(document.querySelector('.hero')),
-})""")
-viewer_state = json.loads(viewer_state)
-print(f"Step 5c viewer window after the click: {viewer_state}")
-assert viewer_state == {"hash": "#/viewer", "connectShell": False, "landing": False}, viewer_state
-
-def eval_main(script, timeout=15):
-    req = urllib.request.Request(
-        f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script, "timeout": timeout, "window": "main"}).encode("utf-8"),
-        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
-        data = json.loads(response.read().decode("utf-8"))
-    if data.get("error"):
-        raise RuntimeError(data["error"])
-    return data.get("result")
+clicked = json.loads(eval_in("viewer", """(() => {
+    const brand = document.querySelector('header.topbar a.brand');
+    if (!brand) return JSON.stringify({clicked: false});
+    const label = brand.getAttribute('aria-label');
+    const href = brand.getAttribute('href');
+    brand.click();
+    return JSON.stringify({clicked: true, viewerWindow: Boolean(window.__COPERCEIVE_VIEWER_WINDOW__), label, href});
+})()""") or "null")
+print(f"Step 5c wordmark click in the viewer window: {clicked}")
+assert clicked == {"clicked": True, "viewerWindow": True, "label": "Return to Library", "href": "#/viewer"}, clicked
 
 library = None
-deadline = time.monotonic() + 20
+deadline = time.monotonic() + 15
 while time.monotonic() < deadline:
     try:
-        library = json.loads(eval_main("""JSON.stringify({
+        library = json.loads(eval_in("main", """JSON.stringify({
             ipc: Boolean(window.__TAURI_INTERNALS__),
             tab: document.querySelector('nav[aria-label="Connect navigation"] button[aria-selected="true"]')?.innerText?.trim() ?? null,
             listsScene: document.body.innerText.includes('synth_001'),
@@ -2057,6 +2061,24 @@ print(f"Step 5c main window after the click: {library}")
 assert library and library.get("ipc") is True, library
 assert library.get("tab") == "Library" and library.get("listsScene") is True, library
 assert library.get("failed") is False, library
+
+viewer_state = json.loads(eval_in("viewer", """JSON.stringify({
+    hash: window.location.hash,
+    connectShell: Boolean(document.querySelector('nav[aria-label="Connect navigation"]')),
+    landing: Boolean(document.querySelector('.hero')),
+})"""))
+print(f"Step 5c viewer window after the click: {viewer_state}")
+assert viewer_state == {"hash": "#/viewer", "connectShell": False, "landing": False}, viewer_state
+
+shown_lines = []
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    shown_lines = [line for line in new_log_lines() if "[viewer] show-library -> " in line]
+    if shown_lines:
+        break
+    time.sleep(0.3)
+print(f"Step 5c controller log: {shown_lines}")
+assert len(shown_lines) == 1 and "shown=true" in shown_lines[0], shown_lines
 
 print("Step 5c verified: wordmark in the viewer brings the main window's Library forward and it lists synth_001.")
 print("Step 5c verified: import, cancel, resume, open.")
