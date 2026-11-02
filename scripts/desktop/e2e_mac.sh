@@ -1991,28 +1991,74 @@ while time.monotonic() < deadline:
 else:
     raise RuntimeError(f"viewer did not open synth_001, last={scenes}")
 
-# Assert wordmark navigates to Connect / Library, never landing page
-print("Testing wordmark link in viewer returns to Connect/Library...")
-brand_href = eval_js("document.querySelector('header.topbar a.brand')?.getAttribute('href')")
-print(f"Step 5c wordmark href={brand_href}")
-assert brand_href == "#/connect", f"Expected href='#/connect', got {brand_href}"
+# The viewer window has no Tauri IPC. Its wordmark must bring the main
+# window forward on its Library (which lists the scene), never render the
+# Library shell inside the viewer window (where every backend call fails).
+print("Testing wordmark link in viewer brings the main window's Library forward...")
+brand_label = eval_js("document.querySelector('header.topbar a.brand')?.getAttribute('aria-label')")
+assert brand_label == "Return to Library", f"Expected the wordmark to say Return to Library, got {brand_label}"
 
-eval_js("document.querySelector('header.topbar a.brand')?.click()")
-time.sleep(1.0)
+shown = eval_js("""(async () => {
+    const original = window.fetch;
+    let answer = null;
+    window.fetch = async (...args) => {
+        const response = await original(...args);
+        if (String(args[0]).endsWith('/show-library')) answer = await response.clone().json();
+        return response;
+    };
+    try {
+        document.querySelector('header.topbar a.brand').click();
+        for (let i = 0; i < 50 && answer === null; i++) await new Promise((r) => setTimeout(r, 100));
+    } finally {
+        window.fetch = original;
+    }
+    return JSON.stringify(answer);
+})()""")
+print(f"Step 5c wordmark click -> /show-library {shown}")
+assert json.loads(shown or "null") == {"shown": True}, f"wordmark did not show the main window: {shown}"
 
-is_connect = eval_js("Boolean(document.querySelector('nav[aria-label=\"Connect navigation\"]'))")
-active_tab = eval_js("document.querySelector('nav[aria-label=\"Connect navigation\"] button[aria-selected=\"true\"]')?.innerText")
-print(f"Step 5c after wordmark click: is_connect={is_connect}, active_tab={active_tab}")
-assert is_connect, "Clicking wordmark must show Connect screen"
-assert active_tab == "Library", f"Expected Library tab active, got {active_tab}"
+viewer_state = eval_js("""JSON.stringify({
+    hash: window.location.hash,
+    connectShell: Boolean(document.querySelector('nav[aria-label="Connect navigation"]')),
+    landing: Boolean(document.querySelector('.hero')),
+})""")
+viewer_state = json.loads(viewer_state)
+print(f"Step 5c viewer window after the click: {viewer_state}")
+assert viewer_state == {"hash": "#/viewer", "connectShell": False, "landing": False}, viewer_state
 
-is_landing = eval_js("Boolean(document.querySelector('.hero'))")
-assert not is_landing, "Desktop runtime must never show marketing landing page"
+def eval_main(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout, "window": "main"}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
 
-eval_js("window.location.hash = '#/viewer'")
-time.sleep(1.0)
+library = None
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline:
+    try:
+        library = json.loads(eval_main("""JSON.stringify({
+            ipc: Boolean(window.__TAURI_INTERNALS__),
+            tab: document.querySelector('nav[aria-label="Connect navigation"] button[aria-selected="true"]')?.innerText?.trim() ?? null,
+            listsScene: document.body.innerText.includes('synth_001'),
+            failed: /Failed to load|(^|[^0-9])0 scenes/.test(document.body.innerText),
+        })""") or "null")
+    except Exception as exc:  # noqa: BLE001 - retried until the deadline
+        library = {"error": str(exc)}
+    if library and library.get("tab") == "Library" and library.get("listsScene"):
+        break
+    time.sleep(0.5)
+print(f"Step 5c main window after the click: {library}")
+assert library and library.get("ipc") is True, library
+assert library.get("tab") == "Library" and library.get("listsScene") is True, library
+assert library.get("failed") is False, library
 
-print("Step 5c verified: wordmark returns to Library.")
+print("Step 5c verified: wordmark in the viewer brings the main window's Library forward and it lists synth_001.")
 print("Step 5c verified: import, cancel, resume, open.")
 EOF
 

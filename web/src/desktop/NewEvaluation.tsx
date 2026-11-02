@@ -43,6 +43,7 @@ import {
   type SubmissionPreview,
   type SubmitOptions,
 } from "./runPlan";
+import { errorText } from "./errors";
 
 const card = {
   backgroundColor: "rgba(28, 28, 30, 0.85)",
@@ -166,7 +167,7 @@ export default function NewEvaluation() {
         setProfiles(loaded);
         if (loaded.length > 0) setProfileId(loaded[0].id);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorText(e));
       }
     })();
   }, []);
@@ -183,7 +184,7 @@ export default function NewEvaluation() {
         setPipelines(installed);
         if (installed.length > 0) selectPipeline(installed[0]);
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorText(e));
       } finally {
         setBusy(null);
       }
@@ -220,7 +221,7 @@ export default function NewEvaluation() {
       selectPipeline(entry);
       setNote(`Loaded “${entry.name}” from ${entry.registration_path ?? "the cluster"}.`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -273,7 +274,7 @@ export default function NewEvaluation() {
       setSubmitPreview(preview);
       setSubmitConfirmed(false);
     } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : String(e));
+      setSubmitError(errorText(e));
     } finally {
       setSubmitBusy(null);
     }
@@ -293,7 +294,7 @@ export default function NewEvaluation() {
       );
       setSubmitOutcome(outcome);
     } catch (e) {
-      setSubmitError(e instanceof Error ? e.message : String(e));
+      setSubmitError(errorText(e));
     } finally {
       setSubmitBusy(null);
     }
@@ -336,7 +337,7 @@ export default function NewEvaluation() {
       invalidateSubmitPreview();
       setNote("Plan checked. Nothing was submitted.");
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -356,7 +357,7 @@ export default function NewEvaluation() {
       invalidateSubmitPreview();
       setNote(`Saved to ${saved.saved_path ?? "the cluster"}. Nothing was submitted.`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }

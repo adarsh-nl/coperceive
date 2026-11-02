@@ -19,6 +19,7 @@ import {
   type SubmissionPreview,
   type SubmitOptions,
 } from "./runPlan";
+import { errorText } from "./errors";
 
 const card = {
   backgroundColor: "rgba(28, 28, 30, 0.85)",
@@ -70,7 +71,7 @@ export default function RunHistory() {
         setProfiles(loaded);
         if (loaded.length > 0) setProfileId((current) => current || loaded[0]?.id || "");
       } catch (e) {
-        setError(e instanceof Error ? e.message : String(e));
+        setError(errorText(e));
       }
     })();
   }, []);
@@ -82,7 +83,7 @@ export default function RunHistory() {
     try {
       setEntries(await listRunHistory(id, 50));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -101,7 +102,7 @@ export default function RunHistory() {
       setConfirmCancel(null);
       await load();
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -114,7 +115,7 @@ export default function RunHistory() {
       const preview = await previewSubmission(profileId, entry.plan_id, RERUN_OPTIONS);
       setRerun({ entry, preview, confirmed: false, outcome: null, error: "" });
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -135,7 +136,7 @@ export default function RunHistory() {
       setRerun({ ...rerun, outcome });
       await load();
     } catch (e) {
-      setRerun({ ...rerun, error: e instanceof Error ? e.message : String(e) });
+      setRerun({ ...rerun, error: errorText(e) });
     } finally {
       setBusy(null);
     }
@@ -149,7 +150,7 @@ export default function RunHistory() {
       const imported = await openPredictions(profileId, entry.plan_id);
       setOpened(`Opened the viewer on run ${imported.run_id}.`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }

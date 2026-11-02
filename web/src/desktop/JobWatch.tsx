@@ -20,6 +20,7 @@ import {
   type PredictionProgress,
   type PredictionSourceCount,
 } from "./runPlan";
+import { errorText } from "./errors";
 
 const panel = {
   marginTop: "0.75rem",
@@ -99,7 +100,7 @@ export default function JobWatch({
         const next = await jobWatchStatus(profileId, planId, initialOutcome.job_id);
         if (!stopped && alive.current) setStatus(next);
       } catch (e) {
-        if (!stopped && alive.current) setError(e instanceof Error ? e.message : String(e));
+        if (!stopped && alive.current) setError(errorText(e));
       }
     };
     void refresh();
@@ -140,7 +141,7 @@ export default function JobWatch({
         if (chunk.latest) setLatest(chunk.latest);
         setLiveNote(chunk.idle ? "waiting for the next prediction line…" : "");
       } catch (e) {
-        if (!stopped && alive.current) setLiveNote(e instanceof Error ? e.message : String(e));
+        if (!stopped && alive.current) setLiveNote(errorText(e));
       }
     };
     void poll();
@@ -161,7 +162,7 @@ export default function JobWatch({
         const report = await runMetrics(profileId, planId);
         if (!stopped && alive.current) setMetrics(report);
       } catch (e) {
-        if (!stopped && alive.current) setLiveNote(e instanceof Error ? e.message : String(e));
+        if (!stopped && alive.current) setLiveNote(errorText(e));
       }
       if (status.state === "failed") {
         try {
@@ -183,7 +184,7 @@ export default function JobWatch({
     try {
       setStatus(await jobWatchStatus(profileId, planId, initialOutcome.job_id));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -196,7 +197,7 @@ export default function JobWatch({
     try {
       setLog(await jobWatchLogs(profileId, planId, initialOutcome.job_id, stream, 50));
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -220,7 +221,7 @@ export default function JobWatch({
       }));
       setConfirmCancel(false);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -233,7 +234,7 @@ export default function JobWatch({
       const imported = await openPredictions(profileId, planId);
       setOpened(`Opened the viewer on run ${imported.run_id}.`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setOpening(false);
     }

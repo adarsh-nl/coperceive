@@ -14,6 +14,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ServerEntry } from "./hpc";
 import {
+  canPrepareWholeDataset,
+  indexingLabel,
+  splitErrorText,
   datasetIndex,
   datasetOpen,
   datasetPrepare,
@@ -31,6 +34,7 @@ import {
   type ClusterSceneStatusEntry,
   type DatasetPreparePreview,
 } from "./clusterDatasets";
+import { errorDetails, errorText } from "./errors";
 
 const cardStyle = {
   backgroundColor: "rgba(28, 28, 30, 0.95)",
@@ -134,6 +138,24 @@ function StatusChip({
   );
 }
 
+/** A backend error: its first line, the rest behind a "Details" toggle. */
+function ErrorLines({ text }: { text: string }) {
+  const { line, details } = splitErrorText(text);
+  return (
+    <>
+      <span>{line || "Something went wrong. Try again."}</span>
+      {details ? (
+        <details style={{ marginTop: "0.35rem" }}>
+          <summary style={{ cursor: "pointer", fontSize: "0.76rem" }}>Details</summary>
+          <pre style={{ margin: "0.35rem 0 0", whiteSpace: "pre-wrap", fontSize: "0.72rem", color: "#c9d1d9" }}>
+            {details}
+          </pre>
+        </details>
+      ) : null}
+    </>
+  );
+}
+
 export default function ClusterDatasetView({
   profile,
   dataset,
@@ -175,9 +197,20 @@ export default function ClusterDatasetView({
 
   const [serverCacheRoot, setServerCacheRoot] = useState<string>("");
 
+  // Elapsed time while indexing, so a slow cluster does not look stuck.
+  const [indexStartedAt, setIndexStartedAt] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!loadingIndex) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [loadingIndex]);
+
   // Load index document on mount
   useEffect(() => {
     let active = true;
+    setIndexStartedAt(Date.now());
+    setNow(Date.now());
     setLoadingIndex(true);
     setIndexError(null);
 
@@ -192,7 +225,7 @@ export default function ClusterDatasetView({
       })
       .catch((err: unknown) => {
         if (!active) return;
-        setIndexError(err instanceof Error ? err.message : String(err));
+        setIndexError(errorDetails(err) || errorText(err));
         setLoadingIndex(false);
       });
 
@@ -287,7 +320,7 @@ export default function ClusterDatasetView({
           split: dataset.split,
         });
       } catch (err) {
-        alert(err instanceof Error ? err.message : String(err));
+        alert(errorText(err));
       }
       return;
     }
@@ -308,7 +341,7 @@ export default function ClusterDatasetView({
       }
       setSinglePreparePreview(preview);
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      alert(errorText(err));
     }
   };
 
@@ -362,7 +395,7 @@ export default function ClusterDatasetView({
       }
       setPreparePreview(preview);
     } catch (err) {
-      setPrepareError(err instanceof Error ? err.message : String(err));
+      setPrepareError(errorDetails(err) || errorText(err));
     }
   };
 
@@ -433,7 +466,12 @@ export default function ClusterDatasetView({
             type="button"
             style={primaryButton}
             onClick={() => void handlePrepareWholeDatasetClick()}
-            disabled={loadingIndex}
+            disabled={!canPrepareWholeDataset(indexDoc, loadingIndex)}
+            title={
+              canPrepareWholeDataset(indexDoc, loadingIndex)
+                ? undefined
+                : "Available once at least one scene is indexed."
+            }
           >
             Prepare whole dataset
           </button>
@@ -511,7 +549,9 @@ export default function ClusterDatasetView({
           </p>
 
           {prepareError ? (
-            <div style={{ color: "#ff7b72", fontSize: "0.8rem", marginBottom: "0.5rem" }}>{prepareError}</div>
+            <div role="alert" style={{ color: "#ff7b72", fontSize: "0.8rem", marginBottom: "0.5rem" }}>
+              <ErrorLines text={prepareError} />
+            </div>
           ) : null}
 
           {preparePreview ? (
@@ -586,8 +626,8 @@ export default function ClusterDatasetView({
             This scene is not ready yet. Prepare it now? Once preparation finishes, the viewer will open automatically.
           </p>
           {singlePrepareError ? (
-            <div style={{ color: "#ff7b72", fontSize: "0.8rem", marginBottom: "0.4rem" }}>
-              {singlePrepareError}
+            <div role="alert" style={{ color: "#ff7b72", fontSize: "0.8rem", marginBottom: "0.4rem" }}>
+              <ErrorLines text={singlePrepareError} />
             </div>
           ) : null}
           <div style={{ fontSize: "0.74rem", color: "#8b949e", marginBottom: "0.4rem" }}>
@@ -673,11 +713,11 @@ export default function ClusterDatasetView({
       {/* Scene Index Table */}
       {loadingIndex ? (
         <div style={{ padding: "2rem", textAlign: "center", color: "#8b949e", fontSize: "0.85rem" }}>
-          Indexing scenes on cluster (metadata only)…
+          {indexingLabel(now - indexStartedAt)}
         </div>
       ) : indexError ? (
         <div role="alert" style={{ padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(255,98,89,0.15)", border: "1px solid rgba(255,98,89,0.35)", color: "#ff6259", fontSize: "0.82rem" }}>
-          {indexError}
+          <ErrorLines text={indexError} />
         </div>
       ) : (
         <>

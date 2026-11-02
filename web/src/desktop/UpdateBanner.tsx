@@ -7,6 +7,7 @@ import {
   isTauriEnvironment,
 } from "./local";
 import { parseUpdateManifest } from "./updateManifest";
+import { errorText } from "./errors";
 
 const CURRENT_VERSION = "0.1.0";
 const DEFAULT_ENDPOINT =
@@ -78,7 +79,7 @@ export default function UpdateBanner() {
         }
       } catch (err) {
         if (isManual) {
-          setErrorMessage(err instanceof Error ? err.message : "Could not check for updates. Check the network and try again.");
+          setErrorMessage(errorText(err, "Could not check for updates. Check the network and try again."));
           setCheckState("error");
         } else {
           setCheckState("idle");
@@ -190,7 +191,7 @@ export default function UpdateBanner() {
         setCheckState("idle");
         return;
       } catch (err) {
-        setErrorMessage(err instanceof Error ? err.message : String(err));
+        setErrorMessage(errorText(err));
         setCheckState("error");
         return;
       }

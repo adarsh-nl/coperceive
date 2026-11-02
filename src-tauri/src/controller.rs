@@ -28,6 +28,7 @@ pub type ExportSaver = Arc<dyn Fn(Option<&str>, Option<&[u8]>) -> Result<String,
 pub type FinderRevealer = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
 pub type UpdaterChecker = Arc<dyn Fn(bool, Option<String>) -> Result<serde_json::Value, String> + Send + Sync>;
 pub type UpdaterInstaller = Arc<dyn Fn(Option<String>) -> Result<(), String> + Send + Sync>;
+pub type EvalDispatcher = Arc<dyn Fn(String, Option<String>) -> Result<(), String> + Send + Sync>;
 
 /// Configuration for the loopback controller.
 #[derive(Clone)]
@@ -38,8 +39,12 @@ pub struct ControllerConfig {
     pub last_open_dialog: Arc<Mutex<Option<Instant>>>,
     pub eval_callbacks: Arc<Mutex<HashMap<u64, EvalSender>>>,
     pub eval_counter: Arc<Mutex<u64>>,
-    pub eval_dispatcher: Option<Arc<dyn Fn(String) -> Result<(), String> + Send + Sync>>,
+    /// Runs a script in a window: the viewer when there is one, else main; or
+    /// the window the request names (`"window": "main"`).
+    pub eval_dispatcher: Option<EvalDispatcher>,
     pub window_closer: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    /// Shows and focuses the main window on its Library; returns whether it is visible.
+    pub library_shower: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
     pub export_picker: Option<ExportPicker>,
     pub export_saver: Option<ExportSaver>,
     pub finder_revealer: Option<FinderRevealer>,
@@ -58,6 +63,7 @@ impl ControllerConfig {
             eval_counter: Arc::new(Mutex::new(0)),
             eval_dispatcher: None,
             window_closer: None,
+            library_shower: None,
             export_picker: None,
             export_saver: None,
             finder_revealer: None,
@@ -310,6 +316,16 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         return Ok(());
     }
 
+    // The viewer window has no Tauri IPC: its wordmark asks for the main
+    // window's Library here instead of rendering the shell itself.
+    if method == "POST" && path == "/show-library" {
+        let shown = config.library_shower.as_ref().map(|show| show()).unwrap_or(false);
+        let payload = serde_json::to_vec(&serde_json::json!({ "shown": shown }))
+            .unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
     if method == "POST" && path == "/eval-result" {
         let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
             Some(b) => b,
@@ -339,6 +355,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             }
         };
         let script = val.get("script").and_then(|v| v.as_str()).unwrap_or("");
+        let target = val.get("window").and_then(|v| v.as_str()).map(str::to_string);
         let timeout_secs = parse_eval_timeout(&val);
         if let Some(ref dispatcher) = config.eval_dispatcher {
             let req_id = {
@@ -375,7 +392,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                 script_json, config.ctrl_port, escaped_secret, req_id
             );
 
-            if let Err(dispatch_err) = dispatcher(wrapper) {
+            if let Err(dispatch_err) = dispatcher(wrapper, target) {
                 config.eval_callbacks.lock().unwrap().remove(&req_id);
                 let err_payload = serde_json::to_vec(&serde_json::json!({
                     "status": "error",
@@ -932,7 +949,7 @@ pub mod tests {
         let mut config = make_test_config();
         let config_for_dispatcher = config.clone();
 
-        config.eval_dispatcher = Some(Arc::new(move |script: String| {
+        config.eval_dispatcher = Some(Arc::new(move |script: String, _window: Option<String>| {
             if let Some(pos) = script.find("req_id: ") {
                 let rest = &script[pos + 8..];
                 let end = rest.find(',').unwrap_or(rest.len());
@@ -988,7 +1005,7 @@ pub mod tests {
         let port_holder = Arc::new(Mutex::new(0u16));
         let port_holder_clone = port_holder.clone();
 
-        config.eval_dispatcher = Some(Arc::new(move |script: String| {
+        config.eval_dispatcher = Some(Arc::new(move |script: String, _window: Option<String>| {
             let port = *port_holder_clone.lock().unwrap();
             if let Some(pos) = script.find("req_id: ") {
                 let rest = &script[pos + 8..];
@@ -1045,7 +1062,7 @@ pub mod tests {
     #[test]
     fn test_eval_dispatcher_error_returns_502() {
         let mut config = make_test_config();
-        config.eval_dispatcher = Some(Arc::new(move |_script: String| {
+        config.eval_dispatcher = Some(Arc::new(move |_script: String, _window: Option<String>| {
             Err("Window not found".into())
         }));
 
@@ -1275,5 +1292,39 @@ pub mod tests {
         let resp = String::from_utf8(writer).unwrap();
         assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
         assert!(resp.contains("No exported file has been saved yet"));
+    }
+
+    #[test]
+    fn test_show_library_endpoint_needs_the_secret_and_calls_the_shower() {
+        let mut config = make_test_config();
+        let calls = Arc::new(Mutex::new(0));
+        let counter = calls.clone();
+        config.library_shower = Some(Arc::new(move || {
+            *counter.lock().unwrap() += 1;
+            true
+        }));
+        let request = |auth: &str| {
+            format!(
+                "POST /show-library HTTP/1.1\r\n\
+                 Host: 127.0.0.1:51234\r\n\
+                 Origin: http://127.0.0.1:8000\r\n\
+                 Authorization: Bearer {auth}\r\n\
+                 Content-Length: 0\r\n\r\n"
+            )
+        };
+
+        let mut writer = Vec::new();
+        let mut reader = Cursor::new(request("wrong").into_bytes());
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        assert!(String::from_utf8(writer).unwrap().starts_with("HTTP/1.1 401"));
+        assert_eq!(*calls.lock().unwrap(), 0);
+
+        let mut writer = Vec::new();
+        let mut reader = Cursor::new(request("secret-token-test-123").into_bytes());
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        assert!(resp.ends_with(r#"{"shown":true}"#), "{resp}");
+        assert_eq!(*calls.lock().unwrap(), 1);
     }
 }

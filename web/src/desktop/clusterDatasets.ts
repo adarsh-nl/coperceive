@@ -6,6 +6,8 @@
  * (schemas: `coperceive-cluster-detect-1`, `coperceive-cluster-index-1`,
  * `coperceive-cluster-scene-status-1`, `coperceive-cluster-dataset-cache-1`).
  */
+
+import { errorDetails } from "./errors.ts";
 export function isTauriEnvironment(): boolean {
   return (
     typeof window !== "undefined" &&
@@ -186,6 +188,29 @@ export function formatLicenceInfo(licence: ClusterDatasetLicence | null): {
 }
 
 /** Format scene duration in seconds cleanly. */
+/** "Prepare whole dataset" needs at least one indexed scene (not "0 of 0 scenes"). */
+export function canPrepareWholeDataset(
+  index: ClusterIndexDocument | null,
+  loading: boolean,
+): boolean {
+  return !loading && index !== null && index.scenes.length > 0;
+}
+
+/** The indexing line with elapsed whole seconds: "Indexing… 40 s". */
+export function indexingLabel(elapsedMs: number): string {
+  const seconds = Math.max(0, Math.floor(elapsedMs / 1000));
+  return `Indexing scenes on the cluster (metadata only)… ${seconds} s`;
+}
+
+/** Split a backend error into its first line and the rest (for a Details toggle). */
+export function splitErrorText(text: string): { line: string; details: string } {
+  const lines = text.split("\n").map((l) => l.trimEnd());
+  const first = lines.findIndex((l) => l.trim() !== "");
+  if (first < 0) return { line: "", details: "" };
+  const rest = lines.slice(first + 1).join("\n").trim();
+  return { line: lines[first].trim(), details: rest };
+}
+
 export function formatDuration(durationS: number | null | undefined): string {
   if (durationS == null || isNaN(durationS)) {
     return "—";
@@ -571,7 +596,7 @@ export async function recoverFromRefusedPrepareSubmit(
   },
   submitError: unknown,
 ): Promise<PrepareSubmissionRecovery> {
-  const errorMsg = submitError instanceof Error ? submitError.message : String(submitError);
+  const errorMsg = errorDetails(submitError);
   let newPreview: DatasetPreparePreview | null = null;
   try {
     newPreview = await datasetPrepare(profileId, params);

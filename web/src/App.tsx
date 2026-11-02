@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
 import { BrandWordmark } from "./desktop/Brand";
 import ConnectScreen from "./desktop/ConnectScreen";
-import { isTauriEnvironment, getStorageInfo, revealInFinder, setAutoDownloadUpdates, getPersistentState } from "./desktop/local";
+import { isTauriEnvironment, isViewerWindow, getStorageInfo, revealInFinder, setAutoDownloadUpdates, getPersistentState, showLibrary } from "./desktop/local";
 import UpdateBanner from "./desktop/UpdateBanner";
 import Landing, { writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
@@ -16,6 +16,8 @@ function useHashRoute(): "home" | "viewer" | "connect" {
   const isConnect = (raw: string) => raw === "/connect" || raw.startsWith("/connect/") || raw.startsWith("/connect?");
   const [route, setRoute] = useState<"home" | "viewer" | "connect">(() => {
     const raw = typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
+    // The viewer window has no IPC: it only ever shows the viewer.
+    if (isViewerWindow()) return "viewer";
     if (isConnect(raw)) return "connect";
     if (raw === "/viewer") return "viewer";
     if (isDesktop) return "viewer";
@@ -24,6 +26,15 @@ function useHashRoute(): "home" | "viewer" | "connect" {
   useEffect(() => {
     const onHash = () => {
       const raw = window.location.hash.replace(/^#/, "");
+      if (isViewerWindow()) {
+        // A Library link here means the main window's Library; stay on the viewer.
+        if (raw !== "/viewer") {
+          void showLibrary().catch(() => {});
+          window.history.replaceState(null, "", "#/viewer");
+        }
+        setRoute("viewer");
+        return;
+      }
       if (isConnect(raw)) {
         setRoute("connect");
         return;
@@ -214,6 +225,25 @@ export default function App() {
   const [tab, setTab] = useState<"viewer" | "desk">("viewer");
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    // Main window: the viewer window's wordmark asks for the Library.
+    if (!isTauri || isViewerWindow()) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const stop = await listen("navigate-library", () => {
+        window.location.hash = "#/connect";
+      });
+      if (cancelled) stop();
+      else unlisten = stop;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [isTauri]);
 
   useEffect(() => {
     if (isDesktop && !window.location.hash) {
@@ -417,7 +447,10 @@ export default function App() {
             className="brand"
             href={isDesktop ? "#/connect" : "#/"}
             onClick={(e) => {
-              if (isDesktop) {
+              if (isViewerWindow()) {
+                e.preventDefault();
+                void showLibrary().catch(() => {});
+              } else if (isDesktop) {
                 e.preventDefault();
                 window.location.hash = "#/connect";
               }

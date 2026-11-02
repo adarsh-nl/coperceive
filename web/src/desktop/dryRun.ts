@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
+import { errorDetails } from "./errors.ts";
+
 /** Turn a Griffin dry-run failure into the card's cause + one next step. */
 
 function lastLine(text: string): string {
@@ -10,7 +12,7 @@ function lastLine(text: string): string {
 }
 
 export function dryRunFailureText(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
+  const raw = errorDetails(error);
   const line = lastLine(raw);
   if (/Hugging Face client|huggingface_hub|No module named/i.test(line)) {
     return "The app build is missing the Hugging Face client. Next: update the desktop app, then try again.";

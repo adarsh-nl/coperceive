@@ -20,6 +20,7 @@ import GetDataScreen from "./GetDataScreen";
 import UpdateBanner from "./UpdateBanner";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
+import { errorText } from "./errors";
 
 interface ConnectScreenProps {
   onConnected: (session: ConnectionSession) => void;
@@ -42,6 +43,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     }
     return "library";
   });
+  // Bumped when the Library is asked for again, so it re-reads the scenes.
+  const [libraryKey, setLibraryKey] = useState(0);
   const [dataRoot, setDataRoot] = useState<string>("");
   const [recentRoots, setRecentRoots] = useState<string[]>([]);
   const [status, setStatus] = useState<string>("");
@@ -102,6 +105,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
     let unlistenImport: (() => void) | undefined;
     let unlistenGetData: (() => void) | undefined;
+    let unlistenLibrary: (() => void) | undefined;
 
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -111,6 +115,10 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       });
       unlistenGetData = await listen("navigate-get-data", () => {
         setActiveTab("get_data");
+      });
+      unlistenLibrary = await listen("navigate-library", () => {
+        setActiveTab("library");
+        setLibraryKey((key) => key + 1);
       });
     })();
 
@@ -125,6 +133,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
       unlistenImport?.();
       unlistenGetData?.();
+      unlistenLibrary?.();
     };
   }, []);
 
@@ -178,7 +187,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       });
     } catch (e) {
       setImporting(false);
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
       stop();
     }
   };
@@ -213,7 +222,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       clearInterval(timer);
       setBusy(false);
       setStatus("");
-      setError(err instanceof Error ? err.message : String(err));
+      setError(errorText(err));
     }
   };
 
@@ -337,6 +346,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       <main style={{ flex: 1, position: "relative", zIndex: 1, padding: "1.5rem 0" }}>
         {activeTab === "library" && (
           <LibraryScreen
+            key={libraryKey}
             onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
             onNavigateGetData={() => setActiveTab("get_data")}
           />
