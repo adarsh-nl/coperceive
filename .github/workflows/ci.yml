@@ -357,6 +357,24 @@ jobs:
             done || true
           fi
 
+      - name: Run cluster-dataset E2E
+        run: bash scripts/desktop/e2e_cluster_datasets.sh 2>&1 | tee /tmp/e2e_cluster_datasets.log
+      - name: Report cluster-dataset E2E results
+        if: always()
+        run: |
+          if [ -f /tmp/e2e_cluster_datasets.log ]; then
+            echo "### Cluster datasets E2E" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'E2E_DATASET_MARK|Step CD-|E2E_DATASET_FAIL' /tmp/e2e_cluster_datasets.log >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'Step CD-|E2E_DATASET_MARK' /tmp/e2e_cluster_datasets.log | while IFS= read -r line; do
+              echo "::notice title=cluster-datasets-e2e::$line"
+            done || true
+            grep -E 'E2E_DATASET_FAIL' /tmp/e2e_cluster_datasets.log | while IFS= read -r line; do
+              echo "::error title=cluster-datasets-e2e::$line"
+            done || true
+          fi
+
       - name: Locate and Measure Single Built DMG
         run: |
           DMG_FILE=$(find src-tauri/target -iname "*.dmg" -type f 2>/dev/null | head -n 1)

@@ -156,7 +156,7 @@ def test_prepare_one_scene_is_atomic_incremental_and_idempotent(tmp_path: Path) 
     cache = _cache(tmp_path, raw)
     first = prepare_cluster_dataset("opv2v", raw / "test", cache, scenes=["scene_0001"])
     states = {scene["scene_id"]: scene["state"] for scene in first["scenes"]}
-    assert states == {"scene_0001": "ready"}
+    assert states == {"scene_0001": "ready", "scene_0002": "not_prepared"}
     assert (cache / "scene_0001" / "manifest.json").is_file()
     assert (cache / "scene_0001" / "COMPLETE.json").is_file()
     assert not (cache / "scene_0002").exists()
