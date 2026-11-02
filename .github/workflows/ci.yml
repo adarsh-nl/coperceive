@@ -375,6 +375,24 @@ jobs:
             done || true
           fi
 
+      - name: Run cluster-dataset packaged-app E2E with a fake ssh
+        run: bash scripts/desktop/e2e_cluster_datasets_app.sh 2>&1 | tee /tmp/e2e_cluster_datasets_app.log
+      - name: Report cluster-dataset packaged-app E2E results
+        if: always()
+        run: |
+          if [ -f /tmp/e2e_cluster_datasets_app.log ]; then
+            echo "### Cluster datasets packaged-app E2E" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'E2E_DATASET_APP_MARK|Step CD-|E2E_DATASET_APP_FAIL' /tmp/e2e_cluster_datasets_app.log >> $GITHUB_STEP_SUMMARY || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            grep -E 'Step CD-|E2E_DATASET_APP_MARK' /tmp/e2e_cluster_datasets_app.log | while IFS= read -r line; do
+              echo "::notice title=cluster-datasets-app-e2e::$line"
+            done || true
+            grep -E 'E2E_DATASET_APP_FAIL' /tmp/e2e_cluster_datasets_app.log | while IFS= read -r line; do
+              echo "::error title=cluster-datasets-app-e2e::$line"
+            done || true
+          fi
+
       - name: Locate and Measure Single Built DMG
         run: |
           DMG_FILE=$(find src-tauri/target -iname "*.dmg" -type f 2>/dev/null | head -n 1)
