@@ -1,0 +1,87 @@
+{
+  "format": "coperceive-failures",
+  "format_version": 1,
+  "run_id": "det-a",
+  "formula": "badness = sum over operating-point false negatives and false positives of class_weight(category) * distance_weight(distance_m)",
+  "weights": {
+    "class_weights": {},
+    "default_class_weight": 1.0,
+    "vru_classes": [
+      "pedestrian",
+      "cyclist",
+      "bicycle",
+      "motorcycle",
+      "rider"
+    ],
+    "vru_weight": 2.0,
+    "near_m": 20.0,
+    "mid_m": 50.0,
+    "near_weight": 2.0,
+    "mid_weight": 1.0,
+    "far_weight": 0.5,
+    "unknown_distance_weight": 1.0,
+    "vru_within_m": 20.0,
+    "ghost_m": 2.0,
+    "duplicate_iou": 0.5,
+    "loc_centre_m": 1.0,
+    "loc_yaw_deg": 15.0,
+    "far_miss_m": 50.0,
+    "occluded_visibility_below": 0.6
+  },
+  "latency_compared": false,
+  "frames": [
+    {
+      "rank": 1,
+      "scene_id": "bins",
+      "time_us": 0,
+      "agent_id": "vehicle",
+      "source": "fused",
+      "badness": 3.0,
+      "tags": [
+        "ghost_box",
+        "far_range_miss",
+        "occluded_miss"
+      ],
+      "object_ids": [
+        "fp:det-a:bins:vehicle:fused:0:1",
+        "gt:bins:vehicle:0:1",
+        "gt:bins:vehicle:0:2"
+      ],
+      "evidence": {
+        "ghost_box": {
+          "count": 1,
+          "object_ids": [
+            "fp:det-a:bins:vehicle:fused:0:1"
+          ],
+          "distances_m": [
+            80.0
+          ],
+          "centre_errors_m": [],
+          "yaw_errors_deg": []
+        },
+        "far_range_miss": {
+          "count": 1,
+          "object_ids": [
+            "gt:bins:vehicle:0:2"
+          ],
+          "distances_m": [
+            60.0
+          ],
+          "centre_errors_m": [],
+          "yaw_errors_deg": []
+        },
+        "occluded_miss": {
+          "count": 1,
+          "object_ids": [
+            "gt:bins:vehicle:0:1"
+          ],
+          "distances_m": [
+            40.0
+          ],
+          "centre_errors_m": [],
+          "yaw_errors_deg": []
+        }
+      }
+    }
+  ]
+}

@@ -9,6 +9,7 @@ own exit 2 for a malformed command line.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -26,6 +27,14 @@ from coperceive.evaluation.breakdown import (
 )
 from coperceive.evaluation.config import ConfigError, load_config
 from coperceive.evaluation.evaluate import EvaluationError, evaluate_run
+from coperceive.evaluation.failures import (
+    FailureWeights,
+    declares_latency,
+    mine_failures,
+    render_failures,
+    weights_from_json,
+    write_failures,
+)
 from coperceive.evaluation.outcomes import (
     DEFAULT_DISTANCE_EDGES,
     DEFAULT_VISIBILITY_EDGES,
@@ -139,6 +148,34 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         help="Ascending visibility-fraction edges inside (0, 1). Default: 0.2,0.6.",
     )
     compare.set_defaults(func=compare_command)
+
+    failures = eval_commands.add_parser(
+        "failures", help="Rank the worst frames of a run and tag why each failed."
+    )
+    failures.add_argument("run_id")
+    _root_arguments(failures)
+    failures.add_argument(
+        "--top", type=int, default=50, help="How many frames to keep. Default 50."
+    )
+    failures.add_argument(
+        "--json",
+        nargs="?",
+        const="-",
+        default=None,
+        help="Write failures.json to this path, or print it when the path is omitted.",
+    )
+    failures.add_argument("--weights", default=None, help="JSON file of badness and tag weights.")
+    failures.add_argument(
+        "--latency-run",
+        default=None,
+        help="A run whose perturbation delays other agents, for the latency-sensitive tag.",
+    )
+    failures.add_argument(
+        "--from-scores",
+        action="store_true",
+        help="Read outcomes.json or matches only; do not reopen scenes.",
+    )
+    failures.set_defaults(func=failures_command)
 
 
 def _root_arguments(parser: argparse.ArgumentParser) -> None:
@@ -363,6 +400,66 @@ def _compare(args: argparse.Namespace) -> None:
             destination = Path(args.json)
             write_compare(destination, document)
             print(f"wrote {destination}", file=sys.stderr)
+
+
+def failures_command(args: argparse.Namespace) -> None:
+    _guarded(_failures, args)
+
+
+def _failures(args: argparse.Namespace) -> None:
+    if not isinstance(args.top, int) or isinstance(args.top, bool) or args.top < 1:
+        raise PredictionError("--top must be at least 1")
+    root = _scenes_root(args)
+    predictions = _existing_predictions_root(args)
+    _evaluated_rows(root, predictions, args.run_id)
+    weights = FailureWeights()
+    if isinstance(args.weights, str):
+        try:
+            loaded: object = json.loads(Path(args.weights).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise PredictionError(f"--weights: {error}") from error
+        if not isinstance(loaded, dict):
+            raise PredictionError("--weights must be a JSON object")
+        weights = weights_from_json(cast(dict[str, object], loaded))
+    records, _origin = load_run_records(
+        root, predictions, args.run_id, from_scores=bool(args.from_scores)
+    )
+    latency: tuple[OutcomeRecord, ...] | None = None
+    if isinstance(args.latency_run, str):
+        if not _declares_latency(predictions, args.latency_run):
+            raise PredictionError(
+                f"run {args.latency_run!r} has no latency perturbation "
+                "(latency_frames or latency_ms in perturbation.json or provenance)"
+            )
+        _evaluated_rows(root, predictions, args.latency_run)
+        latency, _latency_origin = load_run_records(
+            root, predictions, args.latency_run, from_scores=bool(args.from_scores)
+        )
+    document = mine_failures(
+        records, run_id=args.run_id, weights=weights, top=args.top, latency_records=latency
+    )
+    if args.json == "-":
+        print(json.dumps(document, indent=2, allow_nan=False))
+        return
+    print(render_failures(document), end="")
+    if isinstance(args.json, str):
+        destination = Path(args.json)
+        write_failures(destination, document)
+        print(f"wrote {destination}", file=sys.stderr)
+
+
+def _declares_latency(predictions: Path, run_id: str) -> bool:
+    path = predictions / run_id / "perturbation.json"
+    if path.is_file():
+        try:
+            loaded: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise PredictionError(f"{path}: {error}") from error
+        if isinstance(loaded, dict) and declares_latency(cast(dict[str, object], loaded)):
+            return True
+    provenance = read_run_meta(predictions, run_id).provenance or {}
+    raw = provenance.get("perturbation")
+    return isinstance(raw, dict) and declares_latency(cast(dict[str, object], raw))
 
 
 def _breakdown_names(value: object) -> tuple[str, ...]:
