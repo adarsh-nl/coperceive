@@ -47,6 +47,7 @@ declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
     __COPERCEIVE_CTRL_PORT__?: number;
+    __COPERCEIVE_VIEWER_WINDOW__?: boolean;
     __COPERCEIVE_CTRL_SECRET__?: string;
   }
 }
@@ -534,6 +535,25 @@ async function controllerPost<T>(endpoint: string, body: unknown): Promise<T> {
     throw new Error(`Controller request failed (${res.status}): ${text}`);
   }
   return res.json() as Promise<T>;
+}
+
+/**
+ * True in the viewer window: a desktop page served by the scene server. Tauri
+ * injects its IPC object there too, but no backend command is permitted for
+ * that window, so screens that need them (Library, Get data, HPC) must never
+ * render here; it reaches the app through the loopback controller instead.
+ */
+export function isViewerWindow(): boolean {
+  return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_VIEWER_WINDOW__);
+}
+
+/** Bring the main window forward on its Library (from the viewer window). */
+export async function showLibrary(): Promise<boolean> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const resp = await controllerPost<{ shown?: boolean }>("/show-library", {});
+    return Boolean(resp.shown);
+  }
+  return false;
 }
 
 export async function revealInFinder(path?: string): Promise<void> {

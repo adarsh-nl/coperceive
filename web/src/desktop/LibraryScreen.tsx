@@ -16,6 +16,7 @@ import {
   setLibraryRoot,
   validateScene,
 } from "./local";
+import { errorText } from "./errors";
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
@@ -134,7 +135,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
         [scene.path]: {
           percent: current[scene.path]?.percent ?? 0,
           message: "",
-          error: error instanceof Error ? error.message : String(error),
+          error: errorText(error),
           done: false,
         },
       }));
@@ -155,7 +156,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
       const list = await getLibraryScenes();
       applyScenes(list);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
+      setLoadError(errorText(err));
     } finally {
       setLoading(false);
     }
@@ -200,7 +201,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
         loadData();
       }
     } catch (e) {
-      alert(`Storage update error: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Storage update error: ${errorText(e)}`);
       setMovingStorage(false);
     }
   };
@@ -227,7 +228,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
       setDeleteConfirmScene(null);
       loadData();
     } catch (e) {
-      alert(`Failed to delete scene: ${e instanceof Error ? e.message : String(e)}`);
+      alert(`Failed to delete scene: ${errorText(e)}`);
     }
   };
 

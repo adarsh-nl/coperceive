@@ -15,6 +15,7 @@ import {
   loadDatasetCatalog,
   getPersistentState,
 } from "./local";
+import { errorText } from "./errors";
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
@@ -77,9 +78,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
       }
     } catch (err) {
       setCatalogError(
-        err instanceof Error
-          ? err.message
-          : "Could not load the dataset list. Close this screen and open Get data again.",
+        errorText(err, "Could not load the dataset list. Close this screen and open Get data again."),
       );
     } finally {
       setCatalogLoading(false);
@@ -144,7 +143,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
       const res = await datasetDryRun(ds.id, presetId);
       setDryRun(res);
     } catch (err) {
-      setDryRunError(err instanceof Error ? err.message : String(err));
+      setDryRunError(errorText(err));
     } finally {
       setEstimating(false);
     }
@@ -167,7 +166,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
     try {
       await startDatasetJob(selectedDataset.id, selectedPresetId, acceptedTerms);
     } catch (err) {
-      setJobError(err instanceof Error ? err.message : String(err));
+      setJobError(errorText(err));
       setJobRunning(false);
     }
   };
@@ -190,7 +189,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
         setJobNote("Download paused.");
       }
     } catch (err) {
-      setJobError(err instanceof Error ? err.message : String(err));
+      setJobError(errorText(err));
     }
   };
 

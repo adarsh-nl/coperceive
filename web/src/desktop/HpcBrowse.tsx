@@ -29,6 +29,7 @@ import {
   formatLicenceInfo,
   type ClusterDetectDocument,
 } from "./clusterDatasets";
+import { errorText } from "./errors";
 
 const card = {
   backgroundColor: "rgba(28, 28, 30, 0.85)",
@@ -104,7 +105,7 @@ export default function HpcBrowse({
           setDocument(result);
         })
         .catch((e: unknown) => {
-          setError(e instanceof Error ? e.message : String(e));
+          setError(errorText(e));
         });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -119,7 +120,7 @@ export default function HpcBrowse({
       setDocument(result);
       setSelected(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
       setDocument(null);
     } finally {
       setLoading(false);
@@ -167,7 +168,7 @@ export default function HpcBrowse({
           if (!active) return;
           setDetectLoading(false);
           setDetectedDataset(null);
-          setDetectError(e instanceof Error ? e.message : String(e));
+          setDetectError(errorText(e));
         });
     }, 150);
 

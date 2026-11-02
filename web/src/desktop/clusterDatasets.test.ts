@@ -2,7 +2,10 @@
 import test from "node:test";
 import assert from "node:assert";
 import {
+  canPrepareWholeDataset,
   formatDetectBannerTitle,
+  indexingLabel,
+  splitErrorText,
   formatDuration,
   formatLicenceInfo,
   formatSensorsSummary,
@@ -412,4 +415,27 @@ test("in Tauri mode: refused submit regenerates preview and keeps submit disable
     _setInvokeForTesting(null);
     delete (globalThis as unknown as { window?: unknown }).window;
   }
+});
+
+test("Prepare whole dataset waits for at least one indexed scene", () => {
+  const index = (count: number) =>
+    ({ scenes: Array.from({ length: count }, (_, i) => ({ scene_id: `s${i}` })) }) as unknown as ClusterIndexDocument;
+  assert.equal(canPrepareWholeDataset(null, true), false);
+  assert.equal(canPrepareWholeDataset(null, false), false);
+  assert.equal(canPrepareWholeDataset(index(0), false), false);
+  assert.equal(canPrepareWholeDataset(index(3), true), false);
+  assert.equal(canPrepareWholeDataset(index(3), false), true);
+});
+
+test("indexing shows elapsed whole seconds", () => {
+  assert.equal(indexingLabel(0), "Indexing scenes on the cluster (metadata only)… 0 s");
+  assert.equal(indexingLabel(40_900), "Indexing scenes on the cluster (metadata only)… 40 s");
+});
+
+test("a backend error splits into its first line and details", () => {
+  assert.deepEqual(splitErrorText("\ncould not read 000068.yaml: bad tag\n  line 152\n"), {
+    line: "could not read 000068.yaml: bad tag",
+    details: "line 152",
+  });
+  assert.deepEqual(splitErrorText("one line"), { line: "one line", details: "" });
 });

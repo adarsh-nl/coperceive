@@ -294,6 +294,9 @@ fn open_viewer_window(
         (function() {{
             try {{
                 window.__COPERCEIVE_DESKTOP__ = true;
+                // Tauri injects its IPC object here too, but no command is
+                // permitted for this window (capabilities: main only).
+                window.__COPERCEIVE_VIEWER_WINDOW__ = true;
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
                 window.__COPERCEIVE_FORCE_MOTION__ = {force_motion};
                 window.__COPERCEIVE_UPDATE_URL__ = "{escaped_update}";
@@ -645,22 +648,43 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
+/// Bring the main window forward on its Library. The viewer window stays the
+/// one viewer (opening a scene from the Library replaces it); it never renders
+/// the Library itself, because it has no Tauri IPC.
+#[cfg(target_os = "macos")]
+fn show_library_window(app: &tauri::AppHandle) -> bool {
+    use tauri::{Emitter, Manager};
+    let Some(main) = app.get_webview_window("main") else {
+        return false;
+    };
+    let _ = main.unminimize();
+    let _ = main.show();
+    let _ = main.set_focus();
+    let _ = main.emit("navigate-library", ());
+    main.is_visible().unwrap_or(false)
+}
+
 #[cfg(target_os = "macos")]
 fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppState>) -> Result<u16, String> {
     let secret = coperceive_desktop::token::generate_secure_token().map_err(|e| e.to_string())?;
     let mut cfg = ControllerConfig::new(0, secret.clone(), None);
     let handle_eval = app_handle.clone();
-    cfg.eval_dispatcher = Some(Arc::new(move |script: String| {
+    cfg.eval_dispatcher = Some(Arc::new(move |script: String, target: Option<String>| {
         use tauri::Manager;
-        if let Some(w) = handle_eval
-            .get_webview_window("viewer")
-            .or_else(|| handle_eval.get_webview_window("main"))
-        {
+        let window = match target.as_deref() {
+            Some(label) => handle_eval.get_webview_window(label),
+            None => handle_eval
+                .get_webview_window("viewer")
+                .or_else(|| handle_eval.get_webview_window("main")),
+        };
+        if let Some(w) = window {
             w.eval(&script).map_err(|e| format!("w.eval failed: {e}"))
         } else {
             Err("No webview window found (neither 'viewer' nor 'main')".into())
         }
     }));
+    let handle_library = app_handle.clone();
+    cfg.library_shower = Some(Arc::new(move || show_library_window(&handle_library)));
     let handle_close = app_handle.clone();
     cfg.window_closer = Some(Arc::new(move |label: &str| {
         use tauri::Manager;
@@ -3557,6 +3581,8 @@ fn main() {
                     use tauri::Emitter;
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.emit("navigate-get-data", ());
+                        // The main window is hidden while a viewer is open.
+                        let _ = main.show();
                         let _ = main.set_focus();
                     }
                 }

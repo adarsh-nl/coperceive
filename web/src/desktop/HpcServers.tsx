@@ -35,6 +35,7 @@ import {
   type ServerEntry,
   splitFolderList,
 } from "./hpc";
+import { errorText } from "./errors";
 
 const card = {
   backgroundColor: "rgba(28, 28, 30, 0.85)",
@@ -129,7 +130,7 @@ export default function HpcServers() {
       setProfiles(loadedProfiles);
       setHosts(loadedHosts);
     } catch (e) {
-      setLoadError(e instanceof Error ? e.message : String(e));
+      setLoadError(errorText(e));
     } finally {
       setLoading(false);
     }
@@ -221,7 +222,7 @@ export default function HpcServers() {
         setCardReports((current) => ({ ...current, [entry.id]: result }));
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     } finally {
       setBusy(null);
     }
@@ -251,7 +252,7 @@ export default function HpcServers() {
       setDraft(saved);
       setNote(`Saved “${saved.profile.name}”.`);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
       setNote("");
       requestAnimationFrame(() => formErrorRef.current?.scrollIntoView({ block: "center" }));
     } finally {
@@ -268,7 +269,7 @@ export default function HpcServers() {
       setProfiles(await listServerProfiles());
       if (draft?.id === entry.id) setDraft(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : String(e));
+      setError(errorText(e));
     }
   };
 
