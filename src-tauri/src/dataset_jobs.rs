@@ -86,11 +86,24 @@ fn actor_argv(profile: &ServerProfile, request: &DatasetPrepareRequest, cache: &
         request.adapter.clone(),
         "--raw-root".to_string(),
         request.raw_root.clone(),
+    ];
+    // Without the split a root holding several is refused (it used to prepare
+    // the first one present, e.g. train when the user chose test).
+    if let Some(split) = request
+        .split
+        .as_deref()
+        .map(str::trim)
+        .filter(|split| !split.is_empty())
+    {
+        args.push("--split".to_string());
+        args.push(split.to_string());
+    }
+    args.extend([
         "--cache".to_string(),
         cache.to_string(),
         "--workers".to_string(),
         request.workers.to_string(),
-    ];
+    ]);
     if let Some(scenes) = &request.scenes {
         args.push("--scenes".to_string());
         args.push(scenes.join(","));
@@ -323,5 +336,19 @@ mod tests {
         );
         assert!(argv.contains(&"dataset".to_string()));
         assert!(argv.contains(&"--all".to_string()) || argv.contains(&"--scenes".to_string()));
+    }
+
+    #[test]
+    fn the_prepare_argv_names_the_split() {
+        let entry = entry();
+        let mut request = request();
+        request.raw_root = "/data/opv2v".to_string();
+        let argv = actor_argv(&entry.profile, &request, "/data/results/cache/test");
+        let at = argv.iter().position(|arg| arg == "--split").expect("--split");
+        assert_eq!(argv[at + 1], "test");
+        assert_eq!(argv[at - 1], "/data/opv2v");
+        request.split = None;
+        let argv = actor_argv(&entry.profile, &request, "/data/results/cache/all");
+        assert!(!argv.contains(&"--split".to_string()), "{argv:?}");
     }
 }

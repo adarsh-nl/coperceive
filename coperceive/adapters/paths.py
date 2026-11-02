@@ -8,6 +8,7 @@ values). There is no regex. Every resolved path has to stay under the raw root.
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -106,10 +107,8 @@ class Template:
         want_dir = self.text.endswith("/")
         found: list[dict[str, object]] = []
         base = confine(root, ".")
-        for path in sorted(base.glob(pattern.rstrip("/"))):
-            if want_dir != path.is_dir():
-                continue
-            relative = path.relative_to(base).as_posix() + ("/" if want_dir else "")
+        for relative in _matches(base, pattern.rstrip("/"), want_dir):
+            relative += "/" if want_dir else ""
             if not (relative.startswith(prefix) and relative.endswith(suffix)):
                 continue
             raw = relative[len(prefix) : len(relative) - len(suffix)]
@@ -127,6 +126,37 @@ class Template:
                 continue
             found.append({free: value})
         return tuple(found)
+
+
+def _matches(base: Path, pattern: str, want_dir: bool) -> list[str]:
+    """Relative paths under ``base`` matching ``pattern`` (one ``*``), sorted.
+
+    When the ``*`` is in the last component, this is one directory listing whose
+    entry types come from the listing itself: no stat per file. Real OPV2V
+    agents hold thousands of frame files, and a stat each was most of the time
+    detect and index spent on a cluster filesystem.
+    """
+    folder, _, name = pattern.rpartition("/")
+    if "*" not in name or "*" in folder:
+        return [
+            path.relative_to(base).as_posix()
+            for path in sorted(base.glob(pattern))
+            if path.is_dir() == want_dir
+        ]
+    head, _, tail = name.partition("*")
+    try:
+        with os.scandir(base / folder if folder else base) as entries:
+            names = sorted(
+                entry.name
+                for entry in entries
+                if len(entry.name) >= len(head) + len(tail)
+                and entry.name.startswith(head)
+                and entry.name.endswith(tail)
+                and entry.is_dir() == want_dir
+            )
+    except OSError:
+        return []
+    return [f"{folder}/{entry}" if folder else entry for entry in names]
 
 
 def _expand_with_marker(template: Template, known: Mapping[str, object], free: str) -> str:

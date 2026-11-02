@@ -89,34 +89,61 @@ def _split_for(adapter: str, path: Path) -> str | None:
     return present[0] if present else None
 
 
-def _raw_and_split(adapter: str, raw_root: Path) -> tuple[Path, str | None]:
+def _raw_and_split(
+    adapter: str, raw_root: Path, split: str | None = None
+) -> tuple[Path, str | None]:
+    """The dataset root and the one split to work on. Never guesses between splits."""
     if adapter not in _SPLITS:
+        if split:
+            raise DatasetError(f"{adapter} has no splits; leave the split out")
         return raw_root, None
     allowed = _SPLITS[adapter]
+    if split is not None and split not in allowed:
+        raise DatasetError(
+            f"{split!r} is not a {adapter} split; choose one of: {', '.join(allowed)}"
+        )
     if raw_root.name in allowed and raw_root.is_dir():
+        if split is not None and split != raw_root.name:
+            raise DatasetError(f"{raw_root} is the {raw_root.name} split, not {split}")
         return raw_root.parent, raw_root.name
     present = [name for name in allowed if (raw_root / name).is_dir()]
     if not present:
         raise DatasetError(f"no split directory ({', '.join(allowed)}) under {raw_root}")
+    if split is not None:
+        if split not in present:
+            raise DatasetError(f"no {split} split under {raw_root}; it has: {', '.join(present)}")
+        return raw_root, split
+    if len(present) > 1:
+        raise DatasetError(f"{raw_root} holds several splits ({', '.join(present)}); choose one")
     return raw_root, present[0]
 
 
-def _is_v2xset(raw_root: Path, split: str, max_scenes: int) -> bool:
-    try:
-        with os.scandir(raw_root / split) as scenes:
-            for index, scene in enumerate(scenes):
-                if index >= max_scenes:
-                    break
-                if not scene.is_dir(follow_symlinks=False):
-                    continue
-                try:
-                    with os.scandir(scene.path) as agents:
-                        if any(agent.name == "-1" and agent.is_dir() for agent in agents):
-                            return True
-                except OSError:
-                    continue
-    except OSError:
-        return False
+# Detection looks at this many scenes' agent folders at most; it never lists frames.
+_DETECT_PROBE_SCENES = 8
+
+
+def _scene_dirs(split_dir: Path, limit: int) -> list[str]:
+    """Scene directory names in a split, from one listing (no per-entry stat)."""
+    names: list[str] = []
+    with os.scandir(split_dir) as entries:
+        for entry in entries:
+            if entry.name.startswith(".") or not entry.is_dir():
+                continue
+            names.append(entry.name)
+            if len(names) >= limit:
+                break
+    return sorted(names)
+
+
+def _is_v2xset(raw_root: Path, scenes: list[str], split: str) -> bool:
+    """V2XSet scenes carry a roadside unit as agent ``-1``; OPV2V's never do."""
+    for scene in scenes[:_DETECT_PROBE_SCENES]:
+        try:
+            with os.scandir(raw_root / split / scene) as agents:
+                if any(agent.name == "-1" and agent.is_dir() for agent in agents):
+                    return True
+        except OSError:
+            continue
     return False
 
 
@@ -197,11 +224,13 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
-def _directory_bytes(root: Path, *, max_entries: int) -> int:
+def _directory_bytes(root: Path, *, max_entries: int, deadline: float | None = None) -> int:
     total = 0
     seen = 0
     pending = [root]
     while pending and seen < max_entries:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         folder = pending.pop()
         try:
             with os.scandir(folder) as iterator:
@@ -443,6 +472,7 @@ def prepare_cluster_dataset(
     workers: int = 1,
     progress: Callable[[dict[str, Any]], None] | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    split: str | None = None,
 ) -> dict[str, Any]:
     """Prepare selected scenes in parallel, with per-scene atomic staging."""
     if adapter_name not in _BUILTIN:
@@ -451,7 +481,7 @@ def prepare_cluster_dataset(
     cache = _real(cache_dir)
     if not raw.is_dir():
         raise DatasetError(f"raw root is not a directory: {raw}")
-    raw, split = _raw_and_split(adapter_name, raw)
+    raw, split = _raw_and_split(adapter_name, raw, split)
     if _inside(cache, raw):
         raise DatasetError("the cache directory must not be inside the raw dataset root")
     params = _params_for(adapter_name, raw, split)
@@ -616,6 +646,7 @@ def detect_cluster_dataset(
         adapter_name = "griffin"
         raw_root = griffin
         split = None
+        scene_names: list[str] = []
     else:
         accepted = (*_SPLITS["opv2v"], *_SPLITS["v2xset"])
         if candidate.name in accepted and candidate.is_dir():
@@ -627,13 +658,23 @@ def detect_cluster_dataset(
                 return result
             raw_root = candidate
             split = present[0]
-        adapter_name = "v2xset" if _is_v2xset(raw_root, split, max_scenes) else "opv2v"
+        try:
+            scene_names = _scene_dirs(raw_root / split, max(1, max_scenes))
+        except OSError as exc:
+            result["reason"] = f"cannot list {raw_root / split}: {exc.strerror or exc}"
+            return result
+        adapter_name = "v2xset" if _is_v2xset(raw_root, scene_names, split) else "opv2v"
         if split not in _SPLITS[adapter_name]:
             adapter_name = "opv2v"
     params = _params_for(adapter_name, raw_root, split)
     try:
         adapter = resolve_adapter(adapter_name)
-        refs = adapter.scenes(raw_root, params)
+        if split is None:
+            scene_count = len(adapter.scenes(raw_root, params))
+        else:
+            # OPV2V/V2XSet: the split listing is the scene list. Listing every
+            # agent's frames here took ~30 s on a cluster filesystem; index does it.
+            scene_count = len(scene_names)
     except (RegistryError, SpecError, BuildError, OSError, ValueError) as exc:
         result["reason"] = str(exc)
         return result
@@ -644,7 +685,7 @@ def detect_cluster_dataset(
             "split": split,
             "params": params,
             "licence": _licence(adapter),
-            "scene_count": min(len(refs), max_scenes),
+            "scene_count": min(scene_count, max_scenes),
             "status": "ok",
             "reason": None,
         }
@@ -659,8 +700,9 @@ def index_cluster_dataset(
     max_scenes: int = DEFAULT_MAX_SCENES,
     max_entries: int = DEFAULT_MAX_ENTRIES,
     timeout_s: float = DEFAULT_TIMEOUT_S,
+    split: str | None = None,
 ) -> dict[str, Any]:
-    """Every scene of a raw tree, metadata only. Writes nothing."""
+    """Every scene of one split of a raw tree, metadata only. Writes nothing."""
     started = time.monotonic()
     deadline = started + max(1.0, timeout_s)
     if adapter_name not in _BUILTIN:
@@ -668,7 +710,7 @@ def index_cluster_dataset(
     raw = _real(raw_root)
     if not raw.is_dir():
         raise DatasetError(f"raw root is not a directory: {raw}")
-    raw, split = _raw_and_split(adapter_name, raw)
+    raw, split = _raw_and_split(adapter_name, raw, split)
     params = _params_for(adapter_name, raw, split)
     adapter = cast(ManifestAdapter, resolve_adapter(adapter_name))
     errors: list[str] = []
@@ -714,7 +756,11 @@ def index_cluster_dataset(
             estimated_cache_bytes += sizes.get(ref.scene_id, 0)
         else:
             scene_dir = raw / split / ref.scene_id if split else raw / ref.scene_id
-            estimated_cache_bytes += _directory_bytes(scene_dir, max_entries=50_000)
+            # Bounded by the same deadline: a truncated walk must not turn into
+            # an unbounded one per scene (index then ran far past --timeout).
+            estimated_cache_bytes += _directory_bytes(
+                scene_dir, max_entries=50_000, deadline=deadline
+            )
     return {
         "schema": INDEX_SCHEMA,
         "adapter": adapter_name,

@@ -23,7 +23,7 @@ const DETECT_TIMEOUT: Duration = Duration::from_secs(45);
 const INDEX_TIMEOUT: Duration = Duration::from_secs(120);
 pub const CAPABILITIES_SCHEMA: &str = "coperceive-capabilities-1";
 /// What the dataset commands need from the server's coperceive (see `coperceive capabilities`).
-pub const CLUSTER_DATASETS_CAPABILITY: &str = "cluster-datasets-2";
+pub const CLUSTER_DATASETS_CAPABILITY: &str = "cluster-datasets-3";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Where an update comes from when the install is not a git checkout.
 /// Switch to `@main` once cluster datasets are released there.
@@ -233,12 +233,15 @@ pub fn detect(
     )
 }
 
-/// List every scene of a raw dataset. Metadata only; writes nothing.
+/// List every scene of one split of a raw dataset. Metadata only; writes
+/// nothing. `split` is the one `detect` returned; without it a root holding
+/// several splits is refused by the server rather than guessed.
 pub fn index(
     runner: &dyn RemoteRunner,
     profile: &ServerProfile,
     adapter: &str,
     raw_root: &str,
+    split: Option<&str>,
 ) -> Result<Value, String> {
     let adapter = adapter.trim();
     if !matches!(adapter, "griffin" | "opv2v" | "v2xset") {
@@ -247,20 +250,19 @@ pub fn index(
     if raw_root.trim().is_empty() {
         return Err("Choose the raw dataset root on the cluster.".to_string());
     }
-    run_document(
-        runner,
-        profile,
-        &[
-            "dataset".to_string(),
-            "index".to_string(),
-            "--adapter".to_string(),
-            adapter.to_string(),
-            "--raw-root".to_string(),
-            raw_root.trim().to_string(),
-        ],
-        INDEX_TIMEOUT,
-        INDEX_SCHEMA,
-    )
+    let mut args = vec![
+        "dataset".to_string(),
+        "index".to_string(),
+        "--adapter".to_string(),
+        adapter.to_string(),
+        "--raw-root".to_string(),
+        raw_root.trim().to_string(),
+    ];
+    if let Some(split) = split.map(str::trim).filter(|split| !split.is_empty()) {
+        args.push("--split".to_string());
+        args.push(split.to_string());
+    }
+    run_document(runner, profile, &args, INDEX_TIMEOUT, INDEX_SCHEMA)
 }
 
 #[cfg(test)]
@@ -344,6 +346,7 @@ mod tests {
             &profile(),
             "griffin",
             "/data/raw griffin; touch /tmp/x",
+            None,
         )
         .expect("index");
         let calls = runner.calls.lock().unwrap();
@@ -353,12 +356,29 @@ mod tests {
             "{}",
             calls[0]
         );
+        assert!(!calls[0].contains("--split"), "{}", calls[0]);
+    }
+
+    #[test]
+    fn index_passes_the_split_quoted() {
+        let runner = FakeRunner::new(
+            r#"{"schema":"coperceive-cluster-index-1","scene_count":0,"scenes":[]}"#,
+        );
+        index(&runner, &profile(), "opv2v", "/data/opv2v", Some("test; id")).expect("index");
+        index(&runner, &profile(), "opv2v", "/data/opv2v", Some("  ")).expect("index");
+        let calls = runner.calls.lock().unwrap();
+        assert!(
+            calls[0].ends_with("--raw-root /data/opv2v --split 'test; id'"),
+            "{}",
+            calls[0]
+        );
+        assert!(!calls[1].contains("--split"), "{}", calls[1]);
     }
 
     #[test]
     fn an_unknown_adapter_is_refused_locally() {
         let runner = FakeRunner::new("{}");
-        assert!(index(&runner, &profile(), "foo", "/data").is_err());
+        assert!(index(&runner, &profile(), "foo", "/data", None).is_err());
         assert!(runner.calls.lock().unwrap().is_empty());
     }
 
@@ -420,7 +440,7 @@ mod tests {
         assert_eq!(
             error,
             "coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, \
-             which has no capabilities command, need a build with cluster-datasets-2). Update it \
+             which has no capabilities command, need a build with cluster-datasets-3). Update it \
              with: git -C /home/u/coperceive pull --ff-only && /home/u/venv/bin/python -m pip \
              install -e /home/u/coperceive --no-deps"
         );
@@ -438,11 +458,11 @@ mod tests {
     #[test]
     fn a_build_without_the_capability_is_too_old_and_not_a_checkout_gets_pip() {
         let runner = old_cli(
-            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":[]}"#,
+            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":["cluster-datasets-2"]}"#,
         );
-        let error = index(&runner, &profile(), "opv2v", "/data/opv2v").expect_err("too old");
+        let error = index(&runner, &profile(), "opv2v", "/data/opv2v", Some("test")).expect_err("too old");
         assert!(
-            error.contains("(found coperceive 0.1.0 without cluster-datasets-2, need"),
+            error.contains("(found coperceive 0.1.0 without cluster-datasets-3, need"),
             "{error}"
         );
         assert!(
@@ -457,14 +477,14 @@ mod tests {
     #[test]
     fn a_supported_build_keeps_the_original_error() {
         let mut runner = old_cli(
-            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":["cluster-datasets-2"]}"#,
+            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":["cluster-datasets-2","cluster-datasets-3"]}"#,
         );
         runner.command = CommandResult {
             success: false,
             stdout: r#"{"schema":"coperceive-cluster-index-1","status":"error","error":"raw root is not a directory: /x"}"#.to_string(),
             stderr: String::new(),
         };
-        let error = index(&runner, &profile(), "opv2v", "/x").expect_err("error");
+        let error = index(&runner, &profile(), "opv2v", "/x", None).expect_err("error");
         assert_eq!(error, "raw root is not a directory: /x");
         assert_eq!(
             parse_capability_probe(&profile(), &runner.probe),

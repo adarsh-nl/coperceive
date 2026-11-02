@@ -17,6 +17,7 @@ import {
   canPrepareWholeDataset,
   indexingLabel,
   splitErrorText,
+  formatIndexHeader,
   datasetIndex,
   datasetOpen,
   datasetPrepare,
@@ -217,7 +218,7 @@ export default function ClusterDatasetView({
     const adapter = dataset.adapter || "opv2v";
     const rawRoot = dataset.raw_root || dataset.path;
 
-    datasetIndex(profile.id, adapter, rawRoot)
+    datasetIndex(profile.id, adapter, rawRoot, dataset.split)
       .then((res) => {
         if (!active) return;
         setIndexDoc(res);
@@ -458,7 +459,7 @@ export default function ClusterDatasetView({
             ← Back to folders
           </button>
           <h3 style={{ margin: 0, fontSize: "1.1rem", color: "#f5f5f7" }}>
-            {dataset.adapter ? dataset.adapter.toUpperCase() : "Dataset"} · {dataset.split ? `${dataset.split} · ` : ""}{dataset.scene_count} scenes
+            {formatIndexHeader(indexDoc, dataset.adapter)}
           </h3>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
@@ -542,7 +543,7 @@ export default function ClusterDatasetView({
       {showPrepareModal ? (
         <div style={{ marginTop: "0.75rem", padding: "1rem", borderRadius: "8px", border: "1px solid #1f6feb", backgroundColor: "rgba(31, 111, 235, 0.12)" }}>
           <h4 style={{ margin: "0 0 0.35rem", color: "#f5f5f7", fontSize: "0.95rem" }}>
-            Prepare whole dataset ({dataset.scene_count} scenes)
+            Prepare whole dataset ({indexDoc?.scene_count ?? 0} scenes)
           </h4>
           <p style={{ margin: "0 0 0.5rem", fontSize: "0.78rem", color: "#8b949e" }}>
             Ingest all remaining raw scenes into the server results cache as schema-1 scenes. The job runs on CPU compute nodes.
