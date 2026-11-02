@@ -32,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     schema = sub.add_parser("schema", help="Print the on-disk schema version.")
     schema.set_defaults(func=_schema)
 
+    capabilities = sub.add_parser(
+        "capabilities", help="Print what this build supports, as JSON (for the desktop app)."
+    )
+    capabilities.set_defaults(func=_capabilities)
+
     serve = sub.add_parser("serve", help="Serve the local web app.")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8731)
@@ -312,12 +317,18 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--scenes", default=None, help="Comma-separated scene ids.")
     prepare_parser.add_argument("--all", action="store_true", help="Prepare every scene.")
     prepare_parser.add_argument("--workers", type=int, default=1)
+    prepare_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
     prepare_parser.set_defaults(func=_dataset_prepare)
 
     status_parser = dataset_sub.add_parser(
         "status", help="Per-scene states from a cache directory."
     )
     status_parser.add_argument("--cache", required=True)
+    status_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
     status_parser.set_defaults(func=_dataset_status)
 
     detect_parser = dataset_sub.add_parser(
@@ -325,6 +336,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     detect_parser.add_argument("--path", required=True, help="A raw dataset or split directory.")
     detect_parser.add_argument("--max-scenes", type=int, default=5000)
+    detect_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
     detect_parser.set_defaults(func=_dataset_detect)
 
     index_parser = dataset_sub.add_parser(
@@ -335,6 +349,9 @@ def build_parser() -> argparse.ArgumentParser:
     index_parser.add_argument("--max-scenes", type=int, default=5000)
     index_parser.add_argument("--max-entries", type=int, default=200000)
     index_parser.add_argument("--timeout", type=float, default=30.0)
+    index_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
     index_parser.set_defaults(func=_dataset_index)
 
     job_parser = dataset_sub.add_parser("download", help="Download and convert dataset preset.")
@@ -582,6 +599,40 @@ def _export_rerun(args: argparse.Namespace) -> None:
     print(f"samples {samples}")
 
 
+def _failure_line(exc: BaseException) -> str:
+    """One plain line for a failed dataset command: no traceback, no newlines."""
+    import yaml
+
+    from coperceive.adapters.readers.records import yaml_error_line
+
+    if isinstance(exc, OSError) and exc.filename:
+        reason = exc.strerror or type(exc).__name__
+        return f"could not read {exc.filename}: {reason}"
+    if isinstance(exc, yaml.YAMLError):
+        return f"could not read a YAML file: {yaml_error_line(exc)}"
+    text = " ".join(str(exc).split())
+    return text or type(exc).__name__
+
+
+def _dataset_failure(
+    args: argparse.Namespace, exc: BaseException, *, known: type[BaseException]
+) -> str:
+    """Print the one-line error to stderr (the traceback with --verbose) and return it."""
+    import traceback
+
+    import yaml
+
+    line = _failure_line(exc)
+    if not isinstance(exc, (known, ValueError, OSError, yaml.YAMLError)):
+        line = f"{type(exc).__name__}: {line}"
+    print(f"coperceive dataset {args.dataset_command}: {line}", file=sys.stderr)
+    if getattr(args, "verbose", False):
+        traceback.print_exception(exc, file=sys.stderr)
+    else:
+        print("Run again with --verbose for the full traceback.", file=sys.stderr)
+    return line
+
+
 def _dataset_prepare(args: argparse.Namespace) -> None:
     import json
 
@@ -603,13 +654,9 @@ def _dataset_prepare(args: argparse.Namespace) -> None:
             workers=max(1, args.workers),
             progress=progress,
         )
-    except (DatasetError, ValueError, OSError) as exc:
-        print(
-            json.dumps(
-                {"schema": "coperceive-cluster-scene-status-1", "error": str(exc)},
-                indent=2,
-            )
-        )
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        error = _dataset_failure(args, exc, known=DatasetError)
+        print(json.dumps({"schema": "coperceive-cluster-scene-status-1", "error": error}, indent=2))
         raise SystemExit(1) from None
     print(json.dumps(status, indent=2))
     if any(scene["state"] == "failed" for scene in status.get("scenes", [])):
@@ -623,13 +670,9 @@ def _dataset_status(args: argparse.Namespace) -> None:
 
     try:
         status = dataset_status_document(args.cache)
-    except (DatasetError, ValueError, OSError) as exc:
-        print(
-            json.dumps(
-                {"schema": "coperceive-cluster-scene-status-1", "error": str(exc)},
-                indent=2,
-            )
-        )
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        error = _dataset_failure(args, exc, known=DatasetError)
+        print(json.dumps({"schema": "coperceive-cluster-scene-status-1", "error": error}, indent=2))
         raise SystemExit(1) from None
     print(json.dumps(status, indent=2))
 
@@ -641,11 +684,11 @@ def _dataset_detect(args: argparse.Namespace) -> None:
 
     try:
         result = detect_cluster_dataset(args.path, max_scenes=args.max_scenes)
-    except (DatasetError, ValueError, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
         result = {
             "schema": "coperceive-cluster-detect-1",
             "status": "error",
-            "reason": str(exc),
+            "reason": _dataset_failure(args, exc, known=DatasetError),
         }
         print(json.dumps(result, indent=2))
         raise SystemExit(1) from None
@@ -665,14 +708,11 @@ def _dataset_index(args: argparse.Namespace) -> None:
             max_entries=args.max_entries,
             timeout_s=args.timeout,
         )
-    except (DatasetError, ValueError, OSError) as exc:
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        error = _dataset_failure(args, exc, known=DatasetError)
         print(
             json.dumps(
-                {
-                    "schema": "coperceive-cluster-index-1",
-                    "status": "error",
-                    "error": str(exc),
-                },
+                {"schema": "coperceive-cluster-index-1", "status": "error", "error": error},
                 indent=2,
             )
         )
@@ -705,6 +745,29 @@ def _dataset_download(args: argparse.Namespace) -> None:
 
 def _schema(_args: argparse.Namespace) -> None:
     print(SCHEMA_VERSION)
+
+
+# The desktop app checks for these before it runs a cluster command; a build
+# without the `capabilities` command at all predates them.
+# cluster-datasets-2: dataset detect/index/prepare/status, numpy-tagged
+# OPV2V/V2XSet records, per-scene index errors.
+CAPABILITIES = ("cluster-datasets-2",)
+
+
+def _capabilities(_args: argparse.Namespace) -> None:
+    import importlib.metadata
+    import json
+
+    try:
+        version = importlib.metadata.version("coperceive")
+    except importlib.metadata.PackageNotFoundError:
+        version = __version__
+    document = {
+        "schema": "coperceive-capabilities-1",
+        "version": version,
+        "capabilities": list(CAPABILITIES),
+    }
+    print(json.dumps(document))
 
 
 def _download_griffin(args: argparse.Namespace) -> None:

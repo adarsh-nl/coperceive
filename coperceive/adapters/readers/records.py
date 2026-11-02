@@ -45,9 +45,25 @@ def read_json_record(path: Path) -> dict[str, object]:
 
 
 def read_yaml_record(path: Path) -> dict[str, object]:
+    """A dataset YAML record; numpy-tagged scalars (OPV2V/V2XSet) read as numbers."""
     import yaml
 
-    return _as_record(yaml.safe_load(path.read_text(encoding="utf-8")), path)
+    from coperceive.adapters.readers.numpy_yaml import load_dataset_yaml
+
+    try:
+        payload = load_dataset_yaml(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise FieldError(f"not readable YAML: {yaml_error_line(exc)}") from None
+    return _as_record(payload, path)
+
+
+def yaml_error_line(exc: Exception) -> str:
+    """One line for a PyYAML error: the problem and where it is."""
+    problem = getattr(exc, "problem", None) or str(exc).splitlines()[0]
+    mark = getattr(exc, "problem_mark", None)
+    if mark is not None:
+        return f"{problem} (line {mark.line + 1}, column {mark.column + 1})"
+    return str(problem)
 
 
 def read_json_table(path: Path) -> list[dict[str, object]]:

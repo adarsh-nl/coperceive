@@ -122,12 +122,20 @@ against them.
   above; the full cache is `<results_root>/<relative_path>`.
 - `duration_s` is cheap: `sample_count × adapter clock scale`, not measured from
   media. It is `null` when the adapter has no scale.
-- `sensors` is a coarse summary (`sensors` = declared sensors, `camera_samples`
-  = image records, `lidar_samples` = point-cloud records) from the adapter
-  check.
-- `errors` are per-scene check errors, e.g.
+- `agent_count`, `sample_count` and `sensors` are read cheaply: agents and
+  their samples from directory listings, the sensors from each agent's first
+  calibration record (one file per agent), `lidar_samples` from the listing of
+  the point-cloud folders. `sensors` = declared sensors, `camera_samples` =
+  image records (cameras × samples, for every sample), `lidar_samples` =
+  point-cloud files present. No pose, box or point data is read.
+- `errors` are per-scene errors, one line each, e.g.
   `"scene_0001: vehicle-side/pose/000000.json: missing"`; they do not abort the
-  index.
+  index, and a scene with an error is not listed in `scenes`.
+- OPV2V/V2XSet records may hold numpy-tagged scalars
+  (`!!python/object/apply:numpy.core.multiarray.scalar`, `numpy.dtype`,
+  `numpy.core.multiarray._reconstruct`); they are read as plain numbers by a
+  `SafeLoader` subclass that rebuilds them from the dtype descriptor and bytes.
+  Every other `python/*` tag is refused.
 - `truncated` means `--max-scenes` was hit; `scene_count` is the returned count.
 
 ## `dataset.json` cache index — `coperceive-cluster-dataset-cache-1`
@@ -226,6 +234,23 @@ scene to its Slurm job.
   job walltime must stay at or below four hours (the default is four hours).
 - Nothing derived from licensed/unknown raw data is written to this repository;
   fixtures are synthetic.
+- A failed `dataset detect|index|prepare|status` prints its JSON document with a
+  one-line `error`/`reason` (e.g. `could not read <file>: <reason>`) and the same
+  line on stderr; `--verbose` adds the traceback.
+
+## Server support check — `coperceive capabilities`
+
+`coperceive capabilities` prints
+`{"schema": "coperceive-capabilities-1", "version": "0.1.0", "capabilities": ["cluster-datasets-2"]}`.
+`cluster-datasets-2` means: these commands, numpy-tagged records and
+per-scene index errors. When a desktop dataset command fails, and on Test
+connection (row `cluster-datasets`), the app runs this command through the
+saved argv. A build without it, or without `cluster-datasets-2`, gets one
+message: `coperceive on this server is too old for cluster datasets (found X,
+need a build with cluster-datasets-2). Update it with: <command>`, where the
+command is `git -C <checkout> pull --ff-only && <python> -m pip install -e
+<checkout> --no-deps` for a git checkout, else a `pip install --upgrade` from
+the repository.
 
 ## Desktop command names
 

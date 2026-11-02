@@ -4,6 +4,10 @@
 //! Both are read-only and metadata-only: they run the saved coperceive argv on
 //! the login node (`coperceive dataset detect|index`) and return its JSON. No
 //! scene data is read and nothing is written.
+//!
+//! When one of them fails, [`explain_failure`] asks the server's coperceive
+//! what it supports (`coperceive capabilities`), so an older build gets "too old,
+//! update it with …" instead of raw argparse output.
 
 use std::time::Duration;
 
@@ -11,14 +15,165 @@ use serde_json::Value;
 
 use crate::hpc::{coperceive_argv, ServerProfile};
 use crate::slurm_adapter::RemoteRunner;
-use crate::ssh::quote_remote_argv;
+use crate::ssh::{quote_remote_argv, shell_quote};
 
 pub const DETECT_SCHEMA: &str = "coperceive-cluster-detect-1";
 pub const INDEX_SCHEMA: &str = "coperceive-cluster-index-1";
 const DETECT_TIMEOUT: Duration = Duration::from_secs(45);
 const INDEX_TIMEOUT: Duration = Duration::from_secs(120);
+pub const CAPABILITIES_SCHEMA: &str = "coperceive-capabilities-1";
+/// What the dataset commands need from the server's coperceive (see `coperceive capabilities`).
+pub const CLUSTER_DATASETS_CAPABILITY: &str = "cluster-datasets-2";
+const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
+/// Where an update comes from when the install is not a git checkout.
+/// Switch to `@main` once cluster datasets are released there.
+const COPERCEIVE_SOURCE: &str = "git+https://github.com/adarsh-nl/coperceive@feat/m2-import";
+const MISSING_MARKER: &str = "coperceive-capabilities-missing";
+
+/// What the server's coperceive says it supports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RemoteSupport {
+    Supported { version: String },
+    TooOld { found: String, update: String },
+    /// The probe itself did not answer (ssh trouble, no coperceive at all).
+    Unknown,
+}
+
+impl RemoteSupport {
+    /// The user-facing sentence for a build that is too old, if it is.
+    pub fn too_old_message(&self) -> Option<String> {
+        match self {
+            RemoteSupport::TooOld { found, update } => Some(format!(
+                "coperceive on this server is too old for cluster datasets (found {found}, need \
+                 a build with {CLUSTER_DATASETS_CAPABILITY}). Update it with: {update}"
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// One fixed read-only script: `capabilities`, or for an older build its
+/// `--version` line and, for `<python> -m coperceive`, where it is installed.
+pub fn capability_probe_command(profile: &ServerProfile) -> String {
+    let argv = coperceive_argv(profile, &[]);
+    let quoted = argv.iter().map(|part| shell_quote(part)).collect::<Vec<_>>().join(" ");
+    format!(
+        r#"sh -c '# coperceive-check:capabilities
+"$@" capabilities 2>/dev/null && exit 0
+echo {MISSING_MARKER}
+"$@" --version 2>&1 | head -n 1
+if [ "$2" = "-m" ]; then
+  "$1" -c "import coperceive, os; d = os.path.dirname(os.path.dirname(os.path.abspath(coperceive.__file__))); print(\"LOCATION=\" + d); print(\"GIT=1\" if os.path.isdir(os.path.join(d, \".git\")) else \"GIT=0\")" 2>/dev/null
+fi
+exit 0' sh {quoted}"#
+    )
+}
+
+/// Read the probe's output. Pure, so the wording is unit-tested.
+pub fn parse_capability_probe(profile: &ServerProfile, stdout: &str) -> RemoteSupport {
+    let lines: Vec<&str> = stdout.lines().map(str::trim).filter(|l| !l.is_empty()).collect();
+    for line in &lines {
+        let Ok(document) = serde_json::from_str::<Value>(line) else {
+            continue;
+        };
+        if document.get("schema").and_then(Value::as_str) != Some(CAPABILITIES_SCHEMA) {
+            continue;
+        }
+        let version = document
+            .get("version")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown")
+            .to_string();
+        let supported = document
+            .get("capabilities")
+            .and_then(Value::as_array)
+            .is_some_and(|list| {
+                list.iter().any(|item| item.as_str() == Some(CLUSTER_DATASETS_CAPABILITY))
+            });
+        if supported {
+            return RemoteSupport::Supported { version };
+        }
+        return RemoteSupport::TooOld {
+            found: format!("coperceive {version} without {CLUSTER_DATASETS_CAPABILITY}"),
+            update: update_command(profile, None),
+        };
+    }
+    let Some(marker) = lines.iter().position(|line| *line == MISSING_MARKER) else {
+        return RemoteSupport::Unknown;
+    };
+    let rest = &lines[marker + 1..];
+    let version_line = rest
+        .iter()
+        .find(|line| !line.starts_with("LOCATION=") && !line.starts_with("GIT="))
+        .copied()
+        .unwrap_or("");
+    let found = if version_line.starts_with("coperceive ")
+        && !version_line.contains("error")
+        && version_line.len() <= 80
+    {
+        format!("{version_line}, which has no capabilities command")
+    } else {
+        "a build without the capabilities command".to_string()
+    };
+    let location = rest
+        .iter()
+        .find_map(|line| line.strip_prefix("LOCATION="))
+        .filter(|_| rest.contains(&"GIT=1"));
+    RemoteSupport::TooOld {
+        found,
+        update: update_command(profile, location),
+    }
+}
+
+/// The exact command to update the server's coperceive, for the message.
+fn update_command(profile: &ServerProfile, git_checkout: Option<&str>) -> String {
+    let argv = coperceive_argv(profile, &[]);
+    let python_m = argv.len() >= 3 && argv[1] == "-m";
+    match (git_checkout, python_m) {
+        (Some(dir), true) => format!(
+            "git -C {dir} pull --ff-only && {python} -m pip install -e {dir} --no-deps",
+            dir = shell_quote(dir),
+            python = shell_quote(&argv[0]),
+        ),
+        (_, true) => format!(
+            "{python} -m pip install --upgrade {source}",
+            python = shell_quote(&argv[0]),
+            source = shell_quote(COPERCEIVE_SOURCE),
+        ),
+        _ => format!(
+            "pip install --upgrade {source} (in the environment that provides {command})",
+            source = shell_quote(COPERCEIVE_SOURCE),
+            command = argv.first().map(String::as_str).unwrap_or("coperceive"),
+        ),
+    }
+}
+
+/// Ask the server's coperceive what it supports.
+pub fn probe_support(runner: &dyn RemoteRunner, profile: &ServerProfile) -> RemoteSupport {
+    match runner.run(&capability_probe_command(profile), PROBE_TIMEOUT, None) {
+        Ok(result) => parse_capability_probe(profile, &result.stdout),
+        Err(_) => RemoteSupport::Unknown,
+    }
+}
+
+/// A failed dataset command's error, replaced by "too old, update with …" when
+/// the server's coperceive cannot run cluster datasets at all.
+pub fn explain_failure(runner: &dyn RemoteRunner, profile: &ServerProfile, error: String) -> String {
+    probe_support(runner, profile).too_old_message().unwrap_or(error)
+}
 
 fn run_document(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    args: &[String],
+    timeout: Duration,
+    expected_schema: &str,
+) -> Result<Value, String> {
+    run_document_once(runner, profile, args, timeout, expected_schema)
+        .map_err(|error| explain_failure(runner, profile, error))
+}
+
+fn run_document_once(
     runner: &dyn RemoteRunner,
     profile: &ServerProfile,
     args: &[String],
@@ -213,5 +368,124 @@ mod tests {
         runner.success = false;
         let error = detect(&runner, &profile(), "/data/nope").expect_err("error");
         assert!(error.contains("Dataset command failed"), "{error}");
+    }
+
+    /// Answers the capability probe and the dataset command separately.
+    struct ScriptedRunner {
+        calls: Mutex<Vec<String>>,
+        probe: String,
+        command: CommandResult,
+    }
+
+    impl RemoteRunner for ScriptedRunner {
+        fn run(
+            &self,
+            remote_cmd: &str,
+            _timeout: Duration,
+            _stdin: Option<&str>,
+        ) -> Result<CommandResult, String> {
+            self.calls.lock().unwrap().push(remote_cmd.to_string());
+            if remote_cmd.contains("coperceive-check:capabilities") {
+                return Ok(CommandResult {
+                    success: true,
+                    stdout: self.probe.clone(),
+                    stderr: String::new(),
+                });
+            }
+            Ok(self.command.clone())
+        }
+    }
+
+    fn old_cli(probe: &str) -> ScriptedRunner {
+        ScriptedRunner {
+            calls: Mutex::new(Vec::new()),
+            probe: probe.to_string(),
+            command: CommandResult {
+                success: false,
+                stdout: String::new(),
+                stderr: "usage: coperceive dataset [-h] {catalog,dry-run,download} ...\n\
+                         coperceive dataset: error: argument dataset_command: invalid choice: \
+                         'detect' (choose from 'catalog', 'dry-run', 'download')"
+                    .to_string(),
+            },
+        }
+    }
+
+    #[test]
+    fn an_old_cli_is_reported_as_too_old_with_the_update_command() {
+        let runner = old_cli(
+            "coperceive-capabilities-missing\ncoperceive 0.0.0\nLOCATION=/home/u/coperceive\nGIT=1\n",
+        );
+        let error = detect(&runner, &profile(), "/data/opv2v/test").expect_err("too old");
+        assert_eq!(
+            error,
+            "coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, \
+             which has no capabilities command, need a build with cluster-datasets-2). Update it \
+             with: git -C /home/u/coperceive pull --ff-only && /home/u/venv/bin/python -m pip \
+             install -e /home/u/coperceive --no-deps"
+        );
+        assert!(!error.contains("invalid choice"), "{error}");
+        let calls = runner.calls.lock().unwrap();
+        assert_eq!(calls.len(), 2, "{calls:?}");
+        assert!(calls[1].starts_with("sh -c '# coperceive-check:capabilities"), "{}", calls[1]);
+        assert!(
+            calls[1].ends_with("' sh /home/u/venv/bin/python -m coperceive"),
+            "{}",
+            calls[1]
+        );
+    }
+
+    #[test]
+    fn a_build_without_the_capability_is_too_old_and_not_a_checkout_gets_pip() {
+        let runner = old_cli(
+            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":[]}"#,
+        );
+        let error = index(&runner, &profile(), "opv2v", "/data/opv2v").expect_err("too old");
+        assert!(
+            error.contains("(found coperceive 0.1.0 without cluster-datasets-2, need"),
+            "{error}"
+        );
+        assert!(
+            error.ends_with(
+                "Update it with: /home/u/venv/bin/python -m pip install --upgrade \
+                 git+https://github.com/adarsh-nl/coperceive@feat/m2-import"
+            ),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn a_supported_build_keeps_the_original_error() {
+        let mut runner = old_cli(
+            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":["cluster-datasets-2"]}"#,
+        );
+        runner.command = CommandResult {
+            success: false,
+            stdout: r#"{"schema":"coperceive-cluster-index-1","status":"error","error":"raw root is not a directory: /x"}"#.to_string(),
+            stderr: String::new(),
+        };
+        let error = index(&runner, &profile(), "opv2v", "/x").expect_err("error");
+        assert_eq!(error, "raw root is not a directory: /x");
+        assert_eq!(
+            parse_capability_probe(&profile(), &runner.probe),
+            RemoteSupport::Supported { version: "0.1.0".to_string() }
+        );
+    }
+
+    #[test]
+    fn an_unanswered_probe_is_unknown_and_a_bare_command_gets_plain_pip() {
+        assert_eq!(parse_capability_probe(&profile(), ""), RemoteSupport::Unknown);
+        let mut bare = profile();
+        bare.environment.coperceive_command = vec!["coperceive".to_string()];
+        let support = parse_capability_probe(
+            &bare,
+            "coperceive-capabilities-missing\nusage: coperceive [-h]\n",
+        );
+        let message = support.too_old_message().expect("too old");
+        assert!(message.contains("(found a build without the capabilities command,"), "{message}");
+        assert!(
+            message.contains("pip install --upgrade git+https://github.com/adarsh-nl/coperceive@feat/m2-import (in the environment that provides coperceive)"),
+            "{message}"
+        );
     }
 }

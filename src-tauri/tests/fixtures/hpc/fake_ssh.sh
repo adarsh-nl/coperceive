@@ -212,6 +212,15 @@ EOF
         esac
         exit 0
         ;;
+    *"coperceive-check:capabilities"*)
+        case "${all_args}" in
+            *cluster-a*|*cluster-b*|*cluster-save*)
+                echo '{"schema": "coperceive-capabilities-1", "version": "0.1.0", "capabilities": ["cluster-datasets-2"]}'
+                ;;
+            *) exit 127 ;;
+        esac
+        exit 0
+        ;;
     *"coperceive-check:coperceive-version"*)
         case "${all_args}" in
             *cluster-a*) echo "coperceive 0.4.0" ;;

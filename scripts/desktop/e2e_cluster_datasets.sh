@@ -24,6 +24,9 @@ RAW="${TMP_DIR}/raw/opv2v"
 import json, sys
 from pathlib import Path
 root = Path(sys.argv[1]); split = "test"
+NUMPY_YAW = ("!!python/object/apply:numpy.core.multiarray.scalar [!!python/object/apply:numpy.dtype "
+             "{args: [f8, false, true], state: !!python/tuple [3, '<', null, null, null, -1, -1, 0]}, "
+             "!!binary 'AAAAAACAVkA=']")  # float64 90.0
 extrinsic = [[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]]
 intrinsic = [[335.6,0.0,400.0],[0.0,335.6,300.0],[0.0,0.0,1.0]]
 pcd_head = ("# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z rgb\n"
@@ -45,11 +48,16 @@ for scene in range(3):
                 "camera0": {"cords": [float(agent), float(frame), 1.9, 0.0, 90.0, 0.0],
                             "extrinsic": extrinsic, "intrinsic": intrinsic},
             }
-            (folder / f"{frame:06d}.yaml").write_text(json.dumps(record))
+            # Real OPV2V records carry numpy-tagged scalars (PyYAML's full dumper):
+            # write the yaw that way so the numpy-safe loader is on this path.
+            text = json.dumps(record).replace(", 90.0, 0.0]", ", " + NUMPY_YAW + ", 0.0]", 1)
+            assert NUMPY_YAW in text
+            (folder / f"{frame:06d}.yaml").write_text(text)
             (folder / f"{frame:06d}.pcd").write_text(pcd_head)
 PY
 BEFORE="$(find "${RAW}" -type f | sort | xargs sha256sum)"
-echo "Step CD-1 verified: synthetic OPV2V tree with 3 scenes"
+grep -q "numpy.core.multiarray.scalar" "${RAW}/test/scene_0000/641/000000.yaml" || { echo "fixture lost its numpy tag" >&2; exit 1; }
+echo "Step CD-1 verified: synthetic OPV2V tree with 3 scenes (records carry a numpy-tagged yaw, as real OPV2V does)"
 
 "${PYTHON}" -m coperceive.cli dataset detect --path "${RAW}/test" > "${TMP_DIR}/detect.json"
 "${PYTHON}" - "${TMP_DIR}/detect.json" <<'PY'

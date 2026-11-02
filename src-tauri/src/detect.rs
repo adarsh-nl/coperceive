@@ -829,6 +829,36 @@ pub fn detect_server(entry: &ServerEntry, opts: &DetectOptions) -> DetectionRepo
                     )
                 },
             );
+            // Cluster datasets need a newer build than plain job submission does.
+            let datasets_started = Instant::now();
+            let runner = crate::slurm_adapter::SshRunner::new(opts.ssh_bin.clone(), target.clone());
+            let support = crate::cluster_datasets::probe_support(&runner, &entry.profile);
+            match &support {
+                crate::cluster_datasets::RemoteSupport::Supported { .. } => record(
+                    &mut checks,
+                    "cluster-datasets",
+                    "Cluster datasets",
+                    datasets_started,
+                    true,
+                    "This coperceive can detect, index and prepare cluster datasets.",
+                    None,
+                ),
+                crate::cluster_datasets::RemoteSupport::TooOld { .. } => record(
+                    &mut checks,
+                    "cluster-datasets",
+                    "Cluster datasets",
+                    datasets_started,
+                    false,
+                    support.too_old_message().unwrap_or_default(),
+                    Some(
+                        "Run jobs still works; update coperceive on the server to use \
+                         cluster datasets."
+                            .to_string(),
+                    ),
+                ),
+                // No answer: nothing to report beyond the version line above.
+                crate::cluster_datasets::RemoteSupport::Unknown => {}
+            }
         } else {
             let detail = if let Some(interpreter) = configured_interpreter {
                 format!(
@@ -1209,6 +1239,12 @@ mod tests {
         );
         assert!(report.scratch.writable);
         assert_eq!(report.scratch.path.as_deref(), Some("/work/alice"));
+        let datasets = report
+            .checks
+            .iter()
+            .find(|check| check.name == "cluster-datasets")
+            .expect("Test connection reports cluster-dataset support");
+        assert!(datasets.ok, "{}", datasets.detail);
         assert!(report.total_ms < 60_000);
     }
 

@@ -2419,17 +2419,24 @@ async fn dataset_status(
             None,
         )?;
         let text = result.stdout.trim();
-        if let Ok(document) = serde_json::from_str::<serde_json::Value>(text) {
-            if document.get("schema").and_then(serde_json::Value::as_str)
-                == Some("coperceive-cluster-scene-status-1")
-            {
-                return Ok(document);
-            }
-            if let Some(error) = document.get("error").and_then(serde_json::Value::as_str) {
-                return Err(error.to_string());
-            }
-        }
-        Err("The cluster returned an unexpected dataset status document.".to_string())
+        let failure = match serde_json::from_str::<serde_json::Value>(text) {
+            // An error document also carries the status schema: check the error first.
+            Ok(document) => match document.get("error").and_then(serde_json::Value::as_str) {
+                Some(error) => error.to_string(),
+                None if document.get("schema").and_then(serde_json::Value::as_str)
+                    == Some("coperceive-cluster-scene-status-1") =>
+                {
+                    return Ok(document);
+                }
+                None => "The cluster returned an unexpected dataset status document.".to_string(),
+            },
+            Err(_) => "The cluster returned an unexpected dataset status document.".to_string(),
+        };
+        Err(coperceive_desktop::cluster_datasets::explain_failure(
+            &runner,
+            &entry.profile,
+            failure,
+        ))
     })
     .await
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
@@ -2480,6 +2487,7 @@ fn run_dataset_flow_probe(
         .map_err(|error| format!("Could not read the server fixture: {error}"))?;
     let entry: ServerEntry = serde_json::from_str(&server_text)
         .map_err(|error| format!("Server fixture is not valid: {error}"))?;
+    let connection_entry = entry.clone();
     let mut servers = server_profiles::load_servers();
     server_profiles::upsert_server(&mut servers, entry)?;
     let steps = payload
@@ -2510,6 +2518,12 @@ fn run_dataset_flow_probe(
         let state = app.state::<Arc<AppState>>();
         let outcome: Result<serde_json::Value, String> = (|| {
             match command.as_str() {
+                "test_server_connection" => {
+                    tauri::async_runtime::block_on(test_server_connection(connection_entry.clone()))
+                        .and_then(|report| {
+                            serde_json::to_value(report).map_err(|error| error.to_string())
+                        })
+                }
                 "dataset_detect" => tauri::async_runtime::block_on(dataset_detect(
                     arg_text(&args, "profileId")?,
                     arg_text(&args, "path")?,
