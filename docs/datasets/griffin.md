@@ -170,7 +170,7 @@ coperceive maps align --maps /path/maps --scenes /path/scenes
 
 ## Staging the val scenes for the viewer
 
-`scripts/griffin/stage_viewer.py` makes the 10 Griffin-25m `val` scenes viewable with lidar points, camera images and the CARLA town maps on a compute node, without copying the dataset. It writes only under `--scratch` (`/local/$SLURM_JOB_ID/coperceive-viewer` by default) and refuses a scratch under `/home`.
+`scripts/griffin/stage_viewer.py` makes the 10 Griffin-25m `val` scenes viewable with lidar points, camera images and the CARLA town maps on a compute node, without copying the dataset. It writes only under `--scratch`, or under the server profile's scratch template (`--scratch-template` / `COPERCEIVE_SLURM_SCRATCH_TEMPLATE`, for example `/scratch/$USER/$SLURM_JOB_ID`), and refuses a scratch under `/home`.
 
 | Staged | How | Size for the 10 val scenes |
 | --- | --- | --- |
