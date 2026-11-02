@@ -48,7 +48,7 @@ from coperceive.se3 import SE3
 from coperceive.transform import lookup_pose, sensor_frame, transform, world_frame
 from coperceive.viewdata import image_path, pose_times, world_points
 
-_FORMATS = frozenset({"png", "svg"})
+_FORMATS = frozenset({"png", "svg", "pdf"})
 _THEMES = frozenset({"dark", "light"})
 _COLOR_BY = frozenset({"agent", "class"})
 _BOX_STYLES = frozenset({"wire", "solid"})
@@ -525,9 +525,9 @@ def _file_format(dest: Path, fmt: str | None) -> str:
         suffix = dest.suffix.lower().lstrip(".")
         chosen = suffix if suffix in _FORMATS else ""
     if chosen not in _FORMATS:
-        raise PlotError("format must be png or svg")
+        raise PlotError("format must be png, svg, or pdf")
     if dest.suffix.lower() != f".{chosen}":
-        raise PlotError("the output path must end in .png or .svg and match the format")
+        raise PlotError("the output path must end in .png, .svg, or .pdf and match the format")
     return chosen
 
 
