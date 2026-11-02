@@ -4,6 +4,7 @@ import assert from "node:assert";
 import {
   canPrepareWholeDataset,
   formatDetectBannerTitle,
+  formatIndexHeader,
   indexingLabel,
   splitErrorText,
   formatDuration,
@@ -160,7 +161,7 @@ test("datasetDetect and datasetIndex provide typed cluster contract shapes", asy
   assert.strictEqual(detectRes.adapter, "opv2v");
   assert.strictEqual(detectRes.scene_count, 16);
 
-  const indexRes = await datasetIndex("profile-1", "opv2v", "/datasets/opv2v");
+  const indexRes = await datasetIndex("profile-1", "opv2v", "/datasets/opv2v", "test");
   assert.strictEqual(indexRes.schema, "coperceive-cluster-index-1");
   assert.strictEqual(indexRes.adapter, "opv2v");
   assert.strictEqual(indexRes.scene_count, 16);
@@ -438,4 +439,54 @@ test("a backend error splits into its first line and details", () => {
     details: "line 152",
   });
   assert.deepEqual(splitErrorText("one line"), { line: "one line", details: "" });
+});
+
+test("datasetIndex sends the detected split to the backend", async () => {
+  const globals = globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } };
+  const previous = globals.window;
+  globals.window = { __TAURI_INTERNALS__: {} };
+  const calls: Array<{ cmd: string; args: Record<string, unknown> | undefined }> = [];
+  _setInvokeForTesting(async <T,>(cmd: string, args?: Record<string, unknown>) => {
+    calls.push({ cmd, args });
+    return { schema: "coperceive-cluster-index-1", adapter: "opv2v", split: "test" } as T;
+  });
+  try {
+    await datasetIndex("profile-1", "opv2v", "/datasets/opencood/opv2v", "test");
+    await datasetIndex("profile-1", "griffin", "/datasets/griffin", null);
+  } finally {
+    _setInvokeForTesting(null);
+    globals.window = previous;
+  }
+  assert.deepStrictEqual(calls, [
+    {
+      cmd: "dataset_index",
+      args: { profileId: "profile-1", adapter: "opv2v", rawRoot: "/datasets/opencood/opv2v", split: "test" },
+    },
+    {
+      cmd: "dataset_index",
+      args: { profileId: "profile-1", adapter: "griffin", rawRoot: "/datasets/griffin", split: null },
+    },
+  ]);
+});
+
+test("formatIndexHeader titles the view from the index document, not detect", () => {
+  assert.strictEqual(formatIndexHeader(null, "opv2v"), "OPV2V");
+  assert.strictEqual(formatIndexHeader(null, null), "Dataset");
+  const index = {
+    schema: "coperceive-cluster-index-1",
+    adapter: "opv2v",
+    raw_root: "/datasets/opencood/opv2v",
+    split: "test",
+    params: { split: "test" },
+    licence: null,
+    fingerprint: { algorithm: "sha1-mtime-size-v1", digest: "abc", entries: 1, truncated: false },
+    cache: { relative_path: "coperceive-cache/opv2v/abc/test" },
+    scene_count: 16,
+    scenes: [],
+    errors: [],
+    truncated: false,
+    elapsed_ms: 1,
+  } as ClusterIndexDocument;
+  assert.strictEqual(formatIndexHeader(index, "opv2v"), "OPV2V · test · 16 scenes");
+  assert.strictEqual(formatIndexHeader({ ...index, split: null, scene_count: 1 }, "x"), "OPV2V · 1 scene");
 });

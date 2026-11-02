@@ -1978,6 +1978,7 @@ async fn dataset_index(
     profile_id: String,
     adapter: String,
     raw_root: String,
+    split: Option<String>,
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let entry = find_server_entry(&profile_id)?;
@@ -1987,6 +1988,7 @@ async fn dataset_index(
             &entry.profile,
             &adapter,
             &raw_root,
+            split.as_deref(),
         )
     })
     .await
@@ -2304,6 +2306,7 @@ async fn dataset_prepare(
             &entry.profile,
             &adapter,
             &raw_root,
+            split.as_deref(),
         )?;
         if let Some(split) = split.as_deref() {
             if index.get("split").and_then(serde_json::Value::as_str) != Some(split) {
@@ -2556,6 +2559,7 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "profileId")?,
                     arg_text(&args, "adapter")?,
                     arg_text(&args, "rawRoot")?,
+                    optional_text(&args, "split"),
                 )),
                 "dataset_prepare" => tauri::async_runtime::block_on(dataset_prepare(
                     state,

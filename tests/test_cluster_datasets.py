@@ -145,6 +145,119 @@ def test_index_reads_numpy_tagged_records_and_counts_every_sample(tmp_path: Path
         assert scene["sensors"] == {"sensors": 10, "camera_samples": 24, "lidar_samples": 6}
 
 
+def _two_splits(root: Path) -> Path:
+    """train has more scenes than test, as on the real cluster."""
+    write_opencood(
+        root,
+        "train",
+        [two_cav_scene(f"train_{index:04d}") for index in range(3)],
+    )
+    write_opencood(root, "test", [two_cav_scene("test_0001")])
+    return root
+
+
+def test_index_with_a_split_indexes_exactly_that_split(tmp_path: Path) -> None:
+    raw = _two_splits(tmp_path / "opv2v")
+    result = index_cluster_dataset("opv2v", raw, split="test")
+    assert result["split"] == "test"
+    assert result["raw_root"] == str(raw)
+    assert result["params"] == {"split": "test"}
+    assert [scene["scene_id"] for scene in result["scenes"]] == ["test_0001"]
+    assert result["cache"]["relative_path"].endswith("/test")
+    # The split directory itself, with or without a matching --split, is the same split.
+    assert index_cluster_dataset("opv2v", raw / "test")["scene_count"] == 1
+    assert index_cluster_dataset("opv2v", raw / "test", split="test")["scene_count"] == 1
+    assert index_cluster_dataset("opv2v", raw, split="train")["scene_count"] == 3
+
+
+def test_index_without_a_split_refuses_a_root_with_several(tmp_path: Path) -> None:
+    raw = _two_splits(tmp_path / "opv2v")
+    with pytest.raises(DatasetError) as caught:
+        index_cluster_dataset("opv2v", raw)
+    assert str(caught.value) == f"{raw} holds several splits (train, test); choose one"
+
+
+def test_index_refuses_a_split_that_does_not_match_the_path(tmp_path: Path) -> None:
+    raw = _two_splits(tmp_path / "opv2v")
+    with pytest.raises(DatasetError, match="is the test split, not train"):
+        index_cluster_dataset("opv2v", raw / "test", split="train")
+    with pytest.raises(DatasetError, match="no validate split under .*; it has: train, test"):
+        index_cluster_dataset("opv2v", raw, split="validate")
+    with pytest.raises(DatasetError, match="not a opv2v split"):
+        index_cluster_dataset("opv2v", raw, split="../train")
+
+
+def test_prepare_with_a_split_prepares_only_that_split(tmp_path: Path) -> None:
+    raw = _two_splits(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    result = prepare_cluster_dataset("opv2v", raw, cache, split="test")
+    assert {scene["scene_id"]: scene["state"] for scene in result["scenes"]} == {
+        "test_0001": "ready"
+    }
+    with pytest.raises(DatasetError, match="holds several splits"):
+        prepare_cluster_dataset("opv2v", raw, tmp_path / "other-cache")
+
+
+def test_cli_index_split_flag_and_the_several_splits_error(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from coperceive import cli
+
+    raw = _two_splits(tmp_path / "opv2v")
+    cli.main(["dataset", "index", "--adapter", "opv2v", "--raw-root", str(raw), "--split", "test"])
+    document = json.loads(capsys.readouterr().out)
+    assert document["split"] == "test" and document["scene_count"] == 1
+    with pytest.raises(SystemExit) as exited:
+        cli.main(["dataset", "index", "--adapter", "opv2v", "--raw-root", str(raw)])
+    assert exited.value.code == 1
+    captured = capsys.readouterr()
+    assert (
+        json.loads(captured.out)["error"] == f"{raw} holds several splits (train, test); choose one"
+    )
+    assert captured.err.splitlines()[0] == (
+        f"coperceive dataset index: {raw} holds several splits (train, test); choose one"
+    )
+
+
+def test_detect_counts_scenes_without_listing_frames(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coperceive.adapters import paths
+
+    raw = _two_splits(tmp_path / "opv2v")
+
+    def no_frames(*_args: object, **_kwargs: object) -> list[str]:
+        raise AssertionError("detect listed frames")
+
+    monkeypatch.setattr(paths, "_matches", no_frames)
+    result = detect_cluster_dataset(raw / "test")
+    assert (result["status"], result["split"], result["scene_count"]) == ("ok", "test", 1)
+    assert detect_cluster_dataset(raw / "train")["scene_count"] == 3
+
+
+def test_index_does_not_run_past_its_timeout_after_a_truncated_walk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import coperceive.cluster_datasets as module
+
+    raw = _two_splits(tmp_path / "opv2v")
+    scene = raw / "train" / "train_0000"
+    assert module._directory_bytes(scene, max_entries=50_000) > 0
+    calls = {"n": 0}
+
+    def clock() -> float:
+        # The first reading starts the index; every later one is past its deadline.
+        calls["n"] += 1
+        return 0.0 if calls["n"] == 1 else 1e9
+
+    monkeypatch.setattr(module.time, "monotonic", clock)
+    result = index_cluster_dataset("opv2v", raw, split="train", timeout_s=1.0)
+    assert result["fingerprint"]["truncated"] is True
+    assert result["scene_count"] == 3
+    # The fallback size walk stops at the deadline instead of walking each scene.
+    assert result["estimated_cache_bytes"] == 0
+
+
 def test_index_griffin_is_metadata_only(tmp_path: Path) -> None:
     raw = tmp_path / "griffin"
     write_griffin(raw, {"scene-a": [0, 1]})
@@ -403,4 +516,5 @@ def test_capabilities_lists_cluster_datasets(capsys: pytest.CaptureFixture[str])
     document = json.loads(capsys.readouterr().out)
     assert document["schema"] == "coperceive-capabilities-1"
     assert "cluster-datasets-2" in document["capabilities"]
+    assert "cluster-datasets-3" in document["capabilities"]
     assert document["version"]

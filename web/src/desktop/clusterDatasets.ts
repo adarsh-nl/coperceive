@@ -163,6 +163,27 @@ export function formatDetectBannerTitle(doc: ClusterDetectDocument): string {
   return parts.join(" · ");
 }
 
+/**
+ * The Dataset view header, e.g. "OPV2V · test · 16 scenes", from the index
+ * document: the split and count index actually used, not what detect guessed.
+ * Before the index answers it names only the adapter.
+ */
+export function formatIndexHeader(
+  index: ClusterIndexDocument | null,
+  adapter: string | null,
+): string {
+  if (!index) {
+    return adapter ? adapter.toUpperCase() : "Dataset";
+  }
+  const parts: string[] = [index.adapter.toUpperCase()];
+  if (index.split) {
+    parts.push(index.split);
+  }
+  const count = index.scene_count ?? 0;
+  parts.push(`${count} ${count === 1 ? "scene" : "scenes"}`);
+  return parts.join(" · ");
+}
+
 /** Format licence information plainly. */
 export function formatLicenceInfo(licence: ClusterDatasetLicence | null): {
   statusText: string;
@@ -326,29 +347,34 @@ export async function datasetDetect(
 }
 
 /**
- * Run read-only scene indexing on the server for a detected dataset.
- * Invokes Tauri command `dataset_index({ profileId, adapter, rawRoot })`.
+ * Run read-only scene indexing on the server for one split of a detected dataset.
+ * Invokes Tauri command `dataset_index({ profileId, adapter, rawRoot, split })`.
+ * Pass the `split` detect returned: without it a root holding several splits is
+ * refused instead of guessed.
  */
 export async function datasetIndex(
   profileId: string,
   adapter: string,
   rawRoot: string,
+  split: string | null,
 ): Promise<ClusterIndexDocument> {
   if (isTauriEnvironment()) {
     return await tauriInvoke<ClusterIndexDocument>("dataset_index", {
       profileId,
       adapter,
       rawRoot,
+      split,
     });
   }
 
   // Web / browser test fallback outside Tauri
+  const mockSplit = split ?? "test";
   return {
     schema: "coperceive-cluster-index-1",
     adapter,
     raw_root: rawRoot,
-    split: "test",
-    params: { split: "test" },
+    split: mockSplit,
+    params: { split: mockSplit },
     licence: {
       status: "unknown",
       spdx: null,
@@ -362,7 +388,7 @@ export async function datasetIndex(
       truncated: false,
     },
     cache: {
-      relative_path: `coperceive-cache/${adapter}/mockdigest/test`,
+      relative_path: `coperceive-cache/${adapter}/mockdigest/${mockSplit}`,
     },
     scene_count: 16,
     scenes: Array.from({ length: 16 }, (_, i) => ({

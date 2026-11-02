@@ -9,8 +9,10 @@
 # dataset_open). The fake cluster is this machine: dataset commands run the
 # bundled coperceive, a confirmed sbatch runs the rendered prepare script, and
 # dataset_open starts a real `coperceive serve` on the cache behind a loopback
-# "tunnel". The raw tree is the synthetic 3-scene OPV2V layout from
-# e2e_cluster_datasets.sh; no real data, no network.
+# "tunnel". The raw tree is the synthetic OPV2V layout from
+# e2e_cluster_datasets.sh (3 test scenes) plus a bigger train split, as on the
+# real cluster, so index and prepare must use the split detect returned; no real
+# data, no network.
 #
 # Usage: e2e_cluster_datasets_app.sh [app-executable]
 set -euo pipefail
@@ -95,11 +97,12 @@ trap cleanup EXIT INT TERM HUP
 
 mkdir -p "${CLUSTER}/results" "${CLUSTER}/scratch" "${REMOTE_HOME}" "${TMP_DIR}/state"
 
-# Same synthetic tree as e2e_cluster_datasets.sh: 3 scenes x 3 agents x 4 frames.
+# Same synthetic tree as e2e_cluster_datasets.sh: test has 3 scenes x 3 agents x
+# 4 frames. train has 5 scenes, listed first, like the real opencood/opv2v root.
 "${PYTHON}" - "${RAW}" <<'PY'
 import json, sys
 from pathlib import Path
-root = Path(sys.argv[1]); split = "test"
+root = Path(sys.argv[1])
 NUMPY_YAW = ("!!python/object/apply:numpy.core.multiarray.scalar [!!python/object/apply:numpy.dtype "
              "{args: [f8, false, true], state: !!python/tuple [3, '<', null, null, null, -1, -1, 0]}, "
              "!!binary 'AAAAAACAVkA=']")  # float64 90.0
@@ -108,8 +111,9 @@ intrinsic = [[335.6,0.0,400.0],[0.0,335.6,300.0],[0.0,0.0,1.0]]
 pcd_head = ("# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z rgb\n"
             "SIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nWIDTH 1\nHEIGHT 1\n"
             "VIEWPOINT 0 0 0 1 0 0 0\nPOINTS 1\nDATA ascii\n0.000000 0.000000 0.000000 0\n")
-for scene in range(3):
-    base = root / split / f"scene_{scene:04d}"; base.mkdir(parents=True)
+scenes = [("train", f"train_{i:04d}") for i in range(5)] + [("test", f"scene_{i:04d}") for i in range(3)]
+for split, scene_id in scenes:
+    base = root / split / scene_id; base.mkdir(parents=True)
     (base / "data_protocol.yaml").write_text('{"world": {"fixed_delta_seconds": 0.05, "sync_mode": true}}')
     for agent in ("641", "650", "651"):
         folder = base / agent; folder.mkdir()
@@ -252,14 +256,16 @@ if not step["ok"]:
     sys.exit(1)
 d = step["value"]
 assert d["status"] == "ok" and d["adapter"] == "opv2v" and d["scene_count"] == 3, d
+assert d["split"] == "test" and d["raw_root"] == str(__import__("pathlib").Path(d["path"]).parent), d
 print(json.dumps({"adapter": d["adapter"], "rawRoot": d["raw_root"], "split": d["split"]}))
 PY
 )"
-echo "Step CD-1 verified: Test connection reports cluster datasets supported; dataset_detect -> ok, opv2v, 3 scenes (numpy-tagged records)"
+echo "Step CD-1 verified: Test connection reports cluster datasets supported; dataset_detect on opv2v/test -> ok, opv2v, split test, 3 scenes, raw_root the parent that also holds train (numpy-tagged records)"
 DATASET_ARGS="$(profile_args), $(python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]))[1:-1])' "${DATASET}")"
 RAW_ROOT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["rawRoot"])' "${DATASET}")"
 
 run_flow preview "[
+  {\"command\": \"dataset_index\", \"args\": {${DATASET_ARGS}}},
   {\"command\": \"dataset_index\", \"args\": {$(profile_args), \"adapter\": \"opv2v\", \"rawRoot\": \"${RAW_ROOT}\"}},
   {\"command\": \"dataset_prepare\", \"args\": {${DATASET_ARGS}, \"scenes\": [\"scene_0000\"], \"workers\": 1}},
   {\"command\": \"dataset_prepare_submit\", \"args\": {$(profile_args), \"previewHash\": \"0000000000000000\", \"confirmed\": true}},
@@ -270,13 +276,22 @@ check preview <<'PY'
 import json, os, sys
 result, ssh_log, tmp, raw = sys.argv[1:5]
 steps = json.load(open(result, encoding="utf-8"))["steps"]
+index, unsplit = steps[0], steps[1]
+steps = steps[:1] + steps[2:]
 for step in steps[:2]:
     assert step["ok"], step
-index = steps[0]["value"]
+index = index["value"]
+ids = [scene["scene_id"] for scene in index["scenes"]]
+assert index["split"] == "test" and ids == ["scene_0000", "scene_0001", "scene_0002"], (index["split"], ids)
 assert index["scene_count"] == 3 and index["estimated_cache_bytes"] > 0, index
-print(f"Step CD-2 verified: dataset_index -> 3 scenes, estimated_cache_bytes={index['estimated_cache_bytes']}")
+assert index["cache"]["relative_path"].endswith("/test"), index["cache"]
+assert not unsplit["ok"], unsplit
+assert unsplit["error"] == f"{raw} holds several splits (train, test); choose one", unsplit["error"]
+print(f"Step CD-2 verified: dataset_index with detect's split -> split test, 3 scenes {ids} (train has 5), "
+      f"estimated_cache_bytes={index['estimated_cache_bytes']}; without a split -> {unsplit['error']!r}")
 preview = steps[1]["value"]
 script = preview["script"]
+assert " --split test " in script, script
 assert "# No GPU requested" in script, script
 assert preview["cpus_per_task"] == 1, preview["cpus_per_task"]
 assert "--workers 1" in script, script
@@ -285,7 +300,7 @@ cache_root = preview.get("cache_root") or ""
 assert cache_root.startswith(f"{tmp}/cluster/results/coperceive-cache/opv2v/"), cache_root
 assert os.path.commonpath([cache_root, raw]) != raw, (cache_root, raw)
 assert preview["preview_hash"], preview
-print(f"Step CD-3 verified: dataset_prepare preview is CPU-only, cpus_per_task=1, --workers 1, "
+print(f"Step CD-3 verified: dataset_prepare preview is CPU-only, --split test, cpus_per_task=1, --workers 1, "
       f"cache_root outside the raw root, preview_hash={preview['preview_hash']}")
 wrong, unconfirmed = steps[2], steps[4]
 assert steps[3]["ok"], steps[3]
@@ -405,7 +420,7 @@ result, ssh_log, tmp, raw, checkout, python = sys.argv[1:7]
 connection, detect = json.load(open(result, encoding="utf-8"))["steps"]
 update = f"git -C {checkout} pull --ff-only && {python} -m pip install -e {checkout} --no-deps"
 expected = ("coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, which "
-            "has no capabilities command, need a build with cluster-datasets-2). Update it with: " + update)
+            "has no capabilities command, need a build with cluster-datasets-3). Update it with: " + update)
 assert not detect["ok"], detect
 assert detect["error"] == expected, detect["error"]
 assert "invalid choice" not in detect["error"] and "usage:" not in detect["error"], detect["error"]

@@ -313,6 +313,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     prepare_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
     prepare_parser.add_argument("--raw-root", required=True)
+    prepare_parser.add_argument(
+        "--split", default=None, help="The split to prepare (OPV2V/V2XSet)."
+    )
     prepare_parser.add_argument("--cache", required=True, help="The split cache directory.")
     prepare_parser.add_argument("--scenes", default=None, help="Comma-separated scene ids.")
     prepare_parser.add_argument("--all", action="store_true", help="Prepare every scene.")
@@ -346,6 +349,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     index_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
     index_parser.add_argument("--raw-root", required=True)
+    index_parser.add_argument(
+        "--split",
+        default=None,
+        help="The split to index (OPV2V/V2XSet). Required when the root holds several.",
+    )
     index_parser.add_argument("--max-scenes", type=int, default=5000)
     index_parser.add_argument("--max-entries", type=int, default=200000)
     index_parser.add_argument("--timeout", type=float, default=30.0)
@@ -653,6 +661,7 @@ def _dataset_prepare(args: argparse.Namespace) -> None:
             scenes=scenes,
             workers=max(1, args.workers),
             progress=progress,
+            split=args.split,
         )
     except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
         error = _dataset_failure(args, exc, known=DatasetError)
@@ -707,6 +716,7 @@ def _dataset_index(args: argparse.Namespace) -> None:
             max_scenes=args.max_scenes,
             max_entries=args.max_entries,
             timeout_s=args.timeout,
+            split=args.split,
         )
     except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
         error = _dataset_failure(args, exc, known=DatasetError)
@@ -751,7 +761,8 @@ def _schema(_args: argparse.Namespace) -> None:
 # without the `capabilities` command at all predates them.
 # cluster-datasets-2: dataset detect/index/prepare/status, numpy-tagged
 # OPV2V/V2XSet records, per-scene index errors.
-CAPABILITIES = ("cluster-datasets-2",)
+# cluster-datasets-3: index/prepare --split.
+CAPABILITIES = ("cluster-datasets-2", "cluster-datasets-3")
 
 
 def _capabilities(_args: argparse.Namespace) -> None:
