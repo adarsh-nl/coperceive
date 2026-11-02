@@ -14,14 +14,31 @@ CPU Slurm job that writes schema-1 scenes into the cache.
 
 ```text
 coperceive dataset detect --path P
-coperceive dataset index  --adapter A --raw-root R
-coperceive dataset prepare --adapter A --raw-root R --cache C [--scenes ids | --all] --workers N
+coperceive dataset index  --adapter A --raw-root R [--split S]
+coperceive dataset prepare --adapter A --raw-root R [--split S] --cache C [--scenes ids | --all] --workers N
 coperceive dataset status --cache C
 ```
 
 `detect` and `index` print one JSON document and write nothing. `prepare` and
 `status` are PR 2; their schemas are declared here now so the UI can be built
 against them.
+
+### Choosing the split
+
+OPV2V and V2XSet have splits (`train`, `validate`, `test`, and OPV2V's
+`test_culver_city`). `index` and `prepare` work on exactly one split:
+
+- `--split S` names it. `R` may be the dataset root (`…/opv2v`) or the split
+  directory itself (`…/opv2v/test`); with the split directory, `S` must match
+  its name.
+- Without `--split`, `R` must be a split directory, or a dataset root with only
+  one split present. A root with several splits is refused with a plain error
+  that lists them, e.g. `/datasets/…/opv2v holds several splits (train,
+  validate, test); choose one`. The command never picks one silently.
+- `--split` with an adapter that has no splits (Griffin) is refused.
+
+The desktop passes the `split` that `detect` returned. `index` returns the
+split it used, and the Dataset view shows that one.
 
 ## Cache layout
 
@@ -69,7 +86,14 @@ against them.
 - The CLI exits 0 for `status:"ok"` and `"none"`. An unreadable/nonexistent path
   returns `status:"error"` and exits 1.
 - Detection reads directory entries and the adapter's small scene index only;
-  it never reads images, point clouds, parquet, or pose contents.
+  it never reads images, point clouds, parquet, or pose contents. For
+  OPV2V/V2XSet it lists the split directory and one scene's agent folders; it
+  does not list frames. `scene_count` is the number of scene directories in the
+  split (at most `--max-scenes`); `index` may later list fewer if a scene turns
+  out to be unreadable (it is then in `errors`).
+- When `path` is a dataset root with several splits, `split` is the first
+  present one in the adapter's order; the UI should let the user choose, and
+  `index`/`prepare` must be given it explicitly.
 
 ## `dataset index` — `coperceive-cluster-index-1`
 
@@ -114,10 +138,14 @@ against them.
   the split directory (or the raw root when there is no split): relative path,
   type, size and `mtime_ns`, sorted, SHA-1. `entries` counts metadata entries
   visited; `truncated` is true when `--max-entries`/`--timeout` stopped it.
+- `split` is the split that was indexed: the `--split` given, or the one the
+  raw root names.
 - `estimated_cache_bytes` is additive: cached scene files are approximately the
   raw scene files, so it is the sum of file sizes under each scene directory
   (metadata only, no file contents). `estimated_cache_bytes_method` records that
-  rule. It is an estimate, not a promise.
+  rule. It is an estimate, not a promise. When `fingerprint.truncated` is true,
+  scenes the walk did not finish are sized by a further walk that stops at the
+  same `--timeout`; the estimate is then a lower bound.
 - `cache.relative_path` is relative to `results_root` and is exactly the layout
   above; the full cache is `<results_root>/<relative_path>`.
 - `duration_s` is cheap: `sample_count × adapter clock scale`, not measured from
@@ -241,13 +269,14 @@ scene to its Slurm job.
 ## Server support check — `coperceive capabilities`
 
 `coperceive capabilities` prints
-`{"schema": "coperceive-capabilities-1", "version": "0.1.0", "capabilities": ["cluster-datasets-2"]}`.
+`{"schema": "coperceive-capabilities-1", "version": "0.1.0", "capabilities": ["cluster-datasets-2", "cluster-datasets-3"]}`.
 `cluster-datasets-2` means: these commands, numpy-tagged records and
-per-scene index errors. When a desktop dataset command fails, and on Test
+per-scene index errors; `cluster-datasets-3` adds `--split` on `index` and
+`prepare`. The desktop needs `cluster-datasets-3`. When a desktop dataset command fails, and on Test
 connection (row `cluster-datasets`), the app runs this command through the
-saved argv. A build without it, or without `cluster-datasets-2`, gets one
+saved argv. A build without it, or without `cluster-datasets-3`, gets one
 message: `coperceive on this server is too old for cluster datasets (found X,
-need a build with cluster-datasets-2). Update it with: <command>`, where the
+need a build with cluster-datasets-3). Update it with: <command>`, where the
 command is `git -C <checkout> pull --ff-only && <python> -m pip install -e
 <checkout> --no-deps` for a git checkout, else a `pip install --upgrade` from
 the repository.
