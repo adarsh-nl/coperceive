@@ -17,6 +17,7 @@ import {
   testServerConnection,
 } from "./local";
 import HpcBrowse from "./HpcBrowse";
+import { ImportPanel, SharePanel } from "./LabShare";
 import {
   applyDiscovery,
   emptyEntry,
@@ -121,6 +122,9 @@ export default function HpcServers() {
   const [note, setNote] = useState("");
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
+  const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
+  const [shareEntry, setShareEntry] = useState<ServerEntry | null>(null);
+  const [importing, setImporting] = useState(false);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -358,10 +362,23 @@ export default function HpcServers() {
   usePageHeader("servers", {
     meta: "SSH via ssh-agent and ~/.ssh/config · never asks for a password or key",
     actions: (
-      // The "+" is drawn by CSS: e2e_mac.sh (Step 5h) finds this button by its exact text.
-      <button type="button" className="c-header-action has-plus" onClick={startAdd}>
-        Add server
-      </button>
+      <div style={{ display: "flex", gap: "0.4rem" }}>
+        <button
+          type="button"
+          className="c-header-action"
+          onClick={() => {
+            setImporting(true);
+            setShareEntry(null);
+            setError("");
+          }}
+        >
+          Import lab profile
+        </button>
+        {/* The "+" is drawn by CSS: e2e_mac.sh (Step 5h) finds this button by its exact text. */}
+        <button type="button" className="c-header-action has-plus" onClick={startAdd}>
+          Add server
+        </button>
+      </div>
     ),
   });
   const selectedServer = profiles.find((entry) => entry.id === selectedServerId) ?? profiles[0] ?? null;
@@ -434,6 +451,18 @@ export default function HpcServers() {
           }}
         >
           Edit
+        </button>
+        <button
+          type="button"
+          className="c-secondary"
+          disabled={busy !== null}
+          onClick={() => {
+            setShareEntry(selectedServer);
+            setImporting(false);
+            setError("");
+          }}
+        >
+          Share with your lab…
         </button>
         <div style={{ position: "relative" }}>
           <button
@@ -526,6 +555,32 @@ export default function HpcServers() {
       ) : null}
 
       {selectedServer && !draft ? <HpcBrowse profile={selectedServer} header={serverRow} /> : null}
+
+      {shareEntry ? (
+        <div style={{ margin: "16px 24px" }}>
+          <SharePanel
+            entry={shareEntry}
+            onClose={() => setShareEntry(null)}
+            onSaved={(message) => {
+              setNote(message);
+              setShareEntry(null);
+            }}
+          />
+        </div>
+      ) : null}
+
+      {importing ? (
+        <div style={{ margin: "16px 24px" }}>
+          <ImportPanel
+            onClose={() => setImporting(false)}
+            onSaved={(message) => {
+              setNote(message);
+              setImporting(false);
+              void refreshServers();
+            }}
+          />
+        </div>
+      ) : null}
 
       {/* Compact Inline Server Editor */}
       {draft ? (
