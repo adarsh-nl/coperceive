@@ -12,6 +12,7 @@ could not serve, a frame timeout) fails that scene and the run goes on, also ``p
 
 from __future__ import annotations
 
+import json
 import os
 import socket
 import subprocess
@@ -56,6 +57,8 @@ from coperceive.models.spec import (
     manifest_sha256,
     select_model,
 )
+from coperceive.robustness.apply import export_perturbed_inputs
+from coperceive.robustness.spec import PerturbationSpec
 from coperceive.store import read_scene
 from coperceive.viewdata import pose_times, scene_directories
 
@@ -89,6 +92,7 @@ class RunOptions:
     work_dir: Path | None = None
     force: bool = False
     staging_seconds: float | None = None  # the rsync wall time, measured by the Slurm job
+    perturbation: PerturbationSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -221,9 +225,10 @@ def provenance_json(
     parent_env: Mapping[str, str],
     checkpoint: CheckpointInfo | None = None,
     gpu: str | None = None,
+    perturbation: Mapping[str, object] | None = None,
 ) -> dict[str, object]:
     """Every key of spec §Provenance."""
-    return {
+    body: dict[str, object] = {
         "checkpoint": checkpoint.as_json() if checkpoint is not None else None,
         "plugin": manifest.name,
         "plugin_version": manifest.version,
@@ -246,6 +251,25 @@ def provenance_json(
         "dependencies": {k: dict(v) for k, v in dependencies.items()},
         "slurm_job_id": parent_env.get("SLURM_JOB_ID"),
     }
+    if perturbation is not None:
+        body["perturbation"] = dict(perturbation)
+    return body
+
+
+def _cache_options(
+    effective: Mapping[str, object], perturbation: PerturbationSpec | None
+) -> Mapping[str, object]:
+    """Cache key includes the spec so a perturbed run does not reuse a clean one."""
+    if perturbation is None:
+        return effective
+    return {**dict(effective), "perturbation": perturbation.to_json()}
+
+
+def _write_perturbation(directory: Path, spec: PerturbationSpec) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / "perturbation.json").write_text(
+        json.dumps(spec.to_json(), indent=2) + "\n", encoding="utf-8"
+    )
 
 
 def select_agents(
@@ -342,6 +366,9 @@ def run_batch(
         if scene_id not in directories:
             raise BatchError(f"no scene directory {scene_id!r} under {scenes_root}")
 
+    if options.perturbation is not None:
+        _write_perturbation(out_root / run_id, options.perturbation)
+        _write_perturbation(work_dir / "inputs", options.perturbation)
     started = time.monotonic()
     completed: list[str] = []
     skipped: list[str] = []
@@ -383,6 +410,7 @@ def run_batch(
             checkpoint=checkpoint,
             timings=_timings(wall, frames, reported, options.staging_seconds),
             parent_env=env,
+            perturbation=None if options.perturbation is None else options.perturbation.to_json(),
         )
         return run_meta_for(
             manifest, spec, run_id=run_id, created_utc=created_utc, provenance=provenance
@@ -392,7 +420,10 @@ def run_batch(
         if cache is None or not options.cache or "checkpoint_md5" not in environment:
             return None
         return cache.lookup(
-            scene, environment=environment, manifest_sha256=digest, options=effective
+            scene,
+            environment=environment,
+            manifest_sha256=digest,
+            options=_cache_options(effective, options.perturbation),
         )
 
     try:
@@ -404,6 +435,13 @@ def run_batch(
                 continue
             scene = read_scene(directories[scene_id])
             agent_ids = select_agents(scene, spec, options.agent_ids)
+            if options.perturbation is not None and agent_ids:
+                export_perturbed_inputs(
+                    scene,
+                    options.perturbation,
+                    out_root / run_id / "perturbed" / scene_id,
+                    ego_agent_id=agent_ids[0],
+                )
             hit = lookup(scene)
             if hit is None and child is None:
                 if spec.depends_on and not dependencies:
@@ -483,7 +521,7 @@ def run_batch(
                     scene,
                     environment=environment,
                     manifest_sha256=digest,
-                    options=effective,
+                    options=_cache_options(effective, options.perturbation),
                     inputs=tuple(run.inputs.values()),
                     results=tuple(run.results),
                     artifacts=_artifact_dir(work_dir, spec),
@@ -792,6 +830,8 @@ def _run_scene(
             work_dir=work_dir,
             media_roots=options.media_roots,
             raw_root=options.raw_root,
+            perturbation=options.perturbation,
+            ego_agent_id=agent_ids[0] if agent_ids else None,
         )
         if not any(agent in frame.poses for agent in requested):
             remove_inputs(work_dir, frame_id)
