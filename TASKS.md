@@ -20,17 +20,17 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-10-31 |
-| `main` | `0ee039d` (landing page). The desktop app is not on `main`. |
-| `feat/desktop` | Merged into `feat/m2-import` (PR #51). |
-| `feat/m2-import` | `0d0865e` (merge of PR #86). Last pre-merge green run [41229196435](https://github.com/adarsh-nl/coperceive/actions/runs/41229196435) (11/11) at `a1f5d35`. |
+| Last updated | 2026-11-02 |
+| `main` | `19ea517` (desktop app merged via PR #51). |
+| `feat/desktop` | Merged into `main` (PR #51, 2026-10-28). |
+| `feat/m2-import` | `7ba6d88` (merge of PR #90). Includes #87 (`979b9f3`) and #90 (`7ba6d88`). |
 | `feat/landing` | `d3e43bf`, **not merged**, open items below |
 | Version | 0.1.0 (desktop), not released, no tag |
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
 | Current milestone | **M2 completion & cluster dataset visualization** |
-| Top blocker | Cluster datasets merge (PR #87 backend + PR #88 UI), then `feat/m2-import` → `main` merge (Adarsh). |
-| Open agent branches / PRs | #87 (`agent/deepseek-cluster-datasets-2`), #88 (`agent/agy-cluster-datasets-ui`), this docs PR #89 (`agent/agy-tasks-refresh`). |
-| Last merged agent branch | `agent/agy-ci-speed` (PR #86, merge `0d0865e`). |
+| Top blocker | Packaged-app fake-SSH e2e (Claude Code) merge gate for PR #88 cluster datasets UI, then `feat/m2-import` → `main` merge (Adarsh). |
+| Open agent branches / PRs | #88 (`agent/agy-cluster-datasets-ui`), #90 (packaged-app fake-SSH e2e gate / Claude Code follow-up), this docs PR #89 (`agent/agy-tasks-refresh`). |
+| Last merged agent branch | `agent/deepseek-cluster-datasets-e2e` (PR #90, merge `7ba6d88`). |
 
 ## Key docs in the repo
 - `HANDOVER.md`: long engineering log
@@ -74,7 +74,7 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~Eval engine step A and step B (ADR 0010), live model plugins over NDJSON on stdio (ADR 0011), Griffin with 4 models~~
 - [x] ~~Real Griffin eval run (Task 12). Drone and fusion match the paper within 0.001~~
 
-## ✅ Done: desktop app (on `feat/desktop` & merged to `feat/m2-import`)
+## ✅ Done: desktop app (merged to `main` via PR #51)
 - [x] ~~ADR 0014: Tauri v2; local mode plus HPC-over-SSH mode; python-build-standalone; unsigned dmg for now~~
 - [x] ~~Real Tauri v2 app (not a console stub): window, folder picker, invoke commands, `tauri build` in CI~~
 - [x] ~~Bundled Python 3.13.1 (pinned SHA-256) with hash-locked dependencies (`requirements-darwin-arm64.lock`, `--require-hashes`)~~
@@ -111,36 +111,37 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~Auto-update: Tauri v2 updater plugin with minisign verification, quiet 404, prompt banner/toast ("Restart to update"), Help → Check for Updates… (PR #77 `7212bff`).~~
 - [x] ~~Viewer layout & resizable panels: drag handles with clamping and reset, `state.json` persistence, full-screen 3D view (`F` / Esc), wordmark navigation to Library, playback stall bounded to ≤ 350 ms (PR #80 `eb93acd`).~~
 - [x] ~~Town03 map button layout: formatted as full-width secondary button above row actions (PR #80 `eb93acd`).~~
+- [x] ~~Image thumbnails at import: 640 px preview thumbnail at import on library cards, full resolution frames read on demand (PR #56 `2c39f48`).~~
 - [x] ~~Flaky desktop e2e controller evals: retry transient controller evals with backoff and step 5b port fix (PR #27 `8a39b41`).~~
 - [x] ~~CI pipeline acceleration: Rust cache (`Swatinem/rust-cache@v2`), bundled Python standalone caching, pip wheels cache, path filtering for docs/python-only PRs, PR-scoped concurrency cancellation, warm-cache `desktop-macos` down to 5m 55s (PR #86 `0d0865e`).~~
 
-## ✅ Done: M3 HPC Foundation (merged through PR #86 on `feat/m2-import`)
+## ✅ Done: M3 HPC Foundation (merged through PR #87 on `feat/m2-import`)
 - [x] ~~Remote Server Profiles: cluster profiles, scheduler adapter, SSH hardening, secret-free persistence in `state.json` (PR #40, #41, #70, #76, #79).~~
 - [x] ~~Remote Browse: non-blocking remote folder traversal over SSH with symlinks and directory listing (PR #47, #83).~~
 - [x] ~~Run-Plan Builder & Job Submit: evaluation run plan for saved HPC servers (nothing submitted), explicit confirmation, GPU default by job type, saved argv propagation (PR #50, #53, #81, #82).~~
 - [x] ~~Job Monitor & Watch: watch submitted HPC run (state, logs, cancel), report, open in viewer, run history, full job names for watch (PR #61, #63, #65, #84).~~
 - [x] ~~Cluster Datasets Contract: `docs/datasets/cluster-datasets.md` JSON schemas and frozen desktop command contract; read-only `dataset_detect` and `dataset_index` Tauri commands (PR #85 `30d2a82`).~~
+- [x] ~~Cluster Datasets Backend (PR 2): atomic per-scene staging under `<cache>/.partial/<scene>`, atomic rename, `dataset.json` cache index, Slurm CPU prepare script preview with hash + confirm, status polling document (`coperceive-cluster-scene-status-1`), parallel workers, and partial-cache serving (PR #87 `979b9f3`).~~
 
 ---
 
 ## 🔴 NOW: Open Items & Next Milestones (In Order)
 
-1. **Cluster datasets backend (PR 2, DeepSeek):**
-   - [ ] Cache staging under `<cache>/.partial/<scene>`, atomic rename, `dataset.json` index, idempotent, never writes under raw root.
-   - [ ] Scheduled CPU prepare job with Slurm preview hash + confirm, status polling document (`coperceive-cluster-scene-status-1`), partial-cache serving.
-   - PR #87 open on `agent/deepseek-cluster-datasets-2`.
-
-2. **Cluster datasets UI (Antigravity):**
+1. **Cluster datasets UI (PR #88, Antigravity):**
    - [ ] Browse banner (`OPV2V · test · 16 scenes`, licence status notice and links, "Open dataset").
    - [ ] Dataset view: scene table, status chips (`ready`, `preparing`, `not_prepared`, `stale`, `failed`), status polling every ~5s.
    - [ ] Slurm CPU prepare script preview with confirm checkbox, single-scene prepare & auto-open.
    - [ ] Viewer scene dropdown disabling non-ready scenes with `(preparing…)`.
-   - PR #88 open on `agent/agy-cluster-datasets-ui` (rebased on `0d0865e`, all Tauri stubs removed, tests green, CI run [41235531408]).
+   - PR #88 open on `agent/agy-cluster-datasets-ui` (rebased on `979b9f3`, head `f745e47`, all checks green in run [41347381849]; waiting for packaged-app e2e gate).
+
+2. **Cluster datasets packaged-app E2E (#90 / Claude Code):**
+   - [ ] Packaged-app fake-SSH cluster datasets E2E driving built `.app` / fake ssh (detect → index → prepare preview → confirm → submit → scene status ready → viewer open).
+   - PR #90 backend CLI E2E merged (`7ba6d88`), but packaged-app fake-SSH gap remains open (Claude Code PR gate for #88).
 
 3. **M2 Acceptance & Outstanding Items:**
    - [ ] **Mac acceptance (Adarsh):** empty library → Get data → Griffin "One scene with images" (~2.5 GB) → progress with cancel → auto-opens Town03-000 with images and a map, without touching the Terminal.
    - [ ] **Updater acceptance:** install a test release and confirm the banner and Restart (Adarsh tags).
-   - [ ] P1 · **Image thumbnails at import:** 640 px JPEG/WebP preview thumbnail at import, full resolution on demand.
+   - [x] ~~P1 · **Image thumbnails at import:** 640 px JPEG preview thumbnail at import on library cards (PR #56 `2c39f48`); full resolution frames read on demand.~~
 
 4. **HPC Verification & Acceptance:**
    - [ ] **Fake-SSH cluster fixtures e2e:** real-app e2e against fake-SSH cluster fixtures covering detect → index → prepare single scene → ready → viewer open.
@@ -201,6 +202,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ---
 
 ## Change log of this file
+- 2026-11-02: Rebased onto latest feat/m2-import (7ba6d88). Added PR #87 (cluster datasets backend, 979b9f3) to Done list. Kept PR #88 (cluster datasets UI) and #90 (packaged-app fake-SSH E2E gate) as open. Corrected feat/desktop merge target to main (PR #51, 2026-10-28). Struck image thumbnails at import against PR #56 (2c39f48). Recorded docs-only CI timings in docs/ci.md.
 - 2026-10-31: Refreshed master task list through PR #86 (`0d0865e`). Struck merged HPC workspace milestones with matching PR citations (server profiles #40, #41, #70, #76, #79; browsing #47, #83; run-plan builder and submit #50, #53, #81, #82; Slurm watch/monitor #61, #63, #65, #84; cluster datasets detect/index contract PR #85), desktop updater (#77), icon polish (#78), viewer layout with panel resize and full screen (#80), maps in one click (#73), e2e eval-retry (#27), scene pack cruft skipping (#28), and CI acceleration (#86). Archived historical M1 close-out and dated corrections under collapsed Archive. Recorded open PRs #87 (cluster datasets backend PR 2) and #88 (cluster datasets UI), open Mac and updater acceptance items, image thumbnails, and roadmap towards M2→main merge and v0.1.0 release.
 - 2026-10-27: The `desktop-macos` DMG retry is now capped and tested. `COPERCEIVE_DMG_ATTEMPTS` takes a whole number only (non-integers are rejected before any build with `exit 64`), is clamped to 1..3 with the clamp logged, and defaults to 2; the exact-signature gating is unchanged. Branch `agent/deepseek-hdiutil-flake`.
 - 2026-10-27: `desktop-macos` DMG flake fixed in CI only, branch `agent/deepseek-hdiutil-flake`. `scripts/desktop/build_dmg.sh` pre-detaches stale `Coperceive` volumes, clears stale `rw.*.dmg` images, logs `hdiutil info`/`XProtect`/disk, and retries the build once only on that exact signature; `ci.yml` calls it instead of the bare `tauri build`. No product code changed.
