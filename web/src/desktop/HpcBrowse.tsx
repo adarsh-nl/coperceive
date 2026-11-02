@@ -8,7 +8,7 @@
  * playback needs the confirmed job-submission step, so the Open button is
  * disabled and explains that nothing was started.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   browseCrumbs,
   browseRows,
@@ -22,6 +22,13 @@ import {
 } from "./browse";
 import type { ScanDocument, ServerEntry } from "./hpc";
 import { remoteScan } from "./local";
+import ClusterDatasetView from "./ClusterDatasetView";
+import {
+  datasetDetect,
+  formatDetectBannerTitle,
+  formatLicenceInfo,
+  type ClusterDetectDocument,
+} from "./clusterDatasets";
 
 const card = {
   backgroundColor: "rgba(28, 28, 30, 0.85)",
@@ -42,6 +49,17 @@ const secondaryButton = {
   cursor: "pointer",
 } as const;
 
+const primaryButton = {
+  padding: "0.45rem 0.9rem",
+  borderRadius: "6px",
+  border: "none",
+  backgroundColor: "#1f6feb",
+  color: "#ffffff",
+  fontSize: "0.82rem",
+  fontWeight: 600,
+  cursor: "pointer",
+} as const;
+
 const badge = {
   display: "inline-block",
   marginLeft: "0.4rem",
@@ -55,9 +73,11 @@ const badge = {
 export default function HpcBrowse({
   profile,
   onClose,
+  onOpenDataset,
 }: {
   profile: ServerEntry;
   onClose: () => void;
+  onOpenDataset?: (detected: ClusterDetectDocument) => void;
 }) {
   const roots = profile.profile.data_roots.filter((root) => root.trim().length > 0);
   const [root, setRoot] = useState<string>(roots[0] ?? "");
@@ -65,6 +85,12 @@ export default function HpcBrowse({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
+
+  // Cluster dataset detect state
+  const [detectedDataset, setDetectedDataset] = useState<ClusterDetectDocument | null>(null);
+  const [detectLoading, setDetectLoading] = useState(false);
+  const [detectError, setDetectError] = useState("");
+  const [viewingDataset, setViewingDataset] = useState<ClusterDetectDocument | null>(null);
 
   const firstRoot = roots[0] ?? "";
   useEffect(() => {
@@ -107,6 +133,60 @@ export default function HpcBrowse({
   const skipped = skippedMessages(document);
   const summary = scanSummary(document);
   const selectedText = selectionLabel(document, selected);
+
+  const currentFolderFullPath = useMemo(() => {
+    if (!root) return "";
+    return current ? `${root.replace(/\/+$/, "")}/${current.replace(/^\/+/, "")}` : root;
+  }, [root, current]);
+
+  // Debounced cluster dataset detection
+  useEffect(() => {
+    if (!currentFolderFullPath || loading) {
+      setDetectedDataset(null);
+      return;
+    }
+    let active = true;
+    setDetectLoading(true);
+    setDetectError("");
+
+    const timer = setTimeout(() => {
+      datasetDetect(profile.id, currentFolderFullPath)
+        .then((res) => {
+          if (!active) return;
+          setDetectLoading(false);
+          if (res.status === "ok") {
+            setDetectedDataset(res);
+          } else if (res.status === "error") {
+            setDetectedDataset(null);
+            setDetectError(res.reason || "The cluster refused the dataset detection request.");
+          } else {
+            setDetectedDataset(null);
+          }
+        })
+        .catch((e: unknown) => {
+          if (!active) return;
+          setDetectLoading(false);
+          setDetectedDataset(null);
+          setDetectError(e instanceof Error ? e.message : String(e));
+        });
+    }, 150);
+
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [profile.id, currentFolderFullPath, loading]);
+
+  if (viewingDataset) {
+    return (
+      <ClusterDatasetView
+        profile={profile}
+        dataset={viewingDataset}
+        onBack={() => setViewingDataset(null)}
+        onClose={onClose}
+      />
+    );
+  }
 
   return (
     <section aria-label={`Browse data folders on ${profile.profile.name}`} style={card}>
@@ -193,7 +273,7 @@ export default function HpcBrowse({
               Up one folder
             </button>
             <span role="status" style={{ fontSize: "0.75rem", color: "#8b949e" }}>
-              {loading ? "Asking the cluster for folder names (a few seconds)…" : summary}
+              {loading ? "Asking the cluster for folder names (a few seconds)…" : detectLoading ? "Detecting dataset format…" : summary}
             </span>
           </div>
 
@@ -248,6 +328,84 @@ export default function HpcBrowse({
             <p style={{ fontSize: "0.82rem", color: "#8b949e", marginTop: "0.65rem" }}>
               This folder has no subfolders.
             </p>
+          ) : null}
+
+          {/* Cluster dataset detected banner */}
+          {detectedDataset && detectedDataset.status === "ok" ? (
+            <div
+              role="region"
+              aria-label="Detected cluster dataset"
+              style={{
+                marginTop: "0.75rem",
+                padding: "0.75rem 1rem",
+                borderRadius: "10px",
+                backgroundColor: "rgba(31, 111, 235, 0.15)",
+                border: "1px solid #1f6feb",
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                gap: "1rem",
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <strong style={{ fontSize: "0.95rem", color: "#f5f5f7" }}>
+                  {formatDetectBannerTitle(detectedDataset)}
+                </strong>
+                <div style={{ marginTop: "0.2rem", fontSize: "0.76rem", color: "#c9d1d9" }}>
+                  <span>{formatLicenceInfo(detectedDataset.licence).statusText}</span>
+                  {formatLicenceInfo(detectedDataset.licence).links.length > 0 ? (
+                    <span style={{ marginLeft: "0.4rem" }}>
+                      {formatLicenceInfo(detectedDataset.licence).links.map((link, idx) => (
+                        <a
+                          key={link}
+                          href={link}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "#58a6ff", textDecoration: "underline", marginRight: "0.35rem" }}
+                        >
+                          [{idx + 1}]
+                        </a>
+                      ))}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+              <button
+                type="button"
+                style={{
+                  ...primaryButton,
+                  backgroundColor: "#1f6feb",
+                  padding: "0.45rem 1rem",
+                  fontSize: "0.85rem",
+                }}
+                onClick={() => {
+                  if (onOpenDataset) {
+                    onOpenDataset(detectedDataset);
+                  }
+                  setViewingDataset(detectedDataset);
+                }}
+              >
+                Open dataset
+              </button>
+            </div>
+          ) : null}
+
+          {detectError ? (
+            <div
+              role="alert"
+              style={{
+                marginTop: "0.6rem",
+                padding: "0.5rem 0.7rem",
+                borderRadius: "8px",
+                backgroundColor: "rgba(255, 98, 89, 0.12)",
+                border: "1px solid rgba(255, 98, 89, 0.35)",
+                color: "#ff6259",
+                fontSize: "0.8rem",
+              }}
+            >
+              {detectError}
+            </div>
           ) : null}
 
           <ul aria-label="Folders" style={{ listStyle: "none", padding: 0, margin: "0.6rem 0 0" }}>
