@@ -187,6 +187,45 @@ jobs:
             docs/media/hero_recording.mp4
           if-no-files-found: error
 
+  landing:
+    # Build and verify the coperceive public landing page (bundle, E2E, a11y, media recording)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[app,dev]"
+      - run: playwright install --with-deps chromium
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: site/package-lock.json
+      # Same install as pages.yml deploys with: plain npm ci, no --legacy-peer-deps.
+      - run: npm ci
+        working-directory: site
+      - run: npm run build
+        working-directory: site
+      - name: E2E and A11y tests
+        run: pytest tests/test_landing_page.py -v
+        env:
+          COPERCEIVE_E2E_REQUIRED: "1"
+      - name: Measure frame-time & record hero video
+        run: |
+          mkdir -p /tmp/landing-artifacts
+          python scripts/site/measure_and_record.py
+        env:
+          COPERCEIVE_ARTIFACT_DIR: /tmp/landing-artifacts
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: landing-page-media
+          path: |
+            /tmp/landing-artifacts/landing_page.png
+            /tmp/landing-artifacts/hero_recording.webm
+          if-no-files-found: error
+
   gitleaks:
     runs-on: ubuntu-latest
     steps:
