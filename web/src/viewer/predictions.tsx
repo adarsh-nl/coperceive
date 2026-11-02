@@ -63,6 +63,15 @@ export function LineSample({ chip, tag = "A" }: { chip: StatusChip; tag?: RunTag
   );
 }
 
+function perturbationSummary(run: RunInfo | null): string {
+  const spec = run?.run.provenance?.perturbation;
+  if (!spec) return "";
+  return Object.entries(spec)
+    .filter(([, value]) => value !== null && value !== undefined)
+    .map(([key, value]) => `${key}=${String(value)}`)
+    .join(", ");
+}
+
 function Chip({
   on,
   label,
@@ -148,6 +157,7 @@ export default function PredictionsBlock({
             options={runs.map((item) => ({ value: item.run_id, label: runLabel(item) }))}
             onChange={onRun}
           />
+          {perturbationSummary(run) ? <p>Perturbation {perturbationSummary(run)}</p> : null}
           {run && !run.evaluated ? (
             <PanelState
               compact

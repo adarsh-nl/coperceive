@@ -19,6 +19,9 @@ export type RunMeta = {
   categories: string[];
   sources: Record<string, string>;
   notes?: string;
+  provenance?: {
+    perturbation?: Record<string, string | number | boolean | null> | null;
+  };
 };
 
 /** §Evaluation config, as copied into `metrics.json`. */

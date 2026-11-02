@@ -538,6 +538,8 @@ def _run_command(
         argv.append("--hash-inputs")
     if options.force:
         argv.append("--force")
+    if options.perturbation is not None:
+        argv.extend(["--perturb", shlex.quote(options.perturbation.canonical())])
     return argv
 
 
