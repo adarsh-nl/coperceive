@@ -22,6 +22,7 @@ pub mod port;
 pub mod remote;
 pub mod remote_scan;
 pub mod remote_static;
+pub mod repro;
 pub mod run_plan;
 pub mod server_profiles;
 pub mod sidecar;

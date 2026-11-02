@@ -299,6 +299,7 @@ fn open_viewer_window(
     let escaped_root = data_root.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_base = basename.replace('\\', "\\\\").replace('"', "\\\"");
     let test_env = coperceive_desktop::test_seams::test_env_active();
+    let test_repro = coperceive_desktop::repro::test_repro_dir().is_some();
     let force_motion =
         test_env && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
     let update_url = std::env::var("COPERCEIVE_UPDATE_URL").unwrap_or_default();
@@ -324,6 +325,7 @@ fn open_viewer_window(
                 window.__COPERCEIVE_VIEWER_WINDOW__ = true;
                 window.__COPERCEIVE_TITLEBAR__ = "{titlebar_mode}";
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
+                window.__COPERCEIVE_TEST_REPRO__ = {test_repro};
                 window.__COPERCEIVE_FORCE_MOTION__ = {force_motion};
                 window.__COPERCEIVE_UPDATE_URL__ = "{escaped_update}";
                 window.__COPERCEIVE_CTRL_PORT__ = {ctrl_port};
@@ -2496,6 +2498,60 @@ async fn open_predictions(
     Ok(imported)
 }
 
+/// Build a repro card for one finished run. The card is the same JSON
+/// `coperceive repro export` writes.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn preview_repro_card(
+    app: tauri::AppHandle,
+    profile_id: String,
+    plan_id: String,
+    time_limit: Option<String>,
+    gpus: Option<String>,
+    memory: Option<String>,
+) -> Result<serde_json::Value, String> {
+    let python = resolve_python_binary(&app);
+    tauri::async_runtime::spawn_blocking(move || {
+        let profile = if plan_id == coperceive_desktop::repro::TEST_PLAN_ID {
+            if let Some(dir) = coperceive_desktop::repro::test_repro_dir() {
+                dir.join("profile.json")
+            } else {
+                return Err(
+                    "The sample repro card is not available. Export a finished run instead."
+                        .to_string(),
+                );
+            }
+        } else {
+            let entry = find_server_entry(&profile_id)?;
+            let runner = plan_runner(&entry)?;
+            let staging = std::env::temp_dir().join(format!(
+                "coperceive-repro-{}-{}",
+                std::process::id(),
+                &plan_id
+            ));
+            let _ = std::fs::remove_dir_all(&staging);
+            std::fs::create_dir_all(&staging)
+                .map_err(|error| format!("Could not prepare the repro card: {error}"))?;
+            coperceive_desktop::repro::stage_remote_run(
+                &runner,
+                &entry.profile,
+                &plan_id,
+                &staging,
+            )?
+        };
+        coperceive_desktop::repro::card_from_profile(
+            &python,
+            &plan_id,
+            &profile,
+            time_limit.as_deref(),
+            gpus.as_deref(),
+            memory.as_deref(),
+        )
+    })
+    .await
+    .map_err(|error| format!("Could not build the repro card: {error}"))?
+}
+
 /// The app's submitted runs from Slurm accounting, newest first.
 #[tauri::command]
 async fn list_run_history(
@@ -3597,6 +3653,7 @@ fn main() {
             run_metrics,
             open_predictions,
             list_run_history,
+            preview_repro_card,
             remote_connect,
             remote_view_cache,
             remote_status,
@@ -3616,6 +3673,7 @@ fn main() {
                 return;
             }
             let test_env = coperceive_desktop::test_seams::test_env_active();
+            let test_repro = coperceive_desktop::repro::test_repro_dir().is_some();
             let force = test_env
                 && std::env::var("COPERCEIVE_FORCE_MOTION").ok().as_deref() == Some("1");
             let import_source = std::env::var("COPERCEIVE_TEST_IMPORT_SOURCE").unwrap_or_default();
@@ -3648,6 +3706,7 @@ fn main() {
                 window.__COPERCEIVE_CTRL_PORT__ = {port};
                 window.__COPERCEIVE_CTRL_SECRET__ = "{secret}";
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
+                window.__COPERCEIVE_TEST_REPRO__ = {test_repro};
                 window.__COPERCEIVE_FORCE_MOTION__ = {force};
                 window.__COPERCEIVE_TEST_IMPORT_SOURCE__ = "{import_js}";
                 window.__COPERCEIVE_UPDATE_URL__ = "{update_js}";

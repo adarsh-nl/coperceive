@@ -16,6 +16,7 @@ from enum import Enum
 from typing import Protocol
 
 from coperceive.hpc.profile import JobDefaults, ProfileError, SchedulerKind, ServerProfile
+from coperceive.repro.environment import environment_capture_lines
 
 _SINFO_PIPE_COLUMNS = 6
 _SCONTROL_KEYS = (
@@ -416,6 +417,11 @@ class SlurmAdapter:
             lines.append("module purge")
             for module in modules:
                 lines.append(f"module load {shlex.quote(module)}")
+        # Record the compute-node environment into the results folder. The
+        # program is fixed text; a failure here does not fail the job.
+        root = shlex.quote(profile.results_root.rstrip("/"))
+        destination = f'{root}"/environment-${{SLURM_JOB_ID:-0}}.json"'
+        lines.extend(environment_capture_lines(destination))
         if profile.environment.kind.value == "container" and profile.environment.container_image:
             image = shlex.quote(profile.environment.container_image)
             command = " ".join(shlex.quote(element) for element in resolved.command_argv)
