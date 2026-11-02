@@ -23,6 +23,7 @@ import {
   formatLicenceInfo,
   formatSensorsSummary,
   formatStorageEstimate,
+  recoverFromRefusedPrepareSubmit,
   type ClusterDetectDocument,
   type ClusterIndexDocument,
   type ClusterIndexScene,
@@ -164,6 +165,7 @@ export default function ClusterDatasetView({
   const [singleScenePrepare, setSingleScenePrepare] = useState<string | null>(null);
   const [singlePreparePreview, setSinglePreparePreview] = useState<DatasetPreparePreview | null>(null);
   const [singleConfirmed, setSingleConfirmed] = useState(false);
+  const [singlePrepareError, setSinglePrepareError] = useState<string | null>(null);
   const [autoOpenSceneId, setAutoOpenSceneId] = useState<string | null>(null);
 
   // Search & Pagination for 200+ scenes
@@ -293,6 +295,7 @@ export default function ClusterDatasetView({
     // Scene not ready: open single-scene prepare flow
     setSingleScenePrepare(sceneId);
     setSingleConfirmed(false);
+    setSinglePrepareError(null);
     try {
       const preview = await datasetPrepare(profile.id, {
         adapter: dataset.adapter || "opv2v",
@@ -316,9 +319,27 @@ export default function ClusterDatasetView({
       setAutoOpenSceneId(singleScenePrepare);
       setSingleScenePrepare(null);
       setSinglePreparePreview(null);
+      setSinglePrepareError(null);
       startPolling();
     } catch (err) {
-      alert(err instanceof Error ? err.message : String(err));
+      const recovery = await recoverFromRefusedPrepareSubmit(
+        profile.id,
+        {
+          adapter: dataset.adapter || "opv2v",
+          rawRoot: dataset.raw_root || dataset.path,
+          split: dataset.split,
+          scenes: [singleScenePrepare],
+        },
+        err,
+      );
+      setSinglePrepareError(recovery.error);
+      setSingleConfirmed(recovery.confirmed);
+      if (recovery.newPreview) {
+        if (recovery.newPreview.cache_root) {
+          setServerCacheRoot(recovery.newPreview.cache_root);
+        }
+        setSinglePreparePreview(recovery.newPreview);
+      }
     }
   };
 
@@ -356,7 +377,24 @@ export default function ClusterDatasetView({
       setShowPrepareModal(false);
       startPolling();
     } catch (err) {
-      setPrepareError(err instanceof Error ? err.message : String(err));
+      const recovery = await recoverFromRefusedPrepareSubmit(
+        profile.id,
+        {
+          adapter: dataset.adapter || "opv2v",
+          rawRoot: dataset.raw_root || dataset.path,
+          split: dataset.split,
+          scenes: "all",
+        },
+        err,
+      );
+      setPrepareError(recovery.error);
+      setPrepareConfirmed(recovery.confirmed);
+      if (recovery.newPreview) {
+        if (recovery.newPreview.cache_root) {
+          setServerCacheRoot(recovery.newPreview.cache_root);
+        }
+        setPreparePreview(recovery.newPreview);
+      }
     } finally {
       setPrepareBusy(false);
     }
@@ -547,6 +585,11 @@ export default function ClusterDatasetView({
           <p style={{ margin: "0 0 0.35rem", fontSize: "0.76rem", color: "#8b949e" }}>
             This scene is not ready yet. Prepare it now? Once preparation finishes, the viewer will open automatically.
           </p>
+          {singlePrepareError ? (
+            <div style={{ color: "#ff7b72", fontSize: "0.8rem", marginBottom: "0.4rem" }}>
+              {singlePrepareError}
+            </div>
+          ) : null}
           <div style={{ fontSize: "0.74rem", color: "#8b949e", marginBottom: "0.4rem" }}>
             Workers: {singlePreparePreview.cpus_per_task} CPU · Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{singlePreparePreview.cache_root}</span>
           </div>
@@ -573,7 +616,10 @@ export default function ClusterDatasetView({
             <button
               type="button"
               style={secondaryButton}
-              onClick={() => setSingleScenePrepare(null)}
+              onClick={() => {
+                setSingleScenePrepare(null);
+                setSinglePrepareError(null);
+              }}
             >
               Cancel
             </button>

@@ -13,6 +13,7 @@ import {
   datasetPrepare,
   datasetPrepareSubmit,
   datasetOpen,
+  recoverFromRefusedPrepareSubmit,
   _resetStubStore,
   _setStubSceneState,
   _setInvokeForTesting,
@@ -301,6 +302,112 @@ test("in Tauri mode, a rejected invoke throws an error and returns no job id (no
         message: /Tauri IPC rejected command 'dataset_open'/,
       },
     );
+  } finally {
+    _setInvokeForTesting(null);
+    delete (globalThis as unknown as { window?: unknown }).window;
+  }
+});
+
+test("a mock submit error → preview regenerated → confirm unchecked → Submit disabled", async () => {
+  const profileId = "profile-mock-submit";
+  const params = {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opv2v",
+    split: "test",
+    scenes: "all" as const,
+  };
+
+  // 1. Initial preview generation
+  const initialPreview = await datasetPrepare(profileId, params);
+  assert.ok(initialPreview.preview_hash.length > 0);
+  assert.ok(initialPreview.script.length > 0);
+
+  // User confirms preview
+  let confirmed = true;
+  let submitDisabled = !confirmed || !initialPreview;
+  assert.strictEqual(submitDisabled, false, "Submit should be enabled once confirmed");
+
+  // 2. Mock submit error (refused submit from backend e.g. stale hash or unconfirmed)
+  const submitError = new Error("dataset_prepare_submit refused: stale preview hash; pending preview discarded");
+
+  // Small delay to ensure timestamp in fallback preview_hash differs
+  await new Promise((r) => setTimeout(r, 2));
+
+  // 3. Recovery flow runs
+  const recovery = await recoverFromRefusedPrepareSubmit(profileId, params, submitError);
+
+  // 4. Assertions:
+  // - Error shown in plain words
+  assert.strictEqual(
+    recovery.error,
+    "dataset_prepare_submit refused: stale preview hash; pending preview discarded",
+  );
+  // - Confirm unchecked
+  assert.strictEqual(recovery.confirmed, false);
+  confirmed = recovery.confirmed;
+  // - Preview regenerated with new script and new preview hash
+  assert.ok(recovery.newPreview !== null);
+  assert.ok(recovery.newPreview!.script.length > 0);
+  assert.notStrictEqual(recovery.newPreview!.preview_hash, initialPreview.preview_hash);
+  // - Submit disabled
+  submitDisabled = !confirmed || !recovery.newPreview;
+  assert.strictEqual(submitDisabled, true, "Submit must be disabled until user confirms new preview");
+  assert.strictEqual(recovery.submitDisabled, true);
+});
+
+test("in Tauri mode: refused submit regenerates preview and keeps submit disabled until re-confirmed", async () => {
+  (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window = {
+    __TAURI_INTERNALS__: {},
+  };
+
+  let prepareCalls = 0;
+  _setInvokeForTesting(async (cmd) => {
+    if (cmd === "dataset_prepare") {
+      prepareCalls++;
+      return {
+        plan_id: `plan-call-${prepareCalls}`,
+        job_name: "coperceive-dataset-prepare",
+        partition: "ps",
+        walltime: "04:00:00",
+        cpus_per_task: 4,
+        gres: null,
+        cache_root: "/results/cache/opv2v",
+        estimated_cache_bytes: 52428800,
+        script: `#!/bin/bash\n# regenerated script v${prepareCalls}`,
+        preview_hash: `hash-v${prepareCalls}`,
+      };
+    }
+    if (cmd === "dataset_prepare_submit") {
+      throw new Error("Tauri IPC: sbatch refused submit for stale hash");
+    }
+    throw new Error(`Unexpected command: ${cmd}`);
+  });
+
+  try {
+    const profileId = "profile-tauri-recovery";
+    const params = { adapter: "opv2v", rawRoot: "/raw", split: "test", scenes: "all" as const };
+
+    const firstPreview = await datasetPrepare(profileId, params);
+    assert.strictEqual(firstPreview.preview_hash, "hash-v1");
+
+    let confirmed = true;
+    let submitDisabled = !confirmed || !firstPreview;
+    assert.strictEqual(submitDisabled, false);
+
+    let caughtError: unknown = null;
+    try {
+      await datasetPrepareSubmit(profileId, firstPreview.preview_hash, true);
+    } catch (e) {
+      caughtError = e;
+    }
+    assert.ok(caughtError !== null);
+
+    const recovery = await recoverFromRefusedPrepareSubmit(profileId, params, caughtError);
+    assert.strictEqual(recovery.error, "Tauri IPC: sbatch refused submit for stale hash");
+    assert.strictEqual(recovery.confirmed, false);
+    assert.strictEqual(recovery.newPreview?.preview_hash, "hash-v2");
+    assert.strictEqual(recovery.newPreview?.script, "#!/bin/bash\n# regenerated script v2");
+    assert.strictEqual(recovery.submitDisabled, true);
   } finally {
     _setInvokeForTesting(null);
     delete (globalThis as unknown as { window?: unknown }).window;

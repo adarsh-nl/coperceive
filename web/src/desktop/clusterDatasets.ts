@@ -544,3 +544,44 @@ export async function datasetOpen(
     target_type: "remote",
   };
 }
+
+export interface PrepareSubmissionRecovery {
+  error: string;
+  confirmed: boolean;
+  newPreview: DatasetPreparePreview | null;
+  submitDisabled: boolean;
+}
+
+/**
+ * Recovers from a refused prepare submission:
+ * When submit returns an error:
+ * 1. Shows the error in plain words.
+ * 2. Calls datasetPrepare again to regenerate preview and show the new script.
+ * 3. Resets the confirm checkbox so the user confirms the new preview.
+ * 4. Never resubmits automatically (submitDisabled is true until reconfirmed).
+ */
+export async function recoverFromRefusedPrepareSubmit(
+  profileId: string,
+  params: {
+    adapter: string;
+    rawRoot: string;
+    split: string | null;
+    scenes: "all" | string[];
+    workers?: number;
+  },
+  submitError: unknown,
+): Promise<PrepareSubmissionRecovery> {
+  const errorMsg = submitError instanceof Error ? submitError.message : String(submitError);
+  let newPreview: DatasetPreparePreview | null = null;
+  try {
+    newPreview = await datasetPrepare(profileId, params);
+  } catch (err) {
+    console.error("Failed to regenerate prepare preview after submit refusal:", err);
+  }
+  return {
+    error: errorMsg,
+    confirmed: false,
+    newPreview,
+    submitDisabled: true,
+  };
+}
