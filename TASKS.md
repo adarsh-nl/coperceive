@@ -29,7 +29,7 @@ repo: https://github.com/adarsh-nl/coperceive
 | Repo visibility | appears **public** (Adarsh to confirm this is intended) |
 | Current milestone | **M2 completion & cluster dataset visualization** |
 | Top blocker | Packaged-app fake-SSH e2e (Claude Code) merge gate for PR #88 cluster datasets UI, then `feat/m2-import` → `main` merge (Adarsh). |
-| Open agent branches / PRs | #88 (`agent/agy-cluster-datasets-ui`), #90 (packaged-app fake-SSH e2e gate / Claude Code follow-up), this docs PR #89 (`agent/agy-tasks-refresh`). |
+| Open agent branches / PRs | #88 (`agent/agy-cluster-datasets-ui`), Claude Code packaged-app e2e (PR not opened yet), this docs PR #89. |
 | Last merged agent branch | `agent/deepseek-cluster-datasets-e2e` (PR #90, merge `7ba6d88`). |
 
 ## Key docs in the repo
@@ -134,9 +134,9 @@ repo: https://github.com/adarsh-nl/coperceive
    - [ ] Viewer scene dropdown disabling non-ready scenes with `(preparing…)`.
    - PR #88 open on `agent/agy-cluster-datasets-ui` (rebased on `979b9f3`, head `f745e47`, all checks green in run [41347381849]; waiting for packaged-app e2e gate).
 
-2. **Cluster datasets packaged-app E2E (#90 / Claude Code):**
+2. **Cluster datasets packaged-app E2E (Claude Code):**
    - [ ] Packaged-app fake-SSH cluster datasets E2E driving built `.app` / fake ssh (detect → index → prepare preview → confirm → submit → scene status ready → viewer open).
-   - PR #90 backend CLI E2E merged (`7ba6d88`), but packaged-app fake-SSH gap remains open (Claude Code PR gate for #88).
+   - PR #90 backend CLI E2E merged (`7ba6d88`), but packaged-app fake-SSH gap remains open (Claude Code PR gate for #88; PR not opened yet).
 
 3. **M2 Acceptance & Outstanding Items:**
    - [ ] **Mac acceptance (Adarsh):** empty library → Get data → Griffin "One scene with images" (~2.5 GB) → progress with cancel → auto-opens Town03-000 with images and a map, without touching the Terminal.
