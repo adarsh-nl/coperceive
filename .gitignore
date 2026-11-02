@@ -22,9 +22,13 @@ data/
 .DS_Store
 agent-tools/
 web/node_modules/
-# Built by scripts/build_web_static.sh; not committed.
-coperceive/app/static/
 site/
+!site/
+!scripts/site/
+site/node_modules/
+site/dist/
+docs_site/
+!site/public/hero/clip.bin
 target/
 src-tauri/target/
 
