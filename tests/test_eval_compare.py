@@ -140,7 +140,7 @@ def _meta(run_id: str) -> RunMeta:
     )
 
 
-def _prepare(tmp_path: Path) -> Path:
+def prepare_breakdown_scene(tmp_path: Path) -> Path:
     root = tmp_path / "scenes"
     write_scene(_scene(), root / SCENE)
     predictions = root / "predictions"
@@ -160,8 +160,12 @@ def _prepare(tmp_path: Path) -> Path:
     return root
 
 
-def _eval(root: Path, run_id: str) -> None:
+def evaluate_run(root: Path, run_id: str) -> None:
     main(["eval", "run", run_id, "--root", str(root)])
+
+
+_prepare = prepare_breakdown_scene
+_eval = evaluate_run
 
 
 def _as_dict(value: object) -> dict[str, object]:
