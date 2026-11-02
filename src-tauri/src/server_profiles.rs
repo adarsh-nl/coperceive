@@ -13,8 +13,12 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::hpc::{
-    DiscoveredPartition, EnvironmentKind, EnvironmentSetup, SchedulerKind, ServerProfile,
+    DiscoveredPartition, EnvironmentKind, EnvironmentSetup, PipelineSpec, SchedulerKind,
+    ServerProfile,
 };
+
+mod lab_share;
+pub use lab_share::{export_lab_profile, prepare_lab_import, LabImportIdentity};
 
 pub const SERVER_ENTRY_SCHEMA_VERSION: u32 = 1;
 
@@ -81,6 +85,10 @@ pub struct ServerEntry {
     pub discovered: Option<DiscoveredServer>,
     #[serde(default)]
     pub ssh: Option<SshHostSettings>,
+    /// Pipeline registrations shared with this profile. Empty for a profile the
+    /// user typed themselves. Never includes credentials.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub shared_pipelines: Vec<PipelineSpec>,
 }
 
 fn default_schema_version() -> u32 {
@@ -103,6 +111,7 @@ impl ServerEntry {
             profile,
             discovered: None,
             ssh: None,
+            shared_pipelines: Vec::new(),
         }
     }
 
@@ -110,7 +119,10 @@ impl ServerEntry {
     /// user's own ssh config decides host, user, port and jump hosts.
     pub fn ssh_target(&self) -> Result<crate::ssh::SshTarget, String> {
         let port = self.ssh.as_ref().and_then(|settings| settings.port);
-        let proxy_jump = self.ssh.as_ref().and_then(|settings| settings.proxy_jump.clone());
+        let proxy_jump = self
+            .ssh
+            .as_ref()
+            .and_then(|settings| settings.proxy_jump.clone());
         Ok(crate::ssh::SshTarget {
             destination: self.profile.ssh_target()?,
             port,
@@ -174,6 +186,20 @@ impl ServerEntry {
                 "This profile contains a field that looks like a secret ({key}). Coperceive \
                  stores no passwords or keys; sign-in uses your ssh-agent."
             ));
+        }
+        if !self.shared_pipelines.is_empty() {
+            for pipeline in &self.shared_pipelines {
+                pipeline.validate()?;
+            }
+            let pipelines = serde_json::to_value(&self.shared_pipelines).map_err(|error| {
+                format!("Could not check the shared pipelines for secrets: {error}")
+            })?;
+            if let Some(found) = lab_share::find_share_secret(&pipelines) {
+                return Err(format!(
+                    "A shared pipeline contains {found}. Lab profiles store no passwords, tokens \
+                     or keys."
+                ));
+            }
         }
         Ok(())
     }
@@ -345,8 +371,7 @@ pub fn save_servers_to_path(servers: &[ServerEntry], path: &Path) -> Result<(), 
             .sync_all()
             .map_err(|e| format!("Could not save the server list: {e}"))?;
         drop(handle);
-        std::fs::rename(&tmp, path)
-            .map_err(|e| format!("Could not save the server list: {e}"))?;
+        std::fs::rename(&tmp, path).map_err(|e| format!("Could not save the server list: {e}"))?;
     }
     #[cfg(not(unix))]
     {
@@ -658,7 +683,9 @@ mod tests {
         let mut entry = sample_entry("Files only", "files-only");
         entry.profile.scheduler = SchedulerKind::None;
         entry.profile.defaults.partition = Some("gpu-a100".to_string());
-        let err = entry.validate().expect_err("must reject inconsistent profile");
+        let err = entry
+            .validate()
+            .expect_err("must reject inconsistent profile");
         assert!(err.contains("no scheduler"));
     }
 

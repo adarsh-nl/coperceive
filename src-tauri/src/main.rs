@@ -2008,6 +2008,28 @@ async fn delete_server_profile(id: String) -> Result<(), String> {
     server_profiles::remove_server(&mut servers, &id)
 }
 
+/// Exports a server profile as a secret-free lab file. The returned text is the
+/// JSON to save; placeholders stand in for one person's home, user and scratch.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn export_lab_profile(
+    entry: ServerEntry,
+    pipelines: Vec<coperceive_desktop::hpc::PipelineSpec>,
+) -> Result<String, String> {
+    server_profiles::export_lab_profile(&entry, &pipelines)
+}
+
+/// Fills a lab profile with this person's SSH alias and paths. Nothing is saved
+/// until the user saves the returned entry.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn prepare_lab_import(
+    document: String,
+    identity: server_profiles::LabImportIdentity,
+) -> Result<ServerEntry, String> {
+    server_profiles::prepare_lab_import(&document, &identity)
+}
+
 /// Runs the read-only "Test connection" checks off the async runtime, bounded by
 /// per-check timeouts. The result can be applied to the draft profile in the UI.
 #[cfg(target_os = "macos")]
@@ -3274,6 +3296,8 @@ fn main() {
             list_server_profiles,
             save_server_profile,
             delete_server_profile,
+            export_lab_profile,
+            prepare_lab_import,
             test_server_connection,
             list_pipeline_options,
             read_custom_pipeline,
@@ -3700,6 +3724,52 @@ fn main() {
                     let _ = fs::write(
                         &result_path,
                         serde_json::to_string_pretty(&result).unwrap_or_default(),
+                    );
+                });
+            }
+
+            if let Some((server_path, result_path)) =
+                coperceive_desktop::test_seams::hpc_share_probe_request()
+            {
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<serde_json::Value, String> {
+                        let json = fs::read_to_string(&server_path).map_err(|error| {
+                            format!("Could not read the server fixture: {error}")
+                        })?;
+                        let entry: ServerEntry = serde_json::from_str(&json)
+                            .map_err(|error| format!("Server fixture is not valid: {error}"))?;
+                        let exported = server_profiles::export_lab_profile(&entry, &[])?;
+                        let identity = server_profiles::LabImportIdentity {
+                            ssh_alias: "student-cluster".to_string(),
+                            user: "sam".to_string(),
+                            home: "/home/sam".to_string(),
+                            scratch: "/scratch/$USER/$SLURM_JOB_ID".to_string(),
+                        };
+                        let imported =
+                            server_profiles::prepare_lab_import(&exported, &identity)?;
+                        let rendered = serde_json::to_string(&imported).unwrap_or_default();
+                        if rendered.contains("alice") || rendered.contains("bob") {
+                            return Err(
+                                "The imported profile still contains the shared file's user name."
+                                    .to_string(),
+                            );
+                        }
+                        Ok(serde_json::json!({
+                            "ok": true,
+                            "ssh_alias": imported.profile.ssh_alias,
+                            "scratch_template": imported.profile.scratch_template,
+                            "command": imported.profile.environment.coperceive_command,
+                            "data_roots": imported.profile.data_roots,
+                            "has_admin_name": false,
+                        }))
+                    })();
+                    let payload = match result {
+                        Ok(value) => value,
+                        Err(error) => serde_json::json!({"ok": false, "error": error}),
+                    };
+                    let _ = fs::write(
+                        &result_path,
+                        serde_json::to_string_pretty(&payload).unwrap_or_default(),
                     );
                 });
             }
