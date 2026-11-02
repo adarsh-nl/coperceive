@@ -102,6 +102,49 @@ def test_index_reads_every_scene_and_leaves_the_raw_tree_alone(tmp_path: Path) -
     assert _snapshot(raw) == before, "index must not write under the raw tree"
 
 
+def test_index_lists_the_other_scenes_when_one_scene_is_broken(tmp_path: Path) -> None:
+    raw = tmp_path / "opv2v"
+    write_opencood(
+        raw,
+        "test",
+        [two_cav_scene(name) for name in ("scene_0001", "scene_0002", "scene_0003")],
+    )
+    broken = raw / "test" / "scene_0002" / "641" / "000069.yaml"
+    broken.write_text('camera0: !!python/object/apply:os.system ["true"]\n', encoding="utf-8")
+
+    result = index_cluster_dataset("opv2v", raw / "test")
+
+    assert [scene["scene_id"] for scene in result["scenes"]] == ["scene_0001", "scene_0003"]
+    assert result["scene_count"] == 2
+    assert len(result["errors"]) == 1
+    error = result["errors"][0]
+    assert error.startswith("scene_0002: ")
+    assert "000069.yaml" in error and "python/object/apply:os.system" in error
+    assert "\n" not in error
+
+
+def test_index_reads_numpy_tagged_records_and_counts_every_sample(tmp_path: Path) -> None:
+    import numpy as np
+    import yaml
+
+    raw = _opv2v(tmp_path / "opv2v")
+    for path in sorted((raw / "test").glob("*/*/*.yaml")):
+        record = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if "lidar_pose" in record:
+            record["lidar_pose"] = [np.float64(v) for v in record["lidar_pose"]]
+            record["ego_speed"] = np.float32(record["ego_speed"])
+            path.write_text(yaml.dump(record, Dumper=yaml.Dumper), encoding="utf-8")
+    assert "numpy" in next((raw / "test").glob("*/641/*.yaml")).read_text(encoding="utf-8")
+
+    result = index_cluster_dataset("opv2v", raw / "test")
+
+    assert result["errors"] == []
+    for scene in result["scenes"]:
+        assert scene["agent_count"] == 2
+        # 4 cameras + lidar per agent; every one of the 3 samples, not a subset.
+        assert scene["sensors"] == {"sensors": 10, "camera_samples": 24, "lidar_samples": 6}
+
+
 def test_index_griffin_is_metadata_only(tmp_path: Path) -> None:
     raw = tmp_path / "griffin"
     write_griffin(raw, {"scene-a": [0, 1]})
@@ -323,3 +366,41 @@ def test_a_superseded_owner_does_not_overwrite_the_new_claim(
     assert reason and "superseded" in reason
     stored = json.loads((cache / "dataset.json").read_text(encoding="utf-8"))
     assert stored["scenes"]["scene_0001"]["job_id"] == "new-owner"
+
+
+@pytest.mark.parametrize("verbose", [False, True])
+def test_a_failed_dataset_command_prints_one_line(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    verbose: bool,
+) -> None:
+    import yaml
+    from coperceive import cli, cluster_datasets
+
+    def explode(*_args: object, **_kwargs: object) -> None:
+        yaml.safe_load("a: !!python/object/apply:numpy.core.multiarray.scalar [x]\n")
+
+    monkeypatch.setattr(cluster_datasets, "index_cluster_dataset", explode)
+    argv = ["dataset", "index", "--adapter", "opv2v", "--raw-root", str(tmp_path)]
+    with pytest.raises(SystemExit) as stopped:
+        cli.main(argv + (["--verbose"] if verbose else []))
+    assert stopped.value.code == 1
+    out, err = capsys.readouterr()
+    document = json.loads(out)
+    assert document["status"] == "error"
+    assert "\n" not in document["error"]
+    assert document["error"].startswith("could not read a YAML file: could not determine")
+    first = err.splitlines()[0]
+    assert first == f"coperceive dataset index: {document['error']}"
+    assert ("Traceback" in err) is verbose
+
+
+def test_capabilities_lists_cluster_datasets(capsys: pytest.CaptureFixture[str]) -> None:
+    from coperceive import cli
+
+    cli.main(["capabilities"])
+    document = json.loads(capsys.readouterr().out)
+    assert document["schema"] == "coperceive-capabilities-1"
+    assert "cluster-datasets-2" in document["capabilities"]
+    assert document["version"]

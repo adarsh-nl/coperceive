@@ -27,6 +27,7 @@ from coperceive.adapters.build import BuildError, ManifestAdapter
 from coperceive.adapters.ingest import ingest
 from coperceive.adapters.registry import RegistryError, resolve_adapter
 from coperceive.adapters.spec import SpecError
+from coperceive.errors import CoperceiveError
 
 DETECT_SCHEMA = "coperceive-cluster-detect-1"
 INDEX_SCHEMA = "coperceive-cluster-index-1"
@@ -124,9 +125,15 @@ def _fingerprint(
     *,
     max_entries: int = DEFAULT_MAX_ENTRIES,
     deadline: float,
+    sizes: dict[str, int] | None = None,
 ) -> dict[str, object]:
-    """Bounded sha1 over file and directory metadata below ``root``."""
+    """Bounded sha1 over file and directory metadata below ``root``.
+
+    With ``sizes``, file bytes are also summed per top-level entry (a scene
+    directory below a split), so the index needs no second walk.
+    """
     lines: list[str] = []
+    prefix = len(str(root)) + 1
     entries = 0
     truncated = False
     pending = [root]
@@ -146,9 +153,12 @@ def _fingerprint(
                         stat = entry.stat(follow_symlinks=False)
                     except OSError:
                         continue
-                    relative = str(Path(entry.path).relative_to(root))
+                    relative = entry.path[prefix:]
                     kind = "d" if entry.is_dir(follow_symlinks=False) else "f"
                     lines.append(f"{kind}\t{relative}\t{stat.st_size}\t{stat.st_mtime_ns}")
+                    if sizes is not None and kind == "f":
+                        top = relative.split(os.sep, 1)[0]
+                        sizes[top] = sizes.get(top, 0) + stat.st_size
                     if kind == "d":
                         pending.append(Path(entry.path))
                 else:
@@ -164,6 +174,12 @@ def _fingerprint(
         "entries": entries,
         "truncated": truncated,
     }
+
+
+def _scene_error(scene_id: str, exc: BaseException) -> str:
+    """``scene: reason`` on one line, as the index ``errors`` list holds them."""
+    text = " ".join(str(exc).split()) or type(exc).__name__
+    return text if text.startswith(f"{scene_id}:") else f"{scene_id}: {text}"
 
 
 def cache_relative_path(adapter: str, raw_root: str | Path, split: str | None) -> str:
@@ -439,12 +455,16 @@ def prepare_cluster_dataset(
     if _inside(cache, raw):
         raise DatasetError("the cache directory must not be inside the raw dataset root")
     params = _params_for(adapter_name, raw, split)
-    adapter = resolve_adapter(adapter_name)
-    refs = list(adapter.scenes(raw, params))
+    adapter = cast(ManifestAdapter, resolve_adapter(adapter_name))
+    unlisted: list[str] = []
+    refs = list(adapter.scenes(raw, params, errors=unlisted))
     wanted = set(scenes) if scenes else None
     selected = [ref for ref in refs if wanted is None or ref.scene_id in wanted]
     if wanted is not None:
         missing = wanted - {ref.scene_id for ref in refs}
+        reasons = [line for line in unlisted if line.split(":", 1)[0] in missing]
+        if reasons:
+            raise DatasetError(f"cannot read scene {reasons[0]}")
         if missing:
             raise DatasetError(f"unknown scene(s): {', '.join(sorted(missing))}")
     if not selected:
@@ -650,23 +670,29 @@ def index_cluster_dataset(
         raise DatasetError(f"raw root is not a directory: {raw}")
     raw, split = _raw_and_split(adapter_name, raw)
     params = _params_for(adapter_name, raw, split)
-    adapter = resolve_adapter(adapter_name)
-    refs = list(adapter.scenes(raw, params))
+    adapter = cast(ManifestAdapter, resolve_adapter(adapter_name))
+    errors: list[str] = []
+    refs = list(adapter.scenes(raw, params, errors=errors))
     if len(refs) > max_scenes:
         refs = refs[:max_scenes]
-    report = adapter.check(raw, params, scene_ids=[ref.scene_id for ref in refs])
-    counts_by_scene: Mapping[str, tuple[tuple[str, int], ...]] = report.counts
-    manifest_adapter = cast(ManifestAdapter, adapter)
-    scale_us = manifest_adapter.spec.clock.scale_us or 0
+    scale_us = adapter.spec.clock.scale_us or 0
     fingerprint_root = raw / split if split else raw
+    sizes: dict[str, int] = {}
     fingerprint = _fingerprint(
         fingerprint_root,
         max_entries=max_entries,
         deadline=min(deadline, time.monotonic() + max(1.0, timeout_s)),
+        sizes=sizes,
     )
     scenes: list[dict[str, Any]] = []
+    estimated_cache_bytes = 0
     for ref in refs:
-        counts = dict(counts_by_scene.get(ref.scene_id, ()))
+        try:
+            counts = adapter.summarise(raw, ref)
+        except (CoperceiveError, ValueError, OSError) as exc:
+            # One unreadable scene is an entry in errors, not a failed index.
+            errors.append(_scene_error(ref.scene_id, exc))
+            continue
         duration_s: float | None = None
         if scale_us:
             duration_s = round(len(ref.samples) * scale_us / 1_000_000, 6)
@@ -684,11 +710,11 @@ def index_cluster_dataset(
                 "raw": {"scene_id": ref.scene_id},
             }
         )
-    estimated_cache_bytes = 0
-    for ref in refs:
-        scene_dir = raw / split / ref.scene_id if split else raw / ref.scene_id
-        estimated_cache_bytes += _directory_bytes(scene_dir, max_entries=50_000)
-    errors = list(report.errors)
+        if split and not fingerprint["truncated"]:
+            estimated_cache_bytes += sizes.get(ref.scene_id, 0)
+        else:
+            scene_dir = raw / split / ref.scene_id if split else raw / ref.scene_id
+            estimated_cache_bytes += _directory_bytes(scene_dir, max_entries=50_000)
     return {
         "schema": INDEX_SCHEMA,
         "adapter": adapter_name,

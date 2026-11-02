@@ -4,8 +4,9 @@
 # Fake ssh for the packaged-app cluster-dataset e2e
 # (scripts/desktop/e2e_cluster_datasets_app.sh). The "cluster" is this machine:
 #
-# - `<coperceive argv> dataset detect|index|status ...` runs the real command
-#   locally (the profile's coperceive argv is the bundled Python).
+# - `<coperceive argv> dataset detect|index|status ...` and the capability probe
+#   run locally (the profile's coperceive argv is the bundled Python, or
+#   fake_old_python.sh for the "too old" case).
 # - `sbatch --parsable` runs the submitted script to completion with a fake
 #   SLURM_JOB_ID, so the job really runs `coperceive dataset prepare`; squeue
 #   then reports nothing and sacct reports COMPLETED/FAILED.
@@ -48,6 +49,12 @@ if [ "${tunnel}" = "1" ] && [ -n "${spec}" ]; then
 fi
 
 case "${remote}" in
+    "sh -c '# coperceive-check:capabilities"*)
+        # Answered by whatever coperceive the profile names (new or fake_old_python.sh).
+        log_command "capabilities"
+        cd "${home}" || exit 1  # a real ssh session starts in the remote home
+        HOME="${home}" exec sh -c "${remote}"
+        ;;
     *" dataset detect "*|*" dataset index "*|*" dataset status "*)
         verb="${remote#* dataset }"
         log_command "dataset-${verb%% *}"

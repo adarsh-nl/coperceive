@@ -100,6 +100,9 @@ mkdir -p "${CLUSTER}/results" "${CLUSTER}/scratch" "${REMOTE_HOME}" "${TMP_DIR}/
 import json, sys
 from pathlib import Path
 root = Path(sys.argv[1]); split = "test"
+NUMPY_YAW = ("!!python/object/apply:numpy.core.multiarray.scalar [!!python/object/apply:numpy.dtype "
+             "{args: [f8, false, true], state: !!python/tuple [3, '<', null, null, null, -1, -1, 0]}, "
+             "!!binary 'AAAAAACAVkA=']")  # float64 90.0
 extrinsic = [[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]]
 intrinsic = [[335.6,0.0,400.0],[0.0,335.6,300.0],[0.0,0.0,1.0]]
 pcd_head = ("# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z rgb\n"
@@ -121,7 +124,11 @@ for scene in range(3):
                 "camera0": {"cords": [float(agent), float(frame), 1.9, 0.0, 90.0, 0.0],
                             "extrinsic": extrinsic, "intrinsic": intrinsic},
             }
-            (folder / f"{frame:06d}.yaml").write_text(json.dumps(record))
+            # Real OPV2V records carry numpy-tagged scalars (PyYAML's full dumper):
+            # write the yaw that way so the numpy-safe loader is on this path.
+            text = json.dumps(record).replace(", 90.0, 0.0]", ", " + NUMPY_YAW + ", 0.0]", 1)
+            assert NUMPY_YAW in text
+            (folder / f"{frame:06d}.yaml").write_text(text)
             (folder / f"{frame:06d}.pcd").write_text(pcd_head)
 PY
 
@@ -231,11 +238,15 @@ profile_args() {
 
 # --- Flow A: detect, index, preview, two refused submits ----------------------
 run_flow detect "[
+  {\"command\": \"test_server_connection\", \"args\": {}},
   {\"command\": \"dataset_detect\", \"args\": {$(profile_args), \"path\": \"${RAW}/test\"}}
 ]"
 DATASET="$(python3 - "${TMP_DIR}/detect-result.json" <<'PY'
 import json, sys
-step = json.load(open(sys.argv[1], encoding="utf-8"))["steps"][0]
+connection, step = json.load(open(sys.argv[1], encoding="utf-8"))["steps"]
+assert connection["ok"], connection
+rows = {check["name"]: check for check in connection["value"]["checks"]}
+assert rows.get("cluster-datasets", {}).get("ok") is True, rows.get("cluster-datasets")
 if not step["ok"]:
     print(f"E2E_DATASET_APP_FAIL: CD-1 detect failed: {step['error']}", file=sys.stderr)
     sys.exit(1)
@@ -244,7 +255,7 @@ assert d["status"] == "ok" and d["adapter"] == "opv2v" and d["scene_count"] == 3
 print(json.dumps({"adapter": d["adapter"], "rawRoot": d["raw_root"], "split": d["split"]}))
 PY
 )"
-echo "Step CD-1 verified: dataset_detect -> ok, opv2v, 3 scenes"
+echo "Step CD-1 verified: Test connection reports cluster datasets supported; dataset_detect -> ok, opv2v, 3 scenes (numpy-tagged records)"
 DATASET_ARGS="$(profile_args), $(python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1]))[1:-1])' "${DATASET}")"
 RAW_ROOT="$(python3 -c 'import json,sys; print(json.loads(sys.argv[1])["rawRoot"])' "${DATASET}")"
 
@@ -364,4 +375,51 @@ for path in files:
 print(f"Step CD-9 verified: raw tree byte-identical ({sum(1 for _ in open(tmp + '/raw-before.txt'))} files, "
       "sorted sha256); no password/private_key/secret/bearer in the request/result JSON")
 PY
+# --- Flow E: an older coperceive on the cluster --------------------------------
+# The profile's interpreter is fake_old_python.sh: no `capabilities`, no
+# `dataset detect`. Test connection and dataset_detect must both say "too old"
+# with the exact update command, never raw argparse output.
+OLD_CHECKOUT="${TMP_DIR}/old-checkout"
+mkdir -p "${OLD_CHECKOUT}/coperceive" "${OLD_CHECKOUT}/.git"
+printf '' > "${OLD_CHECKOUT}/coperceive/__init__.py"
+export FAKE_OLD_CHECKOUT="${OLD_CHECKOUT}"
+OLD_PYTHON="${ROOT_DIR}/src-tauri/tests/fixtures/datasets/fake_old_python.sh"
+NEW_SERVER="${SERVER}"
+SERVER="${TMP_DIR}/server-old.json"
+python3 - "${NEW_SERVER}" "${SERVER}" "${OLD_PYTHON}" <<'PY'
+import json, sys
+source, target, python = sys.argv[1:4]
+entry = json.load(open(source, encoding="utf-8"))
+entry["profile"]["environment"]["interpreter"] = python
+entry["profile"]["environment"]["coperceive_command"] = [python, "-m", "coperceive"]
+json.dump(entry, open(target, "w", encoding="utf-8"), indent=2)
+PY
+run_flow old "[
+  {\"command\": \"test_server_connection\", \"args\": {}},
+  {\"command\": \"dataset_detect\", \"args\": {$(profile_args), \"path\": \"${RAW}/test\"}}
+]"
+SERVER="${NEW_SERVER}"
+check old "${OLD_CHECKOUT}" "${OLD_PYTHON}" <<'PY'
+import json, sys
+result, ssh_log, tmp, raw, checkout, python = sys.argv[1:7]
+connection, detect = json.load(open(result, encoding="utf-8"))["steps"]
+update = f"git -C {checkout} pull --ff-only && {python} -m pip install -e {checkout} --no-deps"
+expected = ("coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, which "
+            "has no capabilities command, need a build with cluster-datasets-2). Update it with: " + update)
+assert not detect["ok"], detect
+assert detect["error"] == expected, detect["error"]
+assert "invalid choice" not in detect["error"] and "usage:" not in detect["error"], detect["error"]
+rows = {check["name"]: check for check in connection["value"]["checks"]}
+row = rows.get("cluster-datasets")
+assert row is not None and row["ok"] is False and row["detail"] == expected, row
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+assert "dataset-detect" in log and log.count("capabilities") == 2 and "sbatch" not in log, log
+for path in (result, f"{tmp}/old-request.json"):
+    text = open(path, encoding="utf-8").read().lower()
+    for forbidden in ("password", "private_key", "secret", "bearer"):
+        assert forbidden not in text, f"{path} contains {forbidden}"
+print(f"Step CD-10 verified: old coperceive (no capabilities, 'invalid choice: detect') -> Test connection "
+      f"row and dataset_detect both say: {expected}")
+PY
+
 echo "E2E_DATASET_APP_MARK: cluster datasets verified through the packaged app over fake SSH"
