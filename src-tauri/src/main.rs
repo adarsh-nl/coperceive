@@ -717,8 +717,8 @@ fn diagnostics_build_report(
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-fn diagnostics_copy_text(text: String) -> Result<(), String> {
-    coperceive_desktop::diagnostics::copy(&text)
+fn diagnostics_copy_text(context: serde_json::Value, note: String) -> Result<(), String> {
+    coperceive_desktop::diagnostics::copy(&context, &note)
 }
 
 #[cfg(target_os = "macos")]
@@ -737,7 +737,7 @@ fn diagnostics_startup_crash(
 #[tauri::command]
 async fn diagnostics_save_zip(
     app: tauri::AppHandle,
-    preview: String,
+    note: String,
     context: serde_json::Value,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -750,8 +750,7 @@ async fn diagnostics_save_zip(
     let Some(destination) = choice.and_then(|path| path.into_path().ok()) else {
         return Ok(None);
     };
-    let _ = preview;
-    coperceive_desktop::diagnostics::save_zip(&destination, &context)
+    coperceive_desktop::diagnostics::save_zip(&destination, &context, &note)
         .map(|path| Some(path.display().to_string()))
 }
 

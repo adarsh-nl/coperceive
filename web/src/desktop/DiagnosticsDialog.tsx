@@ -76,7 +76,7 @@ export function DiagnosticsDialog({
           <button
             type="button"
             onClick={async () => {
-              const ok = await copyDiagnosticsText(withNote);
+              const ok = await copyDiagnosticsText(merged, note);
               setStatus(ok ? "Copied to clipboard." : "Could not copy diagnostics.");
             }}
           >
@@ -85,7 +85,7 @@ export function DiagnosticsDialog({
           <button
             type="button"
             onClick={async () => {
-              const path = await saveDiagnosticsZip(withNote, merged);
+              const path = await saveDiagnosticsZip(merged, note);
               setStatus(path ? `Saved ${path}` : "Save cancelled.");
             }}
           >

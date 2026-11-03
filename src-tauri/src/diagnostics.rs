@@ -207,20 +207,44 @@ struct Bundle {
 }
 
 fn server_pattern(server: &str) -> regex::Regex {
-    regex::Regex::new(&format!("(?i){}", regex::escape(server))).expect("server regex")
+    regex::Regex::new(&format!(
+        r"(?i)(^|[^A-Za-z0-9._-])({})([^A-Za-z0-9._-]|$)",
+        regex::escape(server)
+    ))
+    .expect("server regex")
 }
 
 fn redact(text: &str, servers: &[String]) -> String {
     use regex::Regex;
     let mut out = text.to_string();
-    let private_key = Regex::new(r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
+    let full_key = Regex::new(r"(?is)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
         .expect("private key regex");
-    out = private_key.replace_all(&out, "[private key redacted]").into_owned();
-    let header = Regex::new(r"(?im)^\s*(authorization|x-coperceive-token|cookie|set-cookie)\s*:.*$")
-        .expect("header regex");
-    out = header.replace_all(&out, "[credential header redacted]").into_owned();
+    out = full_key.replace_all(&out, "[private key redacted]").into_owned();
+    // A tail may start or end inside a key block. Without this, the surviving
+    // base64 body would leak.
+    let begin_key = Regex::new(r"(?is)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*$")
+        .expect("begin key regex");
+    out = begin_key.replace_all(&out, "[private key redacted]").into_owned();
+    let end_key = Regex::new(r"(?is)^.*-----END [A-Z0-9 ]*PRIVATE KEY-----")
+        .expect("end key regex");
+    out = end_key.replace_all(&out, "[private key redacted]").into_owned();
+    let quoted_header = Regex::new(
+        r#"(?i)(["']?(?:authorization|x-coperceive-token|set-cookie|cookie)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}]+)"#,
+    )
+    .expect("quoted header regex");
+    out = quoted_header.replace_all(&out, "$1[redacted]").into_owned();
+    let inline_header = Regex::new(r"(?i)\b(?:authorization|x-coperceive-token|set-cookie|cookie)\b\s*:\s*[^\n,}]*")
+        .expect("inline header regex");
+    out = inline_header.replace_all(&out, "[credential header redacted]").into_owned();
     let bearer = Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+").expect("bearer regex");
     out = bearer.replace_all(&out, "Bearer [redacted]").into_owned();
+    // Quoted values run to their closing quote, so spaces inside a secret are
+    // removed too; unquoted values stop at the usual delimiters.
+    let quoted_value = Regex::new(
+        r#"(?i)(["']?(?:token|password|passwd|secret|api[_-]?key)["']?\s*[:=]\s*)("[^"]*"|'[^']*')"#,
+    )
+    .expect("quoted value regex");
+    out = quoted_value.replace_all(&out, "$1[redacted]").into_owned();
     let assignment = Regex::new(
         r#"(?i)(["']?(?:token|password|passwd|secret|api[_-]?key)["']?\s*[:=]\s*)(["']?)[^"'\s,;&}]+"#,
     )
@@ -242,7 +266,7 @@ fn redact(text: &str, servers: &[String]) -> String {
     for (index, server) in servers.iter().enumerate() {
         if !server.trim().is_empty() {
             out = server_pattern(server)
-                .replace_all(&out, format!("<server-{}>", index + 1))
+                .replace_all(&out, format!("${{1}}<server-{}>${{3}}", index + 1))
                 .into_owned();
         }
     }
@@ -340,31 +364,6 @@ fn tail_lines(text: &str, lines: usize) -> String {
     all[all.len().saturating_sub(lines)..].join("\n")
 }
 
-fn app_logs() -> String {
-    let mut text = String::new();
-    for name in ["desktop.log", "startup-error.log"] {
-        let path = log_dir().join(name);
-        if path.is_file() {
-            text.push_str(&format!("\n## {name}\n"));
-            text.push_str(&tail_lines(&read_tail(&path, MAX_LOG_BYTES / 2), 300));
-            text.push('\n');
-        }
-    }
-    if text.is_empty() { "No app logs recorded.\n".into() } else { text }
-}
-
-fn sidecar_logs() -> String {
-    let Ok(entries) = fs::read_dir(log_dir()) else { return "No sidecar log recorded.\n".into() };
-    let mut paths: Vec<PathBuf> = entries
-        .flatten()
-        .map(|entry| entry.path())
-        .filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("serve-")))
-        .collect();
-    paths.sort();
-    let Some(path) = paths.last() else { return "No sidecar log recorded.\n".into() };
-    format!("\n## {}\n{}\n", path.file_name().unwrap_or_default().to_string_lossy(), tail_lines(&read_tail(path, MAX_LOG_BYTES / 2), 200))
-}
-
 /// Build the complete preview. Everything shared is generated from one
 /// redacted bundle.
 pub fn report(context: &Value) -> Value {
@@ -376,8 +375,22 @@ pub fn report(context: &Value) -> Value {
     })
 }
 
-/// Copy the (already redacted) preview through pbcopy.
-pub fn copy(text: &str) -> Result<(), String> {
+/// The exact text that will be copied: the redacted preview plus the redacted
+/// user note. Built in Rust so the webview cannot substitute unredacted text.
+pub fn copy_text(context: &Value, note: &str) -> String {
+    let bundle = build_bundle(context);
+    let servers = servers_from(context);
+    let note = note.trim();
+    if note.is_empty() {
+        bundle.preview
+    } else {
+        format!("{}\n\n## What I was doing\n{}\n", bundle.preview, redact(note, &servers))
+    }
+}
+
+/// Copy that Rust-built text through pbcopy.
+pub fn copy(context: &Value, note: &str) -> Result<(), String> {
+    let text = copy_text(context, note);
     let mut child = std::process::Command::new("pbcopy")
         .stdin(std::process::Stdio::piped())
         .spawn()
@@ -391,14 +404,15 @@ pub fn copy(text: &str) -> Result<(), String> {
 
 /// Save the exact redacted bundle as a zip: report.txt plus one file per
 /// preview section. Nothing unredacted is copied.
-pub fn save_zip(destination: &Path, context: &Value) -> Result<PathBuf, String> {
+pub fn save_zip(destination: &Path, context: &Value, note: &str) -> Result<PathBuf, String> {
     let bundle = build_bundle(context);
+    let report_text = copy_text(context, note);
     let parent = destination.parent().ok_or_else(|| "Choose a folder for diagnostics.".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let staging = std::env::temp_dir().join(format!("coperceive-diagnostics-{}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
-    fs::write(staging.join("report.txt"), &bundle.preview).map_err(|error| error.to_string())?;
+    fs::write(staging.join("report.txt"), &report_text).map_err(|error| error.to_string())?;
     for (name, text) in &bundle.files {
         fs::write(staging.join(name), text).map_err(|error| error.to_string())?;
     }
@@ -514,7 +528,7 @@ mod tests {
             assert!(!preview.contains(secret), "{secret} leaked into preview:\n{preview}");
         }
         assert!(preview.contains("shadow bad road"), "normal text was mangled");
-        let zip = save_zip(&home.join("report.zip"), &context).unwrap();
+        let zip = save_zip(&home.join("report.zip"), &context, "").unwrap();
         let mut archive = std::fs::File::open(&zip).unwrap();
         let mut bytes = Vec::new();
         archive.read_to_end(&mut bytes).unwrap();
@@ -553,6 +567,43 @@ mod tests {
         let backtrace = record.backtrace.unwrap_or_default();
         assert!(!backtrace.contains("sidecar-auth"), "{backtrace}");
         assert!(!backtrace.contains("/Users/alice"), "{backtrace}");
+        if let Some(old) = old_home { std::env::set_var("HOME", old); }
+    }
+
+    #[test]
+    fn truncated_keys_quoted_values_short_servers_and_inline_headers_are_redacted() {
+        let begin = "prefix\n-----BEGIN OPENSSH PRIVATE KEY-----\ncut-body-secret";
+        let end = "cut-body-other\n-----END OPENSSH PRIVATE KEY-----\nsuffix";
+        for text in [begin, end] {
+            let out = redact(text, &[]);
+            assert!(!out.contains("cut-body"), "{out}");
+        }
+        let quoted = redact(r#"{"password": "my secret pass", "token": "a b c"}"#, &[]);
+        assert!(!quoted.contains("secret pass"), "{quoted}");
+        assert!(!quoted.contains("a b c"), "{quoted}");
+        let short = redact("maps ps output and ps", &["ps".to_string()]);
+        assert!(!short.contains(" ps "), "{short}");
+        assert!(short.contains("maps"), "{short}");
+        let headers = redact(
+            r#"request headers: Cookie: a=b, then {"Authorization": "Bearer hidden"}"#,
+            &[],
+        );
+        assert!(!headers.contains("a=b"), "{headers}");
+        assert!(!headers.contains("hidden"), "{headers}");
+    }
+
+    #[test]
+    fn copied_text_is_the_preview_plus_a_redacted_note() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+        let context = serde_json::json!({"servers": ["hpc"]});
+        let text = copy_text(&context, "token=note-secret /Users/alice/x password=pass-secret");
+        assert!(text.starts_with("Coperceive Diagnostics"));
+        assert!(!text.contains("note-secret"), "{text}");
+        assert!(!text.contains("pass-secret"), "{text}");
+        assert!(!text.contains("/Users/alice"), "{text}");
         if let Some(old) = old_home { std::env::set_var("HOME", old); }
     }
 }

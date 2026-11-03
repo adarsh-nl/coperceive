@@ -998,18 +998,16 @@ export async function buildDiagnosticsReport(context: Record<string, unknown>): 
   }
 }
 
-export async function copyDiagnosticsText(text: string): Promise<boolean> {
+export async function copyDiagnosticsText(
+  context: Record<string, unknown>,
+  note: string,
+): Promise<boolean> {
   if (!isTauriEnvironment()) {
-    try {
-      await navigator.clipboard.writeText(text);
-      return true;
-    } catch {
-      return false;
-    }
+    return false;
   }
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    await invoke("diagnostics_copy_text", { text });
+    await invoke("diagnostics_copy_text", { context, note });
     return true;
   } catch {
     return false;
@@ -1017,13 +1015,13 @@ export async function copyDiagnosticsText(text: string): Promise<boolean> {
 }
 
 export async function saveDiagnosticsZip(
-  preview: string,
   context: Record<string, unknown>,
+  note: string,
 ): Promise<string | null> {
   if (!isTauriEnvironment()) return null;
   try {
     const { invoke } = await import("@tauri-apps/api/core");
-    return await invoke<string | null>("diagnostics_save_zip", { preview, context });
+    return await invoke<string | null>("diagnostics_save_zip", { context, note });
   } catch {
     return null;
   }
