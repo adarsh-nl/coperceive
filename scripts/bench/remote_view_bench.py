@@ -48,9 +48,9 @@ GAP_S = 0.1
 
 def scene(frames: int) -> Scene:
     sweep = struct.pack("<4f", 1.0, 2.0, 0.5, 0.3) * POINTS
-    agents = []
-    clouds = []
-    sensors = []
+    agents: list[Agent] = []
+    clouds: list[PointCloud] = []
+    sensors: list[Sensor] = []
     for agent_id in ("641", "650"):
         poses = tuple(
             StampedPose(i * 100_000, SE3.identity().translation(float(i), 0.0, 0.0))

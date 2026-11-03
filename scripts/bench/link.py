@@ -14,6 +14,7 @@ import subprocess
 import sys
 import threading
 import time
+from typing import IO
 
 
 def main() -> None:
@@ -22,13 +23,15 @@ def main() -> None:
     argv = sys.argv[sys.argv.index("--") + 1 :]
     child = subprocess.Popen(argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, bufsize=0)
     assert child.stdin and child.stdout
+    stdin: IO[bytes] = child.stdin
+    stdout: IO[bytes] = child.stdout
 
     def upstream() -> None:
         for line in sys.stdin.buffer:
             due = time.monotonic() + rtt / 2
-            threading.Timer(max(0.0, due - time.monotonic()), _send, (child.stdin, line)).start()
+            threading.Timer(max(0.0, due - time.monotonic()), _send, (stdin, line)).start()
         time.sleep(rtt / 2 + 0.05)
-        child.stdin.close()
+        stdin.close()
 
     threading.Thread(target=upstream, daemon=True).start()
     out = sys.stdout.buffer
@@ -37,7 +40,7 @@ def main() -> None:
     def downstream_reader() -> None:
         # Stamp each chunk when the streamer wrote it, independent of delivery.
         while True:
-            chunk = os.read(child.stdout.fileno(), 65536)
+            chunk = os.read(stdout.fileno(), 65536)
             arrivals.put((time.monotonic(), chunk) if chunk else None)
             if not chunk:
                 return
@@ -63,7 +66,7 @@ def main() -> None:
 _lock = threading.Lock()
 
 
-def _send(stream, line: bytes) -> None:  # type: ignore[no-untyped-def]
+def _send(stream: IO[bytes], line: bytes) -> None:
     with _lock:
         stream.write(line)
         stream.flush()

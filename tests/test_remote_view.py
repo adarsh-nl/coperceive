@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportPrivateUsage=false
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportPrivateUsage=false, reportAttributeAccessIssue=false
 """Viewing a prepared cluster dataset over SSH, with no Slurm job.
 
 The streamer runs here as a local process (``python -m coperceive dataset
