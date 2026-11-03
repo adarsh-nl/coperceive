@@ -578,6 +578,38 @@ coperceive dataset prepare \\
   };
 }
 
+/** A viewer job still waiting to run (the `viewer-job` event while it queues). */
+export interface ViewerJobProgress {
+  job_id: number | null;
+  state: string;
+  reason: string | null;
+}
+
+/** "Starting viewer on the cluster (job 700003, Priority)". */
+export function viewerStartLabel(progress: ViewerJobProgress | null): string {
+  if (!progress) {
+    return "Starting viewer on the cluster…";
+  }
+  const parts = [progress.job_id != null ? `job ${progress.job_id}` : null, progress.reason || progress.state].filter(Boolean);
+  return `Starting viewer on the cluster (${parts.join(", ")})`;
+}
+
+/** Listen to a Tauri event in the main window; returns the unlisten function. */
+export async function listenTauri<T>(event: string, handler: (payload: T) => void): Promise<() => void> {
+  if (!isTauriEnvironment()) {
+    return () => undefined;
+  }
+  const { listen } = await import("@tauri-apps/api/event");
+  return await listen<T>(event, (message) => handler(message.payload));
+}
+
+/** Tell the viewer every scene of this dataset and its state, for its scene list. */
+export async function shareDatasetScenesWithViewer(scenes: { scene_id: string; state: string }[]): Promise<void> {
+  if (isTauriEnvironment()) {
+    await tauriInvoke<void>("set_viewer_dataset_scenes", { dataset: { scenes } });
+  }
+}
+
 export async function getCameraImagesSetting(profileId: string | null): Promise<CameraImagesSetting> {
   if (isTauriEnvironment()) {
     return await tauriInvoke<CameraImagesSetting>("get_camera_images_setting", { profileId });

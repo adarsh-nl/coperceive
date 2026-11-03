@@ -84,6 +84,9 @@ type TimelineProps = {
   onToggle: () => void;
   onSpeed: (speed: Speed) => void;
   onLoop: () => void;
+  /** Previous/next prepared scene of the dataset; absent when there is none. */
+  onPrevScene?: () => void;
+  onNextScene?: () => void;
 };
 
 export default function Timeline({
@@ -106,6 +109,8 @@ export default function Timeline({
   onToggle,
   onSpeed,
   onLoop,
+  onPrevScene,
+  onNextScene,
 }: TimelineProps) {
   const last = Math.max(length - 1, 0);
   const place = length > 1 ? (Math.min(index, last) / last) * 100 : 0;
@@ -176,6 +181,30 @@ export default function Timeline({
         >
           <IconStep direction={1} />
         </button>
+        {onPrevScene || onNextScene ? (
+          <>
+            <button
+              type="button"
+              className="icon ghost scene-step"
+              disabled={!onPrevScene}
+              aria-label="Previous scene (P)"
+              title="Previous scene (P)"
+              onClick={onPrevScene}
+            >
+              |◀
+            </button>
+            <button
+              type="button"
+              className="icon ghost scene-step"
+              disabled={!onNextScene}
+              aria-label="Next scene (N)"
+              title="Next scene (N)"
+              onClick={onNextScene}
+            >
+              ▶|
+            </button>
+          </>
+        ) : null}
         <Menu
           id="speed"
           label="Speed"
@@ -212,6 +241,9 @@ export default function Timeline({
             </p>
             <p>
               <kbd>[</kbd> <kbd>]</kbd> speed
+            </p>
+            <p>
+              <kbd>P</kbd> <kbd>N</kbd> previous or next scene
             </p>
             <p>
               <kbd>1</kbd>–<kbd>5</kbd> viewpoints

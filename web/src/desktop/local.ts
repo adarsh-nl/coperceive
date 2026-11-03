@@ -547,6 +547,57 @@ export function isViewerWindow(): boolean {
   return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_VIEWER_WINDOW__);
 }
 
+async function controllerGet<T>(endpoint: string): Promise<T> {
+  const port = window.__COPERCEIVE_CTRL_PORT__;
+  const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+  const res = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+    headers: { Authorization: `Bearer ${secret}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Controller request failed (${res.status})`);
+  }
+  return res.json() as Promise<T>;
+}
+
+/** Every scene of the open cluster dataset and its state, as the main window last saw it. */
+export interface DatasetSceneList {
+  scenes: { scene_id: string; state: string }[];
+}
+
+export async function getDatasetScenes(): Promise<DatasetSceneList | null> {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+    return null;
+  }
+  const body = await controllerGet<{ dataset: DatasetSceneList | null }>("/dataset-scenes");
+  return body.dataset && Array.isArray(body.dataset.scenes) ? body.dataset : null;
+}
+
+/** The Slurm job serving a cluster dataset's viewer, or null for a local scene. */
+export interface ViewerJob {
+  job_id: number | null;
+  status: string;
+  state?: string | null;
+  time_left?: string | null;
+  time_left_seconds?: number | null;
+}
+
+export async function getViewerJob(): Promise<ViewerJob | null> {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+    return null;
+  }
+  const body = await controllerGet<{ session: ViewerJob | null }>("/viewer-session");
+  return body.session ?? null;
+}
+
+/** Ask the main window to show the prepare preview for one scene (confirmed there). */
+export async function prepareSceneInMainWindow(sceneId: string): Promise<boolean> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const resp = await controllerPost<{ shown?: boolean }>("/prepare-scene", { scene_id: sceneId });
+    return Boolean(resp.shown);
+  }
+  return false;
+}
+
 /** Bring the main window forward on its Library (from the viewer window). */
 export async function showLibrary(): Promise<boolean> {
   if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {

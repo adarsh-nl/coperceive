@@ -6,6 +6,7 @@ import {
   formatDetectBannerTitle,
   formatIndexHeader,
   indexingLabel,
+  viewerStartLabel,
   splitErrorText,
   formatDuration,
   formatLicenceInfo,
@@ -489,4 +490,16 @@ test("formatIndexHeader titles the view from the index document, not detect", ()
   } as ClusterIndexDocument;
   assert.strictEqual(formatIndexHeader(index, "opv2v"), "OPV2V · test · 16 scenes");
   assert.strictEqual(formatIndexHeader({ ...index, split: null, scene_count: 1 }, "x"), "OPV2V · 1 scene");
+});
+
+test("viewerStartLabel names the queued job and its reason", () => {
+  assert.strictEqual(viewerStartLabel(null), "Starting viewer on the cluster…");
+  assert.strictEqual(
+    viewerStartLabel({ job_id: 700003, state: "PENDING", reason: "Priority" }),
+    "Starting viewer on the cluster (job 700003, Priority)",
+  );
+  assert.strictEqual(
+    viewerStartLabel({ job_id: null, state: "PENDING", reason: null }),
+    "Starting viewer on the cluster (PENDING)",
+  );
 });

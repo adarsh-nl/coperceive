@@ -335,6 +335,30 @@ failed remote command returns a plain error string; a successful `detect` with
 no match returns `status:"none"` (not an error).
 
 
+## What viewing costs: the viewer job
+
+Preparing is once per scene: a prepared scene stays in the cache and is reused
+until the raw data changes. Viewing is separate: the scenes are served from the
+cluster by a small CPU job (`remote_serve.sbatch`, the profile's partition,
+CPUs and time limit) behind an SSH tunnel.
+
+- The first **Open** of a dataset starts that job. Its preview is the server
+  profile itself; nothing GPU, nothing written outside `~/.coperceive`.
+- Every further **Open** of a scene of the same dataset (same server, cache
+  directory and media root) **reuses the running job** and the open viewer
+  window: the viewer is pointed at the scene (`#/viewer?scene=…`), no new job,
+  no new window. Choosing another scene in the viewer, the scene buttons and the
+  P/N keys use the same job.
+- After the app restarts, it reattaches to the job by its session id (kept in
+  `state.json` as `viewer_sessions`) if the job still runs; otherwise it starts
+  a new one.
+- Opening a different dataset (or a local scene) stops the job and starts one
+  for that data.
+- While the job waits in the queue, the dataset view says "Starting viewer on
+  the cluster (job N, queue reason)". A job still queued after 15 minutes is
+  cancelled with a plain message, so it never runs unseen.
+- The viewer shows the job and its time left ("Cluster job N · 3:59:00 left").
+
 ## Camera-image settings and previews (desktop)
 
 | Tauri command | arguments | returns |

@@ -133,6 +133,21 @@ def main() -> int:
             print(json.dumps({"status": "error", "error": "no such session"}))
             return 0
         return _reply(status="ok", uuid=uuid, token=token_file.read_text(encoding="utf-8"))
+    if verb == "status":
+        # Running while the session's serve process is alive, as squeue would say.
+        pid_file = sessions / f"{uuid}.pid"
+        try:
+            os.kill(int(pid_file.read_text(encoding="utf-8")), 0)
+        except (OSError, ValueError):
+            return _reply(status="stopped", uuid=uuid, state="COMPLETED")
+        return _reply(
+            status="running",
+            uuid=uuid,
+            state="RUNNING",
+            job_id=799999,
+            time_left="3:59:00",
+            time_left_seconds=14340,
+        )
     print(json.dumps({"status": "error", "error": f"fake remote does not support {verb}"}))
     return 0
 
