@@ -56,6 +56,14 @@ pub struct SidecarSession {
 }
 
 impl SidecarSession {
+    /// Exit code if the server process ended on its own (not via stop()).
+    pub fn unexpected_exit(&mut self) -> Option<i32> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(status.code().unwrap_or(-1)),
+            _ => None,
+        }
+    }
+
     /// Launches a local `coperceive serve` sidecar process.
     /// Allocates an ephemeral loopback port and a mode 0600 token file.
     pub fn spawn(

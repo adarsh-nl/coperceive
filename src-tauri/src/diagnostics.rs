@@ -159,6 +159,26 @@ pub fn install_panic_hook() {
     }));
 }
 
+/// Record a local server that exited without the app asking it to. The stderr
+/// tail is redacted before it is written, like every other shared artifact.
+pub fn record_sidecar_exit(exit_code: i32, log_path: &Path) {
+    let tail = tail_lines(&read_tail(log_path, MAX_LOG_BYTES / 2), 200);
+    let servers = servers_from(&Value::Null);
+    let record = CrashRecord {
+        schema: CRASH_SCHEMA.into(),
+        kind: "sidecar-exit".into(),
+        timestamp_unix: now_unix(),
+        version: app_version().to_string(),
+        commit: app_commit().to_string(),
+        os: os_version(),
+        arch: std::env::consts::ARCH.to_string(),
+        message: format!("The local Coperceive server exited unexpectedly (exit code {exit_code})."),
+        location: Some(log_path.display().to_string()),
+        backtrace: Some(redact(&tail, &servers)),
+    };
+    let _ = write_crash(&record);
+}
+
 /// Recent crash records, newest first.
 pub fn crash_records() -> Vec<CrashRecord> {
     let mut records: Vec<CrashRecord> = fs::read_dir(log_dir())
@@ -181,70 +201,132 @@ pub fn crash_records() -> Vec<CrashRecord> {
     records
 }
 
+struct Bundle {
+    preview: String,
+    files: Vec<(String, String)>,
+}
+
+fn server_pattern(server: &str) -> regex::Regex {
+    regex::Regex::new(&format!("(?i){}", regex::escape(server))).expect("server regex")
+}
+
 fn redact(text: &str, servers: &[String]) -> String {
-    let home = std::env::var("HOME").unwrap_or_default();
+    use regex::Regex;
     let mut out = text.to_string();
-    if !home.is_empty() {
-        out = out.replace(&home, "~");
+    let private_key = Regex::new(r"(?s)-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----.*?-----END [A-Z0-9 ]*PRIVATE KEY-----")
+        .expect("private key regex");
+    out = private_key.replace_all(&out, "[private key redacted]").into_owned();
+    let header = Regex::new(r"(?im)^\s*(authorization|x-coperceive-token|cookie|set-cookie)\s*:.*$")
+        .expect("header regex");
+    out = header.replace_all(&out, "[credential header redacted]").into_owned();
+    let bearer = Regex::new(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+").expect("bearer regex");
+    out = bearer.replace_all(&out, "Bearer [redacted]").into_owned();
+    let assignment = Regex::new(
+        r#"(?i)(["']?(?:token|password|passwd|secret|api[_-]?key)["']?\s*[:=]\s*)(["']?)[^"'\s,;&}]+"#,
+    )
+    .expect("assignment regex");
+    out = assignment.replace_all(&out, "$1[redacted]").into_owned();
+    let ssh_key = Regex::new(r"(?i)\bssh-(?:rsa|ed25519|dss|ecdsa)\s+[A-Za-z0-9+/=]+")
+        .expect("ssh key regex");
+    out = ssh_key.replace_all(&out, "[ssh key redacted]").into_owned();
+    let home_path = Regex::new(r#"(?m)(?:/Users|/home)/[^/\s"']+"#).expect("home path regex");
+    out = home_path.replace_all(&out, "~").into_owned();
+    if let Ok(home) = std::env::var("HOME") {
         if let Some(user) = Path::new(&home).file_name().and_then(|name| name.to_str()) {
-            out = out.replace(user, "<user>");
+            if !user.is_empty() {
+                let user_regex = Regex::new(&format!(r"\b{}\b", regex::escape(user))).expect("user regex");
+                out = user_regex.replace_all(&out, "<user>").into_owned();
+            }
         }
     }
     for (index, server) in servers.iter().enumerate() {
         if !server.trim().is_empty() {
-            out = out.replace(server, &format!("<server-{}>", index + 1));
+            out = server_pattern(server)
+                .replace_all(&out, format!("<server-{}>", index + 1))
+                .into_owned();
         }
     }
-    out = redact_home_paths(&out);
-    out = out.replace("/datasets/", "<datasets>/");
-    out = redact_secrets(&out);
-    out
+    out.replace("/datasets/", "<datasets>/")
 }
 
-fn redact_home_paths(text: &str) -> String {
-    let mut out = text.to_string();
-    for prefix in ["/Users/", "/home/"] {
-        while let Some(start) = out.find(prefix) {
-            let after = start + prefix.len();
-            let end = out[after..]
-                .find('/')
-                .map(|offset| after + offset)
-                .unwrap_or_else(|| out[after..].find(char::is_whitespace).map(|offset| after + offset).unwrap_or(out.len()));
-            out.replace_range(start..end, "~");
+fn servers_from(context: &Value) -> Vec<String> {
+    let mut servers: Vec<String> = context
+        .get("servers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .map(str::to_string)
+        .collect();
+    for entry in crate::server_profiles::load_servers() {
+        servers.push(entry.profile.name.clone());
+        if let Some(alias) = &entry.profile.ssh_alias {
+            servers.push(alias.clone());
+        }
+        if let Some(host) = &entry.profile.host {
+            servers.push(host.clone());
+        }
+        if let Some(user) = &entry.profile.user {
+            servers.push(user.clone());
         }
     }
-    out
+    servers.sort();
+    servers.dedup();
+    servers
 }
 
-fn redact_secrets(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for line in text.lines() {
-        let lower = line.to_ascii_lowercase();
-        if lower.contains("-----begin") && lower.contains("private key-----") {
-            out.push_str("[private key redacted]\n");
-            continue;
-        }
-        if lower.contains("authorization:") || lower.contains("bearer ") || lower.contains("password=") {
-            out.push_str("[credential line redacted]\n");
-            continue;
-        }
-        let mut parts: Vec<String> = Vec::new();
-        for token in line.split_whitespace() {
-            let lowered = token.to_ascii_lowercase();
-            if lowered.starts_with("token=")
-                || lowered.starts_with("?token=")
-                || lowered.starts_with("&token=")
-                || lowered.starts_with("ssh-")
-            {
-                parts.push("[redacted]".into());
-            } else {
-                parts.push(token.into());
-            }
-        }
-        out.push_str(&parts.join(" "));
-        out.push('\n');
+/// One redacted bundle: the preview and every file put in the zip are built
+/// from this same data, so the user sees exactly what is saved.
+fn build_bundle(context: &Value) -> Bundle {
+    let servers = servers_from(context);
+    let mut files: Vec<(String, String)> = Vec::new();
+    files.push((
+        "feature-state.json".into(),
+        redact(&serde_json::to_string_pretty(context).unwrap_or_default(), &servers),
+    ));
+    for record in crash_records() {
+        let name = format!("crash-{}.json", record.timestamp_unix);
+        files.push((
+            name,
+            redact(&serde_json::to_string_pretty(&record).unwrap_or_default(), &servers),
+        ));
     }
-    if text.is_empty() { out } else { out.trim_end().to_string() }
+    for name in ["desktop.log", "startup-error.log"] {
+        let path = log_dir().join(name);
+        if path.is_file() {
+            files.push((
+                name.into(),
+                redact(&tail_lines(&read_tail(&path, MAX_LOG_BYTES / 2), 300), &servers),
+            ));
+        }
+    }
+    if let Ok(entries) = fs::read_dir(log_dir()) {
+        let mut serve: Vec<PathBuf> = entries
+            .flatten()
+            .map(|entry| entry.path())
+            .filter(|path| path.file_name().and_then(|name| name.to_str()).is_some_and(|name| name.starts_with("serve-")))
+            .collect();
+        serve.sort();
+        if let Some(path) = serve.last() {
+            files.push((
+                path.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                redact(&tail_lines(&read_tail(path, MAX_LOG_BYTES / 2), 200), &servers),
+            ));
+        }
+    }
+    let header = format!(
+        "Coperceive Diagnostics\n======================\nVersion: {}\nCommit: {}\nOS: {}\nArchitecture: {}\nPython: {}\n",
+        app_version(),
+        app_commit(),
+        os_version(),
+        std::env::consts::ARCH,
+        context.get("python").and_then(Value::as_str).unwrap_or("unknown"),
+    );
+    let mut preview = header;
+    for (name, text) in &files {
+        preview.push_str(&format!("\n## {name}\n{text}\n"));
+    }
+    Bundle { preview, files }
 }
 
 fn read_tail(path: &Path, max_bytes: usize) -> String {
@@ -283,65 +365,14 @@ fn sidecar_logs() -> String {
     format!("\n## {}\n{}\n", path.file_name().unwrap_or_default().to_string_lossy(), tail_lines(&read_tail(path, MAX_LOG_BYTES / 2), 200))
 }
 
-/// Build the complete preview. `context` is provided by the UI and must never
-/// bypass redaction: it is serialised and redacted like the logs.
+/// Build the complete preview. Everything shared is generated from one
+/// redacted bundle.
 pub fn report(context: &Value) -> Value {
-    let mut servers: Vec<String> = context
-        .get("servers")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(Value::as_str)
-        .map(str::to_string)
-        .collect();
-    // The saved profiles are the authoritative host/alias list; redact every
-    // alias and host even when the UI context omitted them.
-    for entry in crate::server_profiles::load_servers() {
-        if let Ok(target) = entry.profile.ssh_target() {
-            servers.push(target);
-        }
-        servers.push(entry.profile.name.clone());
-        if let Some(alias) = &entry.profile.ssh_alias {
-            servers.push(alias.clone());
-        }
-        if let Some(host) = &entry.profile.host {
-            servers.push(host.clone());
-        }
-        if let Some(user) = &entry.profile.user {
-            servers.push(user.clone());
-        }
-    }
-    servers.sort();
-    servers.dedup();
-    let crashes = crash_records();
-    let crashes_text = crashes
-        .iter()
-        .map(|record| serde_json::to_string_pretty(record).unwrap_or_default())
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    let context_text = serde_json::to_string_pretty(context).unwrap_or_default();
-    let body = format!(
-        "Coperceive Diagnostics\n======================\n\
-         Version: {}\nCommit: {}\nOS: {}\nArchitecture: {}\nPython: {}\n\
-         \n## Feature state\n{}\n\
-         \n## Recent crashes\n{}\n\
-         \n## App logs\n{}\n\
-         \n## Sidecar logs\n{}\n",
-        app_version(),
-        app_commit(),
-        os_version(),
-        std::env::consts::ARCH,
-        context.get("python").and_then(Value::as_str).unwrap_or("unknown"),
-        context_text,
-        if crashes_text.is_empty() { "No crash files recorded.\n".to_string() } else { crashes_text },
-        app_logs(),
-        sidecar_logs(),
-    );
-    let preview = redact(&body, &servers);
+    let bundle = build_bundle(context);
     serde_json::json!({
-        "preview": preview,
-        "crashes": crashes.len(),
-        "bytes": preview.len(),
+        "preview": bundle.preview,
+        "crashes": crash_records().len(),
+        "bytes": bundle.preview.len(),
     })
 }
 
@@ -358,32 +389,18 @@ pub fn copy(text: &str) -> Result<(), String> {
     if status.success() { Ok(()) } else { Err("pbcopy failed".into()) }
 }
 
-/// Save a zip containing report.txt, crash files and the last app/sidecar logs.
-pub fn save_zip(destination: &Path, preview: &str, context: &Value) -> Result<PathBuf, String> {
+/// Save the exact redacted bundle as a zip: report.txt plus one file per
+/// preview section. Nothing unredacted is copied.
+pub fn save_zip(destination: &Path, context: &Value) -> Result<PathBuf, String> {
+    let bundle = build_bundle(context);
     let parent = destination.parent().ok_or_else(|| "Choose a folder for diagnostics.".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
     let staging = std::env::temp_dir().join(format!("coperceive-diagnostics-{}", std::process::id()));
     let _ = fs::remove_dir_all(&staging);
     fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
-    fs::write(staging.join("report.txt"), preview).map_err(|error| error.to_string())?;
-    fs::write(
-        staging.join("feature-state.json"),
-        serde_json::to_string_pretty(context).unwrap_or_default(),
-    )
-    .map_err(|error| error.to_string())?;
-    // Include the crash records and recent app/sidecar logs. All crash files
-    // are already redacted in report.txt; the raw crash JSON is kept because it
-    // contains no tokens by construction.
-    if let Ok(entries) = fs::read_dir(log_dir()) {
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().to_string();
-            if name.starts_with("crash-") && name.ends_with(".json") {
-                let _ = fs::copy(entry.path(), staging.join(&name));
-            }
-            if name == "desktop.log" || name == "startup-error.log" || name.starts_with("serve-") {
-                let _ = fs::copy(entry.path(), staging.join(&name));
-            }
-        }
+    fs::write(staging.join("report.txt"), &bundle.preview).map_err(|error| error.to_string())?;
+    for (name, text) in &bundle.files {
+        fs::write(staging.join(name), text).map_err(|error| error.to_string())?;
     }
     let mut zip_path = destination.to_path_buf();
     if zip_path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
@@ -404,6 +421,9 @@ pub fn save_zip(destination: &Path, preview: &str, context: &Value) -> Result<Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
 
     fn temp_home() -> PathBuf {
         let path = std::env::temp_dir().join(format!("coperceive-diag-{}", std::process::id()));
@@ -414,7 +434,7 @@ mod tests {
 
     #[test]
     fn planted_secrets_are_removed() {
-        let input = "Authorization: Bearer abc123\nviewer ?token=sekret\n-----BEGIN OPENSSH PRIVATE KEY-----\nabc\nserver alice@hpc.example.org /Users/alice /datasets/eemcs/x\nssh-ed25519 AAAA";
+        let input = "Authorization: Bearer abc123\nviewer ?token=sekret\n-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\nserver alice@hpc.example.org /Users/alice /datasets/eemcs/x\nssh-ed25519 AAAA";
         let servers = vec!["hpc.example.org".to_string()];
         let output = redact(input, &servers);
         for secret in ["abc123", "sekret", "BEGIN OPENSSH", "alice@hpc", "/Users/alice", "ssh-ed25519"] {
@@ -426,6 +446,7 @@ mod tests {
 
     #[test]
     fn crash_file_is_written_and_read_back() {
+        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
         let old_home = std::env::var("HOME").ok();
         std::env::set_var("HOME", &home);
@@ -444,6 +465,94 @@ mod tests {
         let path = write_crash(&record).expect("crash file");
         assert!(path.exists());
         assert!(crash_records().iter().any(|item| item.message == "boom"));
+        if let Some(old) = old_home { std::env::set_var("HOME", old); }
+    }
+
+    #[test]
+    fn every_shared_file_is_redacted_and_the_zip_matches_the_preview() {
+        use std::io::Read;
+
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+        let logs = log_dir();
+        let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nbody-secret-base64\n-----END OPENSSH PRIVATE KEY-----";
+        let log = format!(
+            "viewer http://127.0.0.1:5000/viewer?token=url-secret\n\
+             {{\"token\": \"json-secret\", \"password\": \"json-password\"}}\n\
+             Authorization: Bearer auth-secret\n\
+             Cookie: session=cookie-secret\n\
+             {key}\n\
+             path /Users/alice/project and user alice\n\
+             alias hpc-alias host hpc.example.org\n\
+             normal text: shadow bad road\n"
+        );
+        fs::write(logs.join("desktop.log"), &log).unwrap();
+        fs::write(logs.join("serve-123.log"), "sidecar token=sidecar-secret\n").unwrap();
+        let crash = CrashRecord {
+            schema: CRASH_SCHEMA.into(),
+            kind: "panic".into(),
+            timestamp_unix: 999,
+            version: "0.1.0".into(),
+            commit: "abc".into(),
+            os: "test".into(),
+            arch: "arm64".into(),
+            message: "boom at /Users/alice/project".into(),
+            location: Some("src/main.rs:1".into()),
+            backtrace: None,
+        };
+        let _ = write_crash(&crash);
+        let context = serde_json::json!({"servers": ["hpc-alias", "hpc.example.org"]});
+        let report = report(&context);
+        let preview = report["preview"].as_str().unwrap().to_string();
+        for secret in [
+            "url-secret", "json-secret", "json-password", "auth-secret", "cookie-secret",
+            "body-secret-base64", "BEGIN OPENSSH", "/Users/alice", "hpc-alias", "hpc.example.org",
+            "sidecar-secret",
+        ] {
+            assert!(!preview.contains(secret), "{secret} leaked into preview:\n{preview}");
+        }
+        assert!(preview.contains("shadow bad road"), "normal text was mangled");
+        let zip = save_zip(&home.join("report.zip"), &context).unwrap();
+        let mut archive = std::fs::File::open(&zip).unwrap();
+        let mut bytes = Vec::new();
+        archive.read_to_end(&mut bytes).unwrap();
+        assert!(!bytes.is_empty());
+        let output = std::process::Command::new("unzip")
+            .arg("-p").arg(&zip)
+            .output()
+            .expect("unzip");
+        let all = String::from_utf8_lossy(&output.stdout);
+        for secret in [
+            "url-secret", "json-secret", "json-password", "auth-secret", "cookie-secret",
+            "body-secret-base64", "BEGIN OPENSSH", "/Users/alice", "hpc-alias", "hpc.example.org",
+            "sidecar-secret",
+        ] {
+            assert!(!all.contains(secret), "{secret} leaked into the zip:\n{all}");
+        }
+        let names = std::process::Command::new("unzip").arg("-Z1").arg(&zip).output().unwrap();
+        let names = String::from_utf8_lossy(&names.stdout);
+        assert!(names.contains("report.txt"), "{names}");
+        assert!(names.contains("crash-"), "{names}");
+        assert!(names.contains("desktop.log"), "{names}");
+        if let Some(old) = old_home { std::env::set_var("HOME", old); }
+    }
+
+    #[test]
+    fn sidecar_exit_record_keeps_code_and_redacts_stderr() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+        let log = log_dir().join("serve-9.log");
+        fs::write(&log, "Authorization: Bearer sidecar-auth\nuri /Users/alice/x\n").unwrap();
+        record_sidecar_exit(42, &log);
+        let record = crash_records().into_iter().find(|item| item.kind == "sidecar-exit").expect("sidecar crash");
+        assert!(record.message.contains("42"));
+        let backtrace = record.backtrace.unwrap_or_default();
+        assert!(!backtrace.contains("sidecar-auth"), "{backtrace}");
+        assert!(!backtrace.contains("/Users/alice"), "{backtrace}");
         if let Some(old) = old_home { std::env::set_var("HOME", old); }
     }
 }

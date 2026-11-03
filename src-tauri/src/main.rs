@@ -701,7 +701,17 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
 
 #[cfg(target_os = "macos")]
 #[tauri::command]
-fn diagnostics_build_report(context: serde_json::Value) -> serde_json::Value {
+fn diagnostics_build_report(
+    state: tauri::State<'_, Arc<AppState>>,
+    context: serde_json::Value,
+) -> serde_json::Value {
+    if let Ok(mut lock) = state.sidecar.lock() {
+        if let Some(session) = lock.as_mut() {
+            if let Some(code) = session.unexpected_exit() {
+                coperceive_desktop::diagnostics::record_sidecar_exit(code, &session.log_path);
+            }
+        }
+    }
     coperceive_desktop::diagnostics::report(&context)
 }
 
@@ -740,7 +750,8 @@ async fn diagnostics_save_zip(
     let Some(destination) = choice.and_then(|path| path.into_path().ok()) else {
         return Ok(None);
     };
-    coperceive_desktop::diagnostics::save_zip(&destination, &preview, &context)
+    let _ = preview;
+    coperceive_desktop::diagnostics::save_zip(&destination, &context)
         .map(|path| Some(path.display().to_string()))
 }
 
