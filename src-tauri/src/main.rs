@@ -333,6 +333,7 @@ fn open_viewer_window(
                 // Tauri injects its IPC object here too, but no command is
                 // permitted for this window (capabilities: main only).
                 window.__COPERCEIVE_VIEWER_WINDOW__ = true;
+                window.__COPERCEIVE_TITLEBAR__ = "overlay";
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
                 window.__COPERCEIVE_FORCE_MOTION__ = {force_motion};
                 window.__COPERCEIVE_UPDATE_URL__ = "{escaped_update}";
@@ -362,6 +363,11 @@ fn open_viewer_window(
     .title(format!("coperceive — {}", basename))
     .min_inner_size(900.0, 600.0)
     .resizable(true)
+    // The unified toolbar: no native title bar, the traffic lights inline at
+    // the left of the app's own top bar (as in tauri.conf.json for main).
+    .title_bar_style(tauri::TitleBarStyle::Overlay)
+    .hidden_title(true)
+    .traffic_light_position(tauri::LogicalPosition::new(16.0, 18.0))
     .initialization_script(&init_script);
 
     let monitors_info: Vec<state::MonitorInfo> = {
@@ -3267,7 +3273,9 @@ fn main() {
             let import_js = import_source.replace('\\', "\\\\").replace('"', "\\\"");
             let update_js = update_url.replace('\\', "\\\\").replace('"', "\\\"");
             let _ = webview.eval(&format!(
-                r#"window.__COPERCEIVE_CTRL_PORT__ = {port};
+                r#"window.__COPERCEIVE_TITLEBAR__ = "overlay";
+                window.dispatchEvent(new Event("coperceive-titlebar"));
+                window.__COPERCEIVE_CTRL_PORT__ = {port};
                 window.__COPERCEIVE_CTRL_SECRET__ = "{secret}";
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
                 window.__COPERCEIVE_FORCE_MOTION__ = {force};

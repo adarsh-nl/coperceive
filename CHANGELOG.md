@@ -2,6 +2,8 @@
 
 ## 0.0.0
 
+Both windows use a unified toolbar on macOS: no native title bar, the traffic lights inline at the left of the app's own top bar. Empty toolbar space moves the window and double-click zooms it; the toolbar keeps clear of the traffic lights at any width and gives the space back in full screen. The viewer window may only move and zoom itself (its own capability); it gains no other command.
+
 The viewer offers only what a scene has. Its views come from the scene's own data, never from the dataset's name: Drone needs a UAV and a vehicle, Chase a vehicle, Camera a calibrated camera; the Frustums layer needs a camera. A Griffin scene keeps Drone; OPV2V and V2XSet scenes no longer show it. When the next scene lacks the active view, the viewer falls back to Orbit without an error, and a shortcut for a view the scene lacks does nothing.
 
 The dataset view leads with the whole dataset and follows its jobs. With nothing prepared it offers "Prepare whole dataset (~X GB, 1 CPU job)" first (same preview, camera-image choice and confirm; single-scene Prepare & open stays below) and says so once every scene is ready. A submitted prepare job is followed until it ends, so a scene reads Queued (job N) → Preparing → Ready and "Start preparation & view" opens the viewer when it is ready (polling used to stop at once, before the job reached the scene); a job that ends without preparing is reported. The prepare scripts are shown in full-height, resizable boxes, the cache path comes from the index instead of waiting for a preview, and the viewer window is named after the scene it shows.

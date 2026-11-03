@@ -198,7 +198,33 @@ function DesktopPreferences() {
   );
 }
 
+/**
+ * The unified toolbar (macOS): with the native title bar hidden, the top bar
+ * leaves room for the traffic lights, except in full screen where macOS hides
+ * them. Marks <html data-titlebar="overlay" data-fullscreen="…">.
+ */
+function useTitlebarOverlay() {
+  useEffect(() => {
+    const root = document.documentElement;
+    const apply = () => {
+      if (window.__COPERCEIVE_TITLEBAR__ === "overlay") {
+        root.dataset.titlebar = "overlay";
+      }
+      const full = window.innerWidth >= window.screen.width && window.innerHeight >= window.screen.height;
+      root.dataset.fullscreen = full ? "true" : "false";
+    };
+    apply();
+    window.addEventListener("resize", apply);
+    window.addEventListener("coperceive-titlebar", apply);
+    return () => {
+      window.removeEventListener("resize", apply);
+      window.removeEventListener("coperceive-titlebar", apply);
+    };
+  }, []);
+}
+
 export default function App() {
+  useTitlebarOverlay();
   const isDesktop = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
   const queryClient = useQueryClient();
   const route = useHashRoute();
@@ -460,8 +486,9 @@ export default function App() {
   return (
     <div className={tab === "viewer" || isDesktop ? "shell" : "shell shell-desk"}>
       {isDesktop && <UpdateBanner />}
-      <header className="topbar">
-        <div className="top-cluster">
+      {/* Empty toolbar space moves the window and double-click zooms it. */}
+      <header className="topbar" data-tauri-drag-region>
+        <div className="top-cluster" data-tauri-drag-region>
           <a
             className="brand"
             href={isViewerWindow() ? "#/viewer" : isDesktop ? "#/connect" : "#/"}
@@ -481,7 +508,7 @@ export default function App() {
           >
             <BrandWordmark />
           </a>
-          <div className="top-slot" ref={setSlot} />
+          <div className="top-slot" ref={setSlot} data-tauri-drag-region />
         </div>
         {!isDesktop && (
           <div className="tabs" role="tablist" aria-label="Sections">
@@ -505,7 +532,7 @@ export default function App() {
             </button>
           </div>
         )}
-        <div className="top-cluster top-end">
+        <div className="top-cluster top-end" data-tauri-drag-region>
           <div className="top-actions" ref={setActions} />
           <details className="settings">
             <summary className="icon ghost" aria-label="Settings">
