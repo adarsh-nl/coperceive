@@ -130,6 +130,10 @@ export interface DatasetPreparePreview {
   partition: string;
   walltime: string;
   cpus_per_task: number;
+  /** One Slurm array task (1 CPU) per scene. */
+  array_tasks: number;
+  /** At most this many tasks run at once; editable in the preview. */
+  throttle: number;
   gres: string | null;
   cache_root: string;
   estimated_cache_bytes: number;
@@ -307,8 +311,8 @@ export function wholeDatasetOffer(
     const size = index.estimated_cache_bytes ? `~${formatBytes(index.estimated_cache_bytes)}, ` : "";
     return {
       kind: "offer",
-      button: `Prepare whole dataset (${size}1 CPU job)`,
-      detail: `Prepares all ${index.scene_count} scenes once, in your results folder. Afterwards every scene opens without another preparation job. Or prepare single scenes below with Prepare & open.`,
+      button: `Prepare whole dataset (${size}${index.scene_count} one-CPU tasks)`,
+      detail: `Prepares all ${index.scene_count} scenes once, in your results folder, one CPU task per scene so they run side by side. Afterwards every scene opens without another preparation job. Or prepare single scenes below with Prepare & open.`,
     };
   }
   if (readyCount >= index.scene_count) {
@@ -572,25 +576,27 @@ export async function datasetPrepare(
     return await tauriInvoke<DatasetPreparePreview>("dataset_prepare", args);
   }
 
-  // Web / browser test fallback outside Tauri
-  const sceneArg = Array.isArray(scenes) ? `--scenes ${scenes.join(" ")}` : "--all";
-  const workers = params.workers ?? (Array.isArray(scenes) ? Math.min(scenes.length, 8) : 8);
+  // Web / browser test fallback outside Tauri: the same array shape as the app's.
+  const sceneIds = Array.isArray(scenes) ? scenes : ["scene_0000", "scene_0001", "scene_0002"];
+  const throttle = Math.max(1, Math.min(params.workers ?? Math.min(sceneIds.length, 8), 16, sceneIds.length));
   const script = `#!/bin/bash
 #SBATCH --job-name=coperceive-prepare-${params.adapter}
-#SBATCH --cpus-per-task=${workers}
-#SBATCH --nodes=1
 #SBATCH --time=02:00:00
+#SBATCH --array=0-${sceneIds.length - 1}%${throttle}
+#SBATCH --cpus-per-task=1
 # No GPU requested (CPU-only job).
+# One 1-CPU task per scene (${sceneIds.length}), at most ${throttle} at once.
 
 set -euo pipefail
 
-echo "Starting dataset preparation: adapter=${params.adapter}"
+SCENES=(${sceneIds.join(" ")})
+SCENE="\${SCENES[$SLURM_ARRAY_TASK_ID]}"
 coperceive dataset prepare \\
   --adapter "${params.adapter}" \\
   --raw-root "${params.rawRoot}" \\
-  --workers ${workers} \\
+  --workers 1 \\
   --images ${params.images ?? "originals"} \\
-  ${sceneArg}
+  --scenes "$SCENE"
 `;
 
   return {
@@ -598,14 +604,16 @@ coperceive dataset prepare \\
     job_name: `coperceive-prepare-${params.adapter}`,
     partition: "cpu",
     walltime: "02:00:00",
-    cpus_per_task: workers,
+    cpus_per_task: 1,
+    array_tasks: sceneIds.length,
+    throttle,
     gres: null,
     cache_root: `<results_root>/coperceive-cache/${params.adapter}/mockdigest/${params.split ?? "all"}`,
     estimated_cache_bytes: 1024 * 1024 * 50,
     images: params.images ?? "originals",
     estimated_preview_bytes: 40_000 * 240,
     script,
-    preview_hash: `hash-stub-${params.images ?? "originals"}-${Date.now()}`,
+    preview_hash: `hash-stub-${params.images ?? "originals"}-${throttle}-${Date.now()}`,
   };
 }
 

@@ -131,6 +131,36 @@ def test_pcd_ascii_and_binary(tmp_path: Path) -> None:
         read_pcd(tmp_path / "c.pcd", fields=fields)
 
 
+def test_pcd_ascii_bytes_match_python_float_for_every_spelling(tmp_path: Path) -> None:
+    """The fast ASCII parse gives struct.pack('<f', float(token)) for each value."""
+    rng = np.random.default_rng(11)
+    tokens = [
+        "-0", "0.0", "1e-45", "3.4028235e38", "1e400", "-1e400", "nan", "inf", "-inf",
+        "1.00000005", "0.1", "16777217", "+2.5", "7.", ".5", "1E3",
+    ]  # fmt: skip
+    for value in rng.uniform(-200, 200, 4000):
+        tokens.append(f"{value:.{int(rng.integers(0, 10))}f}")
+        tokens.append(f"{value:.7e}")
+    tokens = tokens[: len(tokens) // 4 * 4]
+    count = len(tokens) // 4
+    header = (
+        "# .PCD v0.7\nVERSION 0.7\nFIELDS x y z intensity\nSIZE 4 4 4 4\nTYPE F F F F\n"
+        f"COUNT 1 1 1 1\nWIDTH {count}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS {count}\n"
+    )
+    rows = "\n".join(" ".join(tokens[i : i + 4]) for i in range(0, len(tokens), 4))
+    (tmp_path / "a.pcd").write_text(header + "DATA ascii\n" + rows + "\n", encoding="utf-8")
+    fields = {"x": "x", "y": "y", "z": "z", "intensity": "intensity"}
+    got_count, blob = read_pcd(tmp_path / "a.pcd", fields=fields)
+    assert got_count == count
+    assert blob == b"".join(struct.pack("<f", float(token)) for token in tokens)
+    # A bad token is still an error, as with float().
+    (tmp_path / "b.pcd").write_text(
+        header.replace(f"POINTS {count}", "POINTS 1") + "DATA ascii\n1 2 x 4\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError):
+        read_pcd(tmp_path / "b.pcd", fields=fields)
+
+
 def test_bin_f32_with_stride_and_offsets(tmp_path: Path) -> None:
     points = np.array([[1, 2, 3, 0.5, 9], [4, 5, 6, 0.25, 9]], dtype=np.float32)
     (tmp_path / "a.bin").write_bytes(points.tobytes())

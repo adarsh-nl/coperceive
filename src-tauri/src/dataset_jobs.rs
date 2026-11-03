@@ -3,7 +3,9 @@
 //!
 //! The script is rendered from the profile and the cache path returned by
 //! `dataset index`; nothing is submitted until the user confirms the exact
-//! preview hash. Preparation never reads or writes the raw root from the login
+//! preview hash. It is a job array: one 1-CPU task per scene, at most
+//! `throttle` running at once (`--array=0-N%throttle`), so scenes start as
+//! single CPUs free up and none waits for a whole multi-CPU allocation. Preparation never reads or writes the raw root from the login
 //! node: the compute-node job runs `coperceive dataset prepare`.
 
 use std::hash::{Hash, Hasher};
@@ -27,6 +29,7 @@ pub struct DatasetPrepareRequest {
     pub raw_root: String,
     pub split: Option<String>,
     pub scenes: Option<Vec<String>>,
+    /// Scenes prepared at once: the array's `%` throttle.
     pub workers: u32,
     /// Camera images: "originals" (read the dataset's files) or "previews".
     #[serde(default = "default_images")]
@@ -47,6 +50,10 @@ pub struct DatasetPreparePreview {
     pub partition: String,
     pub walltime: String,
     pub cpus_per_task: u32,
+    /// One array task per scene.
+    pub array_tasks: u32,
+    /// At most this many tasks run at once (the editable "scenes at once").
+    pub throttle: u32,
     pub gres: Option<String>,
     pub cache_root: String,
     pub estimated_cache_bytes: u64,
@@ -67,7 +74,7 @@ pub struct PendingPrepare {
     pub script: String,
 }
 
-/// The workers a prepare job actually uses: omitted = min(selected scenes, 8),
+/// Scenes a prepare array runs at once: omitted = min(selected scenes, 8),
 /// always clamped to 1..=16.
 pub fn resolve_workers(requested: Option<u32>, selected_scenes: usize) -> u32 {
     requested
@@ -116,23 +123,21 @@ fn actor_argv(profile: &ServerProfile, request: &DatasetPrepareRequest, cache: &
         "--cache".to_string(),
         cache.to_string(),
         "--workers".to_string(),
-        request.workers.to_string(),
+        "1".to_string(),
         "--images".to_string(),
         request.images.clone(),
+        // The task's scene follows, from the script's SCENES array.
+        "--scenes".to_string(),
     ]);
-    if let Some(scenes) = &request.scenes {
-        args.push("--scenes".to_string());
-        args.push(scenes.join(","));
-    } else {
-        args.push("--all".to_string());
-    }
     coperceive_argv(profile, &args)
 }
 
-/// Render the full prepare script; `estimated_cache_bytes` comes from index.
+/// Render the full prepare script; `scene_ids` are the selected scenes (every
+/// scene of the index for "all"), `estimated_cache_bytes` comes from index.
 pub fn render_prepare_script(
     profile: &ServerProfile,
     request: &DatasetPrepareRequest,
+    scene_ids: &[String],
     cache_relative: &str,
     estimated_cache_bytes: u64,
     estimated_preview_bytes: u64,
@@ -144,8 +149,13 @@ pub fn render_prepare_script(
         ));
     }
     if request.workers == 0 {
-        return Err("Choose at least one worker for dataset preparation.".to_string());
+        return Err("Choose at least one scene at a time for dataset preparation.".to_string());
     }
+    if scene_ids.is_empty() {
+        return Err("No scenes to prepare.".to_string());
+    }
+    let tasks = scene_ids.len() as u32;
+    let throttle = request.workers.min(tasks);
     if !matches!(request.adapter.as_str(), "griffin" | "opv2v" | "v2xset") {
         return Err(format!("{} is not a built-in cluster adapter.", request.adapter));
     }
@@ -183,16 +193,18 @@ pub fn render_prepare_script(
         format!("#SBATCH --job-name={job_name}"),
         format!("#SBATCH --partition={partition}"),
         format!("#SBATCH --time={walltime}"),
-        format!("#SBATCH --cpus-per-task={}", request.workers),
+        format!("#SBATCH --array=0-{}%{throttle}", tasks - 1),
+        "#SBATCH --cpus-per-task=1".to_string(),
         format!(
-            "#SBATCH --output={}/dataset-prepare-%j.out",
+            "#SBATCH --output={}/dataset-prepare-%A_%a.out",
             results_root.trim_end_matches('/')
         ),
         format!(
-            "#SBATCH --error={}/dataset-prepare-%j.err",
+            "#SBATCH --error={}/dataset-prepare-%A_%a.err",
             results_root.trim_end_matches('/')
         ),
         "# No GPU requested (CPU-only job).".to_string(),
+        format!("# One 1-CPU task per scene ({tasks}), at most {throttle} at once."),
         String::new(),
         "set -euo pipefail".to_string(),
     ];
@@ -204,7 +216,12 @@ pub fn render_prepare_script(
     lines.push("trap 'rm -rf -- \"$SCRATCH_DIR\"' EXIT".to_string());
     lines.push(format!("CACHE_DIR={}", shell_quote(&cache)));
     lines.push(format!(
-        "{}",
+        "SCENES=({})",
+        scene_ids.iter().map(|scene| shell_quote(scene)).collect::<Vec<_>>().join(" ")
+    ));
+    lines.push("SCENE=\"${SCENES[$SLURM_ARRAY_TASK_ID]}\"".to_string());
+    lines.push(format!(
+        "{} \"$SCENE\"",
         actor_argv(profile, request, &cache)
             .iter()
             .map(|part| shell_quote(part))
@@ -217,7 +234,9 @@ pub fn render_prepare_script(
         job_name,
         partition: partition.to_string(),
         walltime,
-        cpus_per_task: request.workers,
+        cpus_per_task: 1,
+        array_tasks: tasks,
+        throttle,
         gres: None,
         cache_root: cache.clone(),
         estimated_cache_bytes,
@@ -313,18 +332,25 @@ mod tests {
         }
     }
 
+    fn scenes(ids: &[&str]) -> Vec<String> {
+        ids.iter().map(|id| id.to_string()).collect()
+    }
+
     #[test]
     fn preview_is_cpu_only_uses_the_workers_and_has_a_job_scratch_trap() {
         let entry = entry();
         let preview = render_prepare_script(
             &entry.profile,
             &request(),
+            &scenes(&["scene_0001"]),
             "coperceive-cache/opv2v/abc123/test",
             12_345,
             80_000,
         )
         .expect("preview");
-        assert_eq!(preview.cpus_per_task, 4);
+        assert_eq!(preview.cpus_per_task, 1);
+        assert_eq!((preview.array_tasks, preview.throttle), (1, 1));
+        assert!(preview.script.contains("#SBATCH --array=0-0%1"), "{}", preview.script);
         assert_eq!(preview.gres, None);
         assert_eq!(preview.estimated_cache_bytes, 12_345);
         assert!(preview.cache_root.ends_with("coperceive-cache/opv2v/abc123/test"));
@@ -332,8 +358,9 @@ mod tests {
         assert!(preview.script.contains("/coperceive-${SLURM_JOB_ID}"));
         assert!(preview.script.contains("trap 'rm -rf -- \"$SCRATCH_DIR\"' EXIT"));
         assert!(preview.script.contains("dataset prepare"));
-        assert!(preview.script.contains("--workers 4"));
-        assert!(preview.script.contains("--scenes scene_0001"));
+        assert!(preview.script.contains("--workers 1"));
+        assert!(preview.script.contains("SCENES=(scene_0001)"), "{}", preview.script);
+        assert!(preview.script.contains("--scenes \"$SCENE\""), "{}", preview.script);
         assert!(preview.script.contains("--images originals"));
         assert_eq!((preview.images.as_str(), preview.estimated_preview_bytes), ("originals", 80_000));
         assert!(preview.script.contains("'/home/bob/coperceive-app/.venv/bin/python' -m coperceive")
@@ -357,6 +384,7 @@ mod tests {
         let error = render_prepare_script(
             &entry.profile,
             &request,
+            &scenes(&["a"]),
             "coperceive-cache/opv2v/abc/test",
             0,
             0,
@@ -382,7 +410,7 @@ mod tests {
             ]
         );
         assert!(argv.contains(&"dataset".to_string()));
-        assert!(argv.contains(&"--all".to_string()) || argv.contains(&"--scenes".to_string()));
+        assert_eq!(argv.last().map(String::as_str), Some("--scenes"));
     }
 
     #[test]
@@ -390,19 +418,45 @@ mod tests {
         let entry = entry();
         let mut request = request();
         let originals =
-            render_prepare_script(&entry.profile, &request, "coperceive-cache/opv2v/abc/test", 1, 2)
+            render_prepare_script(&entry.profile, &request, &scenes(&["a"]), "coperceive-cache/opv2v/abc/test", 1, 2)
                 .expect("originals");
         request.images = "previews".to_string();
         let previews =
-            render_prepare_script(&entry.profile, &request, "coperceive-cache/opv2v/abc/test", 1, 2)
+            render_prepare_script(&entry.profile, &request, &scenes(&["a"]), "coperceive-cache/opv2v/abc/test", 1, 2)
                 .expect("previews");
         assert!(previews.script.contains("--images previews"), "{}", previews.script);
         assert_ne!(originals.preview_hash, previews.preview_hash);
         request.images = "all".to_string();
         let error =
-            render_prepare_script(&entry.profile, &request, "coperceive-cache/opv2v/abc/test", 1, 2)
+            render_prepare_script(&entry.profile, &request, &scenes(&["a"]), "coperceive-cache/opv2v/abc/test", 1, 2)
                 .expect_err("unknown mode");
         assert!(error.contains("Camera images must be"), "{error}");
+    }
+
+    #[test]
+    fn a_dataset_is_one_task_per_scene_throttled_with_hostile_ids_quoted() {
+        let entry = entry();
+        let mut request = request();
+        request.scenes = None;
+        request.workers = 8;
+        let ids = scenes(&["s0", "s1", "s 2; rm -rf ~", "$(id)"]);
+        let preview =
+            render_prepare_script(&entry.profile, &request, &ids, "coperceive-cache/opv2v/abc/test", 1, 2)
+                .expect("array");
+        assert_eq!((preview.array_tasks, preview.throttle, preview.cpus_per_task), (4, 4, 1));
+        let script = &preview.script;
+        assert!(script.contains("#SBATCH --array=0-3%4"), "{script}");
+        assert!(script.contains("#SBATCH --cpus-per-task=1"), "{script}");
+        assert!(script.contains("dataset-prepare-%A_%a.out"), "{script}");
+        assert!(script.contains("SCENES=(s0 s1 's 2; rm -rf ~' '$(id)')"), "{script}");
+        assert!(!script.contains("--all"), "{script}");
+        request.workers = 2;
+        let throttled =
+            render_prepare_script(&entry.profile, &request, &ids, "coperceive-cache/opv2v/abc/test", 1, 2)
+                .expect("throttled");
+        assert!(throttled.script.contains("#SBATCH --array=0-3%2"), "{}", throttled.script);
+        assert_ne!(throttled.preview_hash, preview.preview_hash);
+        assert!(render_prepare_script(&entry.profile, &request, &[], "c/opv2v/abc/test", 1, 2).is_err());
     }
 
     #[test]

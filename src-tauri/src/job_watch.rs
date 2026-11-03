@@ -232,7 +232,7 @@ pub fn watch_named(
     );
     if let Ok(result) = runner.run(&squeue, STATUS_TIMEOUT, None) {
         if result.success {
-            if let Some(line) = result.stdout.lines().find(|line| !line.trim().is_empty()) {
+            if let Some(line) = array_line(&result.stdout, '|', LIVE_FIRST) {
                 return parse_status_line(
                     line,
                     plan_id,
@@ -248,7 +248,7 @@ pub fn watch_named(
     );
     if let Ok(result) = runner.run(&sacct, STATUS_TIMEOUT, None) {
         if result.success {
-            if let Some(line) = result.stdout.lines().find(|line| !line.trim().is_empty()) {
+            if let Some(line) = array_line(&result.stdout, ' ', UNSUCCESSFUL_FIRST) {
                 if let Some(status) =
                     status_from_accounting(
                         line,
@@ -267,6 +267,33 @@ pub fn watch_named(
         "Slurm has no record of job {job_id} for plan {plan_id}. It may have been purged from the \
          accounting database; the run is not running any more."
     ))
+}
+
+const LIVE_FIRST: &[&str] = &["RUNNING", "COMPLETING", "CONFIGURING", "PENDING"];
+const UNSUCCESSFUL_FIRST: &[&str] = &[
+    "RUNNING", "PENDING", "FAILED", "TIMEOUT", "OUT_OF_MEMORY", "NODE_FAIL", "CANCELLED",
+];
+
+/// One line for a job that may be an array (a dataset prepare submits one task
+/// per scene): squeue and sacct then print a line per task. The first line
+/// whose state is earliest in `priority` stands for the array (any task still
+/// running or pending keeps it live; when all ended, one that did not complete
+/// makes it failed); otherwise the first line.
+fn array_line<'a>(output: &'a str, separator: char, priority: &[&str]) -> Option<&'a str> {
+    let lines: Vec<&str> = output.lines().filter(|line| !line.trim().is_empty()).collect();
+    let state = |line: &str| -> String {
+        let fields: Vec<&str> = if separator == ' ' {
+            line.split_whitespace().collect()
+        } else {
+            line.split(separator).collect()
+        };
+        fields.get(1).map(|field| field.trim().to_string()).unwrap_or_default()
+    };
+    priority
+        .iter()
+        .find_map(|wanted| lines.iter().find(|line| state(line).starts_with(wanted)))
+        .or_else(|| lines.first())
+        .copied()
 }
 
 fn log_path(
@@ -502,6 +529,33 @@ mod tests {
             "somebody-elses-job|RUNNING|None|00:01:00|03:59:00|node1\n",
         );
         assert!(watch_named(&other, &profile(), "dataset-x", "700001", "coperceive-dataset-test").is_err());
+    }
+
+    #[test]
+    fn a_prepare_array_is_live_while_any_task_runs_and_failed_if_one_failed() {
+        let name = "coperceive-dataset-test";
+        let runner = FakeRunner::default().with(
+            "squeue -h -j 700001",
+            &format!(
+                "{name}|PENDING|JobArrayTaskLimit|0:00|4:00:00|(null)\n\
+                 {name}|RUNNING|None|0:42|3:59:18|node3\n\
+                 {name}|RUNNING|None|0:40|3:59:20|node4\n"
+            ),
+        );
+        let status = watch_named(&runner, &profile(), "dataset-x", "700001", name).expect("array");
+        assert_eq!(status.state, JobState::Running);
+        let ended = FakeRunner::default()
+            .with("squeue -h -j 700001", "")
+            .with(
+                "sacct -j 700001",
+                &format!(
+                    "{name} COMPLETED 00:01:10 04:00:00 bob\n\
+                     {name} FAILED 00:00:09 04:00:00 bob\n\
+                     {name} COMPLETED 00:01:02 04:00:00 bob\n"
+                ),
+            );
+        let status = watch_named(&ended, &profile(), "dataset-x", "700001", name).expect("ended");
+        assert_eq!(status.state, JobState::Failed);
     }
 
     #[test]

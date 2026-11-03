@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from collections.abc import Callable, Mapping
@@ -275,7 +276,8 @@ def _read_dataset(cache_dir: Path) -> dict[str, Any]:
 def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = _dataset_json_path(cache_dir)
-    temporary = cache_dir / f".dataset.json.{os.getpid()}.tmp"
+    # Array tasks on several nodes write here: a pid alone is not unique.
+    temporary = cache_dir / f".dataset.json.{socket.gethostname()}.{os.getpid()}.tmp"
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)
 
@@ -317,16 +319,55 @@ def prepare_progress(
     }
 
 
+_LOCK_STALE_S = 120.0
+_LOCK_WAIT_S = 600.0
+
+
 @contextmanager
 def _cache_lock(cache: Path):
+    """Exclusive access to ``dataset.json``, across processes and nodes.
+
+    ``flock`` serialises processes on one node; prepare array tasks run on
+    several nodes, where ``flock`` may be node-local (Lustre's ``localflock``),
+    so an atomic ``mkdir`` guards the read-modify-write as well. The section is
+    a JSON read and write; a lock directory older than two minutes was left by
+    a task that died and is taken over.
+    """
     cache.mkdir(parents=True, exist_ok=True)
     lock_path = cache / ".dataset.json.lock"
     with open(lock_path, "a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
-            yield
+            with _directory_lock(cache / ".dataset.json.lockdir"):
+                yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _directory_lock(path: Path):
+    deadline = time.monotonic() + _LOCK_WAIT_S
+    while True:
+        try:
+            path.mkdir()
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > _LOCK_STALE_S:
+                    path.rmdir()
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() > deadline:
+                raise DatasetError(f"timed out waiting for {path.name}") from None
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            path.rmdir()
+        except OSError:
+            pass
 
 
 def _job_alive(job_id: str) -> bool | None:
@@ -359,6 +400,15 @@ def _claim_still_live(record: Mapping[str, Any], current_job: str | None, now: f
         if alive is False:
             return False
     return True
+
+
+def _slurm_job_id() -> str | None:
+    """This task's job id; ``<array>_<task>`` in a prepare array (squeue takes both)."""
+    array = os.environ.get("SLURM_ARRAY_JOB_ID", "").strip()
+    task = os.environ.get("SLURM_ARRAY_TASK_ID", "").strip()
+    if array.isdigit() and task.isdigit():
+        return f"{array}_{task}"
+    return os.environ.get("SLURM_JOB_ID", "").strip() or None
 
 
 def mark_scene_images(cache: Path, scene_id: str, mode: str) -> None:
@@ -591,7 +641,7 @@ def prepare_cluster_dataset(
         dataset["raw_fingerprint"] = fingerprint
         dataset["updated_unix"] = int(time.time())
         _write_dataset(cache, dataset)
-    job_id = os.environ.get("SLURM_JOB_ID", "").strip() or None
+    job_id = _slurm_job_id()
     total = len(selected)
     done = 0
     pool_size = max(1, min(workers, total))

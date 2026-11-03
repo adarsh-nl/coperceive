@@ -321,7 +321,8 @@ script = preview["script"]
 assert " --split test " in script, script
 assert "# No GPU requested" in script, script
 assert preview["cpus_per_task"] == 1, preview["cpus_per_task"]
-assert "--workers 1" in script, script
+assert "--workers 1" in script and "#SBATCH --array=0-0%1" in script, script
+assert "SCENES=(scene_0000)" in script and '--scenes "$SCENE"' in script, script
 assert preview["gres"] is None, preview["gres"]
 cache_root = preview.get("cache_root") or ""
 assert cache_root.startswith(f"{tmp}/cluster/results/coperceive-cache/opv2v/"), cache_root
@@ -330,7 +331,7 @@ assert preview["preview_hash"], preview
 # No camera-image setting yet: the preview reads originals and says what previews would cost.
 assert preview["images"] == "originals" and " --images originals " in script, (preview["images"], script)
 assert preview["estimated_preview_bytes"] == 3 * 4 * 40_000, preview["estimated_preview_bytes"]
-print(f"Step CD-3 verified: dataset_prepare preview is CPU-only, --split test, cpus_per_task=1, --workers 1, "
+print(f"Step CD-3 verified: dataset_prepare preview is CPU-only, --split test, a 1-task array of 1 CPU, --workers 1, "
       f"--images originals (previews would add {preview['estimated_preview_bytes']} bytes), "
       f"cache_root outside the raw root, preview_hash={preview['preview_hash']}")
 wrong, unconfirmed = steps[2], steps[4]
@@ -388,8 +389,9 @@ steps = json.load(open(result, encoding="utf-8"))["steps"]
 for step in steps:
     assert step["ok"], step
 preview = steps[0]["value"]
-assert preview["cpus_per_task"] == 3, preview["cpus_per_task"]
-assert "--workers 3" in preview["script"] and "--all" in preview["script"], preview["script"]
+assert (preview["cpus_per_task"], preview["array_tasks"], preview["throttle"]) == (1, 3, 3), preview
+assert "#SBATCH --array=0-2%3" in preview["script"], preview["script"]
+assert "SCENES=(scene_0000 scene_0001 scene_0002)" in preview["script"], preview["script"]
 sbatch = [line for line in open(ssh_log, encoding="utf-8").read().splitlines() if line.startswith("sbatch")]
 assert len(sbatch) == 1, sbatch
 scenes = {scene["scene_id"]: scene for scene in steps[2]["value"]["scenes"]}
@@ -398,7 +400,10 @@ assert {key: value["state"] for key, value in scenes.items()} == {
 before = {s["scene_id"]: s for s in json.load(open(f"{tmp}/one-result.json"))["steps"][2]["value"]["scenes"]}
 assert scenes["scene_0000"]["prepared_unix"] == before["scene_0000"]["prepared_unix"], (
     scenes["scene_0000"], before["scene_0000"])
-print(f"Step CD-7 verified: prepare all (workers omitted) -> cpus_per_task=3; status all ready; "
+job = steps[1]["value"]["job_id"]
+assert {scenes[s]["job_id"] for s in ("scene_0001", "scene_0002")} == {f"{job}_1", f"{job}_2"}, scenes
+print(f"Step CD-7 verified: prepare all (workers omitted) -> one sbatch, an array of 3 one-CPU tasks "
+      f"(%3), each task claimed its scene ({job}_1, {job}_2); status all ready; "
       f"scene_0000 prepared_unix unchanged ({before['scene_0000']['prepared_unix']})")
 session = steps[3]["value"]
 assert session["origin"].startswith("http://127.0.0.1:") and session["token"], {k: v for k, v in session.items() if k != "token"}

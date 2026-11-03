@@ -294,9 +294,14 @@ scene to its Slurm job.
 
 - Detection/index accept `--max-scenes` (default 5000), `--max-entries`
   (200000) and `--timeout` (30 s) for index; they never write.
-- Preparation is scheduled: CPU only (no GRES), `--cpus-per-task` equal to
-  `--workers`, a per-job scratch subdirectory, the existing preview/confirm
-  hash, and a per-scene temporary directory moved into the cache atomically.
+- Preparation is scheduled as a job array: one task per scene, CPU only (no
+  GRES), `--cpus-per-task=1`, at most `%N` tasks at once (the preview's
+  "Scenes at once", editable), a per-task scratch subdirectory, the existing
+  preview/confirm hash, and a per-scene temporary directory moved into the
+  cache atomically. Tasks on different nodes update `dataset.json` under
+  `flock` plus an atomic `mkdir` lock (`flock` can be node-local on Lustre); a
+  scene's claim records `<array job>_<task>`. See
+  [prepare-profile.md](prepare-profile.md) for where the time goes.
 - One failed scene does not stop the rest; its `reason` is kept. The claim takeover threshold is a fixed four hours, so the prepare
   job walltime must stay at or below four hours (the default is four hours).
 - Nothing derived from licensed/unknown raw data is written to this repository;
@@ -408,7 +413,7 @@ return JSON and use the saved server profile and `coperceive_command`.
 
 | Tauri command | arguments | returns |
 | --- | --- | --- |
-| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number, "images"?: "originals"\|"previews" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": number, "gres": null, "estimated_cache_bytes": number, "images": "originals"\|"previews", "estimated_preview_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
+| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number, "images"?: "originals"\|"previews" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": 1, "array_tasks": number, "throttle": number, "gres": null, "estimated_cache_bytes": number, "images": "originals"\|"previews", "estimated_preview_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
 | `dataset_prepare_submit` | `{ "profileId": string, "previewHash": string, "confirmed": boolean }` | `{ "job_id": string, "state": "pending"\|"running"\|"completed"\|"failed"\|"cancelled"\|"unknown", "queue_reason": string \| null, "plan_id": string }` |
 | `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null }` | `coperceive-cluster-scene-status-1` document |
 | `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
@@ -421,14 +426,16 @@ different `preview_hash`. `estimated_preview_bytes` is the extra disk the
 previews mode would use for the selected scenes, whichever mode is chosen, so
 the UI can show the cost next to that option.
 
-`scenes` omitted means all scenes, same as `"all"`. `workers` is optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview's `cpus_per_task` is exactly the workers actually used, and the script passes the same `--workers`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
+`scenes` omitted means all scenes, same as `"all"`. `workers` is the array throttle (scenes at once), optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview has `cpus_per_task: 1`, `array_tasks` (one per selected scene; "all" is every scene the index lists) and `throttle`; the script lists the scenes in a shell-quoted `SCENES=(…)` array, and each task runs `dataset prepare --workers 1 --scenes "${SCENES[$SLURM_ARRAY_TASK_ID]}"`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
 Griffin. `dataset_prepare` renders the full script but submits nothing.
 `dataset_prepare_submit` requires the exact `preview_hash`; a changed preview or
 an unconfirmed call submits nothing and returns a plain error. The preview is
 the existing job-submit preview shape plus the additive
 `estimated_cache_bytes`, and its script contains a `# No GPU requested
-(CPU-only job).` line, the job-owned scratch subdirectory trap, and
-`--cpus-per-task` equal to `--workers`.
+(CPU-only job).` line, the job-owned scratch subdirectory trap,
+`#SBATCH --array=0-<n-1>%<throttle>` and `--cpus-per-task=1`. Following the
+job, the app treats the array as running while any task runs or waits, and as
+failed when any task did not complete.
 
 `dataset_open` serves the **cache split directory**, not the raw root, so the
 viewer's scene list is exactly the ready cache scenes. It passes

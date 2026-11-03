@@ -136,10 +136,11 @@ test("datasetPrepare returns preview matching the backend contract", async () =>
   assert.strictEqual(preview.job_name, "coperceive-prepare-opv2v");
   assert.ok(preview.script.includes("# No GPU requested (CPU-only job)."));
   assert.ok(preview.script.includes("--adapter \"opv2v\""));
-  assert.ok(preview.script.includes("--all"));
+  assert.ok(preview.script.includes('--scenes "$SCENE"'));
+  assert.ok(preview.script.includes("#SBATCH --array=0-2%3"), preview.script);
   assert.ok(preview.preview_hash.length > 0);
   assert.strictEqual(preview.gres, null);
-  assert.ok(preview.cpus_per_task >= 1);
+  assert.strictEqual(preview.cpus_per_task, 1);
   assert.ok(preview.cache_root.length > 0);
 
   // Test optional workers
@@ -150,9 +151,11 @@ test("datasetPrepare returns preview matching the backend contract", async () =>
     scenes: ["scene_0001", "scene_0002"],
     workers: 2,
   });
-  assert.strictEqual(previewWorkers.cpus_per_task, 2);
-  assert.ok(previewWorkers.script.includes("--workers 2"));
-  assert.ok(previewWorkers.script.includes("--scenes scene_0001 scene_0002"));
+  assert.strictEqual(previewWorkers.cpus_per_task, 1);
+  assert.strictEqual(previewWorkers.array_tasks, 2);
+  assert.strictEqual(previewWorkers.throttle, 2);
+  assert.ok(previewWorkers.script.includes("#SBATCH --array=0-1%2"));
+  assert.ok(previewWorkers.script.includes("SCENES=(scene_0001 scene_0002)"));
 });
 
 test("datasetDetect and datasetIndex provide typed cluster contract shapes", async () => {
@@ -374,7 +377,9 @@ test("in Tauri mode: refused submit regenerates preview and keeps submit disable
         job_name: "coperceive-dataset-prepare",
         partition: "ps",
         walltime: "04:00:00",
-        cpus_per_task: 4,
+        cpus_per_task: 1,
+        array_tasks: 4,
+        throttle: 4,
         gres: null,
         cache_root: "/results/cache/opv2v",
         estimated_cache_bytes: 52428800,
@@ -511,7 +516,7 @@ test("wholeDatasetOffer leads with the whole dataset while nothing is prepared",
   } as unknown as ClusterIndexDocument;
   const offer = wholeDatasetOffer(index, 0);
   assert.ok(offer && offer.kind === "offer");
-  assert.strictEqual(offer.button, "Prepare whole dataset (~21.0 GB, 1 CPU job)");
+  assert.strictEqual(offer.button, "Prepare whole dataset (~21.0 GB, 16 one-CPU tasks)");
   assert.match(offer.detail, /all 16 scenes once/);
   assert.strictEqual(wholeDatasetOffer(index, 3), null);
   const done = wholeDatasetOffer(index, 16);

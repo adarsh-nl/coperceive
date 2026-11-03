@@ -2,8 +2,8 @@
 """Lidar readers. Each returns ``(count, bytes)``: little-endian float32
 ``x, y, z, intensity`` per point, which is the schema 1 blob layout.
 
-ASCII values go through Python ``float`` and then one cast to float32, so the
-bytes agree with ``struct.pack('<f', float(text))``.
+ASCII values are parsed to float64 exactly as Python ``float`` does and then
+cast once to float32, so the bytes agree with ``struct.pack('<f', float(text))``.
 """
 
 from __future__ import annotations
@@ -185,11 +185,16 @@ def read_bin_f32(
 
 def _ascii_columns(text: str, count: int, names: list[str]) -> dict[str, npt.NDArray[np.float64]]:
     width = len(names)
-    values = [float(part) for part in text.split()]
     needed = count * width
-    if len(values) < needed:
-        raise LidarError(f"expected {needed} values, found {len(values)}")
-    grid = np.asarray(values[:needed], dtype=np.float64).reshape(count, width)  # pyright: ignore[reportUnknownMemberType]
+    try:
+        # numpy's C parser rounds each value as Python ``float`` does (same
+        # bytes), at about half the cost; the sweep parse was most of prepare.
+        parsed = np.fromstring(text, dtype=np.float64, sep=" ")  # pyright: ignore[reportUnknownMemberType, reportCallIssue]
+    except ValueError:
+        parsed = np.asarray([float(part) for part in text.split()], dtype=np.float64)
+    if len(parsed) < needed:
+        raise LidarError(f"expected {needed} values, found {len(parsed)}")
+    grid = parsed[:needed].reshape(count, width)  # pyright: ignore[reportUnknownMemberType]
     return {name: grid[:, index] for index, name in enumerate(names)}
 
 

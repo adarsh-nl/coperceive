@@ -282,6 +282,9 @@ export default function ClusterDatasetView({
   const openFirstReadyRef = useRef<ReadonlySet<string> | null>(null);
   // The camera-image choice shows at once; Submit waits for the new script's hash.
   const [wholeImagesPending, setWholeImagesPending] = useState<CameraImagesMode | null>(null);
+  // "Scenes at once" (the array's % throttle) being typed, and a re-preview for it.
+  const [throttleDraft, setThrottleDraft] = useState<string | null>(null);
+  const [wholeThrottlePending, setWholeThrottlePending] = useState(false);
   const [singleImagesPending, setSingleImagesPending] = useState<CameraImagesMode | null>(null);
   const trackJob = (job: { job_id: string; plan_id: string }, jobName: string, scenes: string[] | "all") => {
     const entry: SubmittedJob = {
@@ -619,12 +622,38 @@ export default function ClusterDatasetView({
           split: dataset.split,
           scenes: "all",
           images,
+          workers: preparePreview?.throttle,
         }),
       );
     } catch (err) {
       setPrepareError(errorDetails(err) || errorText(err));
     } finally {
       setWholeImagesPending(null);
+    }
+  };
+
+  const handleWholeThrottleCommit = async () => {
+    const value = Number(throttleDraft);
+    setThrottleDraft(null);
+    if (!preparePreview || !Number.isInteger(value) || value < 1 || value === preparePreview.throttle) return;
+    setPrepareConfirmed(false);
+    setPrepareError(null);
+    setWholeThrottlePending(true);
+    try {
+      setPreparePreview(
+        await datasetPrepare(profile.id, {
+          adapter: dataset.adapter || "opv2v",
+          rawRoot: dataset.raw_root || dataset.path,
+          split: dataset.split,
+          scenes: "all",
+          images: preparePreview.images,
+          workers: value,
+        }),
+      );
+    } catch (err) {
+      setPrepareError(errorDetails(err) || errorText(err));
+    } finally {
+      setWholeThrottlePending(false);
     }
   };
 
@@ -679,6 +708,7 @@ export default function ClusterDatasetView({
           split: dataset.split,
           scenes: "all",
           images: preparePreview.images,
+          workers: preparePreview.throttle,
         },
         err,
       );
@@ -862,8 +892,28 @@ export default function ClusterDatasetView({
           {preparePreview ? (
             <>
               <div style={{ fontSize: "0.78rem", color: "#c9d1d9", marginBottom: "0.25rem" }}>
-                Script preview (CPU only · No GPU requested · {preparePreview.cpus_per_task} CPU{preparePreview.cpus_per_task === 1 ? "" : "s"} · partition: {preparePreview.partition}):
+                Script preview (CPU only · No GPU requested · {preparePreview.array_tasks} task{preparePreview.array_tasks === 1 ? "" : "s"} of 1 CPU, one per scene · partition: {preparePreview.partition}):
               </div>
+              <label className="settings-field" style={{ fontSize: "0.78rem", color: "#c9d1d9", marginBottom: "0.4rem" }}>
+                <span>Scenes at once</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={16}
+                  aria-label="Scenes at once"
+                  value={throttleDraft ?? String(preparePreview.throttle)}
+                  disabled={prepareBusy || wholeThrottlePending}
+                  onChange={(event) => setThrottleDraft(event.target.value)}
+                  onBlur={() => void handleWholeThrottleCommit()}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void handleWholeThrottleCommit();
+                  }}
+                  style={{ width: "4.5em", marginLeft: "0.5rem" }}
+                />
+                <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
+                  At most {preparePreview.throttle} CPU{preparePreview.throttle === 1 ? "" : "s"} in use; each task starts as soon as one CPU is free.
+                </span>
+              </label>
               <div style={{ fontSize: "0.75rem", color: "#8b949e", marginBottom: "0.5rem" }}>
                 Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{preparePreview.cache_root}</span>
               </div>
@@ -874,16 +924,16 @@ export default function ClusterDatasetView({
                 disabled={prepareBusy}
                 onChange={(mode) => void handleWholeImagesChange(mode)}
               />
-              {wholeImagesPending ? (
+              {wholeImagesPending || wholeThrottlePending ? (
                 <div role="status" style={{ fontSize: "0.75rem", color: "#79c0ff", margin: "0 0 0.3rem" }}>
                   Updating preview…
                 </div>
               ) : null}
               <pre
                 aria-label="Prepare job script"
-                aria-busy={wholeImagesPending !== null}
+                aria-busy={wholeImagesPending !== null || wholeThrottlePending}
                 style={{
-                  opacity: wholeImagesPending ? 0.45 : 1,
+                  opacity: wholeImagesPending || wholeThrottlePending ? 0.45 : 1,
                   margin: "0 0 0.75rem",
                   padding: "0.75rem",
                   borderRadius: "6px",
@@ -918,7 +968,7 @@ export default function ClusterDatasetView({
                     opacity: !prepareConfirmed || prepareBusy ? 0.5 : 1,
                     cursor: !prepareConfirmed || prepareBusy ? "not-allowed" : "pointer",
                   }}
-                  disabled={!prepareConfirmed || prepareBusy || wholeImagesPending !== null}
+                  disabled={!prepareConfirmed || prepareBusy || wholeImagesPending !== null || wholeThrottlePending || throttleDraft !== null}
                   onClick={() => void handleConfirmWholeDatasetSubmit()}
                 >
                   {prepareBusy ? "Submitting…" : "Confirm and submit prepare job"}
@@ -953,7 +1003,7 @@ export default function ClusterDatasetView({
             </div>
           ) : null}
           <div style={{ fontSize: "0.74rem", color: "#8b949e", marginBottom: "0.4rem" }}>
-            Workers: {singlePreparePreview.cpus_per_task} CPU · Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{singlePreparePreview.cache_root}</span>
+            One 1-CPU task · Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{singlePreparePreview.cache_root}</span>
           </div>
           <CameraImagesChoice
             name="single-camera-images"
