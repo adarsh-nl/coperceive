@@ -73,6 +73,7 @@ function DesktopPreferences() {
   const [reopenLast, setReopenLast] = useState<boolean>(true);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(true);
   const [autoNextScene, setAutoNextScene] = useState<boolean>(false);
+  const [openFirstReady, setOpenFirstReady] = useState<boolean>(true);
   const [storageRoot, setStorageRoot] = useState<string>("");
 
   useEffect(() => {
@@ -83,12 +84,15 @@ function DesktopPreferences() {
         headers: { Authorization: `Bearer ${secret}` },
       })
         .then((r) => r.json())
-        .then((data: { reopen_last_session?: boolean; auto_next_scene?: boolean }) => {
+        .then((data: { reopen_last_session?: boolean; auto_next_scene?: boolean; open_first_ready_scene?: boolean }) => {
           if (data && typeof data.reopen_last_session === "boolean") {
             setReopenLast(data.reopen_last_session);
           }
           if (data && typeof data.auto_next_scene === "boolean") {
             setAutoNextScene(data.auto_next_scene);
+          }
+          if (data && typeof data.open_first_ready_scene === "boolean") {
+            setOpenFirstReady(data.open_first_ready_scene);
           }
         })
         .catch(() => {});
@@ -137,6 +141,19 @@ function DesktopPreferences() {
     }
   };
 
+  const handleOpenFirstReadyToggle = (checked: boolean) => {
+    setOpenFirstReady(checked);
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      const port = window.__COPERCEIVE_CTRL_PORT__;
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+      fetch(`http://127.0.0.1:${port}/state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ open_first_ready_scene: checked }),
+      }).catch(() => {});
+    }
+  };
+
   const handleAutoUpdateToggle = (checked: boolean) => {
     setAutoUpdate(checked);
     void setAutoDownloadUpdates(checked);
@@ -161,6 +178,12 @@ function DesktopPreferences() {
         title="Automatically download updates"
         description="Prompt when new signed releases are available."
         onChange={handleAutoUpdateToggle}
+      />
+      <SettingRow
+        checked={openFirstReady}
+        title="Open the viewer when the first scene is ready"
+        description="After preparing a cluster dataset, show its first ready scene; the rest appear in the viewer's scene menu as they finish."
+        onChange={handleOpenFirstReadyToggle}
       />
       <SettingRow
         checked={autoNextScene}

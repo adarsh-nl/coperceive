@@ -467,6 +467,26 @@ pub struct RemoteSessionManager {
     pub job_id: Option<u64>,
 }
 
+/// The viewer job runs and its session (node address, port) is known.
+fn reachable(status: &RemoteStatusResponse) -> bool {
+    // An older CLI sends "ip": "" and "port": 0 before the session exists.
+    status.ip.as_deref().is_some_and(|ip| !ip.is_empty())
+        && status.port.is_some_and(|port| port > 0)
+        && (status.status == "running"
+            || (status.state.as_deref() == Some("RUNNING") && status.status != "stopped"))
+}
+
+/// The job has not ended: queued, or running but its session not written yet.
+/// An older CLI reports the latter as `stopped` with state RUNNING; so does
+/// any reply whose Slurm state is still active.
+fn is_starting(status: &RemoteStatusResponse) -> bool {
+    matches!(status.status.as_str(), "pending" | "running")
+        || matches!(
+            status.state.as_deref(),
+            Some("PENDING" | "CONFIGURING" | "RUNNING" | "COMPLETING" | "RESIZING")
+        )
+}
+
 impl RemoteSessionManager {
     pub fn connect(
         alias: &str,
@@ -506,11 +526,18 @@ impl RemoteSessionManager {
         // Reconnect / reattach or start fresh
         let (uuid, remote_ip, remote_port, token) = if let Some(u) = existing_uuid {
             let st = client.status(Some(u), None)?;
-            if st.status != "running" {
-                return Err(SshErrorKind::Other(format!(
-                    "Cannot reattach: session {} is not running (state: {:?})",
-                    u, st.state
-                )));
+            if !reachable(&st) {
+                return Err(SshErrorKind::Other(if is_starting(&st) {
+                    format!(
+                        "The viewer job is still starting (Slurm state {}). Try again in a moment.",
+                        st.state.as_deref().unwrap_or("unknown")
+                    )
+                } else {
+                    format!(
+                        "Cannot reattach: session {} is not running (state: {:?})",
+                        u, st.state
+                    )
+                }));
             }
             let ip = st
                 .ip
@@ -604,81 +631,129 @@ impl RemoteSessionManager {
             }
         };
         if started.status == "running" {
-            let (Some(ip), Some(port)) = (started.ip.clone(), started.port) else {
-                return Err(SshErrorKind::Other(
-                    "The server did not report the session node address.".to_string(),
-                ));
-            };
-            let local_port = find_free_loopback_port().map_err(|e| {
-                SshErrorKind::Other(format!("Failed to find free local port: {}", e))
-            })?;
-            let token = started.token.clone().unwrap_or_default();
-            let mut session = Self::attach(
-                client,
-                alias,
-                ssh_bin,
-                local_port,
-                uuid,
-                ip,
-                port,
-                token,
-                &options.data_root,
-            )?;
-            session.job_id = job_id;
-            return Ok(session);
-        }
-        {
+            if let (Some(ip), Some(port)) = (started.ip.clone(), started.port) {
+                let local_port = find_free_loopback_port().map_err(|e| {
+                    SshErrorKind::Other(format!("Failed to find free local port: {}", e))
+                })?;
+                let token = started.token.clone().unwrap_or_default();
+                let mut session = Self::attach(
+                    client,
+                    alias,
+                    ssh_bin,
+                    local_port,
+                    uuid,
+                    ip,
+                    port,
+                    token,
+                    &options.data_root,
+                )?;
+                session.job_id = job_id;
+                return Ok(session);
+            }
+        } else {
             progress(&ViewerJobProgress {
                 job_id,
                 state: "PENDING".to_string(),
                 reason: started.reason.clone(),
             });
-            let deadline = std::time::Instant::now() + limit;
-            loop {
-                std::thread::sleep(poll);
-                let status = client.status(Some(&uuid), job_id)?;
-                match status.status.as_str() {
-                    "running" => break,
-                    "pending" => progress(&ViewerJobProgress {
-                        job_id: status.job_id.or(job_id),
-                        state: status.state.clone().unwrap_or_else(|| "PENDING".to_string()),
-                        reason: status.reason.clone(),
-                    }),
-                    other => {
-                        return Err(SshErrorKind::Other(format!(
-                            "The viewer job stopped before it started ({other}{}).",
-                            status
-                                .state
-                                .as_deref()
-                                .map(|state| format!(", {state}"))
-                                .unwrap_or_default()
-                        )))
-                    }
-                }
-                if std::time::Instant::now() >= deadline {
-                    let _ = client.stop(Some(&uuid), job_id);
-                    return Err(SshErrorKind::Other(format!(
-                        "The viewer job waited in the queue for {} minutes and was cancelled{}. Open the scene again to retry.",
-                        limit.as_secs() / 60,
-                        status
-                            .reason
-                            .as_deref()
-                            .map(|reason| format!(" (queue reason: {reason})"))
-                            .unwrap_or_default()
-                    )));
-                }
-            }
         }
-        let mut attached = Self::connect_with_options(
-            alias,
-            &RemoteStartOptions {
-                uuid: Some(uuid),
-                ..options.clone()
-            },
-            ssh_bin,
-        )?;
-        attached.job_id = job_id;
-        Ok(attached)
+        Self::wait_and_attach(client, alias, ssh_bin, &uuid, job_id, &options.data_root, progress, poll, limit)
+    }
+
+    /// Reattach to a viewer job the app started before (its id kept in
+    /// state.json), waiting while it still starts.
+    pub fn reattach_with_progress(
+        alias: &str,
+        options: &RemoteStartOptions,
+        ssh_bin: Option<&str>,
+        uuid: &str,
+        progress: &dyn Fn(&ViewerJobProgress),
+        poll: Duration,
+        limit: Duration,
+    ) -> Result<Self, SshErrorKind> {
+        let mut client = match ssh_bin {
+            Some(bin) => RemoteClient::with_ssh_bin(alias, bin),
+            None => RemoteClient::new(alias),
+        };
+        if !options.coperceive_command.is_empty() {
+            client.coperceive_command = options.coperceive_command.clone();
+        }
+        Self::wait_and_attach(client, alias, ssh_bin, uuid, None, &options.data_root, progress, poll, limit)
+    }
+
+    /// Poll a started job until its session is reachable, then open the tunnel
+    /// from that reply. Polls by session id and job id: a job Slurm already
+    /// runs may not have written its session file yet (it is starting, which an
+    /// older CLI reported as `stopped` with state RUNNING).
+    #[allow(clippy::too_many_arguments)]
+    fn wait_and_attach(
+        client: RemoteClient,
+        alias: &str,
+        ssh_bin: Option<&str>,
+        uuid: &str,
+        job_id: Option<u64>,
+        data_root: &str,
+        progress: &dyn Fn(&ViewerJobProgress),
+        poll: Duration,
+        limit: Duration,
+    ) -> Result<Self, SshErrorKind> {
+        let deadline = std::time::Instant::now() + limit;
+        let mut job_id = job_id;
+        loop {
+            let status = client.status(Some(uuid), job_id)?;
+            job_id = job_id.or(status.job_id); // the job we started wins
+            if reachable(&status) {
+                let (Some(ip), Some(port)) = (status.ip.clone(), status.port) else {
+                    unreachable!("reachable() checked the address")
+                };
+                let token = client.fetch_token(uuid)?;
+                let local_port = find_free_loopback_port().map_err(|e| {
+                    SshErrorKind::Other(format!("Failed to find free local port: {}", e))
+                })?;
+                let mut session = Self::attach(
+                    client,
+                    alias,
+                    ssh_bin,
+                    local_port,
+                    uuid.to_string(),
+                    ip,
+                    port,
+                    token,
+                    data_root,
+                )?;
+                session.job_id = job_id;
+                return Ok(session);
+            }
+            if !is_starting(&status) {
+                return Err(SshErrorKind::Other(format!(
+                    "The viewer job stopped before it started ({}{}).",
+                    status.status,
+                    status
+                        .state
+                        .as_deref()
+                        .map(|state| format!(", {state}"))
+                        .unwrap_or_default()
+                )));
+            }
+            progress(&ViewerJobProgress {
+                job_id,
+                state: status.state.clone().unwrap_or_else(|| "PENDING".to_string()),
+                reason: status.reason.clone(),
+            });
+            if std::time::Instant::now() >= deadline {
+                let _ = client.stop(Some(uuid), job_id);
+                return Err(SshErrorKind::Other(format!(
+                    "The viewer job waited in the queue for {} minutes and was cancelled{}. Open the scene again to retry.",
+                    limit.as_secs() / 60,
+                    status
+                        .reason
+                        .as_deref()
+                        .map(|reason| format!(" (queue reason: {reason})"))
+                        .unwrap_or_default()
+                )));
+            }
+            std::thread::sleep(poll);
+        }
     }
 
     /// The tunnel to the viewer job is still up.
@@ -769,6 +844,8 @@ fi
 if [[ "$args" == *"coperceive remote start"* ]]; then
     if [[ "$args" == *"--root /queued"* ]]; then
         echo '{"status": "pending", "state": "PENDING", "reason": "Priority", "uuid": "test-queued", "job_id": 5560, "token": "tokq"}'
+    elif [[ "$args" == *"--root /slow-session"* ]]; then
+        echo '{"status": "pending", "state": "PENDING", "reason": "Resources", "uuid": "test-slow", "job_id": 5570, "token": "toks"}'
     elif [[ "$args" == *"--root /stuck"* ]]; then
         echo '{"status": "pending", "state": "PENDING", "reason": "ReqNodeNotAvail", "uuid": "test-pending", "job_id": 5556, "token": "tokp"}'
     else
@@ -779,7 +856,13 @@ fi
 
 # Remote status
 if [[ "$args" == *"coperceive remote status"* ]]; then
-    if [[ "$args" == *"test-pending"* ]]; then
+    if [[ "$args" == *"test-slow"* && "$args" != *"--job-id"* ]]; then
+        # The cluster's reply (pretty-printed) while the job runs but has not
+        # written its session file: the sacct-by-name fallback said "stopped".
+        printf '%s\n' '{' '  "status": "stopped",' '  "state": "RUNNING",' '  "stopped_reason": "unknown",' '  "uuid": "test-slow",' '  "job_id": 5570,' '  "healthy": false' '}'
+    elif [[ "$args" == *"test-slow"* ]]; then
+        echo '{"status": "running", "state": "RUNNING", "uuid": "test-slow", "job_id": 5570, "node": "hpc-node3", "ip": "10.20.240.50", "port": 52700, "healthy": true}'
+    elif [[ "$args" == *"test-pending"* ]]; then
         echo '{"status": "pending", "state": "PENDING", "uuid": "test-pending", "job_id": 5556, "reason": "ReqNodeNotAvail"}'
     elif [[ "$args" == *"test-timeout"* ]]; then
         echo '{"status": "stopped", "state": "TIMEOUT", "stopped_reason": "timeout", "uuid": "test-timeout", "job_id": 5557, "last_heartbeat_age_s": 650.0}'
@@ -857,6 +940,45 @@ exit 1
         );
         assert_eq!((session.uuid.as_str(), session.job_id), ("test-queued", Some(5560)));
         assert_eq!(session.token, "tok-reattach-99");
+    }
+
+    #[test]
+    fn a_running_job_whose_session_is_not_written_yet_is_attached_not_refused() {
+        // Reproduces "Cannot reattach: session … is not running (state: Some(\"RUNNING\"))":
+        // after the queue, a lookup by session id alone got {"status":"stopped","state":"RUNNING"}.
+        let fake = FakeSshScript::create();
+        let session = RemoteSessionManager::connect_with_progress(
+            "hpc-alias",
+            &RemoteStartOptions {
+                data_root: "/slow-session".to_string(),
+                wait_timeout: Some(5),
+                ..Default::default()
+            },
+            fake.path.to_str(),
+            &|_| {},
+            Duration::from_millis(10),
+            Duration::from_secs(5),
+        )
+        .expect("attached by job id");
+        assert_eq!((session.uuid.as_str(), session.job_id), ("test-slow", Some(5570)));
+        assert_eq!(session.remote_port, 52700);
+    }
+
+    #[test]
+    fn a_stopped_reply_with_an_active_state_is_still_starting() {
+        let reply: RemoteStatusResponse = serde_json::from_str(
+            "{\n  \"status\": \"stopped\",\n  \"state\": \"RUNNING\",\n  \"uuid\": \"u\"\n}",
+        )
+        .unwrap();
+        assert!(is_starting(&reply) && !reachable(&reply));
+        let empty: RemoteStatusResponse = serde_json::from_str(
+            r#"{"status": "running", "state": "RUNNING", "ip": "", "port": 0}"#,
+        )
+        .unwrap();
+        assert!(!reachable(&empty), "an empty address is not a session");
+        let ended: RemoteStatusResponse =
+            serde_json::from_str(r#"{"status": "stopped", "state": "CANCELLED"}"#).unwrap();
+        assert!(!is_starting(&ended));
     }
 
     #[test]

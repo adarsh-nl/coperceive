@@ -93,6 +93,13 @@ def main() -> int:
             env={**os.environ, "HOME": str(home)},
         )
         (sessions / f"{uuid}.pid").write_text(str(process.pid), encoding="utf-8")
+        if os.environ.get("FAKE_REMOTE_SLOW_SESSION") == "1":
+            # As on a busy cluster: the job queues, and once it runs it takes a
+            # moment to write its session file (address and port).
+            (sessions / f"{uuid}.port").write_text(str(port), encoding="utf-8")
+            return _reply(
+                status="pending", state="PENDING", reason="Resources", uuid=uuid, job_id=799999
+            )
         deadline = time.monotonic() + 45
         while time.monotonic() < deadline:
             if process.poll() is not None:
@@ -140,6 +147,40 @@ def main() -> int:
             os.kill(int(pid_file.read_text(encoding="utf-8")), 0)
         except (OSError, ValueError):
             return _reply(status="stopped", uuid=uuid, state="COMPLETED")
+        slow_port = sessions / f"{uuid}.port"
+        if slow_port.is_file():
+            if "--job-id" not in args:
+                # The real reply of a CLI before the fix, looked up by session id
+                # alone while the session file is missing: sacct said RUNNING and
+                # the reply said "stopped" (pretty-printed, as the CLI prints it).
+                print(
+                    json.dumps(
+                        {
+                            "status": "stopped",
+                            "state": "RUNNING",
+                            "stopped_reason": "unknown",
+                            "uuid": uuid,
+                            "job_id": 799999,
+                            "healthy": False,
+                            "last_heartbeat_age_s": None,
+                            "message": "Job ended (RUNNING)",
+                        },
+                        indent=2,
+                    )
+                )
+                return 0
+            port = int(slow_port.read_text(encoding="utf-8"))
+            return _reply(
+                status="running",
+                state="RUNNING",
+                uuid=uuid,
+                job_id=799999,
+                node="fake-node",
+                ip="127.0.0.1",
+                port=port,
+                time_left="3:59:00",
+                time_left_seconds=14340,
+            )
         return _reply(
             status="running",
             uuid=uuid,

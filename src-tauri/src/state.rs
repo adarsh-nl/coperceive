@@ -419,6 +419,19 @@ pub struct AppPersistentState {
     /// At the end of a scene, move on to the next prepared one. Off by default.
     #[serde(default)]
     pub auto_next_scene: bool,
+
+    /// The cluster dataset last open per server profile (its detect document),
+    /// reopened in the HPC workspace after a restart.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub last_cluster_datasets: HashMap<String, serde_json::Value>,
+
+    /// The server whose dataset was open last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_cluster_profile: Option<String>,
+
+    /// After a prepare, open the viewer when the first scene is ready. On by default.
+    #[serde(default = "default_true")]
+    pub open_first_ready_scene: bool,
 }
 
 /// Camera-image modes for cluster dataset preparation.
@@ -518,6 +531,9 @@ impl Default for AppPersistentState {
             camera_images_by_profile: HashMap::new(),
             viewer_sessions: HashMap::new(),
             auto_next_scene: false,
+            last_cluster_datasets: HashMap::new(),
+            last_cluster_profile: None,
+            open_first_ready_scene: true,
         }
     }
 }
@@ -847,6 +863,9 @@ pub mod tests {
             camera_images_by_profile: HashMap::from([("cluster-a".into(), "originals".into())]),
             viewer_sessions: HashMap::from([("alias|p|/r|".into(), "abc123".into())]),
             auto_next_scene: true,
+            last_cluster_datasets: HashMap::from([("p".into(), serde_json::json!({"path": "/d/opv2v/test"}))]),
+            last_cluster_profile: Some("p".into()),
+            open_first_ready_scene: false,
         };
 
         let json = serde_json::to_string(&state).expect("serialize");

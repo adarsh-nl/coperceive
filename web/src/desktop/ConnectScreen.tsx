@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
+import { JobsIndicator } from "./JobsIndicator";
 import { useEffect, useState } from "react";
 import {
   LocalExecutionTarget,
@@ -43,6 +44,12 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     }
     return "library";
   });
+  // A tab mounts the first time it is shown and then stays mounted (hidden),
+  // so nothing remote is read at launch and nothing is lost by switching.
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<TabMode>>(() => new Set([activeTab]));
+  useEffect(() => {
+    setVisitedTabs((current) => (current.has(activeTab) ? current : new Set([...current, activeTab])));
+  }, [activeTab]);
   // Bumped when the Library is asked for again, so it re-reads the scenes.
   const [libraryKey, setLibraryKey] = useState(0);
   const [dataRoot, setDataRoot] = useState<string>("");
@@ -333,6 +340,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               HPC Workspace
             </button>
           </nav>
+          <JobsIndicator onOpenWorkspace={() => setActiveTab("remote")} />
         </div>
 
         {status && (
@@ -344,15 +352,17 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
       {/* Main Content Area */}
       <main style={{ flex: 1, position: "relative", zIndex: 1, padding: "1.5rem 0" }}>
-        {activeTab === "library" && (
+        {/* Every tab stays mounted (hidden when not shown): an open dataset,
+            scroll and filters survive switching tabs. */}
+        <div className="tab-panel" hidden={activeTab !== "library"}>
           <LibraryScreen
             key={libraryKey}
             onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
             onNavigateGetData={() => setActiveTab("get_data")}
           />
-        )}
+        </div>
 
-        {activeTab === "get_data" && (
+        <div className="tab-panel" hidden={activeTab !== "get_data"}>
           <GetDataScreen
             onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
             onOpenImportFolder={(folder) => {
@@ -361,9 +371,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               setActiveTab("local");
             }}
           />
-        )}
+        </div>
 
-        {activeTab === "local" && (
+        <div className="tab-panel" hidden={activeTab !== "local"}>
           <div
             style={{
               display: "flex",
@@ -710,9 +720,11 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               )}
             </div>
           </div>
-        )}
+        </div>
 
-        {activeTab === "remote" && <HpcWorkspace />}
+        <div className="tab-panel" hidden={activeTab !== "remote"}>
+          {visitedTabs.has("remote") ? <HpcWorkspace /> : null}
+        </div>
 
         {error && (
           <div role="alert" style={{ maxWidth: "520px", margin: "1rem auto" }}>

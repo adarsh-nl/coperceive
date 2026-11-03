@@ -1017,7 +1017,11 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
             detail: { tab: 'local', busy: true }
         }));
     }""")
-    loading_state = session.page.locator("[data-testid='panel-state-loading']")
+    # Tabs stay mounted once shown; the Library's own loading state is in the
+    # (hidden) Library panel. This is the one the Open Folder tab shows.
+    loading_state = session.page.locator(
+        ".tab-panel:not([hidden]) [data-testid='panel-state-loading']"
+    )
     loading_state.wait_for(state="visible", timeout=5000)
     load_title = (loading_state.locator(".panel-state-title").text_content() or "").strip()
     load_desc = (loading_state.locator(".panel-state-description").text_content() or "").strip()
@@ -1038,7 +1042,8 @@ def test_panel_states_empty_loading_error(session: _Session, shots: Path) -> Non
             detail: {{ busy: false, error: '{err_detail}' }}
         }}));
     }}""")
-    error_state = session.page.locator("[data-testid='panel-state-error']")
+    # The (hidden, still mounted) Get Data tab has its own catalog error.
+    error_state = session.page.locator("[data-testid='panel-state-error']:visible")
     error_state.wait_for(state="visible", timeout=5000)
     err_title = (error_state.locator(".panel-state-title").text_content() or "").strip()
     err_desc = (error_state.locator(".panel-state-description").text_content() or "").strip()
@@ -1786,3 +1791,22 @@ def test_the_unified_toolbar_keeps_clear_of_the_traffic_lights(
             assert page.evaluate(probe)["padding"] == 12
         assert session.errors == [], session.errors
         page.close()
+
+
+def test_switching_tabs_keeps_each_tab_mounted(session: _Session) -> None:
+    """Bug: an HPC dataset opened, a visit to Get Data, and back it had reset. A tab
+    now stays mounted (hidden) once shown: the same panel comes back, state intact."""
+    page = session.page
+    page.goto(f"{session.base}/#/connect", wait_until="networkidle")
+    visible = page.locator(".tab-panel:not([hidden])")
+    page.locator("nav button", has_text="Get Data").click()
+    page.evaluate("document.querySelector('.tab-panel:not([hidden])').dataset.mark = 'kept'")
+    page.locator("nav button", has_text="Library").click()
+    page.wait_for_function(
+        "() => !document.querySelector('.tab-panel:not([hidden])')?.dataset.mark"
+    )
+    page.locator("nav button", has_text="Get Data").click()
+    page.wait_for_function(
+        "() => document.querySelector('.tab-panel:not([hidden])')?.dataset.mark === 'kept'"
+    )
+    assert visible.count() == 1

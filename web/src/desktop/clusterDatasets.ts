@@ -650,6 +650,21 @@ export async function datasetPrepareJobStatus(
   return { state: "completed", queue_reason: null };
 }
 
+/** Remember the dataset open in the HPC workspace for this server (null forgets it). */
+export async function rememberClusterDataset(profileId: string, dataset: ClusterDetectDocument | null): Promise<void> {
+  if (isTauriEnvironment()) {
+    await tauriInvoke<void>("remember_cluster_dataset", { profileId, dataset });
+  }
+}
+
+/** The dataset last open in the HPC workspace, to reopen after a restart. */
+export async function lastClusterDataset(): Promise<{ profile_id: string; dataset: ClusterDetectDocument } | null> {
+  if (isTauriEnvironment()) {
+    return await tauriInvoke<{ profile_id: string; dataset: ClusterDetectDocument } | null>("last_cluster_dataset");
+  }
+  return null;
+}
+
 /** Tell the viewer every scene of this dataset and its state, for its scene list. */
 export async function shareDatasetScenesWithViewer(scenes: { scene_id: string; state: string }[]): Promise<void> {
   if (isTauriEnvironment()) {
