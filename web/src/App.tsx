@@ -10,6 +10,7 @@ import UpdateBanner from "./desktop/UpdateBanner";
 import { CrashNotice } from "./desktop/CrashNotice";
 import { DiagnosticsDialog } from "./desktop/DiagnosticsDialog";
 import { startupCrash, type StartupCrash } from "./desktop/local";
+import { installGlobalErrorRecorders } from "./desktop/globalErrors";
 import Landing, { writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
 import { systemTheme, type ThemeName } from "./viewer/appearance";
@@ -163,25 +164,7 @@ export default function App() {
     return () => window.removeEventListener("coperceive-open-diagnostics", open);
   }, [isTauri]);
 
-  useEffect(() => {
-    const record = (event: ErrorEvent) => {
-      (window as unknown as { __COPERCEIVE_LAST_ERROR__?: unknown }).__COPERCEIVE_LAST_ERROR__ = {
-        message: event.message,
-        stack: event.error instanceof Error ? event.error.stack : undefined,
-      };
-    };
-    const rejection = (event: PromiseRejectionEvent) => {
-      (window as unknown as { __COPERCEIVE_LAST_ERROR__?: unknown }).__COPERCEIVE_LAST_ERROR__ = {
-        message: String(event.reason),
-      };
-    };
-    window.addEventListener("error", record);
-    window.addEventListener("unhandledrejection", rejection);
-    return () => {
-      window.removeEventListener("error", record);
-      window.removeEventListener("unhandledrejection", rejection);
-    };
-  }, []);
+  useEffect(() => installGlobalErrorRecorders(), []);
 
   useEffect(() => {
     // Main window: the viewer window's wordmark asks for the Library.

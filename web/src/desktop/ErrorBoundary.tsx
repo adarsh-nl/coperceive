@@ -7,7 +7,11 @@ interface State {
   sharing: boolean;
 }
 
-export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
+export class ErrorBoundary extends Component<{
+  children: ReactNode;
+  /** Test seam only; production reloads the window. */
+  onReload?: () => void;
+}, State> {
   state: State = { error: null, sharing: false };
 
   static getDerivedStateFromError(error: Error): State {
@@ -31,7 +35,13 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
         <h1>Something went wrong</h1>
         <p>Coperceive hit an error in this window. Your data is safe.</p>
         <div className="diagnostics-actions">
-          <button type="button" onClick={() => window.location.reload()}>
+          <button
+            type="button"
+            onClick={() => {
+              this.props.onReload?.();
+              if (!this.props.onReload) window.location.reload();
+            }}
+          >
             Reload
           </button>
           <button type="button" onClick={() => this.setState({ sharing: true })}>
