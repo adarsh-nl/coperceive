@@ -73,6 +73,20 @@ jobs:
       - run: .venv/bin/ruff check .
       - run: .venv/bin/ruff format --check .
       - run: .venv/bin/pyright
+      # coperceive/app/static is built (scripts/build_web_static.sh), never
+      # committed; a merge once dropped its .gitignore rule and a bundle got in.
+      - name: The built viewer bundle is not tracked
+        run: |
+          tracked="$(git ls-files -- coperceive/app/static)"
+          if [ -n "${tracked}" ]; then
+            echo "::error title=BuiltBundleTracked::coperceive/app/static is built, not committed. Untrack it with: git rm -r --cached coperceive/app/static"
+            echo "${tracked}" | head -n 20
+            exit 1
+          fi
+          git check-ignore -q coperceive/app/static/index.html || {
+            echo "::error title=BuiltBundleTracked::.gitignore no longer ignores coperceive/app/static/"
+            exit 1
+          }
 
   test:
     runs-on: ubuntu-latest

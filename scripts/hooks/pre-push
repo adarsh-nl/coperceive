@@ -73,6 +73,19 @@ if [ -z "${CHANGED_FILES//[[:space:]]/}" ]; then
     fi
 fi
 
+# The viewer bundle is built (scripts/build_web_static.sh), never committed:
+# refuse a push whose tip tracks anything under coperceive/app/static/.
+PUSHED_OIDS="$(printf '%s\n' "${STDIN_DATA}" | awk '$2 !~ /^0+$/ {print $2}')"
+for oid in ${PUSHED_OIDS:-HEAD}; do
+    TRACKED_STATIC="$(git ls-tree -r --name-only "${oid}" -- coperceive/app/static 2>/dev/null | head -n 5 || true)"
+    if [ -n "${TRACKED_STATIC}" ]; then
+        echo "[pre-push] ERROR: the built viewer bundle is tracked in ${oid}:" >&2
+        echo "${TRACKED_STATIC}" >&2
+        echo "  Untrack it: git rm -r --cached coperceive/app/static" >&2
+        exit 1
+    fi
+done
+
 # Clean up empty lines and deduplicate
 FILES="$(echo "${CHANGED_FILES}" | sed '/^[[:space:]]*$/d' | sort -u || true)"
 
