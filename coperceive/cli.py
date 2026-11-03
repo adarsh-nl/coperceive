@@ -321,6 +321,12 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser.add_argument("--all", action="store_true", help="Prepare every scene.")
     prepare_parser.add_argument("--workers", type=int, default=1)
     prepare_parser.add_argument(
+        "--images",
+        choices=("originals", "previews"),
+        default="originals",
+        help="Camera images: read the dataset's originals, or also save 640 px previews.",
+    )
+    prepare_parser.add_argument(
         "--verbose", action="store_true", help="Print the full traceback on failure."
     )
     prepare_parser.set_defaults(func=_dataset_prepare)
@@ -333,6 +339,20 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose", action="store_true", help="Print the full traceback on failure."
     )
     status_parser.set_defaults(func=_dataset_status)
+
+    previews_parser = dataset_sub.add_parser(
+        "previews", help="Disk used by camera previews in a cache; --remove deletes them."
+    )
+    previews_parser.add_argument(
+        "--cache-root", required=True, help="<results_root>/coperceive-cache"
+    )
+    previews_parser.add_argument(
+        "--remove", action="store_true", help="Delete the previews (only), keeping the scenes."
+    )
+    previews_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
+    previews_parser.set_defaults(func=_dataset_previews)
 
     detect_parser = dataset_sub.add_parser(
         "detect", help="Identify a raw cluster dataset's built-in adapter and split."
@@ -662,6 +682,7 @@ def _dataset_prepare(args: argparse.Namespace) -> None:
             workers=max(1, args.workers),
             progress=progress,
             split=args.split,
+            images=args.images,
         )
     except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
         error = _dataset_failure(args, exc, known=DatasetError)
@@ -670,6 +691,20 @@ def _dataset_prepare(args: argparse.Namespace) -> None:
     print(json.dumps(status, indent=2))
     if any(scene["state"] == "failed" for scene in status.get("scenes", [])):
         raise SystemExit(2)
+
+
+def _dataset_previews(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.camera_images import PREVIEWS_SCHEMA, CameraImageError, previews_usage
+
+    try:
+        document = previews_usage(args.cache_root, remove=args.remove)
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        error = _dataset_failure(args, exc, known=CameraImageError)
+        print(json.dumps({"schema": PREVIEWS_SCHEMA, "error": error}, indent=2))
+        raise SystemExit(1) from None
+    print(json.dumps(document, indent=2))
 
 
 def _dataset_status(args: argparse.Namespace) -> None:
@@ -762,7 +797,8 @@ def _schema(_args: argparse.Namespace) -> None:
 # cluster-datasets-2: dataset detect/index/prepare/status, numpy-tagged
 # OPV2V/V2XSet records, per-scene index errors.
 # cluster-datasets-3: index/prepare --split.
-CAPABILITIES = ("cluster-datasets-2", "cluster-datasets-3")
+# cluster-datasets-4: prepare --images originals|previews, dataset previews.
+CAPABILITIES = ("cluster-datasets-2", "cluster-datasets-3", "cluster-datasets-4")
 
 
 def _capabilities(_args: argparse.Namespace) -> None:

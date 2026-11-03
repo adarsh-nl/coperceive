@@ -21,6 +21,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 
 from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
+from coperceive.camera_images import served_candidates
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import predictions_root
 from coperceive.evalview import EvalViewError, frame_rows, runs_for_scene, series
@@ -314,22 +315,32 @@ def create_app(
         agent_id: str,
         sensor_id: str,
         width: int | None = None,
+        full: bool = False,
     ) -> Response:
         scene = _cached_scene(app, scene_id)
         relative = image_path(scene, time_us, agent_id, sensor_id)
         if relative is None:
             raise HTTPException(status_code=404, detail="image not found")
         scene_dir = _scene_dir(app.state.root, scene_id)
-        try:
-            target = confine_media(scene_dir, relative, app.state.media_roots)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        try:
-            present = target.is_file()
-        except OSError:
-            # An over-long component or an unsearchable parent: the file is not there.
-            present = False
-        if not present:
+        # A cluster scene's preview falls back to its original, and `full` asks
+        # for the original (docs/datasets/cluster-datasets.md, "Camera images").
+        target: Path | None = None
+        for index, candidate in enumerate(served_candidates(relative, full=full)):
+            try:
+                resolved = confine_media(scene_dir, candidate, app.state.media_roots)
+            except ValueError as exc:
+                if index == 0:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                continue
+            try:
+                present = resolved.is_file()
+            except OSError:
+                # An over-long component or an unsearchable parent: the file is not there.
+                present = False
+            if present:
+                target = resolved
+                break
+        if target is None:
             raise HTTPException(status_code=404, detail="image not found")
         if width is not None:
             # The strip and split pane ask for a display width; resizing here keeps
@@ -515,11 +526,12 @@ def _images_staged(app: FastAPI, scene: Scene, scene_dir: Path) -> bool | None:
     for indices in by_camera.values():
         picks.extend({indices[0], indices[len(indices) // 2], indices[-1]})
     for index in sorted(set(picks))[:48]:
-        try:
-            if confine_media(scene_dir, rows[index].path, app.state.media_roots).is_file():
-                return True
-        except (ValueError, OSError):
-            continue
+        for candidate in served_candidates(rows[index].path, full=False):
+            try:
+                if confine_media(scene_dir, candidate, app.state.media_roots).is_file():
+                    return True
+            except (ValueError, OSError):
+                continue
     return False
 
 

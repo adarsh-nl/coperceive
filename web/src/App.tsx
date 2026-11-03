@@ -3,8 +3,10 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
 import { BrandWordmark } from "./desktop/Brand";
+import { ClusterDatasetSettings } from "./desktop/ClusterDatasetSettings";
 import ConnectScreen from "./desktop/ConnectScreen";
 import { isTauriEnvironment, isViewerWindow, getStorageInfo, revealInFinder, setAutoDownloadUpdates, getPersistentState, showLibrary } from "./desktop/local";
+import { SettingRow } from "./desktop/SettingRow";
 import UpdateBanner from "./desktop/UpdateBanner";
 import Landing, { writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
@@ -128,29 +130,20 @@ function DesktopPreferences() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minWidth: "240px" }}>
-      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "13px", cursor: "pointer" }}>
-        <input
-          type="checkbox"
-          checked={reopenLast}
-          onChange={(e) => handleToggle(e.target.checked)}
-        />
-        <span>Reopen last session on launch</span>
-      </label>
-      <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
-        When unchecked, Coperceive starts at the Connect screen.
-      </p>
-
-      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "13px", cursor: "pointer", marginTop: "0.5rem" }}>
-        <input
-          type="checkbox"
-          checked={autoUpdate}
-          onChange={(e) => handleAutoUpdateToggle(e.target.checked)}
-        />
-        <span>Automatically download updates</span>
-      </label>
-      <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
-        Prompt when new signed releases are available.
-      </p>
+      <SettingRow
+        checked={reopenLast}
+        title="Reopen last session on launch"
+        description="When unchecked, Coperceive starts at the Connect screen."
+        onChange={handleToggle}
+      />
+      <SettingRow
+        checked={autoUpdate}
+        title="Automatically download updates"
+        description="Prompt when new signed releases are available."
+        onChange={handleAutoUpdateToggle}
+      />
+      {/* Cluster commands need the main window's backend access. */}
+      {isViewerWindow() ? null : <ClusterDatasetSettings />}
 
       {storageRoot && (
         <div style={{ marginTop: "0.5rem", borderTop: "1px solid rgba(255, 255, 255, 0.1)", paddingTop: "0.5rem" }}>

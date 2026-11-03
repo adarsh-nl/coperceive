@@ -3,7 +3,7 @@
 
 The real command submits a Slurm serve job; here the "job" is a real
 `coperceive serve` on 127.0.0.1 started with the same coperceive argv the app
-sent, the same --root and --static, and a 0600 token file. The reply has the
+sent, the same --root, --static and --media-root, and a 0600 token file. The reply has the
 shape `coperceive remote start` prints, so the app's tunnel and viewer code run
 unchanged. Usage: fake_remote.py '<the remote command line the app sent>'
 """
@@ -78,6 +78,11 @@ def main() -> int:
             if not (Path(static_dir) / "index.html").is_file():
                 return _reply(status="error", error=f"Viewer page has no index.html: {static_dir}")
             command += ["--static", static_dir]
+        # As remote_serve.sbatch: each --media-root (a cluster dataset's raw root)
+        # reaches serve as its own argument.
+        for index, value in enumerate(args):
+            if value == "--media-root" and index + 1 < len(args):
+                command += ["--media-root", args[index + 1]]
         log = open(sessions / f"{uuid}.log", "wb")
         process = subprocess.Popen(
             command,

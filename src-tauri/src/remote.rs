@@ -189,6 +189,9 @@ pub struct RemoteStartOptions {
     pub static_dir: Option<String>,
     /// Profile's saved coperceive argv; empty means the legacy `coperceive` name.
     pub coperceive_command: Vec<String>,
+    /// Directories the server may read camera images from: a cluster dataset's
+    /// raw root, exactly, so its scenes' `raw` links resolve.
+    pub media_roots: Vec<String>,
 }
 
 impl RemoteClient {
@@ -285,6 +288,9 @@ impl RemoteClient {
             .filter(|dir| !dir.trim().is_empty())
         {
             args.extend(["--static".to_string(), static_dir.to_string()]);
+        }
+        for media in options.media_roots.iter().filter(|root| !root.trim().is_empty()) {
+            args.extend(["--media-root".to_string(), media.to_string()]);
         }
 
         let stdout = self.run_remote_cmd(&args)?;
@@ -680,6 +686,7 @@ exit 1
         let options = RemoteStartOptions {
             data_root: "/path/to/scenes".to_string(),
             static_dir: Some("~/.cache/coperceive/static/0.1.0".to_string()),
+            media_roots: vec!["/datasets/opencood/opv2v".to_string()],
             ..Default::default()
         };
         client.start_with_options(&options).expect("start");
@@ -688,6 +695,10 @@ exit 1
         assert!(
             logged.contains("--static") && logged.contains("~/.cache/coperceive/static/0.1.0"),
             "the remote start must carry the uploaded viewer directory: {logged}"
+        );
+        assert!(
+            logged.contains("--media-root /datasets/opencood/opv2v"),
+            "a cluster dataset's raw root is the server's media root: {logged}"
         );
         let _ = fs::remove_file(&log);
     }

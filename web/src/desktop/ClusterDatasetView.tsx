@@ -34,7 +34,10 @@ import {
   type ClusterSceneState,
   type ClusterSceneStatusEntry,
   type DatasetPreparePreview,
+  type CameraImagesMode,
+  cameraImageChoices,
 } from "./clusterDatasets";
+import { SettingRow } from "./SettingRow";
 import { errorDetails, errorText } from "./errors";
 
 const cardStyle = {
@@ -79,6 +82,43 @@ const chipBase = {
   textAlign: "center" as const,
   userSelect: "none" as const,
 };
+
+/** Camera images for this prepare: read the dataset's originals, or also save previews. */
+function CameraImagesChoice({
+  name,
+  value,
+  previewBytes,
+  disabled,
+  onChange,
+}: {
+  name: string;
+  value: CameraImagesMode;
+  previewBytes: number;
+  disabled?: boolean;
+  onChange: (mode: CameraImagesMode) => void;
+}) {
+  return (
+    <fieldset
+      aria-label="Camera images"
+      style={{ margin: "0 0 0.6rem", padding: "0.5rem 0.65rem", border: "1px solid rgba(255,255,255,0.12)", borderRadius: "6px" }}
+    >
+      <legend style={{ padding: "0 0.3rem", fontSize: "0.78rem", color: "#c9d1d9" }}>Camera images</legend>
+      {cameraImageChoices(previewBytes).map((choice) => (
+        <SettingRow
+          key={choice.mode}
+          type="radio"
+          name={name}
+          value={choice.mode}
+          checked={value === choice.mode}
+          disabled={disabled}
+          title={choice.label}
+          description={choice.detail}
+          onChange={() => onChange(choice.mode)}
+        />
+      ))}
+    </fieldset>
+  );
+}
 
 function StatusChip({
   state,
@@ -363,6 +403,7 @@ export default function ClusterDatasetView({
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
           scenes: [singleScenePrepare],
+          images: singlePreparePreview.images,
         },
         err,
       );
@@ -374,6 +415,45 @@ export default function ClusterDatasetView({
         }
         setSinglePreparePreview(recovery.newPreview);
       }
+    }
+  };
+
+  // Choosing the other camera-image mode renders a new script (and hash): the
+  // confirmation starts over.
+  const handleSingleImagesChange = async (images: CameraImagesMode) => {
+    if (!singleScenePrepare) return;
+    setSingleConfirmed(false);
+    setSinglePrepareError(null);
+    try {
+      setSinglePreparePreview(
+        await datasetPrepare(profile.id, {
+          adapter: dataset.adapter || "opv2v",
+          rawRoot: dataset.raw_root || dataset.path,
+          split: dataset.split,
+          scenes: [singleScenePrepare],
+          images,
+        }),
+      );
+    } catch (err) {
+      setSinglePrepareError(errorDetails(err) || errorText(err));
+    }
+  };
+
+  const handleWholeImagesChange = async (images: CameraImagesMode) => {
+    setPrepareConfirmed(false);
+    setPrepareError(null);
+    try {
+      setPreparePreview(
+        await datasetPrepare(profile.id, {
+          adapter: dataset.adapter || "opv2v",
+          rawRoot: dataset.raw_root || dataset.path,
+          split: dataset.split,
+          scenes: "all",
+          images,
+        }),
+      );
+    } catch (err) {
+      setPrepareError(errorDetails(err) || errorText(err));
     }
   };
 
@@ -418,6 +498,7 @@ export default function ClusterDatasetView({
           rawRoot: dataset.raw_root || dataset.path,
           split: dataset.split,
           scenes: "all",
+          images: preparePreview.images,
         },
         err,
       );
@@ -563,6 +644,13 @@ export default function ClusterDatasetView({
               <div style={{ fontSize: "0.75rem", color: "#8b949e", marginBottom: "0.5rem" }}>
                 Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{preparePreview.cache_root}</span>
               </div>
+              <CameraImagesChoice
+                name="whole-camera-images"
+                value={preparePreview.images}
+                previewBytes={preparePreview.estimated_preview_bytes}
+                disabled={prepareBusy}
+                onChange={(mode) => void handleWholeImagesChange(mode)}
+              />
               <pre
                 aria-label="Prepare job script"
                 style={{
@@ -634,6 +722,12 @@ export default function ClusterDatasetView({
           <div style={{ fontSize: "0.74rem", color: "#8b949e", marginBottom: "0.4rem" }}>
             Workers: {singlePreparePreview.cpus_per_task} CPU · Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{singlePreparePreview.cache_root}</span>
           </div>
+          <CameraImagesChoice
+            name="single-camera-images"
+            value={singlePreparePreview.images}
+            previewBytes={singlePreparePreview.estimated_preview_bytes}
+            onChange={(mode) => void handleSingleImagesChange(mode)}
+          />
           <pre style={{ margin: "0 0 0.5rem", padding: "0.5rem", borderRadius: "6px", backgroundColor: "rgba(0,0,0,0.5)", fontSize: "0.7rem", color: "#c9d1d9", maxHeight: "100px", overflowY: "auto" }}>
             {singlePreparePreview.script}
           </pre>
@@ -771,6 +865,19 @@ export default function ClusterDatasetView({
                             reason={statusEntry?.reason}
                             progress={statusEntry?.progress_percent}
                           />
+                          {isReady && statusEntry?.images ? (
+                            <span
+                              className="camera-mode"
+                              title={
+                                statusEntry.images === "previews"
+                                  ? "Camera previews are saved in your results folder"
+                                  : "Camera images are read from the dataset"
+                              }
+                              style={{ display: "block", marginTop: "0.2rem", fontSize: "0.7rem", color: "#8b949e" }}
+                            >
+                              Camera: {statusEntry.images === "previews" ? "previews" : "originals"}
+                            </span>
+                          ) : null}
                         </td>
                         <td style={{ padding: "0.55rem 0.75rem", textAlign: "right" }}>
                           <button

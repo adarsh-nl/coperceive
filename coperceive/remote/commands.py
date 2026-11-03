@@ -179,10 +179,6 @@ def add_parser(
 
 
 def _remote_start(args: argparse.Namespace) -> None:
-    extra_args: list[str] = []
-    for mr in args.media_root:
-        extra_args.extend(["--media-root", mr])
-
     result = start_session(
         data_root=args.root,
         partition=args.partition,
@@ -194,7 +190,7 @@ def _remote_start(args: argparse.Namespace) -> None:
         session_uuid=args.uuid,
         sbatch_script=args.sbatch_script,
         wait_timeout=args.wait_timeout,
-        extra_args=extra_args if extra_args else None,
+        media_roots=list(args.media_root),
     )
     print(json.dumps(result, indent=2))
     if result.get("status") == "error":

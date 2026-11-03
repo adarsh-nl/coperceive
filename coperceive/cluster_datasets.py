@@ -27,6 +27,7 @@ from coperceive.adapters.build import BuildError, ManifestAdapter
 from coperceive.adapters.ingest import ingest
 from coperceive.adapters.registry import RegistryError, resolve_adapter
 from coperceive.adapters.spec import SpecError
+from coperceive.camera_images import IMAGE_MODES, stage_images
 from coperceive.errors import CoperceiveError
 
 DETECT_SCHEMA = "coperceive-cluster-detect-1"
@@ -292,6 +293,7 @@ def _status_record(cache_dir: Path, record: Mapping[str, Any]) -> dict[str, Any]
         "job_id": record.get("job_id"),
         "prepared_unix": record.get("prepared_unix"),
         "scene_dir": record.get("scene_dir"),
+        "images": record.get("images"),
     }
 
 
@@ -359,6 +361,20 @@ def _claim_still_live(record: Mapping[str, Any], current_job: str | None, now: f
     return True
 
 
+def mark_scene_images(cache: Path, scene_id: str, mode: str) -> None:
+    """Record which camera-image mode a prepared scene uses."""
+    with _cache_lock(cache):
+        try:
+            dataset = _read_dataset(cache)
+        except DatasetError:
+            return
+        record = dataset.get("scenes", {}).get(scene_id)
+        if isinstance(record, dict):
+            record["images"] = mode
+            dataset["updated_unix"] = int(time.time())
+            _write_dataset(cache, dataset)
+
+
 def _claim_and_prepare_scene(
     adapter_name: str,
     raw_root: str,
@@ -366,11 +382,13 @@ def _claim_and_prepare_scene(
     scene_id: str,
     params: Mapping[str, str],
     job_id: str | None,
+    images: str = "originals",
 ) -> tuple[str, str, str | None, int | None]:
     raw = Path(raw_root)
     cache = Path(cache_root)
     adapter = resolve_adapter(adapter_name)
     now = time.time()
+    restage = False
     with _cache_lock(cache):
         dataset = _read_dataset(cache)
         record = dataset.setdefault("scenes", {}).setdefault(
@@ -384,8 +402,12 @@ def _claim_and_prepare_scene(
             },
         )
         if record.get("state") == "ready" and _scene_ready(cache, scene_id):
-            return scene_id, "ready", None, record.get("prepared_unix")
-        if _claim_still_live(record, job_id, now):
+            if record.get("images") == images:
+                return scene_id, "ready", None, record.get("prepared_unix")
+            # Ready in the other camera-image mode (or from before modes): only its
+            # image paths and previews change, the scene is not ingested again.
+            restage = True
+        if not restage and _claim_still_live(record, job_id, now):
             return scene_id, "preparing", "another prepare job claimed this scene", None
         record.update(
             {
@@ -398,6 +420,13 @@ def _claim_and_prepare_scene(
         )
         dataset["updated_unix"] = int(now)
         _write_dataset(cache, dataset)
+    if restage:
+        try:
+            stage_images(cache / scene_id, raw, images)
+            state, reason, prepared = "ready", None, int(time.time())
+        except Exception as exc:  # noqa: BLE001 - reported per scene
+            state, reason, prepared = "failed", f"{type(exc).__name__}: {exc}", None
+        return _finish_scene(cache, scene_id, job_id, state, reason, prepared, images)
     partial_root = cache / ".partial"
     partial_root.mkdir(parents=True, exist_ok=True)
     temporary = partial_root / scene_id
@@ -417,6 +446,7 @@ def _claim_and_prepare_scene(
         produced = partial_root / scene_id
         if not (produced / "manifest.json").is_file() or not (produced / "COMPLETE.json").is_file():
             raise DatasetError("ingest finished without a complete scene")
+        stage_images(produced, raw, images)
         destination = cache / scene_id
         old = cache / f".old-{scene_id}"
         if old.exists():
@@ -437,6 +467,18 @@ def _claim_and_prepare_scene(
             partial_root.rmdir()
         except OSError:
             pass
+    return _finish_scene(cache, scene_id, job_id, state, reason, prepared, images)
+
+
+def _finish_scene(
+    cache: Path,
+    scene_id: str,
+    job_id: str | None,
+    state: str,
+    reason: str | None,
+    prepared: int | None,
+    images: str,
+) -> tuple[str, str, str | None, int | None]:
     with _cache_lock(cache):
         dataset = _read_dataset(cache)
         record = dataset.setdefault("scenes", {}).setdefault(scene_id, {})
@@ -458,6 +500,8 @@ def _claim_and_prepare_scene(
                 "scene_dir": scene_id,
             }
         )
+        if state == "ready":
+            record["images"] = images
         dataset["updated_unix"] = int(time.time())
         _write_dataset(cache, dataset)
     return scene_id, state, reason, prepared
@@ -473,10 +517,17 @@ def prepare_cluster_dataset(
     progress: Callable[[dict[str, Any]], None] | None = None,
     timeout_s: float = DEFAULT_TIMEOUT_S,
     split: str | None = None,
+    images: str = "originals",
 ) -> dict[str, Any]:
-    """Prepare selected scenes in parallel, with per-scene atomic staging."""
+    """Prepare selected scenes in parallel, with per-scene atomic staging.
+
+    ``images`` is the camera-image mode, ``originals`` or ``previews``
+    (docs/datasets/cluster-datasets.md, "Camera images").
+    """
     if adapter_name not in _BUILTIN:
         raise DatasetError(f"{adapter_name!r} is not a built-in cluster adapter")
+    if images not in IMAGE_MODES:
+        raise DatasetError(f"camera images must be one of {', '.join(IMAGE_MODES)}, not {images!r}")
     raw = _real(raw_root)
     cache = _real(cache_dir)
     if not raw.is_dir():
@@ -555,6 +606,7 @@ def prepare_cluster_dataset(
                 ref.scene_id,
                 params,
                 job_id,
+                images,
             ): ref.scene_id
             for ref in selected
         }
