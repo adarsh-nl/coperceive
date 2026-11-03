@@ -15,6 +15,7 @@ from pathlib import Path
 import numpy as np
 import numpy.typing as npt
 
+from coperceive.adapters.prefetch import read_bytes
 from coperceive.errors import CoperceiveError
 
 _PLY_TYPES: dict[str, str] = {
@@ -59,7 +60,7 @@ def read_ply(
     intensity_fill: float | None = None,
 ) -> tuple[int, bytes]:
     """ASCII or binary little-endian PLY with named vertex properties."""
-    data = path.read_bytes()
+    data = read_bytes(path)
     marker = b"end_header\n"
     end = data.find(marker)
     if end < 0:
@@ -106,7 +107,7 @@ def read_pcd(
     intensity_fill: float | None = None,
 ) -> tuple[int, bytes]:
     """PCD 0.7 with ``DATA ascii`` or ``DATA binary``."""
-    data = path.read_bytes()
+    data = read_bytes(path)
     names: list[str] = []
     sizes: list[int] = []
     kinds: list[str] = []
@@ -169,7 +170,7 @@ def read_bin_f32(
     """Headerless little-endian float32 records of ``stride`` values."""
     if stride < 3:
         raise LidarError("stride must be at least 3")
-    data = path.read_bytes()
+    data = read_bytes(path)
     record = stride * 4
     if len(data) % record != 0:
         raise LidarError(f"{path}: {len(data)} bytes is not a multiple of {record}")

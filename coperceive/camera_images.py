@@ -19,6 +19,7 @@ from __future__ import annotations
 import os
 import shutil
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Literal
 
@@ -26,6 +27,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 from PIL import Image
 
+from coperceive.adapters.prefetch import io_threads
 from coperceive.store import IMAGE_SCHEMA
 
 ImageMode = Literal["originals", "previews"]
@@ -120,14 +122,23 @@ def stage_images(scene_dir: Path, raw_root: Path, mode: str) -> dict[str, int]:
     written = 0
     if mode == "previews":
         paths: list[str] = []
+        todo: list[tuple[str, Path]] = []
         for original in originals:
             target = scene_dir / PREVIEWS_DIR / f"{original}{PREVIEW_SUFFIX}"
             if not target.is_file():
-                source = (raw / original).resolve()
-                # A link inside the dataset that leads out of it is not read.
-                if source.is_relative_to(raw) and _write_preview(source, target):
-                    written += 1
+                todo.append((original, target))
             paths.append(f"{PREVIEWS_DIR}/{original}{PREVIEW_SUFFIX}")
+
+        def preview(item: tuple[str, Path]) -> bool:
+            original, target = item
+            source = (raw / original).resolve()
+            # A link inside the dataset that leads out of it is not read.
+            return source.is_relative_to(raw) and _write_preview(source, target)
+
+        # Each original is a cold read on a shared filesystem (~150 ms before
+        # the first byte): read and encode several at once.
+        with ThreadPoolExecutor(max_workers=max(1, io_threads())) as pool:
+            written = sum(pool.map(preview, todo))
     else:
         paths = [f"{RAW_LINK}/{original}" for original in originals]
         previews = scene_dir / PREVIEWS_DIR

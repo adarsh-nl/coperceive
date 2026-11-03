@@ -24,6 +24,7 @@ import {
   datasetPrepareSubmit,
   datasetStatus,
   formatDuration,
+  prepareEstimateLine,
   formatLicenceInfo,
   formatSensorsSummary,
   formatStorageEstimate,
@@ -894,6 +895,9 @@ export default function ClusterDatasetView({
               <div style={{ fontSize: "0.78rem", color: "#c9d1d9", marginBottom: "0.25rem" }}>
                 Script preview (CPU only · No GPU requested · {preparePreview.array_tasks} task{preparePreview.array_tasks === 1 ? "" : "s"} of 1 CPU, one per scene · partition: {preparePreview.partition}):
               </div>
+              <div role="note" style={{ fontSize: "0.76rem", color: "#c9d1d9", marginBottom: "0.4rem" }}>
+                {prepareEstimateLine(preparePreview)}
+              </div>
               <label className="settings-field" style={{ fontSize: "0.78rem", color: "#c9d1d9", marginBottom: "0.4rem" }}>
                 <span>Scenes at once</span>
                 <input
@@ -911,7 +915,7 @@ export default function ClusterDatasetView({
                   style={{ width: "4.5em", marginLeft: "0.5rem" }}
                 />
                 <span style={{ color: "#8b949e", marginLeft: "0.5rem" }}>
-                  At most {preparePreview.throttle} CPU{preparePreview.throttle === 1 ? "" : "s"} in use; each task starts as soon as one CPU is free.
+                  At most {preparePreview.throttle} task{preparePreview.throttle === 1 ? "" : "s"} at once, each reading 16 raw files at a time: the shared filesystem, not CPUs, is the limit.
                 </span>
               </label>
               <div style={{ fontSize: "0.75rem", color: "#8b949e", marginBottom: "0.5rem" }}>
@@ -1003,7 +1007,7 @@ export default function ClusterDatasetView({
             </div>
           ) : null}
           <div style={{ fontSize: "0.74rem", color: "#8b949e", marginBottom: "0.4rem" }}>
-            One 1-CPU task · Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{singlePreparePreview.cache_root}</span>
+            {prepareEstimateLine(singlePreparePreview)} One 1-CPU task · Cache root: <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{singlePreparePreview.cache_root}</span>
           </div>
           <CameraImagesChoice
             name="single-camera-images"

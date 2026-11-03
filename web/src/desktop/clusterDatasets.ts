@@ -134,6 +134,10 @@ export interface DatasetPreparePreview {
   array_tasks: number;
   /** At most this many tasks run at once; editable in the preview. */
   throttle: number;
+  /** Expected wall time once the tasks run (queue time not included). */
+  estimated_seconds: number;
+  /** How the estimate was made: the last run's timing, or the raw file count. */
+  estimate_note: string;
   gres: string | null;
   cache_root: string;
   estimated_cache_bytes: number;
@@ -280,6 +284,28 @@ export function formatSensorsSummary(sensors: ClusterIndexSensors | null | undef
 
 /** Construct an estimated storage label from scene counts if not provided by backend. */
 /** "1.2 GB", "340 MB", "12 KB": disk sizes in plain words. */
+/** "~40 s", "~12 min", "~1 h 40 min" for a prepare estimate. */
+export function formatEstimate(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) {
+    return "under a minute";
+  }
+  if (seconds < 60) {
+    return `~${Math.round(seconds)} s`;
+  }
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) {
+    return `~${minutes} min`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const rest = minutes % 60;
+  return rest ? `~${hours} h ${rest} min` : `~${hours} h`;
+}
+
+/** The preview's time line: the estimate, what it rests on, and what it leaves out. */
+export function prepareEstimateLine(preview: Pick<DatasetPreparePreview, "estimated_seconds" | "estimate_note">): string {
+  return `Estimated time once running: ${formatEstimate(preview.estimated_seconds)} (${preview.estimate_note}). Queue time comes on top.`;
+}
+
 export function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) {
     return "0 MB";
@@ -607,6 +633,8 @@ coperceive dataset prepare \\
     cpus_per_task: 1,
     array_tasks: sceneIds.length,
     throttle,
+    estimated_seconds: Math.ceil(sceneIds.length / throttle) * 42,
+    estimate_note: `${sceneIds.length * 1704} raw files; the shared filesystem is the limit`,
     gres: null,
     cache_root: `<results_root>/coperceive-cache/${params.adapter}/mockdigest/${params.split ?? "all"}`,
     estimated_cache_bytes: 1024 * 1024 * 50,

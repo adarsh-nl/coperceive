@@ -124,6 +124,43 @@ class InlineExecutor:
         return future
 
 
+def simulate_cold_reads(raw: Path, cold_ms: float) -> None:
+    """The first read of each raw file waits ``cold_ms`` (a shared filesystem's
+    per-file latency; ~150 ms measured on the cluster), like a cold page cache."""
+    import threading
+
+    import coperceive.camera_images as camera_images
+
+    root = str(raw.resolve())
+    seen: set[str] = set()
+    lock = threading.Lock()
+
+    def cold(path: object) -> None:
+        name = os.path.realpath(str(path))
+        if not name.startswith(root):
+            return
+        with lock:
+            first = name not in seen
+            seen.add(name)
+        if first:
+            time.sleep(cold_ms / 1000)
+
+    read_bytes = Path.read_bytes
+
+    def slow_read_bytes(self: Path) -> bytes:
+        cold(self)
+        return read_bytes(self)
+
+    open_image = camera_images.Image.open
+
+    def slow_open(fp: Any, *args: Any, **kwargs: Any) -> Any:
+        cold(fp)
+        return open_image(fp, *args, **kwargs)
+
+    Path.read_bytes = slow_read_bytes  # type: ignore[method-assign]
+    camera_images.Image.open = slow_open  # type: ignore[assignment]
+
+
 def cpu() -> float:
     usage = resource.getrusage(resource.RUSAGE_SELF)
     children = resource.getrusage(resource.RUSAGE_CHILDREN)
@@ -151,6 +188,12 @@ def main() -> None:
     parser.add_argument("--images", nargs="+", default=["originals", "previews"])
     parser.add_argument("--top", type=int, default=25)
     parser.add_argument("--no-profile", action="store_true", help="time only, in a worker process")
+    parser.add_argument(
+        "--cold-ms", type=float, default=0.0, help="first-read latency per raw file (cluster: 150)"
+    )
+    parser.add_argument(
+        "--io-threads", type=int, default=None, help="COPERCEIVE_IO_THREADS for the prepare"
+    )
     args = parser.parse_args()
     if not args.no_profile:
         cluster_datasets.ProcessPoolExecutor = InlineExecutor  # type: ignore[misc,assignment]
@@ -162,6 +205,12 @@ def main() -> None:
         size = sum(p.stat().st_size for p in raw.rglob("*") if p.is_file())
         print(json.dumps({"phase": "build fixture", "s": round(time.perf_counter() - started, 2),
                           "raw_mb": round(size / 1024**2, 1)}), flush=True)  # fmt: skip
+        if args.cold_ms:
+            if args.no_profile:
+                parser.error("--cold-ms needs the in-process run (drop --no-profile)")
+            simulate_cold_reads(raw, args.cold_ms)
+        if args.io_threads is not None:
+            os.environ["COPERCEIVE_IO_THREADS"] = str(args.io_threads)
         started = time.perf_counter()
         fingerprint = _fingerprint(raw / "test", deadline=time.monotonic() + 60)
         print(json.dumps({"phase": "fingerprint", "s": round(time.perf_counter() - started, 3),

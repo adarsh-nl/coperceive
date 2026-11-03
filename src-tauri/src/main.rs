@@ -2480,13 +2480,23 @@ async fn dataset_prepare(
         };
         let preview_bytes =
             coperceive_desktop::dataset_jobs::preview_bytes_estimate(&index, scenes.as_deref());
-        let preview = coperceive_desktop::dataset_jobs::render_prepare_script(
+        let timing =
+            coperceive_desktop::dataset_jobs::read_timing_log(&runner, &entry.profile, &cache_relative);
+        let estimate = coperceive_desktop::dataset_jobs::estimate_seconds(
+            &index,
+            &scene_ids,
+            &request.images,
+            request.workers.min(scene_ids.len().max(1) as u32),
+            &timing,
+        );
+        let preview = coperceive_desktop::dataset_jobs::render_prepare_script_with_estimate(
             &entry.profile,
             &request,
             &scene_ids,
             &cache_relative,
             estimated,
             preview_bytes,
+            estimate,
         )?;
         let pending = coperceive_desktop::dataset_jobs::PendingPrepare {
             profile_id: entry.id.clone(),
@@ -2510,6 +2520,8 @@ async fn dataset_prepare(
         "cpus_per_task": preview.cpus_per_task,
         "array_tasks": preview.array_tasks,
         "throttle": preview.throttle,
+        "estimated_seconds": preview.estimated_seconds,
+        "estimate_note": preview.estimate_note,
         "gres": preview.gres,
         "estimated_cache_bytes": preview.estimated_cache_bytes,
         "images": preview.images,

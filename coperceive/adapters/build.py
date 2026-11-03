@@ -20,6 +20,7 @@ import numpy as np
 
 from coperceive.adapters.naming import display_names
 from coperceive.adapters.paths import PathError, Template, confine
+from coperceive.adapters.prefetch import prefetching
 from coperceive.adapters.readers import registry as readers
 from coperceive.adapters.readers.calib import pinhole_from_matrix
 from coperceive.adapters.readers.lidar import LidarError, read_bin_f32, read_pcd, read_ply
@@ -120,6 +121,9 @@ class ManifestAdapter:
             self._reflect = Reflection.parse(spec.conventions.reflect_axis or "y")
         # scenes() lists each agent's samples; summarise() reuses that listing once.
         self._listed: dict[tuple[str, str], list[tuple[_AgentCtx, tuple[Sample, ...]]]] = {}
+        # While one agent is built: each record file parsed once (poses, sensors
+        # and boxes all read the same per-frame record in OPV2V/V2XSet).
+        self._records: dict[Path, dict[str, object]] | None = None
 
     # -- discovery ---------------------------------------------------------------
 
@@ -303,25 +307,39 @@ class ManifestAdapter:
         images: list[ImageRef] = []
         clouds: list[PointCloud] = []
         for ctx in agents_ctx:
-            poses, times = self._poses(raw_root, ctx, samples, tally)
-            agents.append(
-                Agent(
-                    agent_id=ctx.agent_id,
-                    agent_type=ctx.agent_type,  # type: ignore[arg-type]
-                    poses=tuple(poses),
-                    platform=ref.platform,
-                )
-            )
-            agent_sensors = self._sensors(raw_root, ctx, samples, tally)
-            sensors.extend(agent_sensors)
-            if self.spec.streams.boxes is not None:
-                annotations.extend(
-                    self._boxes(raw_root, ctx, samples, agent_sensors, times, tally, variants)
-                )
-            if self.spec.streams.images is not None:
-                images.extend(self._images(raw_root, ctx, samples, agent_sensors, times, tally))
-            if self.spec.streams.lidar is not None:
-                clouds.extend(self._lidar(raw_root, ctx, samples, agent_sensors, times, tally))
+            # The agent's records and sweeps are read ahead, several at a time
+            # (coperceive/adapters/prefetch.py): on a shared filesystem the wait
+            # per cold file, not the parsing, is most of the time.
+            self._records = {}
+            try:
+                with prefetching(raw_root, self._raw_plan(raw_root, ctx, samples)):
+                    poses, times = self._poses(raw_root, ctx, samples, tally)
+                    agents.append(
+                        Agent(
+                            agent_id=ctx.agent_id,
+                            agent_type=ctx.agent_type,  # type: ignore[arg-type]
+                            poses=tuple(poses),
+                            platform=ref.platform,
+                        )
+                    )
+                    agent_sensors = self._sensors(raw_root, ctx, samples, tally)
+                    sensors.extend(agent_sensors)
+                    if self.spec.streams.boxes is not None:
+                        annotations.extend(
+                            self._boxes(
+                                raw_root, ctx, samples, agent_sensors, times, tally, variants
+                            )
+                        )
+                    if self.spec.streams.images is not None:
+                        images.extend(
+                            self._images(raw_root, ctx, samples, agent_sensors, times, tally)
+                        )
+                    if self.spec.streams.lidar is not None:
+                        clouds.extend(
+                            self._lidar(raw_root, ctx, samples, agent_sensors, times, tally)
+                        )
+            finally:
+                self._records = None
         try:
             return Scene(
                 schema_version=SCHEMA_VERSION,
@@ -918,7 +936,38 @@ class ManifestAdapter:
         except PathError as exc:
             raise BuildError(str(exc)) from None
 
+    def _raw_plan(self, raw_root: Path, ctx: _AgentCtx, samples: Sequence[Sample]) -> list[Path]:
+        """The agent's per-sample record and point files, in the order the build reads them.
+
+        Paths are joined without touching the filesystem; a file that is not
+        where the plan says (a symlink inside the dataset) is simply read when
+        asked for.
+        """
+        base = raw_root.resolve()
+        streams = self.spec.streams
+        plan: list[Path] = []
+        for stream in (streams.poses, streams.boxes, streams.lidar):
+            if stream is None:
+                continue
+            if stream is not streams.lidar and stream.reader not in ("yaml_record", "json_record"):
+                continue  # tables are read once anyway
+            for sample in samples:
+                try:
+                    plan.append(base / stream.path.expand(_with_sample(ctx.values, sample)))
+                except PathError:
+                    continue
+        return plan
+
     def _record(self, reader: str, path: Path) -> dict[str, object]:
+        if self._records is not None and path in self._records:
+            return dict(self._records[path])
+        record = self._read_record(reader, path)
+        if self._records is not None:
+            self._records[path] = record
+            return dict(record)
+        return record
+
+    def _read_record(self, reader: str, path: Path) -> dict[str, object]:
         try:
             if reader == "json_record":
                 return read_json_record(path)

@@ -323,6 +323,8 @@ assert "# No GPU requested" in script, script
 assert preview["cpus_per_task"] == 1, preview["cpus_per_task"]
 assert "--workers 1" in script and "#SBATCH --array=0-0%1" in script, script
 assert "SCENES=(scene_0000)" in script and '--scenes "$SCENE"' in script, script
+assert "export COPERCEIVE_IO_THREADS=16" in script, script
+assert preview["estimated_seconds"] > 0 and "raw files" in preview["estimate_note"], preview["estimate_note"]
 assert preview["gres"] is None, preview["gres"]
 cache_root = preview.get("cache_root") or ""
 assert cache_root.startswith(f"{tmp}/cluster/results/coperceive-cache/opv2v/"), cache_root
@@ -402,8 +404,15 @@ assert scenes["scene_0000"]["prepared_unix"] == before["scene_0000"]["prepared_u
     scenes["scene_0000"], before["scene_0000"])
 job = steps[1]["value"]["job_id"]
 assert {scenes[s]["job_id"] for s in ("scene_0001", "scene_0002")} == {f"{job}_1", f"{job}_2"}, scenes
+timing = [json.loads(line) for line in open(f"{preview['cache_root']}/.timing.jsonl", encoding="utf-8")]
+timed = {row["scene_id"]: row for row in timing if row.get("job_id") in (f"{job}_1", f"{job}_2")}
+assert set(timed) == {"scene_0001", "scene_0002"}, timing
+assert all(row["files_read"] > 0 and row["io_threads"] == 16 for row in timed.values()), timed
+timed_text = ", ".join("%s: %d files, %s s" % (k, v["files_read"], v["total_s"]) for k, v in sorted(timed.items()))
 print(f"Step CD-7 verified: prepare all (workers omitted) -> one sbatch, an array of 3 one-CPU tasks "
-      f"(%3), each task claimed its scene ({job}_1, {job}_2); status all ready; "
+      f"(%3), each task claimed its scene ({job}_1, {job}_2) and logged its timing "
+      f"({timed_text}); "
+      f"status all ready; "
       f"scene_0000 prepared_unix unchanged ({before['scene_0000']['prepared_unix']})")
 session = steps[3]["value"]
 assert session["origin"].startswith("http://127.0.0.1:") and session["token"], {k: v for k, v in session.items() if k != "token"}

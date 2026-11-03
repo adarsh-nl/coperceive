@@ -9,6 +9,8 @@ import {
   wholeDatasetOffer,
   splitErrorText,
   formatDuration,
+  formatEstimate,
+  prepareEstimateLine,
   formatLicenceInfo,
   formatSensorsSummary,
   formatStorageEstimate,
@@ -380,6 +382,8 @@ test("in Tauri mode: refused submit regenerates preview and keeps submit disable
         cpus_per_task: 1,
         array_tasks: 4,
         throttle: 4,
+        estimated_seconds: 120,
+        estimate_note: "6816 raw files; the shared filesystem is the limit",
         gres: null,
         cache_root: "/results/cache/opv2v",
         estimated_cache_bytes: 52428800,
@@ -523,4 +527,15 @@ test("wholeDatasetOffer leads with the whole dataset while nothing is prepared",
   assert.ok(done && done.kind === "done");
   assert.match(done.detail, /no further preparation/);
   assert.strictEqual(wholeDatasetOffer(null, 0), null);
+});
+
+test("prepareEstimateLine states the time, its basis and that queueing is extra", () => {
+  assert.strictEqual(formatEstimate(42), "~42 s");
+  assert.strictEqual(formatEstimate(12 * 60 + 10), "~12 min");
+  assert.strictEqual(formatEstimate(100 * 60), "~1 h 40 min");
+  assert.strictEqual(formatEstimate(0), "under a minute");
+  assert.strictEqual(
+    prepareEstimateLine({ estimated_seconds: 720, estimate_note: "from the last run's timing on this cluster (3 scenes, 100 ms per raw file)" }),
+    "Estimated time once running: ~12 min (from the last run's timing on this cluster (3 scenes, 100 ms per raw file)). Queue time comes on top.",
+  );
 });
