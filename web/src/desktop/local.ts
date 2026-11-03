@@ -59,6 +59,8 @@ export function isTauriEnvironment(): boolean {
 }
 
 export interface AppPersistentState {
+  /** After a prepare, open the viewer when the first scene is ready (default on). */
+  open_first_ready_scene?: boolean;
   last_data_root?: string;
   library_root?: string;
   auto_download_updates?: boolean;

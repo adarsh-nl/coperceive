@@ -844,3 +844,55 @@ def test_committed_portability_fixtures_are_generic_and_distinct() -> None:
     fake_ssh = (fixtures_dir / "fake_ssh.sh").read_text(encoding="utf-8")
     assert "gpu:a100:4" in fake_ssh and "gpu:h100:2" in fake_ssh
     assert "proxyjump jump.example.org" in fake_ssh
+
+
+def _session_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    coperceive_dir = tmp_path / ".coperceive"
+    monkeypatch.setattr("coperceive.remote.manager.get_base_dir", lambda: coperceive_dir)
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_sessions_dir", lambda: coperceive_dir / "sessions"
+    )
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_tokens_dir", lambda: coperceive_dir / "tokens"
+    )
+    (coperceive_dir / "sessions").mkdir(parents=True, exist_ok=True)
+    return coperceive_dir
+
+
+def test_a_running_job_without_its_session_file_yet_is_starting_not_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cluster case behind "Cannot reattach: session … is not running (state:
+    RUNNING)": squeue already says RUNNING, the job has not written its session
+    file, and the lookup by session id fell back to sacct, which said "stopped"."""
+    _session_dirs(tmp_path, monkeypatch)
+
+    def fake_subprocess_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "sacct":
+            return subprocess.CompletedProcess(cmd, 0, stdout="55123|RUNNING\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    status = get_status(session_uuid="55bef61ccf2f60b8")
+    assert status["status"] == "pending", status
+    assert status["state"] == "RUNNING" and status["job_id"] == 55123
+    assert "starting" in status["reason"]
+
+
+def test_running_needs_a_known_session_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Looked up by job id, a RUNNING job with no session yet is still starting."""
+    _session_dirs(tmp_path, monkeypatch)
+
+    def fake_subprocess_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "squeue":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="RUNNING|00:00:05|03:59:55|None|node3\n", stderr=""
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    status = get_status(job_id=55123)
+    assert (status["status"], status["state"]) == ("pending", "RUNNING"), status
+    assert "starting" in status["reason"]

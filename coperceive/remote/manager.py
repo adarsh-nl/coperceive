@@ -478,6 +478,12 @@ def get_session_token(*, session_uuid: str) -> dict[str, Any]:
     return {"status": "ok", "uuid": uuid_val, "token": token}
 
 
+# Slurm states of a job that has not ended.
+_ACTIVE_STATES = frozenset(
+    {"PENDING", "CONFIGURING", "RUNNING", "COMPLETING", "SUSPENDED", "RESIZING"}
+)
+
+
 def get_status(
     *,
     session_uuid: str | None = None,
@@ -524,6 +530,19 @@ def get_status(
                 except ValueError:
                     pass
                 sacct_state = first[1] if len(first) > 1 else "COMPLETED"
+                if sacct_state.split()[0] in _ACTIVE_STATES:
+                    # The job runs (or waits) but has not written its session file
+                    # yet: it is starting, not stopped. Calling it "stopped" made the
+                    # desktop refuse to attach to a RUNNING job.
+                    return {
+                        "status": "pending",
+                        "state": sacct_state,
+                        "uuid": session_uuid,
+                        "job_id": resolved_id,
+                        "healthy": False,
+                        "last_heartbeat_age_s": None,
+                        "reason": "starting: the viewer has not written its session yet",
+                    }
                 stopped_reason = map_stopped_reason(sacct_state)
                 # Clean up token and heartbeat files
                 (get_tokens_dir() / f"{session_uuid}.token").unlink(missing_ok=True)
@@ -592,8 +611,12 @@ def get_status(
         if state == "RUNNING" and ip and port and token:
             healthy = probe_health(ip, port, token, timeout=health_timeout)
 
+        # "running" means reachable: the job runs and its session (node address,
+        # port) is known. A RUNNING job whose session file is not written yet is
+        # still starting.
+        reachable = state == "RUNNING" and bool(ip) and bool(port)
         return {
-            "status": "running" if state == "RUNNING" else "pending",
+            "status": "running" if reachable else "pending",
             "state": state,
             "uuid": session_uuid or (session.uuid if session else ""),
             "job_id": job_id,
@@ -605,7 +628,9 @@ def get_status(
             "time_left_seconds": time_left_sec,
             "healthy": healthy,
             "last_heartbeat_age_s": last_hb_age,
-            "reason": reason if state == "PENDING" else None,
+            "reason": reason
+            if state == "PENDING"
+            else (None if reachable else "starting: the viewer has not written its session yet"),
             "warning": warning,
         }
 

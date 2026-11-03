@@ -22,7 +22,6 @@ import {
 } from "./browse";
 import type { ScanDocument, ServerEntry } from "./hpc";
 import { remoteScan } from "./local";
-import ClusterDatasetView from "./ClusterDatasetView";
 import {
   datasetDetect,
   formatDetectBannerTitle,
@@ -91,7 +90,6 @@ export default function HpcBrowse({
   const [detectedDataset, setDetectedDataset] = useState<ClusterDetectDocument | null>(null);
   const [detectLoading, setDetectLoading] = useState(false);
   const [detectError, setDetectError] = useState("");
-  const [viewingDataset, setViewingDataset] = useState<ClusterDetectDocument | null>(null);
 
   const firstRoot = roots[0] ?? "";
   useEffect(() => {
@@ -177,17 +175,6 @@ export default function HpcBrowse({
       clearTimeout(timer);
     };
   }, [profile.id, currentFolderFullPath, loading]);
-
-  if (viewingDataset) {
-    return (
-      <ClusterDatasetView
-        profile={profile}
-        dataset={viewingDataset}
-        onBack={() => setViewingDataset(null)}
-        onClose={onClose}
-      />
-    );
-  }
 
   return (
     <section aria-label={`Browse data folders on ${profile.profile.name}`} style={card}>
@@ -384,7 +371,11 @@ export default function HpcBrowse({
                   if (onOpenDataset) {
                     onOpenDataset(detectedDataset);
                   }
-                  setViewingDataset(detectedDataset);
+                  // One place shows an open dataset: the workspace's Dataset view,
+                  // which stays put while you switch tabs.
+                  window.dispatchEvent(
+                    new CustomEvent("coperceive-open-dataset", { detail: { profile, dataset: detectedDataset } }),
+                  );
                 }}
               >
                 Open dataset

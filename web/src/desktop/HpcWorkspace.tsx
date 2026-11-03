@@ -6,7 +6,8 @@ import NewEvaluation from "./NewEvaluation";
 import RunHistory from "./RunHistory";
 import ClusterDatasetView from "./ClusterDatasetView";
 import type { ServerEntry } from "./hpc";
-import type { ClusterDetectDocument } from "./clusterDatasets";
+import { lastClusterDataset, rememberClusterDataset, type ClusterDetectDocument } from "./clusterDatasets";
+import { listServerProfiles } from "./local";
 
 type WorkspaceTab = "servers" | "evaluation" | "history" | "dataset";
 
@@ -30,6 +31,32 @@ export default function HpcWorkspace() {
     profile: ServerEntry;
     dataset: ClusterDetectDocument;
   } | null>(null);
+  // Sections stay mounted once shown, so an open dataset, its scroll and
+  // filters survive switching sections (and the app's own tabs).
+  const [visited, setVisited] = useState<ReadonlySet<WorkspaceTab>>(() => new Set([tab]));
+  useEffect(() => {
+    setVisited((current) => (current.has(tab) ? current : new Set([...current, tab])));
+  }, [tab]);
+
+  // Reopen the dataset that was open before the app restarted.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const last = await lastClusterDataset();
+        if (!last || cancelled) return;
+        const profile = (await listServerProfiles()).find((entry) => entry.id === last.profile_id);
+        if (!profile || cancelled) return;
+        setActiveDatasetData((current) => current ?? { profile, dataset: last.dataset });
+        setTab((current) => (current === "servers" ? "dataset" : current));
+      } catch {
+        // Nothing to reopen.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const handleOpenEval = () => {
@@ -43,6 +70,7 @@ export default function HpcWorkspace() {
       if (customEvent.detail) {
         setActiveDatasetData(customEvent.detail);
         setTab("dataset");
+        void rememberClusterDataset(customEvent.detail.profile.id, customEvent.detail.dataset).catch(() => undefined);
       }
     };
     window.addEventListener("coperceive-open-evaluation", handleOpenEval);
@@ -87,23 +115,24 @@ export default function HpcWorkspace() {
           Run history
         </button>
       </div>
-      {tab === "servers" ? (
-        <HpcServers />
-      ) : tab === "dataset" && activeDatasetData ? (
-        <ClusterDatasetView
-          profile={activeDatasetData.profile}
-          dataset={activeDatasetData.dataset}
-          onBack={() => setTab("servers")}
-          onClose={() => {
-            setActiveDatasetData(null);
-            setTab("servers");
-          }}
-        />
-      ) : tab === "evaluation" ? (
-        <NewEvaluation />
-      ) : (
-        <RunHistory />
-      )}
+      <div hidden={tab !== "servers"}>{visited.has("servers") ? <HpcServers /> : null}</div>
+      <div hidden={tab !== "dataset"}>
+        {activeDatasetData ? (
+          <ClusterDatasetView
+            key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}`}
+            profile={activeDatasetData.profile}
+            dataset={activeDatasetData.dataset}
+            onBack={() => setTab("servers")}
+            onClose={() => {
+              void rememberClusterDataset(activeDatasetData.profile.id, null).catch(() => undefined);
+              setActiveDatasetData(null);
+              setTab("servers");
+            }}
+          />
+        ) : null}
+      </div>
+      <div hidden={tab !== "evaluation"}>{visited.has("evaluation") ? <NewEvaluation /> : null}</div>
+      <div hidden={tab !== "history"}>{visited.has("history") ? <RunHistory /> : null}</div>
     </div>
   );
 }

@@ -527,6 +527,28 @@ print(f"Step CD-14 verified: two Opens of the same dataset -> one viewer job (1 
       f"{log.count('remote-status')} status check), same origin {first['origin']}; the second reused it")
 PY
 
+# --- Flow I: a viewer job that starts slowly (the real cluster's reply) ------------
+# On the cluster the job queued, ran, and only then wrote its session file; a
+# lookup by session id alone answered {"status": "stopped", "state": "RUNNING"}
+# and the app refused it ("Cannot reattach: … not running (state: RUNNING)").
+export FAKE_REMOTE_SLOW_SESSION=1
+run_flow slowsession "[
+  {\"command\": \"remote_connect\", \"args\": {$(profile_args), \"dataRoot\": \"${CLUSTER}/results\"}}
+]"
+unset FAKE_REMOTE_SLOW_SESSION
+check slowsession <<'PY'
+import json, sys
+result, ssh_log, tmp, raw = sys.argv[1:5]
+(step,) = json.load(open(result, encoding="utf-8"))["steps"]
+assert step["ok"], step
+assert step["value"]["origin"].startswith("http://127.0.0.1:"), step["value"]
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+assert log.count("remote-start") == 1 and "remote-status" in log, log
+print(f"Step CD-15 verified: a viewer job that ran before writing its session (status by id "
+      f"alone said stopped/RUNNING) is attached, not refused: origin {step['value']['origin']}, "
+      f"{log.count('remote-status')} status check(s), 1 remote start")
+PY
+
 # --- Flow E: an older coperceive on the cluster --------------------------------
 # The profile's interpreter is fake_old_python.sh: no `capabilities`, no
 # `dataset detect`. Test connection and dataset_detect must both say "too old"

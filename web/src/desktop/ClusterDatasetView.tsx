@@ -44,6 +44,8 @@ import {
   viewerStartLabel,
 } from "./clusterDatasets";
 import { SettingRow } from "./SettingRow";
+import { publishDatasetJobs, setViewerOpen } from "./jobsStore";
+import { getPersistentState } from "./local";
 import { isJobActive } from "./runPlan";
 import { errorDetails, errorText } from "./errors";
 
@@ -240,6 +242,8 @@ export default function ClusterDatasetView({
   onClose: () => void;
 }) {
   const [indexDoc, setIndexDoc] = useState<ClusterIndexDocument | null>(null);
+  const indexRef = useRef(indexDoc);
+  indexRef.current = indexDoc;
   const [loadingIndex, setLoadingIndex] = useState(true);
   const [indexError, setIndexError] = useState<string | null>(null);
 
@@ -273,6 +277,14 @@ export default function ClusterDatasetView({
   const [submittedJobs, setSubmittedJobs] = useState<SubmittedJob[]>([]);
   const submittedRef = useRef<SubmittedJob[]>([]);
   submittedRef.current = submittedJobs;
+  const datasetKey = `${profile.id}|${dataset.path}`;
+  const datasetLabel = `${(dataset.adapter ?? "dataset").toUpperCase()}${dataset.split ? ` · ${dataset.split}` : ""}`;
+  // After "Prepare whole dataset": the scenes ready before it, so the first one
+  // it prepares opens the viewer (Settings, on by default).
+  const openFirstReadyRef = useRef<ReadonlySet<string> | null>(null);
+  // The camera-image choice shows at once; Submit waits for the new script's hash.
+  const [wholeImagesPending, setWholeImagesPending] = useState<CameraImagesMode | null>(null);
+  const [singleImagesPending, setSingleImagesPending] = useState<CameraImagesMode | null>(null);
   const trackJob = (job: { job_id: string; plan_id: string }, jobName: string, scenes: string[] | "all") => {
     const entry: SubmittedJob = {
       jobId: job.job_id,
@@ -379,6 +391,46 @@ export default function ClusterDatasetView({
         activeJobs = submittedRef.current.length;
       }
 
+      // The first scene the whole-dataset job made ready opens the viewer.
+      const before = openFirstReadyRef.current;
+      if (before) {
+        const firstReady = (indexRef.current?.scenes ?? [])
+          .map((scene) => scene.scene_id)
+          .find((id) => nextMap.get(id)?.state === "ready" && !before.has(id));
+        if (firstReady) {
+          openFirstReadyRef.current = null;
+          void openSceneInViewerRef.current(firstReady);
+        }
+      }
+
+      // The always-visible jobs indicator.
+      const scope = new Set<string>();
+      for (const job of submittedRef.current) {
+        for (const id of job.scenes === "all" ? (indexRef.current?.scenes ?? []).map((s) => s.scene_id) : job.scenes) {
+          scope.add(id);
+        }
+      }
+      const states = Array.from(nextMap.values());
+      const finished = publishDatasetJobs({
+        key: datasetKey,
+        profileId: profile.id,
+        label: datasetLabel,
+        jobIds: submittedRef.current.map((job) => job.jobId),
+        ready: states.filter((s) => s.state === "ready").length,
+        preparing: states.filter((s) => s.state === "preparing").length,
+        queued: Array.from(scope).filter((id) => (nextMap.get(id)?.state ?? "not_prepared") === "not_prepared").length,
+        total: indexRef.current?.scene_count ?? states.length,
+        viewerOpen: false,
+        dataset,
+      });
+      if (finished) {
+        window.dispatchEvent(
+          new CustomEvent("coperceive-dataset-finished", {
+            detail: { label: datasetLabel, ready: states.filter((s) => s.state === "ready").length },
+          }),
+        );
+      }
+
       // Check if anything is still preparing
       const hasPreparing = Array.from(nextMap.values()).some(
         (s) => s.state === "preparing",
@@ -446,6 +498,7 @@ export default function ClusterDatasetView({
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
       });
+      setViewerOpen(true, datasetKey);
     } catch (err) {
       setOpenError(errorDetails(err) || errorText(err));
     } finally {
@@ -548,6 +601,7 @@ export default function ClusterDatasetView({
     if (!singleScenePrepare) return;
     setSingleConfirmed(false);
     setSinglePrepareError(null);
+    setSingleImagesPending(images);
     try {
       setSinglePreparePreview(
         await datasetPrepare(profile.id, {
@@ -560,12 +614,15 @@ export default function ClusterDatasetView({
       );
     } catch (err) {
       setSinglePrepareError(errorDetails(err) || errorText(err));
+    } finally {
+      setSingleImagesPending(null);
     }
   };
 
   const handleWholeImagesChange = async (images: CameraImagesMode) => {
     setPrepareConfirmed(false);
     setPrepareError(null);
+    setWholeImagesPending(images);
     try {
       setPreparePreview(
         await datasetPrepare(profile.id, {
@@ -578,6 +635,8 @@ export default function ClusterDatasetView({
       );
     } catch (err) {
       setPrepareError(errorDetails(err) || errorText(err));
+    } finally {
+      setWholeImagesPending(null);
     }
   };
 
@@ -612,6 +671,14 @@ export default function ClusterDatasetView({
     try {
       const res = await datasetPrepareSubmit(profile.id, preparePreview.preview_hash, true);
       trackJob(res, preparePreview.job_name, "all");
+      const settings = await getPersistentState().catch(() => null);
+      if (settings?.open_first_ready_scene !== false) {
+        openFirstReadyRef.current = new Set(
+          Array.from(statuses.entries())
+            .filter(([, entry]) => entry.state === "ready")
+            .map(([id]) => id),
+        );
+      }
       setPrepareOutcome(`Submitted preparation job ${res.job_id}. Scenes show Queued until it reaches them.`);
       setShowPrepareModal(false);
       startPolling();
@@ -817,14 +884,21 @@ export default function ClusterDatasetView({
               </div>
               <CameraImagesChoice
                 name="whole-camera-images"
-                value={preparePreview.images}
+                value={wholeImagesPending ?? preparePreview.images}
                 previewBytes={preparePreview.estimated_preview_bytes}
                 disabled={prepareBusy}
                 onChange={(mode) => void handleWholeImagesChange(mode)}
               />
+              {wholeImagesPending ? (
+                <div role="status" style={{ fontSize: "0.75rem", color: "#79c0ff", margin: "0 0 0.3rem" }}>
+                  Updating preview…
+                </div>
+              ) : null}
               <pre
                 aria-label="Prepare job script"
+                aria-busy={wholeImagesPending !== null}
                 style={{
+                  opacity: wholeImagesPending ? 0.45 : 1,
                   margin: "0 0 0.75rem",
                   padding: "0.75rem",
                   borderRadius: "6px",
@@ -859,7 +933,7 @@ export default function ClusterDatasetView({
                     opacity: !prepareConfirmed || prepareBusy ? 0.5 : 1,
                     cursor: !prepareConfirmed || prepareBusy ? "not-allowed" : "pointer",
                   }}
-                  disabled={!prepareConfirmed || prepareBusy}
+                  disabled={!prepareConfirmed || prepareBusy || wholeImagesPending !== null}
                   onClick={() => void handleConfirmWholeDatasetSubmit()}
                 >
                   {prepareBusy ? "Submitting…" : "Confirm and submit prepare job"}
@@ -898,12 +972,18 @@ export default function ClusterDatasetView({
           </div>
           <CameraImagesChoice
             name="single-camera-images"
-            value={singlePreparePreview.images}
+            value={singleImagesPending ?? singlePreparePreview.images}
             previewBytes={singlePreparePreview.estimated_preview_bytes}
             onChange={(mode) => void handleSingleImagesChange(mode)}
           />
+          {singleImagesPending ? (
+            <div role="status" style={{ fontSize: "0.75rem", color: "#79c0ff", margin: "0 0 0.3rem" }}>
+              Updating preview…
+            </div>
+          ) : null}
           <pre
             aria-label="Prepare scene script"
+            aria-busy={singleImagesPending !== null}
             style={{ margin: "0 0 0.5rem", padding: "0.5rem", borderRadius: "6px", backgroundColor: "rgba(0,0,0,0.5)", fontSize: "0.7rem", color: "#c9d1d9", minHeight: "16em", maxHeight: "60vh", overflow: "auto", whiteSpace: "pre-wrap", resize: "vertical" }}
           >
             {singlePreparePreview.script}
@@ -920,7 +1000,7 @@ export default function ClusterDatasetView({
             <button
               type="button"
               style={{ ...primaryButton, opacity: !singleConfirmed ? 0.5 : 1 }}
-              disabled={!singleConfirmed}
+              disabled={!singleConfirmed || singleImagesPending !== null}
               onClick={() => void handleConfirmSingleScenePrepare()}
             >
               Start preparation & view

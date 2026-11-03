@@ -2597,6 +2597,44 @@ fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: se
     }
 }
 
+/// Remember the cluster dataset open in the HPC workspace (or forget it on
+/// Close), so the workspace reopens it after a restart.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn remember_cluster_dataset(profile_id: String, dataset: Option<serde_json::Value>) -> Result<(), String> {
+    let mut persistent = state::load_state();
+    match dataset {
+        Some(dataset) => {
+            persistent.last_cluster_datasets.insert(profile_id.clone(), dataset);
+            persistent.last_cluster_profile = Some(profile_id);
+        }
+        None => {
+            persistent.last_cluster_datasets.remove(&profile_id);
+            if persistent.last_cluster_profile.as_deref() == Some(profile_id.as_str()) {
+                persistent.last_cluster_profile = None;
+            }
+        }
+    }
+    state::save_state(&persistent)
+}
+
+/// The dataset last open in the HPC workspace: `{ profile_id, dataset }`, or null.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn last_cluster_dataset() -> serde_json::Value {
+    let persistent = state::load_state();
+    persistent
+        .last_cluster_profile
+        .as_ref()
+        .and_then(|id| {
+            persistent
+                .last_cluster_datasets
+                .get(id)
+                .map(|dataset| serde_json::json!({ "profile_id": id, "dataset": dataset }))
+        })
+        .unwrap_or(serde_json::Value::Null)
+}
+
 /// Settings → Cluster datasets → "Camera images when preparing".
 #[cfg(target_os = "macos")]
 #[tauri::command]
@@ -2780,6 +2818,22 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "profileId")?,
                     args.get("remove").and_then(serde_json::Value::as_bool).unwrap_or(false),
                 )),
+                // A remote viewer session as the evaluation viewer opens one.
+                "remote_connect" => {
+                    let entry = find_server_entry(&arg_text(&args, "profileId")?)?;
+                    let alias = entry.profile.ssh_target()?;
+                    tauri::async_runtime::block_on(remote_connect(
+                        app.clone(),
+                        state,
+                        alias,
+                        arg_text(&args, "dataRoot")?,
+                        None,
+                        Some(entry.id.clone()),
+                        None,
+                        None,
+                    ))
+                    .and_then(|payload| serde_json::to_value(payload).map_err(|error| error.to_string()))
+                }
                 "dataset_open" => tauri::async_runtime::block_on(dataset_open(
                     app.clone(),
                     state,
@@ -2974,19 +3028,27 @@ async fn remote_connect(
     let progress_app = app.clone();
     let alias_for_job = alias.clone();
     let mgr = tauri::async_runtime::spawn_blocking(move || {
-        if let Some(saved) = saved {
-            let reattach = RemoteStartOptions {
-                uuid: Some(saved),
-                ..options.clone()
-            };
-            if let Ok(mgr) = RemoteSessionManager::connect_with_options(&alias_for_job, &reattach, Some(&ssh_bin())) {
-                eprintln!("[viewer] reattached to the running viewer job");
-                return Ok(mgr);
-            }
-        }
         let progress = |job: &coperceive_desktop::remote::ViewerJobProgress| {
             let _ = progress_app.emit("viewer-job", job);
         };
+        if let Some(saved) = saved {
+            // Waits while that job still starts; only one that ended falls through.
+            match RemoteSessionManager::reattach_with_progress(
+                &alias_for_job,
+                &options,
+                Some(&ssh_bin()),
+                &saved,
+                &progress,
+                Duration::from_secs(3),
+                Duration::from_secs(15 * 60),
+            ) {
+                Ok(mgr) => {
+                    eprintln!("[viewer] reattached to the running viewer job");
+                    return Ok(mgr);
+                }
+                Err(error) => eprintln!("[viewer] could not reattach ({error:?}); starting a new viewer job"),
+            }
+        }
         RemoteSessionManager::connect_with_progress(
             &alias_for_job,
             &options,
@@ -3224,6 +3286,8 @@ fn main() {
             get_camera_images_setting,
             set_camera_images_setting,
             set_viewer_dataset_scenes,
+            remember_cluster_dataset,
+            last_cluster_dataset,
             dataset_prepare_job_status,
             dataset_previews,
             build_run_plan,
@@ -4147,9 +4211,11 @@ fn main() {
                     }
                 }
                 tauri::WindowEvent::Destroyed => {
-                    use tauri::Manager;
+                    use tauri::{Emitter, Manager};
                     let label = window.label().to_string();
                     if label == "viewer" {
+                        // The jobs indicator shows whether a dataset's viewer is open.
+                        let _ = window.app_handle().emit("viewer-closed", ());
                         if !state_for_window.replacing_viewer.load(Ordering::SeqCst) {
                             if let Ok(mut lock) = state_for_window.sidecar.lock() {
                                 if let Some(mut s) = lock.take() {
