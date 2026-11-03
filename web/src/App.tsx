@@ -7,6 +7,9 @@ import ConnectScreen from "./desktop/ConnectScreen";
 import { isTauriEnvironment, isViewerWindow, showLibrary } from "./desktop/local";
 import { DesktopPreferences } from "./desktop/SettingsView";
 import UpdateBanner from "./desktop/UpdateBanner";
+import { CrashNotice } from "./desktop/CrashNotice";
+import { DiagnosticsDialog } from "./desktop/DiagnosticsDialog";
+import { startupCrash, type StartupCrash } from "./desktop/local";
 import Landing, { writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
 import { systemTheme, type ThemeName } from "./viewer/appearance";
@@ -140,6 +143,45 @@ export default function App() {
   const [tab, setTab] = useState<"viewer" | "desk">("viewer");
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
+  const [crash, setCrash] = useState<StartupCrash | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+
+  useEffect(() => {
+    if (!isTauri) return;
+    void startupCrash().then((record) => {
+      if (!record) return;
+      let dismissed = false;
+      try {
+        dismissed = localStorage.getItem(`coperceive-dismissed-crash-${record.timestamp_unix}`) === "1";
+      } catch {
+        dismissed = false;
+      }
+      if (!dismissed) setCrash(record);
+    });
+    const open = () => setDiagnosticsOpen(true);
+    window.addEventListener("coperceive-open-diagnostics", open);
+    return () => window.removeEventListener("coperceive-open-diagnostics", open);
+  }, [isTauri]);
+
+  useEffect(() => {
+    const record = (event: ErrorEvent) => {
+      (window as unknown as { __COPERCEIVE_LAST_ERROR__?: unknown }).__COPERCEIVE_LAST_ERROR__ = {
+        message: event.message,
+        stack: event.error instanceof Error ? event.error.stack : undefined,
+      };
+    };
+    const rejection = (event: PromiseRejectionEvent) => {
+      (window as unknown as { __COPERCEIVE_LAST_ERROR__?: unknown }).__COPERCEIVE_LAST_ERROR__ = {
+        message: String(event.reason),
+      };
+    };
+    window.addEventListener("error", record);
+    window.addEventListener("unhandledrejection", rejection);
+    return () => {
+      window.removeEventListener("error", record);
+      window.removeEventListener("unhandledrejection", rejection);
+    };
+  }, []);
 
   useEffect(() => {
     // Main window: the viewer window's wordmark asks for the Library.
@@ -356,6 +398,31 @@ export default function App() {
   return (
     <div className={tab === "viewer" || isDesktop ? "shell" : "shell shell-desk"}>
       {isDesktop && <UpdateBanner />}
+      {crash ? (
+        <CrashNotice
+          crash={crash}
+          onShare={() => setDiagnosticsOpen(true)}
+          onDismiss={() => {
+            try {
+              localStorage.setItem(`coperceive-dismissed-crash-${crash.timestamp_unix}`, "1");
+            } catch {
+              // The notice can still be dismissed for this session.
+            }
+            setCrash(null);
+          }}
+        />
+      ) : null}
+      {diagnosticsOpen ? (
+        <DiagnosticsDialog
+          context={{
+            active_route: typeof window !== "undefined" ? window.location.hash || "#/" : "#/",
+            quick_copy_diagnostics: true,
+            last_ui_error:
+              (window as unknown as { __COPERCEIVE_LAST_ERROR__?: unknown }).__COPERCEIVE_LAST_ERROR__ ?? null,
+          }}
+          onClose={() => setDiagnosticsOpen(false)}
+        />
+      ) : null}
       {/* Empty toolbar space moves the window and double-click zooms it. */}
       <header className="topbar" data-tauri-drag-region>
         <div className="top-cluster" data-tauri-drag-region>

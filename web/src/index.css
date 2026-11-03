@@ -3108,3 +3108,64 @@ main > .tab-panel:not([hidden]) {
 .viewer .view-pill button { white-space: nowrap; }
 .viewer .empty-pill { top: 56px; left: 12px; border-radius: 7px; }
 .viewer .side-card p.muted { font-size: 11.5px; margin: 8px 0 0; }
+
+/* Crash notice and diagnostics: calm, non-blocking, review-before-share. */
+.crash-notice {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.8rem;
+  background: var(--surface-2, #1b2230);
+  border-bottom: 1px solid var(--border, #2d3748);
+}
+.link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent, #7dd3fc);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.diagnostics-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.diagnostics-dialog,
+.error-panel {
+  width: min(760px, calc(100vw - 2rem));
+  max-height: calc(100vh - 3rem);
+  overflow: auto;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border, #2d3748);
+  border-radius: 10px;
+  background: var(--surface, #151b26);
+  color: inherit;
+}
+.error-panel h1 { font-size: 1.05rem; margin: 0 0 0.35rem; }
+.diagnostics-note { display: grid; gap: 0.3rem; font-size: 0.8rem; }
+.diagnostics-note textarea { width: 100%; resize: vertical; }
+.diagnostics-preview {
+  max-height: 42vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.72rem;
+  background: var(--surface-2, #1b2230);
+  border: 1px solid var(--border, #2d3748);
+  border-radius: 6px;
+  padding: 0.6rem;
+}
+.diagnostics-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}

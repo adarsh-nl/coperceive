@@ -971,4 +971,70 @@ export async function onFolderDrop(
       if (first) handler(first);
     }
   });
+
+export interface DiagnosticsReport {
+  preview: string;
+  crashes: number;
+  bytes: number;
+}
+
+export interface StartupCrash {
+  schema: string;
+  kind: string;
+  timestamp_unix: number;
+  version: string;
+  commit: string;
+  message: string;
+  location?: string | null;
+}
+
+export async function buildDiagnosticsReport(context: Record<string, unknown>): Promise<DiagnosticsReport | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<DiagnosticsReport>("diagnostics_build_report", { context });
+  } catch {
+    return null;
+  }
+}
+
+export async function copyDiagnosticsText(text: string): Promise<boolean> {
+  if (!isTauriEnvironment()) {
+    try {
+      await navigator.clipboard.writeText(text);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("diagnostics_copy_text", { text });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function saveDiagnosticsZip(
+  preview: string,
+  context: Record<string, unknown>,
+): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string | null>("diagnostics_save_zip", { preview, context });
+  } catch {
+    return null;
+  }
+}
+
+export async function startupCrash(): Promise<StartupCrash | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<StartupCrash | null>("diagnostics_startup_crash");
+  } catch {
+    return null;
+  }
 }
