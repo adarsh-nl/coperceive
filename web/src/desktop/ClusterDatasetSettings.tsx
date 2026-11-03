@@ -6,10 +6,13 @@ import {
   datasetPreviews,
   formatBytes,
   getCameraImagesSetting,
+  remoteViewCache,
   setCameraImagesSetting,
+  VIEWING_CACHE_CAPS,
   type CameraImagesMode,
   type CameraImagesSetting,
   type CameraPreviewsUsage,
+  type RemoteViewCache,
 } from "./clusterDatasets";
 import { errorText } from "./errors";
 import type { ServerEntry } from "./hpc";
@@ -22,7 +25,8 @@ const ALL = "";
  * Settings → Cluster datasets: what the next prepare preview starts with for
  * camera images, per server (or for every server), and the disk the saved
  * previews use with a confirmed "Remove previews". Changing the choice never
- * changes scenes that are already prepared.
+ * changes scenes that are already prepared. Also the local "Viewing cache" of
+ * sweeps and images read over SSH: its size cap and "Clear cache".
  */
 export function ClusterDatasetSettings() {
   const [servers, setServers] = useState<ServerEntry[]>([]);
@@ -32,6 +36,19 @@ export function ClusterDatasetSettings() {
   const [usageError, setUsageError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [viewingCache, setViewingCache] = useState<RemoteViewCache | null>(null);
+
+  const changeViewingCache = useCallback(async (change: { capBytes?: number; clear?: boolean } = {}) => {
+    try {
+      setViewingCache(await remoteViewCache(change));
+    } catch {
+      setViewingCache(null);
+    }
+  }, []);
+
+  useEffect(() => {
+    void changeViewingCache();
+  }, [changeViewingCache]);
 
   useEffect(() => {
     void listServerProfiles()
@@ -165,6 +182,37 @@ export function ClusterDatasetSettings() {
               </button>
             </div>
           ) : null}
+        </div>
+      ) : null}
+      {viewingCache ? (
+        <div className="viewing-cache" aria-live="polite">
+          <label className="settings-field">
+            <span>Viewing cache</span>
+            <select
+              aria-label="Viewing cache size"
+              value={viewingCache.cap_bytes}
+              onChange={(event) => void changeViewingCache({ capBytes: Number(event.target.value) })}
+            >
+              {[...new Set([...VIEWING_CACHE_CAPS, viewingCache.cap_bytes])]
+                .sort((a, b) => a - b)
+                .map((cap) => (
+                  <option key={cap} value={cap}>
+                    {formatBytes(cap)}
+                  </option>
+                ))}
+            </select>
+          </label>
+          <p className="setting-note">
+            Prepared scenes are read over SSH, with no cluster job; sweeps and images you viewed are kept on this Mac up to this size. In use: {formatBytes(viewingCache.used_bytes)}.
+          </p>
+          <button
+            type="button"
+            className="ghost"
+            onClick={() => void changeViewingCache({ clear: true })}
+            disabled={viewingCache.used_bytes === 0}
+          >
+            Clear cache
+          </button>
         </div>
       ) : null}
     </section>

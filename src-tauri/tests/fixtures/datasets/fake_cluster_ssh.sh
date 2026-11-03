@@ -4,7 +4,7 @@
 # Fake ssh for the packaged-app cluster-dataset e2e
 # (scripts/desktop/e2e_cluster_datasets_app.sh). The "cluster" is this machine:
 #
-# - `<coperceive argv> dataset detect|index|status ...` and the capability probe
+# - `<coperceive argv> dataset detect|index|status|stream ...` and the capability probe
 #   run locally (the profile's coperceive argv is the bundled Python, or
 #   fake_old_python.sh for the "too old" case).
 # - `sbatch --parsable` runs the submitted script to completion with a fake
@@ -55,6 +55,14 @@ case "${remote}" in
         cd "${home}" || exit 1  # a real ssh session starts in the remote home
         HOME="${home}" exec sh -c "${remote}"
         ;;
+    *" dataset stream "*)
+        # Viewing over SSH: the read-only streamer, its stdin/stdout the link.
+        log_command "dataset-stream"
+        if [ -n "${FAKE_SSH_LOG:-}" ]; then
+            printf '%s' "${remote}" > "${FAKE_SSH_LOG}.stream-command"
+        fi
+        HOME="${home}" exec sh -c "${remote}"
+        ;;
     *" dataset detect "*|*" dataset index "*|*" dataset status "*|*" dataset previews "*)
         verb="${remote#* dataset }"
         log_command "dataset-${verb%% *}"
@@ -62,10 +70,31 @@ case "${remote}" in
         ;;
     "sbatch --parsable")
         log_command "sbatch"
+        if [ -n "${FAKE_SBATCH_FAIL:-}" ]; then
+            # As a cluster with no free nodes for the requested configuration.
+            cat > /dev/null
+            echo "sbatch: error: Batch job submission failed: Requested node configuration is not available" >&2
+            exit 1
+        fi
         count_file="${slurm}/next-id"
         job_id=$(( $(cat "${count_file}" 2>/dev/null || echo 700000) + 1 ))
         printf '%s\n' "${job_id}" > "${count_file}"
         cat > "${slurm}/${job_id}.sh"
+        if [ -n "${FAKE_SBATCH_HOLD:-}" ]; then
+            # The job "runs" in the background and does its work only once the
+            # hold file exists, so the app can view while it is running.
+            touch "${slurm}/${job_id}.running"
+            (
+                while [ ! -e "${FAKE_SBATCH_HOLD}" ]; do sleep 0.1; done
+                status=0
+                SLURM_JOB_ID="${job_id}" HOME="${home}" bash "${slurm}/${job_id}.sh" \
+                    > "${slurm}/${job_id}.out" 2> "${slurm}/${job_id}.err" || status=$?
+                printf '%s\n' "${status}" > "${slurm}/${job_id}.exit"
+                rm -f "${slurm}/${job_id}.running"
+            ) < /dev/null > /dev/null 2>&1 &
+            printf '%s;fake-cluster\n' "${job_id}"
+            exit 0
+        fi
         status=0
         SLURM_JOB_ID="${job_id}" HOME="${home}" bash "${slurm}/${job_id}.sh" \
             > "${slurm}/${job_id}.out" 2> "${slurm}/${job_id}.err" || status=$?
@@ -74,15 +103,26 @@ case "${remote}" in
         exit 0
         ;;
     "squeue -h -j 7"[0-9][0-9][0-9][0-9][0-9]" "*)
-        # The fake job ran to completion inside sbatch: no longer queued.
+        # The fake job ran to completion inside sbatch: no longer queued
+        # (unless it is held, see FAKE_SBATCH_HOLD).
         log_command "squeue"
+        job_id="${remote#squeue -h -j }"
+        job_id="${job_id%% *}"
+        if [ -e "${slurm}/${job_id}.running" ]; then
+            case "${remote}" in
+                *"%.256j"*) echo "coperceive-prepare|RUNNING|None|0:05|59:55|fake-node|fake" ;;
+                *) echo "RUNNING|None" ;;
+            esac
+        fi
         exit 0
         ;;
     "sacct -j 7"[0-9][0-9][0-9][0-9][0-9]" "*)
         log_command "sacct"
         job_id="${remote#sacct -j }"
         job_id="${job_id%% *}"
-        if [ "$(cat "${slurm}/${job_id}.exit" 2>/dev/null)" = "0" ]; then
+        if [ -e "${slurm}/${job_id}.running" ]; then
+            echo RUNNING
+        elif [ "$(cat "${slurm}/${job_id}.exit" 2>/dev/null)" = "0" ]; then
             echo COMPLETED
         else
             echo FAILED

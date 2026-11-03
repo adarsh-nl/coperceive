@@ -72,6 +72,18 @@ impl SidecarSession {
         maps_root: Option<&Path>,
         allow_origin: Option<&str>,
     ) -> io::Result<Self> {
+        Self::spawn_with_args(python_bin, data_root, maps_root, allow_origin, &[])
+    }
+
+    /// The same, with extra `coperceive serve` arguments (e.g. the remote-view
+    /// options that read a cluster dataset over SSH into `data_root`, a mirror).
+    pub fn spawn_with_args(
+        python_bin: &Path,
+        data_root: &Path,
+        maps_root: Option<&Path>,
+        allow_origin: Option<&str>,
+        extra_args: &[String],
+    ) -> io::Result<Self> {
         let port = find_free_loopback_port()?;
         let token = generate_secure_token()?;
 
@@ -106,6 +118,7 @@ impl SidecarSession {
         if let Some(origin) = allow_origin {
             cmd.arg("--allow-origin").arg(origin);
         }
+        cmd.args(extra_args);
 
         let child = cmd
             .stdout(Stdio::from(log_file))

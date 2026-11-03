@@ -432,6 +432,18 @@ pub struct AppPersistentState {
     /// After a prepare, open the viewer when the first scene is ready. On by default.
     #[serde(default = "default_true")]
     pub open_first_ready_scene: bool,
+
+    /// Cap of the local cache of sweeps and images read over SSH (Settings →
+    /// "Viewing cache"). 2 GB by default.
+    #[serde(default = "default_remote_view_cache_bytes")]
+    pub remote_view_cache_bytes: u64,
+}
+
+pub const DEFAULT_REMOTE_VIEW_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const MIN_REMOTE_VIEW_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+
+fn default_remote_view_cache_bytes() -> u64 {
+    DEFAULT_REMOTE_VIEW_CACHE_BYTES
 }
 
 /// Camera-image modes for cluster dataset preparation.
@@ -534,6 +546,7 @@ impl Default for AppPersistentState {
             last_cluster_datasets: HashMap::new(),
             last_cluster_profile: None,
             open_first_ready_scene: true,
+            remote_view_cache_bytes: DEFAULT_REMOTE_VIEW_CACHE_BYTES,
         }
     }
 }
@@ -866,6 +879,7 @@ pub mod tests {
             last_cluster_datasets: HashMap::from([("p".into(), serde_json::json!({"path": "/d/opv2v/test"}))]),
             last_cluster_profile: Some("p".into()),
             open_first_ready_scene: false,
+            remote_view_cache_bytes: 512 * 1024 * 1024,
         };
 
         let json = serde_json::to_string(&state).expect("serialize");

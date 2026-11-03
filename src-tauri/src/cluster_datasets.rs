@@ -24,7 +24,7 @@ const DETECT_TIMEOUT: Duration = Duration::from_secs(45);
 const INDEX_TIMEOUT: Duration = Duration::from_secs(120);
 pub const CAPABILITIES_SCHEMA: &str = "coperceive-capabilities-1";
 /// What the dataset commands need from the server's coperceive (see `coperceive capabilities`).
-pub const CLUSTER_DATASETS_CAPABILITY: &str = "cluster-datasets-4";
+pub const CLUSTER_DATASETS_CAPABILITY: &str = "cluster-datasets-5";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Where an update comes from when the install is not a git checkout.
 /// Switch to `@main` once cluster datasets are released there.
@@ -234,6 +234,33 @@ pub fn detect(
     )
 }
 
+/// The command line of the read-only streamer for viewing a prepared dataset
+/// over SSH (no Slurm job): one long-lived `ssh` to `coperceive dataset stream`,
+/// allowed to read the cache split directory and the dataset's raw root. Every
+/// remote argument is shell-quoted; file paths later travel only on stdin.
+pub fn stream_argv(
+    ssh_bin: &str,
+    target: &crate::ssh::SshTarget,
+    profile: &ServerProfile,
+    cache_root: &str,
+    raw_root: &str,
+) -> Vec<String> {
+    let remote = crate::hpc::coperceive_argv(
+        profile,
+        &[
+            "dataset".to_string(),
+            "stream".to_string(),
+            "--root".to_string(),
+            cache_root.to_string(),
+            "--root".to_string(),
+            raw_root.to_string(),
+        ],
+    );
+    let mut argv = vec![ssh_bin.to_string()];
+    argv.extend(crate::ssh::build_ssh_command_for(target, &quote_remote_argv(&remote)));
+    argv
+}
+
 /// Disk used by camera previews in this profile's cache; with `remove`, delete
 /// them (only them). Called with `remove` only after the user confirms.
 pub fn previews(
@@ -397,6 +424,17 @@ mod tests {
     }
 
     #[test]
+    fn the_stream_command_quotes_every_remote_argument() {
+        let target = crate::ssh::SshTarget::alias("cluster-b");
+        let argv = stream_argv("/usr/bin/ssh", &target, &profile(), "/r/cache dir; rm -rf ~", "/d/opv2v");
+        assert_eq!(argv[0], "/usr/bin/ssh");
+        assert!(argv.contains(&"BatchMode=yes".to_string()), "{argv:?}");
+        let remote = argv.last().unwrap();
+        assert!(remote.contains("dataset stream --root '/r/cache dir; rm -rf ~' --root /d/opv2v"), "{remote}");
+        assert!(argv[argv.len() - 2] == "cluster-b", "{argv:?}");
+    }
+
+    #[test]
     fn an_unknown_adapter_is_refused_locally() {
         let runner = FakeRunner::new("{}");
         assert!(index(&runner, &profile(), "foo", "/data", None).is_err());
@@ -461,7 +499,7 @@ mod tests {
         assert_eq!(
             error,
             "coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, \
-             which has no capabilities command, need a build with cluster-datasets-4). Update it \
+             which has no capabilities command, need a build with cluster-datasets-5). Update it \
              with: git -C /home/u/coperceive pull --ff-only && /home/u/venv/bin/python -m pip \
              install -e /home/u/coperceive --no-deps"
         );
@@ -483,7 +521,7 @@ mod tests {
         );
         let error = index(&runner, &profile(), "opv2v", "/data/opv2v", Some("test")).expect_err("too old");
         assert!(
-            error.contains("(found coperceive 0.1.0 without cluster-datasets-4, need"),
+            error.contains("(found coperceive 0.1.0 without cluster-datasets-5, need"),
             "{error}"
         );
         assert!(
@@ -498,7 +536,7 @@ mod tests {
     #[test]
     fn a_supported_build_keeps_the_original_error() {
         let mut runner = old_cli(
-            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":["cluster-datasets-2","cluster-datasets-3","cluster-datasets-4"]}"#,
+            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":["cluster-datasets-2","cluster-datasets-3","cluster-datasets-4","cluster-datasets-5"]}"#,
         );
         runner.command = CommandResult {
             success: false,
