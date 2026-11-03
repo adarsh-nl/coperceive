@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import shutil
+import time
 from collections.abc import Mapping, Sequence
 from concurrent.futures import Future, ProcessPoolExecutor, as_completed
 from dataclasses import dataclass, replace
@@ -21,6 +22,7 @@ from pathlib import Path
 from typing import Protocol, cast
 
 from coperceive.adapters.build import CheckReport, SceneRef
+from coperceive.adapters.prefetch import current_stats
 from coperceive.errors import CoperceiveError
 from coperceive.model import SCHEMA_VERSION, Scene
 from coperceive.store import write_scene
@@ -191,9 +193,15 @@ def ingest_one(job: _Job) -> _Result:
     partial.parent.mkdir(parents=True, exist_ok=True)
     partial.mkdir()
     try:
+        stats = current_stats()
+        started = time.perf_counter()
         variants = _variants(job.adapter, raw_root, job.ref)
         scene = job.adapter.load(raw_root, job.ref)
+        loaded = time.perf_counter()
         write_scene(scene, partial)
+        if stats is not None:
+            stats.build_s += loaded - started
+            stats.write_s += time.perf_counter() - loaded
         marker = dict(expected)
         if variants:
             marker["label_field_counts"] = {str(w): c for w, c in variants}

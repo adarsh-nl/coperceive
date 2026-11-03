@@ -2453,17 +2453,20 @@ async fn dataset_prepare(
             .get("estimated_cache_bytes")
             .and_then(serde_json::Value::as_u64)
             .unwrap_or(0);
-        let selected_count = scenes
-            .as_ref()
-            .map(|items| items.len())
-            .or_else(|| {
-                index
-                    .get("scene_count")
-                    .and_then(serde_json::Value::as_u64)
-                    .map(|count| count as usize)
-            })
-            .unwrap_or(0);
-        let workers = coperceive_desktop::dataset_jobs::resolve_workers(workers, selected_count);
+        // One array task per selected scene; "all" is every scene the index lists.
+        let scene_ids: Vec<String> = scenes.clone().unwrap_or_else(|| {
+            index
+                .get("scenes")
+                .and_then(serde_json::Value::as_array)
+                .map(|rows| {
+                    rows.iter()
+                        .filter_map(|row| row.get("scene_id").and_then(serde_json::Value::as_str))
+                        .map(str::to_string)
+                        .collect()
+                })
+                .unwrap_or_default()
+        });
+        let workers = coperceive_desktop::dataset_jobs::resolve_workers(workers, scene_ids.len());
         let request = coperceive_desktop::dataset_jobs::DatasetPrepareRequest {
             adapter: adapter.clone(),
             raw_root: raw_root.clone(),
@@ -2477,12 +2480,23 @@ async fn dataset_prepare(
         };
         let preview_bytes =
             coperceive_desktop::dataset_jobs::preview_bytes_estimate(&index, scenes.as_deref());
-        let preview = coperceive_desktop::dataset_jobs::render_prepare_script(
+        let timing =
+            coperceive_desktop::dataset_jobs::read_timing_log(&runner, &entry.profile, &cache_relative);
+        let estimate = coperceive_desktop::dataset_jobs::estimate_seconds(
+            &index,
+            &scene_ids,
+            &request.images,
+            request.workers.min(scene_ids.len().max(1) as u32),
+            &timing,
+        );
+        let preview = coperceive_desktop::dataset_jobs::render_prepare_script_with_estimate(
             &entry.profile,
             &request,
+            &scene_ids,
             &cache_relative,
             estimated,
             preview_bytes,
+            estimate,
         )?;
         let pending = coperceive_desktop::dataset_jobs::PendingPrepare {
             profile_id: entry.id.clone(),
@@ -2504,6 +2518,10 @@ async fn dataset_prepare(
         "partition": preview.partition,
         "walltime": preview.walltime,
         "cpus_per_task": preview.cpus_per_task,
+        "array_tasks": preview.array_tasks,
+        "throttle": preview.throttle,
+        "estimated_seconds": preview.estimated_seconds,
+        "estimate_note": preview.estimate_note,
         "gres": preview.gres,
         "estimated_cache_bytes": preview.estimated_cache_bytes,
         "images": preview.images,

@@ -8,7 +8,8 @@
 #   run locally (the profile's coperceive argv is the bundled Python, or
 #   fake_old_python.sh for the "too old" case).
 # - `sbatch --parsable` runs the submitted script to completion with a fake
-#   SLURM_JOB_ID, so the job really runs `coperceive dataset prepare`; squeue
+#   SLURM_JOB_ID (each array task with its SLURM_ARRAY_* too), so the job
+#   really runs `coperceive dataset prepare`; squeue
 #   then reports nothing and sacct reports COMPLETED/FAILED.
 # - the viewer-page upload commands run with HOME=$FAKE_REMOTE_HOME.
 # - `coperceive remote start|stop` and the `-N -L` tunnel are served by
@@ -80,25 +81,40 @@ case "${remote}" in
         job_id=$(( $(cat "${count_file}" 2>/dev/null || echo 700000) + 1 ))
         printf '%s\n' "${job_id}" > "${count_file}"
         cat > "${slurm}/${job_id}.sh"
+        # A job array (`#SBATCH --array=0-N%T`) runs every task, each with the
+        # environment Slurm gives it; the job's exit is the first failure.
+        last="$(sed -n 's/^#SBATCH --array=0-\([0-9]*\).*/\1/p' "${slurm}/${job_id}.sh")"
+        # Task job ids follow the array's id, as Slurm assigns them.
+        printf '%s\n' "$(( job_id + ${last:-0} + 1 ))" > "${count_file}"
+        run_job() {
+            local status=0 task rc
+            if [ -z "${last}" ]; then
+                SLURM_JOB_ID="${job_id}" HOME="${home}" bash "${slurm}/${job_id}.sh" \
+                    > "${slurm}/${job_id}.out" 2> "${slurm}/${job_id}.err" || status=$?
+            else
+                for task in $(seq 0 "${last}"); do
+                    rc=0
+                    SLURM_JOB_ID="$(( job_id + task + 1 ))" SLURM_ARRAY_JOB_ID="${job_id}" \
+                        SLURM_ARRAY_TASK_ID="${task}" HOME="${home}" bash "${slurm}/${job_id}.sh" \
+                        >> "${slurm}/${job_id}.out" 2>> "${slurm}/${job_id}.err" || rc=$?
+                    if [ "${status}" -eq 0 ]; then status="${rc}"; fi
+                done
+            fi
+            printf '%s\n' "${status}" > "${slurm}/${job_id}.exit"
+        }
         if [ -n "${FAKE_SBATCH_HOLD:-}" ]; then
             # The job "runs" in the background and does its work only once the
             # hold file exists, so the app can view while it is running.
             touch "${slurm}/${job_id}.running"
             (
                 while [ ! -e "${FAKE_SBATCH_HOLD}" ]; do sleep 0.1; done
-                status=0
-                SLURM_JOB_ID="${job_id}" HOME="${home}" bash "${slurm}/${job_id}.sh" \
-                    > "${slurm}/${job_id}.out" 2> "${slurm}/${job_id}.err" || status=$?
-                printf '%s\n' "${status}" > "${slurm}/${job_id}.exit"
+                run_job
                 rm -f "${slurm}/${job_id}.running"
             ) < /dev/null > /dev/null 2>&1 &
             printf '%s;fake-cluster\n' "${job_id}"
             exit 0
         fi
-        status=0
-        SLURM_JOB_ID="${job_id}" HOME="${home}" bash "${slurm}/${job_id}.sh" \
-            > "${slurm}/${job_id}.out" 2> "${slurm}/${job_id}.err" || status=$?
-        printf '%s\n' "${status}" > "${slurm}/${job_id}.exit"
+        run_job
         printf '%s;fake-cluster\n' "${job_id}"
         exit 0
         ;;

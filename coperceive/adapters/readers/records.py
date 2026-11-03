@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 from typing import cast
 
+from coperceive.adapters.prefetch import read_bytes
 from coperceive.errors import CoperceiveError
 
 
@@ -41,7 +42,7 @@ def get_field(record: object, path: str) -> object:
 
 
 def read_json_record(path: Path) -> dict[str, object]:
-    return _as_record(json.loads(path.read_text(encoding="utf-8")), path)
+    return _as_record(json.loads(read_bytes(path).decode("utf-8")), path)
 
 
 def read_yaml_record(path: Path) -> dict[str, object]:
@@ -51,7 +52,7 @@ def read_yaml_record(path: Path) -> dict[str, object]:
     from coperceive.adapters.readers.numpy_yaml import load_dataset_yaml
 
     try:
-        payload = load_dataset_yaml(path.read_text(encoding="utf-8"))
+        payload = load_dataset_yaml(read_bytes(path).decode("utf-8"))
     except yaml.YAMLError as exc:
         raise FieldError(f"not readable YAML: {yaml_error_line(exc)}") from None
     return _as_record(payload, path)

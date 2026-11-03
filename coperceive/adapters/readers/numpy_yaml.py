@@ -14,13 +14,30 @@ Every other ``python/*`` tag is refused, as ``yaml.SafeLoader`` refuses it.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
 import yaml
 from yaml.nodes import MappingNode, Node, ScalarNode, SequenceNode
 
+# libyaml's scanner and parser are ~9x faster than PyYAML's pure-Python ones on
+# an 18 KB OPV2V record (8.4 vs 73 ms on an M-series Mac). Without libyaml (a
+# PyYAML built from source without it) the records still load, ten times slower;
+# say so once, so a slow prepare explains itself.
 _BASE: type[yaml.SafeLoader] = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+if _BASE is yaml.SafeLoader:
+    logging.getLogger(__name__).warning(
+        "PyYAML has no libyaml (yaml.CSafeLoader); dataset records load with the "
+        "pure-Python parser, about 10x slower. Install a PyYAML wheel built with libyaml."
+    )
+
+
+def yaml_loader_kind() -> str:
+    """``libyaml`` or ``pure-python``: which parser loads dataset records."""
+    return "libyaml" if _BASE is not yaml.SafeLoader else "pure-python"
+
+
 _APPLY = "tag:yaml.org,2002:python/object/apply:"
 _TUPLE = "tag:yaml.org,2002:python/tuple"
 # numpy 1.x writes numpy.core, numpy 2.x writes numpy._core.

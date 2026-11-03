@@ -15,6 +15,7 @@ import hashlib
 import json
 import os
 import shutil
+import socket
 import subprocess
 import time
 from collections.abc import Callable, Mapping
@@ -25,6 +26,8 @@ from typing import Any, cast
 
 from coperceive.adapters.build import BuildError, ManifestAdapter
 from coperceive.adapters.ingest import ingest
+from coperceive.adapters.prefetch import collecting
+from coperceive.adapters.readers.numpy_yaml import yaml_loader_kind
 from coperceive.adapters.registry import RegistryError, resolve_adapter
 from coperceive.adapters.spec import SpecError
 from coperceive.camera_images import IMAGE_MODES, stage_images
@@ -275,7 +278,8 @@ def _read_dataset(cache_dir: Path) -> dict[str, Any]:
 def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
     cache_dir.mkdir(parents=True, exist_ok=True)
     path = _dataset_json_path(cache_dir)
-    temporary = cache_dir / f".dataset.json.{os.getpid()}.tmp"
+    # Array tasks on several nodes write here: a pid alone is not unique.
+    temporary = cache_dir / f".dataset.json.{socket.gethostname()}.{os.getpid()}.tmp"
     temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     os.replace(temporary, path)
 
@@ -317,16 +321,55 @@ def prepare_progress(
     }
 
 
+_LOCK_STALE_S = 120.0
+_LOCK_WAIT_S = 600.0
+
+
 @contextmanager
 def _cache_lock(cache: Path):
+    """Exclusive access to ``dataset.json``, across processes and nodes.
+
+    ``flock`` serialises processes on one node; prepare array tasks run on
+    several nodes, where ``flock`` may be node-local (Lustre's ``localflock``),
+    so an atomic ``mkdir`` guards the read-modify-write as well. The section is
+    a JSON read and write; a lock directory older than two minutes was left by
+    a task that died and is taken over.
+    """
     cache.mkdir(parents=True, exist_ok=True)
     lock_path = cache / ".dataset.json.lock"
     with open(lock_path, "a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         try:
-            yield
+            with _directory_lock(cache / ".dataset.json.lockdir"):
+                yield
         finally:
             fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def _directory_lock(path: Path):
+    deadline = time.monotonic() + _LOCK_WAIT_S
+    while True:
+        try:
+            path.mkdir()
+            break
+        except FileExistsError:
+            try:
+                if time.time() - path.stat().st_mtime > _LOCK_STALE_S:
+                    path.rmdir()
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() > deadline:
+                raise DatasetError(f"timed out waiting for {path.name}") from None
+            time.sleep(0.05)
+    try:
+        yield
+    finally:
+        try:
+            path.rmdir()
+        except OSError:
+            pass
 
 
 def _job_alive(job_id: str) -> bool | None:
@@ -359,6 +402,15 @@ def _claim_still_live(record: Mapping[str, Any], current_job: str | None, now: f
         if alive is False:
             return False
     return True
+
+
+def _slurm_job_id() -> str | None:
+    """This task's job id; ``<array>_<task>`` in a prepare array (squeue takes both)."""
+    array = os.environ.get("SLURM_ARRAY_JOB_ID", "").strip()
+    task = os.environ.get("SLURM_ARRAY_TASK_ID", "").strip()
+    if array.isdigit() and task.isdigit():
+        return f"{array}_{task}"
+    return os.environ.get("SLURM_JOB_ID", "").strip() or None
 
 
 def mark_scene_images(cache: Path, scene_id: str, mode: str) -> None:
@@ -421,11 +473,17 @@ def _claim_and_prepare_scene(
         dataset["updated_unix"] = int(now)
         _write_dataset(cache, dataset)
     if restage:
+        started = time.perf_counter()
         try:
             stage_images(cache / scene_id, raw, images)
             state, reason, prepared = "ready", None, int(time.time())
         except Exception as exc:  # noqa: BLE001 - reported per scene
             state, reason, prepared = "failed", f"{type(exc).__name__}: {exc}", None
+        _log_timing(
+            cache,
+            {"scene_id": scene_id, "job_id": job_id, "images": images, "restage": True,
+             "previews_s": round(time.perf_counter() - started, 2), "state": state},
+        )  # fmt: skip
         return _finish_scene(cache, scene_id, job_id, state, reason, prepared, images)
     partial_root = cache / ".partial"
     partial_root.mkdir(parents=True, exist_ok=True)
@@ -434,40 +492,85 @@ def _claim_and_prepare_scene(
     state = "failed"
     reason: str | None = None
     prepared: int | None = None
-    try:
-        ingest(
-            adapter,
-            raw,
-            partial_root,
-            params=params,
-            workers=1,
-            scene_ids=[scene_id],
-        )
-        produced = partial_root / scene_id
-        if not (produced / "manifest.json").is_file() or not (produced / "COMPLETE.json").is_file():
-            raise DatasetError("ingest finished without a complete scene")
-        stage_images(produced, raw, images)
-        destination = cache / scene_id
-        old = cache / f".old-{scene_id}"
-        if old.exists():
-            shutil.rmtree(old)
-        if destination.exists():
-            destination.rename(old)
-        os.replace(produced, destination)
-        if old.exists():
-            shutil.rmtree(old)
-        state = "ready"
-        prepared = int(time.time())
-    except Exception as exc:  # noqa: BLE001 - one bad scene must not abort the dataset
-        state = "failed"
-        reason = f"{type(exc).__name__}: {exc}"
-    finally:
-        shutil.rmtree(temporary, ignore_errors=True)
+    started, cpu_started = time.perf_counter(), time.process_time()
+    previews_s = 0.0
+    with collecting() as stats:
         try:
-            partial_root.rmdir()
-        except OSError:
-            pass
+            ingest(
+                adapter,
+                raw,
+                partial_root,
+                params=params,
+                workers=1,
+                scene_ids=[scene_id],
+            )
+            produced = partial_root / scene_id
+            if (
+                not (produced / "manifest.json").is_file()
+                or not (produced / "COMPLETE.json").is_file()
+            ):
+                raise DatasetError("ingest finished without a complete scene")
+            staged = time.perf_counter()
+            stage_images(produced, raw, images)
+            previews_s = time.perf_counter() - staged
+            destination = cache / scene_id
+            old = cache / f".old-{scene_id}"
+            if old.exists():
+                shutil.rmtree(old)
+            if destination.exists():
+                destination.rename(old)
+            os.replace(produced, destination)
+            if old.exists():
+                shutil.rmtree(old)
+            state = "ready"
+            prepared = int(time.time())
+        except Exception as exc:  # noqa: BLE001 - one bad scene must not abort the dataset
+            state = "failed"
+            reason = f"{type(exc).__name__}: {exc}"
+        finally:
+            shutil.rmtree(temporary, ignore_errors=True)
+            try:
+                partial_root.rmdir()
+            except OSError:
+                pass
+    _log_timing(
+        cache,
+        {
+            "scene_id": scene_id,
+            "job_id": job_id,
+            "images": images,
+            "state": state,
+            "io_threads": stats.threads,
+            "files_read": stats.files,
+            "mb_read": round(stats.bytes / 1024**2, 1),
+            "read_wait_s": round(stats.wait_s, 2),
+            "build_s": round(stats.build_s, 2),
+            "write_s": round(stats.write_s, 2),
+            "previews_s": round(previews_s, 2),
+            "total_s": round(time.perf_counter() - started, 2),
+            "cpu_s": round(time.process_time() - cpu_started, 2),
+            "yaml_loader": yaml_loader_kind(),
+        },
+    )
     return _finish_scene(cache, scene_id, job_id, state, reason, prepared, images)
+
+
+TIMING_LOG = ".timing.jsonl"
+
+
+def _log_timing(cache: Path, record: dict[str, Any]) -> None:
+    """One line per prepared scene: in the job log, and in the cache for the next preview.
+
+    ``read_wait_s`` is how long parsing waited for raw files still being read;
+    ``build_s`` includes it. The app estimates the next prepare from these lines.
+    """
+    line = json.dumps({"unix": int(time.time()), "host": socket.gethostname(), **record})
+    print(f"coperceive-timing {line}", flush=True)
+    try:
+        with open(cache / TIMING_LOG, "a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+    except OSError:
+        pass
 
 
 def _finish_scene(
@@ -591,7 +694,7 @@ def prepare_cluster_dataset(
         dataset["raw_fingerprint"] = fingerprint
         dataset["updated_unix"] = int(time.time())
         _write_dataset(cache, dataset)
-    job_id = os.environ.get("SLURM_JOB_ID", "").strip() or None
+    job_id = _slurm_job_id()
     total = len(selected)
     done = 0
     pool_size = max(1, min(workers, total))
