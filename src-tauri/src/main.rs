@@ -610,7 +610,7 @@ pub async fn trigger_open_dataset_dialog(app: &tauri::AppHandle, state: &AppStat
 
 #[cfg(target_os = "macos")]
 fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = coperceive_desktop::updater::app_version(&app.package_info().version);
     let commit = option_env!("GIT_COMMIT").unwrap_or("580691a");
     let macos_ver = std::process::Command::new("sw_vers")
         .arg("-productVersion")
@@ -890,7 +890,7 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                 }
                 Ok(None) => {
                     let outcome = coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
-                        current_version: env!("CARGO_PKG_VERSION").to_string(),
+                        current_version: coperceive_desktop::updater::app_version(&check_handle.package_info().version),
                     };
                     Ok(serde_json::to_value(&outcome).unwrap_or_default())
                 }
@@ -898,7 +898,7 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                     match &err {
                         tauri_plugin_updater::Error::ReleaseNotFound => {
                             let outcome = coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
-                                current_version: env!("CARGO_PKG_VERSION").to_string(),
+                                current_version: coperceive_desktop::updater::app_version(&check_handle.package_info().version),
                             };
                             Ok(serde_json::to_value(&outcome).unwrap_or_default())
                         }
@@ -919,7 +919,10 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
         }
         #[cfg(not(target_os = "macos"))]
         {
-            Ok(serde_json::json!({"status": "uptodate", "current_version": env!("CARGO_PKG_VERSION")}))
+            Ok(serde_json::json!({
+                "status": "uptodate",
+                "current_version": coperceive_desktop::updater::app_version(&check_handle.package_info().version),
+            }))
         }
     }));
 
@@ -4103,7 +4106,7 @@ fn main() {
             let id = event.id().as_ref();
             match id {
                 "about_coperceive" => {
-                    let version = env!("CARGO_PKG_VERSION");
+                    let version = coperceive_desktop::updater::app_version(&app.package_info().version);
                     let commit = option_env!("GIT_DESCRIBE")
                         .or(option_env!("GIT_COMMIT"))
                         .unwrap_or("580691a");
