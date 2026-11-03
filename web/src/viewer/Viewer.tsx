@@ -90,6 +90,7 @@ import {
 import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
 import Timeline, { type Marker } from "./timeline";
 import { neighbourScene } from "./sceneNav";
+import { sceneCapabilities, viewpointFor } from "./capabilities";
 import {
   cameraKey,
   isPose,
@@ -1716,6 +1717,22 @@ export default function Viewer({
   const latestRef = useRef<{ frame: FrameDocument; types: Map<string, string> } | null>(null);
   const orbitHomeRef = useRef<CameraGoal | null>(null);
   const settleRef = useRef(false);
+  // What this scene can show, from its own data (5d): views it cannot use are
+  // not offered, and a view that vanishes with a scene change falls back to Orbit.
+  const capabilities = useMemo(() => sceneCapabilities(summary), [summary]);
+  const capabilitiesRef = useRef(capabilities);
+  capabilitiesRef.current = capabilities;
+  const shownViewpoints = VIEWPOINTS.filter((item) => capabilities.viewpoints.has(item.id));
+  useEffect(() => {
+    if (!summary) return;
+    const kept = viewpointFor(modeRef.current, capabilities);
+    if (kept !== modeRef.current) {
+      modeRef.current = kept;
+      settleRef.current = true;
+      setViewpoint(kept);
+    }
+  }, [summary, capabilities]);
+
   const reduceMotionRef = useRef(false);
   const lengthRef = useRef(0);
   const loopRef = useRef(loop);
@@ -2255,6 +2272,9 @@ export default function Viewer({
       }
     }
     function chooseViewpoint(next: Viewpoint) {
+      if (!capabilitiesRef.current.viewpoints.has(next)) {
+        return; // this scene has no such view (e.g. Drone without a UAV)
+      }
       const resolved = next === "chase" && modeRef.current === "chase" ? "orbit" : next;
       if (resolved === "orbit") {
         settleRef.current = true;
@@ -4156,7 +4176,7 @@ export default function Viewer({
                   ["map", "Map"],
                   ["axes", "Axes"],
                 ] as const
-              ).map(([key, label]) => (
+              ).filter(([key]) => key !== "frustums" || capabilities.cameras).map(([key, label]) => (
                 <EyeToggle
                   key={key}
                   on={appearance[key]}
@@ -4437,10 +4457,10 @@ export default function Viewer({
               className="glass view-pill"
               role="group"
               aria-label="Viewpoint"
-              style={{ ["--count" as string]: VIEWPOINTS.length, ["--index" as string]: Math.max(0, VIEWPOINTS.findIndex((item) => item.id === viewpoint)) }}
+              style={{ ["--count" as string]: shownViewpoints.length, ["--index" as string]: Math.max(0, shownViewpoints.findIndex((item) => item.id === viewpoint)) }}
             >
               <span className="view-slide" aria-hidden="true" />
-              {VIEWPOINTS.map((item) => (
+              {shownViewpoints.map((item) => (
                 <button
                   key={item.id}
                   type="button"
