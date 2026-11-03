@@ -742,6 +742,13 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
             Err(_) => serde_json::json!({ "job_id": session.job_id, "status": "unknown" }),
         }
     }));
+    let handle_title = app_handle.clone();
+    cfg.viewer_titler = Some(Arc::new(move |scene: String| {
+        use tauri::Manager;
+        if let Some(viewer) = handle_title.get_webview_window("viewer") {
+            let _ = viewer.set_title(&format!("coperceive — {scene}"));
+        }
+    }));
     let handle_prepare = app_handle.clone();
     cfg.scene_preparer = Some(Arc::new(move |scene_id: String| {
         use tauri::{Emitter, Manager};
@@ -2196,6 +2203,28 @@ async fn job_watch_status(
     .map_err(|error| format!("Could not read the job state: {error}"))?
 }
 
+/// State of a dataset prepare job this app submitted (Queued -> Preparing ->
+/// Ready in the dataset view); it must still carry the name the preview gave it.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn dataset_prepare_job_status(
+    profile_id: String,
+    plan_id: String,
+    job_id: String,
+    job_name: String,
+) -> Result<JobWatchStatus, String> {
+    if !job_name.starts_with("coperceive-dataset-") {
+        return Err("Not a dataset preparation job.".to_string());
+    }
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        job_watch::watch_named(&runner, &entry.profile, &plan_id, &job_id, &job_name)
+    })
+    .await
+    .map_err(|error| format!("Could not read the job state: {error}"))?
+}
+
 /// A bounded tail (10..=200 lines) of the run's stdout or stderr log.
 #[cfg(target_os = "macos")]
 #[tauri::command]
@@ -3189,6 +3218,7 @@ fn main() {
             get_camera_images_setting,
             set_camera_images_setting,
             set_viewer_dataset_scenes,
+            dataset_prepare_job_status,
             dataset_previews,
             build_run_plan,
             save_run_plan,

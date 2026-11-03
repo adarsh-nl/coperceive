@@ -589,6 +589,13 @@ export async function getViewerJob(): Promise<ViewerJob | null> {
   return body.session ?? null;
 }
 
+/** Name the viewer window after the scene it shows. */
+export async function setViewerTitle(scene: string): Promise<void> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__ && window.__COPERCEIVE_VIEWER_WINDOW__) {
+    await controllerPost("/viewer-title", { scene });
+  }
+}
+
 /** Ask the main window to show the prepare preview for one scene (confirmed there). */
 export async function prepareSceneInMainWindow(sceneId: string): Promise<boolean> {
   if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {

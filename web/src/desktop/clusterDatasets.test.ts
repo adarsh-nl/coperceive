@@ -7,6 +7,7 @@ import {
   formatIndexHeader,
   indexingLabel,
   viewerStartLabel,
+  wholeDatasetOffer,
   splitErrorText,
   formatDuration,
   formatLicenceInfo,
@@ -502,4 +503,32 @@ test("viewerStartLabel names the queued job and its reason", () => {
     viewerStartLabel({ job_id: null, state: "PENDING", reason: null }),
     "Starting viewer on the cluster (PENDING)",
   );
+});
+
+test("wholeDatasetOffer leads with the whole dataset while nothing is prepared", () => {
+  const index = {
+    schema: "coperceive-cluster-index-1",
+    adapter: "opv2v",
+    raw_root: "/d/opv2v",
+    split: "test",
+    params: {},
+    licence: null,
+    fingerprint: { algorithm: "sha1-mtime-size-v1", digest: "x", entries: 1, truncated: false },
+    cache: { relative_path: "coperceive-cache/opv2v/x/test" },
+    scene_count: 16,
+    estimated_cache_bytes: 21 * 1024 ** 3,
+    scenes: [],
+    errors: [],
+    truncated: false,
+    elapsed_ms: 1,
+  } as unknown as ClusterIndexDocument;
+  const offer = wholeDatasetOffer(index, 0);
+  assert.ok(offer && offer.kind === "offer");
+  assert.strictEqual(offer.button, "Prepare whole dataset (~21.0 GB, 1 CPU job)");
+  assert.match(offer.detail, /all 16 scenes once/);
+  assert.strictEqual(wholeDatasetOffer(index, 3), null);
+  const done = wholeDatasetOffer(index, 16);
+  assert.ok(done && done.kind === "done");
+  assert.match(done.detail, /no further preparation/);
+  assert.strictEqual(wholeDatasetOffer(null, 0), null);
 });

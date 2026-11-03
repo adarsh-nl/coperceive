@@ -34,6 +34,7 @@ import {
   pickSavePath,
   prepareSceneInMainWindow,
   revealInFinder,
+  setViewerTitle,
   saveExportedFile,
   type ViewerJob,
 } from "../desktop/local";
@@ -1338,6 +1339,11 @@ export default function Viewer({
   useEffect(() => {
     if (missingReady) setSceneListRev((rev) => rev + 1);
   }, [missingReady]);
+
+  // The window title follows the scene shown (it kept a previous dataset's name).
+  useEffect(() => {
+    if (sceneId) void setViewerTitle(sceneId).catch(() => undefined);
+  }, [sceneId]);
 
   // "Continue to the next scene automatically": play the next scene from its start.
   useEffect(() => {

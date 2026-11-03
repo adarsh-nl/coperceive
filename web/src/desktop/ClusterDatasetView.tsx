@@ -37,11 +37,14 @@ import {
   type CameraImagesMode,
   type ViewerJobProgress,
   cameraImageChoices,
+  datasetPrepareJobStatus,
+  wholeDatasetOffer,
   listenTauri,
   shareDatasetScenesWithViewer,
   viewerStartLabel,
 } from "./clusterDatasets";
 import { SettingRow } from "./SettingRow";
+import { isJobActive } from "./runPlan";
 import { errorDetails, errorText } from "./errors";
 
 const cardStyle = {
@@ -124,14 +127,26 @@ function CameraImagesChoice({
   );
 }
 
+/** A submitted prepare job that has not reached a scene yet. */
+interface SubmittedJob {
+  jobId: string;
+  planId: string;
+  jobName: string;
+  scenes: string[] | "all";
+  state: string;
+  reason: string | null;
+}
+
 function StatusChip({
   state,
   reason,
   progress,
+  queued,
 }: {
   state: ClusterSceneState;
   reason?: string | null;
   progress?: number | null;
+  queued?: SubmittedJob | null;
 }) {
   let bg = "rgba(255, 255, 255, 0.08)";
   let color = "#8b949e";
@@ -163,13 +178,25 @@ function StatusChip({
       bg = "rgba(255, 255, 255, 0.08)";
       color = "#8b949e";
       label = "Not prepared";
+      if (queued) {
+        // Submitted, waiting for the job to reach this scene.
+        bg = "rgba(56, 139, 253, 0.12)";
+        color = "#79c0ff";
+        label = `Queued (job ${queued.jobId})`;
+      }
       break;
   }
 
   return (
     <span
       role="status"
-      title={reason ? `Failure reason: ${reason}` : undefined}
+      title={
+        reason
+          ? `Failure reason: ${reason}`
+          : queued
+            ? `Prepare job ${queued.jobId}: ${queued.state}${queued.reason ? ` (${queued.reason})` : ""}`
+            : undefined
+      }
       style={{
         ...chipBase,
         backgroundColor: bg,
@@ -241,6 +268,23 @@ export default function ClusterDatasetView({
   const PAGE_SIZE = 50;
 
   const [serverCacheRoot, setServerCacheRoot] = useState<string>("");
+  // Prepare jobs submitted from here, followed until they end, so a scene reads
+  // Queued (job N) -> Preparing -> Ready and polling never stops while one waits.
+  const [submittedJobs, setSubmittedJobs] = useState<SubmittedJob[]>([]);
+  const submittedRef = useRef<SubmittedJob[]>([]);
+  submittedRef.current = submittedJobs;
+  const trackJob = (job: { job_id: string; plan_id: string }, jobName: string, scenes: string[] | "all") => {
+    const entry: SubmittedJob = {
+      jobId: job.job_id,
+      planId: job.plan_id,
+      jobName,
+      scenes,
+      state: "pending",
+      reason: null,
+    };
+    submittedRef.current = [...submittedRef.current, entry];
+    setSubmittedJobs(submittedRef.current);
+  };
 
   // Elapsed time while indexing, so a slow cluster does not look stuck.
   const [indexStartedAt, setIndexStartedAt] = useState(() => Date.now());
@@ -305,11 +349,41 @@ export default function ClusterDatasetView({
         void openSceneInViewerRef.current(idToOpen);
       }
 
+      // Follow submitted jobs until they end; one that ended without preparing
+      // its scenes is reported instead of leaving them "Queued".
+      let activeJobs = 0;
+      if (submittedRef.current.length > 0) {
+        const followed = await Promise.all(
+          submittedRef.current.map(async (job) => {
+            try {
+              const watched = await datasetPrepareJobStatus(profile.id, {
+                plan_id: job.planId,
+                job_id: job.jobId,
+                job_name: job.jobName,
+              });
+              return { ...job, state: String(watched.state), reason: watched.queue_reason ?? null };
+            } catch {
+              return job;
+            }
+          }),
+        );
+        const ended = followed.filter((job) => !isJobActive(job.state));
+        const failed = ended.filter((job) => job.state !== "completed");
+        if (failed.length > 0) {
+          setPrepareOutcome(
+            `Preparation job ${failed.map((job) => `${job.jobId} ended ${job.state}`).join(", ")}. Check the job log on the cluster, then prepare again.`,
+          );
+        }
+        submittedRef.current = followed.filter((job) => isJobActive(job.state));
+        setSubmittedJobs(submittedRef.current);
+        activeJobs = submittedRef.current.length;
+      }
+
       // Check if anything is still preparing
       const hasPreparing = Array.from(nextMap.values()).some(
         (s) => s.state === "preparing",
       );
-      if (!hasPreparing && pollTimerRef.current) {
+      if (!hasPreparing && activeJobs === 0 && pollTimerRef.current) {
         clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
         setIsPolling(false);
@@ -438,7 +512,8 @@ export default function ClusterDatasetView({
   const handleConfirmSingleScenePrepare = async () => {
     if (!singleScenePrepare || !singlePreparePreview) return;
     try {
-      await datasetPrepareSubmit(profile.id, singlePreparePreview.preview_hash, true);
+      const submitted = await datasetPrepareSubmit(profile.id, singlePreparePreview.preview_hash, true);
+      trackJob(submitted, singlePreparePreview.job_name, [singleScenePrepare]);
       setAutoOpenSceneId(singleScenePrepare);
       setSingleScenePrepare(null);
       setSinglePreparePreview(null);
@@ -536,7 +611,8 @@ export default function ClusterDatasetView({
 
     try {
       const res = await datasetPrepareSubmit(profile.id, preparePreview.preview_hash, true);
-      setPrepareOutcome(`Submitted preparation job ${res.job_id}. Ingesting scenes on compute node.`);
+      trackJob(res, preparePreview.job_name, "all");
+      setPrepareOutcome(`Submitted preparation job ${res.job_id}. Scenes show Queued until it reaches them.`);
       setShowPrepareModal(false);
       startPolling();
     } catch (err) {
@@ -620,7 +696,12 @@ export default function ClusterDatasetView({
         </div>
         <div>
           <span style={{ color: "#8b949e" }}>Cache path: </span>
-          <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>{serverCacheRoot || "Loading…"}</span>
+          <span style={{ fontFamily: "monospace", color: "#79c0ff" }}>
+            {serverCacheRoot ||
+              (indexDoc
+                ? `${profile.profile.results_root.replace(/\/+$/, "")}/${indexDoc.cache.relative_path}`
+                : "Known once the scenes are indexed")}
+          </span>
         </div>
         <div>
           <span style={{ color: "#8b949e" }}>Storage estimate: </span>
@@ -647,6 +728,34 @@ export default function ClusterDatasetView({
         </div>
       </div>
 
+      {(() => {
+        const readyCount = Array.from(statuses.values()).filter((entry) => entry.state === "ready").length;
+        const offer = submittedJobs.length > 0 ? null : wholeDatasetOffer(indexDoc, readyCount);
+        if (!offer) return null;
+        if (offer.kind === "done") {
+          return (
+            <p role="status" style={{ margin: "0.6rem 0 0", fontSize: "0.82rem", color: "#7ee787" }}>
+              ✓ {offer.detail}
+            </p>
+          );
+        }
+        return (
+          <div
+            aria-label="Prepare the whole dataset"
+            style={{ marginTop: "0.75rem", padding: "0.75rem 0.9rem", borderRadius: "8px", border: "1px solid #1f6feb", backgroundColor: "rgba(31, 111, 235, 0.10)" }}
+          >
+            <button
+              type="button"
+              style={primaryButton}
+              onClick={() => void handlePrepareWholeDatasetClick()}
+              disabled={!canPrepareWholeDataset(indexDoc, loadingIndex) || showPrepareModal}
+            >
+              {offer.button}
+            </button>
+            <p style={{ margin: "0.4rem 0 0", fontSize: "0.76rem", color: "#c9d1d9" }}>{offer.detail}</p>
+          </div>
+        );
+      })()}
       <p style={{ margin: "0.5rem 0 0", fontSize: "0.76rem", color: "#8b949e" }}>
         Viewing runs a small CPU job on the cluster. It starts with the first scene you open and is reused for the others while it runs.
       </p>
@@ -723,8 +832,11 @@ export default function ClusterDatasetView({
                   border: "1px solid rgba(255,255,255,0.1)",
                   fontSize: "0.72rem",
                   color: "#c9d1d9",
-                  overflowX: "auto",
+                  overflow: "auto",
                   whiteSpace: "pre-wrap",
+                  minHeight: "16em",
+                  maxHeight: "60vh",
+                  resize: "vertical",
                 }}
               >
                 {preparePreview.script}
@@ -790,7 +902,10 @@ export default function ClusterDatasetView({
             previewBytes={singlePreparePreview.estimated_preview_bytes}
             onChange={(mode) => void handleSingleImagesChange(mode)}
           />
-          <pre style={{ margin: "0 0 0.5rem", padding: "0.5rem", borderRadius: "6px", backgroundColor: "rgba(0,0,0,0.5)", fontSize: "0.7rem", color: "#c9d1d9", maxHeight: "100px", overflowY: "auto" }}>
+          <pre
+            aria-label="Prepare scene script"
+            style={{ margin: "0 0 0.5rem", padding: "0.5rem", borderRadius: "6px", backgroundColor: "rgba(0,0,0,0.5)", fontSize: "0.7rem", color: "#c9d1d9", minHeight: "16em", maxHeight: "60vh", overflow: "auto", whiteSpace: "pre-wrap", resize: "vertical" }}
+          >
             {singlePreparePreview.script}
           </pre>
           <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.8rem", color: "#f5f5f7", cursor: "pointer" }}>
@@ -926,6 +1041,13 @@ export default function ClusterDatasetView({
                             state={state}
                             reason={statusEntry?.reason}
                             progress={statusEntry?.progress_percent}
+                            queued={
+                              state === "not_prepared"
+                                ? (submittedJobs.find(
+                                    (job) => job.scenes === "all" || job.scenes.includes(scene.scene_id),
+                                  ) ?? null)
+                                : null
+                            }
                           />
                           {isReady && statusEntry?.images ? (
                             <span
