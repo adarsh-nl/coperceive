@@ -22,6 +22,9 @@ import UpdateBanner from "./UpdateBanner";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import { errorText } from "./errors";
+import { Sidebar } from "./components/Sidebar";
+import { IconButton } from "./components/IconButton";
+import { SettingsModal } from "./SettingsView";
 
 interface ConnectScreenProps {
   onConnected: (session: ConnectionSession) => void;
@@ -52,6 +55,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   }, [activeTab]);
   // Bumped when the Library is asked for again, so it re-reads the scenes.
   const [libraryKey, setLibraryKey] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [dataRoot, setDataRoot] = useState<string>("");
   const [recentRoots, setRecentRoots] = useState<string[]>([]);
   const [status, setStatus] = useState<string>("");
@@ -108,11 +113,29 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       }
     })();
 
-    if (!isTauriEnvironment()) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    if (!isTauriEnvironment()) {
+      return () => {
+        window.removeEventListener("coperceive-test-import", applyTestImport);
+        window.removeEventListener("coperceive-test-panel-state", handleTestPanelState);
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+    }
 
     let unlistenImport: (() => void) | undefined;
     let unlistenGetData: (() => void) | undefined;
     let unlistenLibrary: (() => void) | undefined;
+    let unlistenOpenFolder: (() => void) | undefined;
+    let unlistenHpcWorkspace: (() => void) | undefined;
+    let unlistenToggleSidebar: (() => void) | undefined;
+    let unlistenSettings: (() => void) | undefined;
 
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -127,6 +150,18 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         setActiveTab("library");
         setLibraryKey((key) => key + 1);
       });
+      unlistenOpenFolder = await listen("navigate-open-folder", () => {
+        setActiveTab("local");
+      });
+      unlistenHpcWorkspace = await listen("navigate-hpc-workspace", () => {
+        setActiveTab("remote");
+      });
+      unlistenToggleSidebar = await listen("toggle-sidebar", () => {
+        setSidebarOpen((open) => !open);
+      });
+      unlistenSettings = await listen("open-settings", () => {
+        setSettingsOpen(true);
+      });
     })();
 
     const handleOpenEval = () => {
@@ -138,9 +173,14 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       window.removeEventListener("coperceive-test-import", applyTestImport);
       window.removeEventListener("coperceive-test-panel-state", handleTestPanelState);
       window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
+      window.removeEventListener("keydown", handleKeyDown);
       unlistenImport?.();
       unlistenGetData?.();
       unlistenLibrary?.();
+      unlistenOpenFolder?.();
+      unlistenHpcWorkspace?.();
+      unlistenToggleSidebar?.();
+      unlistenSettings?.();
     };
   }, []);
 
@@ -238,120 +278,205 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       style={{
         position: "relative",
         display: "flex",
-        flexDirection: "column",
-        minHeight: "100vh",
+        height: "100vh",
+        width: "100vw",
+        overflow: "hidden",
         backgroundColor: "var(--bg)",
         color: "var(--text)",
         fontFamily: "'Geist', system-ui, -apple-system, sans-serif",
       }}
     >
-      <UpdateBanner />
-
-      {/* Top Header & Tab Navigation */}
-      <header
-        style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 10,
-          background: "var(--panel)",
-          borderBottom: "1px solid var(--line)",
-          padding: "0.8rem 2rem",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-        }}
-      >
-        <div style={{ display: "flex", alignItems: "center", gap: "2rem" }}>
-          <h1 style={{ fontSize: "1.3rem", margin: 0, fontWeight: 600, color: "var(--text)" }}>
-            <BrandWordmark />
-          </h1>
-
-          <nav style={{ display: "flex", gap: "0.5rem" }} role="tablist" aria-label="Connect navigation">
+      <Sidebar
+        collapsed={!sidebarOpen}
+        onToggle={() => setSidebarOpen((open) => !open)}
+        footer={
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
             <button
               type="button"
-              role="tab"
-              aria-selected={activeTab === "library"}
-              onClick={() => setActiveTab("library")}
+              onClick={() => setSettingsOpen(true)}
+              className="c-sidebar-item"
               style={{
-                background: activeTab === "library" ? "var(--sunken)" : "transparent",
-                color: activeTab === "library" ? "var(--text)" : "var(--muted)",
-                border: activeTab === "library" ? "1px solid var(--line)" : "1px solid transparent",
-                borderRadius: "6px",
-                padding: "0.4rem 0.8rem",
-                fontSize: "0.85rem",
-                fontWeight: activeTab === "library" ? 600 : 400,
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+                background: "transparent",
+                border: "none",
+                color: "var(--text-secondary)",
+                padding: "6px 8px",
+                borderRadius: "var(--radius-md)",
                 cursor: "pointer",
+                fontSize: "12.5px",
+                width: "100%",
+                textAlign: "left",
               }}
             >
-              Library
+              <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+                <path d="M8 4.75a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5zM6 8a2 2 0 1 1 4 0 2 2 0 0 1-4 0z" />
+                <path d="M9.22 1.077a1.75 1.75 0 0 0-2.44 0l-.287.288a1.75 1.75 0 0 1-1.428.514l-.403-.048a1.75 1.75 0 0 0-1.724 1.724l.048.403a1.75 1.75 0 0 1-.514 1.428l-.288.287a1.75 1.75 0 0 0 0 2.44l.288.287a1.75 1.75 0 0 1 .514 1.428l-.048.403a1.75 1.75 0 0 0 1.724 1.724l.403-.048a1.75 1.75 0 0 1 1.428.514l.287.288a1.75 1.75 0 0 0 2.44 0l.287-.288a1.75 1.75 0 0 1 1.428-.514l.403.048a1.75 1.75 0 0 0 1.724-1.724l-.048-.403a1.75 1.75 0 0 1 .514-1.428l.288-.287a1.75 1.75 0 0 0 0-2.44l-.288-.287a1.75 1.75 0 0 1-.514-1.428l.048-.403a1.75 1.75 0 0 0-1.724-1.724l-.403.048a1.75 1.75 0 0 1-1.428-.514l-.287-.288z" />
+              </svg>
+              <span>Settings</span>
+              <span style={{ marginLeft: "auto", fontSize: "11px", color: "var(--text-subtle)", fontFamily: "'Geist Mono', monospace" }}>⌘,</span>
             </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === "get_data"}
-              onClick={() => setActiveTab("get_data")}
-              style={{
-                background: activeTab === "get_data" ? "var(--sunken)" : "transparent",
-                color: activeTab === "get_data" ? "var(--text)" : "var(--muted)",
-                border: activeTab === "get_data" ? "1px solid var(--line)" : "1px solid transparent",
-                borderRadius: "6px",
-                padding: "0.4rem 0.8rem",
-                fontSize: "0.85rem",
-                fontWeight: activeTab === "get_data" ? 600 : 400,
-                cursor: "pointer",
-              }}
-            >
-              Get Data
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === "local"}
-              onClick={() => setActiveTab("local")}
-              style={{
-                background: activeTab === "local" ? "var(--sunken)" : "transparent",
-                color: activeTab === "local" ? "var(--text)" : "var(--muted)",
-                border: activeTab === "local" ? "1px solid var(--line)" : "1px solid transparent",
-                borderRadius: "6px",
-                padding: "0.4rem 0.8rem",
-                fontSize: "0.85rem",
-                fontWeight: activeTab === "local" ? 600 : 400,
-                cursor: "pointer",
-              }}
-            >
-              Open Folder
-            </button>
-            <button
-              type="button"
-              role="tab"
-              aria-selected={activeTab === "remote"}
-              onClick={() => setActiveTab("remote")}
-              style={{
-                background: activeTab === "remote" ? "var(--sunken)" : "transparent",
-                color: activeTab === "remote" ? "var(--text)" : "var(--muted)",
-                border: activeTab === "remote" ? "1px solid var(--line)" : "1px solid transparent",
-                borderRadius: "6px",
-                padding: "0.4rem 0.8rem",
-                fontSize: "0.85rem",
-                fontWeight: activeTab === "remote" ? 600 : 400,
-                cursor: "pointer",
-              }}
-            >
-              HPC Workspace
-            </button>
-          </nav>
-          <JobsIndicator onOpenWorkspace={() => setActiveTab("remote")} />
-        </div>
-
-        {status && (
-          <div style={{ fontSize: "0.85rem", color: "#1f6feb", fontWeight: 500 }}>
-            {status}
           </div>
-        )}
-      </header>
+        }
+      >
+        <div style={{ padding: "6px 8px 4px", fontSize: "11px", fontWeight: 500, color: "var(--text-subtle)", letterSpacing: "0.04em" }}>
+          NAVIGATION
+        </div>
+        <nav style={{ display: "flex", flexDirection: "column", gap: "2px" }} role="tablist" aria-label="Connect navigation">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "library"}
+            onClick={() => setActiveTab("library")}
+            className={`c-sidebar-item ${activeTab === "library" ? "active" : ""}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 10px",
+              borderRadius: "var(--radius-md, 6px)",
+              fontSize: "13px",
+              fontWeight: activeTab === "library" ? 500 : 400,
+              color: activeTab === "library" ? "var(--text)" : "var(--text-secondary)",
+              backgroundColor: activeTab === "library" ? "var(--line, rgba(255, 255, 255, 0.08))" : "transparent",
+              border: "none",
+              cursor: "pointer",
+              textAlign: "left",
+              width: "100%",
+            }}
+          >
+            <span>Library</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "get_data"}
+            onClick={() => setActiveTab("get_data")}
+            className={`c-sidebar-item ${activeTab === "get_data" ? "active" : ""}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 10px",
+              borderRadius: "var(--radius-md, 6px)",
+              fontSize: "13px",
+              fontWeight: activeTab === "get_data" ? 500 : 400,
+              color: activeTab === "get_data" ? "var(--text)" : "var(--text-secondary)",
+              backgroundColor: activeTab === "get_data" ? "var(--line, rgba(255, 255, 255, 0.08))" : "transparent",
+              border: "none",
+              cursor: "pointer",
+              textAlign: "left",
+              width: "100%",
+            }}
+          >
+            <span>Get Data</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "local"}
+            onClick={() => setActiveTab("local")}
+            className={`c-sidebar-item ${activeTab === "local" ? "active" : ""}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 10px",
+              borderRadius: "var(--radius-md, 6px)",
+              fontSize: "13px",
+              fontWeight: activeTab === "local" ? 500 : 400,
+              color: activeTab === "local" ? "var(--text)" : "var(--text-secondary)",
+              backgroundColor: activeTab === "local" ? "var(--line, rgba(255, 255, 255, 0.08))" : "transparent",
+              border: "none",
+              cursor: "pointer",
+              textAlign: "left",
+              width: "100%",
+            }}
+          >
+            <span>Open Folder</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeTab === "remote"}
+            onClick={() => setActiveTab("remote")}
+            className={`c-sidebar-item ${activeTab === "remote" ? "active" : ""}`}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              padding: "6px 10px",
+              borderRadius: "var(--radius-md, 6px)",
+              fontSize: "13px",
+              fontWeight: activeTab === "remote" ? 500 : 400,
+              color: activeTab === "remote" ? "var(--text)" : "var(--text-secondary)",
+              backgroundColor: activeTab === "remote" ? "var(--line, rgba(255, 255, 255, 0.08))" : "transparent",
+              border: "none",
+              cursor: "pointer",
+              textAlign: "left",
+              width: "100%",
+            }}
+          >
+            <span>HPC Workspace</span>
+          </button>
+        </nav>
+      </Sidebar>
 
-      {/* Main Content Area */}
-      <main style={{ flex: 1, position: "relative", zIndex: 1, padding: "1.5rem 0" }}>
+      <div style={{ display: "flex", flexDirection: "column", flex: 1, minWidth: 0, minHeight: 0, overflow: "hidden" }}>
+        {/* Top Header */}
+        <header
+          data-tauri-drag-region
+          style={{
+            height: "52px",
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: !sidebarOpen ? "0 20px 0 0" : "0 20px",
+            borderBottom: "1px solid var(--line, rgba(255, 255, 255, 0.08))",
+            backgroundColor: "var(--panel, #1a1a1c)",
+            zIndex: 10,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+            {!sidebarOpen && (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div data-tauri-drag-region className="traffic-lights-spacer" style={{ width: "78px", flexShrink: 0, height: "100%" }} aria-hidden="true" />
+                <IconButton size="sm" label="Open sidebar (⌘\)" onClick={() => setSidebarOpen(true)}>
+                  <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                    <path d="M1.5 2.5A1 1 0 0 1 2.5 1.5h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11zm1 0v11h3.5v-11h-3.5zm4.5 0v11h6.5v-11H7z" />
+                  </svg>
+                </IconButton>
+                <BrandWordmark fontSize="14px" />
+              </div>
+            )}
+            <h1 style={{ fontSize: "15px", fontWeight: 600, margin: 0, color: "var(--text)" }}>
+              {activeTab === "library" && "Library"}
+              {activeTab === "get_data" && "Get Data"}
+              {activeTab === "local" && "Open Local Folder"}
+              {activeTab === "remote" && "HPC Workspace"}
+            </h1>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
+            {status && (
+              <div style={{ fontSize: "0.85rem", color: "var(--primary, #1f6feb)", fontWeight: 500 }}>
+                {status}
+              </div>
+            )}
+            <JobsIndicator onOpenWorkspace={() => setActiveTab("remote")} />
+            <IconButton size="sm" label="Settings (⌘,)" onClick={() => setSettingsOpen(true)}>
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                <path d="M8 4.75a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5zM6 8a2 2 0 1 1 4 0 2 2 0 0 1-4 0z" />
+                <path d="M9.22 1.077a1.75 1.75 0 0 0-2.44 0l-.287.288a1.75 1.75 0 0 1-1.428.514l-.403-.048a1.75 1.75 0 0 0-1.724 1.724l.048.403a1.75 1.75 0 0 1-.514 1.428l-.288.287a1.75 1.75 0 0 0 0 2.44l.288.287a1.75 1.75 0 0 1 .514 1.428l-.048.403a1.75 1.75 0 0 0 1.724 1.724l.403-.048a1.75 1.75 0 0 1 1.428.514l.287.288a1.75 1.75 0 0 0 2.44 0l.287-.288a1.75 1.75 0 0 1 1.428-.514l.403.048a1.75 1.75 0 0 0 1.724-1.724l-.048-.403a1.75 1.75 0 0 1 .514-1.428l.288-.287a1.75 1.75 0 0 0 0-2.44l-.288-.287a1.75 1.75 0 0 1-.514-1.428l.048-.403a1.75 1.75 0 0 0-1.724-1.724l-.403.048a1.75 1.75 0 0 1-1.428-.514l-.287-.288z" />
+              </svg>
+            </IconButton>
+          </div>
+        </header>
+
+        <main style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative" }}>
+          <UpdateBanner />
         {/* Every tab stays mounted (hidden when not shown): an open dataset,
             scroll and filters survive switching tabs. */}
         <div className="tab-panel" hidden={activeTab !== "library"}>
@@ -738,6 +863,9 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           </div>
         )}
       </main>
+      </div>
+
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
   );
 }

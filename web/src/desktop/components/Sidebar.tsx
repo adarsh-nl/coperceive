@@ -1,0 +1,146 @@
+// SPDX-License-Identifier: Apache-2.0
+import React, { useEffect } from "react";
+import { BrandWordmark } from "../Brand";
+import { IconButton } from "./IconButton";
+
+export interface SidebarProps {
+  collapsed: boolean;
+  onToggle: () => void;
+  headerRight?: React.ReactNode;
+  children: React.ReactNode;
+  footer?: React.ReactNode;
+  className?: string;
+  style?: React.CSSProperties;
+}
+
+export function Sidebar({
+  collapsed,
+  onToggle,
+  headerRight,
+  children,
+  footer,
+  className = "",
+  style,
+}: SidebarProps) {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // ⌘\ on Mac or Ctrl+\ on Windows/Linux
+      if ((e.metaKey || e.ctrlKey) && e.key === "\\") {
+        e.preventDefault();
+        onToggle();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [onToggle]);
+
+  return (
+    <aside
+      className={`c-sidebar ${collapsed ? "collapsed" : ""} ${className}`.trim()}
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        width: collapsed ? "0px" : "236px",
+        minWidth: collapsed ? "0px" : "236px",
+        maxWidth: collapsed ? "0px" : "236px",
+        height: "100%",
+        backgroundColor: "var(--sidebar-bg, #1a1a1c)",
+        borderRight: collapsed ? "none" : "1px solid var(--line, rgba(255,255,255,0.08))",
+        overflow: "hidden",
+        transition: "width 0.2s cubic-bezier(0.16, 1, 0.3, 1), min-width 0.2s cubic-bezier(0.16, 1, 0.3, 1)",
+        userSelect: "none",
+        position: "relative",
+        zIndex: 5,
+        ...style,
+      }}
+    >
+      {/* Top Header with macOS traffic lights spacing and brand wordmark */}
+      <div
+        data-tauri-drag-region
+        style={{
+          height: "52px",
+          display: "flex",
+          alignItems: "center",
+          gap: "8px",
+          padding: "0 14px 0 0",
+          flexShrink: 0,
+          borderBottom: "1px solid var(--line-subtle, rgba(255,255,255,0.04))",
+        }}
+      >
+        {/* macOS traffic lights safe area (width 78px starting at x=0 to ensure zero overlap) */}
+        <div
+          data-tauri-drag-region
+          className="traffic-lights-spacer"
+          style={{ width: "78px", flexShrink: 0, height: "100%" }}
+          aria-hidden="true"
+        />
+
+        {/* Toggle sidebar button right next to traffic lights */}
+        <div style={{ flexShrink: 0 }}>
+          <IconButton
+            size="sm"
+            label="Toggle sidebar (⌘\)"
+            onClick={onToggle}
+            data-tauri-drag-region="false"
+          >
+            <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+              <path d="M1.5 2.5A1 1 0 0 1 2.5 1.5h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11zm1 0v11h3.5v-11h-3.5zm4.5 0v11h6.5v-11H7z" />
+            </svg>
+          </IconButton>
+        </div>
+
+        {/* Brand wordmark to the right of traffic lights & toggle */}
+        <div
+          data-tauri-drag-region
+          style={{
+            display: "flex",
+            alignItems: "center",
+            fontSize: "14px",
+            minWidth: 0,
+            overflow: "hidden",
+          }}
+        >
+          <BrandWordmark fontSize="14px" />
+        </div>
+
+        {headerRight && (
+          <div style={{ marginLeft: "auto", flexShrink: 0 }}>
+            {headerRight}
+          </div>
+        )}
+      </div>
+
+      {/* Main navigation / content */}
+      <div
+        className="c-sidebar-content"
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          overflowX: "hidden",
+          padding: "8px 10px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "2px",
+        }}
+      >
+        {children}
+      </div>
+
+      {/* Optional bottom footer */}
+      {footer && (
+        <div
+          className="c-sidebar-footer"
+          style={{
+            marginTop: "auto",
+            borderTop: "1px solid var(--line, rgba(255,255,255,0.08))",
+            padding: "12px 14px",
+            fontSize: "11.5px",
+            flexShrink: 0,
+          }}
+        >
+          {footer}
+        </div>
+      )}
+    </aside>
+  );
+}

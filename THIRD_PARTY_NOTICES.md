@@ -49,6 +49,22 @@ The browser build bundles the direct `web/` dependencies. Their `package.json` l
 | @radix-ui/react-label | MIT |
 | openapi-fetch | MIT |
 | three | MIT |
+| @fontsource-variable/geist, @fontsource-variable/geist-mono | OFL-1.1 |
 | @fontsource/ibm-plex-sans, @fontsource/ibm-plex-mono | OFL-1.1 |
 
 Transitive licences ship inside the built assets. `web/node_modules` is not committed.
+
+## Bundled Fonts: Geist and Geist Mono
+
+The desktop and web applications bundle Geist and Geist Mono variable fonts offline via `@fontsource-variable/geist` and `@fontsource-variable/geist-mono` (version 5.3.0). No runtime requests are made to Google Fonts or other CDN endpoints.
+
+- **Source:** https://github.com/vercel/geist-font (packaged at https://fontsource.org/fonts/geist and https://fontsource.org/fonts/geist-mono)
+- **Version:** 5.3.0
+- **Licence:** SIL Open Font License, Version 1.1 (OFL-1.1)
+
+```
+Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font)
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is available with a FAQ at: http://scripts.sil.org/OFL
+```

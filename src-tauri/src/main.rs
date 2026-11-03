@@ -1037,6 +1037,7 @@ fn build_app_menu(
     // File Submenu
     let mut file_builder = SubmenuBuilder::new(app, "File")
         .item(&MenuItem::with_id(app, "open_dataset", "Open Dataset…", true, Some("CmdOrControl+O"))?)
+        .item(&MenuItem::with_id(app, "open_hpc_dataset", "Open HPC Dataset…", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "get_data", "Get Data…", true, Some("CmdOrControl+G"))?)
         .item(&MenuItem::with_id(
             app,
@@ -1075,6 +1076,13 @@ fn build_app_menu(
 
     // View Submenu
     let view_submenu = SubmenuBuilder::new(app, "View")
+        .item(&MenuItem::with_id(app, "view_library", "Library", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "view_get_data", "Get Data", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "view_open_folder", "Open Folder", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "view_hpc_workspace", "HPC Workspace", true, None::<&str>)?)
+        .separator()
+        .item(&MenuItem::with_id(app, "toggle_sidebar", "Toggle Sidebar", true, Some("CmdOrControl+\\"))?)
+        .separator()
         .item(&MenuItem::with_id(app, "viewpoint_orbit", "Orbit", true, Some("1"))?)
         .item(&MenuItem::with_id(app, "viewpoint_chase", "Chase", true, Some("2"))?)
         .item(&MenuItem::with_id(app, "viewpoint_drone", "Drone", true, Some("3"))?)
@@ -4129,6 +4137,52 @@ fn main() {
                     tauri::async_runtime::spawn(async move {
                         trigger_open_dataset_dialog(&handle, &st).await;
                     });
+                }
+                "open_hpc_dataset" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("navigate-hpc-workspace", ());
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                    }
+                }
+                "view_library" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("navigate-library", ());
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                    }
+                }
+                "view_get_data" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("navigate-get-data", ());
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                    }
+                }
+                "view_open_folder" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("navigate-open-folder", ());
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                    }
+                }
+                "view_hpc_workspace" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("navigate-hpc-workspace", ());
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                    }
+                }
+                "toggle_sidebar" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.emit("toggle-sidebar", ());
+                    }
                 }
                 "import_folder" => {
                     use tauri::Emitter;
