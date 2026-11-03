@@ -16,6 +16,7 @@ import {
   testServerConnection,
 } from "./local";
 import HpcBrowse from "./HpcBrowse";
+import { ImportPanel, SharePanel } from "./LabShare";
 import {
   applyDiscovery,
   emptyEntry,
@@ -117,6 +118,8 @@ export default function HpcServers() {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
+  const [shareEntry, setShareEntry] = useState<ServerEntry | null>(null);
+  const [importing, setImporting] = useState(false);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
 
   const refreshServers = async () => {
@@ -307,9 +310,22 @@ export default function HpcServers() {
               a password or a private key.
             </p>
           </div>
-          <button type="button" onClick={startAdd} style={primaryButton}>
-            Add server
-          </button>
+          <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => {
+                setImporting(true);
+                setShareEntry(null);
+                setError("");
+              }}
+              style={secondaryButton}
+            >
+              Import lab profile
+            </button>
+            <button type="button" onClick={startAdd} style={primaryButton}>
+              Add server
+            </button>
+          </div>
         </div>
       </div>
 
@@ -413,6 +429,18 @@ export default function HpcServers() {
                   style={secondaryButton}
                   disabled={busy !== null}
                   onClick={() => {
+                    setShareEntry(entry);
+                    setImporting(false);
+                    setError("");
+                  }}
+                >
+                  Share with your lab…
+                </button>
+                <button
+                  type="button"
+                  style={secondaryButton}
+                  disabled={busy !== null}
+                  onClick={() => {
                     setDraft(entry);
                     setReport(null);
                     setError("");
@@ -457,6 +485,32 @@ export default function HpcServers() {
 
       {browseProfile ? (
         <HpcBrowse profile={browseProfile} onClose={() => setBrowseProfile(null)} />
+      ) : null}
+
+      {shareEntry ? (
+        <div style={card}>
+          <SharePanel
+            entry={shareEntry}
+            onClose={() => setShareEntry(null)}
+            onSaved={(message) => {
+              setNote(message);
+              setShareEntry(null);
+            }}
+          />
+        </div>
+      ) : null}
+
+      {importing ? (
+        <div style={card}>
+          <ImportPanel
+            onClose={() => setImporting(false)}
+            onSaved={(message) => {
+              setNote(message);
+              setImporting(false);
+              void refreshServers();
+            }}
+          />
+        </div>
       ) : null}
 
       {draft ? (

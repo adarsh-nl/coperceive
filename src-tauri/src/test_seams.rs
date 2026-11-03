@@ -237,6 +237,24 @@ pub fn hpc_scan_probe_request() -> Option<HpcScanProbe> {
     })
 }
 
+/// Test-only lab-profile export/import. `COPERCEIVE_TEST_HPC_SHARE_SERVER` is a
+/// ServerEntry fixture and `COPERCEIVE_TEST_HPC_SHARE_RESULT` is where the
+/// round-trip JSON is written. Production launches never set these.
+pub fn hpc_share_probe_request() -> Option<(std::path::PathBuf, std::path::PathBuf)> {
+    if !test_env_active() {
+        return None;
+    }
+    let server = std::env::var("COPERCEIVE_TEST_HPC_SHARE_SERVER").ok()?;
+    let result = std::env::var("COPERCEIVE_TEST_HPC_SHARE_RESULT").ok()?;
+    if server.trim().is_empty() || result.trim().is_empty() {
+        return None;
+    }
+    Some((
+        std::path::PathBuf::from(server),
+        std::path::PathBuf::from(result),
+    ))
+}
+
 /// Test-only request for the packaged-app cluster-dataset flow: read
 /// `{"server": <ServerEntry fixture path>, "steps": [{"command": "dataset_detect",
 /// "args": {...}}, ...]}`, save the server, call the real Tauri dataset commands

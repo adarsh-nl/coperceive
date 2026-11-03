@@ -482,10 +482,72 @@ PY
     echo "Step verified: HPC server save, reload, list and edit."
 }
 
+run_share() {
+    local fixture="${FIXTURES_DIR}/cluster-b.json"
+    local result_file="${TMP_DIR}/share.json"
+    local stdout_log="${TMP_DIR}/share.stdout.log"
+    local stderr_log="${TMP_DIR}/share.stderr.log"
+    rm -f "${result_file}"
+    echo "--- HPC lab profile export/import for cluster-b ---"
+    COPERCEIVE_TEST_ENV=1 \
+    COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
+    COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
+    COPERCEIVE_TEST_HPC_SHARE_SERVER="${fixture}" \
+    COPERCEIVE_TEST_HPC_SHARE_RESULT="${result_file}" \
+    "${APP_EXE}" >"${stdout_log}" 2>"${stderr_log}" &
+    APP_PID=$!
+    local waited=0
+    while [ ! -s "${result_file}" ]; do
+        if ! kill -0 "${APP_PID}" 2>/dev/null; then
+            fail "app exited before writing the lab profile result"
+        fi
+        if [ "${waited}" -ge 300 ]; then
+            fail "timed out waiting for the lab profile result"
+        fi
+        sleep 0.2
+        waited=$((waited + 1))
+    done
+    kill -9 "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+    APP_PID=""
+    python3 - "${result_file}" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    data = json.load(handle)
+if not data.get("ok"):
+    print(f"E2E_SHARE_FAIL: {data.get('error')}", file=sys.stderr)
+    sys.exit(1)
+rendered = json.dumps(data)
+for forbidden in ("alice", "bob", "password", "private_key", "secret", "bearer"):
+    if forbidden in rendered.lower():
+        print(f"E2E_SHARE_FAIL: result contains {forbidden}", file=sys.stderr)
+        sys.exit(1)
+if data.get("ssh_alias") != "student-cluster":
+    print(f"E2E_SHARE_FAIL: ssh alias {data.get('ssh_alias')!r}", file=sys.stderr)
+    sys.exit(1)
+if data.get("scratch_template") != "/scratch/$USER/$SLURM_JOB_ID":
+    print(f"E2E_SHARE_FAIL: scratch {data.get('scratch_template')!r}", file=sys.stderr)
+    sys.exit(1)
+command = data.get("command") or []
+if not command or not str(command[0]).startswith("/home/sam/"):
+    print(f"E2E_SHARE_FAIL: command {command!r}", file=sys.stderr)
+    sys.exit(1)
+print(
+    "E2E_SHARE_MARK: lab profile export/import verified "
+    f"(alias={data['ssh_alias']}, scratch={data['scratch_template']}, "
+    f"command={command[0]})"
+)
+PY
+    echo "Step verified: lab profile export and import dropped the shared user name."
+}
+
 # Repo-relative app path is easier to find when CI builds from a subdirectory;
 # run from the repository root so relative fixtures resolve the same way.
 run_profile cluster-a
 run_profile cluster-b
+run_share
 run_profile cluster-none
 
 # The "New evaluation" run plan against the same fake cluster: builds, checks
