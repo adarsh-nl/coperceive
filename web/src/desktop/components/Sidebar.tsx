@@ -75,8 +75,23 @@ export function Sidebar({
           aria-hidden="true"
         />
 
-        {/* Toggle sidebar button right next to traffic lights */}
-        <div style={{ flexShrink: 0 }}>
+        {/* Brand wordmark to the right of traffic lights */}
+        <div
+          data-tauri-drag-region
+          style={{
+            display: "flex",
+            alignItems: "center",
+            fontSize: "13px",
+            minWidth: 0,
+            overflow: "hidden",
+          }}
+        >
+          <BrandWordmark fontSize="13px" />
+        </div>
+
+        {/* Right controls: optional headerRight + Toggle sidebar button */}
+        <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: "4px", flexShrink: 0 }}>
+          {headerRight}
           <IconButton
             size="sm"
             label="Toggle sidebar (⌘\)"
@@ -88,26 +103,6 @@ export function Sidebar({
             </svg>
           </IconButton>
         </div>
-
-        {/* Brand wordmark to the right of traffic lights & toggle */}
-        <div
-          data-tauri-drag-region
-          style={{
-            display: "flex",
-            alignItems: "center",
-            fontSize: "14px",
-            minWidth: 0,
-            overflow: "hidden",
-          }}
-        >
-          <BrandWordmark fontSize="14px" />
-        </div>
-
-        {headerRight && (
-          <div style={{ marginLeft: "auto", flexShrink: 0 }}>
-            {headerRight}
-          </div>
-        )}
       </div>
 
       {/* Main navigation / content */}

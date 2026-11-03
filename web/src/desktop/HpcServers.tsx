@@ -37,68 +37,71 @@ import {
 } from "./hpc";
 import { errorText } from "./errors";
 
-const card = {
-  backgroundColor: "rgba(28, 28, 30, 0.85)",
-  border: "1px solid rgba(255, 255, 255, 0.14)",
-  borderRadius: "14px",
-  padding: "1.25rem",
-  boxShadow: "0 20px 50px rgba(0, 0, 0, 0.45)",
-} as const;
-
 const input = {
   width: "100%",
-  boxSizing: "border-box",
-  padding: "0.45rem 0.6rem",
-  fontSize: "0.85rem",
+  boxSizing: "border-box" as const,
+  padding: "5px 9px",
+  fontSize: "12.5px",
   borderRadius: "6px",
-  border: "1px solid rgba(255, 255, 255, 0.14)",
-  backgroundColor: "rgba(0, 0, 0, 0.5)",
-  color: "#f5f5f7",
-} as const;
+  border: "1px solid var(--line-elevated, rgba(255, 255, 255, 0.14))",
+  backgroundColor: "var(--sunken)",
+  color: "var(--text)",
+};
 
 const labelStyle = {
   display: "block",
-  fontSize: "0.72rem",
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-  color: "#86868b",
-  marginBottom: "0.25rem",
+  fontSize: "11px",
+  fontWeight: 500,
+  color: "var(--text-subtle)",
+  marginBottom: "4px",
 } as const;
 
-const field = { marginBottom: "0.75rem" } as const;
+const field = { marginBottom: "10px" } as const;
 
 const primaryButton = {
-  padding: "0.5rem 0.9rem",
+  padding: "6px 14px",
   borderRadius: "6px",
   border: "none",
-  backgroundColor: "#1f6feb",
+  backgroundColor: "var(--primary, #1f6feb)",
   color: "#fff",
-  fontSize: "0.85rem",
+  fontSize: "13px",
   fontWeight: 500,
   cursor: "pointer",
 } as const;
 
 const secondaryButton = {
-  padding: "0.45rem 0.8rem",
-  borderRadius: "6px",
-  border: "1px solid rgba(255, 255, 255, 0.18)",
+  padding: "4px 10px",
+  borderRadius: "5px",
+  border: "1px solid var(--line-elevated, rgba(255, 255, 255, 0.14))",
   backgroundColor: "transparent",
-  color: "#f5f5f7",
-  fontSize: "0.8rem",
+  color: "var(--text)",
+  fontSize: "12px",
+  fontWeight: 500,
   cursor: "pointer",
+  whiteSpace: "nowrap" as const,
 } as const;
 
-function CheckRow({ ok, label, detail, hint }: { ok: boolean; label: string; detail: string; hint?: string | null }) {
+function CheckRow({
+  ok,
+  label,
+  detail,
+  hint,
+}: {
+  ok: boolean;
+  label: string;
+  detail: string;
+  hint?: string | null;
+}) {
   return (
-    <div style={{ display: "flex", gap: "0.5rem", padding: "0.35rem 0", fontSize: "0.82rem" }}>
-      <span aria-hidden style={{ color: ok ? "#3fb950" : "#f0883e", flex: "0 0 auto" }}>
+    <div style={{ display: "flex", gap: "8px", padding: "4px 0", fontSize: "12px" }}>
+      <span aria-hidden style={{ color: ok ? "var(--ok)" : "var(--vehicle)", flex: "0 0 auto" }}>
         {ok ? "✓" : "!"}
       </span>
       <div>
-        <span style={{ color: ok ? "#f5f5f7" : "#ffb86b", fontWeight: 500 }}>{label}</span>
-        <span style={{ color: "#a1a1a6" }}> — {detail}</span>
+        <span style={{ color: ok ? "var(--text)" : "var(--vehicle)", fontWeight: 500 }}>{label}</span>
+        <span style={{ color: "var(--text-tertiary)" }}> — {detail}</span>
         {!ok && hint ? (
-          <div style={{ color: "#8b949e", marginTop: "0.15rem" }}>{hint}</div>
+          <div style={{ color: "var(--text-subtle)", marginTop: "2px" }}>{hint}</div>
         ) : null}
       </div>
     </div>
@@ -119,6 +122,13 @@ export default function HpcServers() {
   const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
 
+  const updateProfilesList = (next: ServerEntry[]) => {
+    setProfiles(next);
+    window.dispatchEvent(
+      new CustomEvent("coperceive-hpc-profiles-updated", { detail: { profiles: next } }),
+    );
+  };
+
   const refreshServers = async () => {
     setLoading(true);
     setLoadError(null);
@@ -127,7 +137,7 @@ export default function HpcServers() {
         listServerProfiles(),
         listSshConfigHosts(),
       ]);
-      setProfiles(loadedProfiles);
+      updateProfilesList(loadedProfiles);
       setHosts(loadedHosts);
     } catch (e) {
       setLoadError(errorText(e));
@@ -138,6 +148,40 @@ export default function HpcServers() {
 
   useEffect(() => {
     void refreshServers();
+  }, []);
+
+  useEffect(() => {
+    const handleSeed = (event: Event) => {
+      const custom = event as CustomEvent<{ profiles?: ServerEntry[]; hosts?: string[] }>;
+      if (custom.detail?.profiles !== undefined) {
+        updateProfilesList(custom.detail.profiles);
+        setLoading(false);
+        setLoadError(null);
+      }
+      if (custom.detail?.hosts) {
+        setHosts(custom.detail.hosts);
+      }
+    };
+    const handleAddServer = () => {
+      setDraft(emptyEntry());
+      setReport(null);
+      setError("");
+      setNote("");
+    };
+    const handleBrowseServer = (event: Event) => {
+      const custom = event as CustomEvent<{ profile?: ServerEntry }>;
+      if (custom.detail?.profile) {
+        setBrowseProfile(custom.detail.profile);
+      }
+    };
+    window.addEventListener("coperceive-test-hpc-servers-seed", handleSeed);
+    window.addEventListener("coperceive-hpc-add-server", handleAddServer);
+    window.addEventListener("coperceive-hpc-browse-server", handleBrowseServer);
+    return () => {
+      window.removeEventListener("coperceive-test-hpc-servers-seed", handleSeed);
+      window.removeEventListener("coperceive-hpc-add-server", handleAddServer);
+      window.removeEventListener("coperceive-hpc-browse-server", handleBrowseServer);
+    };
   }, []);
 
   const updateProfile = (patch: Partial<ServerEntry["profile"]>) => {
@@ -231,7 +275,9 @@ export default function HpcServers() {
   const applyDetected = () => {
     if (!draft || !report) return;
     setDraft(applyDiscovery(draft, report));
-    setNote("Detected settings were applied where you had not chosen a value. You can change anything below.");
+    setNote(
+      "Detected settings were applied where you had not chosen a value. You can change anything below.",
+    );
   };
 
   const save = async () => {
@@ -248,7 +294,7 @@ export default function HpcServers() {
     setBusy("save");
     try {
       const saved = await saveServerProfile(draft);
-      setProfiles(await listServerProfiles());
+      updateProfilesList(await listServerProfiles());
       setDraft(saved);
       setNote(`Saved “${saved.profile.name}”.`);
     } catch (e) {
@@ -261,12 +307,16 @@ export default function HpcServers() {
   };
 
   const remove = async (entry: ServerEntry) => {
-    if (!window.confirm(`Remove the server “${entry.profile.name}”? Saved data folders are not touched.`)) {
+    if (
+      !window.confirm(
+        `Remove the server “${entry.profile.name}”? Saved data folders are not touched.`,
+      )
+    ) {
       return;
     }
     try {
       await deleteServerProfile(entry.id);
-      setProfiles(await listServerProfiles());
+      updateProfilesList(await listServerProfiles());
       if (draft?.id === entry.id) setDraft(null);
     } catch (e) {
       setError(errorText(e));
@@ -282,7 +332,10 @@ export default function HpcServers() {
 
   const discoveredPartitions = draft?.discovered?.partitions ?? [];
   const partitionChoices = [
-    ...new Set([...partitionNames(draft ?? emptyEntry()), ...discoveredPartitions.map((p) => p.name)]),
+    ...new Set([
+      ...partitionNames(draft ?? emptyEntry()),
+      ...discoveredPartitions.map((p) => p.name),
+    ]),
   ];
   const gpuChoices = gpuTypesFor(draft ?? emptyEntry(), draft?.profile.defaults.partition ?? null);
   const selectedGpu = (() => {
@@ -294,175 +347,335 @@ export default function HpcServers() {
   })();
 
   return (
-    <div style={{ maxWidth: "760px", margin: "0 auto", padding: "0 1.5rem 3rem", width: "100%" }}>
-      <div style={{ ...card, marginBottom: "1rem" }}>
-        <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "flex-start" }}>
-          <div>
-            <h2 style={{ fontSize: "1.2rem", margin: "0 0 0.35rem", color: "#f5f5f7", fontWeight: 600 }}>
-              Remote HPC workspace
-            </h2>
-            <p style={{ fontSize: "0.85rem", color: "#86868b", margin: 0, maxWidth: "34rem" }}>
-              Connect your own cluster over SSH. Sign-in uses your own ssh-agent and
-              <code style={{ margin: "0 0.25rem" }}>~/.ssh/config</code> — Coperceive never asks for
-              a password or a private key.
-            </p>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 52px)", fontSize: "13px" }}>
+      {/* Compact Page Header */}
+      <section
+        style={{
+          padding: "18px 24px 14px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+          borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            gap: "16px",
+            alignItems: "flex-start",
+            flexWrap: "wrap",
+          }}
+        >
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
+              HPC workspace / servers
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
+              <h2
+                style={{
+                  fontSize: "20px",
+                  margin: 0,
+                  color: "var(--text)",
+                  fontWeight: 600,
+                  letterSpacing: "-0.01em",
+                }}
+              >
+                Remote HPC workspace
+              </h2>
+              <span style={{ fontSize: "12.5px", color: "var(--text-tertiary)" }}>
+                Connect your own cluster over SSH using ssh-agent and <code>~/.ssh/config</code> — never asks for a password or private key.
+              </span>
+            </div>
           </div>
           <button type="button" onClick={startAdd} style={primaryButton}>
             Add server
           </button>
         </div>
-      </div>
 
-      {error && !draft ? (
-        <div
-          role="alert"
-          style={{
-            marginBottom: "1rem",
-            padding: "0.6rem 0.8rem",
-            borderRadius: "8px",
-            backgroundColor: "rgba(255, 98, 89, 0.12)",
-            border: "1px solid rgba(255, 98, 89, 0.35)",
-            color: "#ff6259",
-            fontSize: "0.82rem",
-          }}
-        >
-          {error}
-        </div>
-      ) : null}
-      {note ? (
-        <div
-          role="status"
-          style={{
-            marginBottom: "1rem",
-            padding: "0.6rem 0.8rem",
-            borderRadius: "8px",
-            backgroundColor: "rgba(63, 185, 80, 0.12)",
-            border: "1px solid rgba(63, 185, 80, 0.35)",
-            color: "#7ee787",
-            fontSize: "0.82rem",
-          }}
-        >
-          {note}
-        </div>
-      ) : null}
+        {error && !draft ? (
+          <div
+            role="alert"
+            style={{
+              padding: "8px 12px",
+              borderRadius: "6px",
+              backgroundColor: "rgba(248, 81, 73, 0.12)",
+              border: "1px solid rgba(248, 81, 73, 0.35)",
+              color: "var(--danger)",
+              fontSize: "12px",
+            }}
+          >
+            {error}
+          </div>
+        ) : null}
+        {note ? (
+          <div
+            role="status"
+            style={{
+              padding: "8px 12px",
+              borderRadius: "6px",
+              backgroundColor: "rgba(63, 185, 80, 0.12)",
+              border: "1px solid rgba(63, 185, 80, 0.35)",
+              color: "var(--ok)",
+              fontSize: "12px",
+            }}
+          >
+            {note}
+          </div>
+        ) : null}
+      </section>
 
       {loading && !draft ? (
-        <PanelState
-          kind="loading"
-          title={PANEL_DEFINITIONS.hpc_workspace.loading.title}
-          description={PANEL_DEFINITIONS.hpc_workspace.loading.description}
-        />
+        <div style={{ padding: "24px" }}>
+          <PanelState
+            kind="loading"
+            title={PANEL_DEFINITIONS.hpc_workspace.loading.title}
+            description={PANEL_DEFINITIONS.hpc_workspace.loading.description}
+          />
+        </div>
       ) : null}
 
       {!loading && loadError && !draft ? (
-        <PanelState
-          kind="error"
-          title={PANEL_DEFINITIONS.hpc_workspace.error.title}
-          description={PANEL_DEFINITIONS.hpc_workspace.error.description}
-          actionLabel={PANEL_DEFINITIONS.hpc_workspace.error.actionLabel}
-          onAction={() => void refreshServers()}
-        />
+        <div style={{ padding: "24px" }}>
+          <PanelState
+            kind="error"
+            title={PANEL_DEFINITIONS.hpc_workspace.error.title}
+            description={PANEL_DEFINITIONS.hpc_workspace.error.description}
+            actionLabel={PANEL_DEFINITIONS.hpc_workspace.error.actionLabel}
+            onAction={() => void refreshServers()}
+          />
+        </div>
       ) : null}
 
       {!loading && !loadError && profiles.length === 0 && !draft ? (
-        <PanelState
-          kind="empty"
-          title={PANEL_DEFINITIONS.hpc_workspace.empty.title}
-          description={PANEL_DEFINITIONS.hpc_workspace.empty.description}
-          actionLabel={PANEL_DEFINITIONS.hpc_workspace.empty.actionLabel}
-          onAction={startAdd}
-        />
+        <div style={{ padding: "24px" }}>
+          <PanelState
+            kind="empty"
+            title={PANEL_DEFINITIONS.hpc_workspace.empty.title}
+            description={PANEL_DEFINITIONS.hpc_workspace.empty.description}
+            actionLabel={PANEL_DEFINITIONS.hpc_workspace.empty.actionLabel}
+            onAction={startAdd}
+          />
+        </div>
       ) : null}
 
-      {profiles.map((entry) => {
-        const cardReport = cardReports[entry.id] ?? null;
-        return (
-          <div key={entry.id} style={{ ...card, marginBottom: "0.75rem" }}>
-            <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem", alignItems: "center" }}>
-              <div>
-                <div style={{ color: "#f5f5f7", fontWeight: 600, fontSize: "1rem" }}>
-                  {entry.profile.name}
-                </div>
-                <div style={{ color: "#8b949e", fontSize: "0.8rem", marginTop: "0.15rem" }}>
-                  {profileSummary(entry)}
-                </div>
-                <div style={{ color: "#8b949e", fontSize: "0.75rem", marginTop: "0.35rem" }}>
-                  {cardReport
-                    ? reportSummary(cardReport)
-                    : entry.discovered
-                      ? `Last checked: ${entry.discovered.partitions.length} partition(s) found.`
-                      : "Not tested yet."}
-                </div>
-              </div>
-              <div style={{ display: "flex", gap: "0.4rem", flexShrink: 0 }}>
-                <button
-                  type="button"
-                  style={secondaryButton}
-                  disabled={busy !== null || entry.profile.data_roots.length === 0}
-                  title={
-                    entry.profile.data_roots.length === 0
-                      ? "Add a data folder to this server first."
-                      : "Browse the data folders on this server (metadata only)."
-                  }
-                  onClick={() => setBrowseProfile(entry)}
-                >
-                  Browse data
-                </button>
-                <button
-                  type="button"
-                  style={secondaryButton}
-                  disabled={busy !== null}
-                  onClick={() => {
-                    setDraft(entry);
-                    setReport(null);
-                    setError("");
-                    setNote("");
+      {/* Dense Server Profiles Table */}
+      {profiles.length > 0 && (
+        <div style={{ overflowX: "auto" }}>
+          <div style={{ minWidth: "760px" }}>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "minmax(130px, 1.1fr) minmax(160px, 1.3fr) minmax(150px, 1.2fr) minmax(140px, 1.1fr) 310px",
+                alignItems: "center",
+                gap: "12px",
+                padding: "0 24px",
+                height: "30px",
+                backgroundColor: "var(--panel)",
+                borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
+                fontSize: "11px",
+                color: "var(--text-subtle)",
+              }}
+            >
+              <span>Server</span>
+              <span>Connection · Scheduler</span>
+              <span>Data & results roots</span>
+              <span>Status</span>
+              <span style={{ textAlign: "right" }}>Actions</span>
+            </div>
+
+            {profiles.map((entry) => {
+              const cardReport = cardReports[entry.id] ?? null;
+              const isHealthy = Boolean(cardReport?.reachable ?? entry.discovered);
+              return (
+                <div
+                  key={entry.id}
+                  className="c-table-row"
+                  style={{
+                    borderBottom: "1px solid var(--line-subtle, rgba(255,255,255,0.04))",
                   }}
                 >
-                  Edit
-                </button>
-                <button
-                  type="button"
-                  style={secondaryButton}
-                  disabled={busy !== null}
-                  onClick={() => void runTest(entry, true)}
-                >
-                  {busy === "card" ? "Testing…" : "Test connection"}
-                </button>
-                <button
-                  type="button"
-                  style={{ ...secondaryButton, color: "#ff7b72" }}
-                  onClick={() => void remove(entry)}
-                >
-                  Remove
-                </button>
-              </div>
-            </div>
-            {cardReport ? (
-              <div style={{ marginTop: "0.6rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "0.4rem" }}>
-                {cardReport.checks.map((check) => (
-                  <CheckRow
-                    key={check.name}
-                    ok={check.ok}
-                    label={check.label}
-                    detail={check.detail}
-                    hint={check.hint}
-                  />
-                ))}
-              </div>
-            ) : null}
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns:
+                        "minmax(130px, 1.1fr) minmax(160px, 1.3fr) minmax(150px, 1.2fr) minmax(140px, 1.1fr) 310px",
+                      alignItems: "center",
+                      gap: "12px",
+                      padding: "8px 24px",
+                      minHeight: "42px",
+                    }}
+                  >
+                    {/* Server Name + Dot */}
+                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+                      <span
+                        style={{
+                          width: "7px",
+                          height: "7px",
+                          borderRadius: "50%",
+                          backgroundColor: isHealthy ? "#3fb950" : "#8e8e93",
+                          flexShrink: 0,
+                        }}
+                      />
+                      <span
+                        style={{
+                          color: "var(--text)",
+                          fontWeight: 500,
+                          fontSize: "13px",
+                          overflow: "hidden",
+                          textOverflow: "ellipsis",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {entry.profile.name}
+                      </span>
+                    </div>
+
+                    {/* Summary */}
+                    <span
+                      style={{
+                        color: "var(--text-secondary)",
+                        fontSize: "12.5px",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {profileSummary(entry)}
+                    </span>
+
+                    {/* Roots */}
+                    <span
+                      style={{
+                        fontFamily: "'Geist Mono', ui-monospace, monospace",
+                        fontSize: "11.5px",
+                        color: "var(--text-tertiary)",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {entry.profile.data_roots[0] || "—"}
+                    </span>
+
+                    {/* Status */}
+                    <span
+                      style={{
+                        color: isHealthy ? "var(--text-secondary)" : "var(--text-subtle)",
+                        fontSize: "12px",
+                        overflow: "hidden",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {cardReport
+                        ? reportSummary(cardReport)
+                        : entry.discovered
+                          ? `Last checked: ${entry.discovered.partitions.length} partition(s) found.`
+                          : "Not tested yet."}
+                    </span>
+
+                    {/* Actions */}
+                    <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end", flexShrink: 0 }}>
+                      <button
+                        type="button"
+                        style={secondaryButton}
+                        disabled={busy !== null || entry.profile.data_roots.length === 0}
+                        title={
+                          entry.profile.data_roots.length === 0
+                            ? "Add a data folder to this server first."
+                            : "Browse the data folders on this server (metadata only)."
+                        }
+                        onClick={() => setBrowseProfile(entry)}
+                      >
+                        Browse data
+                      </button>
+                      <button
+                        type="button"
+                        style={secondaryButton}
+                        disabled={busy !== null}
+                        onClick={() => {
+                          setDraft(entry);
+                          setReport(null);
+                          setError("");
+                          setNote("");
+                        }}
+                      >
+                        Edit
+                      </button>
+                      <button
+                        type="button"
+                        style={secondaryButton}
+                        disabled={busy !== null}
+                        onClick={() => void runTest(entry, true)}
+                      >
+                        {busy === "card" ? "Testing…" : "Test connection"}
+                      </button>
+                      <button
+                        type="button"
+                        style={{ ...secondaryButton, color: "var(--danger)" }}
+                        onClick={() => void remove(entry)}
+                      >
+                        Remove
+                      </button>
+                    </div>
+                  </div>
+
+                  {cardReport ? (
+                    <div
+                      style={{
+                        padding: "6px 24px 10px 39px",
+                        borderTop: "1px solid var(--line-subtle)",
+                        backgroundColor: "var(--sunken)",
+                      }}
+                    >
+                      {cardReport.checks.map((check) => (
+                        <CheckRow
+                          key={check.name}
+                          ok={check.ok}
+                          label={check.label}
+                          detail={check.detail}
+                          hint={check.hint}
+                        />
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
           </div>
-        );
-      })}
+        </div>
+      )}
 
       {browseProfile ? (
-        <HpcBrowse profile={browseProfile} onClose={() => setBrowseProfile(null)} />
+        <div style={{ padding: "16px 24px" }}>
+          <HpcBrowse profile={browseProfile} onClose={() => setBrowseProfile(null)} />
+        </div>
       ) : null}
 
+      {/* Compact Inline Server Editor */}
       {draft ? (
-        <div style={{ ...card, marginTop: "1rem" }}>
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem" }}>
-            <h3 style={{ margin: 0, fontSize: "1.05rem", color: "#f5f5f7" }}>
+        <div
+          style={{
+            margin: "16px 24px 32px",
+            backgroundColor: "var(--panel)",
+            border: "1px solid var(--line, rgba(255, 255, 255, 0.08))",
+            borderRadius: "8px",
+            padding: "16px 20px",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              alignItems: "center",
+              marginBottom: "14px",
+              paddingBottom: "10px",
+              borderBottom: "1px solid var(--line-subtle)",
+            }}
+          >
+            <h3 style={{ margin: 0, fontSize: "14px", fontWeight: 600, color: "var(--text)" }}>
               {draft.id ? "Edit server" : "Add a server"}
             </h3>
             <button type="button" style={secondaryButton} onClick={closeEditor}>
@@ -470,57 +683,59 @@ export default function HpcServers() {
             </button>
           </div>
 
-          <div style={field}>
-            <label style={labelStyle} htmlFor="hpc-name">
-              Server name
-            </label>
-            <input
-              id="hpc-name"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              autoComplete="off"
-              style={input}
-              value={draft.profile.name}
-              placeholder="My cluster"
-              onChange={(event) => updateProfile({ name: event.target.value })}
-            />
-          </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "10px" }}>
+            <div style={field}>
+              <label style={labelStyle} htmlFor="hpc-name">
+                Server name
+              </label>
+              <input
+                id="hpc-name"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
+                style={input}
+                value={draft.profile.name}
+                placeholder="My cluster"
+                onChange={(event) => updateProfile({ name: event.target.value })}
+              />
+            </div>
 
-          <div style={field}>
-            <label style={labelStyle} htmlFor="hpc-alias">
-              Host from ~/.ssh/config
-            </label>
-            <select
-              id="hpc-alias"
-              style={input}
-              value={draft.profile.ssh_alias ?? ""}
-              onChange={(event) => void chooseAlias(event.target.value)}
-            >
-              <option value="">Type a host manually instead</option>
-              {hosts.map((host) => (
-                <option key={host} value={host}>
-                  {host}
-                </option>
-              ))}
-            </select>
-            {draft.ssh &&
-            (draft.ssh.hostname ||
-              draft.ssh.alias ||
-              draft.ssh.user ||
-              draft.ssh.port ||
-              draft.ssh.proxy_jump) ? (
-              <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
-                Read from your SSH config: {draft.ssh.hostname ?? draft.ssh.alias}
-                {draft.ssh.user ? ` as ${draft.ssh.user}` : ""}
-                {draft.ssh.port ? ` on port ${draft.ssh.port}` : ""}
-                {draft.ssh.proxy_jump ? ` through ${draft.ssh.proxy_jump}` : ""}.
-              </p>
-            ) : null}
+            <div style={field}>
+              <label style={labelStyle} htmlFor="hpc-alias">
+                Host from ~/.ssh/config
+              </label>
+              <select
+                id="hpc-alias"
+                style={input}
+                value={draft.profile.ssh_alias ?? ""}
+                onChange={(event) => void chooseAlias(event.target.value)}
+              >
+                <option value="">Type a host manually instead</option>
+                {hosts.map((host) => (
+                  <option key={host} value={host}>
+                    {host}
+                  </option>
+                ))}
+              </select>
+              {draft.ssh &&
+              (draft.ssh.hostname ||
+                draft.ssh.alias ||
+                draft.ssh.user ||
+                draft.ssh.port ||
+                draft.ssh.proxy_jump) ? (
+                <p style={{ color: "var(--text-subtle)", fontSize: "11.5px", margin: "4px 0 0" }}>
+                  Read from your SSH config: {draft.ssh.hostname ?? draft.ssh.alias}
+                  {draft.ssh.user ? ` as ${draft.ssh.user}` : ""}
+                  {draft.ssh.port ? ` on port ${draft.ssh.port}` : ""}
+                  {draft.ssh.proxy_jump ? ` through ${draft.ssh.proxy_jump}` : ""}.
+                </p>
+              ) : null}
+            </div>
           </div>
 
           {!draft.profile.ssh_alias ? (
-            <div style={{ display: "flex", gap: "0.5rem" }}>
+            <div style={{ display: "flex", gap: "10px" }}>
               <div style={{ ...field, flex: 2 }}>
                 <label style={labelStyle} htmlFor="hpc-host">
                   Host name
@@ -556,7 +771,7 @@ export default function HpcServers() {
             </div>
           ) : null}
 
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "10px" }}>
             <div style={{ ...field, flex: 1 }}>
               <label style={labelStyle} htmlFor="hpc-data-root">
                 Data folder on the cluster
@@ -591,56 +806,56 @@ export default function HpcServers() {
                 onChange={(event) => updateProfile({ scratch_template: event.target.value })}
               />
               {!draft.profile.scratch_template.trim() ? (
-                <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
-                  This is a hint, not a saved value. Enter the per-user scratch folder your cluster
-                  gives you.
+                <p style={{ color: "var(--text-subtle)", fontSize: "11px", margin: "4px 0 0" }}>
+                  This is a hint, not a saved value. Enter the per-user scratch folder your cluster gives you.
                 </p>
               ) : null}
             </div>
           </div>
 
-          <div style={field}>
-            <label style={labelStyle} htmlFor="hpc-results-root">
-              Shared results folder
-            </label>
-            <input
-              id="hpc-results-root"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              autoComplete="off"
-              style={input}
-              value={draft.profile.results_root}
-              placeholder="/path/your/account/can/write (not scratch)"
-              onChange={(event) => updateProfile({ results_root: event.target.value })}
-            />
-            <p style={{ color: "#8b949e", fontSize: "0.75rem", margin: "0.3rem 0 0" }}>
-              Run outputs and predictions are written here, on shared storage the login node can
-              read. Coperceive never puts outputs in scratch.
-            </p>
-          </div>
-          <div style={field}>
-            <label style={labelStyle} htmlFor="hpc-code-roots">
-              Pipeline code folders (optional, comma separated)
-            </label>
-            <input
-              id="hpc-code-roots"
-              autoCapitalize="off"
-              autoCorrect="off"
-              spellCheck={false}
-              autoComplete="off"
-              style={input}
-              value={draft.profile.code_roots.join(", ")}
-              placeholder="/project/you/code, /project/you/tools"
-              onChange={(event) =>
-                updateProfile({ code_roots: splitFolderList(event.target.value) })
-              }
-            />
+          <div style={{ display: "flex", gap: "10px" }}>
+            <div style={{ ...field, flex: 1 }}>
+              <label style={labelStyle} htmlFor="hpc-results-root">
+                Shared results folder
+              </label>
+              <input
+                id="hpc-results-root"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
+                style={input}
+                value={draft.profile.results_root}
+                placeholder="/path/your/account/can/write (not scratch)"
+                onChange={(event) => updateProfile({ results_root: event.target.value })}
+              />
+              <p style={{ color: "var(--text-subtle)", fontSize: "11px", margin: "4px 0 0" }}>
+                Run outputs and predictions are written here, on shared storage the login node can read. Coperceive never puts outputs in scratch.
+              </p>
+            </div>
+            <div style={{ ...field, flex: 1 }}>
+              <label style={labelStyle} htmlFor="hpc-code-roots">
+                Pipeline code folders (optional, comma separated)
+              </label>
+              <input
+                id="hpc-code-roots"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
+                style={input}
+                value={draft.profile.code_roots.join(", ")}
+                placeholder="/project/you/code, /project/you/tools"
+                onChange={(event) =>
+                  updateProfile({ code_roots: splitFolderList(event.target.value) })
+                }
+              />
+            </div>
           </div>
 
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "0.5rem 0 0.75rem" }} />
+          <div style={{ borderTop: "1px solid var(--line-subtle)", margin: "6px 0 10px" }} />
 
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "10px" }}>
             <div style={{ ...field, flex: 1 }}>
               <label style={labelStyle} htmlFor="hpc-scheduler">
                 Scheduler
@@ -706,7 +921,7 @@ export default function HpcServers() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "10px" }}>
             <div style={{ ...field, flex: 1 }}>
               <label style={labelStyle} htmlFor="hpc-time">
                 Walltime
@@ -723,9 +938,8 @@ export default function HpcServers() {
                 onChange={(event) => updateDefaults({ time_limit: event.target.value || null })}
               />
               {!draft.profile.defaults.time_limit ? (
-                <p style={{ color: "#8b949e", fontSize: "0.72rem", margin: "0.25rem 0 0" }}>
-                  Leave empty for the partition default. Use HH:MM:SS or D-HH:MM:SS; discovery does
-                  not copy “infinite”.
+                <p style={{ color: "var(--text-subtle)", fontSize: "11px", margin: "4px 0 0" }}>
+                  Leave empty for the partition default. Use HH:MM:SS or D-HH:MM:SS; discovery does not copy “infinite”.
                 </p>
               ) : null}
             </div>
@@ -769,7 +983,7 @@ export default function HpcServers() {
             </div>
           </div>
 
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+          <div style={{ display: "flex", gap: "10px" }}>
             <div style={{ ...field, flex: 1 }}>
               <label style={labelStyle} htmlFor="hpc-env-kind">
                 Environment on compute nodes
@@ -806,7 +1020,7 @@ export default function HpcServers() {
                 placeholder="/path/to/python"
                 onChange={(event) => updateEnvironment({ interpreter: event.target.value || null })}
               />
-              <p style={{ color: "#8b949e", fontSize: "0.72rem", margin: "0.25rem 0 0" }}>
+              <p style={{ color: "var(--text-subtle)", fontSize: "11px", margin: "4px 0 0" }}>
                 Runs:{" "}
                 {draft.profile.environment.coperceive_command.length > 0
                   ? draft.profile.environment.coperceive_command.join(" ")
@@ -879,7 +1093,16 @@ export default function HpcServers() {
             />
           </div>
 
-          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.82rem", color: "#c9d1d9", marginBottom: "0.75rem" }}>
+          <label
+            style={{
+              display: "flex",
+              gap: "8px",
+              alignItems: "center",
+              fontSize: "12.5px",
+              color: "var(--text-secondary)",
+              marginBottom: "12px",
+            }}
+          >
             <input
               type="checkbox"
               checked={draft.profile.environment.compute_has_internet}
@@ -887,8 +1110,7 @@ export default function HpcServers() {
                 updateEnvironment({ compute_has_internet: event.target.checked })
               }
             />
-            Compute nodes on this server can download packages. Leave this off unless you know they
-            can; Coperceive never installs anything on offline nodes.
+            Compute nodes on this server can download packages. Leave this off unless you know they can; Coperceive never installs anything on offline nodes.
           </label>
 
           {error ? (
@@ -896,19 +1118,20 @@ export default function HpcServers() {
               ref={formErrorRef}
               role="alert"
               style={{
-                marginTop: "0.5rem",
-                padding: "0.55rem 0.75rem",
-                borderRadius: "8px",
-                backgroundColor: "rgba(255, 98, 89, 0.12)",
-                border: "1px solid rgba(255, 98, 89, 0.35)",
-                color: "#ff6259",
-                fontSize: "0.82rem",
+                marginTop: "8px",
+                padding: "8px 10px",
+                borderRadius: "6px",
+                backgroundColor: "rgba(248, 81, 73, 0.12)",
+                border: "1px solid rgba(248, 81, 73, 0.35)",
+                color: "var(--danger)",
+                fontSize: "12px",
               }}
             >
               {error}
             </div>
           ) : null}
-          <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
+
+          <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
             <button
               type="button"
               style={primaryButton}
@@ -917,16 +1140,38 @@ export default function HpcServers() {
             >
               {busy === "test" ? "Testing… (up to 1 minute)" : "Test connection"}
             </button>
-            <button type="button" style={secondaryButton} disabled={busy !== null} onClick={() => void save()}>
+            <button
+              type="button"
+              style={secondaryButton}
+              disabled={busy !== null}
+              onClick={() => void save()}
+            >
               {busy === "save" ? "Saving…" : "Save server"}
             </button>
           </div>
 
           {report ? (
-            <div style={{ marginTop: "1rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "0.75rem" }}>
-              <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.25rem" }}>
-                <h4 style={{ margin: 0, fontSize: "0.9rem", color: "#f5f5f7" }}>Connection test</h4>
-                <span style={{ fontSize: "0.75rem", color: "#8b949e" }}>{reportSummary(report)}</span>
+            <div
+              style={{
+                marginTop: "14px",
+                borderTop: "1px solid var(--line-subtle)",
+                paddingTop: "12px",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: "6px",
+                }}
+              >
+                <h4 style={{ margin: 0, fontSize: "13px", color: "var(--text)" }}>
+                  Connection test
+                </h4>
+                <span style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
+                  {reportSummary(report)}
+                </span>
               </div>
               {report.checks.map((check) => (
                 <CheckRow
@@ -939,9 +1184,9 @@ export default function HpcServers() {
               ))}
 
               {report.partitions.length > 0 ? (
-                <div style={{ marginTop: "0.6rem" }}>
-                  <div style={{ ...labelStyle, marginBottom: "0.3rem" }}>Partitions offered</div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "0.35rem" }}>
+                <div style={{ marginTop: "10px" }}>
+                  <div style={{ ...labelStyle, marginBottom: "6px" }}>Partitions offered</div>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px" }}>
                     {groupPartitions(report.partitions).map((partition) => (
                       <button
                         key={partition.name}
@@ -957,33 +1202,33 @@ export default function HpcServers() {
                           })
                         }
                         style={{
-                          padding: "0.3rem 0.55rem",
+                          padding: "4px 10px",
                           borderRadius: "999px",
-                          fontSize: "0.75rem",
+                          fontSize: "11.5px",
                           cursor: "pointer",
                           border:
                             draft.profile.defaults.partition === partition.name
                               ? "1px solid #1f6feb"
-                              : "1px solid rgba(255,255,255,0.18)",
+                              : "1px solid var(--line-elevated)",
                           backgroundColor:
                             draft.profile.defaults.partition === partition.name
-                              ? "rgba(31,111,235,0.25)"
+                              ? "rgba(31,111,235,0.22)"
                               : "transparent",
-                          color: "#f5f5f7",
+                          color: "var(--text)",
                         }}
                       >
                         <span>{partition.name}</span>
                         {partition.gpuTypes.length > 0 ? (
-                          <span style={{ marginLeft: "0.35rem", opacity: 0.8 }}>
+                          <span style={{ marginLeft: "6px", opacity: 0.85 }}>
                             {partition.gpuTypes.map((gpu) => (
                               <span
                                 key={gpu}
                                 style={{
-                                  marginLeft: "0.2rem",
-                                  padding: "0 0.3rem",
+                                  marginLeft: "4px",
+                                  padding: "0 5px",
                                   borderRadius: "999px",
-                                  backgroundColor: "rgba(255,255,255,0.12)",
-                                  fontSize: "0.68rem",
+                                  backgroundColor: "var(--line)",
+                                  fontSize: "10.5px",
                                 }}
                               >
                                 {gpu}
@@ -1001,30 +1246,36 @@ export default function HpcServers() {
               ) : null}
 
               {report.scratch.writable ? (
-                <p style={{ fontSize: "0.8rem", color: "#8b949e", marginTop: "0.5rem" }}>
+                <p style={{ fontSize: "12px", color: "var(--text-tertiary)", marginTop: "8px" }}>
                   Scratch: {report.scratch.path} — {formatBytes(report.scratch.free_bytes)} free
                   {report.scratch.quota ? ` · quota: ${report.scratch.quota.split("\n")[0]}` : ""}
                 </p>
               ) : null}
 
               {missingExplanations(report).length > 0 ? (
-                <ul style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem", color: "#8b949e", fontSize: "0.8rem" }}>
+                <ul
+                  style={{
+                    margin: "8px 0 0",
+                    paddingLeft: "18px",
+                    color: "var(--text-tertiary)",
+                    fontSize: "12px",
+                  }}
+                >
                   {missingExplanations(report).map((text) => (
-                    <li key={text} style={{ marginBottom: "0.25rem" }}>
+                    <li key={text} style={{ marginBottom: "4px" }}>
                       {text}
                     </li>
                   ))}
                 </ul>
               ) : null}
 
-              <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.75rem" }}>
+              <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
                 <button type="button" style={secondaryButton} onClick={applyDetected}>
                   Use detected settings
                 </button>
               </div>
-              <p style={{ fontSize: "0.75rem", color: "#8b949e", marginTop: "0.5rem" }}>
-                Detected values are suggestions. Nothing is submitted without your confirmation,
-                and every job script is shown in full first.
+              <p style={{ fontSize: "11.5px", color: "var(--text-subtle)", marginTop: "8px" }}>
+                Detected values are suggestions. Nothing is submitted without your confirmation, and every job script is shown in full first.
               </p>
             </div>
           ) : null}

@@ -5,11 +5,29 @@ import HpcServers from "./HpcServers";
 import NewEvaluation from "./NewEvaluation";
 import RunHistory from "./RunHistory";
 import ClusterDatasetView from "./ClusterDatasetView";
+import DatasetView, { buildV2xsetMockFixture, type SubmittedJob } from "./hpc/DatasetView";
 import type { ServerEntry } from "./hpc";
-import { lastClusterDataset, rememberClusterDataset, type ClusterDetectDocument } from "./clusterDatasets";
+import {
+  lastClusterDataset,
+  rememberClusterDataset,
+  type ClusterDetectDocument,
+  type ClusterIndexDocument,
+  type ClusterSceneStatusEntry,
+} from "./clusterDatasets";
 import { listServerProfiles } from "./local";
 
-type WorkspaceTab = "servers" | "evaluation" | "history" | "dataset";
+export type WorkspaceTab = "servers" | "evaluation" | "history" | "dataset";
+
+export interface ActiveDatasetPayload {
+  profile: ServerEntry;
+  dataset: ClusterDetectDocument;
+  useNewView?: boolean;
+  indexDoc?: ClusterIndexDocument | null;
+  statuses?: ClusterSceneStatusEntry[];
+  submittedJobs?: SubmittedJob[];
+  cacheRoot?: string;
+  selectedSceneId?: string;
+}
 
 export default function HpcWorkspace() {
   const [tab, setTab] = useState<WorkspaceTab>(() => {
@@ -27,16 +45,21 @@ export default function HpcWorkspace() {
     return "servers";
   });
 
-  const [activeDatasetData, setActiveDatasetData] = useState<{
-    profile: ServerEntry;
-    dataset: ClusterDetectDocument;
-  } | null>(null);
+  const [activeDatasetData, setActiveDatasetData] = useState<ActiveDatasetPayload | null>(null);
   // Sections stay mounted once shown, so an open dataset, its scroll and
   // filters survive switching sections (and the app's own tabs).
   const [visited, setVisited] = useState<ReadonlySet<WorkspaceTab>>(() => new Set([tab]));
   useEffect(() => {
     setVisited((current) => (current.has(tab) ? current : new Set([...current, tab])));
   }, [tab]);
+
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("coperceive-hpc-state", {
+        detail: { tab, activeDataset: activeDatasetData },
+      }),
+    );
+  }, [tab, activeDatasetData]);
 
   // Reopen the dataset that was open before the app restarted.
   useEffect(() => {
@@ -62,73 +85,85 @@ export default function HpcWorkspace() {
     const handleOpenEval = () => {
       setTab("evaluation");
     };
+    const handleSelectSection = (event: Event) => {
+      const custom = event as CustomEvent<{ tab?: WorkspaceTab }>;
+      if (custom.detail?.tab) {
+        setTab(custom.detail.tab);
+      }
+    };
     const handleOpenDataset = (event: Event) => {
-      const customEvent = event as CustomEvent<{
-        profile: ServerEntry;
-        dataset: ClusterDetectDocument;
-      }>;
+      const customEvent = event as CustomEvent<ActiveDatasetPayload & { useMockV2xset?: boolean }>;
+      if (customEvent.detail?.useMockV2xset) {
+        const mock = buildV2xsetMockFixture();
+        setActiveDatasetData({
+          profile: mock.profile,
+          dataset: mock.dataset,
+          useNewView: true,
+          indexDoc: mock.indexDoc,
+          statuses: mock.statuses,
+          submittedJobs: mock.submittedJobs,
+          cacheRoot: mock.cacheRoot,
+          selectedSceneId: mock.selectedSceneId,
+        });
+        setTab("dataset");
+        return;
+      }
       if (customEvent.detail) {
         setActiveDatasetData(customEvent.detail);
         setTab("dataset");
-        void rememberClusterDataset(customEvent.detail.profile.id, customEvent.detail.dataset).catch(() => undefined);
+        if (!customEvent.detail.indexDoc) {
+          void rememberClusterDataset(
+            customEvent.detail.profile.id,
+            customEvent.detail.dataset,
+          ).catch(() => undefined);
+        }
       }
     };
     window.addEventListener("coperceive-open-evaluation", handleOpenEval);
+    window.addEventListener("coperceive-hpc-section", handleSelectSection);
     window.addEventListener("coperceive-open-dataset", handleOpenDataset);
     return () => {
       window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
+      window.removeEventListener("coperceive-hpc-section", handleSelectSection);
       window.removeEventListener("coperceive-open-dataset", handleOpenDataset);
     };
   }, []);
-  const tabStyle = (active: boolean) =>
-    ({
-      padding: "0.45rem 0.9rem",
-      borderRadius: "6px",
-      border: "none",
-      fontSize: "0.85rem",
-      fontWeight: active ? 600 : 400,
-      cursor: "pointer",
-      backgroundColor: active ? "rgba(255, 255, 255, 0.12)" : "transparent",
-      color: active ? "#fff" : "#a1a1a6",
-    }) as const;
+
+  const handleCloseDataset = () => {
+    if (activeDatasetData) {
+      void rememberClusterDataset(activeDatasetData.profile.id, null).catch(() => undefined);
+    }
+    setActiveDatasetData(null);
+    setTab("servers");
+  };
+
   return (
-    <div>
-      <div role="tablist" aria-label="HPC workspace sections" style={{ display: "flex", gap: "0.35rem", justifyContent: "center", marginBottom: "0.75rem" }}>
-        <button type="button" role="tab" aria-selected={tab === "servers"} style={tabStyle(tab === "servers")} onClick={() => setTab("servers")}>
-          Servers
-        </button>
-        {activeDatasetData ? (
-          <button
-            type="button"
-            role="tab"
-            aria-selected={tab === "dataset"}
-            style={tabStyle(tab === "dataset")}
-            onClick={() => setTab("dataset")}
-          >
-            Dataset view
-          </button>
-        ) : null}
-        <button type="button" role="tab" aria-selected={tab === "evaluation"} style={tabStyle(tab === "evaluation")} onClick={() => setTab("evaluation")}>
-          New evaluation
-        </button>
-        <button type="button" role="tab" aria-selected={tab === "history"} style={tabStyle(tab === "history")} onClick={() => setTab("history")}>
-          Run history
-        </button>
-      </div>
+    <div style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
       <div hidden={tab !== "servers"}>{visited.has("servers") ? <HpcServers /> : null}</div>
       <div hidden={tab !== "dataset"}>
         {activeDatasetData ? (
-          <ClusterDatasetView
-            key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}`}
-            profile={activeDatasetData.profile}
-            dataset={activeDatasetData.dataset}
-            onBack={() => setTab("servers")}
-            onClose={() => {
-              void rememberClusterDataset(activeDatasetData.profile.id, null).catch(() => undefined);
-              setActiveDatasetData(null);
-              setTab("servers");
-            }}
-          />
+          activeDatasetData.useNewView || activeDatasetData.indexDoc ? (
+            <DatasetView
+              key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}|v2`}
+              profile={activeDatasetData.profile}
+              dataset={activeDatasetData.dataset}
+              onBack={() => setTab("servers")}
+              onClose={handleCloseDataset}
+              initialIndexDoc={activeDatasetData.indexDoc ?? null}
+              initialStatuses={activeDatasetData.statuses}
+              initialSubmittedJobs={activeDatasetData.submittedJobs}
+              initialCacheRoot={activeDatasetData.cacheRoot}
+              initialSelectedSceneId={activeDatasetData.selectedSceneId}
+            />
+          ) : (
+            <ClusterDatasetView
+              key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}`}
+              profile={activeDatasetData.profile}
+              dataset={activeDatasetData.dataset}
+              onBack={() => setTab("servers")}
+              onClose={handleCloseDataset}
+            />
+          )
         ) : null}
       </div>
       <div hidden={tab !== "evaluation"}>{visited.has("evaluation") ? <NewEvaluation /> : null}</div>

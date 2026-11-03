@@ -48,35 +48,59 @@ export function JobsIndicator({ onOpenWorkspace }: { onOpenWorkspace: () => void
     }
   };
 
+  if (entries.length === 0 && !toast) {
+    return null;
+  }
+
   return (
     <div className="jobs-indicator">
-      <button
-        type="button"
-        className="ghost"
-        aria-expanded={open}
-        title="Preparation jobs on your clusters"
-        onClick={() => setOpen((value) => !value)}
-      >
-        {entries.length > 0 ? `Jobs · ${entries.length} in progress` : "Jobs · none running"}
-      </button>
-      {open ? (
+      {entries.length > 0 && (
+        <button
+          type="button"
+          className="ghost"
+          aria-expanded={open}
+          title="Preparation jobs on your clusters"
+          onClick={() => setOpen((value) => !value)}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "6px",
+            height: "26px",
+            padding: "0 10px",
+            borderRadius: "999px",
+            border: "1px solid rgba(56, 139, 253, 0.35)",
+            backgroundColor: "rgba(56, 139, 253, 0.12)",
+            color: "var(--text)",
+            fontSize: "12px",
+            fontWeight: 500,
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              width: "6px",
+              height: "6px",
+              borderRadius: "999px",
+              backgroundColor: "#388bfd",
+            }}
+          />
+          <span>Jobs · {entries.length} in progress</span>
+        </button>
+      )}
+      {open && entries.length > 0 ? (
         <div className="jobs-pop" role="dialog" aria-label="Preparation jobs">
-          {entries.length === 0 ? (
-            <p className="setting-note">No preparation job is running.</p>
-          ) : (
-            <ul>
-              {entries.map((entry) => (
-                <li key={entry.key}>
-                  <button type="button" className="ghost" onClick={() => void openDataset(entry.key)}>
-                    <span className="jobs-title">{entry.label}</span>
-                    <span className="setting-note">
-                      {jobsSummary(entry)} · job {entry.jobIds.join(", ") || "done"} · viewer {entry.viewerOpen ? "open" : "closed"}
-                    </span>
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+          <ul>
+            {entries.map((entry) => (
+              <li key={entry.key}>
+                <button type="button" className="ghost" onClick={() => void openDataset(entry.key)}>
+                  <span className="jobs-title">{entry.label}</span>
+                  <span className="setting-note">
+                    {jobsSummary(entry)} · job {entry.jobIds.join(", ") || "done"} · viewer {entry.viewerOpen ? "open" : "closed"}
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
         </div>
       ) : null}
       {toast ? (

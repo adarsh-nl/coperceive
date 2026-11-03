@@ -63,7 +63,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
       if (griffin?.presets) {
         for (const preset of griffin.presets) {
           const key = `griffin:${preset.id}`;
-          setPresetSizeNote((prev) => ({ ...prev, [key]: "Checking size…" }));
+          setPresetSizeNote((prev) => ({ ...prev, [key]: "Checking…" }));
           try {
             const measured = await datasetDryRun("griffin", preset.id);
             setPresetBytes((prev) => ({ ...prev, [key]: measured.download_bytes }));
@@ -84,6 +84,25 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
       setCatalogLoading(false);
     }
   };
+
+  useEffect(() => {
+    const handleSeed = (event: Event) => {
+      const custom = event as CustomEvent<{
+        catalog?: CatalogDataset[];
+        presetBytes?: Record<string, number>;
+      }>;
+      if (custom.detail?.catalog !== undefined) {
+        setCatalog(custom.detail.catalog);
+        setCatalogLoading(false);
+        setCatalogError(null);
+      }
+      if (custom.detail?.presetBytes) {
+        setPresetBytes(custom.detail.presetBytes);
+      }
+    };
+    window.addEventListener("coperceive-test-catalog-seed", handleSeed);
+    return () => window.removeEventListener("coperceive-test-catalog-seed", handleSeed);
+  }, []);
 
   useEffect(() => {
     void loadCatalog();
@@ -202,261 +221,434 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
   };
 
   return (
-    <div style={{ padding: "1.5rem", maxWidth: "980px", margin: "0 auto" }}>
-      {catalogError && (
-        <p role="alert" style={{ color: "var(--danger)", marginBottom: "1rem" }}>
-          {catalogError}
-        </p>
-      )}
-      {resumableJob && !jobRunning && (
-        <div
-          style={{
-            marginBottom: "1.5rem",
-            padding: "1rem",
-            borderRadius: "8px",
-            background: "rgba(31, 111, 235, 0.12)",
-            border: "1px solid rgba(31, 111, 235, 0.3)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-          }}
-        >
-          <div>
-            <strong style={{ color: "var(--text)", display: "block" }}>
-              Resume download of {resumableJob.datasetId} ({resumableJob.presetId})?
-            </strong>
-            <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
-              Previous download was interrupted before completion.
-            </span>
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 52px)", fontSize: "13px" }}>
+      {/* Compact Page Header */}
+      <section
+        style={{
+          padding: "18px 24px 14px",
+          display: "flex",
+          flexDirection: "column",
+          gap: "12px",
+          borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
+        }}
+      >
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+            <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
+              Local workspace / catalog
+            </div>
+            <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: "20px",
+                  fontWeight: 600,
+                  letterSpacing: "-0.01em",
+                  color: "var(--text)",
+                }}
+              >
+                Dataset Catalog
+              </h2>
+              <span style={{ fontSize: "12.5px", color: "var(--text-tertiary)" }}>
+                Download verified cooperative-perception benchmarks directly into your local library.
+              </span>
+            </div>
           </div>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
+
+          {onOpenImportFolder && (
             <button
               type="button"
-              onClick={() => handleResumeJob(resumableJob)}
+              onClick={() => onOpenImportFolder()}
               style={{
-                background: "var(--primary, #1f6feb)",
-                color: "#fff",
-                border: "none",
+                padding: "6px 12px",
                 borderRadius: "6px",
-                padding: "0.4rem 0.8rem",
-                cursor: "pointer",
+                border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
+                backgroundColor: "transparent",
+                color: "var(--text)",
+                fontSize: "12.5px",
                 fontWeight: 500,
-              }}
-            >
-              Resume
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                localStorage.removeItem("coperceive_incomplete_download");
-                setResumableJob(null);
-              }}
-              style={{
-                background: "transparent",
-                color: "var(--muted)",
-                border: "1px solid var(--line)",
-                borderRadius: "6px",
-                padding: "0.4rem 0.8rem",
                 cursor: "pointer",
               }}
             >
-              Dismiss
+              Import local folder…
             </button>
+          )}
+        </div>
+
+        {resumableJob && !jobRunning && (
+          <div
+            style={{
+              padding: "10px 14px",
+              borderRadius: "6px",
+              background: "rgba(31, 111, 235, 0.12)",
+              border: "1px solid rgba(31, 111, 235, 0.3)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "12px",
+              fontSize: "12.5px",
+            }}
+          >
+            <div>
+              <strong style={{ color: "var(--text)" }}>
+                Resume download of {resumableJob.datasetId} ({resumableJob.presetId})?
+              </strong>{" "}
+              <span style={{ color: "var(--text-tertiary)" }}>
+                Previous download was interrupted before completion.
+              </span>
+            </div>
+            <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
+              <button
+                type="button"
+                onClick={() => handleResumeJob(resumableJob)}
+                style={{
+                  background: "var(--primary, #1f6feb)",
+                  color: "#fff",
+                  border: "none",
+                  borderRadius: "5px",
+                  padding: "4px 10px",
+                  cursor: "pointer",
+                  fontSize: "12px",
+                  fontWeight: 500,
+                }}
+              >
+                Resume
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  localStorage.removeItem("coperceive_incomplete_download");
+                  setResumableJob(null);
+                }}
+                style={{
+                  background: "transparent",
+                  color: "var(--text-tertiary)",
+                  border: "1px solid var(--line-elevated)",
+                  borderRadius: "5px",
+                  padding: "4px 10px",
+                  fontSize: "12px",
+                  cursor: "pointer",
+                }}
+              >
+                Dismiss
+              </button>
+            </div>
           </div>
+        )}
+
+        {catalogError && (
+          <p role="alert" style={{ color: "var(--danger)", margin: 0, fontSize: "12.5px" }}>
+            {catalogError}
+          </p>
+        )}
+      </section>
+
+      {catalogLoading && (
+        <div style={{ padding: "24px" }}>
+          <PanelState
+            kind="loading"
+            title={PANEL_DEFINITIONS.get_data.loading.title}
+            description={PANEL_DEFINITIONS.get_data.loading.description}
+          />
         </div>
       )}
 
-      <div style={{ marginBottom: "2rem" }}>
-        <h2 style={{ fontSize: "1.4rem", fontWeight: 600, color: "var(--text)", marginBottom: "0.4rem" }}>
-          Dataset Catalog
-        </h2>
-        <p style={{ color: "var(--muted)", fontSize: "0.9rem", margin: 0 }}>
-          Download verified cooperative-perception benchmarks directly into your local library.
-        </p>
-      </div>
-
-      {catalogLoading && (
-        <PanelState
-          kind="loading"
-          title={PANEL_DEFINITIONS.get_data.loading.title}
-          description={PANEL_DEFINITIONS.get_data.loading.description}
-        />
-      )}
-
       {!catalogLoading && catalogError && (
-        <PanelState
-          kind="error"
-          title={PANEL_DEFINITIONS.get_data.error.title}
-          description={PANEL_DEFINITIONS.get_data.error.description}
-          actionLabel={PANEL_DEFINITIONS.get_data.error.actionLabel}
-          onAction={() => void loadCatalog()}
-        />
+        <div style={{ padding: "24px" }}>
+          <PanelState
+            kind="error"
+            title={PANEL_DEFINITIONS.get_data.error.title}
+            description={PANEL_DEFINITIONS.get_data.error.description}
+            actionLabel={PANEL_DEFINITIONS.get_data.error.actionLabel}
+            onAction={() => void loadCatalog()}
+          />
+        </div>
       )}
 
       {!catalogLoading && !catalogError && catalog.length === 0 && (
-        <PanelState
-          kind="empty"
-          title={PANEL_DEFINITIONS.get_data.empty.title}
-          description={PANEL_DEFINITIONS.get_data.empty.description}
-          actionLabel={PANEL_DEFINITIONS.get_data.empty.actionLabel}
-          onAction={() => onOpenImportFolder?.()}
-        />
+        <div style={{ padding: "24px" }}>
+          <PanelState
+            kind="empty"
+            title={PANEL_DEFINITIONS.get_data.empty.title}
+            description={PANEL_DEFINITIONS.get_data.empty.description}
+            actionLabel={PANEL_DEFINITIONS.get_data.empty.actionLabel}
+            onAction={() => onOpenImportFolder?.()}
+          />
+        </div>
       )}
 
+      {/* Tight Catalog Cards Grid with Dense Preset Tables */}
       {!catalogLoading && !catalogError && catalog.length > 0 && (
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: "1rem" }}>
+        <div
+          style={{
+            padding: "18px 24px",
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+            gap: "14px",
+            alignItems: "start",
+          }}
+        >
           {catalog.map((ds) => {
-          const isPlanned = ds.status === "planned";
-          const isLocal = ds.status === "local-import";
-          const isReady = ds.status === "ready";
+            const isPlanned = ds.status === "planned";
+            const isLocal = ds.status === "local-import";
+            const isReady = ds.status === "ready";
 
-          return (
-            <div
-              key={ds.id}
-              style={{
-                background: isPlanned ? "var(--sunken)" : "var(--panel)",
-                border: "1px solid var(--line)",
-                borderRadius: "10px",
-                padding: "1.2rem",
-                display: "flex",
-                flexDirection: "column",
-                justifyContent: "space-between",
-                opacity: isPlanned ? 0.6 : 1,
-              }}
-            >
-              <div>
-                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "0.5rem" }}>
-                  <h3 style={{ margin: 0, fontSize: "1.15rem", color: "var(--text)", fontWeight: 600 }}>{ds.name}</h3>
-                  <span
+            return (
+              <div
+                key={ds.id}
+                style={{
+                  background: isPlanned ? "var(--sunken)" : "var(--panel)",
+                  border: "1px solid var(--line, rgba(255,255,255,0.08))",
+                  borderRadius: "8px",
+                  display: "flex",
+                  flexDirection: "column",
+                  overflow: "hidden",
+                  opacity: isPlanned ? 0.65 : 1,
+                }}
+              >
+                <div style={{ padding: "14px 16px 12px" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
+                    <h3 style={{ margin: 0, fontSize: "15px", color: "var(--text)", fontWeight: 600 }}>
+                      {ds.name}
+                    </h3>
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        fontSize: "11.5px",
+                        fontWeight: 500,
+                        color: isReady ? "var(--ok)" : isLocal ? "var(--vehicle)" : "var(--text-subtle)",
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: "6px",
+                          height: "6px",
+                          borderRadius: "50%",
+                          backgroundColor: isReady ? "#3fb950" : isLocal ? "#f58a1f" : "#6e6e73",
+                        }}
+                      />
+                      {isReady ? "Ready" : isLocal ? "Local import" : "Coming later"}
+                    </span>
+                  </div>
+
+                  <p style={{ fontSize: "12.5px", color: "var(--text-secondary)", margin: "0 0 10px", lineHeight: 1.45 }}>
+                    {ds.description}
+                  </p>
+
+                  <div
                     style={{
-                      fontSize: "0.75rem",
-                      padding: "0.15rem 0.5rem",
-                      borderRadius: "12px",
-                      background: isReady ? "rgba(40, 120, 220, 0.2)" : isLocal ? "rgba(255, 180, 0, 0.15)" : "var(--sunken)",
-                      color: isReady ? "var(--ok)" : isLocal ? "var(--vehicle)" : "var(--muted)",
-                      fontWeight: 500,
+                      display: "grid",
+                      gridTemplateColumns: "auto 1fr",
+                      columnGap: "12px",
+                      rowGap: "3px",
+                      fontSize: "11.5px",
                     }}
                   >
-                    {isReady ? "Ready" : isLocal ? "Local import" : "Coming later"}
-                  </span>
+                    <span style={{ color: "var(--text-subtle)" }}>Agents</span>
+                    <span style={{ color: "var(--text-secondary)" }}>{ds.agents}</span>
+                    <span style={{ color: "var(--text-subtle)" }}>Modalities</span>
+                    <span style={{ color: "var(--text-secondary)" }}>{ds.modalities.join(" · ")}</span>
+                    <span style={{ color: "var(--text-subtle)" }}>Licence</span>
+                    <span style={{ color: "var(--text-secondary)", display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                      {ds.licence_url ? (
+                        <a
+                          href={ds.licence_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "var(--text-secondary)", textDecoration: "underline" }}
+                        >
+                          {ds.licence}
+                        </a>
+                      ) : (
+                        <span>{ds.licence}</span>
+                      )}
+                      {ds.paper_url && (
+                        <a
+                          href={ds.paper_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "var(--primary-hover, #79c0ff)", textDecoration: "none" }}
+                        >
+                          Paper ↗
+                        </a>
+                      )}
+                      {ds.source_url && (
+                        <a
+                          href={ds.source_url}
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "var(--primary-hover, #79c0ff)", textDecoration: "none" }}
+                        >
+                          Source ↗
+                        </a>
+                      )}
+                    </span>
+                  </div>
+
+                  {ds.notice && (
+                    <p
+                      style={{
+                        fontSize: "11.5px",
+                        color: "var(--text-tertiary)",
+                        background: "var(--sunken)",
+                        padding: "6px 8px",
+                        borderRadius: "5px",
+                        margin: "10px 0 0",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {ds.notice}
+                    </p>
+                  )}
                 </div>
 
-                <p style={{ fontSize: "0.85rem", color: "var(--muted)", marginBottom: "0.8rem", lineHeight: 1.4 }}>
-                  {ds.description}
-                </p>
-
-                <div style={{ fontSize: "0.8rem", color: "var(--muted)", display: "flex", flexDirection: "column", gap: "0.3rem", marginBottom: "1rem" }}>
-                  <div><strong>Agents:</strong> {ds.agents}</div>
-                  <div><strong>Modalities:</strong> {ds.modalities.join(", ")}</div>
-                  <div>
-                    <strong>Licence:</strong>{" "}
-                    {ds.licence_url ? (
-                      <a href={ds.licence_url} target="_blank" rel="noreferrer" style={{ color: "var(--text)", textDecoration: "underline" }}>
-                        {ds.licence}
-                      </a>
-                    ) : (
-                      ds.licence
-                    )}
-                  </div>
-                  <div style={{ display: "flex", gap: "0.8rem", marginTop: "0.2rem" }}>
-                    {ds.paper_url && (
-                      <a href={ds.paper_url} target="_blank" rel="noreferrer" style={{ color: "var(--text)", textDecoration: "underline" }}>
-                        Paper ↗
-                      </a>
-                    )}
-                    {ds.source_url && (
-                      <a href={ds.source_url} target="_blank" rel="noreferrer" style={{ color: "var(--text)", textDecoration: "underline" }}>
-                        Source ↗
-                      </a>
-                    )}
-                  </div>
-                </div>
-
-                {ds.notice && (
-                  <p style={{ fontSize: "0.75rem", color: "var(--muted)", background: "var(--sunken)", padding: "0.5rem", borderRadius: "6px" }}>
-                    {ds.notice}
-                  </p>
-                )}
-              </div>
-
-              <div style={{ marginTop: "1rem", paddingTop: "0.8rem", borderTop: "1px solid var(--line)" }}>
+                {/* Dense Preset Table inside the Card */}
                 {isReady && ds.presets && (
-                  <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                    <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                      <span style={{ fontSize: "0.8rem", color: "var(--muted)" }}>Presets:</span>
+                  <div style={{ borderTop: "1px solid var(--line, rgba(255,255,255,0.08))" }}>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "110px 1fr 90px 28px",
+                        alignItems: "center",
+                        gap: "8px",
+                        padding: "5px 16px",
+                        backgroundColor: "var(--sunken)",
+                        borderBottom: "1px solid var(--line-subtle)",
+                        fontSize: "11px",
+                        color: "var(--text-subtle)",
+                      }}
+                    >
+                      <span>Preset</span>
+                      <span>Description</span>
+                      <span style={{ textAlign: "right" }}>Download</span>
+                      <span />
                     </div>
-                    {ds.presets.map((preset) => (
-                      <button
-                        key={preset.id}
-                        type="button"
-                        onClick={() => handleSelectPreset(ds, preset.id)}
-                        style={{
-                          background: "var(--sunken)",
-                          border: "1px solid var(--line)",
-                          borderRadius: "6px",
-                          padding: "0.5rem 0.75rem",
-                          color: "var(--text)",
-                          cursor: "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          textAlign: "left",
-                          fontSize: "0.8rem",
-                        }}
-                      >
-                        <div>
-                          <strong>{preset.name}</strong>
-                          <div style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{preset.description}</div>
-                          <div style={{ fontSize: "0.75rem", color: "var(--text)", marginTop: "0.2rem" }}>
-                            {presetBytes[`${ds.id}:${preset.id}`] != null
-                              ? formatBytes(presetBytes[`${ds.id}:${preset.id}`])
-                              : presetSizeNote[`${ds.id}:${preset.id}`] || "Size is checked when you choose this preset."}
-                          </div>
-                        </div>
-                        <span style={{ fontSize: "1rem", marginLeft: "0.5rem" }}>↓</span>
-                      </button>
-                    ))}
+                    {ds.presets.map((preset, idx) => {
+                      const key = `${ds.id}:${preset.id}`;
+                      const sizeLabel =
+                        presetBytes[key] != null
+                          ? formatBytes(presetBytes[key])
+                          : presetSizeNote[key] || "Check size";
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          onClick={() => handleSelectPreset(ds, preset.id)}
+                          className="c-table-row"
+                          style={{
+                            width: "100%",
+                            display: "grid",
+                            gridTemplateColumns: "110px 1fr 90px 28px",
+                            alignItems: "center",
+                            gap: "8px",
+                            padding: "8px 16px",
+                            background: "transparent",
+                            border: "none",
+                            borderBottom:
+                              idx < ds.presets!.length - 1
+                                ? "1px solid var(--line-subtle)"
+                                : "none",
+                            borderRadius: 0,
+                            textAlign: "left",
+                            cursor: "pointer",
+                            fontSize: "12.5px",
+                          }}
+                        >
+                          <strong style={{ fontWeight: 500, color: "var(--text)" }}>
+                            {preset.name}
+                          </strong>
+                          <span
+                            style={{
+                              fontSize: "12px",
+                              color: "var(--text-tertiary)",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            {preset.description}
+                          </span>
+                          <span
+                            style={{
+                              textAlign: "right",
+                              fontFamily: "'Geist Mono', ui-monospace, monospace",
+                              fontSize: "11.5px",
+                              color: "var(--text-secondary)",
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {sizeLabel}
+                          </span>
+                          <span
+                            style={{
+                              textAlign: "right",
+                              color: "var(--primary-hover, #79c0ff)",
+                              fontWeight: 500,
+                            }}
+                          >
+                            ↓
+                          </span>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
 
                 {isLocal && (
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      if (onOpenImportFolder) {
-                        const folder = await pickDataRoot();
-                        if (folder) onOpenImportFolder(folder);
-                      }
-                    }}
+                  <div
                     style={{
-                      width: "100%",
-                      padding: "0.5rem",
-                      borderRadius: "6px",
-                      background: "var(--sunken)",
-                      border: "1px solid var(--line)",
-                      color: "var(--text)",
-                      cursor: "pointer",
-                      fontSize: "0.85rem",
-                      fontWeight: 500,
+                      padding: "10px 16px",
+                      borderTop: "1px solid var(--line-subtle)",
+                      backgroundColor: "var(--sunken)",
+                      display: "flex",
+                      justifyContent: "flex-end",
                     }}
                   >
-                    Import a local copy…
-                  </button>
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        if (onOpenImportFolder) {
+                          const folder = await pickDataRoot();
+                          if (folder) onOpenImportFolder(folder);
+                        }
+                      }}
+                      style={{
+                        padding: "5px 12px",
+                        borderRadius: "5px",
+                        background: "transparent",
+                        border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
+                        color: "var(--text)",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                        fontWeight: 500,
+                      }}
+                    >
+                      Import a local copy…
+                    </button>
+                  </div>
                 )}
 
                 {isPlanned && (
-                  <div style={{ textAlign: "center", fontSize: "0.8rem", color: "var(--muted)", padding: "0.4rem" }}>
-                    Coming later
+                  <div
+                    style={{
+                      padding: "8px 16px",
+                      borderTop: "1px solid var(--line-subtle)",
+                      fontSize: "11.5px",
+                      color: "var(--text-subtle)",
+                    }}
+                  >
+                    Adapter in preparation
                   </div>
                 )}
               </div>
-            </div>
-          );
-        })}
+            );
+          })}
         </div>
       )}
 
-      {/* Preset Dry-run Modal */}
+      {/* Preset Dry-run & Progress Modal */}
       {selectedDataset && (
         <div
           role="dialog"
@@ -476,20 +668,20 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
           <div
             style={{
               background: "var(--panel)",
-              borderRadius: "12px",
+              borderRadius: "10px",
               border: "1px solid var(--line)",
-              maxWidth: "540px",
+              maxWidth: "500px",
               width: "100%",
-              padding: "1.5rem",
+              padding: "1.25rem",
               boxShadow: "var(--shadow)",
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: "1rem" }}>
               <div>
-                <h3 style={{ margin: 0, fontSize: "1.2rem", color: "var(--text)" }}>
+                <h3 style={{ margin: 0, fontSize: "15px", fontWeight: 600, color: "var(--text)" }}>
                   Download {selectedDataset.name} ({selectedPresetId})
                 </h3>
-                <span style={{ fontSize: "0.85rem", color: "var(--muted)" }}>
+                <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>
                   Schema 1 converted dataset download
                 </span>
               </div>
@@ -504,7 +696,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                   background: "transparent",
                   border: "none",
                   color: "var(--muted)",
-                  fontSize: "1.2rem",
+                  fontSize: "14px",
                   cursor: "pointer",
                 }}
               >
@@ -513,45 +705,68 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             </div>
 
             {estimating && (
-              <div style={{ padding: "2rem", textAlign: "center", color: "var(--muted)" }}>
+              <div style={{ padding: "1.5rem", textAlign: "center", color: "var(--muted)", fontSize: "12.5px" }}>
                 Estimating archive sizes and checking volume headroom…
               </div>
             )}
 
             {dryRunError && (
-              <div style={{ padding: "1rem", borderRadius: "8px", background: "rgba(255, 60, 60, 0.15)", color: "var(--danger)", marginBottom: "1rem" }}>
+              <div
+                style={{
+                  padding: "0.75rem",
+                  borderRadius: "6px",
+                  background: "rgba(248, 81, 73, 0.12)",
+                  color: "var(--danger)",
+                  marginBottom: "0.75rem",
+                  fontSize: "12.5px",
+                }}
+              >
                 {dryRunError}
               </div>
             )}
 
             {dryRun && !estimating && !jobRunning && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                <div style={{ background: "var(--sunken)", borderRadius: "8px", padding: "1rem" }}>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.4rem", fontSize: "0.9rem" }}>
-                    <span style={{ color: "var(--muted)" }}>Download size:</span>
-                    <strong style={{ color: "var(--text)" }}>{formatBytes(dryRun.download_bytes)}</strong>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.4rem", fontSize: "0.9rem" }}>
-                    <span style={{ color: "var(--muted)" }}>Disk space required:</span>
-                    <strong style={{ color: "var(--text)" }}>{formatBytes(dryRun.disk_bytes)}</strong>
-                  </div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.9rem" }}>
-                    <span style={{ color: "var(--muted)" }}>Free space after:</span>
-                    <strong style={{ color: dryRun.has_headroom ? "var(--ok)" : "var(--danger)" }}>
-                      {formatBytes(dryRun.free_bytes - dryRun.disk_bytes)}
-                    </strong>
-                  </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}>
+                <div
+                  style={{
+                    background: "var(--sunken)",
+                    borderRadius: "6px",
+                    padding: "10px 12px",
+                    border: "1px solid var(--line-subtle)",
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    rowGap: "6px",
+                    fontSize: "12.5px",
+                  }}
+                >
+                  <span style={{ color: "var(--text-subtle)" }}>Download size</span>
+                  <strong style={{ color: "var(--text)", fontFamily: "'Geist Mono', monospace" }}>
+                    {formatBytes(dryRun.download_bytes)}
+                  </strong>
+                  <span style={{ color: "var(--text-subtle)" }}>Disk space required</span>
+                  <strong style={{ color: "var(--text)", fontFamily: "'Geist Mono', monospace" }}>
+                    {formatBytes(dryRun.disk_bytes)}
+                  </strong>
+                  <span style={{ color: "var(--text-subtle)" }}>Free space after</span>
+                  <strong
+                    style={{
+                      color: dryRun.has_headroom ? "var(--ok)" : "var(--danger)",
+                      fontFamily: "'Geist Mono', monospace",
+                    }}
+                  >
+                    {formatBytes(dryRun.free_bytes - dryRun.disk_bytes)}
+                  </strong>
                 </div>
 
                 {!dryRun.has_headroom && (
                   <div
                     style={{
-                      padding: "0.8rem",
+                      padding: "8px 10px",
                       borderRadius: "6px",
-                      background: "rgba(255, 69, 58, 0.15)",
-                      border: "1px solid rgba(255, 69, 58, 0.3)",
+                      background: "rgba(248, 81, 73, 0.12)",
+                      border: "1px solid rgba(248, 81, 73, 0.3)",
                       color: "var(--danger)",
-                      fontSize: "0.85rem",
+                      fontSize: "12px",
                     }}
                   >
                     Insufficient disk space. Coperceive requires at least 10% headroom remaining after extraction.
@@ -563,18 +778,17 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     style={{
                       display: "flex",
                       alignItems: "flex-start",
-                      gap: "0.5rem",
-                      fontSize: "0.85rem",
+                      gap: "8px",
+                      fontSize: "12.5px",
                       color: "var(--text)",
                       cursor: "pointer",
-                      padding: "0.5rem 0",
                     }}
                   >
                     <input
                       type="checkbox"
                       checked={acceptedTerms}
                       onChange={(e) => setAcceptedTerms(e.target.checked)}
-                      style={{ marginTop: "0.2rem" }}
+                      style={{ marginTop: "2px" }}
                     />
                     <span>
                       I acknowledge and accept the <strong>{selectedDataset.licence}</strong> licence terms for this dataset.
@@ -582,7 +796,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                   </label>
                 )}
 
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.75rem", marginTop: "0.5rem" }}>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "4px" }}>
                   <button
                     type="button"
                     onClick={() => {
@@ -590,11 +804,12 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                       setDryRun(null);
                     }}
                     style={{
-                      padding: "0.5rem 1rem",
+                      padding: "6px 12px",
                       borderRadius: "6px",
-                      border: "1px solid var(--line)",
+                      border: "1px solid var(--line-elevated)",
                       background: "transparent",
                       color: "var(--text)",
+                      fontSize: "12.5px",
                       cursor: "pointer",
                     }}
                   >
@@ -605,18 +820,22 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     onClick={handleStartDownload}
                     disabled={!dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)}
                     style={{
-                      padding: "0.5rem 1.2rem",
+                      padding: "6px 14px",
                       borderRadius: "6px",
                       border: "none",
-                      background: !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
-                        ? "var(--sunken)"
-                        : "#1f6feb",
-                      color: !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
-                        ? "var(--muted)"
-                        : "#fff",
-                      cursor: !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
-                        ? "not-allowed"
-                        : "pointer",
+                      background:
+                        !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
+                          ? "var(--sunken)"
+                          : "#1f6feb",
+                      color:
+                        !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
+                          ? "var(--muted)"
+                          : "#fff",
+                      cursor:
+                        !dryRun.has_headroom || (selectedDataset.requires_terms && !acceptedTerms)
+                          ? "not-allowed"
+                          : "pointer",
+                      fontSize: "12.5px",
                       fontWeight: 500,
                     }}
                   >
@@ -626,33 +845,41 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
               </div>
             )}
 
-            {/* Active Download / Conversion Progress Panel */}
+            {/* Active Download / Conversion Progress Panel (Mock-style 6px progress bar) */}
             {jobRunning && (
-              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem", marginBottom: "0.4rem" }}>
-                    <span style={{ color: "var(--muted)" }}>
+              <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
+                <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", fontVariantNumeric: "tabular-nums" }}>
+                    <span style={{ color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: "6px" }}>
+                      <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#388bfd" }} />
                       Stage: <strong>{jobStage}</strong>
                     </span>
-                    <span style={{ color: "var(--text)", fontWeight: 600 }}>{jobPercent}%</span>
+                    <span style={{ color: "var(--text)", fontWeight: 500, fontFamily: "'Geist Mono', monospace" }}>
+                      {jobPercent}%
+                    </span>
                   </div>
                   <div
                     role="progressbar"
                     aria-valuemin={0}
                     aria-valuemax={100}
                     aria-valuenow={jobPercent}
-                    style={{ height: "8px", background: "var(--line)", borderRadius: "4px", overflow: "hidden" }}
+                    style={{
+                      height: "6px",
+                      background: "var(--line, rgba(255,255,255,0.06))",
+                      borderRadius: "3px",
+                      overflow: "hidden",
+                    }}
                   >
                     <div
                       style={{
                         width: `${jobPercent}%`,
                         height: "100%",
-                        background: "#1f6feb",
+                        background: "#388bfd",
                         transition: "width 0.3s ease",
                       }}
                     />
                   </div>
-                  <p style={{ fontSize: "0.8rem", color: "var(--muted)", marginTop: "0.4rem" }}>{jobNote}</p>
+                  <p style={{ fontSize: "11.5px", color: "var(--text-tertiary)", margin: 0 }}>{jobNote}</p>
                 </div>
 
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -662,74 +889,76 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     style={{
                       background: "transparent",
                       border: "none",
-                      color: "var(--accent)",
-                      fontSize: "0.85rem",
+                      color: "var(--primary-hover, #79c0ff)",
+                      fontSize: "12px",
                       cursor: "pointer",
                       padding: 0,
                     }}
                   >
                     Show log
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => void handlePauseJob()}
-                    style={{
-                      padding: "0.4rem 0.8rem",
-                      borderRadius: "6px",
-                      border: "1px solid var(--line)",
-                      background: "transparent",
-                      color: "var(--text)",
-                      cursor: "pointer",
-                      fontSize: "0.85rem",
-                      marginRight: "0.5rem",
-                    }}
-                  >
-                    {jobPaused ? "Resume" : "Pause"}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleCancelJob}
-                    style={{
-                      padding: "0.4rem 0.8rem",
-                      borderRadius: "6px",
-                      border: "1px solid var(--line)",
-                      background: "transparent",
-                      color: "var(--danger)",
-                      cursor: "pointer",
-                      fontSize: "0.85rem",
-                    }}
-                  >
-                    Cancel
-                  </button>
+                  <div style={{ display: "flex", gap: "6px" }}>
+                    <button
+                      type="button"
+                      onClick={() => void handlePauseJob()}
+                      style={{
+                        padding: "4px 10px",
+                        borderRadius: "5px",
+                        border: "1px solid var(--line-elevated)",
+                        background: "transparent",
+                        color: "var(--text)",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      {jobPaused ? "Resume" : "Pause"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleCancelJob}
+                      style={{
+                        padding: "4px 10px",
+                        borderRadius: "5px",
+                        border: "1px solid var(--line-elevated)",
+                        background: "transparent",
+                        color: "var(--danger)",
+                        cursor: "pointer",
+                        fontSize: "12px",
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
 
             {jobError && (
-              <div style={{ marginTop: "1rem" }}>
+              <div style={{ marginTop: "0.75rem" }}>
                 <div
                   style={{
-                    padding: "0.8rem",
+                    padding: "8px 10px",
                     borderRadius: "6px",
-                    background: "rgba(255, 69, 58, 0.15)",
-                    border: "1px solid rgba(255, 69, 58, 0.3)",
+                    background: "rgba(248, 81, 73, 0.12)",
+                    border: "1px solid rgba(248, 81, 73, 0.3)",
                     color: "var(--danger)",
-                    fontSize: "0.85rem",
-                    marginBottom: "0.8rem",
+                    fontSize: "12px",
+                    marginBottom: "8px",
                   }}
                 >
                   {jobError}
                 </div>
-                <div style={{ display: "flex", justifyContent: "flex-end", gap: "0.5rem" }}>
+                <div style={{ display: "flex", justifyContent: "flex-end", gap: "6px" }}>
                   <button
                     type="button"
                     onClick={() => setShowLogModal(true)}
                     style={{
-                      padding: "0.4rem 0.8rem",
-                      borderRadius: "6px",
-                      border: "1px solid var(--line)",
+                      padding: "4px 10px",
+                      borderRadius: "5px",
+                      border: "1px solid var(--line-elevated)",
                       background: "transparent",
                       color: "var(--text)",
+                      fontSize: "12px",
                       cursor: "pointer",
                     }}
                   >
@@ -739,11 +968,12 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                     type="button"
                     onClick={handleStartDownload}
                     style={{
-                      padding: "0.4rem 0.8rem",
-                      borderRadius: "6px",
+                      padding: "4px 10px",
+                      borderRadius: "5px",
                       border: "none",
                       background: "#1f6feb",
                       color: "#fff",
+                      fontSize: "12px",
                       cursor: "pointer",
                       fontWeight: 500,
                     }}
@@ -787,7 +1017,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             }}
           >
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.8rem" }}>
-              <h4 style={{ margin: 0, color: "var(--text)" }}>Dataset Job Logs</h4>
+              <h4 style={{ margin: 0, color: "var(--text)", fontSize: "14px" }}>Dataset Job Logs</h4>
               <button
                 type="button"
                 onClick={() => setShowLogModal(false)}
@@ -803,7 +1033,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                 background: "var(--sunken)",
                 padding: "0.75rem",
                 borderRadius: "6px",
-                fontSize: "0.8rem",
+                fontSize: "11.5px",
                 color: "var(--text)",
                 fontFamily: "'Geist Mono', monospace",
                 margin: 0,
