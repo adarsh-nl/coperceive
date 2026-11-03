@@ -224,6 +224,21 @@ async fn save_exported_file(
     Ok(path_str)
 }
 
+/// Poll until no window has `label`, up to `limit`. Never call on the main
+/// thread: closing a window needs the main event loop.
+#[cfg(target_os = "macos")]
+fn wait_for_window_gone(app: &tauri::AppHandle, label: &str, limit: Duration) -> bool {
+    use tauri::Manager;
+    let deadline = Instant::now() + limit;
+    while app.get_webview_window(label).is_some() {
+        if Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 #[cfg(target_os = "macos")]
 fn open_viewer_window(
     app: &tauri::AppHandle,
@@ -238,6 +253,21 @@ fn open_viewer_window(
 
     if let Some(existing_viewer) = app.get_webview_window("viewer") {
         let _ = existing_viewer.close();
+        // close() only asks the window to close. Until it is gone, the lookup
+        // below finds it, "reuses" it and returns, and then it closes: no
+        // viewer at all, and the hidden main window is left showing the scene.
+        // Every caller runs off the main thread, so waiting here is safe.
+        if !wait_for_window_gone(app, "viewer", Duration::from_secs(5)) {
+            if let Some(stuck) = app.get_webview_window("viewer") {
+                let _ = stuck.destroy();
+            }
+            if !wait_for_window_gone(app, "viewer", Duration::from_secs(2)) {
+                return Err(
+                    "The previous viewer window did not close. Close it and open the scene again."
+                        .to_string(),
+                );
+            }
+        }
     }
 
     if let Ok(mut lock) = state.viewer_origin.lock() {
