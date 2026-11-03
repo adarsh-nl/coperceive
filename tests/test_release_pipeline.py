@@ -153,3 +153,5 @@ def test_the_release_runs_the_tests_before_it_builds() -> None:
         assert step in checks, step
     build = workflow[workflow.index("  build-release:") :]
     assert "needs: checks" in build.split("steps:", 1)[0]
+    # The checks job runs the repository's tests: it must not get write access.
+    assert "permissions:\n      contents: read" in checks.split("steps:", 1)[0]
