@@ -65,6 +65,9 @@ pub struct AppState {
     pub remote_key: Mutex<Option<String>>,
     /// The open cluster dataset's scenes and states, for the viewer's scene list.
     pub dataset_scenes: Arc<Mutex<serde_json::Value>>,
+    /// What the local sidecar serves when it reads a cluster dataset over SSH
+    /// (see `dataset_open`); None for a local folder.
+    pub stream_key: Mutex<Option<String>>,
     pub current_root: Mutex<Option<String>>,
     pub startup_instant: Instant,
     /// One viewer window. A second open focuses the existing window.
@@ -88,6 +91,7 @@ impl Default for AppState {
             viewer_origin: Mutex::new(None),
             remote_key: Mutex::new(None),
             dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
+            stream_key: Mutex::new(None),
             current_root: Mutex::new(None),
             startup_instant: Instant::now(),
             viewer_build: Mutex::new(()),
@@ -529,6 +533,9 @@ async fn switch_data_root(
             let _ = old.stop();
         }
         *lock = Some(new_session);
+        if let Ok(mut current) = state.stream_key.lock() {
+            *current = None;
+        }
     }
 
     if let Ok(lock) = state.controller_config.lock() {
@@ -1151,6 +1158,9 @@ async fn start_local_session(
         let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
         if let Some(mut existing) = lock.take() {
             let _ = existing.stop();
+        }
+        if let Ok(mut current) = state.stream_key.lock() {
+            *current = None;
         }
     }
 
@@ -2670,6 +2680,65 @@ async fn dataset_previews(profile_id: String, remove: bool) -> Result<serde_json
     .map_err(|error| format!("Could not read the camera previews: {error}"))?
 }
 
+/// Where viewing over SSH keeps its local files: per-dataset mirrors of the
+/// scenes' small files and the size-capped cache of sweeps and images. This is
+/// the app's own cache directory; nothing is written on the cluster.
+#[cfg(target_os = "macos")]
+fn remote_view_cache_dir() -> PathBuf {
+    if let Some(dir) = std::env::var_os("COPERCEIVE_REMOTE_VIEW_CACHE") {
+        return PathBuf::from(dir);
+    }
+    std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("Library/Caches/nl.adarsh.coperceive/remote-view")
+}
+
+#[cfg(target_os = "macos")]
+fn directory_bytes(dir: &Path) -> u64 {
+    fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .map(|entry| match entry.metadata() {
+                    Ok(meta) if meta.is_dir() => directory_bytes(&entry.path()),
+                    Ok(meta) => meta.len(),
+                    Err(_) => 0,
+                })
+                .sum()
+        })
+        .unwrap_or(0)
+}
+
+/// Settings → Cluster datasets → "Viewing cache": its cap, what it uses, and
+/// `clear` to empty it (sweeps and images only; they are fetched again).
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn remote_view_cache(cap_bytes: Option<u64>, clear: Option<bool>) -> Result<serde_json::Value, String> {
+    let mut persistent = state::load_state();
+    if let Some(cap) = cap_bytes {
+        persistent.remote_view_cache_bytes = cap.max(state::MIN_REMOTE_VIEW_CACHE_BYTES);
+        state::save_state(&persistent).map_err(|error| format!("Could not save the setting: {error}"))?;
+    }
+    let blocks = remote_view_cache_dir().join("blocks");
+    if clear.unwrap_or(false) {
+        if let Ok(entries) = fs::read_dir(&blocks) {
+            for entry in entries.flatten() {
+                let _ = fs::remove_file(entry.path());
+            }
+        }
+    }
+    Ok(serde_json::json!({
+        "cap_bytes": persistent.remote_view_cache_bytes,
+        "used_bytes": directory_bytes(&blocks),
+    }))
+}
+
+/// Opens a prepared cluster dataset in the viewer with no Slurm job: a local
+/// `coperceive serve` reads the scenes over one long-lived SSH connection to a
+/// read-only streamer confined to this dataset's cache split and raw root
+/// (docs/datasets/cluster-datasets.md, "Viewing"). Opening another scene of
+/// the same dataset reuses the server and its connection.
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_open(
@@ -2688,20 +2757,117 @@ async fn dataset_open(
         &raw_root,
         split.as_deref(),
     )?;
-    let alias = entry.profile.ssh_target()?;
-    // Camera images resolve through each scene's `raw` link into exactly this
-    // dataset's root (docs/datasets/cluster-datasets.md, "Camera images").
-    remote_connect(
-        app,
-        state,
-        alias,
-        cache,
-        None,
-        Some(profile_id),
-        Some(vec![raw_root]),
-        scene_id,
-    )
-    .await
+    let target = entry.ssh_target()?;
+    let key = format!("stream|{profile_id}|{cache}|{raw_root}");
+    let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+    let query = scene_id.as_deref().map(|scene| format!("scene={}", urlencoding_component(scene)));
+
+    let reusable = {
+        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+        let current = state.stream_key.lock().ok().and_then(|lock| lock.clone());
+        match lock.as_mut() {
+            Some(session) if current.as_deref() == Some(key.as_str()) => session
+                .is_alive()
+                .then(|| (format!("http://127.0.0.1:{}", session.port), session.token.clone())),
+            _ => None,
+        }
+    };
+    if let Some((origin, token)) = reusable {
+        if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
+            open_viewer_window(&app, &origin, &token, &cache, ctrl_port, state.inner(), query.as_deref())?;
+        }
+        return Ok(SessionPayload {
+            origin,
+            token,
+            server_version: "0.0.0".to_string(),
+            data_root: cache,
+            target_type: "stream".to_string(),
+        });
+    }
+
+    // Anything else stops: the previous local server and any viewer job.
+    {
+        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+        if let Some(mut existing) = lock.take() {
+            let _ = existing.stop();
+        }
+        if let Ok(mut current) = state.stream_key.lock() {
+            *current = None;
+        }
+    }
+    {
+        let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
+        if let Some(mut existing) = lock.take() {
+            let _ = existing.disconnect();
+        }
+        if let Ok(mut current) = state.remote_key.lock() {
+            *current = None;
+        }
+    }
+
+    let stream = coperceive_desktop::cluster_datasets::stream_argv(
+        &ssh_bin(),
+        &target,
+        &entry.profile,
+        &cache,
+        &raw_root,
+    );
+    let cache_dir = remote_view_cache_dir();
+    let mirror = cache_dir.join("mirror").join(format!("{:016x}", {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        key.hash(&mut hasher);
+        hasher.finish()
+    }));
+    fs::create_dir_all(&mirror).map_err(|error| format!("Could not create the viewing cache: {error}"))?;
+    let extra = vec![
+        "--remote-stream-argv".to_string(),
+        serde_json::to_string(&stream).map_err(|error| error.to_string())?,
+        "--remote-cache-dir".to_string(),
+        cache_dir.join("blocks").to_string_lossy().into_owned(),
+        "--remote-cache-bytes".to_string(),
+        state::load_state().remote_view_cache_bytes.to_string(),
+    ];
+    let python_bin = resolve_python_binary(&app);
+    let mut session = SidecarSession::spawn_with_args(&python_bin, &mirror, None, None, &extra)
+        .map_err(|e| format!("Could not start the viewer: {e}"))?;
+    let origin = format!("http://127.0.0.1:{}", session.port);
+    let token = session.token.clone();
+    if let Ok(lock) = state.controller_config.lock() {
+        if let Some(ref cfg) = *lock {
+            cfg.set_allowed_origin(origin.clone());
+        }
+    }
+    if let Err(error) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+        session.preserve_log = true;
+        let tail = fs::read_to_string(&session.log_path)
+            .map(|content| {
+                let lines: Vec<&str> = content.lines().collect();
+                lines[lines.len().saturating_sub(20)..].join("\n")
+            })
+            .unwrap_or_default();
+        let _ = session.stop();
+        return Err(format!("The viewer did not start: {error}\n\n{tail}"));
+    }
+    eprintln!("[viewer] reading {cache} over SSH, no Slurm job");
+    if let Err(error) = open_viewer_window(&app, &origin, &token, &cache, ctrl_port, state.inner(), query.as_deref()) {
+        let _ = session.stop();
+        return Err(error);
+    }
+    {
+        let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+        *lock = Some(session);
+    }
+    if let Ok(mut current) = state.stream_key.lock() {
+        *current = Some(key);
+    }
+    Ok(SessionPayload {
+        origin,
+        token,
+        server_version: "0.0.0".to_string(),
+        data_root: cache,
+        target_type: "stream".to_string(),
+    })
 }
 
 /// Runs the test-only dataset flow (see `test_seams::DatasetFlowProbe`): saves
@@ -3302,6 +3468,7 @@ fn main() {
             open_predictions,
             list_run_history,
             remote_connect,
+            remote_view_cache,
             remote_status,
             remote_disconnect,
             remote_scan,

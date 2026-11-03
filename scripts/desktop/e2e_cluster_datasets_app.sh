@@ -8,8 +8,8 @@
 # dataset_index, dataset_prepare, dataset_prepare_submit, dataset_status,
 # dataset_open). The fake cluster is this machine: dataset commands run the
 # bundled coperceive, a confirmed sbatch runs the rendered prepare script, and
-# dataset_open starts a real `coperceive serve` on the cache behind a loopback
-# "tunnel". The raw tree is the synthetic OPV2V layout from
+# dataset_open starts the app's local `coperceive serve` reading the cache over
+# the fake ssh (`coperceive dataset stream`), with no Slurm job. The raw tree is the synthetic OPV2V layout from
 # e2e_cluster_datasets.sh (3 test scenes) plus a bigger train split, as on the
 # real cluster, so index and prepare must use the split detect returned; no real
 # data, no network.
@@ -75,6 +75,9 @@ stop_fake_cluster() {
         rm -f "${pid_file}"
     done
     pkill -f "${FIXTURES_DIR}/tcp_forward.py" 2>/dev/null || true
+    # The app's viewer server (killed with the app) and its streamer over ssh.
+    pkill -f "${TMP_DIR}/remote-view" 2>/dev/null || true
+    pkill -f "dataset stream --root ${CLUSTER}" 2>/dev/null || true
 }
 
 cleanup() {
@@ -190,6 +193,7 @@ run_flow() {
     FAKE_REMOTE_HOME="${REMOTE_HOME}" \
     FAKE_CLUSTER_PYTHON="${PYTHON}" \
     FAKE_SSH_LOG="${TMP_DIR}/${name}-ssh.txt" \
+    COPERCEIVE_REMOTE_VIEW_CACHE="${TMP_DIR}/remote-view" \
     COPERCEIVE_TEST_DATASET_FLOW_REQUEST="${request}" \
     COPERCEIVE_TEST_DATASET_FLOW_RESULT="${result}" \
     "${APP_EXE}" >"${TMP_DIR}/${name}.stdout.log" 2>"${TMP_DIR}/${name}.stderr.log" &
@@ -398,7 +402,9 @@ print(f"Step CD-7 verified: prepare all (workers omitted) -> cpus_per_task=3; st
       f"scene_0000 prepared_unix unchanged ({before['scene_0000']['prepared_unix']})")
 session = steps[3]["value"]
 assert session["origin"].startswith("http://127.0.0.1:") and session["token"], {k: v for k, v in session.items() if k != "token"}
-assert session["target_type"] == "remote", session["target_type"]
+assert session["target_type"] == "stream", session["target_type"]
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+assert "remote-start" not in log and log.count("dataset-stream") == 1, log
 served = json.load(open(f"{tmp}/all-served.json", encoding="utf-8"))
 ready = sorted(key for key, value in scenes.items() if value["state"] == "ready")
 assert served == ready, (served, ready)
@@ -407,7 +413,8 @@ images = json.load(open(f"{tmp}/all-served-images.json", encoding="utf-8"))
 original, strip = images
 assert (original["status"], original["type"]) == (200, "image/png"), original
 assert (strip["status"], strip["type"]) == (200, "image/jpeg"), strip
-print(f"Step CD-8 verified: dataset_open -> origin {session['origin']} with a token; served scenes "
+print(f"Step CD-8 verified: dataset_open -> origin {session['origin']} with a token, no viewer job "
+      f"(no remote start; one ssh stream); served scenes "
       f"{served} == ready scenes (after one-scene prepare: {partial}); camera0 served from the "
       f"dataset's original PNG through the media root ({original['bytes']} bytes)")
 PY
@@ -502,9 +509,9 @@ print(f"Step CD-13 verified: Remove previews deleted {removed['removed']['bytes'
       "serves its image; raw tree byte-identical")
 PY
 
-# --- Flow H: a second Open reuses the viewer job ---------------------------------
-# Viewing must not submit a Slurm job per Open: the second scene of the same
-# dataset goes to the running job (and the open viewer), not a new one.
+# --- Flow H: a second Open reuses the viewer and its one ssh stream ---------------
+# Viewing a prepared dataset runs no Slurm job: both Opens go to the app's own
+# viewer server, which reads the cache over a single ssh connection.
 run_flow reuse "[
   {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}, \"sceneId\": \"scene_0000\"}},
   {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}, \"sceneId\": \"scene_0002\"}}
@@ -516,15 +523,14 @@ steps = json.load(open(result, encoding="utf-8"))["steps"]
 for step in steps:
     assert step["ok"], step
 first, second = steps[0]["value"], steps[1]["value"]
-assert (first["origin"], first["token"]) == (second["origin"], second["token"]), "the second Open started another session"
+assert (first["origin"], first["token"]) == (second["origin"], second["token"]), "the second Open started another server"
 log = open(ssh_log, encoding="utf-8").read().splitlines()
-starts = [line for line in log if line == "remote-start"]
-assert len(starts) == 1, log
-assert "remote-status" in log, log
-stderr = open(f"{tmp}/reuse.stderr.log", encoding="utf-8", errors="replace").read()
-assert "[viewer] reused the running viewer job" in stderr, stderr[-2000:]
-print(f"Step CD-14 verified: two Opens of the same dataset -> one viewer job (1 remote start, "
-      f"{log.count('remote-status')} status check), same origin {first['origin']}; the second reused it")
+assert not [line for line in log if line.startswith(("remote-", "sbatch", "tunnel"))], log
+assert log.count("dataset-stream") == 1, log
+served = json.load(open(f"{tmp}/reuse-served.json", encoding="utf-8"))
+assert served == ["scene_0000", "scene_0001", "scene_0002"], served
+print(f"Step CD-14 verified: two Opens of the same dataset -> one viewer server ({first['origin']}), "
+      f"no Slurm job (0 sbatch, 0 remote start), one ssh stream serving {len(served)} scenes")
 PY
 
 # --- Flow I: a viewer job that starts slowly (the real cluster's reply) ------------
@@ -547,6 +553,110 @@ assert log.count("remote-start") == 1 and "remote-status" in log, log
 print(f"Step CD-15 verified: a viewer job that ran before writing its session (status by id "
       f"alone said stopped/RUNNING) is attached, not refused: origin {step['value']['origin']}, "
       f"{log.count('remote-status')} status check(s), 1 remote start")
+PY
+
+# --- Flow J: view prepared scenes while the prepare job runs ---------------------
+# train_0000 is prepared first; then a job for the rest is submitted and held
+# running (FAKE_SBATCH_HOLD). The ready scene is viewable meanwhile, over ssh,
+# with no viewer job; the scenes still preparing are not served.
+TRAIN_ARGS="${DATASET_ARGS/\"split\": \"test\"/\"split\": \"train\"}"
+[ "${TRAIN_ARGS}" != "${DATASET_ARGS}" ] || fail "could not derive the train split arguments"
+run_flow trainone "[
+  {\"command\": \"dataset_prepare\", \"args\": {${TRAIN_ARGS}, \"scenes\": [\"train_0000\"], \"workers\": 1}},
+  {\"command\": \"dataset_prepare_submit\", \"args\": {$(profile_args), \"previewHash\": \"@last_preview_hash\", \"confirmed\": true}}
+]"
+# --- Flow K: no nodes for jobs, still viewable; the streamer refuses escapes --------
+# Only train_0000 is prepared; the job for the rest cannot be submitted.
+export FAKE_SBATCH_FAIL=1
+run_flow nonodes "[
+  {\"command\": \"dataset_prepare\", \"args\": {${TRAIN_ARGS}, \"scenes\": \"all\", \"workers\": 1}},
+  {\"command\": \"dataset_prepare_submit\", \"args\": {$(profile_args), \"previewHash\": \"@last_preview_hash\", \"confirmed\": true}},
+  {\"command\": \"dataset_open\", \"args\": {${TRAIN_ARGS}, \"sceneId\": \"train_0000\"}}
+]"
+unset FAKE_SBATCH_FAIL
+check nonodes "${FAKE_SSH}" "${REMOTE_HOME}" "${PYTHON}" <<'PY'
+import json, os, subprocess, sys
+result, ssh_log, tmp, raw, fake_ssh, home, python = sys.argv[1:8]
+preview, submit, opened = json.load(open(result, encoding="utf-8"))["steps"]
+assert preview["ok"] and opened["ok"], (preview, opened)
+assert not submit["ok"] and "node configuration is not available" in submit["error"], submit
+served = json.load(open(f"{tmp}/nonodes-served.json", encoding="utf-8"))
+assert served == ["train_0000"], served
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+assert "remote-start" not in log and log.count("dataset-stream") == 1, log
+print(f"Step CD-16 verified: sbatch failed (no nodes: {submit['error'].splitlines()[0][:80]!r}); "
+      f"dataset_open still served the prepared {served} over ssh, no job")
+
+# The exact streamer command the app ran, over the same fake ssh: reads inside
+# the dataset work; a climb out, an absolute path and a symlink escape are refused.
+remote = open(ssh_log + ".stream-command", encoding="utf-8").read()
+cache_root = remote.split("--root ", 1)[1].split(" --root", 1)[0].strip("'")
+escape = os.path.join(cache_root, "train_0000", "escape-link")
+os.symlink(f"{home}/.fake-slurm/next-id", escape)
+try:
+    requests = [
+        {"op": "read", "path": "train_0000/manifest.json"},
+        {"op": "read", "path": "../../../home/.fake-slurm/next-id"},
+        {"op": "read", "path": f"{home}/.fake-slurm/next-id"},
+        {"op": "read", "path": "train_0000/escape-link"},
+        {"op": "stat", "path": "train_0000/../../.."},
+    ]
+    stdin = "".join(json.dumps({**r, "id": i + 1}) + "\n" for i, r in enumerate(requests))
+    env = {**os.environ, "FAKE_REMOTE_HOME": home, "FAKE_CLUSTER_PYTHON": python}
+    env.pop("FAKE_SSH_LOG", None)
+    out = subprocess.run([fake_ssh, "fake-cluster", remote], input=stdin.encode(), env=env,
+                         capture_output=True, timeout=60).stdout
+finally:
+    os.unlink(escape)
+replies = []
+while out:
+    line, out = out.split(b"\n", 1)
+    header = json.loads(line)
+    out = out[int(header.get("size") or 0):]
+    replies.append(header)
+assert replies[0]["ok"], replies[0]
+assert all(not reply["ok"] for reply in replies[1:]), replies
+print(f"Step CD-17 verified: the app's streamer command reads inside the dataset and refuses "
+      f"{len(replies) - 1} escapes (.., absolute, symlink, stat ..): "
+      f"{sorted({reply['error'][:40] for reply in replies[1:]})}")
+PY
+
+# Then the job for the rest is submitted and held running.
+HOLD="${TMP_DIR}/release-prepare"
+export FAKE_SBATCH_HOLD="${HOLD}"
+run_flow during "[
+  {\"command\": \"dataset_prepare\", \"args\": {${TRAIN_ARGS}, \"scenes\": \"all\", \"workers\": 1}},
+  {\"command\": \"dataset_prepare_submit\", \"args\": {$(profile_args), \"previewHash\": \"@last_preview_hash\", \"confirmed\": true}},
+  {\"command\": \"dataset_status\", \"args\": {${TRAIN_ARGS}}},
+  {\"command\": \"dataset_open\", \"args\": {${TRAIN_ARGS}, \"sceneId\": \"train_0000\"}}
+]"
+unset FAKE_SBATCH_HOLD
+check during "${HOLD}" "${REMOTE_HOME}" <<'PY'
+import json, os, sys, time
+result, ssh_log, tmp, raw, hold, home = sys.argv[1:7]
+steps = json.load(open(result, encoding="utf-8"))["steps"]
+for step in steps:
+    assert step["ok"], step
+job_id = steps[1]["value"]["job_id"]
+slurm = f"{home}/.fake-slurm"
+assert os.path.exists(f"{slurm}/{job_id}.running") and not os.path.exists(f"{slurm}/{job_id}.exit"), \
+    "the prepare job was not still running while viewing"
+states = {scene["scene_id"]: scene["state"] for scene in steps[2]["value"]["scenes"]}
+assert states["train_0000"] == "ready" and all(
+    state != "ready" for scene, state in states.items() if scene != "train_0000"), states
+served = json.load(open(f"{tmp}/during-served.json", encoding="utf-8"))
+assert served == ["train_0000"], served
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+assert log.count("sbatch") == 1 and "remote-start" not in log and log.count("dataset-stream") == 1, log
+open(hold, "w").close()
+deadline = time.monotonic() + 120
+while not os.path.exists(f"{slurm}/{job_id}.exit"):
+    assert time.monotonic() < deadline, "the released prepare job did not finish"
+    time.sleep(0.2)
+assert open(f"{slurm}/{job_id}.exit").read().strip() == "0"
+print(f"Step CD-18 verified: while prepare job {job_id} ran (others {sorted(set(states.values()) - {'ready'})}), "
+      f"dataset_open served the ready scene {served} over one ssh stream with no viewer job; "
+      "the job then finished")
 PY
 
 # --- Flow E: an older coperceive on the cluster --------------------------------
@@ -579,7 +689,7 @@ result, ssh_log, tmp, raw, checkout, python = sys.argv[1:7]
 connection, detect = json.load(open(result, encoding="utf-8"))["steps"]
 update = f"git -C {checkout} pull --ff-only && {python} -m pip install -e {checkout} --no-deps"
 expected = ("coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, which "
-            "has no capabilities command, need a build with cluster-datasets-4). Update it with: " + update)
+            "has no capabilities command, need a build with cluster-datasets-5). Update it with: " + update)
 assert not detect["ok"], detect
 assert detect["error"] == expected, detect["error"]
 assert "invalid choice" not in detect["error"] and "usage:" not in detect["error"], detect["error"]

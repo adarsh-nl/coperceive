@@ -215,7 +215,7 @@ EOF
     *"coperceive-check:capabilities"*)
         case "${all_args}" in
             *cluster-a*|*cluster-b*|*cluster-save*)
-                echo '{"schema": "coperceive-capabilities-1", "version": "0.1.0", "capabilities": ["cluster-datasets-2", "cluster-datasets-3", "cluster-datasets-4"]}'
+                echo '{"schema": "coperceive-capabilities-1", "version": "0.1.0", "capabilities": ["cluster-datasets-2", "cluster-datasets-3", "cluster-datasets-4", "cluster-datasets-5"]}'
                 ;;
             *) exit 127 ;;
         esac

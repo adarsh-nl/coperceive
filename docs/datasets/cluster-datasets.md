@@ -308,14 +308,16 @@ scene to its Slurm job.
 ## Server support check — `coperceive capabilities`
 
 `coperceive capabilities` prints
-`{"schema": "coperceive-capabilities-1", "version": "0.1.0", "capabilities": ["cluster-datasets-2", "cluster-datasets-3"]}`.
+`{"schema": "coperceive-capabilities-1", "version": "0.1.0", "capabilities": ["cluster-datasets-2", …, "cluster-datasets-5"]}`.
 `cluster-datasets-2` means: these commands, numpy-tagged records and
 per-scene index errors; `cluster-datasets-3` adds `--split` on `index` and
-`prepare`. The desktop needs `cluster-datasets-3`. When a desktop dataset command fails, and on Test
+`prepare`; `cluster-datasets-4` adds `prepare --images` and `dataset
+previews`; `cluster-datasets-5` adds `dataset stream` (viewing over SSH). The
+desktop needs `cluster-datasets-5`. When a desktop dataset command fails, and on Test
 connection (row `cluster-datasets`), the app runs this command through the
-saved argv. A build without it, or without `cluster-datasets-3`, gets one
+saved argv. A build without it, or without `cluster-datasets-5`, gets one
 message: `coperceive on this server is too old for cluster datasets (found X,
-need a build with cluster-datasets-3). Update it with: <command>`, where the
+need a build with cluster-datasets-5). Update it with: <command>`, where the
 command is `git -C <checkout> pull --ff-only && <python> -m pip install -e
 <checkout> --no-deps` for a git checkout, else a `pip install --upgrade` from
 the repository.
@@ -335,29 +337,56 @@ failed remote command returns a plain error string; a successful `detect` with
 no match returns `status:"none"` (not an error).
 
 
-## What viewing costs: the viewer job
+## Viewing: over SSH, no job
 
 Preparing is once per scene: a prepared scene stays in the cache and is reused
-until the raw data changes. Viewing is separate: the scenes are served from the
-cluster by a small CPU job (`remote_serve.sbatch`, the profile's partition,
-CPUs and time limit) behind an SSH tunnel.
+until the raw data changes. Viewing runs **no Slurm job**. The app starts its
+own viewer server on this Mac (`coperceive serve --remote-stream-argv …`), and
+that server reads the prepared files over one long-lived SSH connection to a
+read-only streamer on the login node:
 
-- The first **Open** of a dataset starts that job. Its preview is the server
-  profile itself; nothing GPU, nothing written outside `~/.coperceive`.
-- Every further **Open** of a scene of the same dataset (same server, cache
-  directory and media root) **reuses the running job** and the open viewer
-  window: the viewer is pointed at the scene (`#/viewer?scene=…`), no new job,
-  no new window. Choosing another scene in the viewer, the scene buttons and the
-  P/N keys use the same job.
-- After the app restarts, it reattaches to the job by its session id (kept in
-  `state.json` as `viewer_sessions`) if the job still runs; otherwise it starts
-  a new one.
-- Opening a different dataset (or a local scene) stops the job and starts one
-  for that data.
-- While the job waits in the queue, the dataset view says "Starting viewer on
-  the cluster (job N, queue reason)". A job still queued after 15 minutes is
-  cancelled with a plain message, so it never runs unseen.
-- The viewer shows the job and its time left ("Cluster job N · 3:59:00 left").
+    ssh <the profile's options and host> <coperceive argv> dataset stream \
+        --root <cache split directory> --root <dataset raw root>
+
+- **One connection, pipelined.** Requests are JSON lines on the streamer's
+  stdin, each with an id; replies are a JSON header line and the bytes. Several
+  reads are in flight at once, so round trips overlap. The SSH options are the
+  app's usual ones (`BatchMode`, `ControlMaster=auto`, `ControlPersist`). Every
+  remote argument is shell-quoted; file paths only travel on stdin, never
+  through a shell.
+- **Read-only and confined.** The streamer reads only below its `--root`s:
+  the dataset's cache split and its raw root (for "Read originals" camera
+  images). It refuses absolute paths, `..`, NUL, and anything whose `realpath`
+  leaves the roots, symlinks included. It never writes. Requires
+  `cluster-datasets-5`.
+- **What crosses the link.** Each scene's small files (manifest and tables) are
+  mirrored on first open; point sweeps and camera images are read as byte
+  ranges on demand, prefetched ahead of playback (as in "Buffering…"), and kept
+  in a local cache capped at 2 GB (Settings → Cluster datasets → "Viewing
+  cache", with "Clear cache"). The cache lives in
+  `~/Library/Caches/nl.adarsh.coperceive/remote-view/`.
+- **While a prepare job runs**, scenes with `COMPLETE.json` are listed and
+  viewable; the others join the viewer's list as they finish. Viewing still
+  works when no job can be submitted (no free nodes).
+- Every further **Open** of a scene of the same dataset reuses the viewer
+  server and its connection, and points the open viewer at the scene
+  (`#/viewer?scene=…`). Opening another dataset or a local folder stops it.
+
+Measured with `scripts/bench/remote_view_bench.py` (a 2-agent OPV2V-sized
+scene, 56 000 points per sweep, 10 Hz; `scripts/bench/link.py` adds half the
+round trip each way and caps the bandwidth):
+
+| link | playback (first time) | median frame | "Buffering…" frames | from the local cache |
+| --- | --- | --- | --- | --- |
+| 20 ms, 25 MB/s | 9.7 fps | 160 ms | 0 of 60 | 10 fps, ~18 ms |
+| 20 ms, 50 MB/s | 9.9 fps | 112 ms | 0 of 60 | 10 fps, ~18 ms |
+| 40 ms, 25 MB/s | 9.7 fps | 223 ms | 0 of 60 | 10 fps, ~18 ms |
+| 40 ms, 50 MB/s | 9.8 fps | 156 ms | 0 of 60 | 10 fps, ~18 ms |
+| 40 ms, 10 MB/s | 5.7 fps | 841 ms | 35 of 60 | 10 fps, ~21 ms |
+
+Opening the scene took 0.6–1.9 s; 60 frames moved about 102 MB (1.7 MB per
+frame), so below about 18 MB/s the first pass is bandwidth-bound and buffers;
+once cached it plays at full rate.
 
 ## Camera-image settings and previews (desktop)
 
