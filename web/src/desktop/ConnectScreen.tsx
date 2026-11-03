@@ -865,7 +865,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                 }}
               >
                 <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-                  Local workspace / open folder
+                  Local workspace · open folder
                 </div>
                 <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
                   <h2

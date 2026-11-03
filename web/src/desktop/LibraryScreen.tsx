@@ -293,7 +293,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
         >
           <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-              Local workspace / library
+              Local workspace · library
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
               <h2

@@ -235,7 +235,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
           <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
             <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-              Local workspace / catalog
+              Local workspace · catalog
             </div>
             <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
               <h2
