@@ -215,6 +215,7 @@ def start_session(
     sbatch_script: str | Path | None = None,
     wait_timeout: int = 45,
     extra_args: list[str] | None = None,
+    media_roots: list[str] | None = None,
 ) -> dict[str, Any]:
     """Submits a remote serve Slurm job and waits for RUNNING readiness.
 
@@ -251,6 +252,15 @@ def start_session(
                     "Reconnect from the desktop app so it uploads the page again."
                 ),
             }
+
+    # Directories the server may read camera images from (a cluster dataset's raw
+    # root). Each is passed as its own argument, never word-split by the shell.
+    media_paths: list[Path] = []
+    for media in media_roots or []:
+        media_path = Path(media).expanduser().resolve()
+        if not media_path.is_dir() or "\n" in str(media_path):
+            return {"status": "error", "error": f"Media root is not a directory: {media}"}
+        media_paths.append(media_path)
 
     uuid_val = session_uuid or secrets.token_hex(8)
     token = generate_secure_token()
@@ -304,6 +314,8 @@ def start_session(
         env["COPERCEIVE_EXTRA_ARGS"] = " ".join(extra_args)
     if static_path is not None:
         env["COPERCEIVE_REMOTE_STATIC"] = str(static_path)
+    if media_paths:
+        env["COPERCEIVE_REMOTE_MEDIA_ROOTS"] = "\n".join(str(path) for path in media_paths)
 
     # Only the values the profile chose are passed; omitted flags fall back to
     # the cluster's own partition defaults, not to a Coperceive guess.

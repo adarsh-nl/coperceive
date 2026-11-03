@@ -246,6 +246,36 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .settings-pop label { display: flex; flex-direction: column; gap: 4px; font-size: 0.78rem; font-weight: 600; }
 .settings-pop input { width: 100%; }
 
+/* One settings row: control left, aligned with the title's first line; title and
+   description left-aligned beside it. Overrides the stacked `.settings-pop label`. */
+.setting-row,
+.settings-pop label.setting-row {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  column-gap: 8px;
+  align-items: start;
+  text-align: left;
+  font-weight: 400;
+  cursor: pointer;
+}
+.setting-row input,
+.settings-pop .setting-row input {
+  width: auto;
+  min-width: 0;
+  margin: 2px 0 0;
+  padding: 0;
+}
+.setting-row[data-disabled="true"] { cursor: default; opacity: 0.6; }
+.setting-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.setting-title { font-size: 13px; font-weight: 500; }
+.setting-description, .setting-note { font-size: 11px; color: var(--muted); font-weight: 400; margin: 0; }
+.setting-note.error { color: var(--accent); }
+.settings-section { margin-top: 0.5rem; border-top: 1px solid var(--line); padding-top: 0.5rem; display: flex; flex-direction: column; gap: 6px; }
+.settings-heading { margin: 0; font-size: 12px; font-weight: 600; }
+.settings-pop .settings-field { font-weight: 400; }
+.settings-pop .settings-field select { width: 100%; }
+.confirm-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
 .viewer {
   flex: 1;
   min-height: 0;

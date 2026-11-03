@@ -15,8 +15,9 @@ CPU Slurm job that writes schema-1 scenes into the cache.
 ```text
 coperceive dataset detect --path P
 coperceive dataset index  --adapter A --raw-root R [--split S]
-coperceive dataset prepare --adapter A --raw-root R [--split S] --cache C [--scenes ids | --all] --workers N
+coperceive dataset prepare --adapter A --raw-root R [--split S] --cache C [--scenes ids | --all] --workers N [--images originals|previews]
 coperceive dataset status --cache C
+coperceive dataset previews --cache-root <results_root>/coperceive-cache [--remove]
 ```
 
 `detect` and `index` print one JSON document and write nothing. `prepare` and
@@ -55,6 +56,44 @@ split it used, and the Dataset view shows that one.
   (`manifest.json`, `COMPLETE.json`, …), moved into place atomically after it is
   complete.
 - The cache path must not resolve inside `raw_root`; preparation refuses that.
+
+## Camera images — `--images originals|previews`
+
+Camera frames are never copied into the cache at full size, and nothing is ever
+written under `raw_root`. Every prepared scene gets a link `raw` → `raw_root`
+inside its cache directory, and its `images.parquet` paths go through it. The
+user chooses per prepare, before confirming:
+
+| mode | what prepare writes | what the viewer reads |
+| --- | --- | --- |
+| `originals` (default) | nothing extra | `raw/<image path>`: the dataset's own PNG, through the server's allow-listed media root |
+| `previews` | a 640 px wide JPEG per camera frame at `previews/<image path>.jpg` (about 40 KB each) | the preview; the full-resolution original from `raw/` when the user opens one camera |
+
+```text
+<cache scene>/raw -> <raw_root>
+<cache scene>/previews/<split>/<scene>/<agent>/<frame>_<camera>.png.jpg   (previews mode only)
+```
+
+- `images.parquet` paths are `raw/<path>` (originals) or `previews/<path>.jpg`
+  (previews). A preview that is missing (removed, or the original had none)
+  falls back to `raw/<path>`; an original that is missing is reported as no
+  image, as before.
+- The viewer server for a cluster dataset is started with
+  `--media-root <raw_root>`: exactly this dataset's root, nothing above it. A
+  path is served only if it resolves inside the scene directory or that root;
+  a recorded path with `..` or an absolute path is refused, and so is any link
+  inside the raw tree that resolves outside it.
+- `dataset.json` records each scene's mode as `"images": "originals" |
+  "previews"`. Preparing a ready scene again with the other mode only rewrites
+  its image paths (and writes or keeps its previews); it is not re-ingested.
+- `dataset previews --cache-root C` prints `{"schema":
+  "coperceive-cluster-previews-1", "bytes": N, "files": N, "scenes": N}` for
+  every `previews/` directory below `C` (the profile's whole cache).
+  `--remove` deletes exactly those directories, never a scene file, never the
+  `raw` link and never anything it points to, and marks those scenes
+  `originals`. The scenes stay viewable.
+- The estimate shown before confirming is `camera_samples` of the selected
+  scenes (from the index) × 40 KB.
 
 ## `dataset detect` — `coperceive-cluster-detect-1`
 
@@ -296,6 +335,19 @@ failed remote command returns a plain error string; a successful `detect` with
 no match returns `status:"none"` (not an error).
 
 
+## Camera-image settings and previews (desktop)
+
+| Tauri command | arguments | returns |
+| --- | --- | --- |
+| `get_camera_images_setting` | `{ "profileId"?: string }` | `{ "default": "originals"\|"previews", "profile": "originals"\|"previews" \| null, "effective": "originals"\|"previews" }` |
+| `set_camera_images_setting` | `{ "profileId"?: string, "mode": "originals"\|"previews"\|null }` | the same document |
+| `dataset_previews` | `{ "profileId": string, "remove": boolean }` | the `coperceive-cluster-previews-1` document (after removal when `remove`) |
+
+The setting is stored in `state.json` (`camera_images_default`, and
+`camera_images_by_profile` keyed by profile id). Changing it never touches
+prepared scenes; it only sets what the next prepare preview starts with.
+`dataset_previews` with `remove: true` is called only after the user confirms.
+
 ## Desktop prepare/status/open commands (frozen)
 
 These names and argument shapes are the second half of the UI contract. All
@@ -303,10 +355,18 @@ return JSON and use the saved server profile and `coperceive_command`.
 
 | Tauri command | arguments | returns |
 | --- | --- | --- |
-| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": number, "gres": null, "estimated_cache_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
+| `dataset_prepare` | `{ "profileId": string, "adapter": "griffin"\|"opv2v"\|"v2xset", "rawRoot": string, "split": string \| null, "scenes"?: string[] \| "all", "workers"?: number, "images"?: "originals"\|"previews" }` | **submission preview**: `{ "plan_id": string, "job_name": string, "partition": string, "walltime": string, "cpus_per_task": number, "gres": null, "estimated_cache_bytes": number, "images": "originals"\|"previews", "estimated_preview_bytes": number, "cache_root": string, "script": string, "preview_hash": string }` |
 | `dataset_prepare_submit` | `{ "profileId": string, "previewHash": string, "confirmed": boolean }` | `{ "job_id": string, "state": "pending"\|"running"\|"completed"\|"failed"\|"cancelled"\|"unknown", "queue_reason": string \| null, "plan_id": string }` |
 | `dataset_status` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null }` | `coperceive-cluster-scene-status-1` document |
 | `dataset_open` | `{ "profileId": string, "adapter": string, "rawRoot": string, "split": string \| null, "sceneId"?: string }` | `{ "origin": string, "token": string, "server_version": string, "data_root": string, "target_type": "remote" }` |
+
+`images` omitted means the user's default for this server profile (Settings →
+Cluster datasets → "Camera images when preparing"; else the app-wide default;
+else `originals`). The preview echoes the mode it used, and the script passes
+`--images` explicitly, so a different mode is a different script and a
+different `preview_hash`. `estimated_preview_bytes` is the extra disk the
+previews mode would use for the selected scenes, whichever mode is chosen, so
+the UI can show the cost next to that option.
 
 `scenes` omitted means all scenes, same as `"all"`. `workers` is optional: when omitted the backend uses `min(selected_scene_count, 8)`; it is clamped to 1–16 either way. The preview's `cpus_per_task` is exactly the workers actually used, and the script passes the same `--workers`. `cache_root` is the absolute cache split directory (`results_root` + `cache.relative_path`) so the UI never computes it. `split` is `null` only for
 Griffin. `dataset_prepare` renders the full script but submits nothing.
@@ -318,7 +378,9 @@ the existing job-submit preview shape plus the additive
 `--cpus-per-task` equal to `--workers`.
 
 `dataset_open` serves the **cache split directory**, not the raw root, so the
-viewer's scene list is exactly the ready cache scenes. It reuses an existing
+viewer's scene list is exactly the ready cache scenes. It passes
+`--media-root <raw_root>` so camera images resolve through each scene's `raw`
+link (see Camera images). It reuses an existing
 remote session for the same cache directory when one is running; `sceneId` is
 the requested first scene and does not prepare anything by itself (the UI calls
 `dataset_prepare` for a priority scene first).

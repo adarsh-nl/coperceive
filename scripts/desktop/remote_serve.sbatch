@@ -105,6 +105,15 @@ if [ -n "${COPERCEIVE_REMOTE_STATIC:-}" ]; then
     STATIC_ARGS=(--static "${COPERCEIVE_REMOTE_STATIC}")
 fi
 
+# Camera images of a cluster dataset are read from its raw root: one allow-listed
+# directory per line, each passed as its own argument.
+MEDIA_ARGS=()
+if [ -n "${COPERCEIVE_REMOTE_MEDIA_ROOTS:-}" ]; then
+    while IFS= read -r media; do
+        [ -n "${media}" ] && MEDIA_ARGS+=(--media-root "${media}")
+    done <<< "${COPERCEIVE_REMOTE_MEDIA_ROOTS}"
+fi
+
 # Launch server binding to cluster IP with token-file
 # Note: Token is in a 0600 file and NEVER on argv
 "${PYTHON_BIN}" -m coperceive serve \
@@ -113,6 +122,7 @@ fi
     --token-file "${TOKEN_FILE}" \
     --root "${DATA_ROOT}" \
     ${STATIC_ARGS[@]+"${STATIC_ARGS[@]}"} \
+    ${MEDIA_ARGS[@]+"${MEDIA_ARGS[@]}"} \
     ${COPERCEIVE_EXTRA_ARGS:-} &
 SERVE_PID=$!
 

@@ -401,6 +401,74 @@ pub struct AppPersistentState {
 
     #[serde(default)]
     pub recent_roots: Vec<String>,
+
+    /// Camera images when preparing a cluster dataset, app-wide: "originals"
+    /// (read the dataset's files, no extra disk) or "previews". None = originals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_images_default: Option<String>,
+
+    /// The same choice per server profile id; it wins over the app-wide default.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub camera_images_by_profile: HashMap<String, String>,
+}
+
+/// Camera-image modes for cluster dataset preparation.
+pub const CAMERA_IMAGE_MODES: [&str; 2] = ["originals", "previews"];
+
+/// What the next prepare preview starts with, and where that came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CameraImagesSetting {
+    pub default: String,
+    pub profile: Option<String>,
+    pub effective: String,
+}
+
+impl AppPersistentState {
+    pub fn camera_images(&self, profile_id: Option<&str>) -> CameraImagesSetting {
+        let valid = |mode: &String| CAMERA_IMAGE_MODES.contains(&mode.as_str());
+        let default = self
+            .camera_images_default
+            .clone()
+            .filter(valid)
+            .unwrap_or_else(|| "originals".to_string());
+        let profile = profile_id
+            .and_then(|id| self.camera_images_by_profile.get(id))
+            .cloned()
+            .filter(valid);
+        let effective = profile.clone().unwrap_or_else(|| default.clone());
+        CameraImagesSetting {
+            default,
+            profile,
+            effective,
+        }
+    }
+
+    /// Set the per-profile choice (or the app-wide one without a profile);
+    /// `None` clears it so the fallback applies.
+    pub fn set_camera_images(
+        &mut self,
+        profile_id: Option<&str>,
+        mode: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(mode) = mode {
+            if !CAMERA_IMAGE_MODES.contains(&mode) {
+                return Err(format!(
+                    "Camera images must be \"originals\" or \"previews\", not {mode:?}."
+                ));
+            }
+        }
+        match (profile_id, mode) {
+            (Some(id), Some(mode)) => {
+                self.camera_images_by_profile
+                    .insert(id.to_string(), mode.to_string());
+            }
+            (Some(id), None) => {
+                self.camera_images_by_profile.remove(id);
+            }
+            (None, mode) => self.camera_images_default = mode.map(str::to_string),
+        }
+        Ok(())
+    }
 }
 
 /// Returns the default library location: ~/coperceive-data.
@@ -437,6 +505,8 @@ impl Default for AppPersistentState {
             layout: None,
             window_state: None,
             recent_roots: Vec::new(),
+            camera_images_default: None,
+            camera_images_by_profile: HashMap::new(),
         }
     }
 }
@@ -445,7 +515,13 @@ impl Default for AppPersistentState {
 ///
 /// macOS: `~/Library/Application Support/nl.adarsh.coperceive/state.json`
 /// Other Unix: `$XDG_DATA_HOME/nl.adarsh.coperceive/state.json` or `~/.local/share/nl.adarsh.coperceive/state.json`
+///
+/// `COPERCEIVE_STATE_DIR` overrides the directory, as for `servers.json` (the
+/// e2e harnesses set it so the real store is untouched).
 pub fn get_state_file_path() -> PathBuf {
+    if let Some(dir) = std::env::var_os("COPERCEIVE_STATE_DIR") {
+        return PathBuf::from(dir).join("state.json");
+    }
     if let Some(home) = std::env::var_os("HOME") {
         #[cfg(target_os = "macos")]
         {
@@ -640,6 +716,32 @@ pub fn save_state_to_path(state: &AppPersistentState, path: &Path) -> Result<(),
 }
 
 #[cfg(test)]
+mod camera_images_tests {
+    use super::*;
+
+    #[test]
+    fn the_profile_choice_wins_over_the_app_default_which_wins_over_originals() {
+        let mut state = AppPersistentState::default();
+        assert_eq!(state.camera_images(Some("a")).effective, "originals");
+        state.set_camera_images(None, Some("previews")).unwrap();
+        assert_eq!(state.camera_images(Some("a")).effective, "previews");
+        state.set_camera_images(Some("a"), Some("originals")).unwrap();
+        let setting = state.camera_images(Some("a"));
+        assert_eq!(
+            (setting.default.as_str(), setting.profile.as_deref(), setting.effective.as_str()),
+            ("previews", Some("originals"), "originals")
+        );
+        assert_eq!(state.camera_images(Some("b")).effective, "previews");
+        state.set_camera_images(Some("a"), None).unwrap();
+        assert_eq!(state.camera_images(Some("a")).effective, "previews");
+        assert!(state.set_camera_images(None, Some("all")).is_err());
+        let json = serde_json::to_string(&state).unwrap();
+        let back: AppPersistentState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.camera_images(Some("b")).effective, "previews");
+    }
+}
+
+#[cfg(test)]
 pub mod tests {
     use super::*;
 
@@ -730,6 +832,8 @@ pub mod tests {
                 scale_factor: Some(2.0),
             }),
             recent_roots: vec!["/path/to/data".into(), "/path/to/prev".into()],
+            camera_images_default: Some("previews".into()),
+            camera_images_by_profile: HashMap::from([("cluster-a".into(), "originals".into())]),
         };
 
         let json = serde_json::to_string(&state).expect("serialize");

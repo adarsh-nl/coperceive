@@ -19,11 +19,12 @@ use crate::ssh::{quote_remote_argv, shell_quote};
 
 pub const DETECT_SCHEMA: &str = "coperceive-cluster-detect-1";
 pub const INDEX_SCHEMA: &str = "coperceive-cluster-index-1";
+pub const PREVIEWS_SCHEMA: &str = "coperceive-cluster-previews-1";
 const DETECT_TIMEOUT: Duration = Duration::from_secs(45);
 const INDEX_TIMEOUT: Duration = Duration::from_secs(120);
 pub const CAPABILITIES_SCHEMA: &str = "coperceive-capabilities-1";
 /// What the dataset commands need from the server's coperceive (see `coperceive capabilities`).
-pub const CLUSTER_DATASETS_CAPABILITY: &str = "cluster-datasets-3";
+pub const CLUSTER_DATASETS_CAPABILITY: &str = "cluster-datasets-4";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(20);
 /// Where an update comes from when the install is not a git checkout.
 /// Switch to `@main` once cluster datasets are released there.
@@ -233,6 +234,26 @@ pub fn detect(
     )
 }
 
+/// Disk used by camera previews in this profile's cache; with `remove`, delete
+/// them (only them). Called with `remove` only after the user confirms.
+pub fn previews(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    remove: bool,
+) -> Result<Value, String> {
+    let results = crate::hpc::normalise_path(&profile.results_root, "results_root")?;
+    let mut args = vec![
+        "dataset".to_string(),
+        "previews".to_string(),
+        "--cache-root".to_string(),
+        format!("{}/coperceive-cache", results.trim_end_matches('/')),
+    ];
+    if remove {
+        args.push("--remove".to_string());
+    }
+    run_document(runner, profile, &args, INDEX_TIMEOUT, PREVIEWS_SCHEMA)
+}
+
 /// List every scene of one split of a raw dataset. Metadata only; writes
 /// nothing. `split` is the one `detect` returned; without it a root holding
 /// several splits is refused by the server rather than guessed.
@@ -440,7 +461,7 @@ mod tests {
         assert_eq!(
             error,
             "coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, \
-             which has no capabilities command, need a build with cluster-datasets-3). Update it \
+             which has no capabilities command, need a build with cluster-datasets-4). Update it \
              with: git -C /home/u/coperceive pull --ff-only && /home/u/venv/bin/python -m pip \
              install -e /home/u/coperceive --no-deps"
         );
@@ -462,7 +483,7 @@ mod tests {
         );
         let error = index(&runner, &profile(), "opv2v", "/data/opv2v", Some("test")).expect_err("too old");
         assert!(
-            error.contains("(found coperceive 0.1.0 without cluster-datasets-3, need"),
+            error.contains("(found coperceive 0.1.0 without cluster-datasets-4, need"),
             "{error}"
         );
         assert!(
@@ -477,7 +498,7 @@ mod tests {
     #[test]
     fn a_supported_build_keeps_the_original_error() {
         let mut runner = old_cli(
-            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":["cluster-datasets-2","cluster-datasets-3"]}"#,
+            r#"{"schema":"coperceive-capabilities-1","version":"0.1.0","capabilities":["cluster-datasets-2","cluster-datasets-3","cluster-datasets-4"]}"#,
         );
         runner.command = CommandResult {
             success: false,

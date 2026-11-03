@@ -55,7 +55,7 @@ case "${remote}" in
         cd "${home}" || exit 1  # a real ssh session starts in the remote home
         HOME="${home}" exec sh -c "${remote}"
         ;;
-    *" dataset detect "*|*" dataset index "*|*" dataset status "*)
+    *" dataset detect "*|*" dataset index "*|*" dataset status "*|*" dataset previews "*)
         verb="${remote#* dataset }"
         log_command "dataset-${verb%% *}"
         HOME="${home}" exec sh -c "${remote}"

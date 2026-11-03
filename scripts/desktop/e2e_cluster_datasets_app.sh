@@ -108,6 +108,8 @@ NUMPY_YAW = ("!!python/object/apply:numpy.core.multiarray.scalar [!!python/objec
              "!!binary 'AAAAAACAVkA=']")  # float64 90.0
 extrinsic = [[1.0,0.0,0.0,0.0],[0.0,1.0,0.0,0.0],[0.0,0.0,1.0,0.0],[0.0,0.0,0.0,1.0]]
 intrinsic = [[335.6,0.0,400.0],[0.0,335.6,300.0],[0.0,0.0,1.0]]
+from PIL import Image
+camera_png = Image.new("RGB", (800, 600), (60, 120, 180))
 pcd_head = ("# .PCD v0.7 - Point Cloud Data file format\nVERSION 0.7\nFIELDS x y z rgb\n"
             "SIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nWIDTH 1\nHEIGHT 1\n"
             "VIEWPOINT 0 0 0 1 0 0 0\nPOINTS 1\nDATA ascii\n0.000000 0.000000 0.000000 0\n")
@@ -134,6 +136,8 @@ for split, scene_id in scenes:
             assert NUMPY_YAW in text
             (folder / f"{frame:06d}.yaml").write_text(text)
             (folder / f"{frame:06d}.pcd").write_text(pcd_head)
+            # One camera image per frame, as OPV2V's {frame:06d}_camera0.png.
+            camera_png.save(folder / f"{frame:06d}_camera0.png")
 PY
 
 raw_digest() {
@@ -199,7 +203,7 @@ run_flow() {
         waited=$((waited + 1))
     done
     python3 - "${result}" "${TMP_DIR}/${name}-served.json" <<'PY'
-import json, sys, time, urllib.request
+import json, sys, time, urllib.error, urllib.parse, urllib.request
 result, served = sys.argv[1:3]
 steps = json.load(open(result, encoding="utf-8")).get("steps") or []
 if not steps or steps[-1]["command"] != "dataset_open" or not steps[-1]["ok"]:
@@ -221,6 +225,25 @@ while True:
             sys.exit(1)
         time.sleep(0.3)
 json.dump(scenes, open(served, "w", encoding="utf-8"))
+# Camera images the flow asked for: status, type, size and time over the tunnel.
+wanted = served.replace("-served.json", "-images.json")
+try:
+    queries = json.load(open(wanted, encoding="utf-8"))
+except OSError:
+    queries = []
+fetched = []
+for query in queries:
+    url = f"{session['origin']}/api/scenes/{query.pop('scene')}/image?" + urllib.parse.urlencode(query)
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(url, headers={"Authorization": "Bearer " + session["token"]}), timeout=20) as response:
+            body = response.read()
+            fetched.append({"url": url.split("/api/", 1)[1], "status": response.status,
+                            "type": response.headers.get("content-type"), "bytes": len(body),
+                            "ms": round((time.monotonic() - started) * 1000, 1)})
+    except urllib.error.HTTPError as error:
+        fetched.append({"url": url.split("/api/", 1)[1], "status": error.code, "type": None, "bytes": 0, "ms": 0})
+json.dump(fetched, open(served.replace("-served.json", "-served-images.json"), "w", encoding="utf-8"))
 PY
     kill -9 "${APP_PID}" 2>/dev/null || true
     wait "${APP_PID}" 2>/dev/null || true
@@ -300,7 +323,11 @@ cache_root = preview.get("cache_root") or ""
 assert cache_root.startswith(f"{tmp}/cluster/results/coperceive-cache/opv2v/"), cache_root
 assert os.path.commonpath([cache_root, raw]) != raw, (cache_root, raw)
 assert preview["preview_hash"], preview
+# No camera-image setting yet: the preview reads originals and says what previews would cost.
+assert preview["images"] == "originals" and " --images originals " in script, (preview["images"], script)
+assert preview["estimated_preview_bytes"] == 3 * 4 * 40_000, preview["estimated_preview_bytes"]
 print(f"Step CD-3 verified: dataset_prepare preview is CPU-only, --split test, cpus_per_task=1, --workers 1, "
+      f"--images originals (previews would add {preview['estimated_preview_bytes']} bytes), "
       f"cache_root outside the raw root, preview_hash={preview['preview_hash']}")
 wrong, unconfirmed = steps[2], steps[4]
 assert steps[3]["ok"], steps[3]
@@ -340,6 +367,10 @@ assert served == ["scene_0000"], served
 PY
 
 # --- Flow C: prepare all with default workers, status, open -------------------
+camera_query() {  # camera_query SCENE [extra json fields]: frame 0 of agent 641's camera0
+    printf '{"scene": "%s", "time_us": 0, "agent_id": "641", "sensor_id": "camera0"%s}' "$1" "${2:-}"
+}
+printf '[%s, %s]' "$(camera_query scene_0000)" "$(camera_query scene_0000 ', "width": 160')" > "${TMP_DIR}/all-images.json"
 run_flow all "[
   {\"command\": \"dataset_prepare\", \"args\": {${DATASET_ARGS}, \"scenes\": \"all\"}},
   {\"command\": \"dataset_prepare_submit\", \"args\": {$(profile_args), \"previewHash\": \"@last_preview_hash\", \"confirmed\": true}},
@@ -372,8 +403,13 @@ served = json.load(open(f"{tmp}/all-served.json", encoding="utf-8"))
 ready = sorted(key for key, value in scenes.items() if value["state"] == "ready")
 assert served == ready, (served, ready)
 partial = json.load(open(f"{tmp}/one-served.json", encoding="utf-8"))
+images = json.load(open(f"{tmp}/all-served-images.json", encoding="utf-8"))
+original, strip = images
+assert (original["status"], original["type"]) == (200, "image/png"), original
+assert (strip["status"], strip["type"]) == (200, "image/jpeg"), strip
 print(f"Step CD-8 verified: dataset_open -> origin {session['origin']} with a token; served scenes "
-      f"{served} == ready scenes (after one-scene prepare: {partial})")
+      f"{served} == ready scenes (after one-scene prepare: {partial}); camera0 served from the "
+      f"dataset's original PNG through the media root ({original['bytes']} bytes)")
 PY
 
 raw_digest > "${TMP_DIR}/raw-after.txt"
@@ -390,6 +426,82 @@ for path in files:
 print(f"Step CD-9 verified: raw tree byte-identical ({sum(1 for _ in open(tmp + '/raw-before.txt'))} files, "
       "sorted sha256); no password/private_key/secret/bearer in the request/result JSON")
 PY
+# --- Flow F: camera previews, chosen in Settings --------------------------------
+# The setting for this server changes what the next preview starts with (and so
+# its hash); preparing the ready scene_0001 again with previews only re-stages
+# its images. The opened scene serves the preview, and the original on `full`.
+printf '[%s, %s, %s, %s, %s]' \
+    "$(camera_query scene_0001)" "$(camera_query scene_0001 ', "full": "true"')" \
+    "$(camera_query scene_0001 ', "width": 160')" "$(camera_query scene_0000)" \
+    "$(camera_query scene_0000 ', "width": 160')" > "${TMP_DIR}/previews-images.json"
+run_flow previews "[
+  {\"command\": \"get_camera_images_setting\", \"args\": {$(profile_args)}},
+  {\"command\": \"dataset_prepare\", \"args\": {${DATASET_ARGS}, \"scenes\": [\"scene_0001\"], \"workers\": 1}},
+  {\"command\": \"set_camera_images_setting\", \"args\": {$(profile_args), \"mode\": \"previews\"}},
+  {\"command\": \"dataset_prepare\", \"args\": {${DATASET_ARGS}, \"scenes\": [\"scene_0001\"], \"workers\": 1}},
+  {\"command\": \"dataset_prepare_submit\", \"args\": {$(profile_args), \"previewHash\": \"@last_preview_hash\", \"confirmed\": true}},
+  {\"command\": \"dataset_status\", \"args\": {${DATASET_ARGS}}},
+  {\"command\": \"dataset_previews\", \"args\": {$(profile_args), \"remove\": false}},
+  {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}}}
+]"
+check previews <<'PY'
+import json, os, sys
+result, ssh_log, tmp, raw = sys.argv[1:5]
+steps = json.load(open(result, encoding="utf-8"))["steps"]
+for step in steps:
+    assert step["ok"], step
+before, originals, setting, previews = (steps[i]["value"] for i in range(4))
+assert before["effective"] == "originals" and setting["effective"] == "previews", (before, setting)
+assert originals["images"] == "originals" and previews["images"] == "previews", (originals["images"], previews["images"])
+assert " --images previews " in previews["script"], previews["script"]
+assert originals["preview_hash"] != previews["preview_hash"], (originals["preview_hash"], previews["preview_hash"])
+state = json.load(open(f"{tmp}/state/state.json", encoding="utf-8"))
+assert list(state["camera_images_by_profile"].values()) == ["previews"], state
+print(f"Step CD-11 verified: Settings -> previews for this server: the next preview starts with "
+      f"--images previews and its hash changed ({originals['preview_hash']} -> {previews['preview_hash']})")
+modes = {scene["scene_id"]: scene.get("images") for scene in steps[5]["value"]["scenes"]}
+assert modes == {"scene_0000": "originals", "scene_0001": "previews", "scene_0002": "originals"}, modes
+usage = steps[6]["value"]
+assert usage["scenes"] == 1 and usage["bytes"] > 0, usage
+preview, full, strip, original, original_strip = json.load(open(f"{tmp}/previews-served-images.json", encoding="utf-8"))
+assert (preview["status"], preview["type"]) == (200, "image/jpeg"), preview
+assert (full["status"], full["type"]) == (200, "image/png"), full
+assert (original["status"], original["type"]) == (200, "image/png"), original
+assert preview["bytes"] < original["bytes"], (preview, original)
+print(f"Step CD-12 verified: scene_0001 upgraded to previews without re-ingesting; status modes {modes}; "
+      f"previews use {usage['bytes']} bytes; opened scene serves the preview (image/jpeg, {preview['bytes']} B), "
+      f"the original on full (image/png, {full['bytes']} B), and scene_0000's original (image/png)")
+print("E2E_CAMERA_MEASURE " + json.dumps({"preview": preview, "full": full, "strip_preview": strip,
+                                          "original": original, "strip_original": original_strip}))
+PY
+
+# --- Flow G: remove previews -----------------------------------------------------
+printf '[%s]' "$(camera_query scene_0001)" > "${TMP_DIR}/removal-images.json"
+run_flow removal "[
+  {\"command\": \"dataset_previews\", \"args\": {$(profile_args), \"remove\": true}},
+  {\"command\": \"dataset_previews\", \"args\": {$(profile_args), \"remove\": false}},
+  {\"command\": \"dataset_status\", \"args\": {${DATASET_ARGS}}},
+  {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}}}
+]"
+raw_digest > "${TMP_DIR}/raw-after-previews.txt"
+cmp -s "${TMP_DIR}/raw-before.txt" "${TMP_DIR}/raw-after-previews.txt" || fail "CD-13 raw tree changed"
+check removal <<'PY'
+import json, sys
+result, ssh_log, tmp, raw = sys.argv[1:5]
+steps = json.load(open(result, encoding="utf-8"))["steps"]
+for step in steps:
+    assert step["ok"], step
+removed, after, status = (steps[i]["value"] for i in range(3))
+assert removed["removed"]["scenes"] == 1 and after["bytes"] == 0, (removed, after)
+modes = {scene["scene_id"]: scene.get("images") for scene in status["scenes"]}
+assert set(modes.values()) == {"originals"}, modes
+(image,) = json.load(open(f"{tmp}/removal-served-images.json", encoding="utf-8"))
+assert (image["status"], image["type"]) == (200, "image/png"), image
+print(f"Step CD-13 verified: Remove previews deleted {removed['removed']['bytes']} bytes in "
+      f"{removed['removed']['scenes']} scene; all scenes back on originals and scene_0001 still "
+      "serves its image; raw tree byte-identical")
+PY
+
 # --- Flow E: an older coperceive on the cluster --------------------------------
 # The profile's interpreter is fake_old_python.sh: no `capabilities`, no
 # `dataset detect`. Test connection and dataset_detect must both say "too old"
@@ -420,7 +532,7 @@ result, ssh_log, tmp, raw, checkout, python = sys.argv[1:7]
 connection, detect = json.load(open(result, encoding="utf-8"))["steps"]
 update = f"git -C {checkout} pull --ff-only && {python} -m pip install -e {checkout} --no-deps"
 expected = ("coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, which "
-            "has no capabilities command, need a build with cluster-datasets-3). Update it with: " + update)
+            "has no capabilities command, need a build with cluster-datasets-4). Update it with: " + update)
 assert not detect["ok"], detect
 assert detect["error"] == expected, detect["error"]
 assert "invalid choice" not in detect["error"] and "usage:" not in detect["error"], detect["error"]

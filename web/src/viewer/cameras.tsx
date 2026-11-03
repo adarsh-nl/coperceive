@@ -15,6 +15,8 @@ const INK: Record<string, string> = {
 };
 
 const STRIP_WIDTH = 640;
+/** Width of the previews a cluster dataset can prepare (docs/datasets/cluster-datasets.md). */
+const PREVIEW_WIDTH = 640;
 const DECODERS = 3;
 
 const workerSource = `
@@ -226,7 +228,10 @@ async function fetchImage(
   token: string,
   width: number,
 ): Promise<ImageBitmap | null> {
-  const url = `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}&width=${width}`;
+  // Wider than a cluster scene's 640 px preview (the split pane): ask for the
+  // original. A scene without previews ignores `full`.
+  const full = width > PREVIEW_WIDTH ? "&full=true" : "";
+  const url = `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}&width=${width}${full}`;
   const entry = await fetchBytes(url, token);
   if (entry === null) {
     missing.add(key);

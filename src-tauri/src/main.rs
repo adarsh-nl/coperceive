@@ -2315,7 +2315,13 @@ async fn dataset_prepare(
     split: Option<String>,
     scenes: Option<serde_json::Value>,
     workers: Option<u32>,
+    images: Option<String>,
 ) -> Result<serde_json::Value, String> {
+    // Without an explicit choice the preview starts from the user's setting for
+    // this server (else the app-wide one, else originals).
+    let images = images
+        .filter(|mode| !mode.trim().is_empty())
+        .unwrap_or_else(|| state::load_state().camera_images(Some(&profile_id)).effective);
     let scenes: Option<Vec<String>> = match scenes {
         None => None,
         Some(serde_json::Value::String(text)) if text == "all" => None,
@@ -2373,12 +2379,16 @@ async fn dataset_prepare(
                 .map(str::to_string),
             scenes: scenes.clone(),
             workers,
+            images,
         };
+        let preview_bytes =
+            coperceive_desktop::dataset_jobs::preview_bytes_estimate(&index, scenes.as_deref());
         let preview = coperceive_desktop::dataset_jobs::render_prepare_script(
             &entry.profile,
             &request,
             &cache_relative,
             estimated,
+            preview_bytes,
         )?;
         let pending = coperceive_desktop::dataset_jobs::PendingPrepare {
             profile_id: entry.id.clone(),
@@ -2402,6 +2412,8 @@ async fn dataset_prepare(
         "cpus_per_task": preview.cpus_per_task,
         "gres": preview.gres,
         "estimated_cache_bytes": preview.estimated_cache_bytes,
+        "images": preview.images,
+        "estimated_preview_bytes": preview.estimated_preview_bytes,
         "cache_root": preview.cache_root,
         "script": preview.script,
         "preview_hash": preview.preview_hash,
@@ -2499,6 +2511,41 @@ async fn dataset_status(
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
 }
 
+/// Settings → Cluster datasets → "Camera images when preparing".
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn get_camera_images_setting(profile_id: Option<String>) -> state::CameraImagesSetting {
+    state::load_state().camera_images(profile_id.as_deref())
+}
+
+/// Changes only what the next prepare preview starts with; prepared scenes keep
+/// their mode. `mode: null` clears the per-profile (or app-wide) choice.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_camera_images_setting(
+    profile_id: Option<String>,
+    mode: Option<String>,
+) -> Result<state::CameraImagesSetting, String> {
+    let mut persistent = state::load_state();
+    persistent.set_camera_images(profile_id.as_deref(), mode.as_deref())?;
+    state::save_state(&persistent).map_err(|error| format!("Could not save the setting: {error}"))?;
+    Ok(persistent.camera_images(profile_id.as_deref()))
+}
+
+/// Disk used by camera previews in a profile's cache; `remove` deletes only the
+/// previews (the UI asks for confirmation first).
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn dataset_previews(profile_id: String, remove: bool) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let entry = find_server_entry(&profile_id)?;
+        let runner = plan_runner(&entry)?;
+        coperceive_desktop::cluster_datasets::previews(&runner, &entry.profile, remove)
+    })
+    .await
+    .map_err(|error| format!("Could not read the camera previews: {error}"))?
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_open(
@@ -2519,7 +2566,9 @@ async fn dataset_open(
     )?;
     let _ = scene_id;
     let alias = entry.profile.ssh_target()?;
-    remote_connect(app, state, alias, cache, None, Some(profile_id)).await
+    // Camera images resolve through each scene's `raw` link into exactly this
+    // dataset's root (docs/datasets/cluster-datasets.md, "Camera images").
+    remote_connect(app, state, alias, cache, None, Some(profile_id), Some(vec![raw_root])).await
 }
 
 /// Runs the test-only dataset flow (see `test_seams::DatasetFlowProbe`): saves
@@ -2601,6 +2650,7 @@ fn run_dataset_flow_probe(
                     args.get("workers")
                         .and_then(serde_json::Value::as_u64)
                         .map(|workers| workers as u32),
+                    optional_text(&args, "images"),
                 )),
                 "dataset_prepare_submit" => {
                     let mut hash = arg_text(&args, "previewHash")?;
@@ -2621,6 +2671,19 @@ fn run_dataset_flow_probe(
                     arg_text(&args, "adapter")?,
                     arg_text(&args, "rawRoot")?,
                     optional_text(&args, "split"),
+                )),
+                "get_camera_images_setting" => serde_json::to_value(get_camera_images_setting(
+                    optional_text(&args, "profileId"),
+                ))
+                .map_err(|error| error.to_string()),
+                "set_camera_images_setting" => set_camera_images_setting(
+                    optional_text(&args, "profileId"),
+                    optional_text(&args, "mode"),
+                )
+                .and_then(|value| serde_json::to_value(value).map_err(|error| error.to_string())),
+                "dataset_previews" => tauri::async_runtime::block_on(dataset_previews(
+                    arg_text(&args, "profileId")?,
+                    args.get("remove").and_then(serde_json::Value::as_bool).unwrap_or(false),
                 )),
                 "dataset_open" => tauri::async_runtime::block_on(dataset_open(
                     app.clone(),
@@ -2662,6 +2725,7 @@ async fn remote_connect(
     data_root: String,
     uuid: Option<String>,
     profile_id: Option<String>,
+    media_roots: Option<Vec<String>>,
 ) -> Result<SessionPayload, String> {
     // Disconnect existing session if one was active
     {
@@ -2716,6 +2780,7 @@ async fn remote_connect(
             .as_ref()
             .map(|p| p.profile.environment.coperceive_command.clone())
             .unwrap_or_default(),
+        media_roots: media_roots.unwrap_or_default(),
     };
 
     let mgr = RemoteSessionManager::connect_with_options(&alias, &options, Some(&ssh_bin()))
@@ -2934,6 +2999,9 @@ fn main() {
             dataset_prepare_submit,
             dataset_status,
             dataset_open,
+            get_camera_images_setting,
+            set_camera_images_setting,
+            dataset_previews,
             build_run_plan,
             save_run_plan,
             preview_submission,

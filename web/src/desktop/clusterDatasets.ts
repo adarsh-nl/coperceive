@@ -105,7 +105,12 @@ export interface ClusterSceneStatusEntry {
   prepared_unix: number | null;
   scene_dir: string | null;
   progress_percent?: number | null;
+  /** Camera-image mode the scene was prepared with; null before modes existed. */
+  images?: CameraImagesMode | null;
 }
+
+/** How a cluster scene's camera images are read (docs/datasets/cluster-datasets.md). */
+export type CameraImagesMode = "originals" | "previews";
 
 export interface ClusterSceneStatusDocument {
   schema: "coperceive-cluster-scene-status-1" | string;
@@ -126,8 +131,27 @@ export interface DatasetPreparePreview {
   gres: string | null;
   cache_root: string;
   estimated_cache_bytes: number;
+  /** The camera-image mode this script prepares with. */
+  images: CameraImagesMode;
+  /** Extra disk the previews mode would use for the selected scenes. */
+  estimated_preview_bytes: number;
   script: string;
   preview_hash: string;
+}
+
+/** Settings → Cluster datasets → "Camera images when preparing". */
+export interface CameraImagesSetting {
+  default: CameraImagesMode;
+  profile: CameraImagesMode | null;
+  effective: CameraImagesMode;
+}
+
+export interface CameraPreviewsUsage {
+  schema: "coperceive-cluster-previews-1" | string;
+  bytes: number;
+  files: number;
+  scenes: number;
+  removed?: { bytes: number; files: number; scenes: number };
 }
 
 export interface DatasetPrepareSubmitResult {
@@ -249,6 +273,38 @@ export function formatSensorsSummary(sensors: ClusterIndexSensors | null | undef
 }
 
 /** Construct an estimated storage label from scene counts if not provided by backend. */
+/** "1.2 GB", "340 MB", "12 KB": disk sizes in plain words. */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 MB";
+  }
+  const gb = bytes / 1024 ** 3;
+  if (gb >= 1) {
+    return `${gb.toFixed(1)} GB`;
+  }
+  const mb = bytes / 1024 ** 2;
+  if (mb >= 1) {
+    return `${Math.round(mb)} MB`;
+  }
+  return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/** The two camera-image choices with their cost, as the prepare preview shows them. */
+export function cameraImageChoices(previewBytes: number): { mode: CameraImagesMode; label: string; detail: string }[] {
+  return [
+    {
+      mode: "originals",
+      label: "Read originals from the dataset",
+      detail: "No extra disk. Each image is read from the dataset when you view it.",
+    },
+    {
+      mode: "previews",
+      label: "Save previews in my results folder",
+      detail: `~${formatBytes(previewBytes)} extra, smoother playback over the connection. Full resolution still loads when you open one camera.`,
+    },
+  ];
+}
+
 export function formatStorageEstimate(
   doc: ClusterIndexDocument,
 ): string {
@@ -462,6 +518,8 @@ export async function datasetPrepare(
     split: string | null;
     scenes?: string[] | "all";
     workers?: number;
+    /** Omitted: the user's setting for this server decides. */
+    images?: CameraImagesMode;
   },
 ): Promise<DatasetPreparePreview> {
   const scenes = params.scenes ?? "all";
@@ -476,6 +534,9 @@ export async function datasetPrepare(
     };
     if (params.workers != null) {
       args.workers = params.workers;
+    }
+    if (params.images != null) {
+      args.images = params.images;
     }
     return await tauriInvoke<DatasetPreparePreview>("dataset_prepare", args);
   }
@@ -497,6 +558,7 @@ coperceive dataset prepare \\
   --adapter "${params.adapter}" \\
   --raw-root "${params.rawRoot}" \\
   --workers ${workers} \\
+  --images ${params.images ?? "originals"} \\
   ${sceneArg}
 `;
 
@@ -509,9 +571,37 @@ coperceive dataset prepare \\
     gres: null,
     cache_root: `<results_root>/coperceive-cache/${params.adapter}/mockdigest/${params.split ?? "all"}`,
     estimated_cache_bytes: 1024 * 1024 * 50,
+    images: params.images ?? "originals",
+    estimated_preview_bytes: 40_000 * 240,
     script,
-    preview_hash: `hash-stub-${Date.now()}`,
+    preview_hash: `hash-stub-${params.images ?? "originals"}-${Date.now()}`,
   };
+}
+
+export async function getCameraImagesSetting(profileId: string | null): Promise<CameraImagesSetting> {
+  if (isTauriEnvironment()) {
+    return await tauriInvoke<CameraImagesSetting>("get_camera_images_setting", { profileId });
+  }
+  return { default: "originals", profile: null, effective: "originals" };
+}
+
+/** Changes what the next prepare preview starts with; prepared scenes keep their mode. */
+export async function setCameraImagesSetting(
+  profileId: string | null,
+  mode: CameraImagesMode | null,
+): Promise<CameraImagesSetting> {
+  if (isTauriEnvironment()) {
+    return await tauriInvoke<CameraImagesSetting>("set_camera_images_setting", { profileId, mode });
+  }
+  return { default: "originals", profile: mode, effective: mode ?? "originals" };
+}
+
+/** Disk used by camera previews in a server's cache; `remove` deletes only them. */
+export async function datasetPreviews(profileId: string, remove: boolean): Promise<CameraPreviewsUsage> {
+  if (isTauriEnvironment()) {
+    return await tauriInvoke<CameraPreviewsUsage>("dataset_previews", { profileId, remove });
+  }
+  return { schema: "coperceive-cluster-previews-1", bytes: 0, files: 0, scenes: 0 };
 }
 
 /**
@@ -619,6 +709,7 @@ export async function recoverFromRefusedPrepareSubmit(
     split: string | null;
     scenes: "all" | string[];
     workers?: number;
+    images?: CameraImagesMode;
   },
   submitError: unknown,
 ): Promise<PrepareSubmissionRecovery> {

@@ -28,7 +28,17 @@ pub struct DatasetPrepareRequest {
     pub split: Option<String>,
     pub scenes: Option<Vec<String>>,
     pub workers: u32,
+    /// Camera images: "originals" (read the dataset's files) or "previews".
+    #[serde(default = "default_images")]
+    pub images: String,
 }
+
+fn default_images() -> String {
+    "originals".to_string()
+}
+
+/// Disk estimate per camera preview (docs/datasets/cluster-datasets.md).
+pub const PREVIEW_BYTES_ESTIMATE: u64 = 40_000;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DatasetPreparePreview {
@@ -40,6 +50,10 @@ pub struct DatasetPreparePreview {
     pub gres: Option<String>,
     pub cache_root: String,
     pub estimated_cache_bytes: u64,
+    /// The camera-image mode this script prepares with.
+    pub images: String,
+    /// Extra disk the previews mode would use for these scenes.
+    pub estimated_preview_bytes: u64,
     pub script: String,
     pub preview_hash: String,
 }
@@ -103,6 +117,8 @@ fn actor_argv(profile: &ServerProfile, request: &DatasetPrepareRequest, cache: &
         cache.to_string(),
         "--workers".to_string(),
         request.workers.to_string(),
+        "--images".to_string(),
+        request.images.clone(),
     ]);
     if let Some(scenes) = &request.scenes {
         args.push("--scenes".to_string());
@@ -119,7 +135,14 @@ pub fn render_prepare_script(
     request: &DatasetPrepareRequest,
     cache_relative: &str,
     estimated_cache_bytes: u64,
+    estimated_preview_bytes: u64,
 ) -> Result<DatasetPreparePreview, String> {
+    if !crate::state::CAMERA_IMAGE_MODES.contains(&request.images.as_str()) {
+        return Err(format!(
+            "Camera images must be \"originals\" or \"previews\", not {:?}.",
+            request.images
+        ));
+    }
     if request.workers == 0 {
         return Err("Choose at least one worker for dataset preparation.".to_string());
     }
@@ -198,9 +221,28 @@ pub fn render_prepare_script(
         gres: None,
         cache_root: cache.clone(),
         estimated_cache_bytes,
+        images: request.images.clone(),
+        estimated_preview_bytes,
         preview_hash: preview_hash(&script),
         script,
     })
+}
+
+/// Extra disk the previews mode would use: the selected scenes' camera samples
+/// from the index document × the per-preview estimate.
+pub fn preview_bytes_estimate(index: &serde_json::Value, scenes: Option<&[String]>) -> u64 {
+    let wanted = |id: &str| scenes.map_or(true, |list| list.iter().any(|scene| scene == id));
+    index
+        .get("scenes")
+        .and_then(serde_json::Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter(|row| row.get("scene_id").and_then(serde_json::Value::as_str).is_some_and(wanted))
+                .filter_map(|row| row.pointer("/sensors/camera_samples").and_then(serde_json::Value::as_u64))
+                .sum::<u64>()
+        })
+        .unwrap_or(0)
+        * PREVIEW_BYTES_ESTIMATE
 }
 
 /// Submit the exact previewed script. Re-rendering and hash comparison is the
@@ -267,6 +309,7 @@ mod tests {
             split: Some("test".to_string()),
             scenes: Some(vec!["scene_0001".to_string()]),
             workers: 4,
+            images: "originals".to_string(),
         }
     }
 
@@ -278,6 +321,7 @@ mod tests {
             &request(),
             "coperceive-cache/opv2v/abc123/test",
             12_345,
+            80_000,
         )
         .expect("preview");
         assert_eq!(preview.cpus_per_task, 4);
@@ -290,6 +334,8 @@ mod tests {
         assert!(preview.script.contains("dataset prepare"));
         assert!(preview.script.contains("--workers 4"));
         assert!(preview.script.contains("--scenes scene_0001"));
+        assert!(preview.script.contains("--images originals"));
+        assert_eq!((preview.images.as_str(), preview.estimated_preview_bytes), ("originals", 80_000));
         assert!(preview.script.contains("'/home/bob/coperceive-app/.venv/bin/python' -m coperceive")
             || preview.script.contains("/home/bob/coperceive-app/.venv/bin/python -m coperceive"));
     }
@@ -312,6 +358,7 @@ mod tests {
             &entry.profile,
             &request,
             "coperceive-cache/opv2v/abc/test",
+            0,
             0,
         )
         .expect_err("cache inside raw");
@@ -336,6 +383,37 @@ mod tests {
         );
         assert!(argv.contains(&"dataset".to_string()));
         assert!(argv.contains(&"--all".to_string()) || argv.contains(&"--scenes".to_string()));
+    }
+
+    #[test]
+    fn the_camera_image_mode_is_in_the_script_and_changes_the_hash() {
+        let entry = entry();
+        let mut request = request();
+        let originals =
+            render_prepare_script(&entry.profile, &request, "coperceive-cache/opv2v/abc/test", 1, 2)
+                .expect("originals");
+        request.images = "previews".to_string();
+        let previews =
+            render_prepare_script(&entry.profile, &request, "coperceive-cache/opv2v/abc/test", 1, 2)
+                .expect("previews");
+        assert!(previews.script.contains("--images previews"), "{}", previews.script);
+        assert_ne!(originals.preview_hash, previews.preview_hash);
+        request.images = "all".to_string();
+        let error =
+            render_prepare_script(&entry.profile, &request, "coperceive-cache/opv2v/abc/test", 1, 2)
+                .expect_err("unknown mode");
+        assert!(error.contains("Camera images must be"), "{error}");
+    }
+
+    #[test]
+    fn the_preview_estimate_counts_the_selected_scenes_camera_samples() {
+        let index = serde_json::json!({"scenes": [
+            {"scene_id": "a", "sensors": {"camera_samples": 10}},
+            {"scene_id": "b", "sensors": {"camera_samples": 5}},
+        ]});
+        assert_eq!(preview_bytes_estimate(&index, None), 15 * PREVIEW_BYTES_ESTIMATE);
+        let only_b = ["b".to_string()];
+        assert_eq!(preview_bytes_estimate(&index, Some(&only_b)), 5 * PREVIEW_BYTES_ESTIMATE);
     }
 
     #[test]
