@@ -759,6 +759,7 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   font-size: 13px;
   max-width: min(640px, calc(100% - 32px));
 }
+.clock .buffering { color: var(--accent); }
 .keys { position: relative; margin-left: 4px; }
 .keys summary { font-size: 13px; }
 .keys-pop {

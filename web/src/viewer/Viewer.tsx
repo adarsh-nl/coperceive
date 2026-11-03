@@ -148,6 +148,8 @@ type Stage = {
   predictionPicks: THREE.Group;
   /** Ground-truth wires a shown prediction matched, at 40% opacity. */
   dimmedBoxes: THREE.LineSegments;
+  /** The sample the drawn point cloud and boxes come from; they must always agree. */
+  shownTimes: { points: number | null; boxes: number | null };
 };
 
 type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
@@ -261,6 +263,11 @@ const VIEWPOINTS: { id: Viewpoint; label: string; shortcut: string }[] = [
 ];
 
 const PREFETCH_FRAMES = 4;
+/**
+ * A playback hold longer than this shows "Buffering…". It stays up until a sample
+ * advances on time again, so a slow link reads as one steady state, not a flicker.
+ */
+const BUFFERING_AFTER_MS = 60;
 
 function colorFor(agentType: string): number {
   return COLORS[agentType] ?? 0xb7b1a6;
@@ -611,6 +618,7 @@ function drawBoxes(
   appearance: Appearance,
   dimmed: Dimmed | null,
 ) {
+  stage.shownTimes.boxes = frame.time_us;
   const keys = dimmed && dimmed.timeUs === frame.time_us && dimmed.keys.size > 0 ? dimmed.keys : null;
   const shown = frame.boxes.filter((box) => boxShown(box, hidden, appearance) && Array.isArray(box.lines));
   const dims = shown.map((box) => keys !== null && keys.has(frameGtKey(box)));
@@ -677,9 +685,12 @@ async function drawFrame(
   cache: FrameCache,
   dimmed: () => Dimmed | null,
   stale: () => boolean,
+  onPoints?: (ms: number) => void,
+  onApplied?: () => void,
 ): Promise<Drawn | null> {
   let pointCount = 0;
   const sweeps: { xyz: Float32Array; color: THREE.Color }[] = [];
+  const pointsStarted = performance.now();
   for (const sensor of frame.point_sensors) {
     if (!appearance.points || hidden[sensor.agent_id] || sensor.count === 0) {
       continue;
@@ -703,6 +714,7 @@ async function drawFrame(
     (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "post-sensor" };
     return null;
   }
+  onPoints?.(performance.now() - pointsStarted);
   const positions = new Float32Array(pointCount * 3);
   const colors = new Float32Array(pointCount * 3);
   let cursor = 0;
@@ -717,6 +729,10 @@ async function drawFrame(
   }
   replaceColored(stage.points.geometry, positions, colors);
   stage.points.visible = positions.length > 0;
+  stage.shownTimes.points = frame.time_us;
+  // From here on this frame is the one on screen; anything that redraws boxes from
+  // the latest frame (a prediction layer arriving, a hidden agent) must use it.
+  onApplied?.();
   (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = {
     step: "drawn",
     pointCount,
@@ -773,19 +789,35 @@ function replaceMap(stage: Stage, buffer: ArrayBuffer) {
 export type FrameRenderStat = {
   at: number;
   index: number;
+  /** Frame document (boxes, agents) fetch. */
   load_ms: number;
+  /** Point-cloud fetches for the frame, when they finished. */
+  points_ms: number | null;
   draw_ms: number;
   render_ms: number;
   frame_hits: number;
   frame_misses: number;
+  /** "dropped": a newer sample was chosen before this one's points arrived. */
+  result: "applied" | "dropped";
 };
 
-/** Test-only frame telemetry (window.__COPERCEIVE_TEST_ENV__); bounded. */
+/** The viewer log: per-frame timings, bounded. Read it as window.__COPERCEIVE_FRAME_STATS__. */
 function recordFrameStat(stat: FrameRenderStat) {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_TEST_ENV__) return;
+  if (typeof window === "undefined") return;
   const list = window.__COPERCEIVE_FRAME_STATS__ ?? (window.__COPERCEIVE_FRAME_STATS__ = []);
   list.push(stat);
   if (list.length > 1000) list.splice(0, list.length - 1000);
+}
+
+/** Test-only: the points/boxes sample of every rendered frame where either changed. */
+function recordShownTimes(times: { points: number | null; boxes: number | null }, pointsVisible: boolean) {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_TEST_ENV__) return;
+  const list = window.__COPERCEIVE_RENDERED_TIMES__ ?? (window.__COPERCEIVE_RENDERED_TIMES__ = []);
+  const points = pointsVisible ? times.points : null;
+  const last = list[list.length - 1];
+  if (last && last.points === points && last.boxes === times.boxes) return;
+  list.push({ at: performance.now(), points, boxes: times.boxes });
+  if (list.length > 2000) list.splice(0, list.length - 2000);
 }
 
 function prefetchAhead(
@@ -982,6 +1014,7 @@ declare global {
     __COPERCEIVE_SCENES__?: () => string[];
     __COPERCEIVE_TEST_ENV__?: boolean;
     __COPERCEIVE_FRAME_STATS__?: FrameRenderStat[];
+    __COPERCEIVE_RENDERED_TIMES__?: { at: number; points: number | null; boxes: number | null }[];
     __COPERCEIVE_CACHE_STATS__?: {
       frame_hits: number;
       frame_misses: number;
@@ -1715,6 +1748,10 @@ export default function Viewer({
   const modeRef = useRef<Viewpoint>(initialSavedViewpoint());
   const cameraKeyRef = useRef("");
   const latestRef = useRef<{ frame: FrameDocument; types: Map<string, string> } | null>(null);
+  // "scene|time" of the sample whose points and boxes are on screen. Playback waits
+  // for it before moving on, so the clock never runs ahead of what is drawn.
+  const drawnRef = useRef<string | null>(null);
+  const [buffering, setBuffering] = useState(false);
   const orbitHomeRef = useRef<CameraGoal | null>(null);
   const settleRef = useRef(false);
   // What this scene can show, from its own data (5d): views it cannot use are
@@ -1868,6 +1905,7 @@ export default function Viewer({
     controls.target.set(0, 0, 0);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+    const shownTimes: Stage["shownTimes"] = { points: null, boxes: null };
     const points = new THREE.Points(
       new THREE.BufferGeometry(),
       new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true }),
@@ -1935,6 +1973,7 @@ export default function Viewer({
     let damp = 0;
     const draw = () => {
       frameId = 0;
+      recordShownTimes(shownTimes, points.visible);
       const width = canvas.clientWidth || 1;
       const height = canvas.clientHeight || 1;
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -2112,6 +2151,7 @@ export default function Viewer({
       labelNodes.clear();
     };
     stageRef.current = {
+      shownTimes,
       points,
       boxes,
       mapLines,
@@ -2299,6 +2339,8 @@ export default function Viewer({
     let origin = performance.now();
     let stopped = false;
     let timeoutId = 0;
+    let waitingSince: number | null = null;
+    const sceneKey = summary.scene_id;
 
     const tick = () => {
       if (stopped) {
@@ -2308,6 +2350,25 @@ export default function Viewer({
         originIndex = frameRef.current;
         cursor = originIndex;
         origin = performance.now();
+      }
+      // Hold on a sample until its points and boxes are drawn: never show points
+      // from another time than the boxes. The clock restarts from here once it is.
+      if (drawnRef.current !== `${sceneKey}|${times[cursor]}`) {
+        const now = performance.now();
+        waitingSince ??= now;
+        if (now - waitingSince > BUFFERING_AFTER_MS) {
+          setBuffering(true);
+        }
+        originIndex = cursor;
+        origin = now;
+        timeoutId = window.setTimeout(tick, 16);
+        return;
+      }
+      if (waitingSince !== null) {
+        // Held, now drawn: keep the label until a sample comes in on time.
+        waitingSince = null;
+      } else {
+        setBuffering(false);
       }
       let place = indexAfter(times, originIndex, performance.now() - origin, speed, loopRef.current);
       cursor = place.index;
@@ -2340,6 +2401,7 @@ export default function Viewer({
     return () => {
       stopped = true;
       window.clearTimeout(timeoutId);
+      setBuffering(false);
     };
   }, [playing, summary, speed, loop]);
 
@@ -2692,9 +2754,10 @@ export default function Viewer({
     const types = new Map(summary.agents.map((agent) => [agent.agent_id, agent.agent_type]));
     const stale = () => drawGen.current !== gen || summary.scene_id !== sceneIdRef.current;
 
-    // Update status line immediately on every frame tick during playback
+    // Update status line immediately on every frame tick during playback. Counts are
+    // only for the sample on screen: until this one is drawn, name its time alone.
     const latest = latestRef.current;
-    if (latest && latest.frame) {
+    if (latest && latest.frame && latest.frame.time_us === time && latest.frame.scene_id === summary.scene_id) {
       const shown = appearance.points
         ? latest.frame.point_sensors.reduce((sum, sensor) => (hidden[sensor.agent_id] ? sum : sum + sensor.count), 0)
         : 0;
@@ -2760,18 +2823,55 @@ export default function Viewer({
     }
 
     const frameStarted = performance.now();
+    let pointsMs: number | null = null;
+    const dropped = (loaded: number) => {
+      const cacheStats = cacheRef.current.stats;
+      recordFrameStat({
+        at: performance.now(),
+        index: frameIndex,
+        load_ms: loaded - frameStarted,
+        points_ms: pointsMs,
+        draw_ms: 0,
+        render_ms: 0,
+        frame_hits: cacheStats.frame_hits,
+        frame_misses: cacheStats.frame_misses,
+        result: "dropped",
+      });
+    };
     void (async () => {
       const body = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
       const frameLoaded = performance.now();
       if (stale()) {
+        dropped(frameLoaded);
         return;
       }
-      latestRef.current = { frame: body, types };
-      const drawn = await drawFrame(stage, body, types, hidden, appearance, effectiveToken, cacheRef.current, () => dimmedRef.current, stale);
+      const drawn = await drawFrame(
+        stage,
+        body,
+        types,
+        hidden,
+        appearance,
+        effectiveToken,
+        cacheRef.current,
+        () => dimmedRef.current,
+        stale,
+        (ms) => {
+          pointsMs = ms;
+        },
+        () => {
+          latestRef.current = { frame: body, types };
+        },
+      );
       const frameDrawn = performance.now();
       if (!drawn || stale()) {
+        dropped(frameLoaded);
         return;
       }
+      // latestRef moved to this frame inside drawFrame, as its points went on screen.
+      // The per-tick redraw above draws boxes from latestRef, so it must never hold a
+      // frame whose points have not arrived (over a slow tunnel the boxes ran ahead of
+      // frozen points).
+      drawnRef.current = `${summary.scene_id}|${time}`;
       syncMotion(stage, body, types, hidden);
       syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
       stage.renderNow();
@@ -2782,10 +2882,12 @@ export default function Viewer({
         at: frameRendered,
         index: frameIndex,
         load_ms: frameLoaded - frameStarted,
+        points_ms: pointsMs,
         draw_ms: frameDrawn - frameLoaded,
         render_ms: frameRendered - frameDrawn,
         frame_hits: cacheStats.frame_hits,
         frame_misses: cacheStats.frame_misses,
+        result: "applied",
       });
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
@@ -2811,6 +2913,9 @@ export default function Viewer({
       paintWait.current?.(time);
     })().catch((error: unknown) => {
       if (!stale() && !isAbortError(error)) {
+        // Playback waits for each sample to be drawn; a sample that cannot be drawn
+        // must not hold it forever. The status line says what failed.
+        drawnRef.current = `${summary.scene_id}|${time}`;
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
       }
     });
@@ -4689,6 +4794,7 @@ export default function Viewer({
         timeUs={typeof timeUs === "number" ? timeUs : null}
         times={summary?.times_us ?? []}
         playing={playing}
+        buffering={buffering}
         speed={speed}
         loop={loop}
         disabled={!summary || (summary.times_us.length < 2)}
