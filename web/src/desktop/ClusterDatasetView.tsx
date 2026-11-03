@@ -35,13 +35,11 @@ import {
   type ClusterSceneStatusEntry,
   type DatasetPreparePreview,
   type CameraImagesMode,
-  type ViewerJobProgress,
   cameraImageChoices,
   datasetPrepareJobStatus,
   wholeDatasetOffer,
   listenTauri,
   shareDatasetScenesWithViewer,
-  viewerStartLabel,
 } from "./clusterDatasets";
 import { SettingRow } from "./SettingRow";
 import { publishDatasetJobs, setViewerOpen } from "./jobsStore";
@@ -475,23 +473,13 @@ export default function ClusterDatasetView({
     }
   }, [hasPreparingScenes]);
 
-  // Opening a scene: say so while the viewer job starts or queues (it is reused
-  // when it already runs, so this is usually brief).
-  const [viewerStart, setViewerStart] = useState<{ sceneId: string; job: ViewerJobProgress | null } | null>(null);
+  // Opening a scene: the viewer reads it over SSH (no cluster job), so this is brief.
+  const [viewerStart, setViewerStart] = useState<string | null>(null);
   const [openError, setOpenError] = useState<string | null>(null);
-  useEffect(() => {
-    let unlisten: (() => void) | undefined;
-    void listenTauri<ViewerJobProgress>("viewer-job", (job) =>
-      setViewerStart((current) => (current ? { ...current, job } : current)),
-    ).then((stop) => {
-      unlisten = stop;
-    });
-    return () => unlisten?.();
-  }, []);
 
   const openSceneInViewer = async (sceneId: string) => {
     setOpenError(null);
-    setViewerStart({ sceneId, job: null });
+    setViewerStart(sceneId);
     try {
       await datasetOpen(profile.id, sceneId, {
         adapter: dataset.adapter || "opv2v",
@@ -823,12 +811,9 @@ export default function ClusterDatasetView({
           </div>
         );
       })()}
-      <p style={{ margin: "0.5rem 0 0", fontSize: "0.76rem", color: "#8b949e" }}>
-        Viewing runs a small CPU job on the cluster. It starts with the first scene you open and is reused for the others while it runs.
-      </p>
       {viewerStart ? (
         <div role="status" aria-live="polite" style={{ marginTop: "0.5rem", fontSize: "0.82rem", color: "#79c0ff" }}>
-          {viewerStartLabel(viewerStart.job)} · opening {viewerStart.sceneId}
+          Opening {viewerStart}…
         </div>
       ) : null}
       {openError ? (

@@ -86,6 +86,20 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Exact origin allowed for cross-origin requests.",
     )
+    serve.add_argument(
+        "--remote-stream-argv",
+        default=None,
+        help=(
+            "JSON argv of a `coperceive dataset stream` reached over SSH: --root is then "
+            "the local mirror of that cluster dataset (no Slurm job)."
+        ),
+    )
+    serve.add_argument(
+        "--remote-cache-dir", default=None, help="Local disk cache for --remote-stream-argv."
+    )
+    serve.add_argument(
+        "--remote-cache-bytes", type=int, default=None, help="Cap of the local disk cache (bytes)."
+    )
     serve.set_defaults(func=_serve)
 
     scene = sub.add_parser("scene", help="Copy a scene into a self-contained library folder.")
@@ -353,6 +367,18 @@ def build_parser() -> argparse.ArgumentParser:
         "--verbose", action="store_true", help="Print the full traceback on failure."
     )
     previews_parser.set_defaults(func=_dataset_previews)
+
+    stream_parser = dataset_sub.add_parser(
+        "stream",
+        help="Read-only file streamer for viewing a prepared dataset over SSH (stdin/stdout).",
+    )
+    stream_parser.add_argument(
+        "--root",
+        action="append",
+        required=True,
+        help="Allowed root; the first is the cache split directory paths start from.",
+    )
+    stream_parser.set_defaults(func=_dataset_stream)
 
     detect_parser = dataset_sub.add_parser(
         "detect", help="Identify a raw cluster dataset's built-in adapter and split."
@@ -693,6 +719,16 @@ def _dataset_prepare(args: argparse.Namespace) -> None:
         raise SystemExit(2)
 
 
+def _dataset_stream(args: argparse.Namespace) -> None:
+    from coperceive.remote_view.stream import StreamError, main
+
+    try:
+        main(args.root)
+    except StreamError as exc:
+        print(f"coperceive dataset stream: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
 def _dataset_previews(args: argparse.Namespace) -> None:
     import json
 
@@ -798,7 +834,13 @@ def _schema(_args: argparse.Namespace) -> None:
 # OPV2V/V2XSet records, per-scene index errors.
 # cluster-datasets-3: index/prepare --split.
 # cluster-datasets-4: prepare --images originals|previews, dataset previews.
-CAPABILITIES = ("cluster-datasets-2", "cluster-datasets-3", "cluster-datasets-4")
+# cluster-datasets-5: dataset stream (viewing over SSH, no Slurm job).
+CAPABILITIES = (
+    "cluster-datasets-2",
+    "cluster-datasets-3",
+    "cluster-datasets-4",
+    "cluster-datasets-5",
+)
 
 
 def _capabilities(_args: argparse.Namespace) -> None:
@@ -874,7 +916,18 @@ def _serve(args: argparse.Namespace) -> None:
             raise SystemExit(2)
     from coperceive.viewdata import dataset_root_error
 
-    root_error = dataset_root_error(Path(args.root))
+    stream_argv: list[str] | None = None
+    if args.remote_stream_argv:
+        import json
+
+        parsed: object = json.loads(args.remote_stream_argv)
+        items: list[object] = list(cast(list[object], parsed)) if isinstance(parsed, list) else []
+        if not items or not all(isinstance(item, str) for item in items):
+            print("--remote-stream-argv must be a JSON list of strings", file=sys.stderr)
+            raise SystemExit(2)
+        stream_argv = [str(item) for item in items]
+        Path(args.root).mkdir(parents=True, exist_ok=True)
+    root_error = None if stream_argv else dataset_root_error(Path(args.root))
     if root_error is not None:
         print(root_error, file=sys.stderr)
         raise SystemExit(2)
@@ -893,6 +946,9 @@ def _serve(args: argparse.Namespace) -> None:
         static=args.static,
         media_roots=tuple(args.media_root),
         allow_origin=args.allow_origin,
+        remote_stream_argv=stream_argv,
+        remote_cache_dir=args.remote_cache_dir,
+        remote_cache_bytes=args.remote_cache_bytes,
     )
 
 

@@ -517,4 +517,5 @@ def test_capabilities_lists_cluster_datasets(capsys: pytest.CaptureFixture[str])
     assert document["schema"] == "coperceive-capabilities-1"
     assert "cluster-datasets-2" in document["capabilities"]
     assert "cluster-datasets-3" in document["capabilities"]
+    assert "cluster-datasets-5" in document["capabilities"]
     assert document["version"]

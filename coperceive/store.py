@@ -133,7 +133,9 @@ def write_scene(scene: Scene, path: Path) -> None:
     _write_points(scene, path)
 
 
-def read_scene(path: Path) -> Scene:
+def read_scene(path: Path, *, points: bool = True) -> Scene:
+    """The scene at ``path``. ``points=False`` leaves the point sweeps out (a viewer
+    that reads each sweep on demand, e.g. over SSH)."""
     manifest = _read_manifest(path / "manifest.json")
     version = manifest["schema_version"]
     if type(version) is not int:
@@ -206,7 +208,7 @@ def read_scene(path: Path) -> Scene:
             SharedObject(track_id=_req_str(row, "track_id"), category=_req_str(row, "category"))
             for row in objects
         ),
-        point_clouds=_read_points(path),
+        point_clouds=_read_points(path) if points else (),
         images=tuple(
             ImageRef(
                 agent_id=_req_str(row, "agent_id"),
