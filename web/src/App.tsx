@@ -21,7 +21,7 @@ function useHashRoute(): "home" | "viewer" | "connect" {
     // The viewer window has no IPC: it only ever shows the viewer.
     if (isViewerWindow()) return "viewer";
     if (isConnect(raw)) return "connect";
-    if (raw === "/viewer") return "viewer";
+    if (raw === "/viewer" || raw.startsWith("/viewer?")) return "viewer";
     if (isDesktop) return "viewer";
     return "home";
   });
@@ -30,7 +30,8 @@ function useHashRoute(): "home" | "viewer" | "connect" {
       const raw = window.location.hash.replace(/^#/, "");
       if (isViewerWindow()) {
         // A Library link here means the main window's Library; stay on the viewer.
-        if (raw !== "/viewer") {
+        // `/viewer?scene=…` is the app choosing a scene in this viewer.
+        if (raw !== "/viewer" && !raw.startsWith("/viewer?")) {
           void showLibrary().catch(() => {});
           window.history.replaceState(null, "", "#/viewer");
         }
@@ -41,7 +42,7 @@ function useHashRoute(): "home" | "viewer" | "connect" {
         setRoute("connect");
         return;
       }
-      if (raw === "/viewer") {
+      if (raw === "/viewer" || raw.startsWith("/viewer?")) {
         setRoute("viewer");
         return;
       }
@@ -71,6 +72,7 @@ function storedToken(): string {
 function DesktopPreferences() {
   const [reopenLast, setReopenLast] = useState<boolean>(true);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(true);
+  const [autoNextScene, setAutoNextScene] = useState<boolean>(false);
   const [storageRoot, setStorageRoot] = useState<string>("");
 
   useEffect(() => {
@@ -81,9 +83,12 @@ function DesktopPreferences() {
         headers: { Authorization: `Bearer ${secret}` },
       })
         .then((r) => r.json())
-        .then((data: { reopen_last_session?: boolean }) => {
+        .then((data: { reopen_last_session?: boolean; auto_next_scene?: boolean }) => {
           if (data && typeof data.reopen_last_session === "boolean") {
             setReopenLast(data.reopen_last_session);
+          }
+          if (data && typeof data.auto_next_scene === "boolean") {
+            setAutoNextScene(data.auto_next_scene);
           }
         })
         .catch(() => {});
@@ -117,6 +122,21 @@ function DesktopPreferences() {
     }
   };
 
+  const handleAutoNextToggle = (checked: boolean) => {
+    setAutoNextScene(checked);
+    // The viewer in this window follows at once; state.json keeps it for next time.
+    window.dispatchEvent(new CustomEvent("coperceive-auto-next-scene", { detail: checked }));
+    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+      const port = window.__COPERCEIVE_CTRL_PORT__;
+      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+      fetch(`http://127.0.0.1:${port}/state`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ auto_next_scene: checked }),
+      }).catch(() => {});
+    }
+  };
+
   const handleAutoUpdateToggle = (checked: boolean) => {
     setAutoUpdate(checked);
     void setAutoDownloadUpdates(checked);
@@ -141,6 +161,12 @@ function DesktopPreferences() {
         title="Automatically download updates"
         description="Prompt when new signed releases are available."
         onChange={handleAutoUpdateToggle}
+      />
+      <SettingRow
+        checked={autoNextScene}
+        title="Continue to the next scene automatically"
+        description="When a scene ends, play the next prepared one. Off: a note offers it instead."
+        onChange={handleAutoNextToggle}
       />
       {/* Cluster commands need the main window's backend access. */}
       {isViewerWindow() ? null : <ClusterDatasetSettings />}

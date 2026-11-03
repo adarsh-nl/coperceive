@@ -50,6 +50,13 @@ pub struct ControllerConfig {
     pub finder_revealer: Option<FinderRevealer>,
     pub updater_checker: Option<UpdaterChecker>,
     pub updater_installer: Option<UpdaterInstaller>,
+    /// The remote viewer job (id, state, time left), or null without one.
+    pub viewer_session: Option<Arc<dyn Fn() -> serde_json::Value + Send + Sync>>,
+    /// Every scene of the open cluster dataset with its state, as the main
+    /// window last saw it, so the viewer can list scenes that are not ready.
+    pub dataset_scenes: Arc<Mutex<serde_json::Value>>,
+    /// Asks the main window to show the prepare preview for one scene.
+    pub scene_preparer: Option<Arc<dyn Fn(String) -> bool + Send + Sync>>,
 }
 
 impl ControllerConfig {
@@ -69,6 +76,9 @@ impl ControllerConfig {
             finder_revealer: None,
             updater_checker: None,
             updater_installer: None,
+            viewer_session: None,
+            dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
+            scene_preparer: None,
         }
     }
 
@@ -331,6 +341,53 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         return Ok(());
     }
 
+    if method == "GET" && path == "/viewer-session" {
+        let session = config
+            .viewer_session
+            .as_ref()
+            .map(|session| session())
+            .unwrap_or(serde_json::Value::Null);
+        let payload = serde_json::to_vec(&serde_json::json!({ "session": session }))
+            .unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
+    if method == "GET" && path == "/dataset-scenes" {
+        let scenes = config
+            .dataset_scenes
+            .lock()
+            .map(|scenes| scenes.clone())
+            .unwrap_or(serde_json::Value::Null);
+        let payload = serde_json::to_vec(&serde_json::json!({ "dataset": scenes }))
+            .unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/prepare-scene" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let scene_id = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("scene_id").and_then(|id| id.as_str()).map(str::to_string))
+            .filter(|id| !id.is_empty() && id.len() <= 256);
+        let Some(scene_id) = scene_id else {
+            write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), b"{\"error\":\"scene_id is required\"}")?;
+            return Ok(());
+        };
+        let shown = config
+            .scene_preparer
+            .as_ref()
+            .map(|prepare| prepare(scene_id))
+            .unwrap_or(false);
+        let payload = serde_json::to_vec(&serde_json::json!({ "shown": shown })).unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
     if method == "POST" && path == "/eval-result" {
         let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
             Some(b) => b,
@@ -465,6 +522,9 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             }
             if let Some(reopen) = val.get("reopen_last_session").and_then(|v| v.as_bool()) {
                 persistent.reopen_last_session = reopen;
+            }
+            if let Some(auto_next) = val.get("auto_next_scene").and_then(|v| v.as_bool()) {
+                persistent.auto_next_scene = auto_next;
             }
             if let Some(vis) = val.get("agent_visibility") {
                 if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
@@ -1297,6 +1357,40 @@ pub mod tests {
         let resp = String::from_utf8(writer).unwrap();
         assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
         assert!(resp.contains("No exported file has been saved yet"));
+    }
+
+    #[test]
+    fn test_viewer_endpoints_report_the_session_dataset_scenes_and_ask_to_prepare() {
+        let mut config = ControllerConfig::new(51234, "secret".to_string(), Some("http://127.0.0.1:8000".to_string()));
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let record = asked.clone();
+        config.scene_preparer = Some(Arc::new(move |scene: String| {
+            record.lock().unwrap().push(scene);
+            true
+        }));
+        config.viewer_session = Some(Arc::new(|| serde_json::json!({"job_id": 7, "time_left": "3:59:00"})));
+        *config.dataset_scenes.lock().unwrap() = serde_json::json!({"scenes": [{"scene_id": "a", "state": "ready"}]});
+        let call = |request: String| {
+            let mut writer = Vec::new();
+            let mut reader = Cursor::new(request.into_bytes());
+            handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+            String::from_utf8(writer).unwrap()
+        };
+        let get = |path: &str, auth: &str| {
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:51234\r\nOrigin: http://127.0.0.1:8000\r\nAuthorization: Bearer {auth}\r\n\r\n")
+        };
+        assert!(call(get("/viewer-session", "wrong")).starts_with("HTTP/1.1 401"));
+        assert!(call(get("/viewer-session", "secret")).contains("\"time_left\":\"3:59:00\""));
+        assert!(call(get("/dataset-scenes", "secret")).contains("\"scene_id\":\"a\""));
+        let post = |body: &str| {
+            format!(
+                "POST /prepare-scene HTTP/1.1\r\nHost: 127.0.0.1:51234\r\nOrigin: http://127.0.0.1:8000\r\nAuthorization: Bearer secret\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        assert!(call(post("{}")).starts_with("HTTP/1.1 400"));
+        assert!(call(post("{\"scene_id\":\"scene_0002\"}")).contains("\"shown\":true"));
+        assert_eq!(*asked.lock().unwrap(), vec!["scene_0002".to_string()]);
     }
 
     #[test]

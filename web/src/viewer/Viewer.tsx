@@ -28,7 +28,15 @@ import { boxCenter, followPick, type PickRecord } from "./inspect";
 import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
 import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
-import { pickSavePath, revealInFinder, saveExportedFile } from "../desktop/local";
+import {
+  getDatasetScenes,
+  getViewerJob,
+  pickSavePath,
+  prepareSceneInMainWindow,
+  revealInFinder,
+  saveExportedFile,
+  type ViewerJob,
+} from "../desktop/local";
 import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
 import {
   clampLeft,
@@ -80,6 +88,7 @@ import {
 } from "./predictionTypes";
 import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
 import Timeline, { type Marker } from "./timeline";
+import { neighbourScene } from "./sceneNav";
 import {
   cameraKey,
   isPose,
@@ -1002,6 +1011,24 @@ declare global {
   }
 }
 
+/** `scene=` from `#/viewer?scene=…`: the scene the app asked this viewer to show. */
+function hashScene(): string {
+  try {
+    const hash = window.location.hash;
+    const queryAt = hash.indexOf("?");
+    return queryAt < 0 ? "" : (new URLSearchParams(hash.slice(queryAt + 1)).get("scene") ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/** "3:59:10 left" from the scheduler's time left, for the cluster job badge. */
+function jobBadge(job: ViewerJob | null): string | null {
+  if (!job || job.job_id == null) return null;
+  const left = job.time_left && job.time_left !== "UNLIMITED" ? ` · ${job.time_left} left` : "";
+  return `Cluster job ${job.job_id}${left}`;
+}
+
 function clearStage(stage: Stage) {
   stage.points.geometry.setAttribute("position", new THREE.BufferAttribute(new Float32Array(0), 3));
   stage.points.geometry.setAttribute("color", new THREE.BufferAttribute(new Float32Array(0), 3));
@@ -1146,6 +1173,15 @@ export default function Viewer({
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
   const [datasetSceneStatuses, setDatasetSceneStatuses] = useState<Record<string, string>>({});
+  // Every scene of the open cluster dataset (ready or not), in dataset order.
+  const [datasetScenes, setDatasetScenes] = useState<string[]>([]);
+  const [viewerJob, setViewerJob] = useState<ViewerJob | null>(null);
+  // "Continue to the next scene automatically" (Settings); off by default.
+  const [autoNext, setAutoNext] = useState<boolean>(
+    () => Boolean((window.__COPERCEIVE_INITIAL_STATE__ as { auto_next_scene?: boolean } | undefined)?.auto_next_scene),
+  );
+  const [sceneNotice, setSceneNotice] = useState<{ text: string; next: string | null; prepare: string | null } | null>(null);
+  const autoPlayRef = useRef(false);
   // Never trust a restored scene id before the live scene list: it may name a
   // scene that is no longer in this library. The list effect below selects the
   // saved scene only when it exists, otherwise the first current scene (and says
@@ -1153,6 +1189,46 @@ export default function Viewer({
   const [sceneId, setSceneId] = useState<string>("");
   const sceneIdRef = useRef(sceneId);
   sceneIdRef.current = sceneId;
+  // Scene navigation over the whole dataset: its order, and which scenes the
+  // server can show (the ready ones). A scene asked for before it is listed
+  // (just prepared) is chosen once the list is read again.
+  const [sceneListRev, setSceneListRev] = useState(0);
+  const wantedSceneRef = useRef("");
+  const sceneOrder = datasetScenes.length > 0 ? datasetScenes : scenes;
+  const readyScenes = useMemo(() => new Set(scenes), [scenes]);
+  const navRef = useRef({ order: sceneOrder, ready: readyScenes, autoNext });
+  navRef.current = { order: sceneOrder, ready: readyScenes, autoNext };
+  const prevScene = neighbourScene(sceneOrder, readyScenes, sceneId, -1).scene;
+  const nextScene = neighbourScene(sceneOrder, readyScenes, sceneId, 1).scene;
+  const goScene = useCallback((direction: 1 | -1) => {
+    const { order, ready } = navRef.current;
+    const { scene } = neighbourScene(order, ready, sceneIdRef.current, direction);
+    if (scene) {
+      setPlaying(false);
+      setSceneNotice(null);
+      setSceneId(scene);
+    }
+  }, []);
+  const goSceneRef = useRef(goScene);
+  goSceneRef.current = goScene;
+  // At the end of a scene: a heads-up offering the next one, or (Settings) go on.
+  const sceneFinishedRef = useRef<() => void>(() => undefined);
+  sceneFinishedRef.current = () => {
+    const { order, ready, autoNext: continueOn } = navRef.current;
+    const { scene, skipped } = neighbourScene(order, ready, sceneIdRef.current, 1);
+    const skippedNote = skipped.length > 0 ? `Skipped ${skipped.join(", ")} (not prepared). ` : "";
+    if (continueOn && scene) {
+      autoPlayRef.current = true;
+      setSceneNotice(skipped.length > 0 ? { text: skippedNote.trim(), next: null, prepare: null } : null);
+      setSceneId(scene);
+      return;
+    }
+    setSceneNotice({
+      text: scene ? "Scene finished" : `Scene finished. ${skippedNote}${skipped.length > 0 ? "" : "This is the last scene."}`.trim(),
+      next: scene,
+      prepare: scene ? null : (skipped[0] ?? null),
+    });
+  };
   const [summary, setSummary] = useState<SceneSummary | null>(null);
   const [frameIndex, setFrameIndex] = useState(0);
   const [hidden, setHidden] = useState<Record<string, boolean>>(() => {
@@ -1196,6 +1272,94 @@ export default function Viewer({
     };
     window.addEventListener("coperceive-dataset-scene-statuses", onSceneStatuses);
     return () => window.removeEventListener("coperceive-dataset-scene-statuses", onSceneStatuses);
+  }, []);
+
+  // A cluster dataset's viewer: every scene with its state (from the main
+  // window's dataset view) and the Slurm job serving it, through the controller.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+      return;
+    }
+    let stopped = false;
+    const pollScenes = async () => {
+      try {
+        const dataset = await getDatasetScenes();
+        if (stopped || !dataset) return;
+        setDatasetScenes(dataset.scenes.map((scene) => scene.scene_id));
+        setDatasetSceneStatuses(Object.fromEntries(dataset.scenes.map((scene) => [scene.scene_id, scene.state])));
+      } catch {
+        // No controller answer: keep what we have.
+      }
+    };
+    const pollJob = async () => {
+      try {
+        const job = await getViewerJob();
+        if (!stopped) setViewerJob(job);
+      } catch {
+        // Keep the last answer.
+      }
+    };
+    void pollScenes();
+    void pollJob();
+    const scenesTimer = window.setInterval(() => void pollScenes(), 5000);
+    const jobTimer = window.setInterval(() => void pollJob(), 60_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(scenesTimer);
+      window.clearInterval(jobTimer);
+    };
+  }, []);
+
+  // The app shows another scene of the same session by changing the hash
+  // (`#/viewer?scene=…`): no new window, no new viewer job.
+  useEffect(() => {
+    const onHash = () => {
+      const asked = hashScene();
+      if (!asked || asked === sceneIdRef.current) return;
+      if (navRef.current.ready.has(asked)) {
+        setPlaying(false);
+        setSceneNotice(null);
+        setSceneId(asked);
+      } else {
+        wantedSceneRef.current = asked;
+        setSceneListRev((rev) => rev + 1);
+      }
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // A scene the dataset view now reports ready but this list lacks: read the list again.
+  const missingReady = Object.entries(datasetSceneStatuses)
+    .filter(([id, state]) => state === "ready" && !readyScenes.has(id))
+    .map(([id]) => id)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (missingReady) setSceneListRev((rev) => rev + 1);
+  }, [missingReady]);
+
+  // "Continue to the next scene automatically": play the next scene from its start.
+  useEffect(() => {
+    if (autoPlayRef.current && summary && summary.scene_id === sceneId) {
+      autoPlayRef.current = false;
+      setFrameIndex(0);
+      setPlaying(true);
+    }
+  }, [summary, sceneId]);
+
+  useEffect(() => {
+    if (!sceneNotice) return;
+    const timer = window.setTimeout(() => setSceneNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [sceneNotice]);
+
+  useEffect(() => {
+    const onAutoNext = (event: Event) => {
+      setAutoNext(Boolean((event as CustomEvent<boolean>).detail));
+    };
+    window.addEventListener("coperceive-auto-next-scene", onAutoNext);
+    return () => window.removeEventListener("coperceive-auto-next-scene", onAutoNext);
   }, []);
   const [series, setSeries] = useState<{
     points: number[];
@@ -2068,6 +2232,10 @@ export default function Viewer({
       } else if (event.key === "[" || event.key === "]") {
         const direction = event.key === "]" ? 1 : -1;
         setSpeed((current) => neighborSpeed(current, direction));
+      } else if (event.key === "n" || event.key === "N") {
+        goSceneRef.current(1);
+      } else if (event.key === "p" || event.key === "P") {
+        goSceneRef.current(-1);
       } else if (event.key === "1") {
         chooseViewpoint("orbit");
       } else if (event.key === "2") {
@@ -2121,6 +2289,7 @@ export default function Viewer({
       setFrameIndex(place.index);
       if (place.done) {
         setPlaying(false);
+        sceneFinishedRef.current();
         return;
       }
       // Drawing may have used part of this gap. Land on the sample that
@@ -2134,6 +2303,7 @@ export default function Viewer({
       }
       if (place.done) {
         setPlaying(false);
+        sceneFinishedRef.current();
         return;
       }
       timeoutId = window.setTimeout(tick, place.remainMs > 0 ? place.remainMs : 16);
@@ -2174,11 +2344,21 @@ export default function Viewer({
         typeof window !== "undefined"
           ? window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id
           : undefined;
-      if (saved && ids.includes(saved)) {
+      const asked = hashScene();
+      if (asked && ids.includes(asked)) {
+        initialScene = asked;
+      } else if (saved && ids.includes(saved)) {
         initialScene = saved;
       }
       setScenes(ids);
-      setSceneId((current) => current || initialScene || ids[0] || "");
+      const wanted = wantedSceneRef.current;
+      if (wanted && ids.includes(wanted)) {
+        wantedSceneRef.current = "";
+        setPlaying(false);
+        setSceneId(wanted);
+      } else {
+        setSceneId((current) => current || initialScene || ids[0] || "");
+      }
       if (ids.length === 0) {
         setStatus("No scene directories under the server root.");
       } else if (saved && !ids.includes(saved)) {
@@ -2192,7 +2372,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [effectiveToken]);
+  }, [effectiveToken, sceneListRev]);
 
   useEffect(() => {
     if (!sceneId) {
@@ -3837,20 +4017,31 @@ export default function Viewer({
         ariaLabel="Scene"
         value={sceneId}
         options={
-          scenes.length === 0
+          sceneOrder.length === 0
             ? [{ value: "", label: "No scenes" }]
-            : scenes.map((id) => {
-                const status = datasetSceneStatuses[id];
-                const isNonReady = status && status !== "ready";
-                return {
-                  value: id,
-                  label: isNonReady ? `${id} (preparing…)` : id,
-                  disabled: Boolean(isNonReady),
-                };
+            : sceneOrder.map((id) => {
+                if (readyScenes.has(id)) {
+                  return { value: id, label: id };
+                }
+                // A scene of this dataset that the viewer cannot show yet.
+                const state = datasetSceneStatuses[id];
+                const note = state === "preparing" ? "preparing…" : state === "failed" ? "failed" : "not prepared";
+                return { value: id, label: `${id} · ${note}` };
               })
         }
         onChange={(id) => {
           if (id === sceneId) {
+            return;
+          }
+          if (!readyScenes.has(id)) {
+            setSceneNotice({
+              text:
+                datasetSceneStatuses[id] === "preparing"
+                  ? `${id} is being prepared. It opens here when it is ready.`
+                  : `${id} is not prepared yet.`,
+              next: null,
+              prepare: datasetSceneStatuses[id] === "preparing" ? null : id,
+            });
             return;
           }
           // Pause now, not when the new summary arrives: a playing scene keeps
@@ -3862,8 +4053,14 @@ export default function Viewer({
       />
     </div>
   );
+  const jobText = jobBadge(viewerJob);
   const actionTools = (
     <div className="top-actions">
+      {jobText ? (
+        <span className="job-badge" title="This viewer runs as a small CPU job on the cluster; it is reused while it runs.">
+          {jobText}
+        </span>
+      ) : null}
       <button
         type="button"
         className="ghost"
@@ -4340,6 +4537,40 @@ export default function Viewer({
               heightPx={layout.strip_px}
             />
           ) : null}
+          {sceneNotice ? (
+            <div className="scene-notice" role="status">
+              <span>{sceneNotice.text}</span>
+              {sceneNotice.next ? (
+                <button type="button" className="ghost" onClick={() => goScene(1)}>
+                  View next scene (N)
+                </button>
+              ) : null}
+              {sceneNotice.prepare ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    const target = sceneNotice.prepare;
+                    if (!target) return;
+                    void prepareSceneInMainWindow(target).then((shown) =>
+                      setSceneNotice({
+                        text: shown
+                          ? `Confirm the preparation of ${target} in the main window. It opens here when it is ready.`
+                          : `Open the dataset in the main window to prepare ${target}.`,
+                        next: null,
+                        prepare: null,
+                      }),
+                    );
+                  }}
+                >
+                  Prepare &amp; open {sceneNotice.prepare}
+                </button>
+              ) : null}
+              <button type="button" className="icon ghost" aria-label="Dismiss" onClick={() => setSceneNotice(null)}>
+                ×
+              </button>
+            </div>
+          ) : null}
           <p className="status-line">{status}</p>
         </div>
         <div
@@ -4449,6 +4680,8 @@ export default function Viewer({
         onToggle={handleTogglePlay}
         onSpeed={setSpeed}
         onLoop={handleToggleLoop}
+        onPrevScene={prevScene ? () => goScene(-1) : undefined}
+        onNextScene={nextScene ? () => goScene(1) : undefined}
       />
       <ExportDialog
         open={exportOpen}

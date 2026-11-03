@@ -1638,3 +1638,68 @@ def test_desktop_wordmark_navigates_to_connect_never_landing(
         assert page.locator(".hero").count() == 0
     finally:
         context.close()
+
+
+def test_previous_and_next_scene_buttons_and_keys(session: _Session) -> None:
+    """|◀ ▶| and P/N move between prepared scenes; the first has no previous one."""
+    page = session.page
+    session.wait_status(SCENE_FULL)
+    assert page.locator("button[aria-label='Previous scene (P)']").is_disabled()
+    session.choose_scene(SCENE_BARE)
+    page.locator("button[aria-label='Next scene (N)']").click()
+    session.wait_status(FILLER_SCENES[0])
+    page.keyboard.press("p")
+    session.wait_status(SCENE_BARE)
+    page.keyboard.press("n")
+    session.wait_status(FILLER_SCENES[0])
+    page.locator("details.keys summary").click()
+    assert "previous or next scene" in page.locator(".keys-pop").inner_text()
+
+
+def _play_once(session: _Session, scene_id: str) -> None:
+    session.choose_scene(scene_id)
+    page = session.page
+    if page.locator("button[aria-label=Loop][aria-pressed=true]").count():
+        page.locator("button[aria-label=Loop]").click()
+    page.locator("button[aria-label=Play]").click()
+
+
+def test_a_finished_scene_offers_the_next_one(session: _Session) -> None:
+    """Without the setting a finished scene stops and offers the next scene."""
+    _play_once(session, FILLER_SCENES[0])
+    notice = session.page.locator(".scene-notice")
+    session.wait_for(lambda: notice.count() == 1, "the end-of-scene heads-up")
+    assert "Scene finished" in notice.inner_text()
+    assert FILLER_SCENES[0] in session.status()  # it did not move on by itself
+    notice.locator("button", has_text="View next scene (N)").click()
+    session.wait_status(FILLER_SCENES[1])
+    assert notice.count() == 0
+
+
+def test_continue_to_the_next_scene_automatically(session: _Session) -> None:
+    """With the setting on, the next scene plays at the end of this one."""
+    session.page.evaluate(
+        "window.dispatchEvent(new CustomEvent('coperceive-auto-next-scene', {detail: true}))"
+    )
+    _play_once(session, FILLER_SCENES[2])
+    session.wait_status(FILLER_SCENES[3], timeout_s=10.0)
+    session.wait_for(
+        lambda: (
+            session.page.locator("button[aria-label=Pause]").count() == 1
+            or session.page.locator(".scene-notice").count() == 1
+        ),
+        "the next scene to play",
+    )
+    session.page.evaluate(
+        "window.dispatchEvent(new CustomEvent('coperceive-auto-next-scene', {detail: false}))"
+    )
+
+
+def test_the_app_switches_scene_in_place_through_the_hash(session: _Session) -> None:
+    """`#/viewer?scene=…` (how the desktop shows another scene of the same viewer
+    job) switches the scene without reloading the page."""
+    page = session.page
+    page.evaluate("window.__SAME_PAGE__ = true")
+    page.evaluate(f"window.location.hash = '#/viewer?scene={FILLER_SCENES[4]}'")
+    session.wait_status(FILLER_SCENES[4])
+    assert page.evaluate("window.__SAME_PAGE__") is True

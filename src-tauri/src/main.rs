@@ -61,6 +61,10 @@ pub struct AppState {
     pub ctrl_secret: Mutex<Option<String>>,
     pub controller_config: Mutex<Option<ControllerConfig>>,
     pub viewer_origin: Mutex<Option<String>>,
+    /// What the current remote session serves (see `viewer_session_key`).
+    pub remote_key: Mutex<Option<String>>,
+    /// The open cluster dataset's scenes and states, for the viewer's scene list.
+    pub dataset_scenes: Arc<Mutex<serde_json::Value>>,
     pub current_root: Mutex<Option<String>>,
     pub startup_instant: Instant,
     /// One viewer window. A second open focuses the existing window.
@@ -82,6 +86,8 @@ impl Default for AppState {
             ctrl_secret: Mutex::new(None),
             controller_config: Mutex::new(None),
             viewer_origin: Mutex::new(None),
+            remote_key: Mutex::new(None),
+            dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
             current_root: Mutex::new(None),
             startup_instant: Instant::now(),
             viewer_build: Mutex::new(()),
@@ -715,6 +721,41 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     }));
     let handle_library = app_handle.clone();
     cfg.library_shower = Some(Arc::new(move || show_library_window(&handle_library)));
+    cfg.dataset_scenes = app_state.dataset_scenes.clone();
+    let session_state = app_state.clone();
+    cfg.viewer_session = Some(Arc::new(move || {
+        let Ok(lock) = session_state.remote.lock() else {
+            return serde_json::Value::Null;
+        };
+        let Some(session) = lock.as_ref() else {
+            return serde_json::Value::Null;
+        };
+        match session.job_status() {
+            Ok(status) => serde_json::json!({
+                "job_id": status.job_id.or(session.job_id),
+                "state": status.state,
+                "status": status.status,
+                "time_left": status.time_left,
+                "time_left_seconds": status.time_left_seconds,
+                "elapsed": status.elapsed,
+            }),
+            Err(_) => serde_json::json!({ "job_id": session.job_id, "status": "unknown" }),
+        }
+    }));
+    let handle_prepare = app_handle.clone();
+    cfg.scene_preparer = Some(Arc::new(move |scene_id: String| {
+        use tauri::{Emitter, Manager};
+        // The main window shows the dataset view's prepare preview for this scene;
+        // the user confirms there (nothing is submitted from the viewer).
+        let Some(main) = handle_prepare.get_webview_window("main") else {
+            return false;
+        };
+        let _ = main.unminimize();
+        let _ = main.show();
+        let _ = main.set_focus();
+        let _ = main.emit("prepare-scene", serde_json::json!({ "scene_id": scene_id }));
+        main.is_visible().unwrap_or(false)
+    }));
     let handle_close = app_handle.clone();
     cfg.window_closer = Some(Arc::new(move |label: &str| {
         use tauri::Manager;
@@ -2511,6 +2552,16 @@ async fn dataset_status(
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
 }
 
+/// The open cluster dataset's scenes (id, state) from the dataset view, so the
+/// viewer's scene list can show the ones that are not prepared yet.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: serde_json::Value) {
+    if let Ok(mut scenes) = state.dataset_scenes.lock() {
+        *scenes = dataset;
+    }
+}
+
 /// Settings → Cluster datasets → "Camera images when preparing".
 #[cfg(target_os = "macos")]
 #[tauri::command]
@@ -2564,11 +2615,20 @@ async fn dataset_open(
         &raw_root,
         split.as_deref(),
     )?;
-    let _ = scene_id;
     let alias = entry.profile.ssh_target()?;
     // Camera images resolve through each scene's `raw` link into exactly this
     // dataset's root (docs/datasets/cluster-datasets.md, "Camera images").
-    remote_connect(app, state, alias, cache, None, Some(profile_id), Some(vec![raw_root])).await
+    remote_connect(
+        app,
+        state,
+        alias,
+        cache,
+        None,
+        Some(profile_id),
+        Some(vec![raw_root]),
+        scene_id,
+    )
+    .await
 }
 
 /// Runs the test-only dataset flow (see `test_seams::DatasetFlowProbe`): saves
@@ -2716,8 +2776,53 @@ fn run_dataset_flow_probe(
     Ok(serde_json::json!({"ok": true, "steps": records}))
 }
 
+/// What a remote viewer session serves: reused only for exactly the same thing.
+#[cfg(target_os = "macos")]
+fn viewer_session_key(alias: &str, profile_id: Option<&str>, data_root: &str, media_roots: &[String]) -> String {
+    format!("{alias}|{}|{data_root}|{}", profile_id.unwrap_or(""), media_roots.join("\n"))
+}
+
+/// Point the open viewer at another scene of the same session, without a new
+/// window: the viewer reads `scene=` from its hash.
+#[cfg(target_os = "macos")]
+fn show_scene_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, scene_id: Option<&str>) -> bool {
+    use tauri::Manager;
+    let same_origin = state
+        .viewer_origin
+        .lock()
+        .ok()
+        .and_then(|lock| lock.clone())
+        .is_some_and(|current| current == origin);
+    let Some(viewer) = app.get_webview_window("viewer").filter(|_| same_origin) else {
+        return false;
+    };
+    if let Some(scene) = scene_id {
+        let hash = serde_json::to_string(&format!("#/viewer?scene={}", urlencoding_component(scene)))
+            .unwrap_or_else(|_| "\"#/viewer\"".to_string());
+        let _ = viewer.eval(&format!("window.location.hash = {hash};"));
+    }
+    let _ = viewer.show();
+    let _ = viewer.set_focus();
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+    true
+}
+
+#[cfg(target_os = "macos")]
+fn urlencoding_component(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => (byte as char).to_string(),
+            other => format!("%{other:02X}"),
+        })
+        .collect()
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn remote_connect(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -2726,8 +2831,49 @@ async fn remote_connect(
     uuid: Option<String>,
     profile_id: Option<String>,
     media_roots: Option<Vec<String>>,
+    scene_id: Option<String>,
 ) -> Result<SessionPayload, String> {
-    // Disconnect existing session if one was active
+    use tauri::Emitter;
+    let media_roots = media_roots.unwrap_or_default();
+    let key = viewer_session_key(&alias, profile_id.as_deref(), &data_root, &media_roots);
+
+    // The same dataset is already being served: reuse that job and its viewer.
+    // Viewing must not submit a Slurm job per Open (docs/datasets/cluster-datasets.md).
+    let reusable = {
+        let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
+        let current_key = state.remote_key.lock().ok().and_then(|lock| lock.clone());
+        match lock.as_mut() {
+            Some(existing) if current_key.as_deref() == Some(key.as_str()) => {
+                if existing.tunnel_alive() {
+                    existing
+                        .job_status()
+                        .ok()
+                        .filter(|status| status.status == "running")
+                        .map(|_| (existing.origin(), existing.token.clone()))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        }
+    };
+    if let Some((origin, token)) = reusable {
+        if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
+            let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+            let query = scene_id.as_deref().map(|scene| format!("scene={}", urlencoding_component(scene)));
+            open_viewer_window(&app, &origin, &token, &data_root, ctrl_port, state.inner(), query.as_deref())?;
+        }
+        eprintln!("[viewer] reused the running viewer job for {data_root}");
+        return Ok(SessionPayload {
+            origin,
+            token,
+            server_version: "0.0.0".to_string(),
+            data_root,
+            target_type: "remote".to_string(),
+        });
+    }
+
+    // Anything else is served by a new (or reattached) session: stop the old one.
     {
         let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
         if let Some(mut existing) = lock.take() {
@@ -2738,6 +2884,9 @@ async fn remote_connect(
         let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
         if let Some(mut existing) = lock.take() {
             let _ = existing.disconnect();
+        }
+        if let Ok(mut current) = state.remote_key.lock() {
+            *current = None;
         }
     }
 
@@ -2757,6 +2906,8 @@ async fn remote_connect(
     )
     .map_err(|error| format!("Could not prepare the remote viewer page: {error}"))?;
 
+    // A session started for this dataset before a restart may still be running.
+    let saved = uuid.clone().or_else(|| state::load_state().viewer_sessions.get(&key).cloned());
     let options = RemoteStartOptions {
         data_root: data_root.clone(),
         partition: profile
@@ -2774,23 +2925,53 @@ async fn remote_connect(
         python: profile
             .as_ref()
             .and_then(|p| p.profile.environment.interpreter.clone()),
-        uuid: uuid.clone(),
+        uuid: None,
         static_dir: Some(static_dir),
         coperceive_command: profile
             .as_ref()
             .map(|p| p.profile.environment.coperceive_command.clone())
             .unwrap_or_default(),
-        media_roots: media_roots.unwrap_or_default(),
+        media_roots,
+        // Return quickly with the job id while it queues; we poll and report.
+        wait_timeout: Some(5),
     };
 
-    let mgr = RemoteSessionManager::connect_with_options(&alias, &options, Some(&ssh_bin()))
-        .map_err(|e| e.to_string())?;
+    let progress_app = app.clone();
+    let alias_for_job = alias.clone();
+    let mgr = tauri::async_runtime::spawn_blocking(move || {
+        if let Some(saved) = saved {
+            let reattach = RemoteStartOptions {
+                uuid: Some(saved),
+                ..options.clone()
+            };
+            if let Ok(mgr) = RemoteSessionManager::connect_with_options(&alias_for_job, &reattach, Some(&ssh_bin())) {
+                eprintln!("[viewer] reattached to the running viewer job");
+                return Ok(mgr);
+            }
+        }
+        let progress = |job: &coperceive_desktop::remote::ViewerJobProgress| {
+            let _ = progress_app.emit("viewer-job", job);
+        };
+        RemoteSessionManager::connect_with_progress(
+            &alias_for_job,
+            &options,
+            Some(&ssh_bin()),
+            &progress,
+            Duration::from_secs(3),
+            Duration::from_secs(15 * 60),
+        )
+    })
+    .await
+    .map_err(|error| format!("The viewer job could not start: {error}"))?
+    .map_err(|e| e.to_string())?;
+    eprintln!("[viewer] started viewer job {:?} for {data_root}", mgr.job_id);
 
     let origin = mgr.origin();
     let token = mgr.token.clone();
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
 
-    open_viewer_window(&app, &origin, &token, &data_root, ctrl_port, state.inner(), None)?;
+    let query = scene_id.as_deref().map(|scene| format!("scene={}", urlencoding_component(scene)));
+    open_viewer_window(&app, &origin, &token, &data_root, ctrl_port, state.inner(), query.as_deref())?;
 
     let payload = SessionPayload {
         origin,
@@ -2800,6 +2981,12 @@ async fn remote_connect(
         target_type: "remote".to_string(),
     };
 
+    let mut persistent = state::load_state();
+    persistent.viewer_sessions.insert(key.clone(), mgr.uuid.clone());
+    let _ = state::save_state(&persistent);
+    if let Ok(mut current) = state.remote_key.lock() {
+        *current = Some(key);
+    }
     let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
     *lock = Some(mgr);
 
@@ -3001,6 +3188,7 @@ fn main() {
             dataset_open,
             get_camera_images_setting,
             set_camera_images_setting,
+            set_viewer_dataset_scenes,
             dataset_previews,
             build_run_plan,
             save_run_plan,

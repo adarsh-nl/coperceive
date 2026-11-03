@@ -502,6 +502,31 @@ print(f"Step CD-13 verified: Remove previews deleted {removed['removed']['bytes'
       "serves its image; raw tree byte-identical")
 PY
 
+# --- Flow H: a second Open reuses the viewer job ---------------------------------
+# Viewing must not submit a Slurm job per Open: the second scene of the same
+# dataset goes to the running job (and the open viewer), not a new one.
+run_flow reuse "[
+  {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}, \"sceneId\": \"scene_0000\"}},
+  {\"command\": \"dataset_open\", \"args\": {${DATASET_ARGS}, \"sceneId\": \"scene_0002\"}}
+]"
+check reuse <<'PY'
+import json, sys
+result, ssh_log, tmp, raw = sys.argv[1:5]
+steps = json.load(open(result, encoding="utf-8"))["steps"]
+for step in steps:
+    assert step["ok"], step
+first, second = steps[0]["value"], steps[1]["value"]
+assert (first["origin"], first["token"]) == (second["origin"], second["token"]), "the second Open started another session"
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+starts = [line for line in log if line == "remote-start"]
+assert len(starts) == 1, log
+assert "remote-status" in log, log
+stderr = open(f"{tmp}/reuse.stderr.log", encoding="utf-8", errors="replace").read()
+assert "[viewer] reused the running viewer job" in stderr, stderr[-2000:]
+print(f"Step CD-14 verified: two Opens of the same dataset -> one viewer job (1 remote start, "
+      f"{log.count('remote-status')} status check), same origin {first['origin']}; the second reused it")
+PY
+
 # --- Flow E: an older coperceive on the cluster --------------------------------
 # The profile's interpreter is fake_old_python.sh: no `capabilities`, no
 # `dataset detect`. Test connection and dataset_detect must both say "too old"

@@ -410,6 +410,15 @@ pub struct AppPersistentState {
     /// The same choice per server profile id; it wins over the app-wide default.
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub camera_images_by_profile: HashMap<String, String>,
+
+    /// Remote viewer sessions to reattach to after a restart, by what they
+    /// serve (server, cache directory, media roots) → session id.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub viewer_sessions: HashMap<String, String>,
+
+    /// At the end of a scene, move on to the next prepared one. Off by default.
+    #[serde(default)]
+    pub auto_next_scene: bool,
 }
 
 /// Camera-image modes for cluster dataset preparation.
@@ -507,6 +516,8 @@ impl Default for AppPersistentState {
             recent_roots: Vec::new(),
             camera_images_default: None,
             camera_images_by_profile: HashMap::new(),
+            viewer_sessions: HashMap::new(),
+            auto_next_scene: false,
         }
     }
 }
@@ -834,6 +845,8 @@ pub mod tests {
             recent_roots: vec!["/path/to/data".into(), "/path/to/prev".into()],
             camera_images_default: Some("previews".into()),
             camera_images_by_profile: HashMap::from([("cluster-a".into(), "originals".into())]),
+            viewer_sessions: HashMap::from([("alias|p|/r|".into(), "abc123".into())]),
+            auto_next_scene: true,
         };
 
         let json = serde_json::to_string(&state).expect("serialize");

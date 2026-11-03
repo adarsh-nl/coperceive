@@ -35,7 +35,11 @@ import {
   type ClusterSceneStatusEntry,
   type DatasetPreparePreview,
   type CameraImagesMode,
+  type ViewerJobProgress,
   cameraImageChoices,
+  listenTauri,
+  shareDatasetScenesWithViewer,
+  viewerStartLabel,
 } from "./clusterDatasets";
 import { SettingRow } from "./SettingRow";
 import { errorDetails, errorText } from "./errors";
@@ -298,11 +302,7 @@ export default function ClusterDatasetView({
       if (autoOpenSceneId && nextMap.get(autoOpenSceneId)?.state === "ready") {
         const idToOpen = autoOpenSceneId;
         setAutoOpenSceneId(null);
-        void datasetOpen(profile.id, idToOpen, {
-          adapter: dataset.adapter || "opv2v",
-          rawRoot: dataset.raw_root || dataset.path,
-          split: dataset.split,
-        });
+        void openSceneInViewerRef.current(idToOpen);
       }
 
       // Check if anything is still preparing
@@ -349,20 +349,56 @@ export default function ClusterDatasetView({
     }
   }, [hasPreparingScenes]);
 
+  // Opening a scene: say so while the viewer job starts or queues (it is reused
+  // when it already runs, so this is usually brief).
+  const [viewerStart, setViewerStart] = useState<{ sceneId: string; job: ViewerJobProgress | null } | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenTauri<ViewerJobProgress>("viewer-job", (job) =>
+      setViewerStart((current) => (current ? { ...current, job } : current)),
+    ).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  const openSceneInViewer = async (sceneId: string) => {
+    setOpenError(null);
+    setViewerStart({ sceneId, job: null });
+    try {
+      await datasetOpen(profile.id, sceneId, {
+        adapter: dataset.adapter || "opv2v",
+        rawRoot: dataset.raw_root || dataset.path,
+        split: dataset.split,
+      });
+    } catch (err) {
+      setOpenError(errorDetails(err) || errorText(err));
+    } finally {
+      setViewerStart(null);
+    }
+  };
+
+  const openSceneInViewerRef = useRef(openSceneInViewer);
+  openSceneInViewerRef.current = openSceneInViewer;
+
+  // The viewer lists every scene of this dataset; keep it told of their states.
+  useEffect(() => {
+    if (!indexDoc) return;
+    void shareDatasetScenesWithViewer(
+      indexDoc.scenes.map((scene) => ({
+        scene_id: scene.scene_id,
+        state: statuses.get(scene.scene_id)?.state ?? "not_prepared",
+      })),
+    ).catch(() => undefined);
+  }, [indexDoc, statuses]);
+
   // Open a scene flow
   const handleOpenScene = async (sceneId: string) => {
     const currentStatus = statuses.get(sceneId)?.state ?? "not_prepared";
 
     if (currentStatus === "ready") {
-      try {
-        await datasetOpen(profile.id, sceneId, {
-          adapter: dataset.adapter || "opv2v",
-          rawRoot: dataset.raw_root || dataset.path,
-          split: dataset.split,
-        });
-      } catch (err) {
-        alert(errorText(err));
-      }
+      await openSceneInViewer(sceneId);
       return;
     }
 
@@ -385,6 +421,19 @@ export default function ClusterDatasetView({
       alert(errorText(err));
     }
   };
+
+  // "Prepare & open" chosen in the viewer: show this scene's prepare preview here.
+  const handleOpenSceneRef = useRef(handleOpenScene);
+  handleOpenSceneRef.current = handleOpenScene;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listenTauri<{ scene_id: string }>("prepare-scene", (payload) => {
+      if (payload?.scene_id) void handleOpenSceneRef.current(payload.scene_id);
+    }).then((stop) => {
+      unlisten = stop;
+    });
+    return () => unlisten?.();
+  }, []);
 
   const handleConfirmSingleScenePrepare = async () => {
     if (!singleScenePrepare || !singlePreparePreview) return;
@@ -598,6 +647,19 @@ export default function ClusterDatasetView({
         </div>
       </div>
 
+      <p style={{ margin: "0.5rem 0 0", fontSize: "0.76rem", color: "#8b949e" }}>
+        Viewing runs a small CPU job on the cluster. It starts with the first scene you open and is reused for the others while it runs.
+      </p>
+      {viewerStart ? (
+        <div role="status" aria-live="polite" style={{ marginTop: "0.5rem", fontSize: "0.82rem", color: "#79c0ff" }}>
+          {viewerStartLabel(viewerStart.job)} · opening {viewerStart.sceneId}
+        </div>
+      ) : null}
+      {openError ? (
+        <div role="alert" style={{ marginTop: "0.5rem", color: "#ff7b72", fontSize: "0.8rem" }}>
+          <ErrorLines text={openError} />
+        </div>
+      ) : null}
       {prepareOutcome ? (
         <div role="status" style={{ marginTop: "0.6rem", padding: "0.6rem 0.8rem", borderRadius: "8px", backgroundColor: "rgba(63,185,80,0.15)", border: "1px solid rgba(63,185,80,0.35)", color: "#7ee787", fontSize: "0.82rem" }}>
           ✓ {prepareOutcome}
