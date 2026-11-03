@@ -836,7 +836,8 @@ def test_agent_visibility_toggles_remove_objects_from_scene_graph(session: _Sess
     # Advance to sample 2 (100000 µs) where vehicle has points and both agents have boxes
     session.page.keyboard.press("ArrowRight")
     session.page.keyboard.press("ArrowRight")
-    session.wait_status("100000 µs", timeout_s=10.0)
+    # The counts appear once that sample is drawn (points and boxes together).
+    session.wait_status("at 100000 µs. 1 points", timeout_s=10.0)
 
     # Initial counts from Three.js scene graph
     initial = session.page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__()")

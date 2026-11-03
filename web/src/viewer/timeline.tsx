@@ -68,6 +68,8 @@ type TimelineProps = {
   timeUs: number | null;
   times: readonly number[];
   playing: boolean;
+  /** Playback is holding on a sample until its point clouds arrive. */
+  buffering?: boolean;
   speed: Speed;
   loop: boolean;
   disabled: boolean;
@@ -95,6 +97,7 @@ export default function Timeline({
   timeUs,
   times,
   playing,
+  buffering = false,
   speed,
   loop,
   disabled,
@@ -226,6 +229,12 @@ export default function Timeline({
             {" "}
             · sample {length === 0 ? 0 : Math.min(index, last) + 1} / {length}
           </span>
+          {buffering ? (
+            <span className="buffering" role="status" title="Waiting for this sample's point clouds before moving on">
+              {" "}
+              · Buffering…
+            </span>
+          ) : null}
         </p>
         <details className="keys">
           <summary>Keys</summary>
