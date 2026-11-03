@@ -1703,3 +1703,39 @@ def test_the_app_switches_scene_in_place_through_the_hash(session: _Session) -> 
     page.evaluate(f"window.location.hash = '#/viewer?scene={FILLER_SCENES[4]}'")
     session.wait_status(FILLER_SCENES[4])
     assert page.evaluate("window.__SAME_PAGE__") is True
+
+
+def _viewpoints(session: _Session) -> list[str]:
+    buttons = session.page.locator("[role=group][aria-label=Viewpoint] button")
+    return [buttons.nth(i).inner_text().strip() for i in range(buttons.count())]
+
+
+def test_views_and_layers_follow_what_the_scene_has(session: _Session) -> None:
+    """5d: a scene with a UAV offers Drone; one without does not; a scene without
+    cameras has no Camera view and no Frustums layer. No dataset names involved."""
+    page = session.page
+    session.wait_status(SCENE_FULL)
+    assert "Drone" in _viewpoints(session)  # vehicle + UAV, like Griffin
+    page.locator("button[aria-label='Drone viewpoint (4)']").click()
+    assert (
+        page.locator("button[aria-label='Drone viewpoint (4)']").get_attribute("aria-pressed")
+        == "true"
+    )
+
+    session.choose_scene(SCENE_BARE)  # a vehicle with a camera, no UAV (OPV2V-like)
+    session.wait_for(lambda: "Drone" not in _viewpoints(session), "the Drone view to go")
+    assert (
+        page.locator("button[aria-label='Orbit viewpoint (1)']").get_attribute("aria-pressed")
+        == "true"
+    )
+    assert "Camera" in _viewpoints(session)
+    page.keyboard.press("4")  # no UAV: the shortcut does nothing
+    assert (
+        page.locator("button[aria-label='Orbit viewpoint (1)']").get_attribute("aria-pressed")
+        == "true"
+    )
+
+    session.choose_scene(FILLER_SCENES[0])  # a vehicle only: no cameras
+    session.wait_for(lambda: "Camera" not in _viewpoints(session), "the Camera view to go")
+    layers = page.locator("details:has(summary:text('Layers')) .checks").inner_text()
+    assert "Frustums" not in layers and "Boxes" in layers, layers
