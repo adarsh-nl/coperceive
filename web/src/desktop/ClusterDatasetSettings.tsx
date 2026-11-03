@@ -35,7 +35,7 @@ export function ClusterDatasetSettings() {
 
   useEffect(() => {
     void listServerProfiles()
-      .then(setServers)
+      .then((list) => setServers(Array.isArray(list) ? list : []))
       .catch(() => setServers([]));
   }, []);
 
@@ -45,7 +45,8 @@ export function ClusterDatasetSettings() {
     setUsage(null);
     setUsageError(null);
     try {
-      setUsage(await datasetPreviews(id, false));
+      const value = await datasetPreviews(id, false);
+      setUsage(value && typeof value.bytes === "number" ? value : null);
     } catch (err) {
       setUsageError(errorText(err, "Could not read the previews on this server."));
     }
@@ -53,7 +54,9 @@ export function ClusterDatasetSettings() {
 
   useEffect(() => {
     setConfirming(false);
-    void getCameraImagesSetting(profileId).then(setSetting).catch(() => setSetting(null));
+    void getCameraImagesSetting(profileId)
+      .then((value) => setSetting(value && typeof value.effective === "string" ? value : null))
+      .catch(() => setSetting(null));
     if (profileId) {
       void loadUsage(profileId);
     } else {
@@ -70,7 +73,8 @@ export function ClusterDatasetSettings() {
     : null;
 
   const choose = async (mode: CameraImagesMode | null) => {
-    setSetting(await setCameraImagesSetting(profileId, mode));
+    const value = await setCameraImagesSetting(profileId, mode);
+    if (value && typeof value.effective === "string") setSetting(value);
   };
 
   const removePreviews = async () => {

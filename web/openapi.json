@@ -549,6 +549,16 @@
               ],
               "title": "Width"
             }
+          },
+          {
+            "name": "full",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Full"
+            }
           }
         ],
         "responses": {
