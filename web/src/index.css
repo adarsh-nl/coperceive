@@ -151,6 +151,10 @@ kbd {
 .crumb-dataset { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .crumb-sep { color: var(--muted); font-size: 13px; }
 .topbar .menu { flex-direction: row; align-items: center; }
+/* Unified toolbar: the traffic lights sit at the left of the top bar (16 px in,
+   about 52 px wide), so its content starts after them; full screen hides them. */
+:root[data-titlebar="overlay"] .topbar { padding-left: 84px; -webkit-user-select: none; user-select: none; }
+:root[data-titlebar="overlay"][data-fullscreen="true"] .topbar { padding-left: 12px; }
 .topbar .menu-button, .topbar .top-actions .ghost, .topbar .settings summary {
   height: 32px;
   padding: 0 10px;

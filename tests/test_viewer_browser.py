@@ -1739,3 +1739,49 @@ def test_views_and_layers_follow_what_the_scene_has(session: _Session) -> None:
     session.wait_for(lambda: "Camera" not in _viewpoints(session), "the Camera view to go")
     layers = page.locator("details:has(summary:text('Layers')) .checks").inner_text()
     assert "Frustums" not in layers and "Boxes" in layers, layers
+
+
+def test_the_unified_toolbar_keeps_clear_of_the_traffic_lights(
+    browser: Browser, viewer_url: str
+) -> None:
+    """5c: with the native title bar hidden, nothing in the top bar starts under
+    the macOS traffic lights (16 px in, about 52 px wide) at any window width,
+    the bar never wraps, empty space drags the window, and full screen gives the
+    space back."""
+    probe = """() => {
+        const bar = document.querySelector('header.topbar');
+        const wanted = 'a, button, summary, [role=button], input, select';
+        const controls = [...bar.querySelectorAll(wanted)].filter((el) => {
+            const r = el.getBoundingClientRect();
+            return r.width > 0 && r.height > 0;
+        });
+        return {
+            overlay: document.documentElement.dataset.titlebar,
+            drag: bar.hasAttribute('data-tauri-drag-region'),
+            left: Math.min(...controls.map((el) => el.getBoundingClientRect().left)),
+            height: bar.getBoundingClientRect().height,
+            padding: parseFloat(getComputedStyle(bar).paddingLeft),
+        };
+    }"""
+    for width in (900, 1200, 1600):
+        # A display larger than the window, as on a desktop (headless Chromium
+        # otherwise reports the window size as the screen, which reads as full
+        # screen; resizing the viewport resets it, so one page per width).
+        page = browser.new_page(
+            viewport={"width": width, "height": 700}, screen={"width": 2560, "height": 1440}
+        )
+        page.add_init_script(
+            "window.__COPERCEIVE_TEST_ENV__ = true; window.__COPERCEIVE_DESKTOP__ = true;"
+            " window.__COPERCEIVE_TITLEBAR__ = 'overlay';"
+        )
+        session = _Session(page, viewer_url)
+        session.open()
+        state = page.evaluate(probe)
+        assert state["overlay"] == "overlay" and state["drag"], state
+        assert state["left"] >= 76, (width, state)
+        assert state["height"] <= 60, (width, state)  # one row, no wrap
+        if width == 1600:
+            page.evaluate("document.documentElement.dataset.fullscreen = 'true'")
+            assert page.evaluate(probe)["padding"] == 12
+        assert session.errors == [], session.errors
+        page.close()

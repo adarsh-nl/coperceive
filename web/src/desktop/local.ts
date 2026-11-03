@@ -48,6 +48,8 @@ declare global {
     __TAURI_INTERNALS__?: unknown;
     __COPERCEIVE_CTRL_PORT__?: number;
     __COPERCEIVE_VIEWER_WINDOW__?: boolean;
+    /** "overlay": no native title bar; the traffic lights sit in the app's top bar. */
+    __COPERCEIVE_TITLEBAR__?: string;
     __COPERCEIVE_CTRL_SECRET__?: string;
   }
 }
