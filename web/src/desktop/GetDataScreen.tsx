@@ -852,7 +852,9 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
                   <div style={{ display: "flex", justifyContent: "space-between", fontSize: "12px", fontVariantNumeric: "tabular-nums" }}>
                     <span style={{ color: "var(--text-secondary)", display: "inline-flex", alignItems: "center", gap: "6px" }}>
                       <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#388bfd" }} />
-                      Stage: <strong>{jobStage}</strong>
+                      <span>
+                        Stage: <strong>{jobStage}</strong>
+                      </span>
                     </span>
                     <span style={{ color: "var(--text)", fontWeight: 500, fontFamily: "'Geist Mono', monospace" }}>
                       {jobPercent}%
