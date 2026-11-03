@@ -214,8 +214,8 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             marginBottom: "1.5rem",
             padding: "1rem",
             borderRadius: "8px",
-            background: "rgba(217, 72, 43, 0.15)",
-            border: "1px solid rgba(217, 72, 43, 0.4)",
+            background: "rgba(31, 111, 235, 0.12)",
+            border: "1px solid rgba(31, 111, 235, 0.3)",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
@@ -234,7 +234,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
               type="button"
               onClick={() => handleResumeJob(resumableJob)}
               style={{
-                background: "#D9482B",
+                background: "var(--primary, #1f6feb)",
                 color: "#fff",
                 border: "none",
                 borderRadius: "6px",

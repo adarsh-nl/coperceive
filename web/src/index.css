@@ -2,23 +2,40 @@
   color-scheme: light;
   color: var(--text);
   background: var(--bg);
-  font-family: "Geist Variable", "Geist", "Segoe UI", sans-serif;
+  font-family: "Geist Variable", "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   line-height: 1.45;
-  --bg: #f4f4ed;
-  --panel: #f7f7f1;
-  --sunken: #ecece3;
-  --line: #d8d8c7;
-  --text: #1c1c1c;
-  --muted: #5e5e5e;
-  --accent: #de3b21;
-  --accent-ink: #fffdf8;
-  --danger: #a33b34;
-  --ok: #1d6b52;
+  --bg: #ffffff;
+  --panel: #f6f8fa;
+  --sidebar-bg: #f6f8fa;
+  --sunken: #f0f2f5;
+  --surface-alt: #f0f2f5;
+  --line: rgba(0, 0, 0, 0.08);
+  --line-subtle: rgba(0, 0, 0, 0.04);
+  --line-elevated: rgba(0, 0, 0, 0.14);
+  --text: #1c1c1e;
+  --text-secondary: #3a3a3c;
+  --text-tertiary: #636366;
+  --text-subtle: #8e8e93;
+  --muted: #636366;
+  --primary: #1f6feb;
+  --primary-hover: #0969da;
+  --primary-active: #0550ae;
+  --primary-ink: #ffffff;
+  --accent: #1f6feb;
+  --accent-ink: #ffffff;
+  --danger: #cf222e;
+  --danger-hover: #a40e26;
+  --ok: #2ea043;
+  --ok-hover: #238636;
   --vehicle: #f58a1f;
   --drone: #3c8dff;
-  --shadow: 0 1px 2px rgba(28, 28, 28, 0.06), 0 10px 28px rgba(28, 28, 28, 0.05);
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 10px 28px rgba(0, 0, 0, 0.05);
   --viewport: #141414;
-  --radius: 10px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --radius-xl: 12px;
+  --radius: 6px;
   --brand-cursor: #D9482B;
   /* Prediction statuses, docs/spec/predictions.md §Colours and styles. Same in both themes. */
   --eval-tp: #1FA3A3;
@@ -27,19 +44,89 @@
   --eval-ignored: #6B6B6B;
 }
 
-:root[data-theme="dark"] {
+:root[data-theme="dark"], body.dark {
   color-scheme: dark;
-  --bg: #101010;
-  --panel: #1a1a1a;
-  --sunken: #141414;
-  --line: #2e2e2e;
-  --text: #f4f4ed;
-  --muted: #a3a3a3;
-  --accent: #de3b21;
-  --accent-ink: #fffdf8;
-  --danger: #e07a72;
-  --ok: #8fd0b0;
+  --bg: #141415;
+  --panel: #1a1a1c;
+  --sidebar-bg: #1a1a1c;
+  --sunken: #18181a;
+  --surface-alt: #18181a;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-subtle: rgba(255, 255, 255, 0.04);
+  --line-elevated: rgba(255, 255, 255, 0.14);
+  --text: #f5f5f7;
+  --text-secondary: #c7c7cc;
+  --text-tertiary: #a1a1a6;
+  --text-subtle: #6e6e73;
+  --muted: #a1a1a6;
+  --primary: #1f6feb;
+  --primary-hover: #388bfd;
+  --primary-active: #2f7cf6;
+  --primary-ink: #ffffff;
+  --accent: #1f6feb;
+  --accent-ink: #ffffff;
+  --danger: #ff7b72;
+  --danger-hover: #f85149;
+  --ok: #3fb950;
+  --ok-hover: #2ea043;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+  --brand-cursor: #D9482B;
+}
+
+/* Component styles */
+.c-button {
+  font-family: inherit;
+  font-weight: 500;
+  box-sizing: border-box;
+}
+.btn-primary {
+  background-color: var(--primary);
+  color: var(--primary-ink);
+  border: 1px solid transparent;
+}
+.btn-primary:hover:not(:disabled) {
+  background-color: var(--primary-hover);
+}
+.btn-primary:active:not(:disabled) {
+  background-color: var(--primary-active);
+}
+.btn-secondary {
+  background-color: transparent;
+  color: var(--text);
+  border: 1px solid var(--line-elevated);
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--line-subtle);
+}
+.btn-danger {
+  background-color: transparent;
+  color: var(--danger);
+  border: 1px solid var(--line-elevated);
+}
+.btn-danger:hover:not(:disabled) {
+  background-color: rgba(248, 81, 73, 0.1);
+}
+.btn-ghost {
+  background-color: transparent;
+  color: var(--text-secondary);
+  border: 1px solid transparent;
+}
+.btn-ghost:hover:not(:disabled) {
+  background-color: var(--line-subtle);
+  color: var(--text);
+}
+
+.c-icon-button:hover:not(:disabled) {
+  background-color: var(--line);
+}
+
+.c-table-row:hover {
+  background-color: var(--line-subtle) !important;
+}
+
+.c-sidebar-item:hover {
+  background-color: var(--line-subtle);
+  color: var(--text);
 }
 
 * { box-sizing: border-box; }
