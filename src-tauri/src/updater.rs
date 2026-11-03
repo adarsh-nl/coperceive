@@ -34,6 +34,14 @@ pub enum UpdateCheckOutcome {
 /// ONLY when `coperceive_desktop::test_seams::test_env_active()` is true.
 /// In normal runs, any override is ignored and `None` is returned so the configured
 /// production endpoint in `tauri.conf.json` is used.
+/// The version the app reports to people: the bundle version (`tauri.conf.json`,
+/// which `scripts/desktop/sync_version.sh` sets from the release tag), the
+/// same one the updater compares. Not `CARGO_PKG_VERSION`: `Cargo.toml` stays
+/// at its committed version, so a v0.1.1 build would say 0.1.0.
+pub fn app_version(bundle_version: &impl std::fmt::Display) -> String {
+    bundle_version.to_string()
+}
+
 pub fn resolve_update_endpoint_override(override_url_opt: Option<&str>) -> Option<String> {
     resolve_update_endpoint_override_with_env(
         override_url_opt,
@@ -59,6 +67,30 @@ pub fn resolve_update_endpoint_override_with_env(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn about_diagnostics_and_up_to_date_report_the_bundle_version() {
+        // Every place that shows the app's version to a person goes through
+        // app_version(package_info().version); Cargo's version is never shown.
+        let main = include_str!("main.rs");
+        for (what, anchor) in [
+            ("About", "\"about_coperceive\" => {"),
+            ("Copy Diagnostics", "fn copy_diagnostics_to_clipboard("),
+        ] {
+            let start = main.find(anchor).unwrap_or_else(|| panic!("{what}: {anchor} not found"));
+            let body = &main[start..(start + 400).min(main.len())];
+            assert!(
+                body.contains("updater::app_version(&app.package_info().version)"),
+                "{what} must report the bundle version"
+            );
+            assert!(!body.contains("CARGO_PKG_VERSION"), "{what} reads CARGO_PKG_VERSION");
+        }
+        let checker = &main[main.find("cfg.updater_checker = Some(").expect("checker")..];
+        let checker = &checker[..checker.find("cfg.updater_installer").unwrap_or(checker.len())];
+        assert!(!checker.contains("CARGO_PKG_VERSION"), "the up-to-date reply reads CARGO_PKG_VERSION");
+        assert_eq!(checker.matches("app_version(&check_handle.package_info().version)").count(), 3);
+        assert_eq!(app_version(&"0.1.1"), "0.1.1");
+    }
 
     #[test]
     fn test_tauri_conf_has_no_insecure_transport_protocol() {
