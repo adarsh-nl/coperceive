@@ -63,3 +63,45 @@ def test_prepare_timing_reports_every_stage_and_leaves_raw_alone(tmp_path: Path)
         if path.is_file()
     }
     assert after == before
+
+
+def test_sbatch_wrapper_resolves_args_and_interpreter_from_slurm_env(tmp_path: Path) -> None:
+    repo = Path(__file__).resolve().parents[1]
+    sbatch = repo / "scripts" / "hpc" / "prepare_timing.sbatch"
+    spool = tmp_path / "var" / "spool" / "slurmd" / "job123" / "slurm_script"
+    spool.parent.mkdir(parents=True)
+    spool.write_text(sbatch.read_text(encoding="utf-8"), encoding="utf-8")
+    fake_python = tmp_path / "fake-python"
+    log = tmp_path / "args.log"
+    fake_python.write_text(
+        '#!/bin/bash\nprintf \'%s\\n\' "$@" > "${FAKE_PY_LOG:?}"\n', encoding="utf-8"
+    )
+    fake_python.chmod(0o755)
+    home = tmp_path / "home"
+    home.mkdir()
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    env = {
+        "HOME": str(home),
+        "SLURM_SUBMIT_DIR": str(repo),
+        "SLURM_JOB_ID": "12345",
+        "COPERCEIVE_PYTHON": str(fake_python),
+        "FAKE_PY_LOG": str(log),
+        "PATH": "/usr/bin:/bin",
+    }
+    result = subprocess.run(
+        ["bash", str(spool), str(raw), "scene_0001"],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert f"python={fake_python}" in result.stdout
+    args = log.read_text(encoding="utf-8").splitlines()
+    assert args[0] == str(repo / "scripts" / "hpc" / "prepare_timing.py")
+    assert args[args.index("--raw-root") + 1] == str(raw)
+    assert args[args.index("--scene") + 1] == "scene_0001"
+    assert "--partition" not in args
+    out = home / "results" / "coperceive-timing" / "12345-scene_0001"
+    assert out.is_dir()
