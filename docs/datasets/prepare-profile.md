@@ -56,7 +56,17 @@ decode any images.
 | `--images previews` | 11.1 s | 9.4 s (−16 %) |
 | fixed cost per task (Python start, scene listing, fingerprint) | – | 0.73 s |
 
-## Expected wall time for 33 scenes
+## Not yet confirmed on the cluster
+
+The real prepare of a 33-scene split took **1 h 40 min** on the cluster. The
+CPU estimate below is far shorter, so most of the real time is somewhere this
+synthetic profile does not reach: the shared filesystem, real file sizes and
+point counts, queueing, or per-scene work that only real data triggers. Real
+timings are being measured on the HPC. Until they are in, this profile and the
+changes above are not a fix for the slow prepare; they only remove the CPU
+costs it could see.
+
+## CPU-only estimate for 33 scenes (synthetic, not measured)
 
 A real OPV2V/V2XSet scene has about 530 agent-frames: a 16-scene split held
 about 34 000 camera previews, which is 2 140 images and 535 sweeps per scene.
@@ -68,7 +78,7 @@ originals mode and 62 s in previews mode.
 | originals | 5 waves × 32 s ≈ 2.7 min | 5 × 27 s ≈ 2.2 min | 3 × 27 s ≈ 1.3 min |
 | previews | 5 × 74 s ≈ 6.2 min | 5 × 63 s ≈ 5.2 min | 3 × 63 s ≈ 3.2 min |
 
-These estimates count CPU only; queue time comes on top. The array mainly
+These count CPU only, scaled from one synthetic scene; queue time and I/O come on top. The array mainly
 helps there: 1-CPU tasks fit into gaps that an 8-CPU request waits for.
 
 ### Reading the raw data

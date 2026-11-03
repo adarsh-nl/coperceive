@@ -8,6 +8,7 @@ cast once to float32, so the bytes agree with ``struct.pack('<f', float(text))``
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from pathlib import Path
 
@@ -189,8 +190,13 @@ def _ascii_columns(text: str, count: int, names: list[str]) -> dict[str, npt.NDA
     try:
         # numpy's C parser rounds each value as Python ``float`` does (same
         # bytes), at about half the cost; the sweep parse was most of prepare.
-        parsed = np.fromstring(text, dtype=np.float64, sep=" ")  # pyright: ignore[reportUnknownMemberType, reportCallIssue]
-    except ValueError:
+        # Text it cannot read to the end is an error in numpy 2.3+ but only a
+        # DeprecationWarning (with the values so far) before: make both errors,
+        # so a bad token fails through ``float`` on every numpy.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            parsed = np.fromstring(text, dtype=np.float64, sep=" ")  # pyright: ignore[reportUnknownMemberType, reportCallIssue]
+    except (ValueError, DeprecationWarning):
         parsed = np.asarray([float(part) for part in text.split()], dtype=np.float64)
     if len(parsed) < needed:
         raise LidarError(f"expected {needed} values, found {len(parsed)}")

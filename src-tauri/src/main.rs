@@ -2508,6 +2508,8 @@ async fn dataset_prepare(
         "partition": preview.partition,
         "walltime": preview.walltime,
         "cpus_per_task": preview.cpus_per_task,
+        "array_tasks": preview.array_tasks,
+        "throttle": preview.throttle,
         "gres": preview.gres,
         "estimated_cache_bytes": preview.estimated_cache_bytes,
         "images": preview.images,
