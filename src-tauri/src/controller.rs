@@ -57,6 +57,8 @@ pub struct ControllerConfig {
     pub dataset_scenes: Arc<Mutex<serde_json::Value>>,
     /// Asks the main window to show the prepare preview for one scene.
     pub scene_preparer: Option<Arc<dyn Fn(String) -> bool + Send + Sync>>,
+    /// Names the viewer window after the scene it shows.
+    pub viewer_titler: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 impl ControllerConfig {
@@ -79,6 +81,7 @@ impl ControllerConfig {
             viewer_session: None,
             dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
             scene_preparer: None,
+            viewer_titler: None,
         }
     }
 
@@ -385,6 +388,23 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             .unwrap_or(false);
         let payload = serde_json::to_vec(&serde_json::json!({ "shown": shown })).unwrap_or_else(|_| b"{}".to_vec());
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/viewer-title" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let scene = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("scene").and_then(|scene| scene.as_str()).map(str::to_string))
+            .map(|scene| scene.chars().filter(|c| !c.is_control()).take(200).collect::<String>())
+            .filter(|scene| !scene.trim().is_empty());
+        if let (Some(scene), Some(titler)) = (scene, config.viewer_titler.as_ref()) {
+            titler(scene);
+        }
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
         return Ok(());
     }
 

@@ -210,8 +210,22 @@ pub fn watch_status(
     plan_id: &str,
     job_id: &str,
 ) -> Result<JobWatchStatus, String> {
-    validate_job_id(job_id)?;
     let expected_name = expected_job_name(plan_id)?;
+    watch_named(runner, profile, plan_id, job_id, &expected_name)
+}
+
+/// The same, for a job whose Slurm name the app chose itself (a dataset
+/// prepare job is `coperceive-dataset-<split>`): it must still carry that name
+/// and belong to the profile's user.
+pub fn watch_named(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    plan_id: &str,
+    job_id: &str,
+    expected_name: &str,
+) -> Result<JobWatchStatus, String> {
+    validate_job_id(job_id)?;
+    let expected_name = expected_name.to_string();
     let expected_user = expected_user(profile);
     let squeue = format!(
         "squeue -h -j {job_id} -o '%.256j|%T|%r|%M|%L|%N|%u' 2>/dev/null"
@@ -471,6 +485,23 @@ mod tests {
 
     fn expected_name() -> String {
         safe_job_name(plan_id())
+    }
+
+    #[test]
+    fn a_dataset_prepare_job_is_followed_by_its_own_name_only() {
+        let runner = FakeRunner::default().with(
+            "squeue -h -j 700001",
+            "coperceive-dataset-test|PENDING|Priority|00:00:01|04:00:00|(null)\n",
+        );
+        let status = watch_named(&runner, &profile(), "dataset-x", "700001", "coperceive-dataset-test")
+            .expect("its own job");
+        assert_eq!(status.state, JobState::Pending);
+        assert_eq!(status.queue_reason.as_deref(), Some("Priority"));
+        let other = FakeRunner::default().with(
+            "squeue -h -j 700001",
+            "somebody-elses-job|RUNNING|None|00:01:00|03:59:00|node1\n",
+        );
+        assert!(watch_named(&other, &profile(), "dataset-x", "700001", "coperceive-dataset-test").is_err());
     }
 
     #[test]

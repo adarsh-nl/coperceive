@@ -86,6 +86,8 @@ export interface ClusterIndexDocument {
   errors: string[];
   truncated: boolean;
   elapsed_ms: number;
+  /** Sum of raw scene file sizes, metadata only (docs/datasets/cluster-datasets.md). */
+  estimated_cache_bytes?: number;
   storage_estimate_bytes?: number | null;
   storage_estimate_label?: string | null;
 }
@@ -287,6 +289,35 @@ export function formatBytes(bytes: number): string {
     return `${Math.round(mb)} MB`;
   }
   return `${Math.max(1, Math.round(bytes / 1024))} KB`;
+}
+
+/**
+ * What the dataset view leads with: the whole-dataset offer while nothing is
+ * prepared, a "nothing more to prepare" line once every scene is ready, and
+ * nothing in between (the scene list shows progress).
+ */
+export function wholeDatasetOffer(
+  index: ClusterIndexDocument | null,
+  readyCount: number,
+): { kind: "offer"; button: string; detail: string } | { kind: "done"; detail: string } | null {
+  if (!index || index.scene_count === 0) {
+    return null;
+  }
+  if (readyCount === 0) {
+    const size = index.estimated_cache_bytes ? `~${formatBytes(index.estimated_cache_bytes)}, ` : "";
+    return {
+      kind: "offer",
+      button: `Prepare whole dataset (${size}1 CPU job)`,
+      detail: `Prepares all ${index.scene_count} scenes once, in your results folder. Afterwards every scene opens without another preparation job. Or prepare single scenes below with Prepare & open.`,
+    };
+  }
+  if (readyCount >= index.scene_count) {
+    return {
+      kind: "done",
+      detail: `All ${index.scene_count} scenes are prepared. Opening any of them needs no further preparation.`,
+    };
+  }
+  return null;
 }
 
 /** The two camera-image choices with their cost, as the prepare preview shows them. */
@@ -601,6 +632,22 @@ export async function listenTauri<T>(event: string, handler: (payload: T) => voi
   }
   const { listen } = await import("@tauri-apps/api/event");
   return await listen<T>(event, (message) => handler(message.payload));
+}
+
+/** State of a submitted dataset prepare job (pending, running, completed, …). */
+export async function datasetPrepareJobStatus(
+  profileId: string,
+  job: { plan_id: string; job_id: string; job_name: string },
+): Promise<{ state: string; queue_reason?: string | null }> {
+  if (isTauriEnvironment()) {
+    return await tauriInvoke<{ state: string; queue_reason?: string | null }>("dataset_prepare_job_status", {
+      profileId,
+      planId: job.plan_id,
+      jobId: job.job_id,
+      jobName: job.job_name,
+    });
+  }
+  return { state: "completed", queue_reason: null };
 }
 
 /** Tell the viewer every scene of this dataset and its state, for its scene list. */
