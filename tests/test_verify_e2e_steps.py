@@ -20,6 +20,7 @@ SAMPLE_PASSING_LOG = (
     'Step 1 verified state.json content: {"viewpoint": "chase"}\n'
     "Step 1b verified: Still exported successfully and non-empty PNG asserted.\n"
     "Step 1c verified: BEV figure exported successfully and non-empty PNG asserted.\n"
+    "Step 1d verified: Paper export wrote a non-empty zip and said Ready for Overleaf.\n"
     "Playback requirement (c) verified: max frame gap = 120.0ms, "
     "loop wraps observed = 1, frames seen = 150\n"
     "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.\n"
