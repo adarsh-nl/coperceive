@@ -483,7 +483,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               ["library", "Library"],
               ["get_data", "Get Data"],
               ["local", "Open Folder"],
-              ["remote", "HPC Workspace"],
             ] as const
           ).map(([tabKey, label]) => {
             const selected = activeTab === tabKey;
@@ -518,18 +517,27 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         </nav>
 
         {/* HPC Workspace Section in Sidebar (matching Claude Design mock) */}
-        <div
-          style={{
-            marginTop: "12px",
-            padding: "6px 8px 4px",
-            fontSize: "11px",
-            fontWeight: 500,
-            color: "var(--text-subtle)",
-          }}
+        <nav
+          style={{ display: "flex", flexDirection: "column", gap: "1px", marginTop: "12px" }}
+          aria-label="HPC workspace navigation"
         >
-          HPC workspace
-        </div>
-        <div style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+          <button
+            type="button"
+            onClick={() => navigateHpcSection("servers")}
+            style={{
+              padding: "6px 8px 4px",
+              fontSize: "11px",
+              fontWeight: 500,
+              color: "var(--text-subtle)",
+              background: "transparent",
+              border: "none",
+              cursor: "pointer",
+              textAlign: "left",
+              width: "100%",
+            }}
+          >
+            HPC Workspace
+          </button>
           {(
             [
               ["servers", "Servers", hpcServers.length > 0 ? String(hpcServers.length) : undefined],
@@ -578,7 +586,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               </button>
             );
           })}
-        </div>
+        </nav>
 
         {/* Servers Tree in Sidebar (matching Claude Design mock) */}
         <div

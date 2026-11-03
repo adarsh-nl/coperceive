@@ -120,7 +120,15 @@ export default function HpcServers() {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!openMenuId) return;
+    const handleClick = () => setOpenMenuId(null);
+    window.addEventListener("click", handleClick);
+    return () => window.removeEventListener("click", handleClick);
+  }, [openMenuId]);
 
   const updateProfilesList = (next: ServerEntry[]) => {
     setProfiles(next);
@@ -467,7 +475,7 @@ export default function HpcServers() {
               style={{
                 display: "grid",
                 gridTemplateColumns:
-                  "minmax(130px, 1.1fr) minmax(160px, 1.3fr) minmax(150px, 1.2fr) minmax(140px, 1.1fr) 310px",
+                  "minmax(130px, 1.2fr) minmax(160px, 1.4fr) minmax(140px, 1.2fr) 210px 140px",
                 alignItems: "center",
                 gap: "12px",
                 padding: "0 24px",
@@ -500,7 +508,7 @@ export default function HpcServers() {
                     style={{
                       display: "grid",
                       gridTemplateColumns:
-                        "minmax(130px, 1.1fr) minmax(160px, 1.3fr) minmax(150px, 1.2fr) minmax(140px, 1.1fr) 310px",
+                        "minmax(130px, 1.2fr) minmax(160px, 1.4fr) minmax(140px, 1.2fr) 210px 140px",
                       alignItems: "center",
                       gap: "12px",
                       padding: "8px 24px",
@@ -577,7 +585,16 @@ export default function HpcServers() {
                     </span>
 
                     {/* Actions */}
-                    <div style={{ display: "flex", gap: "6px", justifyContent: "flex-end", flexShrink: 0 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "6px",
+                        justifyContent: "flex-end",
+                        alignItems: "center",
+                        position: "relative",
+                        flexShrink: 0,
+                      }}
+                    >
                       <button
                         type="button"
                         style={secondaryButton}
@@ -593,32 +610,110 @@ export default function HpcServers() {
                       </button>
                       <button
                         type="button"
-                        style={secondaryButton}
-                        disabled={busy !== null}
-                        onClick={() => {
-                          setDraft(entry);
-                          setReport(null);
-                          setError("");
-                          setNote("");
+                        style={{
+                          ...secondaryButton,
+                          padding: "4px 8px",
+                          lineHeight: 1,
+                        }}
+                        aria-label={`More actions for ${entry.profile.name}`}
+                        aria-haspopup="true"
+                        aria-expanded={openMenuId === entry.id}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenMenuId((current) => (current === entry.id ? null : entry.id));
                         }}
                       >
-                        Edit
+                        ⋯
                       </button>
-                      <button
-                        type="button"
-                        style={secondaryButton}
-                        disabled={busy !== null}
-                        onClick={() => void runTest(entry, true)}
-                      >
-                        {busy === "card" ? "Testing…" : "Test connection"}
-                      </button>
-                      <button
-                        type="button"
-                        style={{ ...secondaryButton, color: "var(--danger)" }}
-                        onClick={() => void remove(entry)}
-                      >
-                        Remove
-                      </button>
+
+                      {openMenuId === entry.id && (
+                        <div
+                          role="menu"
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            position: "absolute",
+                            right: 0,
+                            top: "100%",
+                            marginTop: "4px",
+                            zIndex: 20,
+                            backgroundColor: "var(--panel, #1c1c1e)",
+                            border: "1px solid var(--line-elevated, rgba(255, 255, 255, 0.16))",
+                            borderRadius: "6px",
+                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
+                            padding: "4px",
+                            minWidth: "140px",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "2px",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            role="menuitem"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--text)",
+                              fontSize: "12px",
+                              padding: "6px 10px",
+                              borderRadius: "4px",
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                            disabled={busy !== null}
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              setDraft(entry);
+                              setReport(null);
+                              setError("");
+                              setNote("");
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--text)",
+                              fontSize: "12px",
+                              padding: "6px 10px",
+                              borderRadius: "4px",
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                            disabled={busy !== null}
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              void runTest(entry, true);
+                            }}
+                          >
+                            {busy === "card" ? "Testing…" : "Test connection"}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--danger, #ff453a)",
+                              fontSize: "12px",
+                              padding: "6px 10px",
+                              borderRadius: "4px",
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                            onClick={() => {
+                              setOpenMenuId(null);
+                              void remove(entry);
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
 

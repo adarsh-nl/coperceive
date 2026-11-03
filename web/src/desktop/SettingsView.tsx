@@ -302,7 +302,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           </IconButton>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px 24px" }}>
           <DesktopPreferences />
         </div>
 

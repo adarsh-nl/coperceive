@@ -4,7 +4,6 @@ import { useEffect, useState } from "react";
 import HpcServers from "./HpcServers";
 import NewEvaluation from "./NewEvaluation";
 import RunHistory from "./RunHistory";
-import ClusterDatasetView from "./ClusterDatasetView";
 import DatasetView, { buildV2xsetMockFixture, type SubmittedJob } from "./hpc/DatasetView";
 import type { ServerEntry } from "./hpc";
 import {
@@ -142,28 +141,18 @@ export default function HpcWorkspace() {
       <div hidden={tab !== "servers"}>{visited.has("servers") ? <HpcServers /> : null}</div>
       <div hidden={tab !== "dataset"}>
         {activeDatasetData ? (
-          activeDatasetData.useNewView || activeDatasetData.indexDoc ? (
-            <DatasetView
-              key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}|v2`}
-              profile={activeDatasetData.profile}
-              dataset={activeDatasetData.dataset}
-              onBack={() => setTab("servers")}
-              onClose={handleCloseDataset}
-              initialIndexDoc={activeDatasetData.indexDoc ?? null}
-              initialStatuses={activeDatasetData.statuses}
-              initialSubmittedJobs={activeDatasetData.submittedJobs}
-              initialCacheRoot={activeDatasetData.cacheRoot}
-              initialSelectedSceneId={activeDatasetData.selectedSceneId}
-            />
-          ) : (
-            <ClusterDatasetView
-              key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}`}
-              profile={activeDatasetData.profile}
-              dataset={activeDatasetData.dataset}
-              onBack={() => setTab("servers")}
-              onClose={handleCloseDataset}
-            />
-          )
+          <DatasetView
+            key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}`}
+            profile={activeDatasetData.profile}
+            dataset={activeDatasetData.dataset}
+            onBack={() => setTab("servers")}
+            onClose={handleCloseDataset}
+            initialIndexDoc={activeDatasetData.indexDoc ?? null}
+            initialStatuses={activeDatasetData.statuses}
+            initialSubmittedJobs={activeDatasetData.submittedJobs}
+            initialCacheRoot={activeDatasetData.cacheRoot}
+            initialSelectedSceneId={activeDatasetData.selectedSceneId}
+          />
         ) : null}
       </div>
       <div hidden={tab !== "evaluation"}>{visited.has("evaluation") ? <NewEvaluation /> : null}</div>

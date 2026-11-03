@@ -143,70 +143,94 @@ SEED_FIXTURES_EVAL = """
   const catalog = [
     {
       id: "griffin",
-      name: "Griffin (Aerial-Ground Cooperative)",
-      description:
-        "Multi-agent aerial + ground cooperative perception benchmark " +
-        "with synchronized LiDAR and 4 cameras per agent.",
-      modalities: ["LiDAR", "RGB", "3D Boxes"],
-      agents: "1 UAV + 2–4 vehicles",
-      licence: "CC BY-NC-SA 4.0",
-      licence_url: "https://griffin-dataset.github.io",
+      name: "Griffin",
+      description: "Cooperative vehicle and drone perception in CARLA and AirSim.",
+      modalities: ["LiDAR", "Camera"],
+      agents: "vehicle + drone",
+      licence: "MIT",
+      licence_url: "https://raw.githubusercontent.com/wang-jh18-SVM/Griffin/main/LICENSE.txt",
+      source_url: "https://huggingface.co/datasets/wjh-svm/Griffin",
+      paper_url: "https://arxiv.org/abs/2503.06983",
       status: "ready",
+      requires_terms: true,
       presets: [
         {
           id: "dev",
-          name: "Dev sample (2 scenes)",
-          description: "Quick local test split with 2 aerial-ground scenes",
-          estimated_download_bytes: 412000000,
-          estimated_disk_bytes: 680000000
+          name: "Dev tier",
+          description: "Metadata and vehicle LiDAR for the 25 m subset. " +
+            "The size is measured when you choose this preset.",
+          subset: "25m",
+          griffin_preset: "dev",
+          open_scene: "Town03-000"
+        },
+        {
+          id: "one-scene",
+          name: "One scene with images",
+          description: "Town03-000 with camera images. The dataset host stores each camera " +
+            "as one zip for the whole 25 m subset, so this downloads those camera archives " +
+            "plus metadata and LiDAR, not a Town03-000 slice. Instance-segmentation archives " +
+            "are left out. The size is measured when you choose this preset.",
+          subset: "25m",
+          components: [
+            "metadata", "lidar", "drone_camera_front", "drone_camera_back",
+            "drone_camera_left", "drone_camera_right", "drone_camera_bottom",
+            "vehicle_camera_front", "vehicle_camera_back", "vehicle_camera_left",
+            "vehicle_camera_right"
+          ].join(","),
+          open_scene: "Town03-000"
         },
         {
           id: "full",
-          name: "Full benchmark split (28 scenes)",
-          description: "Complete train + validation cooperative split",
-          estimated_download_bytes: 6840000000,
-          estimated_disk_bytes: 11200000000
+          name: "Full 25 m subset",
+          description: "Every file in the 25 m subset, including instance-segmentation " +
+            "archives. The size is measured when you choose this preset.",
+          subset: "25m",
+          components: "*",
+          open_scene: "Town03-000"
         }
       ]
     },
     {
-      id: "v2xset",
-      name: "V2XSet (V2X Cooperative Perception)",
-      description:
-        "55 V2X cooperative driving scenes with roadside infrastructure " +
-        "units and connected vehicles.",
-      modalities: ["LiDAR", "RGB", "HD Map"],
-      agents: "2–5 CAVs + RSU",
-      licence: "MIT",
-      source_url: "https://github.com/DerrickXuNu/v2xvit",
+      id: "opv2v",
+      name: "OPV2V",
+      description: "Vehicle-to-vehicle perception benchmark.",
+      modalities: ["LiDAR", "Camera"],
+      agents: "vehicle + vehicle",
+      licence: "unknown",
+      source_url: "https://github.com/DerrickXuNu/OPV2V",
+      paper_url: "https://arxiv.org/abs/2109.07644",
       status: "local-import",
-      notice: "Import from a local V2XSet directory or prepare directly on your HPC cluster."
+      requires_terms: false,
+      notice: "The data licence is not recorded here. Choose a folder you already have, " +
+        "then import it. Nothing is downloaded."
     },
     {
-      id: "opv2v",
-      name: "OPV2V (OpenPack Vehicle-to-Vehicle)",
-      description:
-        "70+ multi-vehicle cooperative LiDAR + RGB sequences collected " +
-        "across 8 CARLA towns and Culver City.",
-      modalities: ["LiDAR", "RGB", "HD Map"],
-      agents: "2–7 vehicles",
-      licence: "MIT",
-      source_url: "https://mobility-lab.seas.ucla.edu/opv2v/",
+      id: "v2xset",
+      name: "V2XSet",
+      description: "Vehicle and infrastructure perception benchmark.",
+      modalities: ["LiDAR", "Camera"],
+      agents: "vehicle + infrastructure",
+      licence: "unknown",
+      source_url: "https://github.com/DerrickXuNu/v2x-vit",
+      paper_url: "https://arxiv.org/abs/2203.10638",
       status: "local-import",
-      notice: "Import from a local OPV2V folder or prepare scenes in the HPC workspace."
+      requires_terms: false,
+      notice: "The data licence is not recorded here. Choose a folder you already have, " +
+        "then import it. Nothing is downloaded."
     },
     {
       id: "v2v4real",
-      name: "V2V4Real (Real-World V2V Benchmark)",
-      description:
-        "Real-world multi-vehicle 3D detection and tracking sequences " +
-        "across highways and urban corridors.",
-      modalities: ["LiDAR", "3D Boxes"],
-      agents: "2 vehicles",
-      licence: "Apache-2.0",
-      source_url: "https://research.ece.osu.edu/carmen/v2v4real/",
+      name: "V2V4Real",
+      description: "Real-world vehicle-to-vehicle perception recordings.",
+      modalities: ["LiDAR", "Camera"],
+      agents: "vehicle + vehicle",
+      licence: "unknown",
+      source_url: "https://github.com/ucla-mobility/V2V4Real",
+      paper_url: "https://arxiv.org/abs/2303.07601",
       status: "planned",
-      notice: "Direct adapter scheduled for v0.2.0."
+      requires_terms: false,
+      notice: "Not available yet. The data licence was not stated in the repository " +
+        "README checked on 2026-10-24."
     }
   ];
 
@@ -484,14 +508,27 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
             page.evaluate(SEED_FIXTURES_EVAL)
             page.wait_for_timeout(150)
 
-            # 1. Assert computed font-family includes Geist and Geist Mono
-            body_font = page.evaluate("window.getComputedStyle(document.body).fontFamily")
-            assert "Geist" in body_font, f"Expected 'Geist' in body font-family, got: {body_font}"
-            mono_font = page.evaluate(
-                "window.getComputedStyle(document.querySelector('.brand-wordmark')).fontFamily"
+            # 1. Assert computed font-family includes Geist and Geist Mono, and check fonts ready
+            fonts_ready = page.evaluate("""async () => {
+                await document.fonts.ready;
+                const brand = document.querySelector('.brand-wordmark');
+                return {
+                    bodyFont: window.getComputedStyle(document.body).fontFamily,
+                    wordmarkFont: brand ? window.getComputedStyle(brand).fontFamily : '',
+                    geist: document.fonts.check('13px "Geist"'),
+                    geistMono: document.fonts.check('13px "Geist Mono"'),
+                };
+            }""")
+            assert "Geist" in fonts_ready["bodyFont"], (
+                f"Expected 'Geist' in body font-family, got: {fonts_ready['bodyFont']}"
             )
-            assert "Geist Mono" in mono_font, (
-                f"Expected 'Geist Mono' in .brand-wordmark font-family, got: {mono_font}"
+            assert "Geist Mono" in fonts_ready["wordmarkFont"], (
+                f"Expected 'Geist Mono' in .brand-wordmark font-family, "
+                f"got: {fonts_ready['wordmarkFont']}"
+            )
+            assert fonts_ready["geist"], "document.fonts.check('13px \"Geist\"') returned False"
+            assert fonts_ready["geistMono"], (
+                "document.fonts.check('13px \"Geist Mono\"') returned False"
             )
 
             # 2. Check traffic light safe zone: traffic light spacer exists and spans >= 68px
@@ -672,6 +709,105 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
 
         finally:
             context.close()
+
+    # 5b. Capture real wired dataset view driven by synthetic OPV2V fixture from
+    # e2e_cluster_datasets_app.sh
+    ctx_real = visual_browser.new_context(viewport={"width": 1280, "height": 800})
+    real_page = ctx_real.new_page()
+    try:
+        real_page.add_init_script(RICH_FIXTURE_INIT_SCRIPT)
+        real_page.goto(f"{app_url}/#/connect", wait_until="networkidle")
+        real_page.evaluate("document.documentElement.dataset.theme = 'dark';")
+        real_page.evaluate(SEED_FIXTURES_EVAL)
+        real_page.evaluate(
+            """() => {
+              const srvs = window.__SEEDED_HPC_PROFILES__ || [];
+              const profile = srvs[0] || {
+                id: "fixture-datasets",
+                profile: {
+                  name: "Delft HPC (DAIC)",
+                  host: "login.daic.tudelft.nl",
+                  scheduler: "slurm",
+                  environment: { kind: "modules", modules: ["cuda/12.1"] },
+                  data_roots: ["/datasets/eemcs/ps/cv/opencood/opv2v"],
+                  results_root: "/home/researcher/results",
+                  defaults: { partition: "gpu", cpus_per_task: 1, gpus: 1, walltime: "02:00:00" },
+                },
+              };
+              const dataset = {
+                path: "/datasets/eemcs/ps/cv/opencood/opv2v/test",
+                adapter: "opv2v",
+                split: "test",
+                raw_root: "/datasets/eemcs/ps/cv/opencood/opv2v",
+                scene_count: 3,
+                camera_count: 4,
+                agent_count: 3,
+                frame_count: 12,
+                duration_s: 1.2,
+                licence: "unknown",
+                licence_url: null,
+              };
+              const indexDoc = {
+                adapter: "opv2v",
+                split: "test",
+                raw_root: "/datasets/eemcs/ps/cv/opencood/opv2v",
+                scene_count: 3,
+                scenes: [
+                  {
+                    scene_id: "test_0000",
+                    sample_count: 4,
+                    agent_count: 3,
+                    camera_count: 4,
+                    duration_s: 1.2,
+                    has_images: "full",
+                  },
+                  {
+                    scene_id: "test_0001",
+                    sample_count: 4,
+                    agent_count: 3,
+                    camera_count: 4,
+                    duration_s: 1.2,
+                    has_images: "full",
+                  },
+                  {
+                    scene_id: "test_0002",
+                    sample_count: 4,
+                    agent_count: 3,
+                    camera_count: 4,
+                    duration_s: 1.2,
+                    has_images: "full",
+                  },
+                ],
+                storage_estimate: {
+                  estimated_raw_bytes: 52428800,
+                  estimated_cache_bytes: 18874368,
+                },
+              };
+              const statuses = [
+                { scene_id: "test_0000", state: "ready", progress_percent: 100 },
+                { scene_id: "test_0001", state: "not_prepared", progress_percent: 0 },
+                { scene_id: "test_0002", state: "not_prepared", progress_percent: 0 },
+              ];
+              window.dispatchEvent(
+                new CustomEvent("coperceive-open-dataset", {
+                  detail: {
+                    profile,
+                    dataset,
+                    indexDoc,
+                    statuses,
+                    cacheRoot: "/home/researcher/results/coperceive-cache/opv2v/a1b2c3d4/test",
+                    selectedSceneId: "test_0000",
+                  }
+                })
+              );
+            }"""
+        )
+        real_page.wait_for_timeout(350)
+        real_shot = screenshots_dir / "dataset_view_real_cluster.png"
+        real_page.screenshot(path=str(real_shot), full_page=False)
+        assert real_shot.is_file() and real_shot.stat().st_size > 0
+    finally:
+        ctx_real.close()
 
     # 6. Render reference Claude Design mock at 1600x1000 for side-by-side comparison
     mock_html = (

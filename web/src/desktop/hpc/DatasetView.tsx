@@ -20,6 +20,7 @@ import {
   datasetStatus,
   formatLicenceInfo,
   formatStorageEstimate,
+  prepareEstimateLine,
   recoverFromRefusedPrepareSubmit,
   type ClusterDetectDocument,
   type ClusterIndexDocument,
@@ -459,6 +460,8 @@ export default function DatasetView({
   const [prepareBusy, setPrepareBusy] = useState(false);
   const [prepareOutcome, setPrepareOutcome] = useState<string | null>(null);
   const [prepareError, setPrepareError] = useState<string | null>(null);
+  const [throttleDraft, setThrottleDraft] = useState<string | null>(null);
+  const [wholeThrottlePending, setWholeThrottlePending] = useState(false);
 
   // Single scene prepare modal/state
   const [singleScenePrepare, setSingleScenePrepare] = useState<string | null>(null);
@@ -816,7 +819,33 @@ export default function DatasetView({
     }
   };
 
+  const handleWholeThrottleCommit = async () => {
+    const value = Number(throttleDraft);
+    setThrottleDraft(null);
+    if (!preparePreview || !Number.isInteger(value) || value < 1 || value === preparePreview.throttle) return;
+    setPrepareConfirmed(false);
+    setPrepareError(null);
+    setWholeThrottlePending(true);
+    try {
+      setPreparePreview(
+        await datasetPrepare(profile.id, {
+          adapter: dataset.adapter || "opv2v",
+          rawRoot: dataset.raw_root || dataset.path,
+          split: dataset.split,
+          scenes: "all",
+          images: preparePreview.images,
+          workers: value,
+        }),
+      );
+    } catch (err) {
+      setPrepareError(errorDetails(err) || errorText(err));
+    } finally {
+      setWholeThrottlePending(false);
+    }
+  };
+
   const handleWholeImagesChange = async (images: CameraImagesMode) => {
+    if (!preparePreview || images === preparePreview.images) return;
     setPrepareConfirmed(false);
     setPrepareError(null);
     setWholeImagesPending(images);
@@ -828,6 +857,7 @@ export default function DatasetView({
           split: dataset.split,
           scenes: "all",
           images,
+          workers: preparePreview.throttle,
         }),
       );
     } catch (err) {
@@ -887,6 +917,7 @@ export default function DatasetView({
           split: dataset.split,
           scenes: "all",
           images: preparePreview.images,
+          workers: preparePreview.throttle,
         },
         err,
       );
@@ -1433,9 +1464,31 @@ export default function DatasetView({
               {preparePreview ? (
                 <>
                   <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
-                    Script preview (CPU only · No GPU requested · {preparePreview.cpus_per_task} CPU
-                    {preparePreview.cpus_per_task === 1 ? "" : "s"} · partition: {preparePreview.partition}):
+                    Script preview (CPU only · No GPU requested · {preparePreview.array_tasks ?? preparePreview.cpus_per_task} task{(preparePreview.array_tasks ?? preparePreview.cpus_per_task) === 1 ? "" : "s"} of 1 CPU, one per scene · partition: {preparePreview.partition}):
                   </div>
+                  <div role="note" style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                    {prepareEstimateLine(preparePreview)}
+                  </div>
+                  <label className="settings-field" style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px", display: "flex", alignItems: "center" }}>
+                    <span>Scenes at once</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={16}
+                      aria-label="Scenes at once"
+                      value={throttleDraft ?? String(preparePreview.throttle)}
+                      disabled={prepareBusy || wholeThrottlePending}
+                      onChange={(event) => setThrottleDraft(event.target.value)}
+                      onBlur={() => void handleWholeThrottleCommit()}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") void handleWholeThrottleCommit();
+                      }}
+                      style={{ width: "4.5em", marginLeft: "0.5rem" }}
+                    />
+                    <span style={{ color: "var(--text-tertiary)", marginLeft: "0.5rem" }}>
+                      At most {preparePreview.throttle} task{preparePreview.throttle === 1 ? "" : "s"} at once, each reading 16 raw files at a time: the shared filesystem, not CPUs, is the limit.
+                    </span>
+                  </label>
                   <div style={{ fontSize: "11.5px", color: "var(--text-tertiary)", marginBottom: "8px" }}>
                     Cache root:{" "}
                     <span style={{ fontFamily: "'Geist Mono', monospace", color: "#79c0ff" }}>
@@ -1449,9 +1502,14 @@ export default function DatasetView({
                     disabled={prepareBusy}
                     onChange={(mode) => void handleWholeImagesChange(mode)}
                   />
+                  {wholeImagesPending || wholeThrottlePending ? (
+                    <div role="status" style={{ fontSize: "12px", color: "#79c0ff", margin: "0 0 6px" }}>
+                      Updating preview…
+                    </div>
+                  ) : null}
                   <pre
                     aria-label="Prepare job script"
-                    aria-busy={wholeImagesPending !== null}
+                    aria-busy={wholeImagesPending !== null || wholeThrottlePending}
                     style={{
                       margin: "0 0 10px",
                       padding: "10px",
@@ -1488,7 +1546,7 @@ export default function DatasetView({
                     <button
                       type="button"
                       className="c-button btn-primary"
-                      disabled={!prepareConfirmed || prepareBusy || wholeImagesPending !== null}
+                      disabled={!prepareConfirmed || prepareBusy || wholeImagesPending !== null || wholeThrottlePending}
                       onClick={() => void handleConfirmWholeDatasetSubmit()}
                       style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12.5px" }}
                     >
@@ -1529,14 +1587,26 @@ export default function DatasetView({
                   <ErrorLines text={singlePrepareError} />
                 </div>
               ) : null}
+              <div role="note" style={{ fontSize: "11.5px", color: "var(--text-tertiary)", marginBottom: "6px" }}>
+                {prepareEstimateLine(singlePreparePreview)} One 1-CPU task · Cache root:{" "}
+                <span style={{ fontFamily: "'Geist Mono', monospace", color: "#79c0ff" }}>
+                  {singlePreparePreview.cache_root}
+                </span>
+              </div>
               <CameraImagesChoice
                 name="single-camera-images"
                 value={singleImagesPending ?? singlePreparePreview.images}
                 previewBytes={singlePreparePreview.estimated_preview_bytes}
                 onChange={(mode) => void handleSingleImagesChange(mode)}
               />
+              {singleImagesPending ? (
+                <div role="status" style={{ fontSize: "12px", color: "#79c0ff", margin: "0 0 6px" }}>
+                  Updating preview…
+                </div>
+              ) : null}
               <pre
                 aria-label="Prepare scene script"
+                aria-busy={singleImagesPending !== null}
                 style={{
                   margin: "0 0 8px",
                   padding: "8px",
@@ -1964,10 +2034,10 @@ export default function DatasetView({
           }}
         >
           <span>
-            Viewing runs a small CPU job on the cluster, started by the first scene you open and reused while it runs.
+            {viewerStart ? `Opening ${viewerStart}…` : ""}
           </span>
           <span style={{ color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
-            {viewerStart ? `Opening ${viewerStart}…` : "Viewer job idle"}
+            {indexDoc?.scene_count ? `${indexDoc.scene_count} scenes` : ""}
           </span>
         </footer>
       </div>

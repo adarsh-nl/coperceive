@@ -61,7 +61,7 @@ export function Sidebar({
           height: "52px",
           display: "flex",
           alignItems: "center",
-          gap: "8px",
+          gap: "0",
           padding: "0 14px 0 0",
           flexShrink: 0,
           borderBottom: "1px solid var(--line-subtle, rgba(255,255,255,0.04))",

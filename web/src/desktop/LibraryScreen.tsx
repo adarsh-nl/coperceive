@@ -47,6 +47,14 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
   >({});
   const [viewMode, setViewMode] = useState<"table" | "grid">("table");
   const [filterQuery, setFilterQuery] = useState<string>("");
+  const [openActionPath, setOpenActionPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!openActionPath) return;
+    const handleClick = () => setOpenActionPath(null);
+    window.addEventListener("click", handleClick);
+    return () => window.removeEventListener("click", handleClick);
+  }, [openActionPath]);
 
   const applyScenes = (list: LibrarySceneInfo[]) => {
     setScenes(list);
@@ -543,7 +551,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                 zIndex: 2,
                 display: "grid",
                 gridTemplateColumns:
-                  "minmax(136px, 1.3fr) minmax(96px, 0.9fr) 86px 62px minmax(132px, 1fr) 68px 86px 196px",
+                  "minmax(140px, 1.3fr) minmax(160px, 1.5fr) 80px 58px minmax(130px, 1.1fr) 68px 84px 96px",
                 alignItems: "center",
                 gap: "12px",
                 padding: "0 24px",
@@ -595,7 +603,7 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                     style={{
                       display: "grid",
                       gridTemplateColumns:
-                        "minmax(136px, 1.3fr) minmax(96px, 0.9fr) 86px 62px minmax(132px, 1fr) 68px 86px 196px",
+                        "minmax(140px, 1.3fr) minmax(160px, 1.5fr) 80px 58px minmax(130px, 1.1fr) 68px 84px 96px",
                       alignItems: "center",
                       gap: "12px",
                       padding: "0 24px",
@@ -766,19 +774,19 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                                 : "var(--text-tertiary)",
                         }}
                       >
-                        <span
-                          style={{
-                            width: "6px",
-                            height: "6px",
-                            borderRadius: "50%",
-                            backgroundColor:
-                              validateStatus === "valid"
-                                ? "#3fb950"
-                                : validateStatus === "invalid"
+                        {validateStatus !== "valid" ? (
+                          <span
+                            style={{
+                              width: "6px",
+                              height: "6px",
+                              borderRadius: "50%",
+                              backgroundColor:
+                                validateStatus === "invalid"
                                   ? "#f85149"
                                   : "#8e8e93",
-                          }}
-                        />
+                            }}
+                          />
+                        ) : null}
                         {validateStatus === "checking"
                           ? "Validating…"
                           : validateStatus === "valid"
@@ -790,7 +798,15 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                     </span>
 
                     {/* Actions */}
-                    <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: "6px" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "flex-end",
+                        alignItems: "center",
+                        gap: "6px",
+                        position: "relative",
+                      }}
+                    >
                       <button
                         type="button"
                         onClick={() => onOpenScene(scene.path)}
@@ -810,54 +826,117 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
                       </button>
                       <button
                         type="button"
-                        onClick={() => revealInFinder(scene.path)}
-                        title="Show in Finder"
-                        aria-label={`Show ${scene.scene_id} in Finder`}
                         style={{
-                          padding: "3px 8px",
+                          padding: "3px 7px",
                           borderRadius: "5px",
                           border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
                           backgroundColor: "transparent",
                           color: "var(--text-secondary)",
                           fontSize: "11.5px",
                           cursor: "pointer",
+                          lineHeight: 1,
+                        }}
+                        aria-label={`More actions for scene ${scene.scene_id}`}
+                        aria-haspopup="true"
+                        aria-expanded={openActionPath === scene.path}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setOpenActionPath((curr) => (curr === scene.path ? null : scene.path));
                         }}
                       >
-                        Finder
+                        ⋯
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => handleValidateNow(scene)}
-                        disabled={isValidating}
-                        title="Validate scene metadata against schema"
-                        aria-label={`Validate scene ${scene.scene_id}`}
-                        style={{
-                          padding: "3px 6px",
-                          background: "transparent",
-                          color: "var(--text-tertiary)",
-                          border: "none",
-                          fontSize: "11.5px",
-                          cursor: isValidating ? "wait" : "pointer",
-                        }}
-                      >
-                        {isValidating ? "Validating…" : "Validate"}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setDeleteConfirmScene(scene)}
-                        title="Move scene to Trash"
-                        aria-label={`Delete scene ${scene.scene_id}`}
-                        style={{
-                          padding: "3px 6px",
-                          background: "transparent",
-                          color: "var(--danger)",
-                          border: "none",
-                          fontSize: "11.5px",
-                          cursor: "pointer",
-                        }}
-                      >
-                        Delete
-                      </button>
+
+                      {openActionPath === scene.path && (
+                        <div
+                          role="menu"
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            position: "absolute",
+                            right: 0,
+                            top: "100%",
+                            marginTop: "4px",
+                            zIndex: 20,
+                            backgroundColor: "var(--panel, #1c1c1e)",
+                            border: "1px solid var(--line-elevated, rgba(255, 255, 255, 0.16))",
+                            borderRadius: "6px",
+                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
+                            padding: "4px",
+                            minWidth: "120px",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: "2px",
+                          }}
+                        >
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionPath(null);
+                              revealInFinder(scene.path);
+                            }}
+                            title="Show in Finder"
+                            aria-label={`Show ${scene.scene_id} in Finder`}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--text)",
+                              fontSize: "12px",
+                              padding: "5px 8px",
+                              borderRadius: "4px",
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Finder
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionPath(null);
+                              handleValidateNow(scene);
+                            }}
+                            disabled={isValidating}
+                            title="Validate scene metadata against schema"
+                            aria-label={`Validate scene ${scene.scene_id}`}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--text-secondary)",
+                              fontSize: "12px",
+                              padding: "5px 8px",
+                              borderRadius: "4px",
+                              textAlign: "left",
+                              cursor: isValidating ? "wait" : "pointer",
+                            }}
+                          >
+                            {isValidating ? "Validating…" : "Validate"}
+                          </button>
+                          <button
+                            type="button"
+                            role="menuitem"
+                            onClick={() => {
+                              setOpenActionPath(null);
+                              setDeleteConfirmScene(scene);
+                            }}
+                            title="Move scene to Trash"
+                            aria-label={`Delete scene ${scene.scene_id}`}
+                            style={{
+                              background: "transparent",
+                              border: "none",
+                              color: "var(--danger, #ff453a)",
+                              fontSize: "12px",
+                              padding: "5px 8px",
+                              borderRadius: "4px",
+                              textAlign: "left",
+                              cursor: "pointer",
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </div>
+                      )}
                     </div>
                   </div>
 
