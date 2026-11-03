@@ -19,6 +19,7 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 from coperceive.app.server import create_app
+from coperceive.camera_images import stage_images
 from coperceive.cluster_datasets import prepare_cluster_dataset
 from coperceive.remote_view import scenes as remote_scenes
 from coperceive.remote_view.client import StreamClient, StreamRefused
@@ -230,5 +231,28 @@ def test_one_connection_serves_many_reads_in_flight(prepared: tuple[Path, Path])
         with pytest.raises(StreamRefused):
             client.read("../outside")
         assert client.read(f"{SCENE}/manifest.json")[:1] == b"{"
+    finally:
+        client.close()
+
+
+def test_a_camera_image_mode_switch_while_viewing_is_served_at_once(
+    prepared: tuple[Path, Path], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Previews made, then removed: images.parquet changes, COMPLETE.json does not."""
+    raw, cache = prepared
+    monkeypatch.setattr(remote_scenes, "_LIST_TTL_S", 0.0)
+    http, _, client = _app(tmp_path, cache, raw)
+    image = {"time_us": 69 * 50_000, "agent_id": "641", "sensor_id": "camera0"}
+    try:
+        assert (
+            http.get(f"/api/scenes/{SCENE}/image", params=image).headers["content-type"]
+            == "image/png"
+        )
+        stage_images(cache / SCENE, raw, "previews")
+        response = http.get(f"/api/scenes/{SCENE}/image", params=image)
+        assert response.headers["content-type"] == "image/jpeg", response.status_code
+        stage_images(cache / SCENE, raw, "originals")
+        response = http.get(f"/api/scenes/{SCENE}/image", params=image)
+        assert (response.status_code, response.headers["content-type"]) == (200, "image/png")
     finally:
         client.close()

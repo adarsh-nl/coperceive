@@ -54,15 +54,39 @@ class Roots:
         return candidate
 
 
+# A scene's version is the newest change to these or to its directory: a
+# camera-image mode switch rewrites images.parquet (and adds or removes
+# previews) without touching COMPLETE.json, and the viewer must see it.
+_VERSIONED = (
+    "COMPLETE.json",
+    "manifest.json",
+    "images.parquet",
+    "point_index.parquet",
+    "poses.parquet",
+    "annotations.parquet",
+    "objects.parquet",
+)
+
+
+def _scene_version(scene: Path) -> int:
+    newest = scene.stat().st_mtime_ns
+    for name in _VERSIONED:
+        try:
+            newest = max(newest, (scene / name).stat().st_mtime_ns)
+        except OSError:
+            continue
+    return newest
+
+
 def _ready_scenes(base: Path) -> list[dict[str, object]]:
     scenes: list[dict[str, object]] = []
     with os.scandir(base) as entries:
         for entry in entries:
             if entry.name.startswith(".") or not entry.is_dir(follow_symlinks=False):
                 continue
-            complete = Path(entry.path) / "COMPLETE.json"
-            if (Path(entry.path) / "manifest.json").is_file() and complete.is_file():
-                scenes.append({"scene_id": entry.name, "mtime_ns": complete.stat().st_mtime_ns})
+            scene = Path(entry.path)
+            if (scene / "manifest.json").is_file() and (scene / "COMPLETE.json").is_file():
+                scenes.append({"scene_id": entry.name, "mtime_ns": _scene_version(scene)})
     return sorted(scenes, key=lambda scene: str(scene["scene_id"]))
 
 

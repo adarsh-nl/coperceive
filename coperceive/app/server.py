@@ -573,17 +573,31 @@ def _images_staged(app: FastAPI, scene: Scene, scene_dir: Path) -> bool | None:
 
 
 class _SceneCache:
-    """One decoded scene. The viewer re-reads when the path changes."""
+    """One decoded scene. The viewer re-reads when the path or its tables change
+    (a camera-image mode switch rewrites images.parquet in place)."""
 
     def __init__(self) -> None:
         self.path: Path | None = None
+        self.signature: tuple[int, ...] = ()
         self.scene: Scene | None = None
+
+    @staticmethod
+    def _signature(path: Path) -> tuple[int, ...]:
+        stamps: list[int] = []
+        for name in ("manifest.json", "COMPLETE.json", "images.parquet"):
+            try:
+                stamps.append((path / name).stat().st_mtime_ns)
+            except OSError:
+                stamps.append(0)
+        return tuple(stamps)
 
     def load(self, path: Path, *, points: bool = True) -> Scene:
         resolved = path.resolve()
-        if self.scene is None or self.path != resolved:
+        signature = self._signature(resolved)
+        if self.scene is None or self.path != resolved or self.signature != signature:
             self.scene = read_scene(resolved, points=points)
             self.path = resolved
+            self.signature = signature
         if self.scene is None:
             raise FileNotFoundError(resolved)
         return self.scene

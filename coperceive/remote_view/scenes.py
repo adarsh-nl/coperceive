@@ -141,7 +141,7 @@ class RemoteScenes:
     # -- listing and mirroring -------------------------------------------------
 
     def ready(self) -> dict[str, int]:
-        """scene id -> COMPLETE.json mtime of every ready scene, refreshed every few seconds."""
+        """scene id -> version (newest change) of every ready scene, refreshed every few seconds."""
         with self._lock:
             listed_at, scenes = self._listed
             if time.monotonic() - listed_at < _LIST_TTL_S:
