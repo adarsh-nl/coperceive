@@ -452,11 +452,14 @@ def _scene_report(
     agreement = _agreement(scene, limits, pooled)
     coverage = _coverage(scene, pooled)
     frames = {agent.agent_id: len(agent.poses) for agent in scene.agents}
+    times = [pose.time_us for agent in scene.agents for pose in agent.poses]
     return {
         "path": str(path),
         "scene_id": scene.scene_id,
         "subset": subset,
         "frames": frames,
+        # First and last pose time: the desktop library's duration and rate.
+        "time_range_us": [min(times), max(times)] if times else None,
         "time_sync": sync_rows,
         "missing_frames": missing,
         "cross_sync": cross_rows,

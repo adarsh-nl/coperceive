@@ -312,6 +312,12 @@ pub struct ValidationRecord {
     pub valid: bool,
     /// `manifest.json` modification time in milliseconds since the epoch when checked.
     pub manifest_mtime_ms: u64,
+    /// The most samples any agent has, from the validate report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames: Option<usize>,
+    /// First and last pose time (µs), from the validate report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_range_us: Option<(i64, i64)>,
 }
 
 /// Persistent desktop application state.

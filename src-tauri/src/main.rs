@@ -1834,7 +1834,7 @@ fn set_auto_download_updates(enabled: bool) -> Result<(), String> {
 fn run_scene_validation(
     python: &Path,
     scene_path: &str,
-) -> Result<(bool, String, String), String> {
+) -> Result<(bool, String, String, SceneTiming), String> {
     use std::process::Command;
 
     let report_dir = std::env::temp_dir().join(format!(
@@ -1884,12 +1884,37 @@ fn run_scene_validation(
         .and_then(|value| value.get("hard_failure_count"))
         .and_then(|value| value.as_u64())
         .unwrap_or(1);
-    Ok((read == 1 && failed == 0 && hard == 0, stdout, stderr))
+    Ok((read == 1 && failed == 0 && hard == 0, stdout, stderr, SceneTiming::from_report(&parsed)))
+}
+
+/// Frames per agent and pose time range of the one scene a validate report read.
+#[cfg(target_os = "macos")]
+#[derive(Default)]
+struct SceneTiming {
+    frames: Option<usize>,
+    time_range_us: Option<(i64, i64)>,
+}
+
+#[cfg(target_os = "macos")]
+impl SceneTiming {
+    fn from_report(report: &serde_json::Value) -> Self {
+        let scene = report.pointer("/scenes/0");
+        let frames = scene
+            .and_then(|scene| scene.get("frames"))
+            .and_then(serde_json::Value::as_object)
+            .and_then(|frames| frames.values().filter_map(serde_json::Value::as_u64).max())
+            .map(|n| n as usize);
+        let time_range_us = scene
+            .and_then(|scene| scene.get("time_range_us"))
+            .and_then(serde_json::Value::as_array)
+            .and_then(|range| Some((range.first()?.as_i64()?, range.get(1)?.as_i64()?)));
+        Self { frames, time_range_us }
+    }
 }
 
 /// Remember a validation answer, keyed by the scene directory and manifest mtime.
 #[cfg(target_os = "macos")]
-fn remember_scene_validation(scene_path: &str, valid: bool) {
+fn remember_scene_validation(scene_path: &str, valid: bool, timing: SceneTiming) {
     let Some(mtime) = coperceive_desktop::library::manifest_mtime_ms(Path::new(scene_path)) else {
         return;
     };
@@ -1899,7 +1924,12 @@ fn remember_scene_validation(scene_path: &str, valid: bool) {
         .get_or_insert_with(std::collections::HashMap::new);
     cache.insert(
         scene_path.to_string(),
-        state::ValidationRecord { valid, manifest_mtime_ms: mtime },
+        state::ValidationRecord {
+            valid,
+            manifest_mtime_ms: mtime,
+            frames: timing.frames,
+            time_range_us: timing.time_range_us,
+        },
     );
     if let Err(err) = state::save_state(&persistent) {
         eprintln!("[validation] could not save the validation cache: {err}");
@@ -1909,8 +1939,8 @@ fn remember_scene_validation(scene_path: &str, valid: bool) {
 /// Validate a scene in the background and remember the answer in `state.json`.
 #[cfg(target_os = "macos")]
 fn store_scene_validation(python: &Path, scene_path: &str) -> Result<bool, String> {
-    let valid = run_scene_validation(python, scene_path)?.0;
-    remember_scene_validation(scene_path, valid);
+    let (valid, _, _, timing) = run_scene_validation(python, scene_path)?;
+    remember_scene_validation(scene_path, valid, timing);
     Ok(valid)
 }
 
@@ -1942,8 +1972,8 @@ fn validate_scene(
     scene_path: String,
 ) -> Result<serde_json::Value, String> {
     let python = resolve_python_binary(&app);
-    let (valid, stdout, stderr) = run_scene_validation(&python, &scene_path)?;
-    remember_scene_validation(&scene_path, valid);
+    let (valid, stdout, stderr, timing) = run_scene_validation(&python, &scene_path)?;
+    remember_scene_validation(&scene_path, valid, timing);
     Ok(serde_json::json!({
         "scene_path": scene_path,
         "valid": valid,
