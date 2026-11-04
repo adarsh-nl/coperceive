@@ -361,7 +361,7 @@ pub fn run_scan(
     parse_scan_output(&result.stdout, result.success, &result.stderr)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs;

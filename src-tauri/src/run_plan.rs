@@ -3052,6 +3052,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn path_check_expands_tilde_against_remote_home() {
         if !std::path::Path::new("/bin/sh").exists() {
             return;
@@ -3284,6 +3285,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn real_fake_ssh_builds_and_saves_a_plan_without_submitting() {
         use crate::ssh::SshTarget;
 

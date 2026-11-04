@@ -306,7 +306,7 @@ jobs:
         run: cargo build --bin coperceive-desktop
         working-directory: src-tauri
       - name: Run Linux Smoke Test
-        run: bash scripts/desktop/smoke_test_linux.sh src-tauri/target/debug/coperceive-desktop
+        run: xvfb-run -a bash scripts/desktop/smoke_test_linux.sh src-tauri/target/debug/coperceive-desktop
 
   desktop-windows:
     runs-on: windows-latest

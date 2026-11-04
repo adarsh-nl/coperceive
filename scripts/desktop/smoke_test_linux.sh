@@ -25,17 +25,23 @@ if [ ! -d "${FIXTURE_ROOT}" ]; then
     exit 2
 fi
 
+# Ensure an active X display is running
+if [ -z "${DISPLAY:-}" ]; then
+    if command -v xvfb-run >/dev/null 2>&1; then
+        echo "No DISPLAY set; re-executing under xvfb-run..."
+        exec xvfb-run -a -s "-screen 0 1280x800x24" bash "$0" "$@"
+    else
+        echo "Warning: DISPLAY not set and xvfb-run not available" >&2
+    fi
+fi
+
 TMPDIR="$(mktemp -d /tmp/coperceive-linux-smoke-XXXXXX)"
-XVFB_PID=""
 APP_PID=""
 
 cleanup() {
     if [ -n "${APP_PID}" ]; then
         kill -TERM "${APP_PID}" 2>/dev/null || true
         wait "${APP_PID}" 2>/dev/null || true
-    fi
-    if [ -n "${XVFB_PID}" ]; then
-        kill "${XVFB_PID}" 2>/dev/null || true
     fi
     rm -rf "${TMPDIR}"
 }
@@ -55,23 +61,16 @@ if [ -z "${COPERCEIVE_PYTHON:-}" ] && command -v python3 >/dev/null 2>&1; then
     export COPERCEIVE_PYTHON="$(command -v python3)"
 fi
 
-if [ -z "${DISPLAY:-}" ]; then
-    if command -v Xvfb >/dev/null 2>&1; then
-        echo "Starting Xvfb on display :99..."
-        Xvfb :99 -screen 0 1280x800x24 -ac &
-        XVFB_PID=$!
-        export DISPLAY=:99
-        sleep 1
-    elif command -v xvfb-run >/dev/null 2>&1; then
-        echo "Xvfb not found directly, falling back to xvfb-run wrapper"
-    fi
+echo "Starting coperceive-desktop with auto-connect fixture..."
+LAUNCH_PREFIX=()
+if command -v stdbuf >/dev/null 2>&1; then
+    LAUNCH_PREFIX=(stdbuf -oL -eL)
 fi
 
-echo "Starting coperceive-desktop with auto-connect fixture..."
 COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
 COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
 COPERCEIVE_STATE_DIR="${TMPDIR}/state" \
-"${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
+"${LAUNCH_PREFIX[@]}" "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
 APP_PID=$!
 echo "App process spawned with PID ${APP_PID}"
 
@@ -97,6 +96,13 @@ if [ ! -f "${MARKER_FILE}" ]; then
     cat "${APP_STDERR}" >&2
     echo "=== App stdout ===" >&2
     cat "${APP_STDOUT}" >&2
+    echo "=== Sidecar logs in /tmp ===" >&2
+    for logfile in /tmp/coperceive-local-*/serve-*.log; do
+        if [ -f "${logfile}" ]; then
+            echo "--- ${logfile} ---" >&2
+            cat "${logfile}" >&2
+        fi
+    done
     exit 4
 fi
 

@@ -395,6 +395,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn test_run_local_command_returns_timed_out_error() {
         let dir = std::env::temp_dir().join(format!("ssh-timeout-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");

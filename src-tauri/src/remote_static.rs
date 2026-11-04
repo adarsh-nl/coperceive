@@ -306,7 +306,7 @@ fn prepare_remote_static_with(
     Ok(remote_display)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
 
