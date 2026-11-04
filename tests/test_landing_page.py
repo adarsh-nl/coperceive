@@ -253,6 +253,16 @@ def _wait_canvas_drawn(page: Page, selector: str) -> None:
         page.wait_for_timeout(100)
 
 
+def _wait_canvas_moved(page: Page, selector: str, before: int) -> None:
+    """Wait for ``selector`` to draw a frame that differs from the one hashed as ``before``.
+    A fixed sleep can read the same frame twice when CI's software-rendered runner
+    hasn't ticked the animation in time."""
+    deadline = time.monotonic() + 5
+    while _hash(page, selector) == before:
+        assert time.monotonic() < deadline, f"{selector} did not change in 5 s (hash {before})"
+        page.wait_for_timeout(100)
+
+
 def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path):
     with sync_playwright() as playwright:
         browser = _launch(playwright)
@@ -290,7 +300,7 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         _wait_canvas_drawn(page, "canvas[data-bev=hero]")
         assert _pixel_count(page, "canvas[data-bev=hero]") > 20
         hero_a = _hash(page, "canvas[data-bev=hero]")
-        page.wait_for_timeout(500)
+        _wait_canvas_moved(page, "canvas[data-bev=hero]", hero_a)
         assert hero_a != _hash(page, "canvas[data-bev=hero]")
         _shot(page, tmp_path, "landing-1440-hero")
 
@@ -384,7 +394,7 @@ def test_reduced_motion_holds_still(site_server: str):
         page = browser.new_page(viewport={"width": 1440, "height": 900}, reduced_motion="reduce")
         page.goto(site_server, wait_until="networkidle")
         page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
-        page.wait_for_timeout(600)
+        _wait_canvas_drawn(page, "canvas[data-bev=hero]")
         assert _pixel_count(page, "canvas[data-bev=hero]") > 20
         # Sections are shown at once and the install block is not typed out.
         assert page.locator("[data-reveal][data-hidden]").count() == 0
