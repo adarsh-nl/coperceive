@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import HpcServers from "./HpcServers";
 import NewEvaluation from "./NewEvaluation";
 import RunHistory from "./RunHistory";
-import DatasetView, { buildV2xsetMockFixture, type SubmittedJob } from "./hpc/DatasetView";
+import DatasetView, { type SubmittedJob } from "./hpc/DatasetView";
 import type { ServerEntry } from "./hpc";
 import {
   lastClusterDataset,
@@ -91,22 +91,7 @@ export default function HpcWorkspace() {
       }
     };
     const handleOpenDataset = (event: Event) => {
-      const customEvent = event as CustomEvent<ActiveDatasetPayload & { useMockV2xset?: boolean }>;
-      if (customEvent.detail?.useMockV2xset) {
-        const mock = buildV2xsetMockFixture();
-        setActiveDatasetData({
-          profile: mock.profile,
-          dataset: mock.dataset,
-          useNewView: true,
-          indexDoc: mock.indexDoc,
-          statuses: mock.statuses,
-          submittedJobs: mock.submittedJobs,
-          cacheRoot: mock.cacheRoot,
-          selectedSceneId: mock.selectedSceneId,
-        });
-        setTab("dataset");
-        return;
-      }
+      const customEvent = event as CustomEvent<ActiveDatasetPayload>;
       if (customEvent.detail) {
         setActiveDatasetData(customEvent.detail);
         setTab("dataset");

@@ -140,6 +140,11 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     };
     window.addEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
 
+    const handleOpenDatasetNav = () => {
+      setActiveTab("remote");
+    };
+    window.addEventListener("coperceive-open-dataset", handleOpenDatasetNav);
+
     void (async () => {
       const state = await getPersistentState();
       if (state?.recent_roots && state.recent_roots.length > 0) {
@@ -175,6 +180,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         window.removeEventListener("coperceive-test-open-folder-seed", handleOpenFolderSeed);
         window.removeEventListener("coperceive-hpc-state", handleHpcState);
         window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
+        window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
         window.removeEventListener("keydown", handleKeyDown);
       };
     }
@@ -225,6 +231,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       window.removeEventListener("coperceive-test-open-folder-seed", handleOpenFolderSeed);
       window.removeEventListener("coperceive-hpc-state", handleHpcState);
       window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
+      window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
       window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
       window.removeEventListener("keydown", handleKeyDown);
       unlistenImport?.();

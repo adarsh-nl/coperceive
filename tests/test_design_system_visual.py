@@ -264,21 +264,21 @@ SEED_FIXTURES_EVAL = """
 
   const hpcProfiles = [
     {
-      id: "ut-eemcs-hpc",
+      id: "cluster-a",
       schema_version: 1,
       profile: {
-        name: "UT EEMCS HPC",
-        ssh_alias: "ut-hpc",
-        host: "hpc-head1.ewi.utwente.nl",
-        user: "nanjaiyalathaa",
+        name: "Delft HPC (DAIC)",
+        ssh_alias: "daic-gpu",
+        host: "hpc.example.org",
+        user: "alice",
         data_roots: ["/datasets/eemcs/ps/cv/opencood/v2xset", "/datasets/eemcs/ps/cv/opv2v"],
         scratch_template: "/scratch/$USER/coperceive",
-        results_root: "/home/nanjaiyalathaa/results",
-        code_roots: ["/home/nanjaiyalathaa/code/opencood"],
+        results_root: "/home/alice/results",
+        code_roots: ["/home/alice/code/opencood"],
         scheduler: "slurm",
         defaults: {
-          partition: "ps",
-          account: "eemcs-cv",
+          partition: "gpu",
+          account: "cv-lab",
           qos: "normal",
           gres: "gpu:a100:1",
           time_limit: "02:00:00",
@@ -288,18 +288,18 @@ SEED_FIXTURES_EVAL = """
         environment: {
           kind: "conda",
           modules: ["cuda/12.1"],
-          interpreter: "/home/nanjaiyalathaa/miniconda3/envs/coperceive/bin/python",
+          interpreter: "/home/alice/miniconda3/envs/coperceive/bin/python",
           container_image: null,
           coperceive_command: ["coperceive"],
           wheelhouse: null,
           compute_has_internet: false
         },
-        notes: "Primary EEMCS computer-vision cluster."
+        notes: "Primary computer-vision cluster."
       },
       discovered: {
         partitions: [
           {
-            name: "ps",
+            name: "gpu",
             nodes: 14,
             state: "up",
             max_time: "2-00:00:00",
@@ -307,7 +307,7 @@ SEED_FIXTURES_EVAL = """
             gpu_types: ["a100"]
           },
           {
-            name: "gpu",
+            name: "compute",
             nodes: 8,
             state: "up",
             max_time: "1-00:00:00",
@@ -319,22 +319,22 @@ SEED_FIXTURES_EVAL = """
         gpu_types: ["a100", "l40s"],
         environment: {
           module_system: true,
-          conda: "/home/nanjaiyalathaa/miniconda3/bin/conda",
+          conda: "/home/alice/miniconda3/bin/conda",
           virtualenv: null,
-          python: "/home/nanjaiyalathaa/miniconda3/envs/coperceive/bin/python",
+          python: "/home/alice/miniconda3/envs/coperceive/bin/python",
           container_runtime: "apptainer",
-          coperceive_path: "/home/nanjaiyalathaa/.local/bin/coperceive",
+          coperceive_path: "/home/alice/.local/bin/coperceive",
           coperceive_version: "0.1.0",
-          scratch_candidates: ["/scratch/nanjaiyalathaa"]
+          scratch_candidates: ["/scratch/alice"]
         },
         checked_unix: 1730660000
       },
       ssh: {
-        alias: "ut-hpc",
-        hostname: "hpc-head1.ewi.utwente.nl",
-        user: "nanjaiyalathaa",
+        alias: "daic-gpu",
+        hostname: "hpc.example.org",
+        user: "alice",
         port: 22,
-        proxy_jump: "bastion.utwente.nl",
+        proxy_jump: "jump.example.org",
         proxy_command: null
       }
     },
@@ -419,7 +419,162 @@ SEED_FIXTURES_EVAL = """
     new CustomEvent("coperceive-test-hpc-servers-seed", {
       detail: {
         profiles: hpcProfiles,
-        hosts: ["ut-hpc", "daic"]
+        hosts: ["daic-gpu", "daic"]
+      }
+    })
+  );
+}
+"""
+
+SYNTHETIC_DATASET_EVAL = """
+() => {
+  const scenes = [];
+  const statuses = [];
+  for (let i = 0; i < 33; i++) {
+    const id = "scene_" + String(i).padStart(4, "0");
+    const dur = 10.0 + (i % 5) * 2.5;
+    const agents = 2 + (i % 3);
+    const frames = Math.round(dur * 20);
+    scenes.push({
+      scene_id: id,
+      sample_count: frames,
+      duration_s: dur,
+      agent_count: agents,
+      sensors: {
+        sensors: agents * 5,
+        camera_samples: frames * agents * 4,
+        lidar_samples: frames * agents,
+      },
+    });
+    if (i < 3) {
+      statuses.push({
+        scene_id: id,
+        state: "ready",
+        reason: null,
+        job_id: "700001",
+        prepared_unix: 1730650000,
+        scene_dir: "/home/alice/results/coperceive-cache/v2xset/cd4d1b066ed1/train/" + id,
+        progress_percent: 100,
+        images: "originals",
+      });
+    } else if (i < 6) {
+      statuses.push({
+        scene_id: id,
+        state: "preparing",
+        reason: null,
+        job_id: "700001",
+        prepared_unix: null,
+        scene_dir: null,
+        progress_percent: 45 - (i - 3) * 15,
+        images: "originals",
+      });
+    } else {
+      statuses.push({
+        scene_id: id,
+        state: "not_prepared",
+        reason: null,
+        job_id: null,
+        prepared_unix: null,
+        scene_dir: null,
+        progress_percent: 0,
+        images: "originals",
+      });
+    }
+  }
+
+  const srvs = window.__SEEDED_HPC_PROFILES__ || [];
+  const profile = srvs[0] || {
+    id: "cluster-a",
+    schema_version: 1,
+    profile: {
+      name: "Delft HPC (DAIC)",
+      ssh_alias: "daic-gpu",
+      host: "hpc.example.org",
+      user: "alice",
+      data_roots: ["/datasets/v2xset"],
+      scratch_template: "/scratch/$USER/coperceive",
+      results_root: "/home/alice/results",
+      code_roots: ["/home/alice/code/coperceive"],
+      scheduler: "slurm",
+      defaults: { partition: "gpu", memory: "32G", cpus_per_task: 8, time_limit: "02:00:00" },
+      environment: {
+        kind: "venv",
+        interpreter: "/home/alice/.venv/bin/python",
+        coperceive_command: ["/home/alice/.venv/bin/python", "-m", "coperceive"],
+      },
+    },
+    discovered: {
+      partitions: [{
+        name: "gpu",
+        nodes: 12,
+        state: "up",
+        max_time: "2-00:00:00",
+        gres: "gpu:a100:2",
+        gpu_types: ["a100"],
+      }],
+      gpu_types: ["a100"],
+      checked_unix: 1730650000,
+    },
+    ssh: { alias: "daic-gpu", hostname: "hpc.example.org", user: "alice", port: 22 },
+  };
+
+  const dataset = {
+    schema: "coperceive-cluster-detect-1",
+    path: "/datasets/v2xset/train",
+    adapter: "v2xset",
+    raw_root: "/datasets/v2xset",
+    split: "train",
+    params: { split: "train" },
+    licence: { status: "unknown", spdx: null, notice: "Research use only", links: [] },
+    scene_count: 33,
+    status: "ok",
+    reason: null,
+  };
+
+  const indexDoc = {
+    schema: "coperceive-cluster-index-1",
+    adapter: "v2xset",
+    raw_root: "/datasets/v2xset",
+    split: "train",
+    params: { split: "train" },
+    licence: { status: "unknown", spdx: null, notice: "Research use only", links: [] },
+    fingerprint: {
+      algorithm: "sha1-mtime-size-v1",
+      digest: "cd4d1b066ed1",
+      entries: 33,
+      truncated: false,
+    },
+    cache: { relative_path: "coperceive-cache/v2xset/cd4d1b066ed1/train" },
+    scene_count: 33,
+    scenes,
+    errors: [],
+    truncated: false,
+    elapsed_ms: 320,
+    storage_estimate_bytes: 4800000000,
+    storage_estimate_label: "~4.8 GB",
+  };
+
+  const submittedJobs = [
+    {
+      jobId: "700001",
+      planId: "plan-v2xset-train",
+      jobName: "coperceive-prepare-v2xset",
+      scenes: "all",
+      state: "running",
+      reason: null,
+    },
+  ];
+
+  window.dispatchEvent(
+    new CustomEvent("coperceive-open-dataset", {
+      detail: {
+        profile,
+        dataset,
+        indexDoc,
+        statuses,
+        submittedJobs,
+        cacheRoot: "/home/alice/results/coperceive-cache/v2xset/cd4d1b066ed1/train",
+        selectedSceneId: "scene_0000",
       }
     })
   );
@@ -512,11 +667,16 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
             fonts_ready = page.evaluate("""async () => {
                 await document.fonts.ready;
                 const brand = document.querySelector('.brand-wordmark');
+                const loaded = [...document.fonts]
+                    .filter(f => f.status === 'loaded')
+                    .map(f => f.family.replace(/['"]/g, ''));
                 return {
                     bodyFont: window.getComputedStyle(document.body).fontFamily,
                     wordmarkFont: brand ? window.getComputedStyle(brand).fontFamily : '',
                     geist: document.fonts.check('13px "Geist"'),
                     geistMono: document.fonts.check('13px "Geist Mono"'),
+                    hasLoadedGeist: loaded.some(f => f.includes('Geist') && !f.includes('Mono')),
+                    hasLoadedGeistMono: loaded.some(f => f.includes('Geist Mono')),
                 };
             }""")
             assert "Geist" in fonts_ready["bodyFont"], (
@@ -529,6 +689,12 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
             assert fonts_ready["geist"], "document.fonts.check('13px \"Geist\"') returned False"
             assert fonts_ready["geistMono"], (
                 "document.fonts.check('13px \"Geist Mono\"') returned False"
+            )
+            assert fonts_ready["hasLoadedGeist"], (
+                "document.fonts does not contain a loaded 'Geist' face"
+            )
+            assert fonts_ready["hasLoadedGeistMono"], (
+                "document.fonts does not contain a loaded 'Geist Mono' face"
             )
 
             # 2. Check traffic light safe zone: traffic light spacer exists and spans >= 68px
@@ -591,24 +757,37 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
                         page.wait_for_timeout(180)
                     elif screen == "dataset_view":
                         page.evaluate(SEED_FIXTURES_EVAL)
-                        page.evaluate(
-                            """() => {
-                              const srvs = window.__SEEDED_HPC_PROFILES__ || [];
-                              const profile = srvs[0];
-                              window.dispatchEvent(
-                                new CustomEvent("coperceive-open-dataset", {
-                                  detail: { profile, useMockV2xset: true }
-                                })
-                              );
-                            }"""
-                        )
-                        page.wait_for_timeout(220)
+                        page.evaluate(SYNTHETIC_DATASET_EVAL)
+                        page.wait_for_selector("text=Scene · start time", timeout=5000)
+                        page.wait_for_timeout(200)
                     elif screen == "settings":
                         page.locator("button[aria-label='Settings (⌘,)']").click()
                         page.wait_for_selector(
                             "div[role=dialog][aria-label='Settings']", timeout=5000
                         )
                         page.wait_for_timeout(150)
+                        # Assert all settings checkboxes have identical bounding box
+                        # size and x position
+                        cbs = page.locator(
+                            "div[role=dialog][aria-label='Settings'] input[type=checkbox]"
+                        ).all()
+                        assert len(cbs) >= 4, f"Expected >= 4 settings checkboxes, found {len(cbs)}"
+                        valid_boxes = [box for cb in cbs if (box := cb.bounding_box()) is not None]
+                        assert len(valid_boxes) == len(cbs), "Some checkboxes had no bounding box"
+                        first_box = valid_boxes[0]
+                        for i, box in enumerate(valid_boxes[1:], start=1):
+                            assert box["width"] == pytest.approx(first_box["width"], abs=0.5), (
+                                f"Checkbox {i} width {box['width']} differs from "
+                                f"checkbox 0 width {first_box['width']}"
+                            )
+                            assert box["height"] == pytest.approx(first_box["height"], abs=0.5), (
+                                f"Checkbox {i} height {box['height']} differs from "
+                                f"checkbox 0 height {first_box['height']}"
+                            )
+                            assert box["x"] == pytest.approx(first_box["x"], abs=0.5), (
+                                f"Checkbox {i} x position {box['x']} differs from "
+                                f"checkbox 0 x position {first_box['x']}"
+                            )
 
                     shot_path = screenshots_dir / f"{screen}_{theme}_{w}x{h}.png"
                     page.screenshot(path=str(shot_path), full_page=False)
@@ -711,7 +890,7 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
             context.close()
 
     # 5b. Capture real wired dataset view driven by synthetic OPV2V fixture from
-    # e2e_cluster_datasets_app.sh
+    # e2e_cluster_datasets_app.sh with prepare preview open showing estimate line
     ctx_real = visual_browser.new_context(viewport={"width": 1280, "height": 800})
     real_page = ctx_real.new_page()
     try:
@@ -719,90 +898,21 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
         real_page.goto(f"{app_url}/#/connect", wait_until="networkidle")
         real_page.evaluate("document.documentElement.dataset.theme = 'dark';")
         real_page.evaluate(SEED_FIXTURES_EVAL)
-        real_page.evaluate(
-            """() => {
-              const srvs = window.__SEEDED_HPC_PROFILES__ || [];
-              const profile = srvs[0] || {
-                id: "fixture-datasets",
-                profile: {
-                  name: "Delft HPC (DAIC)",
-                  host: "login.daic.tudelft.nl",
-                  scheduler: "slurm",
-                  environment: { kind: "modules", modules: ["cuda/12.1"] },
-                  data_roots: ["/datasets/eemcs/ps/cv/opencood/opv2v"],
-                  results_root: "/home/researcher/results",
-                  defaults: { partition: "gpu", cpus_per_task: 1, gpus: 1, walltime: "02:00:00" },
-                },
-              };
-              const dataset = {
-                path: "/datasets/eemcs/ps/cv/opencood/opv2v/test",
-                adapter: "opv2v",
-                split: "test",
-                raw_root: "/datasets/eemcs/ps/cv/opencood/opv2v",
-                scene_count: 3,
-                camera_count: 4,
-                agent_count: 3,
-                frame_count: 12,
-                duration_s: 1.2,
-                licence: "unknown",
-                licence_url: null,
-              };
-              const indexDoc = {
-                adapter: "opv2v",
-                split: "test",
-                raw_root: "/datasets/eemcs/ps/cv/opencood/opv2v",
-                scene_count: 3,
-                scenes: [
-                  {
-                    scene_id: "test_0000",
-                    sample_count: 4,
-                    agent_count: 3,
-                    camera_count: 4,
-                    duration_s: 1.2,
-                    has_images: "full",
-                  },
-                  {
-                    scene_id: "test_0001",
-                    sample_count: 4,
-                    agent_count: 3,
-                    camera_count: 4,
-                    duration_s: 1.2,
-                    has_images: "full",
-                  },
-                  {
-                    scene_id: "test_0002",
-                    sample_count: 4,
-                    agent_count: 3,
-                    camera_count: 4,
-                    duration_s: 1.2,
-                    has_images: "full",
-                  },
-                ],
-                storage_estimate: {
-                  estimated_raw_bytes: 52428800,
-                  estimated_cache_bytes: 18874368,
-                },
-              };
-              const statuses = [
-                { scene_id: "test_0000", state: "ready", progress_percent: 100 },
-                { scene_id: "test_0001", state: "not_prepared", progress_percent: 0 },
-                { scene_id: "test_0002", state: "not_prepared", progress_percent: 0 },
-              ];
-              window.dispatchEvent(
-                new CustomEvent("coperceive-open-dataset", {
-                  detail: {
-                    profile,
-                    dataset,
-                    indexDoc,
-                    statuses,
-                    cacheRoot: "/home/researcher/results/coperceive-cache/opv2v/a1b2c3d4/test",
-                    selectedSceneId: "test_0000",
-                  }
-                })
-              );
-            }"""
-        )
-        real_page.wait_for_timeout(350)
+        real_page.locator(".c-sidebar button", has_text="Servers").first.click()
+        real_page.wait_for_timeout(180)
+        real_page.evaluate(SYNTHETIC_DATASET_EVAL)
+        real_page.wait_for_selector("text=Scene · start time", timeout=5000)
+        real_page.wait_for_timeout(200)
+
+        # Open prepare preview modal showing #110 estimate line
+        prepare_btn = real_page.locator(
+            "button:has-text('Prepare remaining'), button:has-text('Prepare whole')"
+        ).first
+        prepare_btn.click()
+        real_page.wait_for_selector("pre[aria-label='Prepare job script']", timeout=5000)
+        real_page.wait_for_selector("text=Estimated time once running", timeout=5000)
+        real_page.wait_for_timeout(200)
+
         real_shot = screenshots_dir / "dataset_view_real_cluster.png"
         real_page.screenshot(path=str(real_shot), full_page=False)
         assert real_shot.is_file() and real_shot.stat().st_size > 0
@@ -828,3 +938,17 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
             assert mock_shot.is_file()
         finally:
             ctx.close()
+
+
+def test_no_personal_identifiers_in_web_src() -> None:
+    web_src = Path(__file__).resolve().parents[1] / "web" / "src"
+    assert web_src.is_dir(), f"Expected directory {web_src}"
+    forbidden = ["nanjaiyalathaa", "ewi.utwente.nl"]
+    matches: list[str] = []
+    for path in web_src.rglob("*"):
+        if path.is_file():
+            text = path.read_text(encoding="utf-8", errors="ignore")
+            for word in forbidden:
+                if word in text:
+                    matches.append(f"{path.relative_to(web_src)} contains '{word}'")
+    assert not matches, f"Forbidden personal identifiers found in web/src: {matches}"

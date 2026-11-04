@@ -1838,7 +1838,12 @@ font_eval_req = urllib.request.Request(
             await document.fonts.ready;
             const geist = document.fonts.check('13px "Geist"');
             const geistMono = document.fonts.check('13px "Geist Mono"');
-            return JSON.stringify({ geist, geistMono });
+            const loaded = [...document.fonts]
+                .filter(f => f.status === 'loaded')
+                .map(f => f.family.replace(/['"]/g, ''));
+            const loadedGeist = loaded.some(f => f.includes('Geist') && !f.includes('Mono'));
+            const loadedGeistMono = loaded.some(f => f.includes('Geist Mono'));
+            return JSON.stringify({ geist, geistMono, loadedGeist, loadedGeistMono });
         })()
     """}).encode("utf-8"),
     headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
@@ -1846,8 +1851,8 @@ font_eval_req = urllib.request.Request(
 with urllib.request.urlopen(font_eval_req, timeout=10) as r:
     font_resp = json.loads(r.read().decode("utf-8"))
 font_json = json.loads(font_resp.get("result", "{}"))
-assert font_json.get("geist"), f"Geist font not loaded in packaged app: {font_json}"
-assert font_json.get("geistMono"), f"Geist Mono font not loaded in packaged app: {font_json}"
+assert font_json.get("geist") and font_json.get("loadedGeist"), f"Geist font not loaded in packaged app: {font_json}"
+assert font_json.get("geistMono") and font_json.get("loadedGeistMono"), f"Geist Mono font not loaded in packaged app: {font_json}"
 print(f"Step 5b verified: bundled Geist and Geist Mono loaded in packaged app: {font_json}")
 EOF
 
