@@ -3366,7 +3366,6 @@ if [ "${CRASH_STATUS}" -eq 0 ]; then
     echo "E2E_FAIL step=5i crash launch exited 0" >&2
     exit 1
 fi
-echo "Step 5i debug logs:"; ls -la "${DIAG_LOGS}" || true; cat "${DIAG_LOGS}/run-marker.json" 2>/dev/null || true
 CRASH_FILE=$(ls "${DIAG_LOGS}"/crash-*.json 2>/dev/null | head -n 1)
 if [ -z "${CRASH_FILE}" ]; then
     echo "E2E_FAIL step=5i no crash-*.json written" >&2
@@ -3428,12 +3427,6 @@ while time.monotonic() < deadline:
         break
     time.sleep(0.3)
 notice = eval_js("(() => (document.querySelector('.crash-notice') || {}).textContent || '')()")
-print("Step 5i debug ipc:", repr(eval_js("(() => typeof window.__TAURI_INTERNALS__)()")))
-print("Step 5i debug invoke:", repr(eval_js("(() => { if (!window.__TAURI_INTERNALS__) return 'no-ipc'; window.__TAURI_INTERNALS__.invoke('diagnostics_startup_crash').then(x => { window.__CRASHDBG__ = JSON.stringify(x); }).catch(e => { window.__CRASHDBG__ = 'ERR:' + e; }); return 'called'; })()")))
-time.sleep(1.5)
-print("Step 5i debug crash-global:", repr(eval_js("(() => window.__CRASHDBG__ || null)()")))
-print("Step 5i debug notice:", repr(notice))
-print("Step 5i debug main body:", repr(eval_js("(() => document.body.innerText.slice(0, 500))()")))
 assert "closed unexpectedly" in notice, notice
 eval_js("""(() => {
     const button = Array.from(document.querySelectorAll('.crash-notice button'))
