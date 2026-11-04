@@ -345,6 +345,26 @@ def test_one_failed_scene_does_not_stop_the_others(tmp_path: Path) -> None:
     assert not (cache / "scene_0002").exists()
 
 
+def test_status_marks_ready_scenes_stale_when_the_raw_files_change(tmp_path: Path) -> None:
+    """Stale: the raw split's fingerprint changed since the scenes were prepared."""
+    raw = _opv2v(tmp_path / "opv2v")
+    cache = _cache(tmp_path, raw)
+    prepare_cluster_dataset("opv2v", raw / "test", cache)
+    before = {scene["scene_id"]: scene for scene in dataset_status_document(cache)["scenes"]}
+    assert {scene["state"] for scene in before.values()} == {"ready"}
+
+    # A raw file appears after the prepare: the fingerprint no longer matches.
+    (raw / "test" / "scene_0001" / "641" / "000999.yaml").write_text("{}", encoding="utf-8")
+
+    unchanged = dataset_status_document(cache, refresh_stale=False)
+    assert {scene["state"] for scene in unchanged["scenes"]} == {"ready"}
+    after = {scene["scene_id"]: scene for scene in dataset_status_document(cache)["scenes"]}
+    assert {scene["state"] for scene in after.values()} == {"stale"}
+    assert all(scene["reason"] == "raw dataset fingerprint changed" for scene in after.values())
+    # A stale scene is still on disk: it can be opened or re-prepared.
+    assert all((cache / scene_id / "COMPLETE.json").is_file() for scene_id in after)
+
+
 def test_cache_inside_the_raw_root_is_refused(tmp_path: Path) -> None:
     raw = _opv2v(tmp_path / "opv2v")
     with pytest.raises(DatasetError, match="must not be inside"):
