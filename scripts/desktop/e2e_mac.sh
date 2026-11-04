@@ -3412,7 +3412,7 @@ secrets = [
 def eval_js(code):
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code, "timeout": 10}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": 10, "window": "main"}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(request, timeout=15) as response:
@@ -3476,7 +3476,7 @@ import json, sys, urllib.request
 port, secret = sys.argv[1], sys.argv[2]
 request = urllib.request.Request(
     f"http://127.0.0.1:{port}/eval",
-    data=json.dumps({"script": "(() => { const b = Array.from(document.querySelectorAll('button')).find(x => (x.textContent || '').trim() === 'Close'); if (b) b.click(); })()", "timeout": 10}).encode(),
+    data=json.dumps({"script": "(() => { const b = Array.from(document.querySelectorAll('button')).find(x => (x.textContent || '').trim() === 'Close'); if (b) b.click(); })()", "timeout": 10, "window": "main"}).encode(),
     headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
 )
 urllib.request.urlopen(request, timeout=15).read()
