@@ -149,7 +149,7 @@ export default function App() {
 
   useEffect(() => {
     if (!isTauri) return;
-    void startupCrash().then((record) => {
+    const applyCrash = (record: StartupCrash | null) => {
       if (!record) return;
       let dismissed = false;
       try {
@@ -158,10 +158,20 @@ export default function App() {
         dismissed = false;
       }
       if (!dismissed) setCrash(record);
-    });
+    };
+    const injected = (window as unknown as { __COPERCEIVE_STARTUP_CRASH__?: StartupCrash }).__COPERCEIVE_STARTUP_CRASH__ ?? null;
+    applyCrash(injected);
+    void startupCrash().then(applyCrash);
+    const onCrash = (event: Event) => {
+      applyCrash((event as CustomEvent<StartupCrash>).detail ?? null);
+    };
+    window.addEventListener("coperceive-startup-crash", onCrash);
     const open = () => setDiagnosticsOpen(true);
     window.addEventListener("coperceive-open-diagnostics", open);
-    return () => window.removeEventListener("coperceive-open-diagnostics", open);
+    return () => {
+      window.removeEventListener("coperceive-startup-crash", onCrash);
+      window.removeEventListener("coperceive-open-diagnostics", open);
+    };
   }, [isTauri]);
 
   useEffect(() => installGlobalErrorRecorders(), []);
