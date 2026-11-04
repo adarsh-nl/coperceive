@@ -16,6 +16,7 @@ import pytest
 
 try:
     from playwright.sync_api import Browser, ConsoleMessage, Page, Playwright, sync_playwright
+    from playwright.sync_api import TimeoutError as PlaywrightTimeoutError
 except ImportError:
     if os.environ.get("COPERCEIVE_E2E_REQUIRED", "") not in {"", "0"}:
         raise
@@ -204,6 +205,54 @@ def _opacity(page: Page, selector: str) -> float:
     return float(value)
 
 
+_STORY_STATE = """() => {
+    const story = document.querySelector('[data-screen-label=Story]');
+    const rect = story.getBoundingClientRect();
+    return {
+        scrollY: window.scrollY,
+        storyTop: story.offsetTop,
+        storyHeight: story.offsetHeight,
+        innerHeight: window.innerHeight,
+        progress: 5 * Math.min(1, Math.max(0,
+            -rect.top / Math.max(1, rect.height - window.innerHeight))),
+        captions: [...document.querySelectorAll('[data-step]')].map((el) => el.style.opacity),
+        bar: document.querySelector('[data-progress]').style.height,
+    };
+}"""
+
+
+def _wait_story_step(page: Page, shown: str, hidden: str) -> None:
+    """Wait until the story's animation loop has applied the scroll: ``shown`` fully
+    visible and ``hidden`` gone. The captions are set by the canvas's per-frame
+    tick, not by a CSS transition, so a fixed sleep can read them before any frame
+    has run since the scroll (seen on CI's software-rendered runner)."""
+    condition = """([shown, hidden]) => {
+        const opacity = (s) => Number(getComputedStyle(document.querySelector(s)).opacity);
+        return opacity(shown) > 0.9 && opacity(hidden) < 0.1;
+    }"""
+    try:
+        page.wait_for_function(condition, arg=[shown, hidden], timeout=15000)
+    except PlaywrightTimeoutError:
+        frames = page.evaluate(
+            "() => new Promise((done) => { let n = 0; const end = performance.now() + 1000;"
+            " const f = () => { n++;"
+            " performance.now() < end ? requestAnimationFrame(f) : done(n); };"
+            " requestAnimationFrame(f); })"
+        )
+        state = page.evaluate(_STORY_STATE)
+        raise AssertionError(
+            f"the story never showed {shown} and hid {hidden}: {state}; {frames} frames in 1 s"
+        ) from None
+
+
+def _wait_canvas_drawn(page: Page, selector: str) -> None:
+    """Wait for the story scene (a lazily loaded chunk) to draw its first frames."""
+    deadline = time.monotonic() + 15
+    while _pixel_count(page, selector) <= 20:
+        assert time.monotonic() < deadline, f"{selector} drew nothing in 15 s"
+        page.wait_for_timeout(100)
+
+
 def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path):
     with sync_playwright() as playwright:
         browser = _launch(playwright)
@@ -238,7 +287,7 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
 
         # The story canvas draws and moves.
         page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
-        page.wait_for_timeout(600)
+        _wait_canvas_drawn(page, "canvas[data-bev=hero]")
         assert _pixel_count(page, "canvas[data-bev=hero]") > 20
         hero_a = _hash(page, "canvas[data-bev=hero]")
         page.wait_for_timeout(500)
@@ -247,6 +296,7 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
 
         # Scrolling the pinned story swaps the captions and fills the progress bar.
         _scroll_story(page, 2.5)
+        _wait_story_step(page, "[data-step='2']", "[data-step='1']")
         assert _opacity(page, "[data-step='2']") > 0.9
         assert _opacity(page, "[data-step='1']") < 0.1
         assert page.locator("[data-step='2']").get_attribute("aria-hidden") == "false"
