@@ -3105,3 +3105,6 @@ main > .tab-panel:not([hidden]) {
 .viewer .hist-label { padding: 18px 0 0; }
 .viewer .gap-legend { padding-top: 40px; }
 .viewer .glass, .viewer .scale-bar { z-index: 3; }
+.viewer .view-pill button { white-space: nowrap; }
+.viewer .empty-pill { top: 56px; left: 12px; border-radius: 7px; }
+.viewer .side-card p.muted { font-size: 11.5px; margin: 8px 0 0; }

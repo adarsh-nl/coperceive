@@ -4258,7 +4258,7 @@ export default function Viewer({
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (
     <div className="crumb">
-      {isDesktop && (
+      {isDesktop && !datasetAbout && (
         <div className="dataset-badge" title={dataRoot || undefined}>
           <span className="dataset-folder-icon" aria-hidden="true">📁</span>
           <span className="dataset-name">{dataBasename || "Dataset"}</span>
@@ -4277,7 +4277,7 @@ export default function Viewer({
         className="crumb-dataset"
         title={datasetAbout?.server ? `${datasetAbout.label} on ${datasetAbout.server}` : undefined}
       >
-        {datasetAbout?.label || (sceneId ? sceneStem : "Scenes")}
+        {datasetAbout?.label || (sceneId && sceneStem !== sceneId ? sceneStem : "Scenes")}
       </span>
       <span className="crumb-sep" aria-hidden="true">/</span>
       <span className="scene-nav">
@@ -4485,7 +4485,7 @@ export default function Viewer({
                   onChange={() => setAppearance((current) => toggleFrustumImages(current))}
                 />
               ) : null}
-              {!mapInfo || mapInfo.available ? (
+              {mapInfo?.available ? (
                 <EyeToggle
                   on={appearance.map}
                   label="Road map"
@@ -4774,10 +4774,12 @@ export default function Viewer({
                 <span ref={extentRef} />
               </div>
             ) : null}
-            <div className="scale-bar" ref={scaleBarRef} hidden aria-hidden="true">
-              <b />
-              <span />
-            </div>
+            {summary ? (
+              <div className="scale-bar" ref={scaleBarRef} hidden aria-hidden="true">
+                <b />
+                <span />
+              </div>
+            ) : null}
             {missing.length > 0 ? (
               <ul className="glass empty-pill" aria-label="Missing data">
                 {missing.map((item) => (
