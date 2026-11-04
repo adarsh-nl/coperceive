@@ -77,6 +77,7 @@ pub struct AppState {
     pub pending_update: Mutex<Option<tauri_plugin_updater::Update>>,
     pub pending_dataset_prepare:
         Mutex<Option<coperceive_desktop::dataset_jobs::PendingPrepare>>,
+    pub startup_crash: Mutex<Option<serde_json::Value>>,
 }
 
 #[cfg(target_os = "macos")]
@@ -99,6 +100,7 @@ impl Default for AppState {
             pending_export: coperceive_desktop::export::PendingExportDestination::new(),
             pending_update: Mutex::new(None),
             pending_dataset_prepare: Mutex::new(None),
+            startup_crash: Mutex::new(None),
         }
     }
 }
@@ -697,6 +699,66 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn diagnostics_build_report(
+    state: tauri::State<'_, Arc<AppState>>,
+    context: serde_json::Value,
+) -> serde_json::Value {
+    if let Ok(mut lock) = state.sidecar.lock() {
+        if let Some(session) = lock.as_mut() {
+            if let Some(code) = session.unexpected_exit() {
+                coperceive_desktop::diagnostics::record_sidecar_exit(code, &session.log_path);
+            }
+        }
+    }
+    coperceive_desktop::diagnostics::report(&context)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn diagnostics_copy_text(context: serde_json::Value, note: String) -> Result<(), String> {
+    coperceive_desktop::diagnostics::copy(&context, &note)
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn diagnostics_startup_crash(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Option<serde_json::Value> {
+    state
+        .startup_crash
+        .lock()
+        .ok()
+        .and_then(|lock| lock.clone())
+}
+
+#[cfg(target_os = "macos")]
+#[tauri::command]
+async fn diagnostics_save_zip(
+    app: tauri::AppHandle,
+    note: String,
+    context: serde_json::Value,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+    let destination = if let Some(path) = coperceive_desktop::diagnostics::test_save_path() {
+        path
+    } else {
+        let choice = app
+            .dialog()
+            .file()
+            .set_file_name("coperceive-diagnostics.zip")
+            .add_filter("Zip archive", &["zip"])
+            .blocking_save_file();
+        let Some(destination) = choice.and_then(|path| path.into_path().ok()) else {
+            return Ok(None);
+        };
+        destination
+    };
+    coperceive_desktop::diagnostics::save_zip(&destination, &context, &note)
+        .map(|path| Some(path.display().to_string()))
+}
+
 /// Bring the main window forward on its Library. The viewer window stays the
 /// one viewer (opening a scene from the Library replaces it); it never renders
 /// the Library itself, because it has no Tauri IPC.
@@ -1117,6 +1179,7 @@ fn build_app_menu(
         .separator()
         .item(&MenuItem::with_id(app, "help_logs", "Show Logs", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "help_diagnostics", "Copy Diagnostics", true, None::<&str>)?)
+        .item(&MenuItem::with_id(app, "help_share_diagnostics", "Share Diagnostics…", true, None::<&str>)?)
         .separator()
         .item(&MenuItem::with_id(app, "help_docs", "Documentation", true, None::<&str>)?)
         .item(&MenuItem::with_id(app, "help_repo", "GitHub Repository", true, None::<&str>)?)
@@ -3462,12 +3525,37 @@ fn handle_fatal_error(err_msg: &str) {
 
 #[cfg(target_os = "macos")]
 fn main() {
-    std::panic::set_hook(Box::new(|info| {
+    let test_mode = coperceive_desktop::test_seams::test_env_active();
+    std::panic::set_hook(Box::new(move |info| {
         let msg = format!("Panic occurred: {info}");
-        handle_fatal_error(&msg);
+        if test_mode {
+            // The e2e harness must not block on a native alert while testing a
+            // real panic; the diagnostics hook below still writes the crash.
+            eprintln!("{msg}");
+        } else {
+            handle_fatal_error(&msg);
+        }
     }));
+    // Keep the fatal-error hook above as the previous hook, and also write a
+    // crash file. A marker left by a previous run means an unclean exit.
+    coperceive_desktop::diagnostics::install_panic_hook();
+    let startup_crash = coperceive_desktop::diagnostics::start_run().map(|record| {
+        serde_json::to_value(record).unwrap_or_default()
+    });
+    // Test-only forced crash: the real hook writes the real crash file, and the
+    // running marker is left behind so the next launch shows the notice.
+    if coperceive_desktop::test_seams::test_env_active()
+        && std::env::var("COPERCEIVE_TEST_CRASH").ok().as_deref() == Some("1")
+    {
+        panic!("COPERCEIVE_TEST_CRASH: intentional test crash");
+    }
 
     let app_state = Arc::new(AppState::default());
+    if let Some(crash) = startup_crash {
+        if let Ok(mut lock) = app_state.startup_crash.lock() {
+            *lock = Some(crash);
+        }
+    }
     let state_for_menu = Arc::clone(&app_state);
     let state_for_dnd = Arc::clone(&app_state);
     let state_for_window = Arc::clone(&app_state);
@@ -3530,6 +3618,10 @@ fn main() {
             submit_run_plan,
             job_watch_status,
             job_watch_logs,
+            diagnostics_build_report,
+            diagnostics_copy_text,
+            diagnostics_startup_crash,
+            diagnostics_save_zip,
             cancel_run_job,
             prediction_stream,
             run_metrics,
@@ -4348,6 +4440,11 @@ fn main() {
                         let _ = std::process::Command::new("open").arg(&log_dir).spawn();
                     }
                 }
+                "help_share_diagnostics" => {
+                    if let Some(viewer) = app.get_webview_window("viewer") {
+                        let _ = viewer.eval("window.dispatchEvent(new CustomEvent('coperceive-open-diagnostics'))");
+                    }
+                }
                 "help_diagnostics" => {
                     copy_diagnostics_to_clipboard(app, &state_for_menu);
                 }
@@ -4554,6 +4651,7 @@ fn main() {
     app.run(move |_app_handle, event| {
         match event {
             tauri::RunEvent::ExitRequested { .. } | tauri::RunEvent::Exit => {
+                coperceive_desktop::diagnostics::clean_exit();
                 if let Ok(mut lock) = state_for_exit.sidecar.lock() {
                     if let Some(mut s) = lock.take() {
                         let _ = s.stop();

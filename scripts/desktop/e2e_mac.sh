@@ -3311,6 +3311,214 @@ print("Step 5h verified: text inputs disable macOS auto-capitalisation, typed lo
 EOF
 
 echo ""
+echo "--- Step 5i: Crash -> notice -> Share diagnostics -> saved zip has no secrets ---"
+DIAG_LOGS="${TMP_DIR}/diag-logs"
+DIAG_ZIP="${TMP_DIR}/diag.zip"
+rm -rf "${DIAG_LOGS}" "${DIAG_ZIP}"
+mkdir -p "${DIAG_LOGS}"
+cat > "${DIAG_LOGS}/desktop.log" <<'DIAGLOG'
+-----BEGIN OPENSSH PRIVATE KEY-----
+e2e-secret-key-body
+-----END OPENSSH PRIVATE KEY-----
+http://127.0.0.1:5000/viewer?token=e2e-secret-token
+{"password": "e2e secret pass"}
+Authorization: Bearer e2e-secret-bearer
+/Users/e2e-user/project
+ssh e2e-alias.example.org
+DIAGLOG
+
+# Quit the app the same way Step 5d does.
+osascript <<'OSA' || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+OSA
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+
+# Crash launch: a real panic through the real hook leaves crash JSON + marker.
+rm -f "${MARKER_FILE}"
+set +e
+COPERCEIVE_TEST_ENV=1 COPERCEIVE_TEST_CRASH=1 COPERCEIVE_TEST_LOG_DIR="${DIAG_LOGS}" \
+    "${APP_EXE}" > "${TMP_DIR}/diag_crash_stdout.log" 2> "${TMP_DIR}/diag_crash_stderr.log" &
+CRASH_PID=$!
+for i in {1..100}; do
+    if ! kill -0 "${CRASH_PID}" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if kill -0 "${CRASH_PID}" 2>/dev/null; then
+    kill -TERM "${CRASH_PID}" 2>/dev/null || true
+fi
+wait "${CRASH_PID}"
+CRASH_STATUS=$?
+set -e
+if [ "${CRASH_STATUS}" -eq 0 ]; then
+    echo "E2E_FAIL step=5i crash launch exited 0" >&2
+    exit 1
+fi
+CRASH_FILE=$(ls "${DIAG_LOGS}"/crash-*.json 2>/dev/null | head -n 1)
+if [ -z "${CRASH_FILE}" ]; then
+    echo "E2E_FAIL step=5i no crash-*.json written" >&2
+    cat "${TMP_DIR}/diag_crash_stderr.log" >&2 || true
+    exit 1
+fi
+
+# Relaunch normally; the marker from the crash launch produces the notice.
+rm -f "${MARKER_FILE}"
+COPERCEIVE_TEST_ENV=1 COPERCEIVE_TEST_LOG_DIR="${DIAG_LOGS}" \
+    COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH="${DIAG_ZIP}" \
+    "${APP_EXE}" > "${TMP_DIR}/diag_relaunch_stdout.log" 2> "${TMP_DIR}/diag_relaunch_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then break; fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "E2E_FAIL step=5i relaunch died before marker" >&2
+        cat "${TMP_DIR}/diag_relaunch_stderr.log" >&2 || true
+        exit 1
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "E2E_FAIL step=5i relaunch did not write the marker" >&2
+    exit 1
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+
+python3 - "${RELAUNCH_PORT}" "${RELAUNCH_SECRET}" "${DIAG_ZIP}" <<'PY'
+import json
+import os
+import sys
+import time
+import urllib.request
+import zipfile
+
+port, secret, zip_path = sys.argv[1], sys.argv[2], sys.argv[3]
+secrets = [
+    "e2e-secret-key-body", "e2e-secret-token", "e2e secret pass",
+    "e2e-secret-bearer", "e2e-user", "e2e-alias.example.org", "BEGIN OPENSSH",
+]
+
+def eval_js(code):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code, "timeout": 10, "window": "main"}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(f"JS error: {data['error']}")
+    return data.get("result")
+
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    if eval_js("(() => { const n = document.querySelector('.crash-notice'); return n ? n.textContent : ''; })()"):
+        break
+    time.sleep(0.3)
+notice = eval_js("(() => (document.querySelector('.crash-notice') || {}).textContent || '')()")
+assert "closed unexpectedly" in notice, notice
+eval_js("""(() => {
+    const button = Array.from(document.querySelectorAll('.crash-notice button'))
+        .find(b => (b.textContent || '').includes('Share diagnostics'));
+    if (!button) throw new Error('no Share diagnostics button');
+    button.click();
+})()""")
+
+deadline = time.monotonic() + 15
+preview = ""
+while time.monotonic() < deadline:
+    preview = eval_js("(() => (document.querySelector('.diagnostics-preview') || {}).textContent || '')()")
+    if "Coperceive Diagnostics" in preview and "Collecting diagnostics" not in preview:
+        break
+    time.sleep(0.3)
+assert "Coperceive Diagnostics" in preview and "Collecting diagnostics" not in preview, preview[:500]
+assert "COPERCEIVE_TEST_CRASH" in preview or "crash-" in preview, preview[:500]
+for planted in secrets:
+    assert planted not in preview, f"{planted} leaked into preview:\n{preview[:2000]}"
+if os.path.exists(zip_path):
+    os.unlink(zip_path)
+eval_js("""(() => {
+    const button = Array.from(document.querySelectorAll('.diagnostics-actions button'))
+        .find(b => (b.textContent || '').includes('Save as file'));
+    if (!button) throw new Error('no Save as file button');
+    button.click();
+})()""")
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline and not os.path.exists(zip_path):
+    time.sleep(0.2)
+assert os.path.exists(zip_path), f"zip not written at {zip_path}"
+entries = 0
+with zipfile.ZipFile(zip_path) as archive:
+    names = archive.namelist()
+    assert "report.txt" in names, names
+    for name in names:
+        entries += 1
+        text = archive.read(name).decode("utf-8", errors="replace")
+        for planted in secrets:
+            assert planted not in text, f"{planted} leaked into zip entry {name}"
+print(f"Step 5i preview and {entries} zip entries contain no planted secrets")
+PY
+
+# Close the dialog, quit, clean up and restore a normal running app for Step 6.
+python3 - "${RELAUNCH_PORT}" "${RELAUNCH_SECRET}" <<'PY' || true
+import json, sys, urllib.request
+port, secret = sys.argv[1], sys.argv[2]
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/eval",
+    data=json.dumps({"script": "(() => { const b = Array.from(document.querySelectorAll('button')).find(x => (x.textContent || '').trim() === 'Close'); if (b) b.click(); })()", "timeout": 10, "window": "main"}).encode(),
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+urllib.request.urlopen(request, timeout=15).read()
+PY
+osascript <<'OSA' || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+OSA
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -rf "${DIAG_LOGS}" "${DIAG_ZIP}"
+rm -f "${MARKER_FILE}"
+"${APP_EXE}" > "${TMP_DIR}/diag_clean_stdout.log" 2> "${TMP_DIR}/diag_clean_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then break; fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "E2E_FAIL step=5i clean relaunch died" >&2
+        exit 1
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "E2E_FAIL step=5i clean relaunch did not write the marker" >&2
+    exit 1
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+echo "Step 5i verified: crash $(basename "${CRASH_FILE}") -> notice -> Share diagnostics -> saved zip scanned with no planted secrets."
+
+echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"
 osascript <<EOF || true
 tell application "System Events"

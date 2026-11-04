@@ -6,6 +6,7 @@
 
 pub mod cluster_datasets;
 pub mod controller;
+pub mod diagnostics;
 pub mod dataset_jobs;
 pub mod detect;
 pub mod export;

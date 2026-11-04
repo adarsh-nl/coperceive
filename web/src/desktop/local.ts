@@ -972,3 +972,78 @@ export async function onFolderDrop(
     }
   });
 }
+
+export type DiagnosticsInvoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+
+let diagnosticsInvoke: DiagnosticsInvoke | null = null;
+
+/** Test-only injection for the diagnostics commands; production leaves it null. */
+export function _setDiagnosticsInvokeForTesting(fn: DiagnosticsInvoke | null): void {
+  diagnosticsInvoke = fn;
+}
+
+async function invokeDiagnostics<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (diagnosticsInvoke) return (await diagnosticsInvoke(cmd, args)) as T;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<T>(cmd, args);
+}
+export interface DiagnosticsReport {
+  preview: string;
+  crashes: number;
+  bytes: number;
+}
+
+export interface StartupCrash {
+  schema: string;
+  kind: string;
+  timestamp_unix: number;
+  version: string;
+  commit: string;
+  message: string;
+  location?: string | null;
+}
+
+export async function buildDiagnosticsReport(context: Record<string, unknown>): Promise<DiagnosticsReport | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    return await invokeDiagnostics<DiagnosticsReport>("diagnostics_build_report", { context });
+  } catch {
+    return null;
+  }
+}
+
+export async function copyDiagnosticsText(
+  context: Record<string, unknown>,
+  note: string,
+): Promise<boolean> {
+  if (!isTauriEnvironment()) {
+    return false;
+  }
+  try {
+    await invokeDiagnostics("diagnostics_copy_text", { context, note });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function saveDiagnosticsZip(
+  context: Record<string, unknown>,
+  note: string,
+): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    return await invokeDiagnostics<string | null>("diagnostics_save_zip", { context, note });
+  } catch {
+    return null;
+  }
+}
+
+export async function startupCrash(): Promise<StartupCrash | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    return await invokeDiagnostics<StartupCrash | null>("diagnostics_startup_crash");
+  } catch {
+    return null;
+  }
+}
