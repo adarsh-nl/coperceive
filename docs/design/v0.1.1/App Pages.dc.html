@@ -1,0 +1,627 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#141415;color:#f5f5f7;font-family:"Geist",-apple-system,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#79c0ff;text-decoration:none}a:hover{color:#a5d6ff;text-decoration:underline}
+input::placeholder{color:#6e6e73}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:5px;border:2px solid #141415}::-webkit-scrollbar-corner{background:transparent}
+</style>
+</helmet>
+<div style="height:100vh;min-height:640px;display:grid;grid-template-columns:{{ rootCols }};background:#141415;font-size:13px;overflow:hidden">
+
+  <sc-if value="{{ sidebarOpen }}" hint-placeholder-val="{{ true }}">
+  <aside style="display:flex;flex-direction:column;background:#1a1a1c;border-right:1px solid rgba(255,255,255,0.08);min-height:0">
+    <div style="height:52px;display:flex;align-items:center;gap:22px;padding:0 10px 0 16px;flex-shrink:0">
+      <div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+      <div style="display:flex;align-items:flex-end;gap:2px;font-family:'Geist Mono',ui-monospace,monospace;font-size:15px;font-weight:500;letter-spacing:-0.01em"><span>coperceive</span><span style="width:8px;height:2px;background:#D9482B;margin-bottom:4px"></span></div>
+      <span title="Hide sidebar (⌘\)" onClick="{{ toggleSidebar }}" style="margin-left:auto;width:28px;height:24px;display:grid;place-items:center;border-radius:5px;color:#8e8e93;cursor:pointer" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7"><span style="width:16px;height:13px;border:1.5px solid currentColor;border-radius:3px;display:flex;padding:1.5px"><span style="width:4px;height:100%;background:currentColor;border-radius:1px"></span></span></span>
+    </div>
+    <div style="padding:8px 10px 0;display:flex;flex-direction:column;gap:1px">
+      <div style="padding:6px 8px 4px;font-size:11px;font-weight:500;color:#6e6e73">Local</div>
+      <sc-for list="{{ localNav }}" as="n" hint-placeholder-count="3">
+        <div onClick="{{ n.go }}" style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-radius:6px;cursor:default;background:{{ n.bg }};color:{{ n.color }};font-weight:{{ n.weight }}" style-hover="background:rgba(255,255,255,0.05)">{{ n.label }}<span style="font-size:11px;font-weight:400;color:{{ n.metaColor }}">{{ n.meta }}</span></div>
+      </sc-for>
+    </div>
+    <div style="padding:14px 10px 0;display:flex;flex-direction:column;gap:1px">
+      <div style="padding:6px 8px 4px;font-size:11px;font-weight:500;color:#6e6e73">HPC workspace</div>
+      <sc-for list="{{ hpcNav }}" as="n" hint-placeholder-count="3">
+        <div onClick="{{ n.go }}" style="display:flex;justify-content:space-between;align-items:center;padding:5px 8px;border-radius:6px;cursor:default;background:{{ n.bg }};color:{{ n.color }};font-weight:{{ n.weight }}" style-hover="background:rgba(255,255,255,0.05)">{{ n.label }}<span style="font-size:11px;font-weight:400;color:{{ n.metaColor }}">{{ n.meta }}</span></div>
+      </sc-for>
+    </div>
+    <div style="padding:14px 10px 0;display:flex;flex-direction:column;gap:1px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px 4px"><span style="font-size:11px;font-weight:500;color:#6e6e73">Servers</span><span title="Add server" style="width:18px;height:18px;display:grid;place-items:center;border-radius:4px;color:#a1a1a6;font-size:15px;cursor:pointer" style-hover="background:rgba(255,255,255,0.08)">+</span></div>
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px"><span style="width:7px;height:7px;border-radius:50%;background:#3fb950"></span><span style="font-weight:500">Example HPC</span></div>
+      <div style="padding-left:15px;display:flex;flex-direction:column;gap:1px">
+        <div style="display:flex;align-items:center;gap:6px;padding:4px 8px;font-weight:500;color:#e5e5ea"><span style="font-size:8px;color:#8e8e93">▼</span>V2XSET</div>
+        <a href="HPC%20Dataset%20View%20v2.dc.html" style="display:flex;align-items:center;gap:8px;padding:4px 8px;margin-left:14px;border-radius:6px;color:#c7c7cc;font-size:12px;text-decoration:none" style-hover="background:rgba(255,255,255,0.05)">train<span style="flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,0.1);display:flex"><span style="width:9%;background:#3fb950;border-radius:2px"></span></span><span style="font-size:11px;color:#6e6e73">3/33</span></a>
+        <div onClick="{{ goServers }}" style="padding:4px 8px;margin-left:14px;border-radius:6px;color:#a1a1a6;font-size:12px" style-hover="background:rgba(255,255,255,0.05)">Browse data…</div>
+      </div>
+    </div>
+    <div style="margin-top:auto;padding:12px 18px;border-top:1px solid rgba(255,255,255,0.08);display:flex;justify-content:space-between;color:#a1a1a6"><span style="cursor:pointer" style-hover="color:#f5f5f7">Settings</span><span style="font-size:11px;color:#6e6e73">⌘,</span></div>
+  </aside>
+  </sc-if>
+
+  <div style="display:flex;flex-direction:column;min-width:0;min-height:0">
+    <header style="height:52px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 20px;border-bottom:1px solid rgba(255,255,255,0.08)">
+      <div style="display:flex;align-items:center;gap:16px;min-width:0">
+        <sc-if value="{{ sidebarClosed }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:14px;margin-left:-4px">
+            <div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+            <div style="display:flex;align-items:flex-end;gap:2px;margin-left:8px;font-family:'Geist Mono',monospace;font-size:15px;font-weight:500"><span>coperceive</span><span style="width:8px;height:2px;background:#D9482B;margin-bottom:4px"></span></div>
+            <span title="Show sidebar (⌘\)" onClick="{{ toggleSidebar }}" style="width:28px;height:24px;display:grid;place-items:center;border-radius:5px;color:#8e8e93;cursor:pointer" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7"><span style="width:16px;height:13px;border:1.5px solid currentColor;border-radius:3px;display:flex;padding:1.5px"><span style="width:4px;height:100%;background:currentColor;border-radius:1px"></span></span></span>
+          </div>
+        </sc-if>
+        <div style="display:flex;align-items:baseline;gap:12px;min-width:0">
+          <h1 style="margin:0;font-size:16px;font-weight:600;white-space:nowrap">{{ title }}</h1>
+          <span style="font-size:12px;color:#a1a1a6;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-variant-numeric:tabular-nums">{{ subtitle }}</span>
+        </div>
+      </div>
+      <div style="display:flex;gap:8px;flex-shrink:0">
+        <sc-if value="{{ isLibrary }}" hint-placeholder-val="{{ true }}">
+          <span onClick="{{ goGetData }}" style="padding:5px 12px;border-radius:6px;border:1px solid rgba(56,139,253,0.5);background:rgba(31,111,235,0.14);color:#a5c8ff;cursor:pointer;white-space:nowrap" style-hover="filter:brightness(1.15)">+ Add scenes</span>
+        </sc-if>
+        <sc-if value="{{ isGetData }}" hint-placeholder-val="{{ false }}">
+          <span onClick="{{ goOpen }}" style="padding:5px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer;white-space:nowrap" style-hover="background:rgba(255,255,255,0.06)">Import local folder…</span>
+        </sc-if>
+        <sc-if value="{{ isServers }}" hint-placeholder-val="{{ false }}">
+          <span style="padding:5px 12px;border-radius:6px;border:1px solid rgba(56,139,253,0.5);background:rgba(31,111,235,0.14);color:#a5c8ff;cursor:pointer;white-space:nowrap" style-hover="filter:brightness(1.15)">+ Add server</span>
+        </sc-if>
+        <sc-if value="{{ isRuns }}" hint-placeholder-val="{{ false }}">
+          <span style="display:flex;align-items:center;gap:8px;font-size:12px;color:#a1a1a6;white-space:nowrap"><span style="width:6px;height:6px;border-radius:50%;background:#79c0ff"></span>Polling every 10 s</span>
+          <span onClick="{{ goEval }}" style="padding:5px 12px;border-radius:6px;border:1px solid rgba(56,139,253,0.5);background:rgba(31,111,235,0.14);color:#a5c8ff;cursor:pointer;white-space:nowrap" style-hover="filter:brightness(1.15)">New evaluation</span>
+        </sc-if>
+      </div>
+    </header>
+
+    <div style="flex:1;min-height:0;display:grid;grid-template-columns:{{ bodyCols }};grid-template-rows:{{ bodyRows }};overflow:auto">
+
+      <!-- LIBRARY -->
+      <sc-if value="{{ isLibrary }}" hint-placeholder-val="{{ true }}">
+        <main style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto">
+          <div style="flex-shrink:0;padding:12px 24px;display:flex;align-items:center;gap:16px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,0.08);font-size:12px">
+            <span style="color:#6e6e73">Folder</span>
+            <span style="font-family:'Geist Mono',monospace;color:#c7c7cc">/Users/alice/coperceive-data</span>
+            <span style="color:#8e8e93;cursor:pointer" style-hover="color:#f5f5f7">Show in Finder</span>
+            <span style="color:#8e8e93;cursor:pointer" style-hover="color:#f5f5f7">Change…</span>
+            <div style="margin-left:auto;display:flex;align-items:center;gap:10px;color:#a1a1a6;font-variant-numeric:tabular-nums">
+              <div title="Macintosh HD" style="width:160px;height:6px;border-radius:2px;background:rgba(255,255,255,0.06);display:flex;overflow:hidden;gap:1px"><span style="width:30%;background:#388bfd"></span><span style="width:0"></span></div>
+              <span><span style="color:#f5f5f7">6.9 GB</span> library · 16.0 GB free</span>
+            </div>
+          </div>
+          <div style="flex-shrink:0;padding:10px 24px;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <input type="search" placeholder="Filter scene or dataset   /" style="width:220px;padding:5px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.25);color:#f5f5f7;font:inherit;font-size:12.5px;outline:none">
+            <span style="margin-left:auto;font-size:12px;color:#6e6e73">1 scene</span>
+          </div>
+          <div style="overflow-x:auto;flex-shrink:0">
+            <div style="min-width:720px">
+              <div style="display:grid;grid-template-columns:minmax(130px,1.1fr) minmax(150px,1.3fr) 110px 64px 150px 64px 80px 60px;gap:12px;align-items:center;padding:0 24px;height:30px;background:#1a1a1c;border-bottom:1px solid rgba(255,255,255,0.08);font-size:11px;color:#6e6e73">
+                <span>Scene</span><span>Dataset · town</span><span>Duration</span><span>Agents</span><span>Modalities</span><span style="text-align:right">Size</span><span>Check</span><span></span>
+              </div>
+              <sc-for list="{{ libRows }}" as="s" hint-placeholder-count="1">
+                <div onClick="{{ s.select }}" style="display:grid;grid-template-columns:minmax(130px,1.1fr) minmax(150px,1.3fr) 110px 64px 150px 64px 80px 60px;gap:12px;align-items:center;padding:0 24px;height:36px;border-bottom:1px solid rgba(255,255,255,0.04);background:{{ s.bg }};box-shadow:{{ s.edge }}">
+                  <span style="font-family:'Geist Mono',monospace;font-size:12.5px;color:#f5f5f7">{{ s.id }}</span>
+                  <span style="color:#c7c7cc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ s.dataset }} <span style="color:#6e6e73">· {{ s.town }}</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;color:#c7c7cc;font-variant-numeric:tabular-nums"><span style="width:38px;text-align:right">{{ s.durLabel }}</span><span style="flex:1;height:4px;border-radius:2px;background:rgba(255,255,255,0.06)"><span style="display:block;width:50%;height:100%;border-radius:2px;background:#8e8e93"></span></span></span>
+                  <span style="display:flex;align-items:center;gap:8px;color:#c7c7cc">{{ s.agents }}<span style="display:flex;gap:2px"><span style="width:6px;height:10px;border-radius:1px;background:#8e8e93"></span><span style="width:6px;height:10px;border-radius:1px;background:#8e8e93"></span></span></span>
+                  <span style="display:flex;gap:4px"><sc-for list="{{ s.mods }}" as="m" hint-placeholder-count="3"><span style="padding:1px 6px;border-radius:4px;font-size:11px;border:1px solid {{ m.border }};color:{{ m.color }}">{{ m.label }}</span></sc-for></span>
+                  <span style="text-align:right;color:#c7c7cc;font-variant-numeric:tabular-nums">{{ s.sizeLabel }}</span>
+                  <span style="display:flex;align-items:center;gap:6px;color:#7ee787;font-size:12.5px"><span style="width:7px;height:7px;border-radius:50%;background:#3fb950"></span>Valid</span>
+                  <span style="display:flex;justify-content:flex-end"><span style="padding:3px 10px;border-radius:5px;border:1px solid rgba(63,185,80,0.55);color:#7ee787;font-size:12px;font-weight:500;cursor:pointer" style-hover="background:rgba(63,185,80,0.12)">Open</span></span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <section style="flex-shrink:0;padding:28px 24px;display:flex;flex-direction:column;gap:12px">
+            <span style="font-size:11px;font-weight:500;color:#6e6e73">Add more scenes</span>
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+              <div onClick="{{ goGetData }}" style="display:flex;flex-direction:column;gap:4px;padding:12px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);cursor:pointer" style-hover="background:rgba(255,255,255,0.03);border-color:rgba(255,255,255,0.16)">
+                <span style="font-weight:500">Download from catalog →</span>
+                <span style="font-size:12px;color:#8e8e93">Griffin is ready · presets from 228.6 MB</span>
+              </div>
+              <div onClick="{{ goOpen }}" style="display:flex;flex-direction:column;gap:4px;padding:12px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);cursor:pointer" style-hover="background:rgba(255,255,255,0.03);border-color:rgba(255,255,255,0.16)">
+                <span style="font-weight:500">Import a local folder →</span>
+                <span style="font-size:12px;color:#8e8e93">Any folder holding schema 1 scenes</span>
+              </div>
+              <a href="HPC%20Dataset%20View%20v2.dc.html" style="display:flex;flex-direction:column;gap:4px;padding:12px 14px;border-radius:8px;border:1px solid rgba(255,255,255,0.08);color:#f5f5f7;text-decoration:none" style-hover="background:rgba(255,255,255,0.03);border-color:rgba(255,255,255,0.16)">
+                <span style="font-weight:500">Prepare on HPC →</span>
+                <span style="font-size:12px;color:#8e8e93">V2XSet train · 3 of 33 ready on Example HPC</span>
+              </a>
+            </div>
+          </section>
+        </main>
+        <aside style="background:#18181a;display:flex;flex-direction:column;min-height:0;overflow:auto;border-left:{{ panelBorderL }};border-top:{{ panelBorderT }}">
+          <div style="padding:18px 20px 16px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Selected scene</span>
+            <span style="font-family:'Geist Mono',monospace;font-size:14px">Town03-000</span>
+            <span style="font-size:12px;color:#a1a1a6">Griffin · Cooperative Scene · CARLA Town03</span>
+            <span style="margin-top:6px;text-align:center;padding:7px 0;border-radius:6px;background:#238636;color:#fff;font-weight:500;cursor:pointer" style-hover="background:#2ea043">Open in viewer</span>
+          </div>
+          <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:14px 12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Duration</span><span style="font-size:15px">15.0 s</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Frames / agent</span><span style="font-size:15px">150 <span style="font-size:11px;color:#6e6e73">@ 10 Hz</span></span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Camera images</span><span style="font-size:15px">Full</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">HD map</span><span style="font-size:15px">Yes</span></div>
+          </div>
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">2 agents</span>
+            <div style="display:grid;grid-template-columns:64px 1fr auto;gap:8px;font-size:12px;align-items:center"><span>Vehicle</span><span style="display:flex;gap:3px"><span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span><span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span><span style="width:10px;height:10px;border-radius:50%;background:#8e8e93;margin-left:3px"></span></span><span style="font-size:11px;color:#6e6e73">2 cam · 1 LiDAR</span></div>
+            <div style="display:grid;grid-template-columns:64px 1fr auto;gap:8px;font-size:12px;align-items:center"><span>Drone</span><span style="display:flex;gap:3px"><span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span></span><span style="font-size:11px;color:#6e6e73">1 cam</span></div>
+          </div>
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">6.9 GB on disk</span>
+            <div style="display:flex;height:6px;border-radius:2px;overflow:hidden;gap:1px"><span style="width:90%;background:#388bfd"></span><span style="width:8.5%;background:#79c0ff"></span><span style="width:1.5%;background:#8e8e93"></span></div>
+            <div style="display:grid;grid-template-columns:auto 1fr auto;gap:4px 8px;font-size:12px;align-items:center;font-variant-numeric:tabular-nums">
+              <span style="width:8px;height:8px;border-radius:2px;background:#388bfd"></span><span style="color:#c7c7cc">Camera images</span><span style="color:#a1a1a6;text-align:right">6.2 GB</span>
+              <span style="width:8px;height:8px;border-radius:2px;background:#79c0ff"></span><span style="color:#c7c7cc">LiDAR</span><span style="color:#a1a1a6;text-align:right">0.6 GB</span>
+              <span style="width:8px;height:8px;border-radius:2px;background:#8e8e93"></span><span style="color:#c7c7cc">Labels &amp; map</span><span style="color:#a1a1a6;text-align:right">0.1 GB</span>
+            </div>
+          </div>
+          <div style="padding:16px 20px;display:flex;flex-wrap:wrap;gap:6px">
+            <span style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:12px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Show in Finder</span>
+            <span style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:12px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Re-check</span>
+            <span style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:12px;color:#ff7b72;cursor:pointer" style-hover="background:rgba(248,81,73,0.1)">Remove…</span>
+          </div>
+        </aside>
+      </sc-if>
+
+      <!-- GET DATA -->
+      <sc-if value="{{ isGetData }}" hint-placeholder-val="{{ false }}">
+        <main style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto">
+          <div style="overflow-x:auto;flex-shrink:0">
+            <div style="min-width:720px">
+              <div style="display:grid;grid-template-columns:minmax(200px,1.6fr) minmax(120px,1fr) 120px 110px minmax(150px,1fr);gap:16px;align-items:center;padding:0 24px;height:30px;background:#1a1a1c;border-bottom:1px solid rgba(255,255,255,0.08);font-size:11px;color:#6e6e73">
+                <span>Dataset</span><span>Agents</span><span>Modalities</span><span>Licence</span><span>Availability</span>
+              </div>
+              <sc-for list="{{ dsRows }}" as="d" hint-placeholder-count="4">
+                <div onClick="{{ d.select }}" style="display:grid;grid-template-columns:minmax(200px,1.6fr) minmax(120px,1fr) 120px 110px minmax(150px,1fr);gap:16px;align-items:center;padding:10px 24px;border-bottom:1px solid rgba(255,255,255,0.05);cursor:default;background:{{ d.bg }};box-shadow:{{ d.edge }};opacity:{{ d.opacity }}" style-hover="background:rgba(255,255,255,0.03)">
+                  <span style="display:flex;flex-direction:column;gap:2px;min-width:0"><span style="font-weight:600">{{ d.name }}</span><span style="font-size:12px;color:#8e8e93;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ d.desc }}</span></span>
+                  <span style="color:#c7c7cc">{{ d.agents }}</span>
+                  <span style="display:flex;gap:4px"><span style="padding:1px 6px;border-radius:4px;font-size:11px;border:1px solid rgba(255,255,255,0.18);color:#c7c7cc">Cam</span><span style="padding:1px 6px;border-radius:4px;font-size:11px;border:1px solid rgba(255,255,255,0.18);color:#c7c7cc">LiDAR</span></span>
+                  <span style="color:{{ d.licColor }}">{{ d.licence }}</span>
+                  <span style="display:flex;flex-direction:column;gap:2px"><span style="display:flex;align-items:center;gap:6px;color:{{ d.availColor }}"><span style="width:7px;height:7px;border-radius:50%;background:{{ d.availDot }}"></span>{{ d.availLabel }}</span><span style="font-size:11.5px;color:#6e6e73">{{ d.hint }}</span></span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+          <p style="flex-shrink:0;margin:0;padding:16px 24px;font-size:12px;line-height:1.5;color:#6e6e73;max-width:720px;text-wrap:pretty">Downloads go to /Users/alice/coperceive-data. Datasets without a recorded licence can only be imported from a copy you already have — the app never downloads them.</p>
+        </main>
+        <aside style="background:#18181a;display:flex;flex-direction:column;min-height:0;overflow:auto;border-left:{{ panelBorderL }};border-top:{{ panelBorderT }}">
+          <div style="padding:18px 20px 16px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:18px;font-weight:600">{{ ds.name }}</span>
+            <span style="font-size:12px;line-height:1.5;color:#a1a1a6">{{ ds.desc }}</span>
+            <div style="display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12px">
+              <span style="color:#6e6e73">Agents</span><span style="color:#c7c7cc">{{ ds.agents }}</span>
+              <span style="color:#6e6e73">Licence</span><span style="color:{{ ds.licColor }}">{{ ds.licence }}</span>
+              <span style="color:#6e6e73">Links</span><span style="display:flex;gap:10px"><a href="#">Paper ↗</a><a href="#">Source ↗</a></span>
+            </div>
+          </div>
+          <sc-if value="{{ ds.isReady }}" hint-placeholder-val="{{ true }}">
+            <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:#6e6e73"><span>Presets</span><span>16.0 GB free</span></div>
+              <sc-for list="{{ presets }}" as="p" hint-placeholder-count="3">
+                <div style="display:flex;flex-direction:column;gap:6px;padding-bottom:12px;border-bottom:1px solid rgba(255,255,255,0.06)">
+                  <div style="display:flex;justify-content:space-between;gap:8px;align-items:baseline"><span style="font-weight:500">{{ p.name }}</span><span style="font-family:'Geist Mono',monospace;font-size:12px;color:#c7c7cc">{{ p.label }}</span></div>
+                  <span style="font-size:12px;line-height:1.4;color:#8e8e93">{{ p.desc }}</span>
+                  <div style="position:relative;height:4px;border-radius:2px;background:rgba(255,255,255,0.06)"><span style="position:absolute;left:0;top:0;bottom:0;border-radius:2px;width:{{ p.w }};background:{{ p.barColor }}"></span><span title="Free space" style="position:absolute;top:-3px;bottom:-3px;width:1px;background:#a1a1a6;left:{{ freeMark }}"></span></div>
+                  <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+                    <span style="font-size:11.5px;color:{{ p.noteColor }}">{{ p.note }}</span>
+                    <span style="padding:3px 10px;border-radius:5px;font-size:12px;white-space:nowrap;border:1px solid {{ p.btnBorder }};color:{{ p.btnColor }};cursor:{{ p.cursor }}">{{ p.btn }}</span>
+                  </div>
+                </div>
+              </sc-for>
+              <span style="font-size:11px;color:#6e6e73">Bars on a log scale · tick marks free disk space</span>
+            </div>
+          </sc-if>
+          <sc-if value="{{ ds.isLocal }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px">
+              <span style="font-size:12px;line-height:1.5;color:#a1a1a6">The licence isn't recorded, so nothing is downloaded. Choose a copy you already have and it is imported into your library.</span>
+              <span style="text-align:center;padding:7px 0;border-radius:6px;border:1px solid rgba(56,139,253,0.5);background:rgba(31,111,235,0.14);color:#a5c8ff;cursor:pointer">Import a local copy…</span>
+              <div style="display:flex;flex-direction:column;gap:4px;padding:10px 12px;border-radius:8px;background:rgba(0,0,0,0.3)">
+                <span style="font-size:11px;color:#6e6e73">Also found on Example HPC</span>
+                <span style="font-family:'Geist Mono',monospace;font-size:11.5px;color:#c7c7cc;word-break:break-all">{{ ds.hpcPath }}</span>
+                <span onClick="{{ goServers }}" style="font-size:12px;color:#79c0ff;cursor:pointer">Browse on HPC →</span>
+              </div>
+            </div>
+          </sc-if>
+          <sc-if value="{{ ds.isLater }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px">
+              <span style="font-size:12px;line-height:1.5;color:#a1a1a6">Adapter in preparation. The data licence was not stated in the repository README checked on 2026-10-24.</span>
+              <span style="font-size:12px;color:#8e8e93">A raw copy exists on Example HPC: <span style="font-family:'Geist Mono',monospace;color:#c7c7cc">{{ ds.hpcPath }}</span></span>
+            </div>
+          </sc-if>
+        </aside>
+      </sc-if>
+
+      <!-- OPEN FOLDER -->
+      <sc-if value="{{ isOpen }}" hint-placeholder-val="{{ false }}">
+        <main style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto">
+          <section style="flex-shrink:0;padding:20px 24px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Folder path</span>
+            <div style="display:flex;gap:8px;max-width:760px">
+              <input value="{{ folderPath }}" onInput="{{ onPath }}" style="flex:1;min-width:0;padding:7px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.25);color:#f5f5f7;font-family:'Geist Mono',monospace;font-size:12.5px;outline:none">
+              <span style="padding:6px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer;white-space:nowrap" style-hover="background:rgba(255,255,255,0.06)">Choose…</span>
+            </div>
+            <span style="font-size:11.5px;color:#6e6e73">Or drop a folder anywhere on this window.</span>
+          </section>
+          <div style="flex-shrink:0;padding:14px 24px 8px;font-size:11px;font-weight:500;color:#6e6e73">Recent</div>
+          <div style="overflow-x:auto;flex-shrink:0">
+            <div style="min-width:620px">
+              <div style="display:grid;grid-template-columns:minmax(140px,1fr) 80px 60px minmax(200px,2fr) 110px;gap:14px;padding:0 24px;height:28px;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);font-size:11px;color:#6e6e73"><span>Name</span><span>Kind</span><span style="text-align:right">Scenes</span><span>Path</span><span style="text-align:right">Opened</span></div>
+              <sc-for list="{{ recents }}" as="r" hint-placeholder-count="2">
+                <div onClick="{{ r.select }}" style="display:grid;grid-template-columns:minmax(140px,1fr) 80px 60px minmax(200px,2fr) 110px;gap:14px;padding:0 24px;height:34px;align-items:center;border-bottom:1px solid rgba(255,255,255,0.04);background:{{ r.bg }};box-shadow:{{ r.edge }}" style-hover="background:rgba(255,255,255,0.03)">
+                  <span style="font-weight:500">{{ r.name }}</span>
+                  <span style="color:#a1a1a6">{{ r.kind }}</span>
+                  <span style="text-align:right;color:#c7c7cc;font-variant-numeric:tabular-nums">{{ r.scenes }}</span>
+                  <span style="font-family:'Geist Mono',monospace;font-size:11.5px;color:#8e8e93;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.path }}</span>
+                  <span style="text-align:right;color:#a1a1a6;font-size:12px">{{ r.opened }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </main>
+        <aside style="background:#18181a;display:flex;flex-direction:column;min-height:0;overflow:auto;border-left:{{ panelBorderL }};border-top:{{ panelBorderT }}">
+          <div style="padding:18px 20px 14px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Folder check</span>
+            <span style="display:flex;align-items:center;gap:8px;font-weight:500;color:{{ check.color }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ check.dot }}"></span>{{ check.headline }}</span>
+          </div>
+          <div style="padding:14px 20px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <sc-for list="{{ check.items }}" as="c" hint-placeholder-count="4">
+              <div style="display:grid;grid-template-columns:14px 82px 1fr;gap:8px;font-size:12px;align-items:baseline"><span style="color:{{ c.color }}">{{ c.mark }}</span><span style="color:#6e6e73">{{ c.k }}</span><span style="color:#c7c7cc">{{ c.v }}</span></div>
+            </sc-for>
+          </div>
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:8px">
+            <span style="text-align:center;padding:7px 0;border-radius:6px;font-weight:500;cursor:pointer;background:{{ check.openBg }};color:{{ check.openColor }}">Open in viewer</span>
+            <span style="text-align:center;padding:6px 0;border-radius:6px;border:1px solid rgba(255,255,255,0.14);color:{{ check.importColor }}">{{ check.importLabel }}</span>
+            <span title="Open without restoring the last viewer session" style="text-align:center;font-size:12px;color:#8e8e93;cursor:pointer" style-hover="color:#f5f5f7">Open without restoring last session</span>
+          </div>
+        </aside>
+      </sc-if>
+
+      <!-- SERVERS -->
+      <sc-if value="{{ isServers }}" hint-placeholder-val="{{ false }}">
+        <main style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto">
+          <section style="flex-shrink:0;padding:14px 24px;display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px 24px;align-items:start;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;flex-direction:column;gap:3px"><span style="font-size:11px;color:#6e6e73">Server</span><span style="display:flex;align-items:center;gap:8px;font-weight:600"><span style="width:7px;height:7px;border-radius:50%;background:#3fb950"></span>Example HPC</span></div>
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:0"><span style="font-size:11px;color:#6e6e73">Host · scheduler</span><span style="font-size:12px;color:#c7c7cc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"><span style="font-family:'Geist Mono',monospace">hpc.example.org</span> · Slurm · ps</span></div>
+            <div style="display:flex;flex-direction:column;gap:3px"><span style="font-size:11px;color:#6e6e73">Last check</span><span style="font-size:12px;color:#c7c7cc">2 min ago · 25 partitions</span></div>
+            <div style="display:flex;gap:6px;justify-content:flex-end;align-self:center">
+              <span style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:12px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Test</span>
+              <span style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:12px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Edit</span>
+              <span style="padding:4px 8px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:12px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">⋯</span>
+            </div>
+          </section>
+          <div style="flex-shrink:0;padding:10px 24px;display:flex;align-items:center;gap:6px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,0.08);font-family:'Geist Mono',monospace;font-size:12.5px">
+            <span style="color:#6e6e73;cursor:pointer" style-hover="color:#f5f5f7">/datasets</span><span style="color:#48484a">/</span>
+            <span style="color:#6e6e73;cursor:pointer" style-hover="color:#f5f5f7">group</span><span style="color:#48484a">/</span>
+            <span style="color:#6e6e73;cursor:pointer" style-hover="color:#f5f5f7">ps</span><span style="color:#48484a">/</span>
+            <span style="color:#f5f5f7">cv</span>
+            <span style="margin-left:auto;font-family:'Geist',sans-serif;font-size:12px;color:#6e6e73">11 folders · read in 277 ms · read-only</span>
+          </div>
+          <div style="overflow-x:auto;flex-shrink:0">
+            <div style="min-width:560px">
+              <div style="display:grid;grid-template-columns:minmax(180px,1.4fr) 64px 52px minmax(140px,1fr) 20px;gap:14px;padding:0 24px;height:28px;align-items:center;background:#1a1a1c;border-bottom:1px solid rgba(255,255,255,0.08);font-size:11px;color:#6e6e73"><span>Folder</span><span style="text-align:right">Folders</span><span style="text-align:right">Files</span><span>Recognised as</span><span></span></div>
+              <sc-for list="{{ folders }}" as="f" hint-placeholder-count="10">
+                <div onClick="{{ f.select }}" style="display:grid;grid-template-columns:minmax(180px,1.4fr) 64px 52px minmax(140px,1fr) 20px;gap:14px;padding:0 24px;height:32px;align-items:center;border-bottom:1px solid rgba(255,255,255,0.04);background:{{ f.bg }};box-shadow:{{ f.edge }}" style-hover="background:rgba(255,255,255,0.03)">
+                  <span style="font-family:'Geist Mono',monospace;font-size:12.5px;color:#f5f5f7">{{ f.name }}</span>
+                  <span style="text-align:right;color:#a1a1a6;font-variant-numeric:tabular-nums">{{ f.dirs }}</span>
+                  <span style="text-align:right;color:#a1a1a6;font-variant-numeric:tabular-nums">{{ f.files }}</span>
+                  <span style="display:flex;align-items:center;gap:6px;font-size:12px;color:{{ f.recColor }}"><span style="width:6px;height:6px;border-radius:50%;background:{{ f.recDot }}"></span>{{ f.rec }}</span>
+                  <span style="color:#6e6e73">›</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </main>
+        <aside style="background:#18181a;display:flex;flex-direction:column;min-height:0;overflow:auto;border-left:{{ panelBorderL }};border-top:{{ panelBorderT }}">
+          <div style="padding:18px 20px 16px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Selected folder</span>
+            <span style="font-family:'Geist Mono',monospace;font-size:14px">{{ folder.name }}</span>
+            <span style="font-family:'Geist Mono',monospace;font-size:11px;color:#8e8e93;word-break:break-all">/datasets/group/ps/cv/{{ folder.name }}</span>
+          </div>
+          <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Folders</span><span style="font-size:15px">{{ folder.dirs }}</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Files</span><span style="font-size:15px">{{ folder.files }}</span></div>
+            <div style="grid-column:1 / -1;display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Recognised as</span><span style="color:{{ folder.recColor }}">{{ folder.rec }}</span><span style="font-size:12px;line-height:1.45;color:#8e8e93">{{ folder.note }}</span></div>
+          </div>
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:8px">
+            <sc-if value="{{ folder.isPrepared }}" hint-placeholder-val="{{ false }}">
+              <a href="HPC%20Dataset%20View%20v2.dc.html" style="text-align:center;padding:7px 0;border-radius:6px;border:1px solid rgba(56,139,253,0.5);background:rgba(31,111,235,0.14);color:#a5c8ff;text-decoration:none">Open dataset</a>
+            </sc-if>
+            <sc-if value="{{ folder.isDataset }}" hint-placeholder-val="{{ false }}">
+              <span style="text-align:center;padding:7px 0;border-radius:6px;border:1px solid rgba(56,139,253,0.5);background:rgba(31,111,235,0.14);color:#a5c8ff;cursor:pointer">Add as dataset…</span>
+            </sc-if>
+            <span style="text-align:center;padding:6px 0;border-radius:6px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Open folder</span>
+          </div>
+        </aside>
+      </sc-if>
+
+      <!-- NEW EVALUATION -->
+      <sc-if value="{{ isEval }}" hint-placeholder-val="{{ false }}">
+        <main style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto;padding:8px 24px 24px">
+          <div style="flex-shrink:0;max-width:760px;width:100%;display:flex;flex-direction:column">
+            <sc-for list="{{ steps }}" as="st" hint-placeholder-count="6">
+              <div style="display:grid;grid-template-columns:24px minmax(0,1fr);gap:14px;padding:14px 0;border-bottom:1px solid rgba(255,255,255,0.06);opacity:{{ st.opacity }}">
+                <span style="width:22px;height:22px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-variant-numeric:tabular-nums;border:1px solid {{ st.ring }};background:{{ st.fill }};color:{{ st.numColor }}">{{ st.mark }}</span>
+                <div style="display:flex;flex-direction:column;gap:5px;min-width:0">
+                  <div style="display:flex;justify-content:space-between;gap:12px;align-items:baseline"><span style="font-weight:500">{{ st.title }}</span><span style="font-family:'Geist Mono',monospace;font-size:12px;color:{{ st.valueColor }};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0">{{ st.value }}</span></div>
+                  <span style="font-size:12px;line-height:1.45;color:#8e8e93;text-wrap:pretty">{{ st.desc }}</span>
+                  <sc-if value="{{ st.isPipelineInput }}" hint-placeholder-val="{{ false }}">
+                    <div style="display:flex;gap:8px;margin-top:4px">
+                      <input value="/data/code/pipelines/my_pipeline.py" style="flex:1;min-width:0;padding:6px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.25);color:#f5f5f7;font-family:'Geist Mono',monospace;font-size:12px;outline:none">
+                      <span onClick="{{ loadPipeline }}" style="padding:5px 12px;border-radius:6px;border:1px solid rgba(56,139,253,0.5);background:rgba(31,111,235,0.14);color:#a5c8ff;cursor:pointer;white-space:nowrap" style-hover="filter:brightness(1.15)">Load pipeline</span>
+                    </div>
+                  </sc-if>
+                </div>
+              </div>
+            </sc-for>
+          </div>
+        </main>
+        <aside style="background:#18181a;display:flex;flex-direction:column;min-height:0;overflow:auto;border-left:{{ panelBorderL }};border-top:{{ panelBorderT }}">
+          <div style="padding:18px 20px 14px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Run plan</span>
+            <span style="font-weight:500">{{ planHeadline }}</span>
+            <div style="height:4px;border-radius:2px;background:rgba(255,255,255,0.06)"><div style="height:100%;border-radius:2px;background:#388bfd;transition:width .4s;width:{{ planPct }}"></div></div>
+          </div>
+          <div style="padding:14px 20px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 12px;font-size:12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <sc-for list="{{ steps }}" as="st" hint-placeholder-count="6">
+              <span style="color:#6e6e73">{{ st.title }}</span><span style="color:{{ st.valueColor }};overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ st.short }}</span>
+            </sc-for>
+          </div>
+          <div style="padding:14px 20px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Job script preview</span>
+            <pre style="margin:0;padding:10px 12px;border-radius:6px;background:rgba(0,0,0,0.35);font-family:'Geist Mono',monospace;font-size:11px;line-height:1.6;color:{{ scriptColor }};white-space:pre-wrap;word-break:break-all">{{ script }}</pre>
+          </div>
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:8px">
+            <span style="text-align:center;padding:7px 0;border-radius:6px;font-weight:500;background:{{ saveBg }};color:{{ saveColor }};cursor:{{ saveCursor }}">Save plan to cluster</span>
+            <span style="font-size:11.5px;line-height:1.45;color:#6e6e73;text-align:center">Saved next to your pipeline. Nothing is submitted from here.</span>
+          </div>
+        </aside>
+      </sc-if>
+
+      <!-- RUN HISTORY -->
+      <sc-if value="{{ isRuns }}" hint-placeholder-val="{{ false }}">
+        <main style="display:flex;flex-direction:column;min-width:0;min-height:0;overflow:auto">
+          <div style="flex-shrink:0;padding:10px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;gap:2px;padding:2px;border-radius:7px;background:rgba(255,255,255,0.05)">
+              <sc-for list="{{ runFilters }}" as="f" hint-placeholder-count="5">
+                <span onClick="{{ f.pick }}" style="display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:5px;font-size:12px;cursor:pointer;white-space:nowrap;background:{{ f.bg }};color:{{ f.color }}"><span style="width:7px;height:7px;border-radius:50%;background:{{ f.dot }}"></span>{{ f.label }} <span style="color:#6e6e73">{{ f.count }}</span></span>
+              </sc-for>
+            </div>
+            <span style="margin-left:auto;font-size:12px;color:#6e6e73">Example HPC · last 30 days</span>
+          </div>
+          <div style="overflow-x:auto;flex-shrink:0">
+            <div style="min-width:680px">
+              <div style="display:grid;grid-template-columns:70px minmax(180px,1.5fr) 110px minmax(150px,1fr) 100px;gap:14px;padding:0 24px;height:28px;align-items:center;background:#1a1a1c;border-bottom:1px solid rgba(255,255,255,0.08);font-size:11px;color:#6e6e73"><span>Job</span><span>Pipeline · plan</span><span>State</span><span>Time used / limit</span><span style="text-align:right">Started</span></div>
+              <sc-for list="{{ runRows }}" as="r" hint-placeholder-count="5">
+                <div onClick="{{ r.select }}" style="display:grid;grid-template-columns:70px minmax(180px,1.5fr) 110px minmax(150px,1fr) 100px;gap:14px;padding:0 24px;height:42px;align-items:center;border-bottom:1px solid rgba(255,255,255,0.04);background:{{ r.bg }};box-shadow:{{ r.edge }}" style-hover="background:rgba(255,255,255,0.03)">
+                  <span style="font-family:'Geist Mono',monospace;font-size:12.5px;color:#f5f5f7">{{ r.job }}</span>
+                  <span style="display:flex;flex-direction:column;gap:1px;min-width:0"><span style="color:#e5e5ea">{{ r.pipeline }} <span style="color:#6e6e73">· {{ r.split }}</span></span><span style="font-family:'Geist Mono',monospace;font-size:10.5px;color:#6e6e73;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.plan }}</span></span>
+                  <span style="display:flex;align-items:center;gap:7px;font-size:12.5px;color:{{ r.text }}"><span style="width:7px;height:7px;border-radius:50%;background:{{ r.dot }}"></span>{{ r.stateLabel }}</span>
+                  <span style="display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums;font-size:12px;color:#a1a1a6"><span style="flex:1;max-width:120px;height:4px;border-radius:2px;background:rgba(255,255,255,0.06)"><span style="display:block;height:100%;border-radius:2px;width:{{ r.pct }};background:{{ r.dot }}"></span></span><span><span style="color:#e5e5ea">{{ r.elapsed }}</span> / {{ r.limit }}</span></span>
+                  <span style="text-align:right;font-size:12px;color:#a1a1a6;white-space:nowrap">{{ r.started }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+        </main>
+        <aside style="background:#18181a;display:flex;flex-direction:column;min-height:0;overflow:auto;border-left:{{ panelBorderL }};border-top:{{ panelBorderT }}">
+          <div style="padding:18px 20px 14px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Job {{ run.job }}</span>
+            <span style="display:flex;align-items:center;gap:8px;font-weight:500;color:{{ run.text }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ run.dot }}"></span>{{ run.stateLabel }}</span>
+            <span style="font-size:12px;line-height:1.45;color:#a1a1a6">{{ run.note }}</span>
+          </div>
+          <div style="padding:14px 20px;display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 12px;font-size:12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="color:#6e6e73">Pipeline</span><span style="color:#c7c7cc">{{ run.pipeline }}</span>
+            <span style="color:#6e6e73">Test split</span><span style="color:#c7c7cc">{{ run.split }}</span>
+            <span style="color:#6e6e73">Node</span><span style="color:#c7c7cc;font-family:'Geist Mono',monospace">{{ run.node }}</span>
+            <span style="color:#6e6e73">Started</span><span style="color:#c7c7cc">{{ run.startedFull }}</span>
+            <span style="color:#6e6e73">Time</span><span style="color:#c7c7cc">{{ run.elapsed }} of {{ run.limit }}</span>
+          </div>
+          <sc-if value="{{ run.hasResults }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:14px 20px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.08)">
+              <span style="font-size:11px;color:#6e6e73">Average precision · {{ run.scenes }} scenes</span>
+              <sc-for list="{{ run.ap }}" as="a" hint-placeholder-count="3">
+                <div style="display:grid;grid-template-columns:52px 1fr 44px;gap:10px;align-items:center;font-size:12px;font-variant-numeric:tabular-nums"><span style="color:#8e8e93">{{ a.k }}</span><span style="height:6px;border-radius:2px;background:rgba(255,255,255,0.06)"><span style="display:block;height:100%;border-radius:2px;background:#8e8e93;width:{{ a.w }}"></span></span><span style="text-align:right;color:#f5f5f7">{{ a.v }}</span></div>
+              </sc-for>
+            </div>
+          </sc-if>
+          <sc-if value="{{ run.hasLog }}" hint-placeholder-val="{{ false }}">
+            <div style="padding:14px 20px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+              <span style="font-size:11px;color:#6e6e73">Log tail</span>
+              <pre style="margin:0;padding:10px 12px;border-radius:6px;background:rgba(0,0,0,0.35);font-family:'Geist Mono',monospace;font-size:11px;line-height:1.6;color:#c7c7cc;white-space:pre-wrap;word-break:break-all">{{ run.log }}</pre>
+            </div>
+          </sc-if>
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:8px">
+            <sc-if value="{{ run.hasResults }}" hint-placeholder-val="{{ false }}">
+              <span style="text-align:center;padding:7px 0;border-radius:6px;background:#238636;color:#fff;font-weight:500;cursor:pointer" style-hover="background:#2ea043">Open predictions</span>
+            </sc-if>
+            <sc-if value="{{ run.isRunning }}" hint-placeholder-val="{{ false }}">
+              <span style="text-align:center;padding:6px 0;border-radius:6px;border:1px solid rgba(248,81,73,0.5);color:#ff7b72;cursor:pointer">Cancel job</span>
+            </sc-if>
+            <span style="text-align:center;padding:6px 0;border-radius:6px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Re-run with same plan</span>
+          </div>
+        </aside>
+      </sc-if>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;startPage&quot;:{&quot;editor&quot;:&quot;enum&quot;,&quot;options&quot;:[&quot;library&quot;,&quot;getdata&quot;,&quot;open&quot;,&quot;servers&quot;,&quot;eval&quot;,&quot;runs&quot;],&quot;default&quot;:&quot;library&quot;,&quot;tsType&quot;:&quot;string&quot;,&quot;label&quot;:&quot;Start page&quot;}}">
+const PAGES = {
+  library: ["Library", "1 scene · 15.0 s · 6.9 GB"],
+  getdata: ["Get Data", "Cooperative-perception benchmarks · 1 ready to download"],
+  open: ["Open Folder", "Any folder holding schema 1 scenes or datasets"],
+  servers: ["Servers", "SSH via ssh-agent and ~/.ssh/config · never asks for a password or key"],
+  eval: ["New evaluation", "Build a run plan on Example HPC · nothing is submitted here"],
+  runs: ["Run history", "Example HPC"],
+};
+const DS = [
+  { key: "griffin", name: "Griffin", desc: "Cooperative vehicle and drone perception in CARLA and AirSim.", agents: "vehicle + drone", licence: "MIT", avail: "ready", hint: "3 presets · from 228.6 MB", hpcPath: "/datasets/group/ps/cv/griffin" },
+  { key: "opv2v", name: "OPV2V", desc: "Vehicle-to-vehicle perception benchmark.", agents: "vehicle + vehicle", licence: "Unknown", avail: "local", hint: "Raw copy found on HPC", hpcPath: "/datasets/group/ps/cv/opv2v" },
+  { key: "v2xset", name: "V2XSet", desc: "Vehicle and infrastructure perception benchmark.", agents: "vehicle + infrastructure", licence: "Unknown", avail: "local", hint: "Prepared on HPC · 3/33 train", hpcPath: "/datasets/group/ps/cv/v2xset" },
+  { key: "v2v4real", name: "V2V4Real", desc: "Real-world vehicle-to-vehicle perception recordings.", agents: "vehicle + vehicle", licence: "Unknown", avail: "later", hint: "Adapter in preparation", hpcPath: "/datasets/group/ps/cv/v2v4real-from-ucla-box" },
+];
+const PRESETS = [
+  { name: "Dev tier", desc: "Metadata and vehicle LiDAR for the 25 m subset.", mb: 228.6, label: "228.6 MB" },
+  { name: "One scene with images", desc: "Town03-000 with camera images.", mb: 151400, label: "151.4 GB" },
+  { name: "Full 25 m subset", desc: "Every file in the 25 m subset, including instance labels.", mb: 155700, label: "155.7 GB" },
+];
+const FREE_MB = 16000;
+const RECENTS = [
+  { name: "Town03-000", kind: "Scene", scenes: 1, path: "/Users/alice/coperceive-data/Town03-000", opened: "Today 14:02" },
+  { name: "coperceive-data", kind: "Library", scenes: 1, path: "/Users/alice/coperceive-data", opened: "Yesterday" },
+];
+const FOLDERS = [
+  ["air-thu", 1, 0, "—", ""], ["cosdh_checkpoints", 1, 1, "Checkpoints", "ckpt"], ["dair-v2x-c_raw", 2, 1, "DAIR-V2X-C · raw", "ds"],
+  ["griffin", 2, 0, "Griffin", "ds"], ["huggingface", 1, 0, "—", ""], ["opencood", 5, 0, "OpenCOOD root · 5 datasets", "ds"],
+  ["opv2v", 6, 1, "OPV2V", "ds"], ["v2v4real-from-ucla-box", 1, 2, "V2V4Real · raw", "ds"], ["v2xset", 3, 0, "V2XSet · prepared", "prep"], ["v2xset_checkpoints", 1, 2, "Checkpoints", "ckpt"],
+];
+const RUNS = [
+  { job: "652480", pipeline: "my_pipeline", split: "v2xset/test", plan: "plan-1793790112-41fe90a2c7d1", state: "running", el: 192, lim: 600, started: "Today 13:40", startedFull: "4 Nov 2026, 13:40:12", node: "gpu-node12" },
+  { job: "652101", pipeline: "my_pipeline", split: "v2xset/test", plan: "plan-1793612004-0b77e1c09a3f", state: "failed", el: 4, lim: 600, started: "2 Nov 18:22", startedFull: "2 Nov 2026, 18:22:40", node: "gpu-node07",
+    log: "[contract] checking outputs…\n[contract] predictions/*.npz missing key 'pred_box3d'\nerror: contract check failed (1 of 5)" },
+  { job: "651911", pipeline: "my_pipeline", split: "v2xset/test", plan: "plan-1793457677-d8a3e883333a", state: "completed", el: 31, lim: 600, started: "31 Oct 15:51", startedFull: "31 Oct 2026, 15:51:45", node: "gpu-node03", ap: [0.912, 0.887, 0.764] },
+  { job: "651877", pipeline: "where2comm", split: "v2xset/test", plan: "plan-1793449310-77c2ab01e5d9", state: "timeout", el: 600, lim: 600, started: "31 Oct 13:31", startedFull: "31 Oct 2026, 13:31:50", node: "gpu-node03",
+    log: "[eval] scene 9/13 · frame 212/404\nslurmstepd: *** JOB 651877 CANCELLED DUE TO TIME LIMIT ***" },
+  { job: "651650", pipeline: "where2comm", split: "v2xset/test", plan: "plan-1793361270-c93b5f10aa42", state: "completed", el: 412, lim: 900, started: "30 Oct 11:14", startedFull: "30 Oct 2026, 11:14:30", node: "gpu-node05", ap: [0.903, 0.871, 0.698] },
+];
+const RS = {
+  running: { dot: "#388bfd", text: "#79c0ff", label: "Running" },
+  completed: { dot: "#3fb950", text: "#7ee787", label: "Completed" },
+  failed: { dot: "#f85149", text: "#ff7b72", label: "Failed" },
+  timeout: { dot: "#d29922", text: "#e3b341", label: "Timed out" },
+};
+const mmss = s => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+const selStyle = on => ({ bg: on ? "rgba(31,111,235,0.16)" : "transparent", edge: on ? "inset 2px 0 0 #388bfd" : "none" });
+
+class Component extends DCLogic {
+  state = { page: null, sidebarOpen: true, ds: "griffin", recent: 0, path: RECENTS[0].path, folder: "v2xset", loaded: false, run: "651911", runFilter: "all" };
+
+  componentDidMount() {
+    this.onResize = () => { const w = window.innerWidth >= 1100; if (w !== this.state.wide) this.setState({ wide: w }); };
+    window.addEventListener("resize", this.onResize); this.onResize();
+    this.onKey = e => { if ((e.metaKey || e.ctrlKey) && e.key === "\\") { e.preventDefault(); this.setState(s => ({ sidebarOpen: !s.sidebarOpen })); } };
+    window.addEventListener("keydown", this.onKey);
+  }
+  componentWillUnmount() { window.removeEventListener("resize", this.onResize); window.removeEventListener("keydown", this.onKey); }
+
+  renderVals() {
+    const st = this.state;
+    const page = st.page || this.props.startPage || "library";
+    const go = p => () => this.setState({ page: p });
+    const nav = (items) => items.map(([k, label, meta, metaColor]) => {
+      const on = page === k;
+      return { label, meta, go: go(k), bg: on ? "rgba(255,255,255,0.08)" : "transparent", color: on ? "#f5f5f7" : "#c7c7cc", weight: on ? 500 : 400, metaColor: metaColor || "#6e6e73" };
+    });
+    const wide = st.wide !== false;
+
+    const dsRows = DS.map(d => ({
+      ...d, select: () => this.setState({ ds: d.key }), ...selStyle(st.ds === d.key),
+      opacity: d.avail === "later" ? 0.6 : 1,
+      licColor: d.licence === "MIT" ? "#c7c7cc" : "#e3b341",
+      availLabel: d.avail === "ready" ? "Download" : d.avail === "local" ? "Local import" : "Coming later",
+      availDot: d.avail === "ready" ? "#3fb950" : d.avail === "local" ? "#d29922" : "#6e6e73",
+      availColor: d.avail === "ready" ? "#7ee787" : d.avail === "local" ? "#e3b341" : "#8e8e93",
+    }));
+    const dsSel = dsRows.find(d => d.key === st.ds);
+    const maxLog = Math.log10(Math.max(...PRESETS.map(p => p.mb)));
+    const presets = PRESETS.map(p => {
+      const fits = p.mb <= FREE_MB;
+      return { ...p, w: `${(Math.log10(p.mb) / maxLog) * 100}%`, barColor: fits ? "#388bfd" : "#d29922",
+        note: fits ? "Fits · " + (FREE_MB / 1000 - p.mb / 1000).toFixed(1) + " GB left after" : `Needs ${p.label} · only 16.0 GB free`,
+        noteColor: fits ? "#8e8e93" : "#e3b341", btn: fits ? "Download" : "Free up space", btnBorder: fits ? "rgba(56,139,253,0.5)" : "rgba(255,255,255,0.12)",
+        btnColor: fits ? "#a5c8ff" : "#8e8e93", cursor: fits ? "pointer" : "default" };
+    });
+
+    const recents = RECENTS.map((r, i) => ({ ...r, select: () => this.setState({ recent: i, path: r.path }), ...selStyle(st.recent === i && st.path === r.path) }));
+    const known = RECENTS.find(r => r.path === st.path.trim());
+    const ok = { mark: "✓", color: "#3fb950" };
+    const check = known ? {
+      headline: known.kind === "Scene" ? "Valid scene" : "Valid library folder", dot: "#3fb950", color: "#7ee787",
+      items: [{ k: "Schema", v: known.kind === "Scene" ? "schema 1 · scene manifest" : "schema 1 · library index", ...ok }, { k: "Scenes", v: "1 · Town03-000", ...ok }, { k: "Modalities", v: "Camera · LiDAR · map", ...ok }, { k: "Size", v: "6.9 GB", ...ok }, { k: "Library", v: "Already in your library", mark: "•", color: "#6e6e73" }],
+      openBg: "#238636", openColor: "#fff", importLabel: "Already in library", importColor: "#6e6e73",
+    } : {
+      headline: "Not checked yet", dot: "#6e6e73", color: "#a1a1a6",
+      items: [{ k: "Schema", v: "Waiting for a folder", mark: "–", color: "#6e6e73" }],
+      openBg: "rgba(255,255,255,0.06)", openColor: "#6e6e73", importLabel: "Import into library…", importColor: "#6e6e73",
+    };
+
+    const folders = FOLDERS.map(([name, dirs, files, rec, kind]) => ({
+      name, dirs, files, rec, kind, select: () => this.setState({ folder: name }), ...selStyle(st.folder === name),
+      recColor: kind === "prep" ? "#7ee787" : kind === "ds" ? "#c7c7cc" : "#8e8e93",
+      recDot: kind === "prep" ? "#3fb950" : kind === "ds" ? "#8e8e93" : kind === "ckpt" ? "#48484a" : "transparent",
+    }));
+    const f = folders.find(x => x.name === st.folder);
+    const folder = { ...f, isPrepared: f.kind === "prep", isDataset: f.kind === "ds",
+      note: f.kind === "prep" ? "Cache exists for train (3 of 33 scenes ready)." : f.kind === "ds" ? "Matches a known dataset layout. Add it to prepare scenes on the cluster." : f.kind === "ckpt" ? "Model weights. Pick these when building an evaluation." : "No known dataset layout detected." };
+
+    const L = st.loaded;
+    const stepDefs = [
+      { title: "Server", value: "Example HPC", short: "Example HPC", desc: "hpc.example.org · Slurm · partition ps", done: true },
+      { title: "Pipeline", value: L ? "my_pipeline.py" : "—", short: L ? "my_pipeline.py" : "—", desc: L ? "coperceive-pipeline.json found · 5 typed arguments" : "No installed plugins found. Load a custom script — its coperceive-pipeline.json must sit beside it.", done: L, active: !L, input: !L },
+      { title: "Checkpoint", value: L ? "…/where2comm/net_epoch30.pth" : "—", short: L ? "net_epoch30.pth" : "—", desc: L ? "From /datasets/group/ps/cv/v2xset_checkpoints" : "Pick a model checkpoint on the cluster.", done: L },
+      { title: "Test split", value: L ? "v2xset / test" : "—", short: L ? "v2xset/test · 13 scenes" : "—", desc: L ? "13 scenes · prepared cache will be reused" : "Choose which prepared split to evaluate on.", done: L },
+      { title: "Environment", value: L ? "conda · opencood" : "—", short: L ? "conda · opencood" : "—", desc: L ? "Python 3.8 · torch 1.12 · 1 GPU, 10 min limit" : "Conda env, GPU count and time limit for the job.", done: L },
+      { title: "Contract check", value: L ? "5 of 5 passed" : "—", short: L ? "Passed" : "—", desc: "Dry-runs the pipeline on one frame to confirm its outputs match what the viewer expects.", done: L },
+    ];
+    const steps = stepDefs.map((s, i) => {
+      const locked = !s.done && !s.active;
+      return { ...s, isPipelineInput: !!s.input, mark: s.done ? "✓" : String(i + 1), opacity: locked ? 0.45 : 1,
+        ring: s.done ? "rgba(63,185,80,0.6)" : s.active ? "#388bfd" : "rgba(255,255,255,0.2)", fill: s.done ? "rgba(63,185,80,0.14)" : "transparent",
+        numColor: s.done ? "#7ee787" : s.active ? "#a5c8ff" : "#8e8e93", valueColor: s.done ? "#c7c7cc" : "#6e6e73",
+        desc: locked && i > 1 ? s.desc + " Unlocks after the pipeline loads." : s.desc };
+    });
+    const nDone = stepDefs.filter(s => s.done).length;
+
+    const counts = k => RUNS.filter(r => r.state === k).length;
+    const runFilters = [["all", "All", RUNS.length, "transparent"], ...["running", "completed", "failed", "timeout"].map(k => [k, RS[k].label, counts(k), RS[k].dot])].map(([k, label, count, dot]) => ({
+      label, count, dot, pick: () => this.setState({ runFilter: k }), bg: st.runFilter === k ? "rgba(255,255,255,0.12)" : "transparent", color: st.runFilter === k ? "#f5f5f7" : "#a1a1a6",
+    }));
+    const decoRun = r => ({ ...r, ...RS[r.state], stateLabel: RS[r.state].label, elapsed: mmss(r.el), limit: mmss(r.lim), pct: `${Math.min(100, r.el / r.lim * 100)}%` });
+    const runRows = RUNS.filter(r => st.runFilter === "all" || r.state === st.runFilter).map(r => ({ ...decoRun(r), select: () => this.setState({ run: r.job }), ...selStyle(st.run === r.job) }));
+    const rr = decoRun(RUNS.find(r => r.job === st.run));
+    const run = { ...rr, hasResults: !!rr.ap, hasLog: !!rr.log, isRunning: rr.state === "running", scenes: 13,
+      ap: (rr.ap || []).map((v, i) => ({ k: ["AP@0.3", "AP@0.5", "AP@0.7"][i], v: v.toFixed(3), w: `${v * 100}%` })),
+      note: { running: "Evaluating scene 6 of 13. Predictions stream into the results folder.", completed: "Finished well inside its time limit. Predictions are ready to open in the viewer.", failed: "Stopped by the contract check before evaluation began.", timeout: "Hit the time limit at scene 9 of 13. Re-run with a longer limit." }[rr.state] };
+
+    const [title, subtitle] = PAGES[page];
+    return {
+      title, subtitle,
+      isLibrary: page === "library", isGetData: page === "getdata", isOpen: page === "open", isServers: page === "servers", isEval: page === "eval", isRuns: page === "runs",
+      localNav: nav([["library", "Library", "1"], ["getdata", "Get Data", ""], ["open", "Open Folder", ""]]),
+      hpcNav: nav([["servers", "Servers", "1"], ["eval", "New evaluation", ""], ["runs", "Run history", "1 running", "#79c0ff"]]),
+      goGetData: go("getdata"), goOpen: go("open"), goServers: go("servers"), goEval: go("eval"),
+      sidebarOpen: st.sidebarOpen, sidebarClosed: !st.sidebarOpen,
+      rootCols: st.sidebarOpen ? "236px minmax(0,1fr)" : "minmax(0,1fr)",
+      toggleSidebar: () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen })),
+      bodyCols: wide ? "minmax(0,1fr) 320px" : "minmax(0,1fr)", bodyRows: wide ? "minmax(0,1fr)" : "max-content max-content",
+      panelBorderL: wide ? "1px solid rgba(255,255,255,0.08)" : "none", panelBorderT: wide ? "none" : "1px solid rgba(255,255,255,0.08)",
+      libRows: [{ id: "Town03-000", dataset: "Cooperative Scene", town: "Town03", durLabel: "15.0 s", agents: 2, sizeLabel: "6.9 GB", ...selStyle(true), select: () => {},
+        mods: [["Cam", 1], ["LiDAR", 1], ["Map", 1]].map(([label, on]) => ({ label, border: on ? "rgba(255,255,255,0.18)" : "rgba(255,255,255,0.06)", color: on ? "#c7c7cc" : "#48484a" })) }],
+      dsRows, ds: { ...dsSel, isReady: dsSel.avail === "ready", isLocal: dsSel.avail === "local", isLater: dsSel.avail === "later" },
+      presets, freeMark: `${(Math.log10(FREE_MB) / maxLog) * 100}%`,
+      recents, folderPath: st.path, onPath: e => this.setState({ path: e.target.value }), check,
+      folders, folder,
+      steps, loadPipeline: () => this.setState({ loaded: true }),
+      planHeadline: nDone === 6 ? "Ready to save" : `${nDone} of 6 steps complete`, planPct: `${nDone / 6 * 100}%`,
+      script: L ? "#SBATCH --partition=ps\n#SBATCH --gres=gpu:1\n#SBATCH --time=00:10:00\nconda activate opencood\npython my_pipeline.py \\\n  --ckpt …/where2comm/net_epoch30.pth \\\n  --split v2xset/test" : "#SBATCH --partition=ps\n# waiting for pipeline…",
+      scriptColor: L ? "#c7c7cc" : "#6e6e73",
+      saveBg: L ? "#1f6feb" : "rgba(255,255,255,0.06)", saveColor: L ? "#fff" : "#6e6e73", saveCursor: L ? "pointer" : "default",
+      runFilters, runRows, run,
+    };
+  }
+}
+</script>
+</body>
+</html>

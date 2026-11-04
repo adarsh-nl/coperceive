@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#141415;color:#f5f5f7;font-family:"Geist",-apple-system,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased;overflow:hidden}
+*{box-sizing:border-box}
+a{color:#79c0ff;text-decoration:none}a:hover{color:#a5d6ff;text-decoration:underline}
+::-webkit-scrollbar{width:8px;height:8px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.1);border-radius:4px}
+</style>
+</helmet>
+<div style="height:100vh;min-height:640px;display:flex;flex-direction:column;background:#141415;font-size:12.5px;user-select:none">
+
+  <header style="height:52px;flex-shrink:0;display:flex;align-items:center;gap:16px;padding:0 16px;border-bottom:1px solid rgba(255,255,255,0.08);background:#1a1a1c">
+    <div style="display:flex;gap:8px;flex-shrink:0">
+      <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span>
+      <span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span>
+      <span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span>
+    </div>
+    <div style="display:flex;align-items:flex-end;gap:2px;margin-left:8px;font-family:'Geist Mono',ui-monospace,monospace;font-size:15px;font-weight:500;color:#f5f5f7;flex-shrink:0">
+      <span>coperceive</span><span style="width:8px;height:2px;background:#D9482B;margin-bottom:4px"></span>
+    </div>
+    <span style="width:1px;height:20px;background:rgba(255,255,255,0.1);flex-shrink:0"></span>
+    <div style="display:flex;align-items:center;gap:6px;min-width:0">
+      <span title="Back to dataset" style="padding:3px 8px;border-radius:5px;color:#a1a1a6;cursor:pointer;white-space:nowrap" style-hover="background:rgba(255,255,255,0.06);color:#f5f5f7">‹ V2XSET train</span>
+      <span style="color:#48484a">/</span>
+      <div style="display:flex;align-items:center;gap:2px;padding:2px;border-radius:7px;background:rgba(255,255,255,0.05)">
+        <span title="Previous scene (P)" style="width:22px;height:22px;display:grid;place-items:center;border-radius:5px;color:#a1a1a6;cursor:pointer" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7">‹</span>
+        <span style="padding:0 6px;font-family:'Geist Mono',monospace;font-size:12.5px;white-space:nowrap"><span style="color:#6e6e73">2021_08_18_</span>19_11_02</span>
+        <span title="Next scene (N)" style="width:22px;height:22px;display:grid;place-items:center;border-radius:5px;color:#a1a1a6;cursor:pointer" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7">›</span>
+      </div>
+      <span style="font-size:11.5px;color:#6e6e73;white-space:nowrap">1 of 33</span>
+    </div>
+    <div style="margin-left:auto;display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <span title="This viewer runs as a small CPU job on the cluster; it is reused while it runs." style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#a1a1a6;white-space:nowrap"><span style="width:6px;height:6px;border-radius:50%;background:#3fb950"></span>Viewer job · 1 CPU · Example HPC</span>
+      <span style="padding:4px 12px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Export…</span>
+    </div>
+  </header>
+
+  <div style="flex:1;min-height:0;display:grid;grid-template-columns:{{ cols }}">
+
+    <sc-if value="{{ showLeft }}" hint-placeholder-val="{{ true }}">
+    <aside style="border-right:1px solid rgba(255,255,255,0.08);background:#18181a;overflow:auto;min-height:0">
+      <section style="padding:14px 14px 12px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px">
+        <div style="display:flex;justify-content:space-between;padding:0 4px 6px;font-size:11px;font-weight:500;color:#6e6e73"><span>Layers</span><span>{{ shownPtsLabel }}</span></div>
+        <sc-for list="{{ layers }}" as="l" hint-placeholder-count="5">
+          <div onClick="{{ l.toggle }}" style="display:grid;grid-template-columns:18px 1fr auto;align-items:center;gap:8px;padding:5px 6px;border-radius:6px;cursor:pointer;opacity:{{ l.opacity }}" style-hover="background:rgba(255,255,255,0.04)">
+            <span style="width:14px;height:14px;border-radius:4px;display:grid;place-items:center;font-size:10px;border:1px solid {{ l.border }};background:{{ l.bg }};color:#fff">{{ l.check }}</span>
+            <span style="color:#e5e5ea">{{ l.label }}</span>
+            <span style="font-size:11px;color:#6e6e73;font-variant-numeric:tabular-nums">{{ l.meta }}</span>
+          </div>
+        </sc-for>
+        <div style="display:grid;grid-template-columns:1fr 90px 30px;align-items:center;gap:8px;padding:6px 6px 0 32px;font-size:11.5px;color:#8e8e93">
+          <span>Image opacity</span>
+          <input type="range" min="0" max="100" value="{{ imgOpacity }}" onInput="{{ onImgOpacity }}" style="width:100%;accent-color:#8e8e93">
+          <span style="text-align:right;font-variant-numeric:tabular-nums">{{ imgOpacity }}%</span>
+        </div>
+      </section>
+
+      <section style="padding:14px 14px 12px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:2px">
+        <div style="display:flex;justify-content:space-between;padding:0 4px 6px;font-size:11px;font-weight:500;color:#6e6e73"><span>Agents</span><span>{{ agentsShown }}</span></div>
+        <sc-for list="{{ agentRows }}" as="a" hint-placeholder-count="4">
+          <div onClick="{{ a.toggle }}" title="{{ a.id }}" style="display:grid;grid-template-columns:12px 1fr auto;align-items:center;gap:9px;padding:6px 6px;border-radius:6px;cursor:pointer;opacity:{{ a.opacity }}" style-hover="background:rgba(255,255,255,0.04)">
+            <span style="width:10px;height:10px;border-radius:3px;background:{{ a.color }}"></span>
+            <span style="display:flex;flex-direction:column;gap:1px;min-width:0">
+              <span style="color:#e5e5ea;white-space:nowrap">{{ a.name }}</span>
+              <span style="font-size:11px;color:#6e6e73;white-space:nowrap">{{ a.sub }}</span>
+            </span>
+            <span style="font-size:11px;color:#8e8e93;font-variant-numeric:tabular-nums">{{ a.pts }}</span>
+          </div>
+        </sc-for>
+      </section>
+
+      <section style="padding:14px 18px 14px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:12px">
+        <div style="font-size:11px;font-weight:500;color:#6e6e73">Appearance</div>
+        <div style="display:grid;grid-template-columns:72px 1fr;align-items:center;gap:10px">
+          <span style="color:#a1a1a6">Colour by</span>
+          <div style="display:flex;gap:2px;padding:2px;border-radius:6px;background:rgba(255,255,255,0.05)">
+            <sc-for list="{{ colorOpts }}" as="o" hint-placeholder-count="2"><span onClick="{{ o.pick }}" style="flex:1;text-align:center;padding:3px 0;border-radius:4px;cursor:pointer;background:{{ o.bg }};color:{{ o.color }}">{{ o.label }}</span></sc-for>
+          </div>
+          <span style="color:#a1a1a6">Boxes</span>
+          <div style="display:flex;gap:2px;padding:2px;border-radius:6px;background:rgba(255,255,255,0.05)">
+            <sc-for list="{{ boxOpts }}" as="o" hint-placeholder-count="2"><span onClick="{{ o.pick }}" style="flex:1;text-align:center;padding:3px 0;border-radius:4px;cursor:pointer;background:{{ o.bg }};color:{{ o.color }}">{{ o.label }}</span></sc-for>
+          </div>
+          <span style="color:#a1a1a6">Point size</span>
+          <input type="range" min="1" max="4" step="0.5" value="{{ pointSize }}" onInput="{{ onPointSize }}" style="width:100%;accent-color:#8e8e93">
+        </div>
+      </section>
+
+      <section style="padding:14px 18px 16px;display:flex;flex-direction:column;gap:8px">
+        <div style="font-size:11px;font-weight:500;color:#6e6e73">Predictions</div>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <span style="color:#8e8e93">No run loaded</span>
+          <span style="padding:3px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer;white-space:nowrap" style-hover="background:rgba(255,255,255,0.06)">Load run…</span>
+        </div>
+        <span style="font-size:11px;line-height:1.45;color:#6e6e73;text-wrap:pretty">Overlay detections from a finished evaluation to compare single-agent and fused results.</span>
+      </section>
+    </aside>
+    </sc-if>
+
+    <main style="display:flex;flex-direction:column;min-width:0;min-height:0;background:#0e0e0f">
+      <div ref="{{ stageRef }}" style="flex:1;min-height:150px;position:relative;overflow:hidden">
+        <div style="position:absolute;inset:0;perspective:1400px;display:{{ canvasDisplay }}">
+          <canvas ref="{{ canvasRef }}" onClick="{{ onCanvasClick }}" style="position:absolute;inset:0;width:100%;height:100%;transform-origin:50% 55%;transition:transform .5s cubic-bezier(.2,.7,.2,1);transform:{{ stageTransform }};cursor:crosshair"></canvas>
+        </div>
+        <sc-if value="{{ isCameraView }}" hint-placeholder-val="{{ false }}">
+          <div style="position:absolute;inset:16px;border-radius:8px;overflow:hidden;background:repeating-linear-gradient(135deg,#1b1b1d 0 10px,#18181a 10px 20px);display:grid;place-items:center">
+            <div style="display:flex;flex-direction:column;align-items:center;gap:6px;font-family:'Geist Mono',monospace;font-size:12px;color:#6e6e73">
+              <span>camera image · {{ camViewLabel }}</span>
+              <span style="font-size:11px">boxes projected through calibrated intrinsics</span>
+            </div>
+          </div>
+        </sc-if>
+
+        <div style="position:absolute;top:12px;left:12px;right:12px;display:flex;gap:8px;flex-wrap:wrap;justify-content:space-between;align-items:flex-start;pointer-events:none">
+        <div style="pointer-events:auto;display:flex;gap:8px;align-items:center;padding:5px 10px;white-space:nowrap;border-radius:7px;background:rgba(20,20,21,0.78);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.08);font-size:11.5px;color:#c7c7cc">
+          <span onClick="{{ toggleLeft }}" title="Toggle layers panel" style="cursor:pointer;color:#8e8e93" style-hover="color:#f5f5f7">◧</span>
+          <span style="font-variant-numeric:tabular-nums">{{ viewLabel }}</span>
+        </div>
+
+        <div style="pointer-events:auto;display:flex;gap:2px;padding:3px;border-radius:9px;background:rgba(20,20,21,0.78);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.08)">
+          <sc-for list="{{ viewpoints }}" as="v" hint-placeholder-count="5">
+            <span onClick="{{ v.pick }}" title="{{ v.title }}" style="display:flex;align-items:center;gap:6px;padding:4px 10px;border-radius:6px;cursor:pointer;white-space:nowrap;background:{{ v.bg }};color:{{ v.color }}">{{ v.label }}<sc-if value="{{ showKeys }}" hint-placeholder-val="{{ true }}"><span style="font-size:10px;color:#6e6e73;font-family:'Geist Mono',monospace">{{ v.key }}</span></sc-if></span>
+          </sc-for>
+        </div>
+
+        <div style="pointer-events:auto;display:flex;gap:8px;align-items:center;white-space:nowrap;padding:5px 10px;border-radius:7px;background:rgba(20,20,21,0.78);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.08);font-size:11.5px;color:#8e8e93">
+          <span style="font-variant-numeric:tabular-nums">{{ rangeLabel }}</span>
+          <span onClick="{{ toggleRight }}" title="Toggle telemetry panel" style="cursor:pointer" style-hover="color:#f5f5f7">◨</span>
+        </div>
+        </div>
+
+        <div style="position:absolute;left:12px;right:12px;bottom:12px;display:flex;gap:8px;justify-content:space-between;align-items:flex-end;pointer-events:none">
+        <div style="display:flex;flex-wrap:wrap;gap:10px 14px;min-width:0;padding:7px 11px;border-radius:7px;background:rgba(20,20,21,0.78);backdrop-filter:blur(12px);border:1px solid rgba(255,255,255,0.08);font-size:11px;color:#a1a1a6">
+          <sc-for list="{{ legend }}" as="g" hint-placeholder-count="4">
+            <span style="display:flex;align-items:center;gap:6px;white-space:nowrap"><span style="width:8px;height:8px;border-radius:{{ g.radius }};background:{{ g.color }}"></span>{{ g.label }}</span>
+          </sc-for>
+        </div>
+
+        <div style="flex-shrink:0;display:flex;align-items:center;gap:8px;font-size:11px;color:#8e8e93;font-variant-numeric:tabular-nums">
+          <span style="width:{{ scaleBarPx }};height:5px;border:1px solid #8e8e93;border-top:none"></span><span>10 m</span>
+        </div>
+        </div>
+      </div>
+
+      <div style="height:104px;flex-shrink:0;border-top:1px solid rgba(255,255,255,0.08);background:#141415;display:flex;gap:8px;padding:8px 12px;align-items:stretch">
+        <div style="width:110px;flex-shrink:0;display:flex;flex-direction:column;justify-content:center;gap:3px">
+          <span style="font-size:11px;color:#6e6e73">Cameras</span>
+          <span style="display:flex;align-items:center;gap:6px;color:#e5e5ea"><span style="width:8px;height:8px;border-radius:2px;background:{{ camAgentColor }}"></span>{{ camAgentName }}</span>
+          <span onClick="{{ cycleCamAgent }}" style="font-size:11px;color:#79c0ff;cursor:pointer">Switch agent</span>
+        </div>
+        <sc-for list="{{ cams }}" as="c" hint-placeholder-count="4">
+          <div onClick="{{ c.pick }}" style="flex:1;min-width:0;position:relative;border-radius:6px;overflow:hidden;cursor:pointer;background:repeating-linear-gradient(135deg,#1d1d1f 0 8px,#1a1a1c 8px 16px);border:1px solid {{ c.border }}">
+            <span style="position:absolute;left:6px;top:5px;font-family:'Geist Mono',monospace;font-size:10.5px;color:#a1a1a6">{{ c.label }}</span>
+            <span style="position:absolute;right:6px;bottom:5px;font-family:'Geist Mono',monospace;font-size:10px;color:#6e6e73">{{ c.boxes }}</span>
+          </div>
+        </sc-for>
+      </div>
+
+      <div style="flex-shrink:0;border-top:1px solid rgba(255,255,255,0.08);background:#1a1a1c;padding:8px 14px 10px;display:flex;flex-direction:column;gap:6px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="display:flex;align-items:center;gap:2px">
+            <span onClick="{{ stepBack }}" title="Step back (←)" style="width:28px;height:26px;display:grid;place-items:center;border-radius:5px;color:#c7c7cc;cursor:pointer;font-size:11px" style-hover="background:rgba(255,255,255,0.08)">◀︎❘</span>
+            <span onClick="{{ togglePlay }}" title="Play / pause (Space)" style="width:34px;height:28px;display:grid;place-items:center;border-radius:6px;background:rgba(255,255,255,0.1);color:#f5f5f7;cursor:pointer;font-size:12px" style-hover="background:rgba(255,255,255,0.16)">{{ playIcon }}</span>
+            <span onClick="{{ stepFwd }}" title="Step forward (→)" style="width:28px;height:26px;display:grid;place-items:center;border-radius:5px;color:#c7c7cc;cursor:pointer;font-size:11px" style-hover="background:rgba(255,255,255,0.08)">❘▶︎</span>
+          </div>
+          <span style="font-family:'Geist Mono',monospace;font-size:12.5px;font-variant-numeric:tabular-nums;color:#f5f5f7;white-space:nowrap">{{ timeLabel }} <span style="color:#6e6e73">/ 10.65 s</span></span>
+          <span style="font-size:11.5px;color:#6e6e73;font-variant-numeric:tabular-nums;white-space:nowrap">sample {{ sampleLabel }}</span>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:8px">
+            <div style="display:flex;gap:2px;padding:2px;border-radius:6px;background:rgba(255,255,255,0.05)">
+              <sc-for list="{{ speeds }}" as="s" hint-placeholder-count="4"><span onClick="{{ s.pick }}" style="padding:2px 8px;border-radius:4px;font-size:11.5px;cursor:pointer;font-variant-numeric:tabular-nums;background:{{ s.bg }};color:{{ s.color }}">{{ s.label }}</span></sc-for>
+            </div>
+            <span onClick="{{ toggleLoop }}" title="Loop" style="padding:3px 9px;border-radius:5px;font-size:11.5px;cursor:pointer;border:1px solid {{ loopBorder }};color:{{ loopColor }}">Loop</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px">
+          <span style="width:62px;font-size:10.5px;color:#6e6e73;text-align:right;line-height:1.2">boxes in range</span>
+          <div ref="{{ trackRef }}" onPointerDown="{{ onScrubDown }}" onPointerMove="{{ onScrubMove }}" style="flex:1;position:relative;height:34px;cursor:pointer;touch-action:none">
+            <div style="position:absolute;left:0;right:0;top:0;height:24px;display:flex;align-items:flex-end;gap:1px">
+              <sc-for list="{{ spark }}" as="b" hint-placeholder-count="60"><span style="flex:1;border-radius:1px 1px 0 0;height:{{ b.h }};background:{{ b.c }}"></span></sc-for>
+            </div>
+            <div style="position:absolute;left:0;right:0;top:27px;height:3px;border-radius:2px;background:rgba(255,255,255,0.1)"><div style="height:100%;border-radius:2px;background:#f5f5f7;width:{{ progPct }}"></div></div>
+            <sc-for list="{{ gaps }}" as="g" hint-placeholder-count="2"><span title="Sweep gap" style="position:absolute;top:25px;width:2px;height:7px;background:#e3b341;left:{{ g.left }}"></span></sc-for>
+            <span style="position:absolute;top:-2px;bottom:0;width:1px;background:#f5f5f7;left:{{ progPct }}"></span>
+            <span style="position:absolute;top:22px;width:11px;height:11px;margin-left:-5px;border-radius:50%;background:#f5f5f7;box-shadow:0 0 0 3px rgba(0,0,0,0.4);left:{{ progPct }}"></span>
+          </div>
+          <span style="font-size:10.5px;color:#6e6e73;display:flex;align-items:center;gap:5px;white-space:nowrap"><span style="width:2px;height:8px;background:#e3b341"></span>{{ gapCount }} sweep gaps</span>
+        </div>
+      </div>
+    </main>
+
+    <sc-if value="{{ showRight }}" hint-placeholder-val="{{ true }}">
+    <aside style="border-left:1px solid rgba(255,255,255,0.08);background:#18181a;overflow:auto;min-height:0">
+      <section style="padding:14px 18px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:12px">
+        <div style="font-size:11px;font-weight:500;color:#6e6e73">Scene</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Duration</span><span style="font-size:15px;font-variant-numeric:tabular-nums">10.7 s</span></div>
+          <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Samples</span><span style="font-size:15px;font-variant-numeric:tabular-nums">213</span></div>
+          <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Agents</span><span style="font-size:15px;font-variant-numeric:tabular-nums">4</span></div>
+          <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Boxes now</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ boxesNow }}</span></div>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          <sc-for list="{{ classBars }}" as="c" hint-placeholder-count="3">
+            <div style="display:grid;grid-template-columns:44px 1fr 22px;align-items:center;gap:8px;font-size:11.5px">
+              <span style="color:#a1a1a6">{{ c.name }}</span>
+              <span style="height:6px;border-radius:1px;background:rgba(255,255,255,0.05)"><span style="display:block;height:100%;border-radius:1px;width:{{ c.w }};background:{{ c.color }}"></span></span>
+              <span style="text-align:right;font-variant-numeric:tabular-nums;color:#e5e5ea">{{ c.n }}</span>
+            </div>
+          </sc-for>
+        </div>
+      </section>
+
+      <section style="padding:14px 18px;border-bottom:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:10px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;font-weight:500;color:#6e6e73"><span>Selected</span><sc-if value="{{ hasPick }}" hint-placeholder-val="{{ false }}"><span onClick="{{ clearPick }}" style="cursor:pointer;font-weight:400" style-hover="color:#f5f5f7">Clear</span></sc-if></div>
+        <sc-if value="{{ noPick }}" hint-placeholder-val="{{ true }}">
+          <span style="font-size:12px;line-height:1.5;color:#8e8e93;text-wrap:pretty">Click a box in the bird's-eye view to follow it through the scene.</span>
+        </sc-if>
+        <sc-if value="{{ hasPick }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;align-items:baseline;gap:8px"><span style="font-size:15px;font-weight:500">{{ pick.cls }}</span><span style="font-family:'Geist Mono',monospace;font-size:11.5px;color:#8e8e93">{{ pick.id }}</span></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+              <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Speed</span><span style="font-variant-numeric:tabular-nums">{{ pick.speed }}</span></div>
+              <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Size l×w</span><span style="font-variant-numeric:tabular-nums">{{ pick.size }}</span></div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <span style="font-size:11px;color:#6e6e73">Distance · seen by {{ pick.seenCount }} of 4</span>
+              <sc-for list="{{ pick.dists }}" as="d" hint-placeholder-count="4">
+                <div style="display:grid;grid-template-columns:10px 1fr 1fr 46px;align-items:center;gap:8px;font-size:11.5px">
+                  <span style="width:8px;height:8px;border-radius:2px;background:{{ d.color }}"></span>
+                  <span style="color:{{ d.text }};white-space:nowrap">{{ d.name }}</span>
+                  <span style="height:4px;border-radius:2px;background:rgba(255,255,255,0.05)"><span style="display:block;height:100%;border-radius:2px;width:{{ d.w }};background:{{ d.bar }}"></span></span>
+                  <span style="text-align:right;font-variant-numeric:tabular-nums;color:{{ d.text }}">{{ d.m }}</span>
+                </div>
+              </sc-for>
+              <span style="font-size:10.5px;color:#6e6e73">Bar = distance; faded rows are beyond 50 m LiDAR range.</span>
+            </div>
+          </div>
+        </sc-if>
+      </section>
+
+      <section style="padding:12px 18px 14px;display:flex;flex-direction:column;gap:8px">
+        <div onClick="{{ toggleRadar }}" style="display:flex;justify-content:space-between;font-size:11px;font-weight:500;color:#6e6e73;cursor:pointer" style-hover="color:#a1a1a6"><span>Radar · 80 m</span><span style="font-weight:400">{{ radarToggleLabel }}</span></div>
+        <sc-if value="{{ showRadar }}" hint-placeholder-val="{{ true }}">
+          <div style="display:grid;grid-template-columns:112px 1fr;gap:12px;align-items:center">
+            <canvas ref="{{ radarRef }}" width="224" height="224" style="width:112px;height:112px;border-radius:6px;background:#121213"></canvas>
+            <span style="font-size:11px;line-height:1.5;color:#6e6e73">Centred on {{ camAgentName }}, north up. Rings every 20 m.</span>
+          </div>
+        </sc-if>
+      </section>
+    </aside>
+    </sc-if>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+const FR = 213, DT = 0.05, RANGE = 50;
+const AGENTS = [
+  { id: "veh_ego_1047", name: "Vehicle 1", sub: "Ego · vehicle", color: "#F58A1F", kind: "veh", lane: 0, off: -34, v: 6.5 },
+  { id: "veh_1311", name: "Vehicle 2", sub: "Vehicle", color: "#3C8DFF", kind: "veh", lane: 1, off: 26, v: 5.2 },
+  { id: "veh_1702", name: "Vehicle 3", sub: "Vehicle", color: "#2fbf9f", kind: "veh", lane: 2, off: -40, v: 7.4 },
+  { id: "rsu_0003", name: "Infrastructure 1", sub: "Roadside unit", color: "#b48cff", kind: "rsu", x: 11, y: 11 },
+];
+const CLS = { car: "#f2cc60", truck: "#ff8f6b", van: "#8fd19e" };
+const LANES = [ { dx: 1, dy: 0, c: -3.5 }, { dx: -1, dy: 0, c: 3.5 }, { dx: 0, dy: 1, c: 3.5 }, { dx: 0, dy: -1, c: -3.5 } ];
+const OBJS = (() => {
+  const out = []; let seed = 7; const r = () => (seed = (seed * 16807) % 2147483647) / 2147483647;
+  for (let i = 0; i < 26; i++) {
+    const cls = i % 9 === 4 ? "truck" : i % 7 === 3 ? "van" : "car";
+    const [l, w] = cls === "truck" ? [8.2, 2.6] : cls === "van" ? [5.2, 2.1] : [4.5, 1.9];
+    out.push({ id: `${cls}_${String(100 + i * 13).padStart(4, "0")}`, cls, l, w, lane: i % 4, off: r() * 200 - 100, v: 3 + r() * 7 });
+  }
+  [[-20, -9.5], [-28, -9.5], [24, 9.6], [-9.6, 30], [9.6, -26], [33, -9.5]].forEach(([x, y], i) => out.push({ id: `car_p${i}`, cls: "car", l: 4.5, w: 1.9, park: true, x, y, yaw: Math.abs(y) > 9 ? 0 : Math.PI / 2, v: 0 }));
+  return out;
+})();
+const BLOCKS = [[13, 13, 70, 70], [-70, 13, -13, 70], [-70, -70, -13, -13], [13, -70, 70, -13]];
+const wrap = p => ((p + 100) % 200 + 200) % 200 - 100;
+function laneAt(lane, off, v, t) {
+  const L = LANES[lane], s = wrap(off + v * t);
+  return { x: L.dx ? s * L.dx : L.c, y: L.dy ? s * L.dy : L.c, yaw: Math.atan2(L.dy, L.dx) };
+}
+function agentPose(a, t) { return a.kind === "rsu" ? { x: a.x, y: a.y, yaw: -Math.PI * 0.75 } : laneAt(a.lane, a.off, a.v, t); }
+function objPose(o, t) { return o.park ? { x: o.x, y: o.y, yaw: o.yaw } : laneAt(o.lane, o.off, o.v, t); }
+function rng(s) { return () => { s |= 0; s = s + 0x6D2B79F5 | 0; let t = Math.imul(s ^ s >>> 15, 1 | s); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
+const inBlock = (x, y) => BLOCKS.some(([a, b, c, d]) => x > a && x < c && y > b && y < d);
+const SPARK = Array.from({ length: FR }, (_, f) => {
+  const t = f * DT, ps = AGENTS.map(a => agentPose(a, t));
+  return OBJS.filter(o => { const p = objPose(o, t); return ps.some(q => Math.hypot(p.x - q.x, p.y - q.y) < RANGE); }).length;
+});
+const GAPS = [58, 141];
+const VIEWS = [["orbit", "Orbit", "1"], ["bird", "Bird's-eye", "2"], ["chase", "Chase", "3"], ["drone", "Drone", "4"], ["camera", "Camera", "5"]];
+const CAMS = ["front", "left", "right", "rear"];
+
+class Component extends DCLogic {
+  state = {
+    frame: 87, playing: false, speed: 1, loop: true, view: "bird",
+    layers: { points: true, boxes: true, frustums: true, images: false, map: true },
+    hidden: {}, colorBy: "agent", boxStyle: "wire", pointSize: 1.5, imgOpacity: 60,
+    pick: "car_0113", camAgent: 0, showRadar: true, cam: "front", showLeft: true, showRight: true,
+  };
+  canvasRef = React.createRef(); radarRef = React.createRef(); stageRef = React.createRef(); trackRef = React.createRef();
+
+  componentDidMount() {
+    this.ro = new ResizeObserver(() => { this.draw(); const w = this.stageRef.current?.clientWidth || 0; const sk = w >= 640; if (sk !== this.state.showKeys) this.setState({ showKeys: sk }); }); if (this.stageRef.current) this.ro.observe(this.stageRef.current);
+    this.onKey = e => {
+      if (e.target.tagName === "INPUT") return;
+      if (e.key === " ") { e.preventDefault(); this.togglePlay(); }
+      else if (e.key === "ArrowRight") this.step(1); else if (e.key === "ArrowLeft") this.step(-1);
+      else if ("12345".includes(e.key) && e.key.length === 1) this.setState({ view: VIEWS[+e.key - 1][0] });
+    };
+    window.addEventListener("keydown", this.onKey);
+    this.draw();
+  }
+  componentWillUnmount() { this.ro?.disconnect(); window.removeEventListener("keydown", this.onKey); cancelAnimationFrame(this.raf); }
+  componentDidUpdate() { this.draw(); }
+
+  togglePlay() {
+    const playing = !this.state.playing; this.setState({ playing });
+    cancelAnimationFrame(this.raf);
+    if (playing) { let last = performance.now(), acc = 0;
+      const loop = now => { acc += (now - last) / 1000 * this.state.speed; last = now;
+        if (acc >= DT) { const n = Math.floor(acc / DT); acc -= n * DT; let f = this.state.frame + n;
+          if (f >= FR) { if (this.state.loop) f = f % FR; else { this.setState({ frame: FR - 1, playing: false }); return; } }
+          this.setState({ frame: f }); }
+        this.raf = requestAnimationFrame(loop); };
+      this.raf = requestAnimationFrame(loop); }
+  }
+  step(d) { this.setState(s => ({ frame: Math.max(0, Math.min(FR - 1, s.frame + d)) })); }
+
+  geom() {
+    const c = this.canvasRef.current; if (!c) return null;
+    const W = c.clientWidth, H = c.clientHeight;
+    const t = this.state.frame * DT;
+    const center = this.state.view === "chase" ? agentPose(AGENTS[this.state.camAgent], t) : { x: 0, y: 0 };
+    const zoom = this.state.view === "chase" ? 1.6 : this.state.view === "drone" ? 1.25 : 1;
+    const s = Math.min(W, H) / (2 * 58) * zoom;
+    return { W, H, s, cx: center.x, cy: center.y, t };
+  }
+
+  draw() {
+    const c = this.canvasRef.current; const g = this.geom(); if (!c || !g) return;
+    const dpr = window.devicePixelRatio || 1;
+    if (c.width !== Math.round(g.W * dpr) || c.height !== Math.round(g.H * dpr)) { c.width = Math.round(g.W * dpr); c.height = Math.round(g.H * dpr); }
+    const ctx = c.getContext("2d"); ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const { W, H, s, cx, cy, t } = g; const st = this.state;
+    const X = x => W / 2 + (x - cx) * s, Y = y => H / 2 - (y - cy) * s;
+    ctx.fillStyle = "#0e0e0f"; ctx.fillRect(0, 0, W, H);
+    if (st.layers.map) {
+      ctx.fillStyle = "#18181a"; ctx.fillRect(X(-120), Y(7), 240 * s, 14 * s); ctx.fillRect(X(-7), Y(120), 14 * s, 240 * s);
+      ctx.fillStyle = "#121213"; ctx.strokeStyle = "#222225"; ctx.lineWidth = 1;
+      BLOCKS.forEach(([a, b, c2, d]) => { ctx.fillRect(X(a), Y(d), (c2 - a) * s, (d - b) * s); ctx.strokeRect(X(a), Y(d), (c2 - a) * s, (d - b) * s); });
+      ctx.strokeStyle = "#2c2c2f"; ctx.setLineDash([3 * s, 3 * s]); ctx.beginPath();
+      ctx.moveTo(X(-120), Y(0)); ctx.lineTo(X(-7), Y(0)); ctx.moveTo(X(7), Y(0)); ctx.lineTo(X(120), Y(0));
+      ctx.moveTo(X(0), Y(-120)); ctx.lineTo(X(0), Y(-7)); ctx.moveTo(X(0), Y(7)); ctx.lineTo(X(0), Y(120)); ctx.stroke(); ctx.setLineDash([]);
+    }
+    const objs = OBJS.map(o => ({ ...o, ...objPose(o, t) }));
+    const ags = AGENTS.map((a, i) => ({ ...a, i, ...agentPose(a, t) }));
+    if (st.layers.frustums) ags.forEach(a => {
+      if (st.hidden[a.id] || a.kind === "rsu") return;
+      [0, Math.PI / 2, -Math.PI / 2, Math.PI].forEach((o, k) => {
+        const yaw = a.yaw + o, L = 16;
+        ctx.beginPath(); ctx.moveTo(X(a.x), Y(a.y));
+        ctx.lineTo(X(a.x + Math.cos(yaw - 0.7) * L), Y(a.y + Math.sin(yaw - 0.7) * L));
+        ctx.lineTo(X(a.x + Math.cos(yaw + 0.7) * L), Y(a.y + Math.sin(yaw + 0.7) * L)); ctx.closePath();
+        ctx.globalAlpha = st.layers.images ? st.imgOpacity / 100 * 0.25 : 0.06; ctx.fillStyle = a.color; ctx.fill();
+        ctx.globalAlpha = 0.3; ctx.strokeStyle = a.color; ctx.stroke(); ctx.globalAlpha = 1;
+      });
+    });
+    if (st.layers.points) {
+      const ps = st.pointSize;
+      ags.forEach(a => {
+        if (st.hidden[a.id]) return;
+        const r = rng(a.i * 1000 + st.frame); const col = st.colorBy === "agent" ? a.color : "#7a7a80";
+        ctx.fillStyle = col; ctx.globalAlpha = 0.55;
+        for (let ring = 3; ring < RANGE; ring += 1.6 + ring * 0.05) {
+          const n = Math.floor(ring * 3.2);
+          for (let k = 0; k < n; k++) { if (r() > 0.6) continue;
+            const ang = (k / n) * Math.PI * 2 + r() * 0.05, rr = ring + (r() - 0.5) * 0.5;
+            const x = a.x + Math.cos(ang) * rr, y = a.y + Math.sin(ang) * rr;
+            if (inBlock(x, y)) continue; ctx.fillRect(X(x) - ps / 2, Y(y) - ps / 2, ps, ps); }
+        }
+        ctx.globalAlpha = 0.8;
+        BLOCKS.forEach(([b0, b1, b2, b3]) => { for (let k = 0; k < 140; k++) {
+          const side = Math.floor(r() * 4), u = r();
+          const x = side < 2 ? b0 + (b2 - b0) * u : side === 2 ? b0 : b2, y = side < 2 ? (side === 0 ? b1 : b3) : b1 + (b3 - b1) * u;
+          if (Math.hypot(x - a.x, y - a.y) > RANGE) continue;
+          ctx.fillStyle = st.colorBy === "agent" ? a.color : "#a1a1a6"; ctx.fillRect(X(x) - ps / 2, Y(y) - ps / 2, ps, ps); } });
+        objs.forEach(o => { const d = Math.hypot(o.x - a.x, o.y - a.y); if (d > RANGE || d < 1) return;
+          ctx.fillStyle = st.colorBy === "agent" ? a.color : CLS[o.cls]; const n = Math.round(60 / Math.max(4, d) * 6);
+          const cs = Math.cos(o.yaw), sn = Math.sin(o.yaw);
+          for (let k = 0; k < n; k++) { const u = (r() - 0.5) * o.l, v = (r() - 0.5) * o.w;
+            const px = o.x + u * cs - v * sn, py = o.y + u * sn + v * cs;
+            if (Math.hypot(px - a.x, py - a.y) > d + 0.6) continue; ctx.fillRect(X(px) - ps / 2, Y(py) - ps / 2, ps, ps); } });
+      });
+      ctx.globalAlpha = 1;
+    }
+    if (st.layers.boxes) objs.forEach(o => {
+      const sel = o.id === st.pick, col = CLS[o.cls];
+      ctx.save(); ctx.translate(X(o.x), Y(o.y)); ctx.rotate(-o.yaw);
+      if (st.boxStyle === "solid") { ctx.globalAlpha = 0.3; ctx.fillStyle = col; ctx.fillRect(-o.l * s / 2, -o.w * s / 2, o.l * s, o.w * s); ctx.globalAlpha = 1; }
+      ctx.strokeStyle = sel ? "#ffffff" : col; ctx.lineWidth = sel ? 2 : 1.1; ctx.strokeRect(-o.l * s / 2, -o.w * s / 2, o.l * s, o.w * s);
+      ctx.beginPath(); ctx.moveTo(o.l * s / 2, 0); ctx.lineTo(o.l * s / 2 - Math.min(6, o.l * s * 0.3), 0); ctx.stroke();
+      ctx.restore();
+      if (sel) { ctx.fillStyle = "#fff"; ctx.font = "500 11px Geist, sans-serif"; ctx.fillText(o.id, X(o.x) + 10, Y(o.y) - 10); }
+    });
+    ags.forEach(a => {
+      if (st.hidden[a.id]) return;
+      ctx.save(); ctx.translate(X(a.x), Y(a.y)); ctx.rotate(-a.yaw); ctx.fillStyle = a.color;
+      if (a.kind === "rsu") { ctx.rotate(Math.PI / 4); ctx.fillRect(-5, -5, 10, 10); }
+      else { ctx.fillRect(-4.5 * s / 2, -1.9 * s / 2, 4.5 * s, 1.9 * s); ctx.fillStyle = "#0e0e0f"; ctx.fillRect(4.5 * s / 2 - 3, -1.5, 2, 3); }
+      ctx.restore();
+    });
+    this.drawRadar(ags, objs);
+  }
+
+  drawRadar(ags, objs) {
+    const c = this.radarRef.current; if (!c) return; const ctx = c.getContext("2d"); const S = c.width, h = S / 2, R = 80, k = S / 464;
+    const o = ags[this.state.camAgent]; ctx.clearRect(0, 0, S, S);
+    ctx.strokeStyle = "#2a2a2d"; ctx.lineWidth = 1;
+    [20, 40, 60, 80].forEach(r => { ctx.beginPath(); ctx.arc(h, h, r / R * (h - 12), 0, Math.PI * 2); ctx.stroke(); });
+    ctx.beginPath(); ctx.moveTo(h, 12); ctx.lineTo(h, S - 12); ctx.moveTo(12, h); ctx.lineTo(S - 12, h); ctx.stroke();
+    ctx.fillStyle = "#8e8e93"; ctx.font = "16px Geist"; ctx.fillText("N", h + 4, 22);
+    const P = (x, y) => [h + (x - o.x) / R * (h - 12), h - (y - o.y) / R * (h - 12)];
+    objs.forEach(b => { const [x, y] = P(b.x, b.y); if (Math.hypot(x - h, y - h) > h - 10) return; const sel = b.id === this.state.pick;
+      ctx.fillStyle = sel ? "#ffffff" : "#77777c"; ctx.beginPath(); ctx.arc(x, y, (sel ? 6 : 3) * Math.max(0.7, k * 1.4), 0, Math.PI * 2); ctx.fill(); });
+    ags.forEach(a => { if (this.state.hidden[a.id]) return; const [x, y] = P(a.x, a.y); if (Math.hypot(x - h, y - h) > h - 10) return;
+      ctx.fillStyle = a.color; ctx.beginPath(); ctx.arc(x, y, 6, 0, Math.PI * 2); ctx.fill(); });
+  }
+
+  scrubTo(e) { const b = this.trackRef.current?.getBoundingClientRect(); if (!b) return;
+    this.setState({ frame: Math.max(0, Math.min(FR - 1, Math.round((e.clientX - b.left) / b.width * (FR - 1)))) }); }
+
+  renderVals() {
+    const st = this.state, t = st.frame * DT;
+    const ags = AGENTS.map((a, i) => ({ ...a, i, ...agentPose(a, t) }));
+    const objs = OBJS.map(o => ({ ...o, ...objPose(o, t) }));
+    const visAg = ags.filter(a => !st.hidden[a.id]);
+    const inRange = objs.filter(o => visAg.some(a => Math.hypot(o.x - a.x, o.y - a.y) < RANGE));
+    const ptsFor = a => 16000 + Math.round(Math.sin(st.frame / 9 + a.i) * 900) + a.i * 1300;
+    const totalPts = visAg.reduce((n, a) => n + ptsFor(a), 0);
+    const k = n => n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+    const L = [["points", "Points", `${k(totalPts)}`], ["boxes", "Boxes", `${inRange.length}`], ["frustums", "Camera frustums", `${visAg.filter(a => a.kind === "veh").length * 4}`], ["images", "Frustum images", ""], ["map", "Road map", "Town05"]];
+    const layers = L.map(([id, label, meta]) => { const on = st.layers[id]; return { label, meta, check: on ? "✓" : "", bg: on ? "#3a3a3d" : "transparent", border: on ? "#5a5a5e" : "rgba(255,255,255,0.2)", opacity: on ? 1 : 0.55,
+      toggle: () => this.setState(s => ({ layers: { ...s.layers, [id]: !s.layers[id] } })) }; });
+    const agentRows = ags.map(a => ({ id: a.id, name: a.name, sub: a.sub, color: a.color, pts: st.hidden[a.id] ? "hidden" : k(ptsFor(a)), opacity: st.hidden[a.id] ? 0.4 : 1,
+      toggle: () => this.setState(s => ({ hidden: { ...s.hidden, [a.id]: !s.hidden[a.id] } })) }));
+    const seg = (cur, key, opts) => opts.map(([v, l]) => ({ label: l, bg: cur === v ? "rgba(255,255,255,0.12)" : "transparent", color: cur === v ? "#f5f5f7" : "#a1a1a6", pick: () => this.setState({ [key]: v }) }));
+    const viewpoints = VIEWS.map(([v, l, key]) => ({ label: l, key, title: `${l} viewpoint (${key})`, bg: st.view === v ? "rgba(255,255,255,0.14)" : "transparent", color: st.view === v ? "#f5f5f7" : "#a1a1a6", pick: () => this.setState({ view: v }) }));
+    const transforms = { orbit: "rotateX(48deg) rotateZ(-18deg) scale(1.15)", bird: "none", chase: "rotateX(58deg) scale(1.2)", drone: "rotateX(28deg) scale(1.05)", camera: "none" };
+    const legend = st.colorBy === "agent" ? visAg.map(a => ({ label: a.name, color: a.color, radius: "2px" })).concat([{ label: "Boxes by class", color: "#f2cc60", radius: "0" }])
+      : Object.entries(CLS).map(([n, c]) => ({ label: n, color: c, radius: "2px" })).concat([{ label: "ground / static", color: "#7a7a80", radius: "2px" }]);
+    const counts = Object.keys(CLS).map(n => ({ name: n, n: inRange.filter(o => o.cls === n).length, color: CLS[n] }));
+    const peak = Math.max(1, ...counts.map(c => c.n));
+    const p = objs.find(o => o.id === st.pick);
+    let pick = null;
+    if (p) {
+      const dists = ags.map(a => { const m = Math.hypot(p.x - a.x, p.y - a.y), inr = m < RANGE && !st.hidden[a.id];
+        return { name: a.name, color: a.color, m: `${m.toFixed(1)} m`, w: `${Math.min(100, m / 100 * 100)}%`, bar: inr ? a.color : "rgba(255,255,255,0.15)", text: inr ? "#e5e5ea" : "#6e6e73", inr }; });
+      pick = { id: p.id, cls: p.cls[0].toUpperCase() + p.cls.slice(1), speed: `${(p.v * 3.6).toFixed(1)} km/h`, size: `${p.l.toFixed(1)} × ${p.w.toFixed(1)} m`, dists, seenCount: dists.filter(d => d.inr).length };
+    }
+    const ca = ags[st.camAgent];
+    const caCams = ca.kind === "rsu" ? ["north", "east", "south", "west"] : CAMS;
+    const cams = caCams.map((c, i) => ({ label: `${c}`, boxes: `${Math.max(0, Math.round(inRange.length / 3) - i)} boxes`, border: st.view === "camera" && st.cam === c ? "#f5f5f7" : "rgba(255,255,255,0.08)",
+      pick: () => this.setState({ cam: c, view: "camera" }) }));
+    const sp = Math.max(...SPARK);
+    const spark = [];
+    for (let f = 0; f < FR; f += 3) spark.push({ h: `${Math.max(8, SPARK[f] / sp * 100)}%`, c: f <= st.frame ? "rgba(255,255,255,0.32)" : "rgba(255,255,255,0.12)" });
+    const g = this.geom();
+    return {
+      cols: `${st.showLeft ? "248px " : ""}minmax(0,1fr)${st.showRight ? " 268px" : ""}`,
+      showLeft: st.showLeft, showRight: st.showRight,
+      toggleLeft: () => this.setState(s => ({ showLeft: !s.showLeft })), toggleRight: () => this.setState(s => ({ showRight: !s.showRight })),
+      layers, agentRows, shownPtsLabel: `${k(totalPts)} pts`, agentsShown: `${visAg.length} of 4 shown`,
+      imgOpacity: st.imgOpacity, onImgOpacity: e => this.setState({ imgOpacity: +e.target.value }),
+      pointSize: st.pointSize, onPointSize: e => this.setState({ pointSize: +e.target.value }),
+      colorOpts: seg(st.colorBy, "colorBy", [["agent", "Agent"], ["class", "Class"]]),
+      boxOpts: seg(st.boxStyle, "boxStyle", [["wire", "Wire"], ["solid", "Solid"]]),
+      showKeys: st.showKeys !== false, viewpoints, stageTransform: transforms[st.view], canvasDisplay: st.view === "camera" ? "none" : "block",
+      isCameraView: st.view === "camera", camViewLabel: `${ca.name} · ${st.cam}`,
+      viewLabel: `${VIEWS.find(v => v[0] === st.view)[1]} · t = ${t.toFixed(2)} s`,
+      rangeLabel: st.view === "chase" ? `following ${ca.name}` : "world frame · 116 m",
+      scaleBarPx: g ? `${Math.round(g.s * 10)}px` : "40px",
+      legend, camAgentName: ca.name, camAgentColor: ca.color, cams,
+      cycleCamAgent: () => this.setState(s => ({ camAgent: (s.camAgent + 1) % 4 })),
+      showRadar: st.showRadar, radarToggleLabel: st.showRadar ? "Hide" : "Show", toggleRadar: () => this.setState(s => ({ showRadar: !s.showRadar })),
+      boxesNow: inRange.length, classBars: counts.map(c => ({ ...c, w: `${c.n / peak * 100}%` })),
+      hasPick: !!pick, noPick: !pick, pick: pick || { dists: [] }, clearPick: () => this.setState({ pick: null }),
+      onCanvasClick: e => {
+        if (st.view !== "bird" && st.view !== "chase") return;
+        const gg = this.geom(), r = e.currentTarget.getBoundingClientRect();
+        const wx = gg.cx + (e.clientX - r.left - gg.W / 2) / gg.s, wy = gg.cy - (e.clientY - r.top - gg.H / 2) / gg.s;
+        let best = null, bd = 4;
+        objs.forEach(o => { const d = Math.hypot(o.x - wx, o.y - wy); if (d < bd) { bd = d; best = o.id; } });
+        this.setState({ pick: best });
+      },
+      playIcon: st.playing ? "❚❚" : "▶︎", togglePlay: () => this.togglePlay(),
+      stepBack: () => this.step(-1), stepFwd: () => this.step(1),
+      timeLabel: `${t.toFixed(2)} s`, sampleLabel: `${st.frame + 1} / ${FR}`,
+      speeds: [0.25, 0.5, 1, 2].map(v => ({ label: `${v}×`, bg: st.speed === v ? "rgba(255,255,255,0.12)" : "transparent", color: st.speed === v ? "#f5f5f7" : "#a1a1a6", pick: () => this.setState({ speed: v }) })),
+      toggleLoop: () => this.setState(s => ({ loop: !s.loop })), loopBorder: st.loop ? "rgba(255,255,255,0.3)" : "rgba(255,255,255,0.1)", loopColor: st.loop ? "#f5f5f7" : "#6e6e73",
+      spark, progPct: `${st.frame / (FR - 1) * 100}%`, gaps: GAPS.map(f => ({ left: `${f / (FR - 1) * 100}%` })), gapCount: GAPS.length,
+      onScrubDown: e => { e.currentTarget.setPointerCapture(e.pointerId); this.scrubTo(e); },
+      onScrubMove: e => { if (e.currentTarget.hasPointerCapture(e.pointerId)) this.scrubTo(e); },
+      canvasRef: this.canvasRef, radarRef: this.radarRef, stageRef: this.stageRef, trackRef: this.trackRef,
+    };
+  }
+}
+</script>
+</body>
+</html>
