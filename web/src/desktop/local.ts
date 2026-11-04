@@ -568,6 +568,9 @@ async function controllerGet<T>(endpoint: string): Promise<T> {
 /** Every scene of the open cluster dataset and its state, as the main window last saw it. */
 export interface DatasetSceneList {
   scenes: { scene_id: string; state: string }[];
+  /** The dataset's name ("V2XSET train") and its server; absent from an older main window. */
+  label?: string;
+  server?: string;
 }
 
 export async function getDatasetScenes(): Promise<DatasetSceneList | null> {
