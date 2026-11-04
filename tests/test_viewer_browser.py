@@ -1744,7 +1744,8 @@ def test_views_and_layers_follow_what_the_scene_has(session: _Session) -> None:
     session.choose_scene(FILLER_SCENES[0])  # a vehicle only: no cameras
     session.wait_for(lambda: "Camera" not in _viewpoints(session), "the Camera view to go")
     layers = page.locator("details:has(summary:text('Layers')) .checks").inner_text()
-    assert "Frustums" not in layers and "Boxes" in layers, layers
+    # Neither "Camera frustums" nor "Frustum images" without a camera.
+    assert "frustum" not in layers.lower() and "Boxes" in layers, layers
 
 
 def test_the_unified_toolbar_keeps_clear_of_the_traffic_lights(
@@ -1810,3 +1811,150 @@ def test_switching_tabs_keeps_each_tab_mounted(session: _Session) -> None:
         "() => document.querySelector('.tab-panel:not([hidden])')?.dataset.mark === 'kept'"
     )
     assert visible.count() == 1
+
+
+# v0.1.1 layout (docs/design/v0.1.1/Scene Viewer.dc.html): what each new element
+# shows comes from the scene, and what the scene lacks is not offered.
+
+
+def _frames(session: _Session, scene_id: str) -> list[dict[str, object]]:
+    """Every frame of a scene, read from the API outside the page's own cache."""
+    found: object = session.page.evaluate(
+        """async (scene) => {
+            const base = `/api/scenes/${encodeURIComponent(scene)}`;
+            const summary = await (await fetch(base)).json();
+            const out = [];
+            for (const t of summary.times_us) {
+              out.push(await (await fetch(`${base}/frame?time_us=${t}`)).json());
+            }
+            return out;
+        }""",
+        scene_id,
+    )
+    assert isinstance(found, list)
+    return cast(list[dict[str, object]], found)
+
+
+def test_the_top_bar_places_the_scene_and_names_the_connection(session: _Session) -> None:
+    """‹ scene › with its place in the list; the right side says where scenes come from."""
+    page = session.page
+    order = sorted([SCENE_FULL, SCENE_BARE, *FILLER_SCENES])
+    assert page.locator(".crumb-count").inner_text() == f"1 of {len(order)}"
+    assert page.locator("button[aria-label='Previous scene (P)']").is_disabled()
+    page.locator("button[aria-label='Next scene (N)']").click()
+    session.wait_status(order[1])
+    assert page.locator(".crumb-count").inner_text() == f"2 of {len(order)}"
+    host = session.base.split("://", 1)[1]
+    assert page.locator(".top-actions .conn-state").inner_text() == f"Server · {host}"
+
+
+def test_layer_rows_count_what_the_sample_draws(session: _Session) -> None:
+    """Points, Boxes and Camera frustums count this sample; Road map names the map."""
+    page = session.page
+    step = page.locator("button[aria-label='Step forward']")
+    step.click()
+    step.click()
+    session.wait_status("at 100000 µs. 1 points")
+
+    def meta(name: str) -> str:
+        row = page.get_by_role("switch", name=name, exact=True)
+        return row.locator(".eye-meta").inner_text()
+
+    assert meta("Points") == "1"
+    assert meta("Boxes") == "6"
+    assert meta("Camera frustums") == "2"
+    assert meta("Road map") == "Town03"
+
+
+def test_rows_the_scene_cannot_fill_are_not_offered(session: _Session) -> None:
+    """No map: no Road map row (the reason stays). No cameras: no frustum rows."""
+    page = session.page
+    session.choose_scene(SCENE_BARE)  # no Town06 map
+    session.wait_for(
+        lambda: page.get_by_role("switch", name="Road map", exact=True).count() == 0,
+        "the Road map row to go",
+    )
+    assert page.get_by_role("switch", name="Axes", exact=True).count() == 1
+    assert "Map: no map for Town06." in page.locator(".panel .empty-state").all_inner_texts()
+    session.choose_scene(FILLER_SCENES[0])  # a vehicle only: no cameras
+    session.wait_for(
+        lambda: page.get_by_role("switch", name="Camera frustums", exact=True).count() == 0,
+        "the frustum rows to go",
+    )
+    assert page.get_by_role("switch", name="Frustum images", exact=True).count() == 0
+    assert page.locator(".cam-strip").count() == 0
+
+
+def test_sweep_gaps_mark_the_samples_without_lidar(session: _Session) -> None:
+    """A marker per sample whose frame has no point sensor with points, and their count."""
+    page = session.page
+    frames = _frames(session, SCENE_FULL)
+    expected = [
+        index
+        for index, frame in enumerate(frames)
+        if not any(
+            int(cast(dict[str, object], sensor)["count"]) > 0  # pyright: ignore[reportArgumentType]
+            for sensor in cast(list[object], frame["point_sensors"])
+        )
+    ]
+    assert 0 < len(expected) < len(frames), expected  # the fixture has both kinds
+    session.wait_for(
+        lambda: page.locator(".marker-gap").count() == len(expected), "the sweep-gap markers"
+    )
+    titles = [
+        page.locator(".marker-gap").nth(i).get_attribute("title")
+        for i in range(page.locator(".marker-gap").count())
+    ]
+    assert titles == [f"No lidar sweep at sample {index + 1}" for index in expected]
+    assert page.locator(".gap-legend").inner_text().strip() == f"{len(expected)} sweep gaps"
+    session.choose_scene(SCENE_BARE)  # no lidar at all: nothing is a gap
+    session.wait_for(lambda: page.locator(".marker-gap").count() == 0, "no gap markers")
+    assert page.locator(".gap-legend").inner_text().strip() == ""
+
+
+def test_the_camera_strip_counts_boxes_per_camera(session: _Session) -> None:
+    """Each thumbnail says how many boxes it sees; never more than the sample draws."""
+    page = session.page
+    step = page.locator("button[aria-label='Step forward']")
+    step.click()
+    step.click()
+    session.wait_status("at 100000 µs. 1 points")
+    counts = page.locator(".cam-thumb-count").all_inner_texts()
+    assert len(counts) == 2, counts
+    for text in counts:
+        number, word = text.split()
+        assert word in {"box", "boxes"} and 0 <= int(number) <= 6, counts
+
+
+def test_the_radar_hides_and_stays_hidden(browser: Browser, viewer_url: str) -> None:
+    """Hide removes the radar picture; the choice is kept for the next visit."""
+    page = browser.new_page(viewport={"width": 1600, "height": 1000})
+    session = _Session(page, viewer_url)
+    session.open()
+    radar = page.locator(".radar-card")
+    assert radar.locator("svg").count() == 1
+    assert "Centred on Vehicle 1" in radar.inner_text()
+    radar.get_by_role("button", name="Hide").click()
+    assert radar.locator("svg").count() == 0
+    assert _stored_view(session)["radarOpen"] is False
+    page.reload(wait_until="networkidle")
+    session.wait_status(SCENE_FULL)
+    assert page.locator(".radar-card svg").count() == 0
+    page.locator(".radar-card").get_by_role("button", name="Show").click()
+    assert page.locator(".radar-card svg").count() == 1
+    assert session.errors == [], session.errors
+    page.close()
+
+
+def test_the_stage_chips_say_the_view_and_the_frame(session: _Session) -> None:
+    """Title chip: viewpoint and time; frame chip: the world frame and view width; the
+    mode buttons keep their names (the key hint is drawn, not text)."""
+    page = session.page
+    assert page.locator(".status-pill").inner_text().startswith("Orbit · t = ")
+    session.wait_for(
+        lambda: page.locator(".frame-pill").inner_text().startswith("ENU frame · "),
+        "the view width",
+    )
+    assert page.locator(".frame-pill").inner_text().endswith(" m")
+    assert page.locator(".scale-bar").is_visible()
+    assert _viewpoints(session)[0] == "Orbit"

@@ -121,23 +121,32 @@ export default function PredictionsBlock({
         />
       ) : null}
       {runs !== null && runs.length === 0 ? (
-        <PanelState
-          compact
-          kind="empty"
-          title={PANEL_DEFINITIONS.predictions.empty.title}
-          description={PANEL_DEFINITIONS.predictions.empty.description}
-          actionLabel={PANEL_DEFINITIONS.predictions.empty.actionLabel}
-          onAction={() => {
-            if (typeof sessionStorage !== "undefined") {
-              try {
-                sessionStorage.setItem("coperceive-connect-tab", "remote");
-                sessionStorage.setItem("coperceive-hpc-tab", "evaluation");
-              } catch {}
-            }
-            window.location.hash = "#/connect/evaluation";
-            window.dispatchEvent(new CustomEvent("coperceive-open-evaluation"));
-          }}
-        />
+        <div className="pred-empty">
+          <div className="pred-empty-row">
+            <span>No run loaded</span>
+            <button
+              type="button"
+              className="ghost"
+              title="Open Evaluation, where finished prediction runs are imported or started"
+              onClick={() => {
+                if (typeof sessionStorage !== "undefined") {
+                  try {
+                    sessionStorage.setItem("coperceive-connect-tab", "remote");
+                    sessionStorage.setItem("coperceive-hpc-tab", "evaluation");
+                  } catch {}
+                }
+                window.location.hash = "#/connect/evaluation";
+                window.dispatchEvent(new CustomEvent("coperceive-open-evaluation"));
+              }}
+            >
+              Load run…
+            </button>
+          </div>
+          <p className="muted">
+            {PANEL_DEFINITIONS.predictions.empty.description} Overlay detections from a finished evaluation to
+            compare single-agent and fused results.
+          </p>
+        </div>
       ) : null}
       {runs !== null && runs.length > 0 ? (
         <div className="stack">
@@ -204,7 +213,15 @@ export default function PredictionsBlock({
                   />
                 ))}
               </div>
-              <Slider label={`Score ≥ ${score.toFixed(2)}`} value={score} min={0} max={1} step={0.01} onChange={onScore} />
+              <Slider
+                label={`Score ≥ ${score.toFixed(2)}`}
+                value={score}
+                min={0}
+                max={1}
+                step={0.01}
+                valueText={score.toFixed(2)}
+                onChange={onScore}
+              />
               {scoreDefault !== null && Math.abs(score - scoreDefault) > 1e-9 ? (
                 <button type="button" className="ghost" onClick={() => onScore(null)}>
                   Back to the run's {scoreDefault.toFixed(2)}

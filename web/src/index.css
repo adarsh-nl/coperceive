@@ -2868,3 +2868,240 @@ main > .tab-panel:not([hidden]) {
 .dv-insp-button.is-ok { background: var(--dv-ready); border-color: var(--dv-ready); color: #fff; }
 .dv-insp-button.is-danger { border-color: var(--dv-failed); color: var(--dv-failed); }
 .dv-insp-button.is-warn { border-color: var(--dv-stale); color: var(--dv-stale); }
+
+/* ------------------------------------------------------------------ */
+/* Scene viewer, v0.1.1 layout (docs/design/v0.1.1/Scene Viewer.dc.html):
+   flush side panels, the stage with its chips, the camera strip and the
+   timeline under it, scene stats / selection / radar on the right. */
+
+.viewer .workspace { padding: 0; }
+.viewer .workspace > .panel {
+  border-radius: 0;
+  box-shadow: none;
+  border: 0;
+  padding: 12px 16px;
+  background: var(--panel);
+}
+.viewer .workspace > .panel:not(.panel-right) { border-right: 1px solid var(--line); }
+.viewer .workspace > .panel-right { border-left: 1px solid var(--line); }
+.viewer .workspace > .stage { gap: 0; background: var(--viewport); }
+.viewer .viewport { border-radius: 0; box-shadow: none; }
+.viewer .panel-resizer-vertical::after { opacity: 0; }
+
+/* Section heads: sentence case, a muted count on the right. */
+.viewer .panel h2,
+.viewer .panel summary,
+.viewer .side-card h3 {
+  font-size: 11.5px;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
+  color: var(--muted);
+}
+.viewer .panel summary { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; cursor: pointer; }
+.viewer .panel summary::marker { content: ""; }
+.viewer .panel summary::-webkit-details-marker { display: none; }
+.summary-meta { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.viewer .panel details { padding: 12px 0; margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+.viewer .panel details.cam-fold { margin: 0; padding: 2px 0 0; }
+.viewer .checks { gap: 2px; }
+
+/* Layer and agent rows. */
+.eye-meta { margin-left: auto; color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.viewer .eye { grid-template-columns: 16px 1fr auto; padding: 6px 0; font-weight: 450; }
+.viewer .agent-list { gap: 4px; }
+.viewer .agent-list .swatch {
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 1px;
+  padding: 5px 0;
+}
+.viewer .agent-list .swatch i { grid-row: 1 / span 2; width: 10px; height: 10px; border-radius: 2px; }
+.viewer .agent-list .swatch > span:first-of-type { grid-column: 2; grid-row: 1; font-weight: 500; }
+.viewer .agent-list .agent-role { grid-column: 2; grid-row: 2; font-size: 11px; color: var(--muted); font-weight: 400; }
+.viewer .agent-list .agent-points { grid-column: 3; grid-row: 1 / span 2; font-size: 11.5px; }
+
+/* Appearance: label left, control right. */
+.viewer .panel .stack > .seg-field,
+.viewer .panel .stack > .slider-field { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.viewer .panel .stack > .seg-field .field-label,
+.viewer .panel .stack > .slider-field .field-label { text-transform: none; letter-spacing: 0; font-size: 12.5px; color: var(--text); font-weight: 400; }
+.viewer .panel .stack > .seg-field .seg { grid-column: 2 / span 2; }
+.viewer .checks > .slider-field { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 4px 0; }
+.viewer .checks > .slider-field .field-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.slider-value { font-size: 11.5px; color: var(--muted); min-width: 30px; text-align: right; }
+.viewer .seg button { padding: 5px 8px; font-size: 12.5px; }
+
+/* Predictions with no run. */
+.pred-empty-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.pred-empty-row button { height: 28px; padding: 0 12px; border: 1px solid var(--line-elevated); border-radius: 6px; font-size: 12.5px; }
+.pred-empty p { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; }
+
+/* Top bar: dataset / ‹ scene › · k of n, and where the scene comes from. */
+.scene-nav { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: var(--sunken); }
+.scene-nav .scene-step { width: 24px; height: 26px; font-size: 15px; letter-spacing: 0; padding: 0; }
+.scene-nav .menu-button { font-family: "Geist Mono Variable", ui-monospace, monospace; font-size: 12.5px; }
+.crumb-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.conn-state { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); white-space: nowrap; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; }
+.conn-state i { flex: none; width: 6px; height: 6px; border-radius: 99px; background: #3fb950; }
+.conn-state.wait i { background: #f58a1f; }
+.conn-state.bad i { background: var(--danger); }
+
+/* Stage chips: square-ish glass, pointer-transparent except the mode switch. */
+.viewer .glass { border-radius: 7px; background: rgba(14, 14, 14, 0.72); }
+.viewer .status-pill { top: 12px; left: 12px; font-size: 12px; }
+.frame-pill { top: 12px; right: 12px; padding: 6px 10px; font-size: 12px; pointer-events: none; white-space: nowrap; }
+.viewer .view-pill { top: 12px; right: auto; left: 50%; transform: translateX(-50%); padding: 3px; border-radius: 8px; }
+.viewer .view-slide { border-radius: 6px; }
+.viewer .view-pill button { border-radius: 6px; padding: 6px 12px; font-size: 12.5px; }
+.viewer .view-pill button::after {
+  content: attr(data-key);
+  margin-left: 6px;
+  font-family: "Geist Mono Variable", ui-monospace, monospace;
+  font-size: 10px;
+  opacity: 0.5;
+}
+.viewer .legend { left: 12px; bottom: 12px; font-size: 11.5px; padding: 7px 12px; border-radius: 7px; }
+.scale-bar {
+  position: absolute;
+  z-index: 2;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+  color: #c9c9c0;
+  font-size: 11px;
+  font-family: "Geist Mono Variable", ui-monospace, monospace;
+}
+.scale-bar[hidden] { display: none; }
+.scale-bar b {
+  display: block;
+  width: var(--bar, 60px);
+  height: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-top: 0;
+}
+.pick-tag {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(10, 10, 10, 0.72);
+  color: #f4f4ed;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Camera strip: one agent's cameras, a label column on the left. */
+.viewer .cam-strip { border-radius: 0; border: 0; border-top: 1px solid var(--line); background: var(--panel); box-shadow: none; }
+.viewer .cam-group { border-left: 0; padding-left: 0; }
+.cam-group-head { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
+.viewer .cam-group-name { font-size: 12.5px; color: var(--text); text-transform: none; letter-spacing: 0; display: inline-flex; align-items: center; gap: 6px; }
+.viewer .cam-group-name::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--agent, var(--vehicle)); }
+.cam-switch { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--accent); font-size: 12px; cursor: pointer; }
+.cam-switch:hover { text-decoration: underline; }
+.cam-thumb-count {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 10.5px;
+  color: #c9c9c0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+.viewer .status-line { padding: 4px 16px; background: var(--panel); font-size: 11.5px; }
+
+/* Timeline under the stage. */
+.viewer .stage > .timeline { margin: 0; border-radius: 0; border: 0; border-top: 1px solid var(--line); box-shadow: none; padding: 10px 16px 12px; }
+.viewer .timeline-tools { flex-wrap: nowrap; gap: 6px; }
+.viewer .timeline-tools .clock { margin: 0 0 0 10px; display: inline-flex; align-items: baseline; gap: 0; white-space: nowrap; }
+.viewer .clock strong { font-weight: 500; color: var(--text); font-size: 14px; }
+.viewer .clock .clock-total { color: var(--muted); margin-left: 4px; }
+.viewer .clock .clock-sample { margin-left: 10px; }
+.timeline-spacer { flex: 1; }
+.speed-seg { flex: none; }
+.speed-seg button { min-width: 38px; font-size: 12px; }
+.loop-btn { height: 28px; padding: 0 12px; border: 1px solid var(--line-elevated); border-radius: 6px; font-size: 12.5px; }
+.loop-btn[aria-pressed="true"] { background: var(--sunken); border-color: var(--text); }
+.timeline-body { display: grid; grid-template-columns: 68px minmax(0, 1fr) auto; align-items: end; column-gap: 12px; margin-top: 8px; }
+.hist-label { font-size: 10.5px; color: var(--muted); text-align: right; line-height: 1.2; padding-bottom: 8px; }
+.viewer .timeline-chart { margin-top: 0; }
+.viewer .ticks { position: relative; top: auto; height: 14px; margin-bottom: 2px; }
+.hist { display: flex; align-items: flex-end; gap: 1px; height: 22px; }
+.hist i { flex: 1; min-width: 1px; background: var(--line-elevated); border-radius: 1px 1px 0 0; }
+.hist i.past { background: color-mix(in srgb, var(--text) 38%, transparent); }
+.viewer .track { height: 14px; margin-top: 2px; }
+.viewer .track::before { top: 6px; height: 2px; border-radius: 1px; background: var(--line-elevated); }
+.track-fill { position: absolute; left: 0; top: 6px; height: 2px; border-radius: 1px; background: var(--text); pointer-events: none; }
+.track-thumb {
+  position: absolute;
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 99px;
+  background: var(--text);
+  border: 2px solid var(--panel);
+  pointer-events: none;
+  z-index: 3;
+}
+.viewer .marker { top: 4px; width: 6px; height: 6px; margin-left: -3px; background: var(--muted); }
+.viewer .marker.marker-gap { top: 2px; width: 2px; height: 10px; margin-left: -1px; transform: none; border-radius: 1px; background: var(--eval-fp); }
+.viewer .playhead { top: 14px; bottom: 14px; width: 1px; background: color-mix(in srgb, var(--text) 70%, transparent); }
+.viewer .flag { display: none; }
+.gap-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; padding-bottom: 2px; min-width: 0; }
+.gap-legend i { width: 2px; height: 10px; border-radius: 1px; background: var(--eval-fp); }
+
+/* Right panel. */
+.viewer .side-card { padding: 12px 0; border-top: 1px solid var(--line); margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+.viewer .panel-right > .side-card:first-child { border-top: 0; padding-top: 0; }
+.viewer .side-card h3 { display: flex; align-items: center; margin-bottom: 12px; }
+.side-card-action { margin-left: auto; padding: 0; border: 0; background: none; color: var(--muted); font-size: 11.5px; cursor: pointer; }
+.side-card-action:hover { color: var(--text); }
+.viewer .stat-grid { row-gap: 12px; }
+.viewer .stat-grid dt { text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+.viewer .side-card[aria-label="Scene summary"] .stat-grid dd { font-size: 16px; font-weight: 500; }
+.sel-title { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; }
+.sel-title strong { font-size: 15px; font-weight: 600; }
+.sel-title .num { color: var(--muted); font-size: 12px; }
+.dist-head { margin: 14px 0 6px; font-size: 11.5px; color: var(--muted); }
+.viewer .distance-list { margin: 0; display: flex; flex-direction: column; gap: 3px; }
+.viewer .distance-list li { display: grid; grid-template-columns: minmax(0, 1fr) 72px 52px; align-items: center; font-size: 12px; }
+.viewer .distance-list li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer .distance-list li .num { text-align: right; }
+.viewer .distance-list li.unseen { opacity: 0.45; }
+.dist-bar { height: 3px; border-radius: 2px; background: var(--line-elevated); overflow: hidden; }
+.dist-bar i { display: block; height: 100%; background: var(--text); opacity: 0.7; }
+.dist-note { margin: 6px 0 0; font-size: 11px; }
+.viewer .radar-card { flex: none; min-height: 0; }
+.radar-body { display: grid; grid-template-columns: minmax(0, 120px) minmax(0, 1fr); gap: 12px; align-items: center; }
+.radar-body p { margin: 0; font-size: 11.5px; line-height: 1.5; }
+.radar-bg { fill: #141414; }
+.radar-ring { stroke: #2e2e2e; }
+.radar-text { fill: #a3a3a3; }
+.radar-box { fill: #8a8a8a; }
+.radar-picked { fill: #f4f4ed; }
+.side-fold { border-top: 1px solid var(--line); margin: 0 -16px; padding: 12px 16px 0; }
+.side-fold summary { cursor: pointer; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+.side-fold[open] summary { margin-bottom: 8px; }
+.side-fold .tele:first-of-type { border-top: 0; padding-top: 0; }
+.viewer .cam-strip[data-open="true"] { padding: 8px 16px; gap: 14px; }
+.viewer .cam-groups { flex: 1; }
+.viewer .cam-group { flex: 1; min-width: 0; flex-direction: row; gap: 14px; }
+.viewer .cam-thumbs { flex: 1; min-width: 0; gap: 8px; }
+.viewer .cam-thumb-wrap { flex: 1 1 0; min-width: 112px; max-width: 300px; }
+.viewer .cam-thumb { width: 100%; height: 100%; min-height: 56px; border-radius: 6px; }
+.viewer .cam-thumb-name {
+  top: 0;
+  bottom: auto;
+  padding: 4px 7px;
+  font-family: "Geist Mono Variable", ui-monospace, monospace;
+  font-size: 10.5px;
+  background: linear-gradient(rgba(0, 0, 0, 0.55), transparent);
+}
+.viewer .timeline-body { align-items: start; }
+.viewer .hist-label { padding: 18px 0 0; }
+.viewer .gap-legend { padding-top: 40px; }
+.viewer .glass, .viewer .scale-bar { z-index: 3; }
