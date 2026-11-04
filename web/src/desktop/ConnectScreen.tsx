@@ -6,11 +6,14 @@ import {
   cancelImport,
   getPersistentState,
   getStorageInfo,
+  inspectFolder,
   isTauriEnvironment,
   listServerProfiles,
   onImportProgress,
   pickDataRoot,
+  onFolderDrop,
   startImport,
+  type FolderCheck,
   type ImportImages,
 } from "./local";
 import type { ConnectionSession } from "./types";
@@ -27,6 +30,18 @@ import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
 import type { ServerEntry } from "./hpc";
+import {
+  GridTable,
+  MiniBar,
+  NavCountButton,
+  PageHeaderProvider,
+  PageLayout,
+  PublishedActions,
+  PublishedMeta,
+  createPageHeaderStore,
+} from "./components/Page";
+import { FolderCheckPanel, OpenFolderHeader, recentColumns as folderColumns } from "./OpenFolder";
+import { datasetJobs as currentDatasetJobs, subscribeDatasetJobs, type DatasetJobs } from "./jobsStore";
 
 interface ConnectScreenProps {
   onConnected: (session: ConnectionSession) => void;
@@ -69,6 +84,53 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [hpcServers, setHpcServers] = useState<ServerEntry[]>([]);
   const [hpcSubTab, setHpcSubTab] = useState<WorkspaceTab>("servers");
   const [activeHpcDataset, setActiveHpcDataset] = useState<ActiveDatasetPayload | null>(null);
+  // What each page shows in the one-line header and as its sidebar count.
+  // Held outside this component's state: see createPageHeaderStore.
+  const [headerStore] = useState(createPageHeaderStore);
+  const [datasetJobs, setDatasetJobs] = useState<DatasetJobs[]>(() => currentDatasetJobs());
+  useEffect(() => subscribeDatasetJobs(() => setDatasetJobs(currentDatasetJobs())), []);
+  const [collapsedDatasets, setCollapsedDatasets] = useState<ReadonlySet<string>>(() => new Set());
+  // Open Folder: the folder check for the chosen path and each recent folder.
+  const [folderChecks, setFolderChecks] = useState<Record<string, FolderCheck | null>>({});
+  const [dropHover, setDropHover] = useState(false);
+  useEffect(() => {
+    const wanted = [dataRoot, ...recentRoots].filter((root) => root && !(root in folderChecks));
+    if (wanted.length === 0) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      for (const root of wanted) {
+        void inspectFolder(root)
+          .then((check) => {
+            if (!cancelled) setFolderChecks((current) => ({ ...current, [root]: check }));
+          })
+          .catch(() => undefined);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [dataRoot, recentRoots, folderChecks]);
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void onFolderDrop(
+      (path) => {
+        setDataRoot(path);
+        setError("");
+        setActiveTab("local");
+      },
+      setDropHover,
+    ).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, []);
+  const recentColumns = folderColumns(folderChecks);
 
   // Import dialog state
   const [importOpen, setImportOpen] = useState<boolean>(false);
@@ -108,9 +170,14 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     window.addEventListener("coperceive-test-panel-state", handleTestPanelState);
 
     const handleOpenFolderSeed = (event: Event) => {
-      const custom = event as CustomEvent<{ dataRoot?: string; recentRoots?: string[] }>;
+      const custom = event as CustomEvent<{
+        dataRoot?: string;
+        recentRoots?: string[];
+        checks?: Record<string, FolderCheck | null>;
+      }>;
       if (custom.detail?.dataRoot !== undefined) setDataRoot(custom.detail.dataRoot);
       if (custom.detail?.recentRoots !== undefined) setRecentRoots(custom.detail.recentRoots);
+      if (custom.detail?.checks !== undefined) setFolderChecks(custom.detail.checks);
     };
     window.addEventListener("coperceive-test-open-folder-seed", handleOpenFolderSeed);
 
@@ -343,8 +410,19 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   };
 
   const activeFooterServer = activeHpcDataset?.profile ?? hpcServers[0] ?? null;
+  const pageKey = activeTab === "remote" ? hpcSubTab : activeTab;
+  const pageTitle =
+    ({
+      library: "Library",
+      get_data: "Get Data",
+      local: "Open Folder",
+      servers: "Servers",
+      evaluation: "New evaluation",
+      history: "Run history",
+    } as Record<string, string>)[pageKey] ?? "HPC Workspace";
 
   return (
+    <PageHeaderProvider value={headerStore}>
     <div
       style={{
         position: "relative",
@@ -469,17 +547,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           </div>
         }
       >
-        {/* Local / General Section */}
-        <div
-          style={{
-            padding: "4px 8px 4px",
-            fontSize: "11px",
-            fontWeight: 500,
-            color: "var(--text-subtle)",
-          }}
-        >
-          Local
-        </div>
+        {/* Local */}
+        <div className="c-sidebar-group">Local</div>
         <nav
           style={{ display: "flex", flexDirection: "column", gap: "1px" }}
           role="tablist"
@@ -494,54 +563,29 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           ).map(([tabKey, label]) => {
             const selected = activeTab === tabKey;
             return (
-              <button
+              <NavCountButton
                 key={tabKey}
+                page={tabKey}
                 type="button"
                 role="tab"
                 aria-selected={selected}
                 onClick={() => setActiveTab(tabKey)}
-                className={`c-sidebar-item ${selected ? "active" : ""}`}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "5px 8px",
-                  borderRadius: "6px",
-                  fontSize: "13px",
-                  fontWeight: selected ? 500 : 400,
-                  color: selected ? "var(--text)" : "var(--text-secondary)",
-                  backgroundColor: selected ? "var(--line, rgba(255, 255, 255, 0.08))" : "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  width: "100%",
-                }}
+                className={`c-sidebar-item c-nav-item ${selected ? "active" : ""}`}
               >
-                <span>{label}</span>
-              </button>
+                {label}
+              </NavCountButton>
             );
           })}
         </nav>
 
-        {/* HPC Workspace Section in Sidebar (matching Claude Design mock) */}
-        <nav
-          style={{ display: "flex", flexDirection: "column", gap: "1px", marginTop: "12px" }}
-          aria-label="HPC workspace navigation"
-        >
+        {/* HPC workspace. The group label is a button inside this nav whose text is
+            exactly "HPC Workspace": scripts/desktop/e2e_mac.sh (Step 5h) selects it so. */}
+        <nav style={{ display: "flex", flexDirection: "column", gap: "1px" }} aria-label="HPC workspace navigation">
           <button
             type="button"
+            className="c-sidebar-group c-sidebar-group-button"
+            style={{ marginTop: "12px" }}
             onClick={() => navigateHpcSection("servers")}
-            style={{
-              padding: "6px 8px 4px",
-              fontSize: "11px",
-              fontWeight: 500,
-              color: "var(--text-subtle)",
-              background: "transparent",
-              border: "none",
-              cursor: "pointer",
-              textAlign: "left",
-              width: "100%",
-            }}
           >
             HPC Workspace
           </button>
@@ -551,93 +595,39 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               ["evaluation", "New evaluation", undefined],
               ["history", "Run history", undefined],
             ] as const
-          ).map(([secKey, label, badge]) => {
+          ).map(([secKey, label, count]) => {
             const isSelected = activeTab === "remote" && hpcSubTab === secKey;
             return (
-              <button
+              <NavCountButton
                 key={secKey}
+                page={secKey}
+                count={count}
+                liveClassName={secKey === "history" ? "is-live" : undefined}
                 type="button"
                 onClick={() => navigateHpcSection(secKey)}
-                className="c-sidebar-item"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "5px 8px",
-                  borderRadius: "6px",
-                  fontSize: "13px",
-                  fontWeight: isSelected ? 500 : 400,
-                  color: isSelected ? "var(--text)" : "var(--text-secondary)",
-                  backgroundColor: isSelected
-                    ? "var(--line, rgba(255, 255, 255, 0.08))"
-                    : "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  width: "100%",
-                }}
+                className={`c-sidebar-item c-nav-item ${isSelected ? "active" : ""}`}
+                aria-current={isSelected ? "page" : undefined}
               >
-                <span>{label}</span>
-                {badge ? (
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      color: "var(--text-tertiary)",
-                      fontWeight: 400,
-                      fontVariantNumeric: "tabular-nums",
-                    }}
-                  >
-                    {badge}
-                  </span>
-                ) : null}
-              </button>
+                {label}
+              </NavCountButton>
             );
           })}
         </nav>
 
-        {/* Servers Tree in Sidebar (matching Claude Design mock) */}
-        <div
-          style={{
-            marginTop: "12px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1px",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "6px 8px 4px",
-            }}
-          >
-            <span style={{ fontSize: "11px", fontWeight: 500, color: "var(--text-subtle)" }}>
-              Servers
-            </span>
+        {/* Servers tree: server, its dataset, the split's progress, browse */}
+        <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "1px" }}>
+          <div className="c-sidebar-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>Servers</span>
             <button
               type="button"
               title="Add server"
               aria-label="New server profile"
+              className="c-sidebar-add"
               onClick={() => {
                 navigateHpcSection("servers");
                 setTimeout(() => {
                   window.dispatchEvent(new CustomEvent("coperceive-hpc-add-server"));
                 }, 0);
-              }}
-              style={{
-                width: "18px",
-                height: "18px",
-                padding: 0,
-                display: "grid",
-                placeItems: "center",
-                borderRadius: "4px",
-                border: "none",
-                background: "transparent",
-                color: "var(--text-tertiary)",
-                fontSize: "15px",
-                lineHeight: 1,
-                cursor: "pointer",
               }}
             >
               +
@@ -648,124 +638,75 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             const srvName = srv.profile?.name || srv.id;
             const hasDataset = activeHpcDataset && activeHpcDataset.profile.id === srv.id;
             const dsDoc = hasDataset ? activeHpcDataset.dataset : null;
-            const isDatasetSelected =
-              activeTab === "remote" && hpcSubTab === "dataset" && hasDataset;
+            const isDatasetSelected = activeTab === "remote" && hpcSubTab === "dataset" && Boolean(hasDataset);
+            const jobs = dsDoc ? datasetJobs.find((entry) => entry.profileId === srv.id) : undefined;
+            const expanded = !collapsedDatasets.has(srv.id);
+            const adapter = (dsDoc?.adapter || "dataset").toUpperCase();
             return (
               <div key={srv.id} style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    padding: "5px 8px",
-                    color: "var(--text)",
-                    fontSize: "13px",
-                  }}
-                >
-                  <span
-                    style={{
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      backgroundColor: "#3fb950",
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span
-                    style={{
-                      fontWeight: 500,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {srvName}
-                  </span>
+                <div className="c-tree-server">
+                  <span className="c-dot" style={{ backgroundColor: "#3fb950" }} />
+                  <span className="c-tree-name">{srvName}</span>
                 </div>
-
-                <div
-                  style={{
-                    padding: "0 8px 0 23px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "1px",
-                  }}
-                >
-                  {dsDoc && (
-                    <>
-                      <div
-                        style={{
-                          fontFamily: "'Geist Mono', ui-monospace, monospace",
-                          fontSize: "11px",
-                          color: "var(--text-subtle)",
-                          padding: "0 0 4px",
-                        }}
-                      >
-                        {(dsDoc.adapter || "dataset").toLowerCase()}
-                      </div>
+                {dsDoc ? (
+                  <>
+                    <button
+                      type="button"
+                      className="c-sidebar-item c-tree-dataset"
+                      aria-expanded={expanded}
+                      onClick={() =>
+                        setCollapsedDatasets((current) => {
+                          const next = new Set(current);
+                          if (next.has(srv.id)) next.delete(srv.id);
+                          else next.add(srv.id);
+                          return next;
+                        })
+                      }
+                    >
+                      <span aria-hidden="true" className="c-tree-caret">{expanded ? "▾" : "▸"}</span>
+                      {adapter}
+                    </button>
+                    {expanded ? (
                       <button
                         type="button"
                         onClick={() => navigateHpcSection("dataset")}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          padding: "5px 8px",
-                          marginLeft: "-8px",
-                          borderRadius: "6px",
-                          border: "none",
-                          backgroundColor: isDatasetSelected
-                            ? "rgba(31, 111, 235, 0.22)"
-                            : "transparent",
-                          color: "var(--text)",
-                          fontSize: "12.5px",
-                          fontWeight: isDatasetSelected ? 500 : 400,
-                          cursor: "pointer",
-                          textAlign: "left",
-                        }}
+                        className={`c-sidebar-item c-tree-split ${isDatasetSelected ? "active" : ""}`}
+                        aria-current={isDatasetSelected ? "page" : undefined}
+                        title={jobs ? `${jobs.ready} of ${jobs.total} scenes ready` : `${dsDoc.scene_count} scenes`}
                       >
                         <span>{dsDoc.split || "all"}</span>
-                        <span
-                          style={{
-                            fontSize: "11px",
-                            color: isDatasetSelected ? "var(--primary-hover, #a5c8ff)" : "var(--text-tertiary)",
-                            fontVariantNumeric: "tabular-nums",
-                            fontFamily: "'Geist Mono', ui-monospace, monospace",
-                          }}
-                        >
-                          {dsDoc.scene_count}
-                        </span>
+                        {jobs && jobs.total > 0 ? (
+                          <>
+                            <MiniBar value={jobs.ready / jobs.total} tone="ok" />
+                            <span className="c-tree-count">
+                              {jobs.ready}/{jobs.total}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="c-tree-count" style={{ marginLeft: "auto" }}>
+                            {dsDoc.scene_count}
+                          </span>
+                        )}
                       </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigateHpcSection("servers");
-                      setTimeout(() => {
-                        window.dispatchEvent(
-                          new CustomEvent("coperceive-hpc-browse-server", {
-                            detail: { profile: srv },
-                          }),
-                        );
-                      }, 0);
-                    }}
-                    className="c-sidebar-item"
-                    style={{
-                      padding: "5px 8px",
-                      marginLeft: "-8px",
-                      borderRadius: "6px",
-                      border: "none",
-                      background: "transparent",
-                      color: "var(--text-tertiary)",
-                      fontSize: "12.5px",
-                      textAlign: "left",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Browse data…
-                  </button>
-                </div>
+                    ) : null}
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigateHpcSection("servers");
+                    setTimeout(() => {
+                      window.dispatchEvent(
+                        new CustomEvent("coperceive-hpc-browse-server", {
+                          detail: { profile: srv },
+                        }),
+                      );
+                    }, 0);
+                  }}
+                  className="c-sidebar-item c-tree-browse"
+                >
+                  Browse data…
+                </button>
               </div>
             );
           })}
@@ -818,12 +759,10 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                 <BrandWordmark fontSize="13px" />
               </div>
             )}
-            <h1 style={{ fontSize: "13.5px", fontWeight: 500, margin: 0, color: "var(--text)" }}>
-              {activeTab === "library" && "Library"}
-              {activeTab === "get_data" && "Get Data"}
-              {activeTab === "local" && "Open Local Folder"}
-              {activeTab === "remote" && "HPC Workspace"}
-            </h1>
+            <div className="c-header-title">
+              <h1>{pageTitle}</h1>
+              <PublishedMeta page={pageKey} />
+            </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
@@ -833,6 +772,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               </div>
             )}
             <JobsIndicator onOpenWorkspace={() => setActiveTab("remote")} />
+            <PublishedActions page={pageKey} />
           </div>
         </header>
 
@@ -846,12 +786,15 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               key={libraryKey}
               onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
               onNavigateGetData={() => setActiveTab("get_data")}
+              onNavigateOpenFolder={() => setActiveTab("local")}
+              onNavigateServers={() => navigateHpcSection("servers")}
             />
           </div>
 
           <div className="tab-panel" hidden={activeTab !== "get_data"}>
             <GetDataScreen
               onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
+              onOpenLibrary={() => setActiveTab("library")}
               onOpenImportFolder={(folder) => {
                 if (folder) setImportSource(folder);
                 setImportOpen(true);
@@ -862,69 +805,22 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
           {/* Open Folder Tab: Left-aligned full-width compact form + Dense Recent Datasets table */}
           <div className="tab-panel" hidden={activeTab !== "local"}>
-            <div
-              style={{
-                display: "flex",
-                flexDirection: "column",
-                minHeight: "calc(100vh - 52px)",
-                fontSize: "13px",
-              }}
-            >
-              <section
-                style={{
-                  padding: "18px 24px 14px",
-                  display: "flex",
-                  flexDirection: "column",
-                  gap: "4px",
-                  borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-                }}
+            <OpenFolderHeader active={activeTab === "local"} />
+            <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 52px)", fontSize: "13px" }}>
+              <PageLayout
+                inspectorLabel="Folder check"
+                inspector={
+                  dataRoot ? (
+                    <FolderCheckPanel
+                      check={dataRoot in folderChecks ? folderChecks[dataRoot] : undefined}
+                      busy={busy}
+                      onOpen={() => handleConnectLocal()}
+                      onOpenFresh={() => handleConnectLocal(undefined, true)}
+                    />
+                  ) : null
+                }
               >
-                <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-                  Local workspace · open folder
-                </div>
-                <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
-                  <h2
-                    style={{
-                      fontSize: "20px",
-                      margin: 0,
-                      color: "var(--text)",
-                      fontWeight: 600,
-                      letterSpacing: "-0.01em",
-                    }}
-                  >
-                    Open Local Folder
-                  </h2>
-                  <span style={{ fontSize: "12.5px", color: "var(--text-tertiary)" }}>
-                    Browse directly to any folder holding schema 1 scenes or datasets.
-                  </span>
-                </div>
-              </section>
-
-              <div
-                style={{
-                  padding: "18px 24px",
-                  display: "grid",
-                  gridTemplateColumns:
-                    recentRoots.length > 0
-                      ? "minmax(340px, 520px) minmax(280px, 1fr)"
-                      : "minmax(340px, 560px)",
-                  gap: "24px",
-                  alignItems: "start",
-                }}
-              >
-                {/* Left Column: Compact Folder Form + Collapsible Import */}
-                <div
-                  className="connect-card"
-                  style={{
-                    backgroundColor: "var(--panel)",
-                    borderRadius: "8px",
-                    border: "1px solid var(--line)",
-                    padding: "16px 18px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "12px",
-                  }}
-                >
+                <section className="c-open-form">
                   {busy && (
                     <PanelState
                       compact
@@ -938,7 +834,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       }}
                     />
                   )}
-
                   {!busy && !dataRoot && recentRoots.length === 0 && (
                     <PanelState
                       compact
@@ -949,92 +844,41 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       onAction={handlePickFolder}
                     />
                   )}
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                    <span style={{ fontSize: "11px", fontWeight: 500, color: "var(--text-subtle)" }}>
-                      Dataset folder path
-                    </span>
-                    <div style={{ display: "flex", gap: "8px" }}>
-                      <IdentifierInput
-                        type="text"
-                        readOnly
-                        placeholder="No directory selected..."
-                        value={dataRoot}
-                        aria-label="Selected dataset folder"
-                        style={{
-                          flex: 1,
-                          padding: "6px 10px",
-                          fontSize: "12.5px",
-                          borderRadius: "6px",
-                          border: "1px solid var(--line-elevated)",
-                          backgroundColor: "var(--sunken)",
-                          color: "var(--text)",
-                          fontFamily: "'Geist Mono', ui-monospace, monospace",
-                        }}
-                      />
-                      <button
-                        type="button"
-                        onClick={handlePickFolder}
-                        disabled={busy}
-                        aria-label="Choose dataset folder"
-                        style={{
-                          padding: "6px 12px",
-                          fontSize: "12.5px",
-                          borderRadius: "6px",
-                          cursor: "pointer",
-                          border: "1px solid var(--line-elevated)",
-                          backgroundColor: "transparent",
-                          color: "var(--text)",
-                          fontWeight: 500,
-                        }}
-                      >
-                        Choose…
-                      </button>
-                    </div>
-                  </div>
-
-                  <div style={{ display: "flex", gap: "8px" }}>
+                  <label className="c-inspector-label" htmlFor="open-folder-path">
+                    Folder path
+                  </label>
+                  <div style={{ display: "flex", gap: "8px", maxWidth: "760px" }}>
+                    <IdentifierInput
+                      id="open-folder-path"
+                      type="text"
+                      placeholder="/path/to/scenes"
+                      value={dataRoot}
+                      onChange={(event) => {
+                        setDataRoot(event.target.value);
+                        setError("");
+                      }}
+                      aria-label="Selected dataset folder"
+                      className="c-path-input"
+                    />
                     <button
                       type="button"
-                      onClick={() => handleConnectLocal()}
-                      disabled={busy || !dataRoot}
-                      aria-label="Open Local Viewer"
-                      style={{
-                        flex: 1,
-                        padding: "7px 14px",
-                        fontSize: "13px",
-                        fontWeight: 500,
-                        borderRadius: "6px",
-                        cursor: busy || !dataRoot ? "not-allowed" : "pointer",
-                        border: "none",
-                        backgroundColor: busy || !dataRoot ? "var(--sunken)" : "var(--accent)",
-                        color: busy || !dataRoot ? "var(--muted)" : "var(--accent-ink)",
-                      }}
+                      onClick={handlePickFolder}
+                      disabled={busy}
+                      aria-label="Choose dataset folder"
+                      className="c-secondary"
                     >
-                      {busy ? "Connecting…" : "Open Local Viewer"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => handleConnectLocal(undefined, true)}
-                      disabled={busy || !dataRoot}
-                      title="Connect without restoring saved session state"
-                      aria-label="Start fresh without restoring saved session state"
-                      style={{
-                        padding: "7px 12px",
-                        fontSize: "12.5px",
-                        fontWeight: 500,
-                        borderRadius: "6px",
-                        cursor: busy || !dataRoot ? "not-allowed" : "pointer",
-                        border: "1px solid var(--line-elevated)",
-                        backgroundColor: "transparent",
-                        color: "var(--text)",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      Start fresh
+                      Choose…
                     </button>
                   </div>
-
+                  <p className={`c-drop-note${dropHover ? " is-hover" : ""}`}>
+                    {dropHover ? "Drop the folder to check it." : "Or drop a folder anywhere on this window."}
+                  </p>
+                  {error ? (
+                    <p role="alert" className="dataset-error-msg" style={{ color: "var(--danger)", margin: 0, fontSize: "12.5px" }}>
+                      {error}
+                    </p>
+                  ) : null}
+                  <div className="c-open-import">
                   {/* Import from folder section */}
                   <div style={{ borderTop: "1px solid var(--line-subtle)", paddingTop: "10px" }}>
                     <button
@@ -1239,92 +1083,30 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       </div>
                     )}
                   </div>
-                </div>
-
-                {/* Right Column: Dense Recent Datasets Table */}
-                {recentRoots.length > 0 && (
-                  <div
-                    style={{
-                      backgroundColor: "var(--panel)",
-                      border: "1px solid var(--line)",
-                      borderRadius: "8px",
-                      overflow: "hidden",
-                    }}
-                  >
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "minmax(120px, 1fr) minmax(180px, 2fr)",
-                        alignItems: "center",
-                        gap: "12px",
-                        padding: "0 16px",
-                        height: "30px",
-                        backgroundColor: "var(--sunken)",
-                        borderBottom: "1px solid var(--line)",
-                        fontSize: "11px",
-                        color: "var(--text-subtle)",
-                      }}
-                    >
-                      <span>Recent Datasets</span>
-                      <span style={{ textAlign: "right" }}>Path</span>
-                    </div>
-                    <div style={{ display: "flex", flexDirection: "column" }}>
-                      {recentRoots.map((root, idx) => {
-                        const base = root.split("/").filter(Boolean).pop() || root;
-                        const isSelected = dataRoot === root;
-                        return (
-                          <button
-                            key={root}
-                            type="button"
-                            onClick={() => {
-                              setDataRoot(root);
-                              setError("");
-                            }}
-                            aria-label={`Select recent dataset ${base}`}
-                            className="c-table-row"
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "minmax(120px, 1fr) minmax(180px, 2fr)",
-                              alignItems: "center",
-                              gap: "12px",
-                              textAlign: "left",
-                              padding: "8px 16px",
-                              fontSize: "12.5px",
-                              backgroundColor: isSelected
-                                ? "rgba(31, 111, 235, 0.16)"
-                                : "transparent",
-                              boxShadow: isSelected ? "inset 2px 0 0 #388bfd" : "none",
-                              color: "var(--text)",
-                              border: "none",
-                              borderBottom:
-                                idx < recentRoots.length - 1
-                                  ? "1px solid var(--line-subtle)"
-                                  : "none",
-                              borderRadius: 0,
-                              cursor: "pointer",
-                            }}
-                          >
-                            <span style={{ fontWeight: 500, whiteSpace: "nowrap" }}>{base}</span>
-                            <span
-                              style={{
-                                color: "var(--text-tertiary)",
-                                fontSize: "11.5px",
-                                overflow: "hidden",
-                                textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
-                                fontFamily: "'Geist Mono', ui-monospace, monospace",
-                                textAlign: "right",
-                              }}
-                            >
-                              {root}
-                            </span>
-                          </button>
-                        );
-                      })}
-                    </div>
                   </div>
-                )}
-              </div>
+                </section>
+
+                {recentRoots.length > 0 ? (
+                  <>
+                    <div className="c-inspector-label" style={{ padding: "16px 24px 8px" }}>
+                      Recent
+                    </div>
+                    <GridTable
+                      label="Recent folders"
+                      columns={recentColumns}
+                      rows={recentRoots}
+                      rowKey={(root) => root}
+                      selectedKey={dataRoot || null}
+                      onSelect={(root) => {
+                        setDataRoot(root);
+                        setError("");
+                      }}
+                      onActivate={(root) => void handleConnectLocal(root)}
+                      rowHeight={34}
+                    />
+                  </>
+                ) : null}
+              </PageLayout>
             </div>
           </div>
 
@@ -1348,5 +1130,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
+    </PageHeaderProvider>
   );
 }

@@ -1,115 +1,65 @@
 // SPDX-License-Identifier: Apache-2.0
 /**
- * Browse a remote server's data folders.
+ * Browse a remote server's data folders (docs/design/v0.1.1/App Pages.dc.html,
+ * Servers): a breadcrumb path, the folders listed under it, and an inspector
+ * for the selected folder.
  *
- * Metadata only: the app runs `coperceive remote scan` over the reused SSH
- * connection and shows folder listings, detected scenes and datasets, and the
- * plain-language notes when a bound stopped the scan. Opening a scene for
- * playback needs the confirmed job-submission step, so the Open button is
- * disabled and explains that nothing was started.
+ * Metadata only: one `coperceive remote scan` over the reused SSH connection
+ * per folder lists the subfolders, their file counts and what each one is
+ * ("Recognised as", from the same listing). Opening a dataset runs the usual
+ * `dataset detect` on the selected folder first; nothing starts on the cluster.
  */
-import { useEffect, useMemo, useState } from "react";
-import {
-  browseCrumbs,
-  browseRows,
-  OPEN_BLOCKED_REASON,
-  parentBrowsePath,
-  relativeBrowsePath,
-  scanSummary,
-  selectionLabel,
-  skippedMessages,
-  truncatedMessage,
-} from "./browse";
-import type { ScanDocument, ServerEntry } from "./hpc";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
+import { browseCrumbs, relativeBrowsePath, skippedMessages, truncatedMessage } from "./browse";
+import type { FolderInfo, ScanDocument, ServerEntry } from "./hpc";
 import { remoteScan } from "./local";
-import {
-  datasetDetect,
-  formatDetectBannerTitle,
-  formatLicenceInfo,
-  type ClusterDetectDocument,
-} from "./clusterDatasets";
+import { datasetDetect, formatLicenceInfo, type ClusterDetectDocument } from "./clusterDatasets";
 import { errorText } from "./errors";
+import { GridTable, InspectorSection, PageLayout, PageToolbar, type GridColumn } from "./components/Page";
 
-const card = {
-  backgroundColor: "rgba(28, 28, 30, 0.85)",
-  border: "1px solid rgba(255, 255, 255, 0.14)",
-  borderRadius: "14px",
-  padding: "1.25rem",
-  marginTop: "1rem",
-  boxShadow: "0 20px 50px rgba(0, 0, 0, 0.45)",
-} as const;
+function nameOf(path: string): string {
+  const parts = path.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? path;
+}
 
-const secondaryButton = {
-  padding: "0.4rem 0.7rem",
-  borderRadius: "6px",
-  border: "1px solid rgba(255, 255, 255, 0.18)",
-  backgroundColor: "transparent",
-  color: "#f5f5f7",
-  fontSize: "0.8rem",
-  cursor: "pointer",
-} as const;
+function isChild(current: string, path: string): boolean {
+  if (path === "." || path === current) return false;
+  const prefix = current ? `${current}/` : "";
+  return path.startsWith(prefix) && !path.slice(prefix.length).includes("/");
+}
 
-const primaryButton = {
-  padding: "0.45rem 0.9rem",
-  borderRadius: "6px",
-  border: "none",
-  backgroundColor: "#1f6feb",
-  color: "#ffffff",
-  fontSize: "0.82rem",
-  fontWeight: 600,
-  cursor: "pointer",
-} as const;
-
-const badge = {
-  display: "inline-block",
-  marginLeft: "0.4rem",
-  padding: "0.05rem 0.4rem",
-  borderRadius: "999px",
-  fontSize: "0.68rem",
-  letterSpacing: "0.02em",
-  textTransform: "uppercase",
-} as const;
+/** The label shown in "Recognised as": what the scan read, else nothing. */
+function recognisedOf(folder: FolderInfo): string | null {
+  return folder.recognised ?? null;
+}
 
 export default function HpcBrowse({
   profile,
-  onClose,
+  header,
   onOpenDataset,
 }: {
   profile: ServerEntry;
-  onClose: () => void;
+  /** The server's own row (name, host, Test / Edit), shown above the path. */
+  header?: React.ReactNode;
   onOpenDataset?: (detected: ClusterDetectDocument) => void;
 }) {
   const roots = profile.profile.data_roots.filter((root) => root.trim().length > 0);
-  const [root, setRoot] = useState<string>(roots[0] ?? "");
+  const firstRoot = roots[0] ?? "";
+  const [root, setRoot] = useState<string>(firstRoot);
   const [document, setDocument] = useState<ScanDocument | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
-
-  // Cluster dataset detect state
-  const [detectedDataset, setDetectedDataset] = useState<ClusterDetectDocument | null>(null);
-  const [detectLoading, setDetectLoading] = useState(false);
+  const [detected, setDetected] = useState<ClusterDetectDocument | null>(null);
+  const [detecting, setDetecting] = useState(false);
   const [detectError, setDetectError] = useState("");
 
-  const firstRoot = roots[0] ?? "";
-  useEffect(() => {
-    setRoot(firstRoot);
-    setDocument(null);
-    setError("");
-    setSelected(null);
-    if (firstRoot) {
-      void remoteScan(profile.id, firstRoot, "")
-        .then((result) => {
-          setDocument(result);
-        })
-        .catch((e: unknown) => {
-          setError(errorText(e));
-        });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profile.id]);
+  // Set once a test seed arrives: the seeded listing then stands.
+  const seeded = useRef(false);
 
   const load = async (nextRoot: string, nextPath: string) => {
+    if (seeded.current) return;
     setLoading(true);
     setError("");
     try {
@@ -125,376 +75,279 @@ export default function HpcBrowse({
     }
   };
 
-  const current = relativeBrowsePath(document);
-  const rows = browseRows(document);
-  const crumbs = browseCrumbs(root, current);
-  const note = truncatedMessage(document);
-  const skipped = skippedMessages(document);
-  const summary = scanSummary(document);
-  const selectedText = selectionLabel(document, selected);
-
-  const currentFolderFullPath = useMemo(() => {
-    if (!root) return "";
-    return current ? `${root.replace(/\/+$/, "")}/${current.replace(/^\/+/, "")}` : root;
-  }, [root, current]);
-
-  // Debounced cluster dataset detection
   useEffect(() => {
-    if (!currentFolderFullPath || loading) {
-      setDetectedDataset(null);
+    setRoot(firstRoot);
+    setDocument(null);
+    setError("");
+    setSelected(null);
+    if (firstRoot) void load(firstRoot, "");
+    // Rescan only when another server is shown.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile.id]);
+
+  // Test-only: a seeded scan, as the screenshot tests have no cluster.
+  useEffect(() => {
+    const handleSeed = (event: Event) => {
+      const custom = event as CustomEvent<{ document?: ScanDocument; root?: string }>;
+      if (custom.detail?.document) {
+        seeded.current = true;
+        setRoot(custom.detail.root ?? custom.detail.document.root);
+        setDocument(custom.detail.document);
+        setError("");
+        setLoading(false);
+      }
+    };
+    window.addEventListener("coperceive-test-hpc-scan-seed", handleSeed);
+    return () => window.removeEventListener("coperceive-test-hpc-scan-seed", handleSeed);
+  }, []);
+
+  const current = relativeBrowsePath(document);
+  const crumbs = browseCrumbs(root, current);
+  const rows = useMemo(
+    () =>
+      (document?.folders ?? [])
+        .filter((folder) => isChild(current, folder.path))
+        .sort((left, right) => nameOf(left.path).localeCompare(nameOf(right.path))),
+    [document, current],
+  );
+  // The first folder is selected by default.
+  useEffect(() => {
+    if (rows.length && (selected === null || !rows.some((row) => row.path === selected))) {
+      setSelected(rows[0].path);
+    }
+  }, [rows, selected]);
+  const folder = rows.find((row) => row.path === selected) ?? null;
+  const fullPath = (relative: string) =>
+    relative ? `${root.replace(/\/+$/, "")}/${relative.replace(/^\/+/, "")}` : root;
+
+  // What "Open dataset" would open: the usual detect, on the selected folder.
+  useEffect(() => {
+    setDetected(null);
+    setDetectError("");
+    if (!folder || !recognisedOf(folder) || recognisedOf(folder)?.startsWith("Checkpoints")) {
+      setDetecting(false);
       return;
     }
     let active = true;
-    setDetectLoading(true);
-    setDetectError("");
-
-    const timer = setTimeout(() => {
-      datasetDetect(profile.id, currentFolderFullPath)
-        .then((res) => {
+    setDetecting(true);
+    const timer = window.setTimeout(() => {
+      datasetDetect(profile.id, fullPath(folder.path))
+        .then((result) => {
           if (!active) return;
-          setDetectLoading(false);
-          if (res.status === "ok") {
-            setDetectedDataset(res);
-          } else if (res.status === "error") {
-            setDetectedDataset(null);
-            setDetectError(res.reason || "The cluster refused the dataset detection request.");
-          } else {
-            setDetectedDataset(null);
-          }
+          if (result.status === "ok") setDetected(result);
+          else if (result.status === "error") setDetectError(result.reason || "The cluster refused the detection.");
         })
         .catch((e: unknown) => {
-          if (!active) return;
-          setDetectLoading(false);
-          setDetectedDataset(null);
-          setDetectError(errorText(e));
+          if (active) setDetectError(errorText(e));
+        })
+        .finally(() => {
+          if (active) setDetecting(false);
         });
     }, 150);
-
     return () => {
       active = false;
-      clearTimeout(timer);
+      window.clearTimeout(timer);
     };
-  }, [profile.id, currentFolderFullPath, loading]);
+    // fullPath depends on root, which the folder path is relative to.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profile.id, folder?.path, root]);
+
+  const openDataset = () => {
+    if (!detected) return;
+    if (onOpenDataset) onOpenDataset(detected);
+    else window.dispatchEvent(new CustomEvent("coperceive-open-dataset", { detail: { profile, dataset: detected } }));
+  };
+
+  const columns: GridColumn<FolderInfo>[] = [
+    {
+      key: "folder",
+      header: "Folder",
+      min: 180,
+      max: 360,
+      render: (row) => (
+        <span className="c-mono" style={{ color: "var(--text)" }}>
+          {nameOf(row.path)}
+        </span>
+      ),
+    },
+    { key: "folders", header: "Folders", min: 64, max: 64, align: "right", render: (row) => row.subfolder_count },
+    { key: "files", header: "Files", min: 52, max: 52, align: "right", render: (row) => row.file_count },
+    {
+      key: "recognised",
+      header: "Recognised as",
+      min: 160,
+      max: 320,
+      render: (row) => {
+        const label = recognisedOf(row);
+        return label ? (
+          <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
+            <span className="c-dot" style={{ width: "6px", height: "6px", background: "#8e8e93" }} />
+            {label}
+          </span>
+        ) : (
+          <span style={{ color: "var(--text-subtle)" }}>—</span>
+        );
+      },
+    },
+    {
+      key: "go",
+      header: "",
+      min: 24,
+      max: 24,
+      align: "right",
+      render: (row) => (
+        <button
+          type="button"
+          className="c-link"
+          aria-label={`Open folder ${nameOf(row.path)}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            void load(root, row.path);
+          }}
+        >
+          ›
+        </button>
+      ),
+    },
+  ];
+
+  const note = truncatedMessage(document);
+  const skipped = skippedMessages(document);
 
   return (
-    <section aria-label={`Browse data folders on ${profile.profile.name}`} style={card}>
-      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-        <div>
-          <h4 style={{ margin: 0, fontSize: "0.95rem", color: "#f5f5f7" }}>
-            Browse data folders on {profile.profile.name}
-          </h4>
-          <p style={{ margin: "0.2rem 0 0", fontSize: "0.75rem", color: "#8b949e" }}>
-            Read-only and metadata only: folder names, scenes and datasets. No scene data is
-            downloaded and nothing is started on the cluster.
-          </p>
-        </div>
-        <button type="button" style={secondaryButton} onClick={onClose}>
-          Close
-        </button>
-      </div>
-
-      {roots.length === 0 ? (
-        <p style={{ fontSize: "0.82rem", color: "#ffb86b", marginTop: "0.75rem" }}>
-          This server has no data folder yet. Add a data folder in its settings, then browse again.
-        </p>
-      ) : (
-        <>
-          <div
-            role="group"
-            aria-label="Data folders"
-            style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap", marginTop: "0.75rem" }}
-          >
-            {roots.map((candidate) => (
-              <button
-                key={candidate}
-                type="button"
-                style={{
-                  ...secondaryButton,
-                  borderColor:
-                    candidate === root ? "#1f6feb" : "rgba(255, 255, 255, 0.18)",
-                  backgroundColor:
-                    candidate === root ? "rgba(31, 111, 235, 0.25)" : "transparent",
-                  fontFamily: "monospace",
-                  fontSize: "0.75rem",
-                }}
-                disabled={loading}
-                onClick={() => void load(candidate, "")}
-              >
-                {candidate}
-              </button>
-            ))}
-          </div>
-
-          <nav aria-label="Folder path" style={{ marginTop: "0.65rem", fontSize: "0.8rem" }}>
-            {crumbs.map((crumb, index) => (
-              <span key={`${crumb.path}-${index}`}>
-                {index > 0 ? <span style={{ color: "#6e7681" }}> / </span> : null}
-                {index === crumbs.length - 1 ? (
-                  <strong style={{ color: "#f5f5f7" }}>{crumb.label}</strong>
-                ) : (
-                  <button
-                    type="button"
-                    style={{
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      color: "#58a6ff",
-                      cursor: "pointer",
-                      fontSize: "0.8rem",
-                    }}
-                    onClick={() => void load(root, crumb.path)}
-                  >
-                    {crumb.label}
-                  </button>
-                )}
-              </span>
-            ))}
-          </nav>
-
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.5rem" }}>
-            <button
-              type="button"
-              style={secondaryButton}
-              disabled={loading || current === ""}
-              onClick={() => void load(root, parentBrowsePath(current))}
-            >
-              Up one folder
-            </button>
-            <span role="status" style={{ fontSize: "0.75rem", color: "#8b949e" }}>
-              {loading ? "Asking the cluster for folder names (a few seconds)…" : detectLoading ? "Detecting dataset format…" : summary}
-            </span>
-          </div>
-
-          {error ? (
-            <div
-              role="alert"
-              style={{
-                marginTop: "0.6rem",
-                padding: "0.5rem 0.7rem",
-                borderRadius: "8px",
-                backgroundColor: "rgba(255, 98, 89, 0.12)",
-                border: "1px solid rgba(255, 98, 89, 0.35)",
-                color: "#ff6259",
-                fontSize: "0.82rem",
-              }}
-            >
-              {error}
-            </div>
-          ) : null}
-
-          {note ? (
-            <div
-              role="status"
-              style={{
-                marginTop: "0.6rem",
-                padding: "0.5rem 0.7rem",
-                borderRadius: "8px",
-                backgroundColor: "rgba(210, 153, 34, 0.12)",
-                border: "1px solid rgba(210, 153, 34, 0.35)",
-                color: "#e3b341",
-                fontSize: "0.82rem",
-              }}
-            >
-              {note}
-            </div>
-          ) : null}
-
-          {skipped.length > 0 ? (
-            <ul
-              aria-label="Skipped entries"
-              style={{ margin: "0.5rem 0 0", paddingLeft: "1.1rem", color: "#8b949e", fontSize: "0.75rem" }}
-            >
-              {skipped.map((message) => (
-                <li key={message} style={{ marginBottom: "0.2rem" }}>
-                  {message}
-                </li>
-              ))}
-            </ul>
-          ) : null}
-
-          {document && rows.length === 0 && !loading && !error ? (
-            <p style={{ fontSize: "0.82rem", color: "#8b949e", marginTop: "0.65rem" }}>
-              This folder has no subfolders.
-            </p>
-          ) : null}
-
-          {/* Cluster dataset detected banner */}
-          {detectedDataset && detectedDataset.status === "ok" ? (
-            <div
-              role="region"
-              aria-label="Detected cluster dataset"
-              style={{
-                marginTop: "0.75rem",
-                padding: "0.75rem 1rem",
-                borderRadius: "10px",
-                backgroundColor: "rgba(31, 111, 235, 0.15)",
-                border: "1px solid #1f6feb",
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                gap: "1rem",
-                flexWrap: "wrap",
-              }}
-            >
-              <div>
-                <strong style={{ fontSize: "0.95rem", color: "#f5f5f7" }}>
-                  {formatDetectBannerTitle(detectedDataset)}
-                </strong>
-                <div style={{ marginTop: "0.2rem", fontSize: "0.76rem", color: "#c9d1d9" }}>
-                  <span>{formatLicenceInfo(detectedDataset.licence).statusText}</span>
-                  {formatLicenceInfo(detectedDataset.licence).links.length > 0 ? (
-                    <span style={{ marginLeft: "0.4rem" }}>
-                      {formatLicenceInfo(detectedDataset.licence).links.map((link, idx) => (
-                        <a
-                          key={link}
-                          href={link}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: "#58a6ff", textDecoration: "underline", marginRight: "0.35rem" }}
-                        >
-                          [{idx + 1}]
-                        </a>
-                      ))}
-                    </span>
-                  ) : null}
-                </div>
+    <PageLayout
+      inspectorLabel="Selected folder"
+      inspector={
+        folder ? (
+          <>
+            <InspectorSection title="Selected folder">
+              <div className="c-mono" style={{ fontSize: "14px", color: "var(--text)" }}>
+                {nameOf(folder.path)}
               </div>
-              <button
-                type="button"
-                style={{
-                  ...primaryButton,
-                  backgroundColor: "#1f6feb",
-                  padding: "0.45rem 1rem",
-                  fontSize: "0.85rem",
-                }}
-                onClick={() => {
-                  if (onOpenDataset) {
-                    onOpenDataset(detectedDataset);
-                  }
-                  // One place shows an open dataset: the workspace's Dataset view,
-                  // which stays put while you switch tabs.
-                  window.dispatchEvent(
-                    new CustomEvent("coperceive-open-dataset", { detail: { profile, dataset: detectedDataset } }),
-                  );
-                }}
-              >
+              <div className="c-mono" style={{ fontSize: "11.5px", color: "var(--text-subtle)", overflowWrap: "anywhere" }}>
+                {fullPath(folder.path)}
+              </div>
+            </InspectorSection>
+            <InspectorSection>
+              <dl className="c-facts">
+                <div className="c-fact">
+                  <dt>Folders</dt>
+                  <dd>{folder.subfolder_count}</dd>
+                </div>
+                <div className="c-fact">
+                  <dt>Files</dt>
+                  <dd>{folder.file_count}</dd>
+                </div>
+              </dl>
+              {recognisedOf(folder) ? (
+                <div>
+                  <div className="c-inspector-label">Recognised as</div>
+                  <div style={{ color: detected ? "var(--ok)" : "var(--text)", marginTop: "2px" }}>{recognisedOf(folder)}</div>
+                </div>
+              ) : null}
+              {detected ? (
+                <span style={{ fontSize: "12px" }}>
+                  {[
+                    detected.split ? `split ${detected.split}` : null,
+                    `${detected.scene_count} scene${detected.scene_count === 1 ? "" : "s"}`,
+                    detected.licence ? formatLicenceInfo(detected.licence).statusText : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </span>
+              ) : detecting ? (
+                <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>Checking what this folder holds…</span>
+              ) : detectError ? (
+                <span style={{ fontSize: "12px", color: "var(--danger)" }}>{detectError}</span>
+              ) : null}
+            </InspectorSection>
+            <InspectorSection>
+              <button type="button" className="c-primary-wide is-blue" onClick={openDataset} disabled={!detected}>
                 Open dataset
               </button>
-            </div>
-          ) : null}
-
-          {detectError ? (
-            <div
-              role="alert"
-              style={{
-                marginTop: "0.6rem",
-                padding: "0.5rem 0.7rem",
-                borderRadius: "8px",
-                backgroundColor: "rgba(255, 98, 89, 0.12)",
-                border: "1px solid rgba(255, 98, 89, 0.35)",
-                color: "#ff6259",
-                fontSize: "0.8rem",
-              }}
-            >
-              {detectError}
-            </div>
-          ) : null}
-
-          <ul aria-label="Folders" style={{ listStyle: "none", padding: 0, margin: "0.6rem 0 0" }}>
-            {rows.map((row) => (
-              <li key={row.path} style={{ marginBottom: "0.25rem" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "0.5rem",
-                    padding: "0.35rem 0.5rem",
-                    borderRadius: "8px",
-                    border:
-                      selected === row.path
-                        ? "1px solid #1f6feb"
-                        : "1px solid rgba(255, 255, 255, 0.08)",
-                    backgroundColor:
-                      selected === row.path ? "rgba(31, 111, 235, 0.18)" : "transparent",
-                  }}
+              <button type="button" className="c-secondary" onClick={() => void load(root, folder.path)}>
+                Open folder
+              </button>
+            </InspectorSection>
+          </>
+        ) : null
+      }
+    >
+      <section aria-label={`Browse data folders on ${profile.profile.name}`} style={{ display: "contents" }}>
+        {header}
+        {roots.length === 0 ? (
+          <p className="c-page-note" style={{ color: "#d29922" }}>
+            This server has no data folder yet. Add a data folder in its settings, then browse again.
+          </p>
+        ) : (
+          <>
+            <PageToolbar>
+              {roots.length > 1 ? (
+                <select
+                  aria-label="Data folder"
+                  value={root}
+                  disabled={loading}
+                  onChange={(event) => void load(event.target.value, "")}
+                  className="c-select"
                 >
-                  <button
-                    type="button"
-                    style={{
-                      flex: "1 1 auto",
-                      textAlign: "left",
-                      background: "none",
-                      border: "none",
-                      padding: 0,
-                      color: "#f5f5f7",
-                      fontSize: "0.85rem",
-                      cursor: "pointer",
-                    }}
-                    aria-label={`${row.kind} ${row.name}`}
-                    onClick={() => {
-                      if (row.kind === "folder" || row.kind === "dataset") {
-                        // row.path is already relative to the data root (the scan
-                        // reports root-relative paths even for nested rows), so
-                        // send it unchanged; using the basename here would drop
-                        // the parent for a folder listed below the current one.
-                        void load(root, row.path);
-                      } else {
-                        setSelected(row.path);
-                      }
-                    }}
-                  >
-                    {row.name}
-                    <span
-                      style={{
-                        ...badge,
-                        backgroundColor:
-                          row.kind === "scene"
-                            ? "rgba(63, 185, 80, 0.2)"
-                            : row.kind === "dataset"
-                              ? "rgba(88, 166, 255, 0.2)"
-                              : "rgba(255, 255, 255, 0.08)",
-                        color:
-                          row.kind === "scene"
-                            ? "#7ee787"
-                            : row.kind === "dataset"
-                              ? "#79c0ff"
-                              : "#8b949e",
-                      }}
-                    >
-                      {row.kind}
-                    </span>
-                    <span style={{ marginLeft: "0.5rem", color: "#8b949e", fontSize: "0.75rem" }}>
-                      {row.detail}
-                    </span>
-                  </button>
-                  {row.kind !== "folder" ? (
-                    <button
-                      type="button"
-                      style={secondaryButton}
-                      aria-pressed={selected === row.path}
-                      onClick={() => setSelected(row.path)}
-                    >
-                      {selected === row.path ? "Selected" : "Select"}
-                    </button>
-                  ) : null}
-                </div>
-              </li>
-            ))}
-          </ul>
-
-          {selectedText ? (
-            <div style={{ marginTop: "0.75rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "0.6rem" }}>
-              <div style={{ fontSize: "0.82rem", color: "#f5f5f7" }}>{selectedText} selected.</div>
-              <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.4rem" }}>
-                <button type="button" style={{ ...secondaryButton, opacity: 0.55, cursor: "not-allowed" }} disabled>
-                  Open scene (not available yet)
-                </button>
-                <span style={{ fontSize: "0.75rem", color: "#8b949e" }}>{OPEN_BLOCKED_REASON}</span>
-              </div>
-            </div>
-          ) : null}
-        </>
-      )}
-    </section>
+                  {roots.map((candidate) => (
+                    <option key={candidate} value={candidate}>
+                      {candidate}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <nav aria-label="Folder path" className="c-crumbs">
+                {crumbs.map((crumb, index) => (
+                  <span key={`${crumb.path}-${index}`}>
+                    {index > 0 ? <span className="c-crumb-sep">/</span> : null}
+                    {index === crumbs.length - 1 ? (
+                      <strong>{crumb.label}</strong>
+                    ) : (
+                      <button type="button" className="c-link c-mono" disabled={loading} onClick={() => void load(root, crumb.path)}>
+                        {crumb.label}
+                      </button>
+                    )}
+                  </span>
+                ))}
+              </nav>
+              <span className="c-toolbar-end">
+                {loading
+                  ? "Reading…"
+                  : document
+                    ? `${rows.length} folder${rows.length === 1 ? "" : "s"} · read in ${Math.round(document.elapsed_ms)} ms · read-only`
+                    : ""}
+              </span>
+            </PageToolbar>
+            {error ? (
+              <p role="alert" className="c-page-note" style={{ color: "var(--danger)" }}>
+                {error}
+              </p>
+            ) : null}
+            {document ? (
+              <GridTable
+                label="Folders"
+                columns={columns}
+                rows={rows}
+                rowKey={(row) => row.path}
+                selectedKey={selected}
+                onSelect={(row) => setSelected(row.path)}
+                onActivate={(row) => void load(root, row.path)}
+                rowHeight={32}
+                empty="No folders here."
+              />
+            ) : null}
+            {note ? <p className="c-page-note">{note}</p> : null}
+            {skipped.length ? (
+              <ul aria-label="Skipped entries" className="c-page-note" style={{ margin: 0 }}>
+                {skipped.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            ) : null}
+          </>
+        )}
+      </section>
+    </PageLayout>
   );
 }

@@ -346,6 +346,11 @@ def test_cli_writes_json_and_markdown(tmp_path: Path, capsys: pytest.CaptureFixt
     )
     payload = json.loads(json_path.read_text(encoding="utf-8"))
     assert payload["aggregate"]["missing_frames"] == 0
+    # Frames per agent and the pose time range: the desktop library's
+    # frames/agent, duration and rate come from here when COMPLETE.json lacks them.
+    (scene_report,) = payload["scenes"]
+    assert scene_report["time_range_us"] == [0, 500_000]
+    assert scene_report["frames"] == {"vehicle": 6, "uav": 6}
     assert payload["aggregate"]["altitude_dz_m"]["median"] == pytest.approx(26.0)
     text = markdown_path.read_text(encoding="utf-8")
     assert "coperceive validate" in text

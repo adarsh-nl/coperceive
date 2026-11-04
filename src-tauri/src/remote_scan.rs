@@ -55,6 +55,10 @@ pub struct FolderInfo {
     pub subfolder_count: u32,
     #[serde(default)]
     pub file_count: u32,
+    /// What the folder is ("OPV2V · train, test", "Griffin"), for the folders
+    /// listed under the scanned path; absent from older coperceive builds.
+    #[serde(default)]
+    pub recognised: Option<String>,
 }
 
 /// One detected coperceive scene (a folder with `manifest.json` and `COMPLETE.json`).

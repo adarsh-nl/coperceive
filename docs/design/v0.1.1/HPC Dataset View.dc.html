@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#141415;color:#f5f5f7;font-family:"Geist",-apple-system,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#79c0ff;text-decoration:none}a:hover{color:#a5d6ff;text-decoration:underline}
+input::placeholder{color:#6e6e73}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:5px;border:2px solid #141415}
+</style>
+</helmet>
+<div style="height:100vh;min-height:640px;display:grid;grid-template-columns:{{ rootCols }};background:#141415;font-size:13px;overflow:hidden">
+
+  <sc-if value="{{ sidebarOpen }}" hint-placeholder-val="{{ true }}"><aside style="display:flex;flex-direction:column;background:#1a1a1c;border-right:1px solid rgba(255,255,255,0.08);min-height:0">
+    <div style="height:52px;display:flex;align-items:center;gap:22px;padding:0 16px;flex-shrink:0">
+      <div style="display:flex;gap:8px">
+        <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:2px;font-family:'Geist Mono',ui-monospace,monospace;font-size:15px;font-weight:500;letter-spacing:-0.01em;color:#f5f5f7">
+        <span>coperceive</span><span style="width:8px;height:2px;background:#D9482B;margin-bottom:4px"></span>
+      </div>
+      <span style="margin-left:auto;margin-right:-6px;display:flex"><span title="Hide sidebar" onClick="{{ toggleSidebar }}" style="width:28px;height:24px;display:grid;place-items:center;border-radius:5px;color:#8e8e93;cursor:pointer;flex-shrink:0" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7"><span style="width:16px;height:13px;border:1.5px solid currentColor;border-radius:3px;display:flex;padding:1.5px"><span style="width:4px;height:100%;background:currentColor;border-radius:1px"></span></span></span></span>
+    </div>
+
+    <div style="padding:8px 10px 0;display:flex;flex-direction:column;gap:1px">
+      <div style="padding:6px 8px 4px;font-size:11px;font-weight:500;color:#6e6e73">HPC workspace</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.08);color:#f5f5f7;font-weight:500">Servers <span style="font-size:11px;color:#a1a1a6;font-weight:400">1</span></div>
+      <div style="padding:5px 8px;border-radius:6px;color:#c7c7cc" style-hover="background:rgba(255,255,255,0.04)">New evaluation</div>
+      <div style="padding:5px 8px;border-radius:6px;color:#c7c7cc" style-hover="background:rgba(255,255,255,0.04)">Run history</div>
+    </div>
+
+    <div style="padding:14px 10px 0;display:flex;flex-direction:column;gap:1px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px 4px">
+        <span style="font-size:11px;font-weight:500;color:#6e6e73">Servers</span>
+        <span title="Add server" style="width:18px;height:18px;display:grid;place-items:center;border-radius:4px;color:#a1a1a6;font-size:15px;line-height:1;cursor:pointer" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7">+</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;color:#f5f5f7">
+        <span style="width:7px;height:7px;border-radius:50%;background:#3fb950;flex-shrink:0"></span>
+        <span style="font-weight:500">Example HPC</span>
+      </div>
+      <div style="padding:0 8px 0 23px;display:flex;flex-direction:column;gap:1px">
+        <div style="font-family:'Geist Mono',monospace;font-size:11px;color:#6e6e73;padding:0 0 6px">v2xset</div>
+        <div style="display:flex;justify-content:space-between;padding:5px 8px;margin-left:-8px;border-radius:6px;background:rgba(31,111,235,0.22);color:#f5f5f7">train <span style="font-size:11px;color:#a5c8ff;font-variant-numeric:tabular-nums">33</span></div>
+        <div style="padding:5px 8px;margin-left:-8px;border-radius:6px;color:#a1a1a6" style-hover="background:rgba(255,255,255,0.04)">Browse data…</div>
+      </div>
+    </div>
+
+    <div style="margin-top:auto;padding:14px 18px 16px;border-top:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:10px">
+      <div style="display:grid;grid-template-columns:auto 1fr;column-gap:10px;row-gap:4px;font-size:11.5px">
+        <span style="color:#6e6e73">Host</span><span style="font-family:'Geist Mono',monospace;color:#c7c7cc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">hpc.example.org</span>
+        <span style="color:#6e6e73">Scheduler</span><span style="color:#c7c7cc">Slurm · partition ps</span>
+        <span style="color:#6e6e73">Checked</span><span style="color:#c7c7cc">25 partitions found</span>
+      </div>
+      <div style="display:flex;gap:6px">
+        <span style="flex:1;text-align:center;padding:4px 0;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:11.5px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Test</span>
+        <span style="flex:1;text-align:center;padding:4px 0;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:11.5px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Edit</span>
+        <span style="flex:1;text-align:center;padding:4px 0;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:11.5px;color:#ff7b72;cursor:pointer" style-hover="background:rgba(248,81,73,0.1)">Remove</span>
+      </div>
+      <p style="margin:0;font-size:11px;line-height:1.45;color:#6e6e73;text-wrap:pretty">Signs in with your ssh-agent and ~/.ssh/config. Never asks for a password or key.</p>
+    </div>
+  </aside></sc-if>
+
+  <div style="display:flex;flex-direction:column;min-width:0;min-height:0">
+    <header style="height:52px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 20px;border-bottom:1px solid rgba(255,255,255,0.08)">
+      <div style="display:flex;align-items:center;gap:16px;min-width:0">
+      <sc-if value="{{ sidebarClosed }}" hint-placeholder-val="{{ false }}"><div style="display:flex;align-items:center;gap:14px;margin-left:-4px"><div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div><div style="display:flex;align-items:flex-end;gap:2px;margin-left:8px;font-family:'Geist Mono',ui-monospace,monospace;font-size:15px;font-weight:500;letter-spacing:-0.01em;color:#f5f5f7;white-space:nowrap"><span>coperceive</span><span style="width:8px;height:2px;background:#D9482B;margin-bottom:4px"></span></div><span title="Show sidebar" onClick="{{ toggleSidebar }}" style="width:28px;height:24px;display:grid;place-items:center;border-radius:5px;color:#8e8e93;cursor:pointer;flex-shrink:0" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7"><span style="width:16px;height:13px;border:1.5px solid currentColor;border-radius:3px;display:flex;padding:1.5px"><span style="width:4px;height:100%;background:currentColor;border-radius:1px"></span></span></span></div></sc-if>
+      <nav style="display:flex;gap:2px;padding:2px;border-radius:8px;background:rgba(255,255,255,0.05)">
+        <span style="white-space:nowrap;padding:4px 12px;border-radius:6px;color:#a1a1a6;cursor:pointer" style-hover="color:#f5f5f7">Library</span>
+        <span style="white-space:nowrap;padding:4px 12px;border-radius:6px;color:#a1a1a6;cursor:pointer" style-hover="color:#f5f5f7">Get Data</span>
+        <span style="white-space:nowrap;padding:4px 12px;border-radius:6px;color:#a1a1a6;cursor:pointer" style-hover="color:#f5f5f7">Open Folder</span>
+        <span style="white-space:nowrap;padding:4px 12px;border-radius:6px;background:rgba(255,255,255,0.12);color:#f5f5f7;font-weight:500">HPC Workspace</span>
+      </nav>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#a1a1a6;min-width:0">
+        <span style="width:6px;height:6px;border-radius:50%;background:#79c0ff"></span>
+        <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ pollLabel }}</span>
+        <span style="flex-shrink:0;padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)" onClick="{{ refresh }}">Refresh</span>
+      </div>
+    </header>
+
+    <div style="flex:1;min-height:0;display:grid;grid-template-columns:{{ mainCols }}">
+      <main style="display:flex;flex-direction:column;min-width:0;min-height:0">
+        <section style="padding:18px 24px 16px;display:flex;flex-direction:column;gap:16px;border-bottom:1px solid rgba(255,255,255,0.08)">
+          <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;flex-wrap:wrap">
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <div style="font-size:11.5px;color:#6e6e73">Example HPC / v2xset / train</div>
+              <h1 style="margin:0;font-size:20px;font-weight:600;letter-spacing:-0.01em">V2XSET <span style="color:#a1a1a6;font-weight:400">train</span></h1>
+            </div>
+            <div style="display:flex;gap:8px">
+              <span style="padding:6px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Close</span>
+              <span style="padding:6px 14px;border-radius:6px;background:#1f6feb;color:#fff;font-weight:500;cursor:pointer" style-hover="background:#2f7cf6">Prepare remaining {{ remainingCount }}</span>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px 24px">
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+              <span style="font-size:11px;color:#6e6e73">Scenes</span>
+              <span style="font-size:15px;font-variant-numeric:tabular-nums">33 <span style="color:#6e6e73;font-size:12px">· {{ totalDur }} total</span></span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+              <span style="font-size:11px;color:#6e6e73">Frames</span>
+              <span style="font-size:15px;font-variant-numeric:tabular-nums">{{ totalCam }} <span style="color:#6e6e73;font-size:12px">cam</span> · {{ totalLidar }} <span style="color:#6e6e73;font-size:12px">LiDAR</span></span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+              <span style="font-size:11px;color:#6e6e73">Cache size</span>
+              <span style="font-size:15px">~4.8 GB <span style="color:#6e6e73;font-size:12px">est.</span></span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:3px;min-width:0">
+              <span style="font-size:11px;color:#6e6e73">Licence</span>
+              <span style="font-size:12.5px;line-height:1.35;color:#e5e5ea">Not published · research use on this cluster only <a href="#">[1]</a> <a href="#">[2]</a></span>
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:auto minmax(0,1fr);column-gap:14px;row-gap:4px;font-size:11.5px">
+            <span style="color:#6e6e73">Raw root</span>
+            <span style="font-family:'Geist Mono',monospace;color:#c7c7cc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/datasets/group/ps/cv/opencood/v2xset</span>
+            <span style="color:#6e6e73">Cache</span>
+            <span style="font-family:'Geist Mono',monospace;color:#79c0ff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/home/alice/results/coperceive-cache/v2xset/cd4d1b066ed1/train</span>
+          </div>
+
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <div style="display:flex;height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,0.06);gap:1px">
+              <div style="width:{{ readyPct }};background:#3fb950;transition:width .4s"></div>
+              <div style="width:{{ prepPct }};background:#388bfd;transition:width .4s"></div>
+              <div style="width:{{ queuedPct }};background:rgba(121,192,255,0.28);transition:width .4s"></div>
+            </div>
+            <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:12px;color:#a1a1a6;font-variant-numeric:tabular-nums">
+              <span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:#3fb950"></span><span style="color:#f5f5f7">{{ nReady }}</span> ready</span>
+              <span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:#388bfd"></span><span style="color:#f5f5f7">{{ nPrep }}</span> preparing</span>
+              <span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(121,192,255,0.28)"></span><span style="color:#f5f5f7">{{ nQueued }}</span> queued · job 4417382</span>
+            </div>
+          </div>
+        </section>
+
+        <div style="padding:10px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap;border-bottom:1px solid rgba(255,255,255,0.08)">
+          <input type="search" placeholder="Filter scene ID…" value="{{ q }}" onInput="{{ onQuery }}" style="width:200px;padding:5px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.25);color:#f5f5f7;font:inherit;font-size:12.5px;outline:none">
+          <div style="display:flex;gap:2px;padding:2px;border-radius:7px;background:rgba(255,255,255,0.05)">
+            <sc-for list="{{ filters }}" as="f" hint-placeholder-count="4">
+              <span onClick="{{ f.pick }}" style="padding:3px 10px;border-radius:5px;font-size:12px;cursor:pointer;background:{{ f.bg }};color:{{ f.color }}">{{ f.label }}</span>
+            </sc-for>
+          </div>
+          <span style="margin-left:auto;font-size:12px;color:#6e6e73;font-variant-numeric:tabular-nums">{{ shownLabel }}</span>
+        </div>
+
+        <div style="flex:1;min-height:0;overflow:auto">
+          <div style="min-width:760px">
+            <div style="position:sticky;top:0;z-index:2;display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(130px,1.2fr) 84px 84px 84px minmax(150px,1fr) 76px;align-items:center;gap:12px;padding:0 24px;height:30px;background:#1a1a1c;border-bottom:1px solid rgba(255,255,255,0.08);font-size:11px;color:#6e6e73">
+              <span>Scene · start time</span><span>Duration</span><span>Agents</span><span style="text-align:right">Cam frames</span><span style="text-align:right">LiDAR frames</span><span>Status</span><span></span>
+            </div>
+            <sc-for list="{{ groups }}" as="g" hint-placeholder-count="1">
+              <sc-if value="{{ g.showHeader }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;align-items:baseline;gap:10px;padding:14px 24px 6px;font-size:12px">
+                  <span style="color:#e5e5ea;font-weight:500">{{ g.label }}</span>
+                  <span style="color:#6e6e73;font-variant-numeric:tabular-nums">{{ g.meta }}</span>
+                </div>
+              </sc-if>
+              <sc-for list="{{ g.rows }}" as="s" hint-placeholder-count="8">
+                <div onClick="{{ s.select }}" style="display:grid;grid-template-columns:minmax(150px,1.3fr) minmax(130px,1.2fr) 84px 84px 84px minmax(150px,1fr) 76px;align-items:center;gap:12px;padding:0 24px;height:34px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:default;background:{{ s.bg }};box-shadow:{{ s.edge }}" style-hover="background:rgba(255,255,255,0.03)">
+                  <span style="font-family:'Geist Mono',monospace;font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap"><span style="color:#6e6e73">{{ s.datePart }}</span> <span style="color:#f5f5f7">{{ s.timePart }}</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums;color:#c7c7cc">
+                    <span style="width:40px;text-align:right">{{ s.durLabel }}</span>
+                    <span style="flex:1;max-width:110px;height:4px;border-radius:2px;background:rgba(255,255,255,0.06)"><span style="display:block;height:100%;border-radius:2px;background:#8e8e93;width:{{ s.durPct }}"></span></span>
+                  </span>
+                  <span style="display:flex;align-items:center;gap:8px;color:#c7c7cc;font-variant-numeric:tabular-nums">
+                    <span style="width:8px">{{ s.agents }}</span>
+                    <span style="display:flex;gap:2px"><sc-for list="{{ s.agentDots }}" as="d" hint-placeholder-count="2"><span style="width:6px;height:10px;border-radius:1px;background:#8e8e93"></span></sc-for></span>
+                  </span>
+                  <span style="text-align:right;font-variant-numeric:tabular-nums;color:#c7c7cc">{{ s.camLabel }}</span>
+                  <span style="text-align:right;font-variant-numeric:tabular-nums;color:#c7c7cc">{{ s.lidarLabel }}</span>
+                  <span style="display:flex;align-items:center;gap:8px;font-size:12.5px;white-space:nowrap">
+                    <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;background:{{ s.dot }}"></span>
+                    <span style="color:{{ s.statusColor }}">{{ s.statusLabel }}</span>
+                    <sc-if value="{{ s.isPrep }}" hint-placeholder-val="{{ false }}">
+                      <span style="width:56px;height:3px;border-radius:2px;background:rgba(56,139,253,0.2)"><span style="display:block;height:100%;border-radius:2px;background:#388bfd;transition:width .6s;width:{{ s.progPct }}"></span></span>
+                    </sc-if>
+                    <sc-if value="{{ s.isReady }}" hint-placeholder-val="{{ false }}">
+                      <span style="color:#6e6e73;font-size:11.5px">previews</span>
+                    </sc-if>
+                  </span>
+                  <span style="display:flex;justify-content:flex-end">
+                    <sc-if value="{{ s.isReady }}" hint-placeholder-val="{{ false }}">
+                      <span onClick="{{ s.open }}" style="padding:3px 12px;border-radius:5px;border:1px solid rgba(63,185,80,0.6);color:#7ee787;font-size:12px;font-weight:500;cursor:pointer" style-hover="background:rgba(63,185,80,0.14)">Open</span>
+                    </sc-if>
+                  </span>
+                </div>
+              </sc-for>
+            </sc-for>
+            <sc-if value="{{ empty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:40px 24px;color:#6e6e73;text-align:center">No scenes match this filter.</div>
+            </sc-if>
+          </div>
+        </div>
+
+        <footer style="flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:7px 24px;border-top:1px solid rgba(255,255,255,0.08);background:#18181a;font-size:11.5px;color:#6e6e73">
+          <span>Viewing runs a small CPU job on the cluster, started by the first scene you open and reused while it runs.</span>
+          <span style="color:#a1a1a6;white-space:nowrap">{{ viewerLabel }}</span>
+        </footer>
+      </main>
+
+      <sc-if value="{{ showInspector }}" hint-placeholder-val="{{ true }}">
+        <aside style="border-left:1px solid rgba(255,255,255,0.08);background:#18181a;display:flex;flex-direction:column;min-height:0;overflow:auto">
+          <div style="padding:18px 20px 16px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Selected scene</span>
+            <span style="font-family:'Geist Mono',monospace;font-size:14px;color:#f5f5f7;word-break:break-all">{{ sel.id }}</span>
+            <span style="font-size:12px;color:#a1a1a6">{{ sel.longDate }}</span>
+          </div>
+
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="width:8px;height:8px;border-radius:50%;background:{{ sel.dot }}"></span>
+              <span style="font-weight:500;color:{{ sel.statusColor }}">{{ sel.statusLabel }}</span>
+              <span style="margin-left:auto;font-size:11.5px;color:#6e6e73">{{ sel.statusNote }}</span>
+            </div>
+            <sc-if value="{{ sel.isPrep }}" hint-placeholder-val="{{ false }}">
+              <div style="height:4px;border-radius:2px;background:rgba(56,139,253,0.2)"><div style="height:100%;border-radius:2px;background:#388bfd;transition:width .6s;width:{{ sel.progPct }}"></div></div>
+            </sc-if>
+            <sc-if value="{{ sel.isReady }}" hint-placeholder-val="{{ false }}">
+              <span onClick="{{ sel.open }}" style="text-align:center;padding:7px 0;border-radius:6px;background:#238636;color:#fff;font-weight:500;cursor:pointer" style-hover="background:#2ea043">Open scene</span>
+            </sc-if>
+            <sc-if value="{{ sel.isQueued }}" hint-placeholder-val="{{ false }}">
+              <span style="font-size:12px;line-height:1.45;color:#a1a1a6">Waiting for prepare job 4417382 to reach this scene. It opens automatically once ready.</span>
+            </sc-if>
+          </div>
+
+          <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:14px 12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Duration</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ sel.durLabel }}</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Frames / agent</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ sel.frames }}</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Cam frames</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ sel.camLabel }}</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">LiDAR frames</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ sel.lidarLabel }}</span></div>
+          </div>
+
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">{{ sel.sensorsLabel }}</span>
+            <sc-for list="{{ sel.agentList }}" as="a" hint-placeholder-count="2">
+              <div style="display:grid;grid-template-columns:62px 1fr auto;align-items:center;gap:8px;font-size:12px">
+                <span style="color:#e5e5ea">{{ a.name }}</span>
+                <span style="display:flex;gap:3px">
+                  <span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span>
+                  <span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span>
+                  <span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span>
+                  <span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span>
+                  <span style="width:10px;height:10px;border-radius:50%;background:#8e8e93;margin-left:3px"></span>
+                </span>
+                <span style="color:#6e6e73;font-size:11px">4 cam · 1 LiDAR</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:4px">
+            <span style="font-size:11px;color:#6e6e73">Cache location</span>
+            <span style="font-family:'Geist Mono',monospace;font-size:11px;line-height:1.5;color:#79c0ff;word-break:break-all">…/cd4d1b066ed1/train/{{ sel.id }}</span>
+          </div>
+        </aside>
+      </sc-if>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showInspector&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;groupByDay&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;simulate&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;label&quot;:&quot;Simulate status polling&quot;}}">
+const RAW = [
+  ["2021_08_18_19_11_02",10.7,4],["2021_08_18_21_38_28",12.1,2],["2021_08_18_22_16_12",30.9,3],["2021_08_18_23_23_19",9.2,2,"r"],
+  ["2021_08_20_16_20_46",4.0,2,"r"],["2021_08_20_20_39_00",18.8,2],["2021_08_20_21_00_19",7.2,2,"r"],
+  ["2021_08_21_09_09_41",10.1,4],["2021_08_21_15_41_04",4.3,2,"r"],["2021_08_21_17_00_32",5.0,2],["2021_08_21_21_35_56",11.8,3],["2021_08_21_22_41_37",23.4,3],
+  ["2021_08_22_07_52_02",14.6,2,"r"],["2021_08_22_08_39_59",8.8,3],["2021_08_22_09_08_29",16.2,2],["2021_08_22_09_43_53",6.4,4,"r"],["2021_08_22_10_10_40",21.7,3],["2021_08_22_10_46_58",12.9,2],["2021_08_22_11_29_38",9.6,2],
+  ["2021_08_23_10_47_16",17.3,3],["2021_08_23_11_06_41",5.8,2,"r"],["2021_08_23_12_13_48",13.4,4],["2021_08_23_12_58_19",7.9,2],["2021_08_23_13_10_47",26.1,3],["2021_08_23_15_19_19",10.4,2],["2021_08_23_16_06_26",4.7,2,"r"],["2021_08_23_17_07_55",19.5,3],["2021_08_23_19_42_07",8.1,2],["2021_08_23_20_47_11",11.2,4],["2021_08_23_21_07_10",15.0,2],["2021_08_23_21_47_19",6.9,3,"r"],["2021_08_23_22_31_01",12.6,2],["2021_08_23_23_13_15",9.9,2]
+];
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const fmt = n => n.toLocaleString("en-US");
+const fmtDur = s => s >= 60 ? `${Math.floor(s/60)}m ${Math.round(s%60)}s` : `${s.toFixed(1)} s`;
+
+class Component extends DCLogic {
+  state = (() => {
+    let started = 0;
+    const scenes = RAW.map(([id, dur, agents, r]) => {
+      const frames = Math.round(dur * 19.9);
+      let state = r ? "ready" : "queued", progress = 0;
+      if (!r && started < 3) { state = "preparing"; progress = [64, 31, 8][started++]; }
+      return { id, dur, agents, frames, cam: frames * agents * 4, lidar: frames * agents, state, progress };
+    });
+    return { scenes, q: "", filter: "all", selId: "2021_08_18_23_23_19", tick: 0, viewer: "Viewer job idle", sidebarOpen: true };
+  })();
+
+  componentDidMount() {
+    this.onResize = () => { const w = window.innerWidth >= 1240; if (w !== this.state.wide) this.setState({ wide: w }); };
+    window.addEventListener("resize", this.onResize); this.onResize();
+    this.timer = setInterval(() => {
+      if (this.props.simulate === false) return;
+      this.setState(st => {
+        const scenes = st.scenes.map(s => ({ ...s }));
+        scenes.forEach(s => {
+          if (s.state !== "preparing") return;
+          s.progress = Math.min(100, s.progress + 2 + Math.round(Math.random() * 6 / Math.max(1, s.dur / 10)));
+          if (s.progress >= 100) { s.state = "ready"; s.progress = 0; }
+        });
+        let active = scenes.filter(s => s.state === "preparing").length;
+        for (const s of scenes) { if (active >= 3) break; if (s.state === "queued") { s.state = "preparing"; s.progress = 1; active++; } }
+        return { scenes, tick: (st.tick + 1) % 5 };
+      });
+    }, 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); window.removeEventListener("resize", this.onResize); }
+
+  status(s) {
+    if (s.state === "ready") return { dot: "#3fb950", statusColor: "#7ee787", statusLabel: "Ready", statusNote: "camera previews" };
+    if (s.state === "preparing") return { dot: "#388bfd", statusColor: "#79c0ff", statusLabel: `Preparing ${s.progress}%`, statusNote: "job 4417382" };
+    return { dot: "rgba(121,192,255,0.35)", statusColor: "#a1a1a6", statusLabel: "Queued", statusNote: "job 4417382" };
+  }
+
+  decorate(s, maxDur) {
+    const p = s.id.split("_");
+    const d = new Date(+p[0], +p[1] - 1, +p[2]);
+    return {
+      ...s, ...this.status(s),
+      datePart: `${p[1]}-${p[2]}`, timePart: `${p[3]}:${p[4]}:${p[5]}`,
+      dayKey: `${p[0]}${p[1]}${p[2]}`,
+      dayLabel: `${DOW[d.getDay()]} ${+p[2]} ${MON[+p[1] - 1]} ${p[0]}`,
+      longDate: `${DOW[d.getDay()]} ${+p[2]} ${MON[+p[1] - 1]} ${p[0]}, ${p[3]}:${p[4]}:${p[5]}`,
+      durLabel: fmtDur(s.dur), durPct: `${(s.dur / maxDur) * 100}%`,
+      camLabel: fmt(s.cam), lidarLabel: fmt(s.lidar),
+      agentDots: Array.from({ length: s.agents }, (_, i) => i),
+      isReady: s.state === "ready", isPrep: s.state === "preparing", isQueued: s.state === "queued",
+      progPct: `${s.progress}%`,
+      sensorsLabel: `${s.agents} agents · ${s.agents * 5} sensors`,
+      agentList: Array.from({ length: s.agents }, (_, i) => ({ name: i === 0 ? "Ego" : `Agent ${i + 1}` })),
+      open: e => { e && e.stopPropagation(); this.setState({ viewer: `Starting viewer job · opening ${s.id}` }); setTimeout(() => this.setState({ viewer: "Viewer job running · 1 CPU" }), 1800); },
+    };
+  }
+
+  renderVals() {
+    const { scenes, q, filter, selId } = this.state;
+    const maxDur = Math.max(...scenes.map(s => s.dur));
+    const all = scenes.map(s => this.decorate(s, maxDur));
+    const n = st => all.filter(s => s.state === st).length;
+    const nReady = n("ready"), nPrep = n("preparing"), nQueued = n("queued"), N = all.length;
+    const filtered = all.filter(s => (filter === "all" || s.state === filter) && (!q || s.id.includes(q.trim().replace(/[-: ]/g, "_"))));
+    const selKey = id => ({ select: () => this.setState({ selId: id }) });
+    const groupBy = this.props.groupByDay ?? true;
+    const groups = [];
+    for (const s of filtered) {
+      const sel = s.id === selId;
+      const row = { ...s, ...selKey(s.id), bg: sel ? "rgba(31,111,235,0.16)" : "transparent", edge: sel ? "inset 2px 0 0 #388bfd" : "none" };
+      const key = groupBy ? s.dayKey : "all";
+      let g = groups.find(x => x.key === key);
+      if (!g) { g = { key, label: s.dayLabel, showHeader: groupBy, rows: [] }; groups.push(g); }
+      g.rows.push(row);
+    }
+    groups.forEach(g => {
+      const r = g.rows.filter(x => x.isReady).length;
+      g.meta = `${g.rows.length} scene${g.rows.length > 1 ? "s" : ""} · ${fmtDur(g.rows.reduce((a, x) => a + x.dur, 0))}${r ? ` · ${r} ready` : ""}`;
+    });
+    const filters = [["all", "All", N], ["ready", "Ready", nReady], ["preparing", "Preparing", nPrep], ["queued", "Queued", nQueued]].map(([k, l, c]) => ({
+      label: `${l} ${c}`, pick: () => this.setState({ filter: k }),
+      bg: filter === k ? "rgba(255,255,255,0.12)" : "transparent", color: filter === k ? "#f5f5f7" : "#a1a1a6",
+    }));
+    const showInspector = (this.props.showInspector ?? true) && this.state.wide !== false;
+    const sel = all.find(s => s.id === selId) || all[0];
+    return {
+      groups, filters, sel, showInspector, q,
+      sidebarOpen: this.state.sidebarOpen, sidebarClosed: !this.state.sidebarOpen,
+      rootCols: this.state.sidebarOpen ? "236px minmax(0,1fr)" : "minmax(0,1fr)",
+      toggleSidebar: () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen })),
+      empty: filtered.length === 0,
+      mainCols: showInspector ? "minmax(0,1fr) 300px" : "minmax(0,1fr)",
+      onQuery: e => this.setState({ q: e.target.value }),
+      refresh: () => this.setState({ tick: 0 }),
+      pollLabel: this.props.simulate === false ? "Polling paused" : `Polling every 5 s · updated ${this.state.tick} s ago`,
+      shownLabel: filtered.length === N ? `${N} scenes` : `${filtered.length} of ${N} scenes`,
+      nReady, nPrep, nQueued, remainingCount: nPrep + nQueued,
+      readyPct: `${nReady / N * 100}%`, prepPct: `${nPrep / N * 100}%`, queuedPct: `${nQueued / N * 100}%`,
+      totalDur: fmtDur(scenes.reduce((a, s) => a + s.dur, 0)),
+      totalCam: fmt(scenes.reduce((a, s) => a + s.cam, 0)),
+      totalLidar: fmt(scenes.reduce((a, s) => a + s.lidar, 0)),
+      viewerLabel: this.state.viewer,
+    };
+  }
+}
+</script>
+</body>
+</html>

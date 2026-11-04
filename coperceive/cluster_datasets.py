@@ -32,6 +32,13 @@ from coperceive.adapters.registry import RegistryError, resolve_adapter
 from coperceive.adapters.spec import SpecError
 from coperceive.camera_images import IMAGE_MODES, stage_images
 from coperceive.errors import CoperceiveError
+from coperceive.remote.recognise import (
+    DETECT_PROBE_SCENES,
+    GRIFFIN_SUBSETS,
+    SPLITS,
+    is_v2xset,
+    scene_dirs,
+)
 
 DETECT_SCHEMA = "coperceive-cluster-detect-1"
 INDEX_SCHEMA = "coperceive-cluster-index-1"
@@ -43,11 +50,9 @@ DEFAULT_MAX_ENTRIES = 200_000
 DEFAULT_MAX_SCENES = 5_000
 DEFAULT_TIMEOUT_S = 30.0
 _BUILTIN = ("griffin", "opv2v", "v2xset")
-_SPLITS = {
-    "opv2v": ("train", "validate", "test", "test_culver_city"),
-    "v2xset": ("train", "validate", "test"),
-}
-_GRIFFIN_SUBSETS = ("25m", "40m", "55m", "random")
+# Shared with the folder scan's "Recognised as" (coperceive/remote/recognise.py).
+_SPLITS = SPLITS
+_GRIFFIN_SUBSETS = GRIFFIN_SUBSETS
 
 
 class DatasetError(RuntimeError):
@@ -123,32 +128,11 @@ def _raw_and_split(
 
 
 # Detection looks at this many scenes' agent folders at most; it never lists frames.
-_DETECT_PROBE_SCENES = 8
+_DETECT_PROBE_SCENES = DETECT_PROBE_SCENES
 
 
-def _scene_dirs(split_dir: Path, limit: int) -> list[str]:
-    """Scene directory names in a split, from one listing (no per-entry stat)."""
-    names: list[str] = []
-    with os.scandir(split_dir) as entries:
-        for entry in entries:
-            if entry.name.startswith(".") or not entry.is_dir():
-                continue
-            names.append(entry.name)
-            if len(names) >= limit:
-                break
-    return sorted(names)
-
-
-def _is_v2xset(raw_root: Path, scenes: list[str], split: str) -> bool:
-    """V2XSet scenes carry a roadside unit as agent ``-1``; OPV2V's never do."""
-    for scene in scenes[:_DETECT_PROBE_SCENES]:
-        try:
-            with os.scandir(raw_root / split / scene) as agents:
-                if any(agent.name == "-1" and agent.is_dir() for agent in agents):
-                    return True
-        except OSError:
-            continue
-    return False
+_scene_dirs = scene_dirs
+_is_v2xset = is_v2xset
 
 
 def _fingerprint(

@@ -18,6 +18,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TypedDict, cast
 
+from coperceive.remote.recognise import recognise
+
 DEFAULT_DEPTH = 2
 MAX_DEPTH = 4
 DEFAULT_TIMEOUT_S = 10.0
@@ -48,6 +50,9 @@ class FolderInfo(TypedDict):
     has_complete: bool
     subfolder_count: int
     file_count: int
+    # What the folder is ("OPV2V · train, test", "Griffin", "Checkpoints · 2"),
+    # for the folders listed directly under the scanned path; None when unknown.
+    recognised: str | None
 
 
 class SceneInfo(TypedDict):
@@ -289,6 +294,7 @@ def _scan_dir(state: _State, real_dir: Path, rel_dir: str, depth: int) -> None:
         "has_complete": has_complete,
         "subfolder_count": len(dirs),
         "file_count": len(files),
+        "recognised": None,
     }
     state.folders.append(record)
     if is_scene:
@@ -332,6 +338,24 @@ def _mark_datasets(state: _State) -> list[DatasetInfo]:
     return datasets
 
 
+def _recognise_listed(state: _State) -> None:
+    """Label the folders listed under the scanned path, until the deadline."""
+    for record in state.folders:
+        if record["depth"] != 1:
+            continue
+        if state.clock() >= state.deadline:
+            state.truncated = True
+            state.truncated_reason = state.truncated_reason or "timeout"
+            return
+        if record["is_scene"]:
+            record["recognised"] = "Scene"
+        elif record["dataset"]:
+            count = record["scene_count"]
+            record["recognised"] = f"Schema 1 scenes · {count}"
+        else:
+            record["recognised"] = recognise(state.root / record["path"])
+
+
 def scan_tree(
     root: str | Path,
     path: str | Path,
@@ -357,6 +381,7 @@ def scan_tree(
     )
     _scan_dir(state, target_real, rel_path, 0)
     datasets = _mark_datasets(state)
+    _recognise_listed(state)
     elapsed_ms = max(0.0, (clock() - started) * 1000.0)
     state.folders.sort(key=lambda record: record["path"])
     state.skipped.sort(key=lambda item: item["path"])

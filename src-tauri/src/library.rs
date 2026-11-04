@@ -25,6 +25,63 @@ pub struct StorageStats {
     pub scene_count: usize,
 }
 
+/// One agent of a library scene, from its manifest.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LibraryAgent {
+    pub agent_id: String,
+    pub agent_type: String,
+    pub display_name: Option<String>,
+    pub cameras: usize,
+    pub lidars: usize,
+}
+
+/// Samples, start and end time recorded in `COMPLETE.json`: duration (one
+/// sample gap past the last start, as the viewer counts it) and the rate.
+/// Ingest writes `sample_count`; older files have `samples` (a count, or the
+/// list of sample ids) or `frames` (a list).
+fn recorded_timing(complete: &serde_json::Value) -> (Option<usize>, Option<f64>, Option<f64>) {
+    let samples = match complete
+        .get("sample_count")
+        .or_else(|| complete.get("samples"))
+        .or_else(|| complete.get("frames"))
+    {
+        Some(serde_json::Value::Number(n)) => n.as_u64().map(|n| n as usize),
+        Some(serde_json::Value::Array(items)) => Some(items.len()),
+        _ => None,
+    };
+    let start = complete.get("start_time_us").and_then(serde_json::Value::as_i64);
+    let end = complete.get("end_time_us").and_then(serde_json::Value::as_i64);
+    match (samples, start, end) {
+        (Some(n), Some(start), Some(end)) if n >= 2 && end > start => {
+            let span_s = (end - start) as f64 / 1e6;
+            let gap_s = span_s / (n - 1) as f64;
+            (Some(n), Some(span_s + gap_s), Some(1.0 / gap_s))
+        }
+        (samples, _, _) => (samples, None, None),
+    }
+}
+
+/// The same from a fresh validation record (frames per agent and the time
+/// range of the `coperceive validate` report), when `COMPLETE.json` has none.
+pub fn validated_timing(
+    scene_dir: &Path,
+    cache: &HashMap<String, ValidationRecord>,
+) -> (Option<usize>, Option<f64>, Option<f64>) {
+    let key = scene_dir.to_string_lossy();
+    let Some(record) = cache.get(key.as_ref()) else {
+        return (None, None, None);
+    };
+    if Some(record.manifest_mtime_ms) != manifest_mtime_ms(scene_dir) {
+        return (None, None, None);
+    }
+    let complete = serde_json::json!({
+        "sample_count": record.frames,
+        "start_time_us": record.time_range_us.map(|range| range.0),
+        "end_time_us": record.time_range_us.map(|range| range.1),
+    });
+    recorded_timing(&complete)
+}
+
 /// Metadata and validation state of a scene stored in the library.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LibrarySceneInfo {
@@ -32,9 +89,17 @@ pub struct LibrarySceneInfo {
     pub path: String,
     pub dataset: String,
     pub town: Option<String>,
-    pub duration_s: f64,
-    pub sample_count: usize,
+    /// From `COMPLETE.json` when it records the time range; never a default.
+    pub duration_s: Option<f64>,
+    /// Samples per agent, from `COMPLETE.json`; None when it does not say.
+    pub sample_count: Option<usize>,
+    /// Sample rate, when `COMPLETE.json` records the range and the count.
+    #[serde(default)]
+    pub rate_hz: Option<f64>,
     pub agent_count: usize,
+    /// Each agent with its type and how many cameras and LiDARs it carries.
+    #[serde(default)]
+    pub agents: Vec<LibraryAgent>,
     pub sensor_modalities: Vec<String>,
     pub size_bytes: u64,
     /// "full" (original images), "preview" (compressed 640px JPEG), or "none" (no camera data)
@@ -260,13 +325,57 @@ fn parse_scene_info_with_cache(
     }
 
     let mut modalities = HashSet::new();
+    let mut agents: Vec<LibraryAgent> = manifest
+        .get("agents")
+        .and_then(|a| a.as_array())
+        .map(|list| {
+            list.iter()
+                .filter_map(|agent| {
+                    Some(LibraryAgent {
+                        agent_id: agent.get("agent_id")?.as_str()?.to_string(),
+                        agent_type: agent
+                            .get("agent_type")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("agent")
+                            .to_string(),
+                        display_name: agent
+                            .get("display_name")
+                            .and_then(|v| v.as_str())
+                            .map(str::to_string),
+                        cameras: 0,
+                        lidars: 0,
+                    })
+                })
+                .collect()
+        })
+        .unwrap_or_default();
     if let Some(sensors) = manifest.get("sensors").and_then(|s| s.as_array()) {
         for sensor in sensors {
-            if let Some(m) = sensor.get("modality").and_then(|m| m.as_str()) {
+            let modality = sensor.get("modality").and_then(|m| m.as_str());
+            if let Some(m) = modality {
                 modalities.insert(m.to_string());
+            }
+            let owner = sensor.get("agent_id").and_then(|a| a.as_str());
+            if let Some(agent) = agents.iter_mut().find(|agent| Some(agent.agent_id.as_str()) == owner) {
+                match modality {
+                    Some("camera") => agent.cameras += 1,
+                    Some("lidar") => agent.lidars += 1,
+                    _ => {}
+                }
             }
         }
     }
+    let complete: serde_json::Value = fs::read_to_string(scene_dir.join("COMPLETE.json"))
+        .ok()
+        .and_then(|text| serde_json::from_str(&text).ok())
+        .unwrap_or(serde_json::Value::Null);
+    let (sample_count, duration_s, rate_hz) = match recorded_timing(&complete) {
+        (_, None, _) => {
+            let validated = validated_timing(scene_dir, cache);
+            if validated.1.is_some() { validated } else { recorded_timing(&complete) }
+        }
+        recorded => recorded,
+    };
     let mut sensor_modalities: Vec<String> = modalities.into_iter().collect();
     sensor_modalities.sort();
 
@@ -303,9 +412,11 @@ fn parse_scene_info_with_cache(
         path: scene_dir.to_string_lossy().into_owned(),
         dataset,
         town,
-        duration_s: 15.0, // default evaluation scene duration
-        sample_count: 150,
+        duration_s,
+        sample_count,
+        rate_hz,
         agent_count,
+        agents,
         sensor_modalities,
         size_bytes,
         has_images,
@@ -314,6 +425,74 @@ fn parse_scene_info_with_cache(
         has_map,
         is_valid: cached_validation(scene_dir, cache),
     })
+}
+
+/// What Open Folder shows about a folder before opening it ("Folder check").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FolderCheck {
+    pub path: String,
+    /// "scene" (the folder is a scene), "library" (the app's library root),
+    /// "folder" (holds scenes), or "none" (missing, not a folder, no scenes).
+    pub kind: String,
+    pub scene_ids: Vec<String>,
+    pub modalities: Vec<String>,
+    pub has_map: bool,
+    pub size_bytes: u64,
+    /// The folder is the library or inside it.
+    pub in_library: bool,
+    /// Why it cannot be opened, when it cannot.
+    pub problem: Option<String>,
+}
+
+/// Inspect a folder the way Open Folder would open it, reading only manifests.
+pub fn inspect_folder(path: &Path, library_root: Option<&Path>) -> FolderCheck {
+    let display = path.to_string_lossy().into_owned();
+    let in_library = library_root
+        .and_then(|root| {
+            let root = fs::canonicalize(root).ok()?;
+            Some(fs::canonicalize(path).ok()?.starts_with(root))
+        })
+        .unwrap_or(false);
+    let none = |problem: String| FolderCheck {
+        path: display.clone(),
+        kind: "none".to_string(),
+        scene_ids: Vec::new(),
+        modalities: Vec::new(),
+        has_map: false,
+        size_bytes: 0,
+        in_library,
+        problem: Some(problem),
+    };
+    if let Err(problem) = crate::state::validate_dataset_root(path) {
+        return none(problem);
+    }
+    let root = library_root.unwrap_or(path);
+    let is_scene = path.join("manifest.json").is_file() && path.join("COMPLETE.json").is_file();
+    let scenes = if is_scene {
+        parse_scene_info_with_cache(path, &HashMap::new(), root).into_iter().collect()
+    } else {
+        scan_library_scenes(path)
+    };
+    let mut modalities: Vec<String> = scenes
+        .iter()
+        .flat_map(|scene| scene.sensor_modalities.iter().cloned())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    modalities.sort();
+    let is_library = library_root
+        .and_then(|root| Some(fs::canonicalize(root).ok()? == fs::canonicalize(path).ok()?))
+        .unwrap_or(false);
+    FolderCheck {
+        path: display,
+        kind: if is_scene { "scene" } else if is_library { "library" } else { "folder" }.to_string(),
+        scene_ids: scenes.iter().map(|scene| scene.scene_id.clone()).collect(),
+        has_map: scenes.iter().any(|scene| scene.has_map),
+        size_bytes: scenes.iter().map(|scene| scene.size_bytes).sum(),
+        modalities,
+        in_library,
+        problem: None,
+    }
 }
 
 /// The scene's agreed `platform.map_name`, if every agent that sets one agrees.
@@ -567,6 +746,105 @@ mod tests {
     }
 
     #[test]
+    fn duration_samples_and_sensors_come_from_the_scene_never_a_default() {
+        let tmp = std::env::temp_dir().join(format!("coperceive-test-lib-timing-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let manifest = r#"{
+            "schema_version": 1, "scene_id": "S",
+            "agents": [
+                { "agent_id": "veh1", "agent_type": "vehicle", "display_name": "Vehicle 1" },
+                { "agent_id": "uav1", "agent_type": "uav" }
+            ],
+            "sensors": [
+                { "sensor_id": "lidar_top", "agent_id": "veh1", "modality": "lidar" },
+                { "sensor_id": "cam_front", "agent_id": "veh1", "modality": "camera" },
+                { "sensor_id": "cam_rear", "agent_id": "veh1", "modality": "camera" },
+                { "sensor_id": "cam_down", "agent_id": "uav1", "modality": "camera" }
+            ]
+        }"#;
+        for (name, complete) in [
+            ("timed", r#"{"samples": 150, "start_time_us": 0, "end_time_us": 14900000}"#),
+            ("frames", r#"{"frames": [1, 2, 3, 4]}"#),
+            ("bare", "{}"),
+        ] {
+            let scene = tmp.join(name);
+            fs::create_dir_all(&scene).expect("scene dir");
+            fs::write(scene.join("manifest.json"), manifest).expect("manifest");
+            fs::write(scene.join("COMPLETE.json"), complete).expect("complete");
+        }
+        let scenes = scan_library_scenes(&tmp);
+        let by_dir = |name: &str| scenes.iter().find(|s| s.path.ends_with(name)).expect(name);
+        let timed = by_dir("timed");
+        assert_eq!(timed.sample_count, Some(150));
+        assert!((timed.duration_s.unwrap() - 15.0).abs() < 1e-9, "{:?}", timed.duration_s);
+        assert!((timed.rate_hz.unwrap() - 10.0).abs() < 1e-9, "{:?}", timed.rate_hz);
+        let frames = by_dir("frames");
+        assert_eq!((frames.sample_count, frames.duration_s, frames.rate_hz), (Some(4), None, None));
+        let bare = by_dir("bare");
+        assert_eq!((bare.sample_count, bare.duration_s, bare.rate_hz), (None, None, None));
+        // A fresh validation record fills in what COMPLETE.json does not say.
+        let bare_dir = tmp.join("bare");
+        let mtime = manifest_mtime_ms(&bare_dir).expect("mtime");
+        let mut cache = HashMap::new();
+        cache.insert(
+            bare_dir.to_string_lossy().into_owned(),
+            ValidationRecord { valid: true, manifest_mtime_ms: mtime, frames: Some(6), time_range_us: Some((0, 500_000)) },
+        );
+        let (samples, duration, rate) = validated_timing(&bare_dir, &cache);
+        assert_eq!(samples, Some(6));
+        assert!((duration.unwrap() - 0.6).abs() < 1e-9 && (rate.unwrap() - 10.0).abs() < 1e-9);
+        let rescanned = scan_library_scenes_with_cache(&tmp, &cache);
+        let bare = rescanned.iter().find(|s| s.path.ends_with("bare")).expect("bare");
+        assert_eq!(bare.sample_count, Some(6));
+        // A record for an older manifest is ignored.
+        cache.get_mut(bare_dir.to_string_lossy().as_ref()).expect("record").manifest_mtime_ms = mtime + 1;
+        assert_eq!(validated_timing(&bare_dir, &cache), (None, None, None));
+        let agents: Vec<(&str, usize, usize)> = bare
+            .agents
+            .iter()
+            .map(|a| (a.agent_id.as_str(), a.cameras, a.lidars))
+            .collect();
+        assert_eq!(agents, vec![("veh1", 2, 1), ("uav1", 1, 0)]);
+        assert_eq!(bare.agents[0].display_name.as_deref(), Some("Vehicle 1"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_folder_check_reads_only_what_the_scenes_record() {
+        let tmp = std::env::temp_dir().join(format!("coperceive-test-folder-check-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let library = tmp.join("library");
+        let manifest = |id: &str, modality: &str| {
+            format!(
+                r#"{{"schema_version": 1, "scene_id": "{id}", "agents": [{{"agent_id": "a", "agent_type": "vehicle"}}],
+                "sensors": [{{"sensor_id": "s", "agent_id": "a", "modality": "{modality}"}}]}}"#
+            )
+        };
+        for (dir, id, modality) in [("library/A", "A", "lidar"), ("library/B", "B", "camera"), ("loose/C", "C", "lidar")] {
+            let scene = tmp.join(dir);
+            fs::create_dir_all(&scene).expect("scene");
+            fs::write(scene.join("manifest.json"), manifest(id, modality)).expect("manifest");
+            fs::write(scene.join("COMPLETE.json"), "{}").expect("complete");
+        }
+        let whole = inspect_folder(&library, Some(&library));
+        assert_eq!(whole.kind, "library");
+        assert_eq!(whole.scene_ids, vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(whole.modalities, vec!["camera".to_string(), "lidar".to_string()]);
+        assert!(whole.in_library && whole.problem.is_none());
+        let one = inspect_folder(&tmp.join("loose/C"), Some(&library));
+        assert_eq!((one.kind.as_str(), one.scene_ids.len(), one.in_library), ("scene", 1, false));
+        let loose = inspect_folder(&tmp.join("loose"), Some(&library));
+        assert_eq!((loose.kind.as_str(), loose.scene_ids.clone()), ("folder", vec!["C".to_string()]));
+        let missing = inspect_folder(&tmp.join("nope"), Some(&library));
+        assert_eq!(missing.kind, "none");
+        assert!(missing.problem.unwrap().contains("does not exist"));
+        let empty = tmp.join("empty");
+        fs::create_dir_all(&empty).expect("empty");
+        assert!(inspect_folder(&empty, None).problem.unwrap().contains("No coperceive scenes"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
     fn test_move_library_scenes() {
         let tmp = std::env::temp_dir().join(format!("coperceive-test-move-{}", std::process::id()));
         let src = tmp.join("src_lib");
@@ -632,21 +910,21 @@ mod tests {
         assert_eq!(cached_validation(&scene, &cache), None);
         cache.insert(
             scene.to_string_lossy().into_owned(),
-            ValidationRecord { valid: true, manifest_mtime_ms: mtime },
+            ValidationRecord { valid: true, manifest_mtime_ms: mtime, frames: None, time_range_us: None },
         );
         assert_eq!(cached_validation(&scene, &cache), Some(true));
 
         // A different manifest invalidates the cached answer.
         cache.insert(
             scene.to_string_lossy().into_owned(),
-            ValidationRecord { valid: true, manifest_mtime_ms: mtime + 1 },
+            ValidationRecord { valid: true, manifest_mtime_ms: mtime + 1, frames: None, time_range_us: None },
         );
         assert_eq!(cached_validation(&scene, &cache), None);
 
         // The scan carries the cached answer into the scene list.
         cache.insert(
             scene.to_string_lossy().into_owned(),
-            ValidationRecord { valid: false, manifest_mtime_ms: mtime },
+            ValidationRecord { valid: false, manifest_mtime_ms: mtime, frames: None, time_range_us: None },
         );
         let scenes = scan_library_scenes_with_cache(&tmp, &cache);
         assert_eq!(scenes.len(), 1);

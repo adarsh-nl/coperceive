@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 /** Remote HPC 6/6: the run history with cancel, re-run and open predictions. */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   cancelRunJob,
   listRunHistory,
@@ -13,33 +13,26 @@ import type { ServerEntry } from "./hpc";
 import {
   historyCanRerun,
   historyStateLabel,
-  historyTiming,
+  slurmSeconds,
   type JobSubmitOutcome,
   type RunHistoryEntry,
   type SubmissionPreview,
   type SubmitOptions,
 } from "./runPlan";
 import { errorText } from "./errors";
+import {
+  Facts,
+  GridTable,
+  InspectorSection,
+  MiniBar,
+  PageLayout,
+  PageToolbar,
+  useDefaultSelection,
+  usePageHeader,
+  type GridColumn,
+} from "./components/Page";
 
-const card = {
-  backgroundColor: "rgba(28, 28, 30, 0.85)",
-  border: "1px solid rgba(255, 255, 255, 0.14)",
-  borderRadius: "14px",
-  padding: "1.25rem",
-  boxShadow: "0 20px 50px rgba(0, 0, 0, 0.45)",
-  color: "#c9d1d9",
-  fontSize: "0.85rem",
-} as const;
-
-const button = {
-  padding: "0.3rem 0.65rem",
-  fontSize: "0.78rem",
-  borderRadius: "6px",
-  border: "1px solid rgba(255, 255, 255, 0.2)",
-  backgroundColor: "rgba(255, 255, 255, 0.08)",
-  color: "#fff",
-  cursor: "pointer",
-} as const;
+const rowKey = (entry: RunHistoryEntry) => entry.job_id;
 
 const RERUN_OPTIONS: SubmitOptions = {
   walltime: "04:00:00",
@@ -47,6 +40,48 @@ const RERUN_OPTIONS: SubmitOptions = {
   account: null,
   qos: null,
 };
+
+const FILTERS: Array<{ key: string; label: string; match: (entry: RunHistoryEntry) => boolean }> = [
+  { key: "all", label: "All", match: () => true },
+  { key: "running", label: "Running", match: (entry) => entry.state === "running" },
+  { key: "pending", label: "Pending", match: (entry) => entry.state === "pending" },
+  { key: "completed", label: "Completed", match: (entry) => entry.state === "completed" },
+  { key: "failed", label: "Failed", match: (entry) => entry.state === "failed" || entry.state === "timeout" },
+  { key: "cancelled", label: "Cancelled", match: (entry) => entry.state === "cancelled" },
+];
+
+function stateTone(state: string): "ok" | "primary" | "warn" | "danger" | "neutral" {
+  if (state === "completed") return "ok";
+  if (state === "running") return "primary";
+  if (state === "pending") return "warn";
+  if (state === "failed" || state === "timeout") return "danger";
+  return "neutral";
+}
+
+function StateLabel({ entry }: { entry: RunHistoryEntry }) {
+  return (
+    <span className={`c-state tone-${stateTone(entry.state)}`}>
+      <span className="c-dot" />
+      {historyStateLabel(entry)}
+    </span>
+  );
+}
+
+function TimeUsed({ entry }: { entry: RunHistoryEntry }) {
+  const used = slurmSeconds(entry.elapsed);
+  const limit = slurmSeconds(entry.time_limit);
+  return (
+    <span style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
+      {used !== null && limit ? (
+        <MiniBar value={used / limit} tone={stateTone(entry.state) === "danger" ? "danger" : "neutral"} />
+      ) : null}
+      <span className="c-mono" style={{ fontSize: "12px", whiteSpace: "nowrap" }}>
+        {entry.elapsed ?? "—"}
+        {entry.time_limit ? <span style={{ color: "var(--text-subtle)" }}> / {entry.time_limit}</span> : null}
+      </span>
+    </span>
+  );
+}
 
 export default function RunHistory() {
   const [profiles, setProfiles] = useState<ServerEntry[]>([]);
@@ -56,6 +91,9 @@ export default function RunHistory() {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [opened, setOpened] = useState("");
+  const [filter, setFilter] = useState("all");
+  const seeded = useRef(false);
+  const [selectedJob, setSelectedJob] = useState<string | null>(null);
   const [rerun, setRerun] = useState<{
     entry: RunHistoryEntry;
     preview: SubmissionPreview;
@@ -68,6 +106,7 @@ export default function RunHistory() {
     void (async () => {
       try {
         const loaded = await listServerProfiles();
+        if (seeded.current) return;
         setProfiles(loaded);
         if (loaded.length > 0) setProfileId((current) => current || loaded[0]?.id || "");
       } catch (e) {
@@ -89,8 +128,23 @@ export default function RunHistory() {
     }
   };
 
+  // Test-only: seeded servers and runs, as the screenshot tests have no cluster.
   useEffect(() => {
-    if (profileId) void load(profileId);
+    const handleSeed = (event: Event) => {
+      const detail = (event as CustomEvent<{ profiles?: ServerEntry[]; entries?: RunHistoryEntry[] }>).detail;
+      if (!detail?.profiles) return;
+      seeded.current = true;
+      setProfiles(detail.profiles);
+      setProfileId(detail.profiles[0]?.id ?? "");
+      setEntries(detail.entries ?? []);
+      setError("");
+    };
+    window.addEventListener("coperceive-test-run-history-seed", handleSeed);
+    return () => window.removeEventListener("coperceive-test-run-history-seed", handleSeed);
+  }, []);
+
+  useEffect(() => {
+    if (profileId && !seeded.current) void load(profileId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileId]);
 
@@ -156,129 +210,121 @@ export default function RunHistory() {
     }
   };
 
-  return (
-    <div style={card}>
-      <div style={{ display: "flex", gap: "0.6rem", alignItems: "center", flexWrap: "wrap" }}>
-        <strong>Run history</strong>
-        <select
-          aria-label="Server profile"
-          value={profileId}
-          onChange={(event) => setProfileId(event.target.value)}
-          style={{ padding: "0.35rem 0.5rem", borderRadius: "6px", background: "rgba(0,0,0,0.5)", color: "#fff" }}
-        >
-          {profiles.map((entry) => (
-            <option key={entry.id} value={entry.id}>
-              {entry.profile.name}
-            </option>
-          ))}
-        </select>
-        <button type="button" style={button} disabled={busy !== null} onClick={() => void load()}>
-          {busy === "load" ? "Refreshing…" : "Refresh"}
-        </button>
-      </div>
-      {error ? <div style={{ marginTop: "0.5rem", color: "#ff7b72" }}>{error}</div> : null}
-      {opened ? <div style={{ marginTop: "0.5rem", color: "#7ee787" }}>{opened}</div> : null}
-      {entries === null ? (
-        <div style={{ marginTop: "0.75rem", opacity: 0.75 }}>Loading submitted runs…</div>
-      ) : entries.length === 0 ? (
-        <div style={{ marginTop: "0.75rem", opacity: 0.75 }}>
-          No submitted runs in the last 30 days for this server.
-        </div>
-      ) : (
-        <table style={{ width: "100%", marginTop: "0.75rem", borderCollapse: "collapse" }}>
-          <thead>
-            <tr style={{ textAlign: "left", opacity: 0.75 }}>
-              <th style={{ padding: "0.25rem 0.5rem 0.25rem 0" }}>Job</th>
-              <th>Plan</th>
-              <th>State</th>
-              <th>Timing</th>
-              <th>Started</th>
-              <th>Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            {entries.map((entry) => (
-              <tr key={entry.job_id} style={{ borderTop: "1px solid rgba(255,255,255,0.08)", verticalAlign: "top" }}>
-                <td style={{ padding: "0.35rem 0.5rem 0.35rem 0" }}>{entry.job_id}</td>
-                <td style={{ fontFamily: "ui-monospace, monospace", fontSize: "0.75rem" }}>{entry.plan_id}</td>
-                <td>{historyStateLabel(entry)}</td>
-                <td>{historyTiming(entry)}</td>
-                <td>{entry.started ?? "—"}</td>
-                <td>
-                  <div style={{ display: "flex", gap: "0.35rem", flexWrap: "wrap" }}>
-                    {entry.active ? (
-                      confirmCancel === entry.job_id ? (
-                        <>
-                          <button
-                            type="button"
-                            style={{ ...button, borderColor: "rgba(248,81,73,0.7)" }}
-                            disabled={busy !== null}
-                            onClick={() => void cancel(entry)}
-                          >
-                            Confirm cancel
-                          </button>
-                          <button type="button" style={button} onClick={() => setConfirmCancel(null)}>
-                            Keep
-                          </button>
-                        </>
-                      ) : (
-                        <button type="button" style={button} onClick={() => setConfirmCancel(entry.job_id)}>
-                          Cancel
-                        </button>
-                      )
-                    ) : null}
-                    {historyCanRerun(entry) ? (
-                      <button type="button" style={button} disabled={busy !== null} onClick={() => void beginRerun(entry)}>
-                        Re-run
-                      </button>
-                    ) : null}
-                    {entry.plan_available && (entry.state === "completed" || entry.state === "failed") ? (
-                      <button type="button" style={button} disabled={busy !== null} onClick={() => void open(entry)}>
-                        Open predictions
-                      </button>
-                    ) : null}
-                    {!entry.plan_available ? <span style={{ opacity: 0.6 }}>saved plan gone</span> : null}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      )}
-      {rerun ? (
-        <div style={{ marginTop: "0.9rem", borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: "0.75rem" }}>
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
-            <strong>Re-run {rerun.entry.plan_id}</strong>
-            <button type="button" style={button} onClick={() => setRerun(null)}>
-              Close
-            </button>
-          </div>
-          <div style={{ marginTop: "0.35rem", opacity: 0.8 }}>
-            This is a new submission of the saved plan; nothing is submitted until you confirm the
-            previewed script.
-          </div>
-          <pre
-            style={{
-              maxHeight: "12rem",
-              overflow: "auto",
-              padding: "0.5rem",
-              marginTop: "0.4rem",
-              borderRadius: "6px",
-              backgroundColor: "rgba(0,0,0,0.55)",
-              border: "1px solid rgba(255,255,255,0.1)",
-              fontSize: "0.72rem",
-            }}
-          >
-            {rerun.preview.script}
-          </pre>
-          {rerun.outcome ? (
-            <div style={{ marginTop: "0.4rem", color: "#7ee787" }}>
-              Resubmitted as job {rerun.outcome.job_id} — {rerun.outcome.state.toUpperCase()}
-              {rerun.outcome.queue_reason ? ` (${rerun.outcome.queue_reason})` : ""}
+  const shown = (entries ?? []).filter((entry) => (FILTERS.find((item) => item.key === filter) ?? FILTERS[0]).match(entry));
+  const selected = shown.find((entry) => entry.job_id === selectedJob) ?? null;
+  useDefaultSelection(shown, rowKey, selectedJob, setSelectedJob);
+  const running = (entries ?? []).filter((entry) => entry.state === "running").length;
+  const serverName = profiles.find((entry) => entry.id === profileId)?.profile.name ?? "";
+  usePageHeader("history", {
+    meta: entries && profiles.length > 0
+      ? `${entries.length} run${entries.length === 1 ? "" : "s"} in the last 30 days${serverName ? ` · ${serverName}` : ""} · from sacct`
+      : undefined,
+    navCount: running > 0 ? `${running} running` : undefined,
+    actions: (
+      <button type="button" className="c-header-action" disabled={busy !== null || !profileId} onClick={() => void load()}>
+        {busy === "load" ? "Refreshing…" : "Refresh"}
+      </button>
+    ),
+  });
+
+  const columns: GridColumn<RunHistoryEntry>[] = [
+    {
+      key: "job",
+      header: "Job",
+      min: 80,
+      max: 110,
+      render: (entry) => (
+        <span className="c-mono" style={{ color: "var(--text)" }}>
+          {entry.job_id}
+        </span>
+      ),
+    },
+    {
+      key: "plan",
+      header: "Plan",
+      min: 130,
+      max: 360,
+      render: (entry) => (
+        <span className="c-mono" style={{ fontSize: "12px" }}>
+          {entry.plan_id}
+          {!entry.plan_available ? <span style={{ color: "var(--text-subtle)" }}> · saved plan gone</span> : null}
+        </span>
+      ),
+    },
+    { key: "state", header: "State", min: 104, max: 130, render: (entry) => <StateLabel entry={entry} /> },
+    { key: "time", header: "Time used / limit", min: 176, max: 260, render: (entry) => <TimeUsed entry={entry} /> },
+    {
+      key: "started",
+      header: "Started",
+      min: 128,
+      max: 180,
+      render: (entry) => <span className="c-mono" style={{ fontSize: "12px" }}>{entry.started ?? "—"}</span>,
+    },
+  ];
+
+  const inspector = selected ? (
+    <>
+      <InspectorSection title={`Job ${selected.job_id}`}>
+        <StateLabel entry={selected} />
+        <span className="c-mono" style={{ fontSize: "12px", color: "var(--text-subtle)", overflowWrap: "anywhere" }}>
+          plan {selected.plan_id}
+        </span>
+      </InspectorSection>
+      <InspectorSection>
+        <Facts
+          items={[
+            ["Time used", selected.elapsed ?? "—"],
+            ["Limit", selected.time_limit ?? "—"],
+            selected.partition ? ["Partition", selected.partition] : null,
+            ["Started", selected.started ?? "—"],
+            selected.ended ? ["Ended", selected.ended] : null,
+          ]}
+        />
+      </InspectorSection>
+      <InspectorSection>
+        {selected.plan_available && (selected.state === "completed" || selected.state === "failed") ? (
+          <button type="button" className="c-primary-wide is-blue" disabled={busy !== null} onClick={() => void open(selected)}>
+            Open predictions
+          </button>
+        ) : null}
+        {historyCanRerun(selected) ? (
+          <button type="button" className="c-secondary" disabled={busy !== null} onClick={() => void beginRerun(selected)}>
+            Re-run with same plan
+          </button>
+        ) : (
+          <span className="c-step-note">The saved plan is no longer on the server, so this run cannot be repeated.</span>
+        )}
+        {selected.active ? (
+          confirmCancel === selected.job_id ? (
+            <div style={{ display: "flex", gap: "8px" }}>
+              <button type="button" className="c-secondary is-danger" disabled={busy !== null} onClick={() => void cancel(selected)}>
+                Confirm cancel
+              </button>
+              <button type="button" className="c-secondary" onClick={() => setConfirmCancel(null)}>
+                Keep
+              </button>
             </div>
           ) : (
-            <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", marginTop: "0.4rem", flexWrap: "wrap" }}>
-              <label style={{ display: "inline-flex", gap: "0.35rem", alignItems: "center" }}>
+            <button type="button" className="c-secondary is-danger" onClick={() => setConfirmCancel(selected.job_id)}>
+              Cancel job
+            </button>
+          )
+        ) : null}
+      </InspectorSection>
+      {rerun && rerun.entry.job_id === selected.job_id ? (
+        <InspectorSection title="Re-run">
+          <span className="c-step-note">
+            A new submission of the saved plan. Nothing is submitted until you confirm the previewed script.
+          </span>
+          <pre className="c-script">{rerun.preview.script}</pre>
+          {rerun.outcome ? (
+            <span style={{ color: "var(--ok)" }}>
+              Resubmitted as job {rerun.outcome.job_id} — {rerun.outcome.state.toUpperCase()}
+              {rerun.outcome.queue_reason ? ` (${rerun.outcome.queue_reason})` : ""}
+            </span>
+          ) : (
+            <>
+              <label style={{ display: "inline-flex", gap: "6px", alignItems: "center", fontSize: "12.5px" }}>
                 <input
                   type="checkbox"
                   checked={rerun.confirmed}
@@ -286,19 +332,90 @@ export default function RunHistory() {
                 />
                 I reviewed the script and want to submit it
               </label>
-              <button
-                type="button"
-                style={button}
-                disabled={busy !== null || !rerun.confirmed}
-                onClick={() => void submitRerun()}
-              >
-                {busy !== null ? "Submitting…" : "Submit re-run"}
-              </button>
-            </div>
+              <div style={{ display: "flex", gap: "8px" }}>
+                <button
+                  type="button"
+                  className="c-secondary"
+                  disabled={busy !== null || !rerun.confirmed}
+                  onClick={() => void submitRerun()}
+                >
+                  {busy !== null ? "Submitting…" : "Submit re-run"}
+                </button>
+                <button type="button" className="c-secondary" onClick={() => setRerun(null)}>
+                  Close
+                </button>
+              </div>
+            </>
           )}
-          {rerun.error ? <div style={{ marginTop: "0.4rem", color: "#ff7b72" }}>{rerun.error}</div> : null}
-        </div>
+          {rerun.error ? <span style={{ color: "var(--danger)" }}>{rerun.error}</span> : null}
+        </InspectorSection>
       ) : null}
-    </div>
+    </>
+  ) : null;
+
+  return (
+    <PageLayout inspectorLabel="Selected run" inspector={inspector}>
+      {profiles.length === 0 ? null : (
+      <PageToolbar>
+        {profiles.length > 1 ? (
+          <select
+            aria-label="Server profile"
+            className="c-select"
+            value={profileId}
+            onChange={(event) => setProfileId(event.target.value)}
+          >
+            {profiles.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.profile.name}
+              </option>
+            ))}
+          </select>
+        ) : null}
+        {profiles.length === 0 ? null : <div role="group" aria-label="Filter runs by state" className="c-chips">
+          {FILTERS.map((item) => {
+            const count = (entries ?? []).filter(item.match).length;
+            if (item.key !== "all" && count === 0) return null;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                className={`c-filter${filter === item.key ? " is-active" : ""}`}
+                aria-pressed={filter === item.key}
+                onClick={() => setFilter(item.key)}
+              >
+                {item.label} <span className="c-filter-count">{count}</span>
+              </button>
+            );
+          })}
+        </div>}
+      </PageToolbar>
+      )}
+      {error ? (
+        <p role="alert" className="c-page-note" style={{ color: "var(--danger)" }}>
+          {error}
+        </p>
+      ) : null}
+      {opened ? (
+        <p role="status" className="c-page-note" style={{ color: "var(--ok)" }}>
+          {opened}
+        </p>
+      ) : null}
+      {profiles.length === 0 && !error ? (
+        <p className="c-page-note">Add a server in Servers; runs you submit there are listed here.</p>
+      ) : entries === null ? (
+        <p className="c-page-note">Loading submitted runs…</p>
+      ) : (
+        <GridTable
+          label="Runs"
+          columns={columns}
+          rows={shown}
+          rowKey={rowKey}
+          selectedKey={selectedJob}
+          onSelect={(entry) => setSelectedJob(entry.job_id)}
+          rowHeight={34}
+          empty="No submitted runs in the last 30 days for this server."
+        />
+      )}
+    </PageLayout>
   );
 }
