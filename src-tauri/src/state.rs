@@ -443,6 +443,25 @@ pub struct AppPersistentState {
     /// "Viewing cache"). 2 GB by default.
     #[serde(default = "default_remote_view_cache_bytes")]
     pub remote_view_cache_bytes: u64,
+
+    /// How the dataset view groups its scenes (Settings → Datasets → "Group
+    /// scenes"): "none" (a flat list by scene name), "state" or "day" (the
+    /// recording day read from the scene name). "none" by default.
+    #[serde(default = "default_dataset_grouping")]
+    pub dataset_grouping: String,
+}
+
+/// The values "Group scenes" may hold; anything else is ignored.
+pub const DATASET_GROUPINGS: [&str; 3] = ["none", "state", "day"];
+
+fn default_dataset_grouping() -> String {
+    "none".to_string()
+}
+
+/// A grouping from a settings update, when it is one of [`DATASET_GROUPINGS`].
+pub fn dataset_grouping_from(value: &serde_json::Value) -> Option<String> {
+    let text = value.as_str()?;
+    DATASET_GROUPINGS.contains(&text).then(|| text.to_string())
 }
 
 pub const DEFAULT_REMOTE_VIEW_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -553,6 +572,7 @@ impl Default for AppPersistentState {
             last_cluster_profile: None,
             open_first_ready_scene: true,
             remote_view_cache_bytes: DEFAULT_REMOTE_VIEW_CACHE_BYTES,
+            dataset_grouping: default_dataset_grouping(),
         }
     }
 }
@@ -789,6 +809,20 @@ mod camera_images_tests {
 
 #[cfg(test)]
 pub mod tests {
+    #[test]
+    fn dataset_grouping_defaults_to_none_and_accepts_only_known_values() {
+        assert_eq!(AppPersistentState::default().dataset_grouping, "none");
+        // A state.json written before the setting existed reads as "none".
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert_eq!(old.dataset_grouping, "none");
+        for value in DATASET_GROUPINGS {
+            assert_eq!(dataset_grouping_from(&serde_json::json!(value)).as_deref(), Some(value));
+        }
+        for value in [serde_json::json!("date"), serde_json::json!(""), serde_json::json!(1), serde_json::Value::Null] {
+            assert_eq!(dataset_grouping_from(&value), None, "{value}");
+        }
+    }
+
     use super::*;
 
     #[test]
@@ -886,6 +920,7 @@ pub mod tests {
             last_cluster_profile: Some("p".into()),
             open_first_ready_scene: false,
             remote_view_cache_bytes: 512 * 1024 * 1024,
+            dataset_grouping: "day".into(),
         };
 
         let json = serde_json::to_string(&state).expect("serialize");
