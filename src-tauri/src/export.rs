@@ -89,7 +89,7 @@ pub fn write_export_file(
         .ok_or_else(|| "No data root set; cannot resolve exported source path".to_string())?;
 
     let rel_path = Path::new(rel_str);
-    if rel_path.is_absolute() {
+    if rel_path.is_absolute() || rel_path.has_root() {
         return Err(format!("Absolute source path rejected: {rel_str}"));
     }
 
@@ -160,6 +160,19 @@ mod tests {
         let dest = dir.join("out.png");
 
         let err = write_export_file(Some(&dir), Some("/etc/passwd"), &dest, None);
+        assert!(err.is_err());
+        assert!(err.unwrap_err().contains("Absolute source path rejected"));
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn windows_drive_path_rejected() {
+        let dir = temp_test_dir("win_absolute");
+        let dest = dir.join("out.png");
+
+        let err = write_export_file(Some(&dir), Some(r"C:\secret.txt"), &dest, None);
         assert!(err.is_err());
         assert!(err.unwrap_err().contains("Absolute source path rejected"));
 

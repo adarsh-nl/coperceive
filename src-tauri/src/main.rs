@@ -3878,9 +3878,11 @@ fn main() {
                         *lock = Some(port);
                     }
                     println!("[desktop-ctrl] Loopback controller listening on port {}", port);
+                    let _ = std::io::Write::flush(&mut std::io::stdout());
                 }
                 Err(e) => {
                     eprintln!("[desktop-ctrl] Failed to start loopback controller: {}", e);
+                    let _ = std::io::Write::flush(&mut std::io::stderr());
                 }
             }
 
@@ -3937,6 +3939,7 @@ fn main() {
                             match start_local_session(&h, &st, root_str).await {
                                 Ok(payload) => {
                                     println!("[auto-connect] Successfully connected: origin={}", payload.origin);
+                                    let _ = std::io::Write::flush(&mut std::io::stdout());
                                     if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
                                         let log_path = {
                                             let lock = st.sidecar.lock().ok();
@@ -3958,6 +3961,7 @@ fn main() {
                                 }
                                 Err(err) => {
                                     eprintln!("[auto-connect] Error connecting to last root: {err}");
+                                    let _ = std::io::Write::flush(&mut std::io::stderr());
                                     if let Some(main) = h.get_webview_window("main") {
                                         let _ = main.show();
                                     }

@@ -25,6 +25,7 @@ pub fn reveal_path(path: &Path) -> Result<(), String> {
 
 pub fn handle_fatal_error(err_msg: &str) {
     eprintln!("Fatal startup error: {err_msg}");
+    let _ = std::io::Write::flush(&mut std::io::stderr());
     let log_dir = get_log_dir();
     let _ = std::fs::create_dir_all(&log_dir);
     let log_file = log_dir.join("startup-error.log");
@@ -35,11 +36,14 @@ pub fn handle_fatal_error(err_msg: &str) {
             .map(|d| d.as_secs())
             .unwrap_or(0);
         let _ = writeln!(f, "[{now}] Fatal startup error: {err_msg}");
+        let _ = f.flush();
     }
 
-    let _ = std::process::Command::new("zenity")
-        .args(["--error", "--text", err_msg, "--title", "Coperceive Startup Error"])
-        .status();
+    if std::env::var("CI").is_err() && !coperceive_desktop::test_seams::test_env_active() {
+        let _ = std::process::Command::new("zenity")
+            .args(["--error", "--text", err_msg, "--title", "Coperceive Startup Error", "--timeout=15"])
+            .status();
+    }
 }
 
 pub fn copy_to_clipboard(text: &str) -> bool {

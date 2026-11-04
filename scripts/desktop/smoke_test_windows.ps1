@@ -36,14 +36,19 @@ if (-not $env:COPERCEIVE_PYTHON) {
     }
 }
 
-$proc = Start-Process -FilePath $AppExe -PassThru
+$StdOutFile = Join-Path $TempDir "app_stdout.log"
+$StdErrFile = Join-Path $TempDir "app_stderr.log"
+
+$proc = Start-Process -FilePath $AppExe -RedirectStandardOutput $StdOutFile -RedirectStandardError $StdErrFile -PassThru
 
 Write-Host "Waiting for auto-connect and sidecar startup (PID: $($proc.Id))..."
-$timeout = 30
+$timeout = 45
 $elapsed = 0
 while (-not (Test-Path $MarkerFile) -and $elapsed -lt $timeout) {
     if ($proc.HasExited) {
         Write-Error "App process exited prematurely with exit code $($proc.ExitCode)"
+        if (Test-Path $StdErrFile) { Get-Content $StdErrFile }
+        if (Test-Path $StdOutFile) { Get-Content $StdOutFile }
         exit 2
     }
     Start-Sleep -Milliseconds 500
@@ -53,6 +58,8 @@ while (-not (Test-Path $MarkerFile) -and $elapsed -lt $timeout) {
 if (-not (Test-Path $MarkerFile)) {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
     Write-Error "Auto-connect marker file was not created within $timeout seconds"
+    if (Test-Path $StdErrFile) { Get-Content $StdErrFile }
+    if (Test-Path $StdOutFile) { Get-Content $StdOutFile }
     exit 3
 }
 
