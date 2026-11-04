@@ -436,6 +436,15 @@ export interface RunHistoryEntry {
   plan_available: boolean;
 }
 
+/** Seconds in a Slurm duration ("[D-]HH:MM:SS", "MM:SS"), or null. */
+export function slurmSeconds(value: string | null): number | null {
+  if (!value) return null;
+  const match = /^(?:(\d+)-)?(?:(\d+):)?(\d+):(\d+)$/.exec(value.trim());
+  if (!match) return null;
+  const [, days, hours, minutes, seconds] = match;
+  return Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
 /** Plain-language state for a history row. */
 export function historyStateLabel(entry: RunHistoryEntry): string {
   if (entry.state === "pending") return "PENDING";

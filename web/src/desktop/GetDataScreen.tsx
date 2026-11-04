@@ -14,8 +14,18 @@ import {
   pickDataRoot,
   loadDatasetCatalog,
   getPersistentState,
+  getStorageInfo,
 } from "./local";
 import { errorText } from "./errors";
+import {
+  GridTable,
+  InspectorSection,
+  PageLayout,
+  useDefaultSelection,
+  usePageHeader,
+  type GridColumn,
+} from "./components/Page";
+import { datasetJobs, subscribeDatasetJobs, type DatasetJobs } from "./jobsStore";
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
@@ -27,14 +37,75 @@ function formatBytes(bytes: number): string {
 interface Props {
   onOpenScene: (scenePath: string) => void;
   onOpenImportFolder?: (folderPath?: string) => void;
+  /** "Free up space" goes to the Library, where scenes can be removed. */
+  onOpenLibrary?: () => void;
 }
 
-export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props) {
+const datasetKey = (ds: CatalogDataset) => ds.id;
+
+/** What the Availability column says: only from the catalog and real cluster state. */
+export function availabilityOf(
+  ds: CatalogDataset,
+  presetBytes: Record<string, number>,
+  clusterJobs: readonly DatasetJobs[],
+): { label: string; hint: string; color: string; dot: string } {
+  if (ds.status === "ready") {
+    const sizes = (ds.presets ?? [])
+      .map((preset) => presetBytes[`${ds.id}:${preset.id}`])
+      .filter((bytes): bytes is number => typeof bytes === "number");
+    const count = ds.presets?.length ?? 0;
+    const presets = `${count} ${count === 1 ? "preset" : "presets"}`;
+    return {
+      label: "Download",
+      hint: sizes.length ? `${presets} · from ${formatBytes(Math.min(...sizes))}` : presets,
+      color: "var(--ok)",
+      dot: "#3fb950",
+    };
+  }
+  if (ds.status === "local-import") {
+    // A dataset being prepared on a cluster this session: "Prepared on HPC · 3/33 train".
+    const id = ds.id.toLowerCase();
+    const prepared = clusterJobs.find((entry) => entry.label.toLowerCase().includes(id));
+    return {
+      label: "Local import",
+      hint: prepared ? `Prepared on HPC · ${prepared.ready}/${prepared.total}${splitOf(prepared.label)}` : "",
+      color: "var(--text-secondary)",
+      dot: "#8e8e93",
+    };
+  }
+  return { label: "Coming later", hint: "Adapter in preparation", color: "var(--text-subtle)", dot: "#48484a" };
+}
+
+function splitOf(label: string): string {
+  const split = label.split("·").map((part) => part.trim())[1];
+  return split ? ` ${split}` : "";
+}
+
+/** The preset's disk need against free space, on a log scale, with a tick at free. */
+function DiskFit({ need, free }: { need: number; free: number }) {
+  const mb = (bytes: number) => Math.max(1, bytes / 1024 ** 2);
+  const top = Math.log10(Math.max(mb(need), mb(free)) * 1.2);
+  const width = (Math.log10(mb(need)) / top) * 100;
+  const tick = (Math.log10(mb(free)) / top) * 100;
+  return (
+    <span className="c-diskfit" role="img" aria-label={`Needs ${formatBytes(need)} of ${formatBytes(free)} free`}>
+      <span className={`c-diskfit-bar${need > free ? " is-over" : ""}`} style={{ width: `${width}%` }} />
+      <span className="c-diskfit-tick" style={{ left: `${tick}%` }} />
+    </span>
+  );
+}
+
+export default function GetDataScreen({ onOpenScene, onOpenImportFolder, onOpenLibrary }: Props) {
+  const [clusterJobs, setClusterJobs] = useState<readonly DatasetJobs[]>(() => datasetJobs());
+  useEffect(() => subscribeDatasetJobs(() => setClusterJobs(datasetJobs())), []);
   const [catalog, setCatalog] = useState<CatalogDataset[]>([]);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [presetBytes, setPresetBytes] = useState<Record<string, number>>({});
   const [presetSizeNote, setPresetSizeNote] = useState<Record<string, string>>({});
+  const [presetRuns, setPresetRuns] = useState<Record<string, DryRunResult>>({});
+  const [inspectId, setInspectId] = useState<string | null>(null);
+  const [libraryRoot, setLibraryRoot] = useState<string>("");
   const [selectedDataset, setSelectedDataset] = useState<CatalogDataset | null>(null);
   const [selectedPresetId, setSelectedPresetId] = useState<string>("dev");
   const [dryRun, setDryRun] = useState<DryRunResult | null>(null);
@@ -67,6 +138,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
           try {
             const measured = await datasetDryRun("griffin", preset.id);
             setPresetBytes((prev) => ({ ...prev, [key]: measured.download_bytes }));
+            setPresetRuns((prev) => ({ ...prev, [key]: measured }));
             setPresetSizeNote((prev) => ({ ...prev, [key]: "" }));
           } catch (err) {
             setPresetSizeNote((prev) => ({
@@ -90,6 +162,7 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
       const custom = event as CustomEvent<{
         catalog?: CatalogDataset[];
         presetBytes?: Record<string, number>;
+        presetRuns?: Record<string, DryRunResult>;
       }>;
       if (custom.detail?.catalog !== undefined) {
         setCatalog(custom.detail.catalog);
@@ -99,12 +172,18 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
       if (custom.detail?.presetBytes) {
         setPresetBytes(custom.detail.presetBytes);
       }
+      if (custom.detail?.presetRuns) {
+        setPresetRuns(custom.detail.presetRuns);
+      }
     };
     window.addEventListener("coperceive-test-catalog-seed", handleSeed);
     return () => window.removeEventListener("coperceive-test-catalog-seed", handleSeed);
   }, []);
 
   useEffect(() => {
+    void getStorageInfo()
+      .then((stats) => setLibraryRoot(stats?.library_root ?? ""))
+      .catch(() => undefined);
     void loadCatalog();
     void (async () => {
       const saved = await getPersistentState();
@@ -220,114 +299,222 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
     }
   };
 
+  const readyCount = catalog.filter((ds) => ds.status === "ready").length;
+  usePageHeader("get_data", {
+    meta: catalog.length
+      ? `Cooperative-perception benchmarks · ${readyCount} ready to download`
+      : undefined,
+    actions: onOpenImportFolder ? (
+      <button type="button" className="c-header-action" onClick={() => onOpenImportFolder()}>
+        Import local folder…
+      </button>
+    ) : undefined,
+  });
+  useDefaultSelection(catalog, datasetKey, inspectId, setInspectId);
+  const inspected = catalog.find((ds) => ds.id === inspectId) ?? null;
+  const measuredRuns = Object.values(presetRuns);
+  const freeBytes = measuredRuns.length ? measuredRuns[measuredRuns.length - 1].free_bytes : null;
+
+  const columns: GridColumn<CatalogDataset>[] = [
+    {
+      key: "dataset",
+      header: "Dataset",
+      min: 200,
+      max: 420,
+      render: (ds) => (
+        <span style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+          <span style={{ fontWeight: 600, color: "var(--text)" }}>{ds.name}</span>
+          <span className="c-ellipsis" style={{ fontSize: "12px", color: "var(--text-subtle)" }}>
+            {ds.description}
+          </span>
+        </span>
+      ),
+    },
+    { key: "agents", header: "Agents", min: 120, max: 200, render: (ds) => ds.agents },
+    {
+      key: "modalities",
+      header: "Modalities",
+      min: 120,
+      max: 140,
+      render: (ds) => (
+        <span style={{ display: "flex", gap: "4px" }}>
+          {ds.modalities.map((modality) => (
+            <span key={modality} className="c-chip">
+              {modality === "Camera" ? "Cam" : modality}
+            </span>
+          ))}
+        </span>
+      ),
+    },
+    {
+      key: "licence",
+      header: "Licence",
+      min: 90,
+      max: 110,
+      render: (ds) => (ds.licence === "unknown" ? <span style={{ color: "var(--text-subtle)" }}>Unknown</span> : ds.licence),
+    },
+    {
+      key: "availability",
+      header: "Availability",
+      min: 160,
+      max: 260,
+      render: (ds) => {
+        const availability = availabilityOf(ds, presetBytes, clusterJobs);
+        return (
+          <span style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+            <span style={{ display: "flex", alignItems: "center", gap: "6px", color: availability.color }}>
+              <span className="c-dot" style={{ background: availability.dot }} />
+              {availability.label}
+            </span>
+            {availability.hint ? (
+              <span className="c-ellipsis" style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
+                {availability.hint}
+              </span>
+            ) : null}
+          </span>
+        );
+      },
+    },
+  ];
+
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 52px)", fontSize: "13px" }}>
-      {/* Compact Page Header */}
-      <section
-        style={{
-          padding: "18px 24px 14px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-          borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-        }}
+      <PageLayout
+        inspectorLabel="Selected dataset"
+        inspector={
+          inspected ? (
+            <>
+              <InspectorSection>
+                <div style={{ fontSize: "15px", fontWeight: 600, color: "var(--text)" }}>{inspected.name}</div>
+                <div style={{ color: "var(--text-subtle)", fontSize: "12px" }}>{inspected.description}</div>
+              </InspectorSection>
+              <InspectorSection>
+                <dl className="c-pairs">
+                  <dt>Agents</dt>
+                  <dd>{inspected.agents}</dd>
+                  <dt>Licence</dt>
+                  <dd>{inspected.licence === "unknown" ? "Not recorded" : inspected.licence}</dd>
+                  {inspected.paper_url || inspected.source_url ? (
+                    <>
+                      <dt>Links</dt>
+                      <dd style={{ display: "flex", gap: "12px" }}>
+                        {inspected.paper_url ? (
+                          <a href={inspected.paper_url} target="_blank" rel="noreferrer">
+                            Paper ↗
+                          </a>
+                        ) : null}
+                        {inspected.source_url ? (
+                          <a href={inspected.source_url} target="_blank" rel="noreferrer">
+                            Source ↗
+                          </a>
+                        ) : null}
+                      </dd>
+                    </>
+                  ) : null}
+                </dl>
+              </InspectorSection>
+              {inspected.status === "ready" && inspected.presets?.length ? (
+                <InspectorSection
+                  title={
+                    <span style={{ display: "flex", justifyContent: "space-between" }}>
+                      <span>Presets</span>
+                      {freeBytes !== null ? <span>{formatBytes(freeBytes)} free</span> : null}
+                    </span>
+                  }
+                >
+                  {inspected.presets.map((preset) => {
+                    const key = `${inspected.id}:${preset.id}`;
+                    const run = presetRuns[key];
+                    const bytes = presetBytes[key];
+                    return (
+                      <div key={preset.id} className="c-preset">
+                        <button
+                          type="button"
+                          className="c-preset-head"
+                          onClick={() => void handleSelectPreset(inspected, preset.id)}
+                        >
+                          <span style={{ fontWeight: 500, color: "var(--text)" }}>{preset.name}</span>
+                          <span className="c-mono" style={{ fontSize: "12px" }}>
+                            {typeof bytes === "number" ? formatBytes(bytes) : presetSizeNote[key] || ""}
+                          </span>
+                        </button>
+                        <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>{preset.description}</span>
+                        {run ? (
+                          <>
+                            <DiskFit need={run.disk_bytes} free={run.free_bytes} />
+                            <span style={{ fontSize: "11.5px", color: run.has_headroom ? "var(--ok)" : "var(--danger)" }}>
+                              {run.has_headroom
+                                ? `Fits · ${formatBytes(run.free_bytes - run.disk_bytes)} left after`
+                                : `Needs ${formatBytes(run.disk_bytes)} · only ${formatBytes(run.free_bytes)} free`}
+                            </span>
+                          </>
+                        ) : null}
+                        {run && !run.has_headroom ? (
+                          <button type="button" className="c-secondary" onClick={onOpenLibrary}>
+                            Free up space
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="c-secondary"
+                            onClick={() => void handleSelectPreset(inspected, preset.id)}
+                            aria-label={`Download ${inspected.name}: ${preset.name}`}
+                          >
+                            Download
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                  {measuredRuns.length ? (
+                    <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>
+                      Bars on a log scale · the tick marks free disk space
+                    </span>
+                  ) : null}
+                </InspectorSection>
+              ) : (
+                <InspectorSection>
+                  <span>
+                    {inspected.status === "planned"
+                      ? "The adapter for this dataset is in preparation."
+                      : "This dataset has no recorded licence, so the app never downloads it. Import a copy you already have, or prepare it on a cluster."}
+                  </span>
+                  {inspected.status === "local-import" && onOpenImportFolder ? (
+                    <button
+                      type="button"
+                      className="c-secondary"
+                      onClick={async () => {
+                        const folder = await pickDataRoot();
+                        if (folder) onOpenImportFolder(folder);
+                      }}
+                    >
+                      Import a copy…
+                    </button>
+                  ) : null}
+                </InspectorSection>
+              )}
+            </>
+          ) : null
+        }
       >
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "16px", flexWrap: "wrap" }}>
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-              Local workspace · catalog
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "20px",
-                  fontWeight: 600,
-                  letterSpacing: "-0.01em",
-                  color: "var(--text)",
-                }}
-              >
-                Dataset Catalog
-              </h2>
-              <span style={{ fontSize: "12.5px", color: "var(--text-tertiary)" }}>
-                Download verified cooperative-perception benchmarks directly into your local library.
-              </span>
-            </div>
-          </div>
-
-          {onOpenImportFolder && (
-            <button
-              type="button"
-              onClick={() => onOpenImportFolder()}
-              style={{
-                padding: "6px 12px",
-                borderRadius: "6px",
-                border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
-                backgroundColor: "transparent",
-                color: "var(--text)",
-                fontSize: "12.5px",
-                fontWeight: 500,
-                cursor: "pointer",
-              }}
-            >
-              Import local folder…
-            </button>
-          )}
-        </div>
-
         {resumableJob && !jobRunning && (
-          <div
-            style={{
-              padding: "10px 14px",
-              borderRadius: "6px",
-              background: "rgba(31, 111, 235, 0.12)",
-              border: "1px solid rgba(31, 111, 235, 0.3)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "12px",
-              fontSize: "12.5px",
-            }}
-          >
+          <div className="c-banner">
             <div>
               <strong style={{ color: "var(--text)" }}>
                 Resume download of {resumableJob.datasetId} ({resumableJob.presetId})?
               </strong>{" "}
-              <span style={{ color: "var(--text-tertiary)" }}>
-                Previous download was interrupted before completion.
-              </span>
+              <span style={{ color: "var(--text-tertiary)" }}>Previous download was interrupted before completion.</span>
             </div>
             <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
-              <button
-                type="button"
-                onClick={() => handleResumeJob(resumableJob)}
-                style={{
-                  background: "var(--primary, #1f6feb)",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "5px",
-                  padding: "4px 10px",
-                  cursor: "pointer",
-                  fontSize: "12px",
-                  fontWeight: 500,
-                }}
-              >
+              <button type="button" className="c-secondary" onClick={() => handleResumeJob(resumableJob)}>
                 Resume
               </button>
               <button
                 type="button"
+                className="c-link"
                 onClick={() => {
                   localStorage.removeItem("coperceive_incomplete_download");
                   setResumableJob(null);
-                }}
-                style={{
-                  background: "transparent",
-                  color: "var(--text-tertiary)",
-                  border: "1px solid var(--line-elevated)",
-                  borderRadius: "5px",
-                  padding: "4px 10px",
-                  fontSize: "12px",
-                  cursor: "pointer",
                 }}
               >
                 Dismiss
@@ -335,318 +522,64 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder }: Props
             </div>
           </div>
         )}
-
         {catalogError && (
-          <p role="alert" style={{ color: "var(--danger)", margin: 0, fontSize: "12.5px" }}>
+          <p role="alert" style={{ color: "var(--danger)", margin: "12px 24px", fontSize: "12.5px" }}>
             {catalogError}
           </p>
         )}
-      </section>
 
-      {catalogLoading && (
-        <div style={{ padding: "24px" }}>
-          <PanelState
-            kind="loading"
-            title={PANEL_DEFINITIONS.get_data.loading.title}
-            description={PANEL_DEFINITIONS.get_data.loading.description}
-          />
-        </div>
-      )}
+        {catalogLoading && (
+          <div style={{ padding: "24px" }}>
+            <PanelState
+              kind="loading"
+              title={PANEL_DEFINITIONS.get_data.loading.title}
+              description={PANEL_DEFINITIONS.get_data.loading.description}
+            />
+          </div>
+        )}
+        {!catalogLoading && catalogError && (
+          <div style={{ padding: "24px" }}>
+            <PanelState
+              kind="error"
+              title={PANEL_DEFINITIONS.get_data.error.title}
+              description={PANEL_DEFINITIONS.get_data.error.description}
+              actionLabel={PANEL_DEFINITIONS.get_data.error.actionLabel}
+              onAction={() => void loadCatalog()}
+            />
+          </div>
+        )}
+        {!catalogLoading && !catalogError && catalog.length === 0 && (
+          <div style={{ padding: "24px" }}>
+            <PanelState
+              kind="empty"
+              title={PANEL_DEFINITIONS.get_data.empty.title}
+              description={PANEL_DEFINITIONS.get_data.empty.description}
+              actionLabel={PANEL_DEFINITIONS.get_data.empty.actionLabel}
+              onAction={() => onOpenImportFolder?.()}
+            />
+          </div>
+        )}
 
-      {!catalogLoading && catalogError && (
-        <div style={{ padding: "24px" }}>
-          <PanelState
-            kind="error"
-            title={PANEL_DEFINITIONS.get_data.error.title}
-            description={PANEL_DEFINITIONS.get_data.error.description}
-            actionLabel={PANEL_DEFINITIONS.get_data.error.actionLabel}
-            onAction={() => void loadCatalog()}
-          />
-        </div>
-      )}
-
-      {!catalogLoading && !catalogError && catalog.length === 0 && (
-        <div style={{ padding: "24px" }}>
-          <PanelState
-            kind="empty"
-            title={PANEL_DEFINITIONS.get_data.empty.title}
-            description={PANEL_DEFINITIONS.get_data.empty.description}
-            actionLabel={PANEL_DEFINITIONS.get_data.empty.actionLabel}
-            onAction={() => onOpenImportFolder?.()}
-          />
-        </div>
-      )}
-
-      {/* Tight Catalog Cards Grid with Dense Preset Tables */}
-      {!catalogLoading && !catalogError && catalog.length > 0 && (
-        <div
-          style={{
-            padding: "18px 24px",
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-            gap: "14px",
-            alignItems: "start",
-          }}
-        >
-          {catalog.map((ds) => {
-            const isPlanned = ds.status === "planned";
-            const isLocal = ds.status === "local-import";
-            const isReady = ds.status === "ready";
-
-            return (
-              <div
-                key={ds.id}
-                style={{
-                  background: isPlanned ? "var(--sunken)" : "var(--panel)",
-                  border: "1px solid var(--line, rgba(255,255,255,0.08))",
-                  borderRadius: "8px",
-                  display: "flex",
-                  flexDirection: "column",
-                  overflow: "hidden",
-                  opacity: isPlanned ? 0.65 : 1,
-                }}
-              >
-                <div style={{ padding: "14px 16px 12px" }}>
-                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "6px" }}>
-                    <h3 style={{ margin: 0, fontSize: "15px", color: "var(--text)", fontWeight: 600 }}>
-                      {ds.name}
-                    </h3>
-                    <span
-                      style={{
-                        display: "inline-flex",
-                        alignItems: "center",
-                        gap: "6px",
-                        fontSize: "11.5px",
-                        fontWeight: 500,
-                        color: isReady ? "var(--ok)" : isLocal ? "var(--vehicle)" : "var(--text-subtle)",
-                      }}
-                    >
-                      <span
-                        style={{
-                          width: "6px",
-                          height: "6px",
-                          borderRadius: "50%",
-                          backgroundColor: isReady ? "#3fb950" : isLocal ? "#f58a1f" : "#6e6e73",
-                        }}
-                      />
-                      {isReady ? "Ready" : isLocal ? "Local import" : "Coming later"}
-                    </span>
-                  </div>
-
-                  <p style={{ fontSize: "12.5px", color: "var(--text-secondary)", margin: "0 0 10px", lineHeight: 1.45 }}>
-                    {ds.description}
-                  </p>
-
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns: "auto 1fr",
-                      columnGap: "12px",
-                      rowGap: "3px",
-                      fontSize: "11.5px",
-                    }}
-                  >
-                    <span style={{ color: "var(--text-subtle)" }}>Agents</span>
-                    <span style={{ color: "var(--text-secondary)" }}>{ds.agents}</span>
-                    <span style={{ color: "var(--text-subtle)" }}>Modalities</span>
-                    <span style={{ color: "var(--text-secondary)" }}>{ds.modalities.join(" · ")}</span>
-                    <span style={{ color: "var(--text-subtle)" }}>Licence</span>
-                    <span style={{ color: "var(--text-secondary)", display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                      {ds.licence_url ? (
-                        <a
-                          href={ds.licence_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: "var(--text-secondary)", textDecoration: "underline" }}
-                        >
-                          {ds.licence}
-                        </a>
-                      ) : (
-                        <span>{ds.licence}</span>
-                      )}
-                      {ds.paper_url && (
-                        <a
-                          href={ds.paper_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: "var(--primary-hover, #79c0ff)", textDecoration: "none" }}
-                        >
-                          Paper ↗
-                        </a>
-                      )}
-                      {ds.source_url && (
-                        <a
-                          href={ds.source_url}
-                          target="_blank"
-                          rel="noreferrer"
-                          style={{ color: "var(--primary-hover, #79c0ff)", textDecoration: "none" }}
-                        >
-                          Source ↗
-                        </a>
-                      )}
-                    </span>
-                  </div>
-
-                  {ds.notice && (
-                    <p
-                      style={{
-                        fontSize: "11.5px",
-                        color: "var(--text-tertiary)",
-                        background: "var(--sunken)",
-                        padding: "6px 8px",
-                        borderRadius: "5px",
-                        margin: "10px 0 0",
-                        lineHeight: 1.4,
-                      }}
-                    >
-                      {ds.notice}
-                    </p>
-                  )}
-                </div>
-
-                {/* Dense Preset Table inside the Card */}
-                {isReady && ds.presets && (
-                  <div style={{ borderTop: "1px solid var(--line, rgba(255,255,255,0.08))" }}>
-                    <div
-                      style={{
-                        display: "grid",
-                        gridTemplateColumns: "110px 1fr 90px 28px",
-                        alignItems: "center",
-                        gap: "8px",
-                        padding: "5px 16px",
-                        backgroundColor: "var(--sunken)",
-                        borderBottom: "1px solid var(--line-subtle)",
-                        fontSize: "11px",
-                        color: "var(--text-subtle)",
-                      }}
-                    >
-                      <span>Preset</span>
-                      <span>Description</span>
-                      <span style={{ textAlign: "right" }}>Download</span>
-                      <span />
-                    </div>
-                    {ds.presets.map((preset, idx) => {
-                      const key = `${ds.id}:${preset.id}`;
-                      const sizeLabel =
-                        presetBytes[key] != null
-                          ? formatBytes(presetBytes[key])
-                          : presetSizeNote[key] || "Check size";
-                      return (
-                        <button
-                          key={preset.id}
-                          type="button"
-                          onClick={() => handleSelectPreset(ds, preset.id)}
-                          className="c-table-row"
-                          style={{
-                            width: "100%",
-                            display: "grid",
-                            gridTemplateColumns: "110px 1fr 90px 28px",
-                            alignItems: "center",
-                            gap: "8px",
-                            padding: "8px 16px",
-                            background: "transparent",
-                            border: "none",
-                            borderBottom:
-                              idx < ds.presets!.length - 1
-                                ? "1px solid var(--line-subtle)"
-                                : "none",
-                            borderRadius: 0,
-                            textAlign: "left",
-                            cursor: "pointer",
-                            fontSize: "12.5px",
-                          }}
-                        >
-                          <strong style={{ fontWeight: 500, color: "var(--text)" }}>
-                            {preset.name}
-                          </strong>
-                          <span
-                            style={{
-                              fontSize: "12px",
-                              color: "var(--text-tertiary)",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {preset.description}
-                          </span>
-                          <span
-                            style={{
-                              textAlign: "right",
-                              fontFamily: "'Geist Mono', ui-monospace, monospace",
-                              fontSize: "11.5px",
-                              color: "var(--text-secondary)",
-                              fontVariantNumeric: "tabular-nums",
-                            }}
-                          >
-                            {sizeLabel}
-                          </span>
-                          <span
-                            style={{
-                              textAlign: "right",
-                              color: "var(--primary-hover, #79c0ff)",
-                              fontWeight: 500,
-                            }}
-                          >
-                            ↓
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                )}
-
-                {isLocal && (
-                  <div
-                    style={{
-                      padding: "10px 16px",
-                      borderTop: "1px solid var(--line-subtle)",
-                      backgroundColor: "var(--sunken)",
-                      display: "flex",
-                      justifyContent: "flex-end",
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        if (onOpenImportFolder) {
-                          const folder = await pickDataRoot();
-                          if (folder) onOpenImportFolder(folder);
-                        }
-                      }}
-                      style={{
-                        padding: "5px 12px",
-                        borderRadius: "5px",
-                        background: "transparent",
-                        border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
-                        color: "var(--text)",
-                        cursor: "pointer",
-                        fontSize: "12px",
-                        fontWeight: 500,
-                      }}
-                    >
-                      Import a local copy…
-                    </button>
-                  </div>
-                )}
-
-                {isPlanned && (
-                  <div
-                    style={{
-                      padding: "8px 16px",
-                      borderTop: "1px solid var(--line-subtle)",
-                      fontSize: "11.5px",
-                      color: "var(--text-subtle)",
-                    }}
-                  >
-                    Adapter in preparation
-                  </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
-      )}
+        {catalog.length > 0 ? (
+          <>
+            <GridTable
+              label="Dataset catalog"
+              columns={columns}
+              rows={catalog}
+              rowKey={datasetKey}
+              selectedKey={inspected?.id ?? null}
+              onSelect={(ds) => setInspectId(ds.id)}
+              rowHeight={52}
+              rowClassName={(ds) => (ds.status === "planned" ? "is-muted" : undefined)}
+            />
+            <p className="c-page-note">
+              {libraryRoot ? `Downloads go to ${libraryRoot}. ` : ""}
+              Datasets without a recorded licence can only be imported from a copy you already have — the app never
+              downloads them.
+            </p>
+          </>
+        ) : null}
+      </PageLayout>
 
       {/* Preset Dry-run & Progress Modal */}
       {selectedDataset && (

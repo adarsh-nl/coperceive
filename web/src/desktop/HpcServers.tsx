@@ -5,6 +5,7 @@
  * ~/.ssh/config; there is no password or key field anywhere.
  */
 import { useEffect, useRef, useState } from "react";
+import { usePageHeader } from "./components/Page";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
@@ -25,7 +26,6 @@ import {
   gpuTypesFor,
   missingExplanations,
   partitionNames,
-  profileSummary,
   reportSummary,
   validateConnectionShape,
   validateDraft,
@@ -119,7 +119,7 @@ export default function HpcServers() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
-  const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const formErrorRef = useRef<HTMLDivElement | null>(null);
 
@@ -179,7 +179,8 @@ export default function HpcServers() {
     const handleBrowseServer = (event: Event) => {
       const custom = event as CustomEvent<{ profile?: ServerEntry }>;
       if (custom.detail?.profile) {
-        setBrowseProfile(custom.detail.profile);
+        setSelectedServerId(custom.detail.profile.id);
+        setDraft(null);
       }
     };
     window.addEventListener("coperceive-test-hpc-servers-seed", handleSeed);
@@ -354,84 +355,140 @@ export default function HpcServers() {
     return "gpu";
   })();
 
-  return (
-    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 52px)", fontSize: "13px" }}>
-      {/* Compact Page Header */}
-      <section
-        style={{
-          padding: "18px 24px 14px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-          borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-        }}
-      >
-        <div
-          style={{
-            display: "flex",
-            justifyContent: "space-between",
-            gap: "16px",
-            alignItems: "flex-start",
-            flexWrap: "wrap",
+  usePageHeader("servers", {
+    meta: "SSH via ssh-agent and ~/.ssh/config · never asks for a password or key",
+    actions: (
+      <button type="button" className="c-header-action" onClick={startAdd}>
+        + Add server
+      </button>
+    ),
+  });
+  const selectedServer = profiles.find((entry) => entry.id === selectedServerId) ?? profiles[0] ?? null;
+  const cardReport = selectedServer ? cardReports[selectedServer.id] : undefined;
+  const partitionsKnown = cardReport?.partitions?.length ?? selectedServer?.discovered?.partitions?.length ?? 0;
+
+  const serverRow = selectedServer ? (
+    <section className="c-server-row" aria-label={`Server ${selectedServer.profile.name}`}>
+      <div className="c-server-cell">
+        <span className="c-inspector-label">Server</span>
+        {profiles.length > 1 ? (
+          <select
+            aria-label="Server"
+            className="c-select"
+            value={selectedServer.id}
+            onChange={(event) => setSelectedServerId(event.target.value)}
+          >
+            {profiles.map((entry) => (
+              <option key={entry.id} value={entry.id}>
+                {entry.profile.name}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <span style={{ display: "flex", alignItems: "center", gap: "8px", fontWeight: 600, color: "var(--text)" }}>
+            <span className="c-dot" style={{ background: "#3fb950" }} />
+            {selectedServer.profile.name}
+          </span>
+        )}
+      </div>
+      <div className="c-server-cell" style={{ minWidth: 0 }}>
+        <span className="c-inspector-label">Host · scheduler</span>
+        <span className="c-ellipsis" style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+          <span className="c-mono">
+            {selectedServer.ssh?.hostname || selectedServer.profile.host || selectedServer.profile.ssh_alias || "—"}
+          </span>
+          {" · "}
+          {selectedServer.profile.scheduler === "slurm"
+            ? `Slurm${selectedServer.profile.defaults?.partition ? ` · ${selectedServer.profile.defaults.partition}` : ""}`
+            : "Files only"}
+        </span>
+      </div>
+      {partitionsKnown > 0 || cardReport ? (
+        <div className="c-server-cell">
+          <span className="c-inspector-label">Last check</span>
+          <span style={{ fontSize: "12px", color: "var(--text-secondary)" }}>
+            {cardReport ? "This session" : "Saved"}
+            {partitionsKnown > 0 ? ` · ${partitionsKnown} partitions` : ""}
+          </span>
+        </div>
+      ) : null}
+      <div className="c-server-actions">
+        <button
+          type="button"
+          className="c-secondary"
+          disabled={busy !== null}
+          onClick={() => void runTest(selectedServer, true)}
+          aria-label={`Test connection to ${selectedServer.profile.name}`}
+        >
+          {busy === "card" ? "Testing…" : "Test"}
+        </button>
+        <button
+          type="button"
+          className="c-secondary"
+          onClick={() => {
+            setDraft(selectedServer);
+            setReport(cardReports[selectedServer.id] ?? null);
+            setError("");
+            setNote("");
           }}
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-              HPC workspace · servers
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
-              <h2
-                style={{
-                  fontSize: "20px",
-                  margin: 0,
-                  color: "var(--text)",
-                  fontWeight: 600,
-                  letterSpacing: "-0.01em",
+          Edit
+        </button>
+        <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            className="c-secondary"
+            aria-label={`More actions for ${selectedServer.profile.name}`}
+            aria-haspopup="menu"
+            aria-expanded={openMenuId === selectedServer.id}
+            onClick={(event) => {
+              event.stopPropagation();
+              setOpenMenuId(openMenuId === selectedServer.id ? null : selectedServer.id);
+            }}
+          >
+            ⋯
+          </button>
+          {openMenuId === selectedServer.id ? (
+            <div role="menu" className="c-menu" onClick={(event) => event.stopPropagation()}>
+              <button
+                type="button"
+                role="menuitem"
+                className="c-menu-item is-danger"
+                onClick={() => {
+                  setOpenMenuId(null);
+                  void remove(selectedServer);
                 }}
               >
-                Remote HPC workspace
-              </h2>
-              <span style={{ fontSize: "12.5px", color: "var(--text-tertiary)" }}>
-                Connect your own cluster over SSH using ssh-agent and <code>~/.ssh/config</code> — never asks for a password or private key.
-              </span>
+                Remove server…
+              </button>
             </div>
-          </div>
-          <button type="button" onClick={startAdd} style={primaryButton}>
-            Add server
-          </button>
+          ) : null}
         </div>
+      </div>
+      {cardReport ? (
+        <div className="c-server-report" role="status">
+          {cardReport.checks
+            .filter((check) => !check.ok)
+            .map((check) => check.detail)
+            .slice(0, 2)
+            .join(" ") || "Connection works."}
+        </div>
+      ) : null}
+    </section>
+  ) : null;
 
-        {error && !draft ? (
-          <div
-            role="alert"
-            style={{
-              padding: "8px 12px",
-              borderRadius: "6px",
-              backgroundColor: "rgba(248, 81, 73, 0.12)",
-              border: "1px solid rgba(248, 81, 73, 0.35)",
-              color: "var(--danger)",
-              fontSize: "12px",
-            }}
-          >
-            {error}
-          </div>
-        ) : null}
-        {note ? (
-          <div
-            role="status"
-            style={{
-              padding: "8px 12px",
-              borderRadius: "6px",
-              backgroundColor: "rgba(63, 185, 80, 0.12)",
-              border: "1px solid rgba(63, 185, 80, 0.35)",
-              color: "var(--ok)",
-              fontSize: "12px",
-            }}
-          >
-            {note}
-          </div>
-        ) : null}
-      </section>
+  return (
+    <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 52px)", fontSize: "13px" }}>
+      {error && !draft ? (
+        <div role="alert" className="c-banner is-danger">
+          {error}
+        </div>
+      ) : null}
+      {note ? (
+        <div role="status" className="c-banner">
+          {note}
+        </div>
+      ) : null}
 
       {loading && !draft ? (
         <div style={{ padding: "24px" }}>
@@ -467,287 +524,7 @@ export default function HpcServers() {
         </div>
       ) : null}
 
-      {/* Dense Server Profiles Table */}
-      {profiles.length > 0 && (
-        <div style={{ overflowX: "auto" }}>
-          <div style={{ minWidth: "760px" }}>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "minmax(130px, 1.2fr) minmax(160px, 1.4fr) minmax(140px, 1.2fr) 210px 140px",
-                alignItems: "center",
-                gap: "12px",
-                padding: "0 24px",
-                height: "30px",
-                backgroundColor: "var(--panel)",
-                borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-                fontSize: "11px",
-                color: "var(--text-subtle)",
-              }}
-            >
-              <span>Server</span>
-              <span>Connection · Scheduler</span>
-              <span>Data & results roots</span>
-              <span>Status</span>
-              <span style={{ textAlign: "right" }}>Actions</span>
-            </div>
-
-            {profiles.map((entry) => {
-              const cardReport = cardReports[entry.id] ?? null;
-              const isHealthy = Boolean(cardReport?.reachable ?? entry.discovered);
-              return (
-                <div
-                  key={entry.id}
-                  className="c-table-row"
-                  style={{
-                    borderBottom: "1px solid var(--line-subtle, rgba(255,255,255,0.04))",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "minmax(130px, 1.2fr) minmax(160px, 1.4fr) minmax(140px, 1.2fr) 210px 140px",
-                      alignItems: "center",
-                      gap: "12px",
-                      padding: "8px 24px",
-                      minHeight: "42px",
-                    }}
-                  >
-                    {/* Server Name + Dot */}
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                      <span
-                        style={{
-                          width: "7px",
-                          height: "7px",
-                          borderRadius: "50%",
-                          backgroundColor: isHealthy ? "#3fb950" : "#8e8e93",
-                          flexShrink: 0,
-                        }}
-                      />
-                      <span
-                        style={{
-                          color: "var(--text)",
-                          fontWeight: 500,
-                          fontSize: "13px",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {entry.profile.name}
-                      </span>
-                    </div>
-
-                    {/* Summary */}
-                    <span
-                      style={{
-                        color: "var(--text-secondary)",
-                        fontSize: "12.5px",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {profileSummary(entry)}
-                    </span>
-
-                    {/* Roots */}
-                    <span
-                      style={{
-                        fontFamily: "'Geist Mono', ui-monospace, monospace",
-                        fontSize: "11.5px",
-                        color: "var(--text-tertiary)",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {entry.profile.data_roots[0] || "—"}
-                    </span>
-
-                    {/* Status */}
-                    <span
-                      style={{
-                        color: isHealthy ? "var(--text-secondary)" : "var(--text-subtle)",
-                        fontSize: "12px",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {cardReport
-                        ? reportSummary(cardReport)
-                        : entry.discovered
-                          ? `Last checked: ${entry.discovered.partitions.length} partition(s) found.`
-                          : "Not tested yet."}
-                    </span>
-
-                    {/* Actions */}
-                    <div
-                      style={{
-                        display: "flex",
-                        gap: "6px",
-                        justifyContent: "flex-end",
-                        alignItems: "center",
-                        position: "relative",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <button
-                        type="button"
-                        style={secondaryButton}
-                        disabled={busy !== null || entry.profile.data_roots.length === 0}
-                        title={
-                          entry.profile.data_roots.length === 0
-                            ? "Add a data folder to this server first."
-                            : "Browse the data folders on this server (metadata only)."
-                        }
-                        onClick={() => setBrowseProfile(entry)}
-                      >
-                        Browse data
-                      </button>
-                      <button
-                        type="button"
-                        style={{
-                          ...secondaryButton,
-                          padding: "4px 8px",
-                          lineHeight: 1,
-                        }}
-                        aria-label={`More actions for ${entry.profile.name}`}
-                        aria-haspopup="true"
-                        aria-expanded={openMenuId === entry.id}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenMenuId((current) => (current === entry.id ? null : entry.id));
-                        }}
-                      >
-                        ⋯
-                      </button>
-
-                      {openMenuId === entry.id && (
-                        <div
-                          role="menu"
-                          onClick={(e) => e.stopPropagation()}
-                          style={{
-                            position: "absolute",
-                            right: 0,
-                            top: "100%",
-                            marginTop: "4px",
-                            zIndex: 20,
-                            backgroundColor: "var(--panel, #1c1c1e)",
-                            border: "1px solid var(--line-elevated, rgba(255, 255, 255, 0.16))",
-                            borderRadius: "6px",
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
-                            padding: "4px",
-                            minWidth: "140px",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "2px",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            role="menuitem"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              color: "var(--text)",
-                              fontSize: "12px",
-                              padding: "6px 10px",
-                              borderRadius: "4px",
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                            disabled={busy !== null}
-                            onClick={() => {
-                              setOpenMenuId(null);
-                              setDraft(entry);
-                              setReport(null);
-                              setError("");
-                              setNote("");
-                            }}
-                          >
-                            Edit
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              color: "var(--text)",
-                              fontSize: "12px",
-                              padding: "6px 10px",
-                              borderRadius: "4px",
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                            disabled={busy !== null}
-                            onClick={() => {
-                              setOpenMenuId(null);
-                              void runTest(entry, true);
-                            }}
-                          >
-                            {busy === "card" ? "Testing…" : "Test connection"}
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              color: "var(--danger, #ff453a)",
-                              fontSize: "12px",
-                              padding: "6px 10px",
-                              borderRadius: "4px",
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                            onClick={() => {
-                              setOpenMenuId(null);
-                              void remove(entry);
-                            }}
-                          >
-                            Remove
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {cardReport ? (
-                    <div
-                      style={{
-                        padding: "6px 24px 10px 39px",
-                        borderTop: "1px solid var(--line-subtle)",
-                        backgroundColor: "var(--sunken)",
-                      }}
-                    >
-                      {cardReport.checks.map((check) => (
-                        <CheckRow
-                          key={check.name}
-                          ok={check.ok}
-                          label={check.label}
-                          detail={check.detail}
-                          hint={check.hint}
-                        />
-                      ))}
-                    </div>
-                  ) : null}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {browseProfile ? (
-        <div style={{ padding: "16px 24px" }}>
-          <HpcBrowse profile={browseProfile} onClose={() => setBrowseProfile(null)} />
-        </div>
-      ) : null}
+      {selectedServer && !draft ? <HpcBrowse profile={selectedServer} header={serverRow} /> : null}
 
       {/* Compact Inline Server Editor */}
       {draft ? (

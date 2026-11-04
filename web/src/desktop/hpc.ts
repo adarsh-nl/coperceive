@@ -123,6 +123,8 @@ export interface FolderInfo {
   has_complete: boolean;
   subfolder_count: number;
   file_count: number;
+  /** "OPV2V · train, test", "Griffin", "Checkpoints · 2"; null or absent when unknown. */
+  recognised?: string | null;
 }
 
 /** One detected coperceive scene. */

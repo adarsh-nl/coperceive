@@ -10,6 +10,7 @@ import {
   failureNextAction,
   formatArgv,
   historyCanRerun,
+  slurmSeconds,
   historyStateLabel,
   historyTiming,
   isJobActive,
@@ -254,4 +255,13 @@ test("history rows show state, timing and whether re-run is possible", () => {
   assert.strictEqual(historyStateLabel(running), "RUNNING");
   assert.strictEqual(historyCanRerun(running), false);
   assert.strictEqual(historyTiming({ ...entry, elapsed: null, time_limit: null }), "—");
+});
+
+test("slurmSeconds reads sacct durations and refuses anything else", () => {
+  assert.strictEqual(slurmSeconds("01:12:40"), 4360);
+  assert.strictEqual(slurmSeconds("1-02:00:00"), 93600);
+  assert.strictEqual(slurmSeconds("05:30"), 330);
+  assert.strictEqual(slurmSeconds(null), null);
+  assert.strictEqual(slurmSeconds("UNLIMITED"), null);
+  assert.strictEqual(slurmSeconds(""), null);
 });

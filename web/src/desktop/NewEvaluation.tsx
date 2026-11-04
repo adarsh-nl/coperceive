@@ -7,7 +7,8 @@
  * Nothing is submitted from this panel. The plan is saved under the profile's
  * results_root; the next step submits it after the user has seen the script.
  */
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import type React from "react";
 import IdentifierInput from "./IdentifierInput";
 import JobWatch from "./JobWatch";
 import {
@@ -44,10 +45,49 @@ import {
   type SubmitOptions,
 } from "./runPlan";
 import { errorText } from "./errors";
+import { InspectorSection, MiniBar, PageLayout, usePageHeader } from "./components/Page";
+
+/**
+ * One step of the plan builder. A step opens once the steps it depends on are
+ * complete; until then it shows what it will ask for, greyed out.
+ */
+function Step({
+  index,
+  title,
+  value,
+  done,
+  open,
+  locked,
+  children,
+}: {
+  index: number;
+  title: string;
+  value: string;
+  done: boolean;
+  open: boolean;
+  locked?: string;
+  children: React.ReactNode;
+}) {
+  const state = done ? "is-done" : open ? "is-current" : "is-locked";
+  return (
+    <section className={`c-step ${state}`} aria-label={`Step ${index}: ${title}`}>
+      <span className="c-step-index" aria-hidden="true">
+        {done ? "✓" : index}
+      </span>
+      <div className="c-step-body">
+        <div className="c-step-head">
+          <span className="c-step-title">{title}</span>
+          {value ? <span className="c-step-value c-mono">{value}</span> : null}
+        </div>
+        {open ? <div className="c-step-fields">{children}</div> : locked ? <span className="c-step-note">{locked}</span> : null}
+      </div>
+    </section>
+  );
+}
 
 const card = {
-  backgroundColor: "rgba(28, 28, 30, 0.85)",
-  border: "1px solid rgba(255, 255, 255, 0.14)",
+  backgroundColor: "var(--panel)",
+  border: "1px solid var(--line-elevated)",
   borderRadius: "14px",
   padding: "1.25rem",
   boxShadow: "0 20px 50px rgba(0, 0, 0, 0.45)",
@@ -59,9 +99,9 @@ const input = {
   padding: "0.45rem 0.6rem",
   fontSize: "0.85rem",
   borderRadius: "6px",
-  border: "1px solid rgba(255, 255, 255, 0.14)",
-  backgroundColor: "rgba(0, 0, 0, 0.5)",
-  color: "#f5f5f7",
+  border: "1px solid var(--line-elevated)",
+  backgroundColor: "var(--bg)",
+  color: "var(--text)",
 } as const;
 
 const labelStyle = {
@@ -69,7 +109,7 @@ const labelStyle = {
   fontSize: "0.72rem",
   letterSpacing: "0.04em",
   textTransform: "uppercase",
-  color: "#86868b",
+  color: "var(--text-subtle)",
   marginBottom: "0.25rem",
 } as const;
 
@@ -89,9 +129,9 @@ const primaryButton = {
 const secondaryButton = {
   padding: "0.45rem 0.8rem",
   borderRadius: "6px",
-  border: "1px solid rgba(255, 255, 255, 0.18)",
+  border: "1px solid var(--line-elevated)",
   backgroundColor: "transparent",
-  color: "#f5f5f7",
+  color: "var(--text)",
   fontSize: "0.8rem",
   cursor: "pointer",
 } as const;
@@ -99,14 +139,14 @@ const secondaryButton = {
 function CheckRow({ check }: { check: RunPlan["checks"][number] }) {
   return (
     <div style={{ display: "flex", gap: "0.5rem", padding: "0.3rem 0", fontSize: "0.82rem" }}>
-      <span aria-hidden style={{ color: check.ok ? "#3fb950" : "#f0883e", flex: "0 0 auto" }}>
+      <span aria-hidden style={{ color: check.ok ? "var(--ok)" : "#d29922", flex: "0 0 auto" }}>
         {check.ok ? "✓" : "!"}
       </span>
       <div>
-        <span style={{ color: check.ok ? "#f5f5f7" : "#ffb86b", fontWeight: 500 }}>{check.label}</span>
-        <span style={{ color: "#a1a1a6" }}> — {check.detail}</span>
+        <span style={{ color: check.ok ? "var(--text)" : "#d29922", fontWeight: 500 }}>{check.label}</span>
+        <span style={{ color: "var(--text-subtle)" }}> — {check.detail}</span>
         {!check.ok && check.hint ? (
-          <div style={{ color: "#8b949e", marginTop: "0.15rem" }}>{check.hint}</div>
+          <div style={{ color: "var(--text-subtle)", marginTop: "0.15rem" }}>{check.hint}</div>
         ) : null}
       </div>
     </div>
@@ -150,6 +190,10 @@ export default function NewEvaluation() {
   const needsSplit =
     selectedPipeline?.source === "builtin" ||
     Boolean(selectedPipeline?.spec.arguments.some((argument) => argument.role === "test_data"));
+  const seeded = useRef(false);
+  const stepArguments = (selectedPipeline?.spec.arguments ?? []).filter(
+    (argument) => argument.role !== "checkpoint" && argument.role !== "test_data",
+  );
   const selectedPartition = selectedProfile?.discovered?.partitions.find(
     (partition) => partition.name === selectedProfile.profile.defaults.partition,
   );
@@ -164,6 +208,7 @@ export default function NewEvaluation() {
     void (async () => {
       try {
         const loaded = await listServerProfiles();
+        if (seeded.current) return;
         setProfiles(loaded);
         if (loaded.length > 0) setProfileId(loaded[0].id);
       } catch (e) {
@@ -172,8 +217,25 @@ export default function NewEvaluation() {
     })();
   }, []);
 
+  // Test-only: seeded servers and pipelines, as the screenshot tests have no cluster.
   useEffect(() => {
-    if (!profileId) return;
+    const handleSeed = (event: Event) => {
+      const detail = (event as CustomEvent<{ profiles?: ServerEntry[]; pipelines?: PipelineEntry[] }>).detail;
+      if (!detail?.profiles) return;
+      seeded.current = true;
+      setProfiles(detail.profiles);
+      setProfileId(detail.profiles[0]?.id ?? "");
+      setPipelines(detail.pipelines ?? []);
+      setError("");
+      if (detail.pipelines?.[0]) selectPipeline(detail.pipelines[0]);
+    };
+    window.addEventListener("coperceive-test-evaluation-seed", handleSeed);
+    return () => window.removeEventListener("coperceive-test-evaluation-seed", handleSeed);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (!profileId || seeded.current) return;
     setPipelines([]);
     setPipelineId("");
     setPlan(null);
@@ -363,146 +425,158 @@ export default function NewEvaluation() {
     }
   };
 
+  const profileName = selectedProfile?.profile.name ?? "";
+  usePageHeader("evaluation", {
+    meta: selectedProfile
+      ? `Build a run plan on ${profileName} · nothing is submitted until you confirm it`
+      : "Build a run plan on one of your servers",
+  });
+  const serverDone = Boolean(selectedProfile);
+  const pipelineDone = Boolean(selectedPipeline);
+  const checkpointDone = pipelineDone && (!needsCheckpoint || checkpoint.trim().length > 0);
+  const splitDone = pipelineDone && (!needsSplit || split.trim().length > 0);
+  const environmentDone = pipelineDone && (!overrideEnv || environment.kind !== "none");
+  const contractDone = Boolean(plan);
+  const doneCount = [serverDone, pipelineDone, checkpointDone, splitDone, environmentDone, contractDone].filter(Boolean).length;
+  const environmentText = environmentSummary(overrideEnv ? environment : (selectedProfile?.profile.environment ?? environment));
+  const scriptPreview = plan?.contract_check_script ?? null;
+
   return (
-    <div style={{ maxWidth: "820px", margin: "0 auto", padding: "0 1.5rem 3rem", width: "100%" }}>
-      <div style={{ ...card, marginBottom: "1rem" }}>
-        <h2 style={{ fontSize: "1.2rem", margin: "0 0 0.35rem", color: "#f5f5f7", fontWeight: 600 }}>
-          New evaluation
-        </h2>
-        <p style={{ fontSize: "0.85rem", color: "#86868b", margin: 0, maxWidth: "40rem" }}>
-          Build a run plan for one of your servers: pipeline, typed arguments, checkpoint, test
-          split, environment and the contract-check script. The plan is saved on the cluster;
-          <strong style={{ color: "#f5f5f7" }}> nothing is submitted here</strong>.
-        </p>
-      </div>
-
-      {error ? (
-        <div role="alert" style={{ marginBottom: "1rem", padding: "0.6rem 0.8rem", borderRadius: "8px", backgroundColor: "rgba(255, 98, 89, 0.12)", border: "1px solid rgba(255, 98, 89, 0.35)", color: "#ff6259", fontSize: "0.82rem" }}>
-          {error}
-        </div>
-      ) : null}
-      {note ? (
-        <div role="status" style={{ marginBottom: "1rem", padding: "0.6rem 0.8rem", borderRadius: "8px", backgroundColor: "rgba(63, 185, 80, 0.12)", border: "1px solid rgba(63, 185, 80, 0.35)", color: "#7ee787", fontSize: "0.82rem" }}>
-          {note}
-        </div>
-      ) : null}
-
-      {profiles.length === 0 ? (
-        <div style={{ ...card, textAlign: "center", padding: "2rem" }}>
-          <p style={{ color: "#8b949e", margin: 0 }}>
-            Add a server first in the Servers tab, then come back to build an evaluation plan.
-          </p>
-        </div>
-      ) : (
-        <div style={card}>
-          <div style={{ display: "flex", gap: "0.5rem" }}>
-            <div style={{ ...field, flex: 1 }}>
-              <label style={labelStyle} htmlFor="plan-profile">
-                Server
-              </label>
-              <select
-                id="plan-profile"
-                style={input}
-                value={profileId}
-                onChange={(event) => setProfileId(event.target.value)}
+    <div style={{ display: "flex", flexDirection: "column", flex: 1, minHeight: 0, fontSize: "13px" }}>
+      <PageLayout
+        inspectorLabel="Run plan"
+        inspector={
+          profiles.length === 0 ? null : <>
+            <InspectorSection title="Run plan">
+              <span style={{ fontWeight: 500, color: "var(--text)" }}>
+                {doneCount === 6 ? "Ready to save" : `${doneCount} of 6 steps complete`}
+              </span>
+              <MiniBar value={doneCount / 6} tone="primary" />
+            </InspectorSection>
+            <InspectorSection>
+              <dl className="c-pairs">
+                <dt>Server</dt>
+                <dd>{profileName || "—"}</dd>
+                <dt>Pipeline</dt>
+                <dd>{selectedPipeline?.name ?? "—"}</dd>
+                <dt>Checkpoint</dt>
+                <dd className="c-mono">{needsCheckpoint ? checkpoint.trim() || "—" : pipelineDone ? "not used" : "—"}</dd>
+                <dt>Test split</dt>
+                <dd className="c-mono">{needsSplit ? split.trim() || "—" : pipelineDone ? "not used" : "—"}</dd>
+                <dt>Environment</dt>
+                <dd>{pipelineDone ? environmentText : "—"}</dd>
+                <dt>Contract check</dt>
+                <dd>{plan ? (plan.checks.every((check) => check.ok) ? "passed" : "needs attention") : "—"}</dd>
+              </dl>
+            </InspectorSection>
+            <InspectorSection title="Contract-check script">
+              <pre className="c-script" aria-label="Contract check script preview">
+                {scriptPreview ?? "Appears once the contract check (step 6) has run."}
+              </pre>
+            </InspectorSection>
+            <InspectorSection>
+              <button
+                type="button"
+                className="c-primary-wide is-blue"
+                disabled={busy !== null || !planIsSaveable(plan)}
+                onClick={() => void save()}
               >
-                {profiles.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.profile.name}
-                  </option>
-                ))}
-              </select>
+                {busy === "save" ? "Saving…" : "Save plan to cluster"}
+              </button>
+              <span style={{ fontSize: "12px", color: "var(--text-subtle)", textAlign: "center" }}>
+                {plan?.saved_path
+                  ? `Saved to ${plan.saved_path}. Nothing was submitted.`
+                  : "Saved next to your pipeline. Saving submits nothing; submitting is a separate, confirmed step."}
+              </span>
+            </InspectorSection>
+          </>
+        }
+      >
+        <div className="c-steps">
+          {error ? (
+            <div role="alert" className="c-banner is-danger" style={{ margin: "0 0 12px" }}>
+              {error}
             </div>
-            <div style={{ ...field, flex: 1 }}>
-              <label style={labelStyle} htmlFor="plan-pipeline">
-                Pipeline
-              </label>
-              <select
-                id="plan-pipeline"
-                style={input}
-                value={pipelineId}
-                onChange={(event) => {
-                  const entry = pipelines.find((candidate) => candidate.id === event.target.value);
-                  if (entry) selectPipeline(entry);
-                }}
-              >
-                {pipelines.length === 0 ? <option value="">No pipelines found yet</option> : null}
-                {pipelines.map((entry) => (
-                  <option key={entry.id} value={entry.id}>
-                    {entry.name} {entry.source === "builtin" ? "(installed plugin)" : "(custom)"}
-                  </option>
-                ))}
-              </select>
+          ) : null}
+          {note ? (
+            <div role="status" className="c-banner" style={{ margin: "0 0 12px" }}>
+              {note}
             </div>
-          </div>
-
-          <div style={{ display: "flex", gap: "0.5rem", alignItems: "flex-end", marginBottom: "0.75rem" }}>
-            <div style={{ flex: 1 }}>
-              <label style={labelStyle} htmlFor="plan-custom">
-                Custom pipeline script on the cluster (reads coperceive-pipeline.json beside it)
-              </label>
-              <IdentifierInput
-                id="plan-custom"
-                style={input}
-                value={customScript}
-                placeholder="/data/code/pipelines/my_pipeline.py"
-                onChange={(event) => setCustomScript(event.target.value)}
-              />
-            </div>
-            <button type="button" style={secondaryButton} disabled={busy !== null || !customScript.trim()} onClick={() => void loadCustom()}>
-              {busy === "catalog" ? "Loading…" : "Load pipeline"}
-            </button>
-          </div>
-
-          {selectedPipeline ? (
+          ) : null}
+          {profiles.length === 0 ? (
+            <p className="c-page-note" style={{ padding: "12px 0" }}>
+              Add a server first in Servers, then come back to build an evaluation plan.
+            </p>
+          ) : (
             <>
-              <p style={{ fontSize: "0.8rem", color: "#8b949e", marginTop: 0 }}>
-                {selectedPipeline.description || "A script with a typed argument schema."}
-                {selectedPipeline.plugin_manifest ? ` Manifest: ${selectedPipeline.plugin_manifest}.` : ""}
-              </p>
-
-              {needsCheckpoint || needsSplit ? (
-                <div style={{ display: "flex", gap: "0.5rem" }}>
-                  {needsCheckpoint ? (
-                    <div style={{ ...field, flex: 1 }}>
-                    <label style={labelStyle} htmlFor="plan-checkpoint">
-                      Checkpoint (inside data/code folders)
-                    </label>
-                    <IdentifierInput
-                      id="plan-checkpoint"
-                      style={input}
-                      value={checkpoint}
-                      placeholder="/data/code/checkpoints/model.pt"
-                      onChange={(event) => {
-                        setCheckpoint(event.target.value);
-                        syncRoleValue("checkpoint", event.target.value);
-                      }}
-                    />
-                  </div>
-                  ) : null}
-                  {needsSplit ? (
-                    <div style={{ ...field, flex: 1 }}>
-                    <label style={labelStyle} htmlFor="plan-split">
-                      Test split (inside data/code folders)
-                    </label>
-                    <IdentifierInput
-                      id="plan-split"
-                      style={input}
-                      value={split}
-                      placeholder="/data/scenes or /data/code/splits/test.txt"
-                      onChange={(event) => {
-                        setSplit(event.target.value);
-                        syncRoleValue("test_data", event.target.value);
-                      }}
-                    />
-                  </div>
-                  ) : null}
+              <Step index={1} title="Server" value={profileName} done={serverDone} open>
+                <select
+                  id="plan-profile"
+                  aria-label="Server"
+                  className="c-select"
+                  value={profileId}
+                  onChange={(event) => setProfileId(event.target.value)}
+                >
+                  {profiles.map((entry) => (
+                    <option key={entry.id} value={entry.id}>
+                      {entry.profile.name}
+                    </option>
+                  ))}
+                </select>
+              </Step>
+              <Step index={2} title="Pipeline" value={selectedPipeline?.name ?? ""} done={pipelineDone} open={serverDone}>
+                {pipelines.length > 0 ? (
+                  <select
+                    id="plan-pipeline"
+                    aria-label="Pipeline"
+                    className="c-select"
+                    value={pipelineId}
+                    onChange={(event) => {
+                      const entry = pipelines.find((candidate) => candidate.id === event.target.value);
+                      if (entry) selectPipeline(entry);
+                    }}
+                  >
+                    {pipelines.map((entry) => (
+                      <option key={entry.id} value={entry.id}>
+                        {entry.name} {entry.source === "builtin" ? "(installed plugin)" : "(custom)"}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <span className="c-step-note">
+                    {busy === "catalog"
+                      ? "Looking for installed plugins…"
+                      : "No installed plugins found. Load a custom script — its coperceive-pipeline.json must sit beside it."}
+                  </span>
+                )}
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <IdentifierInput
+                    id="plan-custom"
+                    aria-label="Custom pipeline script on the cluster"
+                    className="c-path-input"
+                    value={customScript}
+                    placeholder="/data/code/pipelines/my_pipeline.py"
+                    onChange={(event) => setCustomScript(event.target.value)}
+                  />
+                  <button
+                    type="button"
+                    className="c-secondary"
+                    disabled={busy !== null || !customScript.trim()}
+                    onClick={() => void loadCustom()}
+                  >
+                    {busy === "catalog" ? "Loading…" : "Load pipeline"}
+                  </button>
                 </div>
-              ) : null}
-
-              {selectedPipeline.spec.arguments.length > 0 ? (
+                {selectedPipeline ? (
+                  <>
+                    <span className="c-step-note">
+                      {selectedPipeline.description || "A script with a typed argument schema."}
+                      {selectedPipeline.plugin_manifest ? ` Manifest: ${selectedPipeline.plugin_manifest}.` : ""}
+                    </span>
+              {/* Checkpoint and test-split arguments have their own steps (3 and 4). */}
+              {stepArguments.length > 0 ? (
                 <div style={{ marginTop: "0.25rem" }}>
-                  {selectedPipeline.spec.arguments.map((argument) => {
+                  {stepArguments.map((argument) => {
                     const value = argumentForm[argument.name];
                     const id = `plan-arg-${argument.name}`;
                     return (
@@ -512,7 +586,7 @@ export default function NewEvaluation() {
                           {argument.required ? " · required" : ""}
                         </label>
                         {argument.kind === "bool" ? (
-                          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.82rem", color: "#c9d1d9" }}>
+                          <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.82rem", color: "var(--text)" }}>
                             <input
                               id={id}
                               type="checkbox"
@@ -568,16 +642,73 @@ export default function NewEvaluation() {
                           />
                         )}
                         {argument.help && argument.kind !== "bool" ? (
-                          <div style={{ color: "#8b949e", fontSize: "0.72rem", marginTop: "0.15rem" }}>{argument.help}</div>
+                          <div style={{ color: "var(--text-subtle)", fontSize: "0.72rem", marginTop: "0.15rem" }}>{argument.help}</div>
                         ) : null}
                       </div>
                     );
                   })}
                 </div>
               ) : null}
-
-              <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", margin: "0.75rem 0" }} />
-              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.85rem", color: "#c9d1d9", marginBottom: "0.5rem" }}>
+                  </>
+                ) : null}
+              </Step>
+              <Step
+                index={3}
+                title="Checkpoint"
+                value={needsCheckpoint ? checkpoint.trim() : pipelineDone ? "not used" : ""}
+                done={checkpointDone}
+                open={pipelineDone}
+                locked="Pick a model checkpoint on the cluster. Unlocks after the pipeline loads."
+              >
+                {needsCheckpoint ? (
+                  <IdentifierInput
+                    id="plan-checkpoint"
+                    aria-label="Checkpoint (inside data/code folders)"
+                    className="c-path-input"
+                    value={checkpoint}
+                    placeholder="/data/code/checkpoints/model.pt"
+                    onChange={(event) => {
+                      setCheckpoint(event.target.value);
+                      syncRoleValue("checkpoint", event.target.value);
+                    }}
+                  />
+                ) : (
+                  <span className="c-step-note">This pipeline takes no checkpoint.</span>
+                )}
+              </Step>
+              <Step
+                index={4}
+                title="Test split"
+                value={needsSplit ? split.trim() : pipelineDone ? "not used" : ""}
+                done={splitDone}
+                open={pipelineDone}
+                locked="Choose which prepared split to evaluate on. Unlocks after the pipeline loads."
+              >
+                {needsSplit ? (
+                  <IdentifierInput
+                    id="plan-split"
+                    aria-label="Test split (inside data/code folders)"
+                    className="c-path-input"
+                    value={split}
+                    placeholder="/data/scenes or /data/code/splits/test.txt"
+                    onChange={(event) => {
+                      setSplit(event.target.value);
+                      syncRoleValue("test_data", event.target.value);
+                    }}
+                  />
+                ) : (
+                  <span className="c-step-note">This pipeline takes no test split.</span>
+                )}
+              </Step>
+              <Step
+                index={5}
+                title="Environment"
+                value={pipelineDone ? environmentText : ""}
+                done={environmentDone}
+                open={pipelineDone}
+                locked="Conda env, GPU count and time limit for the job. Unlocks after the pipeline loads."
+              >
+              <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.85rem", color: "var(--text)", marginBottom: "0.5rem" }}>
                 <input type="checkbox" checked={overrideEnv} onChange={(event) => setOverrideEnv(event.target.checked)} />
                 Override the environment for this plan (otherwise the server profile's environment
                 is used)
@@ -646,49 +777,41 @@ export default function NewEvaluation() {
                 </div>
               ) : null}
 
-              <p style={{ fontSize: "0.75rem", color: "#8b949e", margin: "0 0 0.75rem" }}>
+              <p style={{ fontSize: "0.75rem", color: "var(--text-subtle)", margin: "0 0 0.75rem" }}>
                 Environment in the plan: {environmentSummary(overrideEnv ? environment : (selectedProfile?.profile.environment ?? environment))}.
                 Compute nodes without internet never install or download anything.
               </p>
-
-              <div style={{ display: "flex", gap: "0.5rem" }}>
-                <button type="button" style={primaryButton} disabled={busy !== null} onClick={() => void checkPlan()}>
+              </Step>
+              <Step
+                index={6}
+                title="Contract check"
+                value={plan ? `plan ${plan.id}` : ""}
+                done={contractDone}
+                open={checkpointDone && splitDone}
+                locked="Dry-runs the pipeline on one frame to confirm its outputs match what the viewer expects. Unlocks after the pipeline loads."
+              >
+                <button type="button" className="c-secondary" style={{ alignSelf: "flex-start" }} disabled={busy !== null} onClick={() => void checkPlan()}>
                   {busy === "check" ? "Checking… (up to 1 minute)" : "Check plan"}
                 </button>
-                <button
-                  type="button"
-                  style={secondaryButton}
-                  disabled={busy !== null || !planIsSaveable(plan)}
-                  onClick={() => void save()}
-                >
-                  {busy === "save" ? "Saving…" : "Save plan"}
-                </button>
-              </div>
+              </Step>
             </>
-          ) : (
-            <p style={{ fontSize: "0.82rem", color: "#8b949e" }}>
-              No pipeline selected yet. Load a custom pipeline (its coperceive-pipeline.json next to
-              the script) or pick an installed plugin.
-            </p>
           )}
         </div>
-      )}
-
       {plan ? (
         <div style={{ ...card, marginTop: "1rem" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.5rem" }}>
-            <h3 style={{ margin: 0, fontSize: "1rem", color: "#f5f5f7" }}>Plan {plan.id}</h3>
-            <span style={{ fontSize: "0.75rem", color: "#8b949e" }}>
+            <h3 style={{ margin: 0, fontSize: "1rem", color: "var(--text)" }}>Plan {plan.id}</h3>
+            <span style={{ fontSize: "0.75rem", color: "var(--text-subtle)" }}>
               {planSummary(plan, selectedProfile)}
             </span>
           </div>
-          <p style={{ fontSize: "0.8rem", color: "#8b949e", marginTop: 0 }}>
+          <p style={{ fontSize: "0.8rem", color: "var(--text-subtle)", marginTop: 0 }}>
             {plan.environment_note} Environment: {environmentSummary(plan.environment)}. Outputs:
             {" "}
             {plan.output_dir}. Scratch: {plan.scratch_dir}.
           </p>
 
-          <div style={{ borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "0.4rem" }}>
+          <div style={{ borderTop: "1px solid var(--line-elevated)", paddingTop: "0.4rem" }}>
             {plan.checks.map((check) => (
               <CheckRow key={check.name} check={check} />
             ))}
@@ -698,13 +821,13 @@ export default function NewEvaluation() {
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
               <div style={{ flex: 1 }}>
                 <div style={labelStyle}>Checkpoint sha256</div>
-                <code style={{ fontSize: "0.75rem", color: "#f5f5f7", wordBreak: "break-all" }}>
+                <code style={{ fontSize: "0.75rem", color: "var(--text)", wordBreak: "break-all" }}>
                   {plan.checkpoint.sha256 ?? "not recorded"} · {plan.checkpoint.path}
                 </code>
               </div>
               <div style={{ flex: 1 }}>
                 <div style={labelStyle}>Split sha256</div>
-                <code style={{ fontSize: "0.75rem", color: "#f5f5f7", wordBreak: "break-all" }}>
+                <code style={{ fontSize: "0.75rem", color: "var(--text)", wordBreak: "break-all" }}>
                   {plan.split.sha256 ?? "not recorded"} · {plan.split.path}
                 </code>
               </div>
@@ -713,7 +836,7 @@ export default function NewEvaluation() {
 
           <div style={{ marginTop: "0.75rem" }}>
             <div style={labelStyle}>Typed argv — one element per line, never a shell string</div>
-            <ol style={{ margin: "0.3rem 0 0.5rem", paddingLeft: "2.2rem", fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: "0.75rem", color: "#c9d1d9" }}>
+            <ol style={{ margin: "0.3rem 0 0.5rem", paddingLeft: "2.2rem", fontFamily: "'Geist Mono', ui-monospace, monospace", fontSize: "0.75rem", color: "var(--text)" }}>
               {formatArgv(plan.argv).map((line) => (
                 <li key={line.index} style={{ whiteSpace: "pre-wrap", wordBreak: "break-all" }}>
                   {line.element}
@@ -726,24 +849,24 @@ export default function NewEvaluation() {
             <div style={labelStyle}>Contract-check Slurm script — shown in full, NOT submitted</div>
             <pre
               aria-label="Contract check script"
-              style={{ margin: "0.3rem 0 0", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.1)", fontSize: "0.72rem", color: "#c9d1d9", overflowX: "auto", whiteSpace: "pre-wrap" }}
+              style={{ margin: "0.3rem 0 0", padding: "0.75rem", borderRadius: "8px", backgroundColor: "var(--panel)", border: "1px solid var(--line-elevated)", fontSize: "0.72rem", color: "var(--text)", overflowX: "auto", whiteSpace: "pre-wrap" }}
             >
               {plan.contract_check_script}
             </pre>
           </div>
 
-          <div style={{ marginTop: "0.75rem", padding: "0.5rem 0.75rem", borderRadius: "8px", backgroundColor: "rgba(31, 111, 235, 0.15)", border: "1px solid rgba(31, 111, 235, 0.35)", color: "#c9d1d9", fontSize: "0.8rem" }}>
+          <div style={{ marginTop: "0.75rem", padding: "0.5rem 0.75rem", borderRadius: "8px", backgroundColor: "rgba(31, 111, 235, 0.15)", border: "1px solid rgba(31, 111, 235, 0.35)", color: "var(--text)", fontSize: "0.8rem" }}>
             Nothing was submitted. This step only builds and saves the plan; the next step submits
             the script after you have seen it in full.
-            {plan.saved_path ? <div style={{ marginTop: "0.25rem", color: "#7ee787" }}>Saved to {plan.saved_path}.</div> : null}
+            {plan.saved_path ? <div style={{ marginTop: "0.25rem", color: "var(--ok)" }}>Saved to {plan.saved_path}.</div> : null}
           </div>
 
           {plan.saved_path ? (
-            <div style={{ marginTop: "0.9rem", borderTop: "1px solid rgba(255,255,255,0.08)", paddingTop: "0.75rem" }}>
-              <h4 style={{ margin: "0 0 0.25rem", fontSize: "0.95rem", color: "#f5f5f7" }}>
+            <div style={{ marginTop: "0.9rem", borderTop: "1px solid var(--line-elevated)", paddingTop: "0.75rem" }}>
+              <h4 style={{ margin: "0 0 0.25rem", fontSize: "0.95rem", color: "var(--text)" }}>
                 Submit this run
               </h4>
-              <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "#8b949e" }}>
+              <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--text-subtle)" }}>
                 Generate the full job script and read it before submitting. Nothing is submitted
                 automatically; the Submit button is enabled only after you confirm the script you see.
               </p>
@@ -812,7 +935,7 @@ export default function NewEvaluation() {
                       })}
                     </select>
                     {selectedPartition && partitionGpuTypes.length === 0 ? (
-                      <p style={{ margin: "0.25rem 0 0", color: "#8b949e", fontSize: "0.72rem" }}>
+                      <p style={{ margin: "0.25rem 0 0", color: "var(--text-subtle)", fontSize: "0.72rem" }}>
                         This partition has no GPUs; the job will not request one.
                       </p>
                     ) : null}
@@ -830,24 +953,24 @@ export default function NewEvaluation() {
                 </button>
               </div>
               {submitError ? (
-                <div style={{ marginTop: "0.5rem", color: "#ff7b72", fontSize: "0.8rem" }}>
+                <div style={{ marginTop: "0.5rem", color: "var(--danger)", fontSize: "0.8rem" }}>
                   {submitError}
                 </div>
               ) : null}
               {submitPreview ? (
                 <div style={{ marginTop: "0.6rem" }}>
-                  <div style={{ fontSize: "0.78rem", color: "#c9d1d9" }}>
+                  <div style={{ fontSize: "0.78rem", color: "var(--text)" }}>
                     Partition {submitPreview.partition} · walltime {submitPreview.walltime} · GPU:{" "}
                     {submitPreview.gres && submitPreview.gres.trim() ? submitPreview.gres : "no GPU requested"}{" "}
                     · {submitPreview.job_name}
                   </div>
                   <pre
                     aria-label="Submission job script"
-                    style={{ margin: "0.3rem 0 0.5rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "rgba(0,0,0,0.55)", border: "1px solid rgba(255,255,255,0.1)", fontSize: "0.72rem", color: "#c9d1d9", overflowX: "auto", whiteSpace: "pre-wrap" }}
+                    style={{ margin: "0.3rem 0 0.5rem", padding: "0.75rem", borderRadius: "8px", backgroundColor: "var(--panel)", border: "1px solid var(--line-elevated)", fontSize: "0.72rem", color: "var(--text)", overflowX: "auto", whiteSpace: "pre-wrap" }}
                   >
                     {submitPreview.script}
                   </pre>
-                  <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.82rem", color: "#f5f5f7" }}>
+                  <label style={{ display: "flex", gap: "0.5rem", alignItems: "center", fontSize: "0.82rem", color: "var(--text)" }}>
                     <input
                       type="checkbox"
                       checked={submitConfirmed}
@@ -866,7 +989,7 @@ export default function NewEvaluation() {
                     </button>
                   </div>
                   {submitOutcome && plan ? (
-                    <div style={{ marginTop: "0.5rem", padding: "0.5rem 0.75rem", borderRadius: "8px", backgroundColor: "rgba(63, 185, 80, 0.12)", border: "1px solid rgba(63, 185, 80, 0.35)", color: "#c9d1d9", fontSize: "0.82rem" }}>
+                    <div style={{ marginTop: "0.5rem", padding: "0.5rem 0.75rem", borderRadius: "8px", backgroundColor: "rgba(63, 185, 80, 0.12)", border: "1px solid rgba(63, 185, 80, 0.35)", color: "var(--text)", fontSize: "0.82rem" }}>
                       Submitted as job <strong>{submitOutcome.job_id}</strong> —{" "}
                       {jobStateLabel(submitOutcome)}
                       <JobWatch
@@ -882,6 +1005,7 @@ export default function NewEvaluation() {
           ) : null}
         </div>
       ) : null}
+      </PageLayout>
     </div>
   );
 }

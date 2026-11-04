@@ -920,3 +920,50 @@ export async function installDesktopUpdate(updateUrl?: string): Promise<void> {
   throw new Error("Controller not available");
 }
 
+
+/** What Open Folder's folder check shows; read from the folder's scene manifests. */
+export interface FolderCheck {
+  path: string;
+  kind: "scene" | "library" | "folder" | "none";
+  scene_ids: string[];
+  modalities: string[];
+  has_map: boolean;
+  size_bytes: number;
+  in_library: boolean;
+  problem: string | null;
+}
+
+export async function inspectFolder(path: string): Promise<FolderCheck | null> {
+  if (!path.trim() || !isTauriEnvironment()) {
+    return null;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<FolderCheck>("inspect_folder", { path });
+}
+
+/**
+ * Call `handler` with the first path dropped anywhere on the window (Tauri's
+ * webview drag-drop; a browser drop carries no path, so it is ignored there).
+ * `onHover` says whether something is being dragged over the window.
+ */
+export async function onFolderDrop(
+  handler: (path: string) => void,
+  onHover?: (hovering: boolean) => void,
+): Promise<() => void> {
+  if (!isTauriEnvironment()) {
+    return () => undefined;
+  }
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return await getCurrentWebview().onDragDropEvent((event) => {
+    const payload = event.payload;
+    if (payload.type === "enter" || payload.type === "over") {
+      onHover?.(true);
+    } else if (payload.type === "leave") {
+      onHover?.(false);
+    } else if (payload.type === "drop") {
+      onHover?.(false);
+      const first = payload.paths[0];
+      if (first) handler(first);
+    }
+  });
+}

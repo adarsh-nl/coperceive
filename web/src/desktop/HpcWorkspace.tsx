@@ -122,9 +122,9 @@ export default function HpcWorkspace() {
   };
 
   return (
-    <div style={{ minHeight: "100%", display: "flex", flexDirection: "column" }}>
-      <div hidden={tab !== "servers"}>{visited.has("servers") ? <HpcServers /> : null}</div>
-      <div hidden={tab !== "dataset"}>
+    <div style={{ minHeight: "100%", flex: 1, display: "flex", flexDirection: "column" }}>
+      <div className="c-hpc-tab" hidden={tab !== "servers"}>{visited.has("servers") ? <HpcServers /> : null}</div>
+      <div className="c-hpc-tab" hidden={tab !== "dataset"}>
         {activeDatasetData ? (
           <DatasetView
             key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}`}
@@ -140,8 +140,8 @@ export default function HpcWorkspace() {
           />
         ) : null}
       </div>
-      <div hidden={tab !== "evaluation"}>{visited.has("evaluation") ? <NewEvaluation /> : null}</div>
-      <div hidden={tab !== "history"}>{visited.has("history") ? <RunHistory /> : null}</div>
+      <div className="c-hpc-tab" hidden={tab !== "evaluation"}>{visited.has("evaluation") ? <NewEvaluation /> : null}</div>
+      <div className="c-hpc-tab" hidden={tab !== "history"}>{visited.has("history") ? <RunHistory /> : null}</div>
     </div>
   );
 }

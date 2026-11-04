@@ -1954,3 +1954,425 @@ form.stack, .stack { display: flex; flex-direction: column; gap: 8px; }
 .c-add-cards {
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
 }
+.c-ellipsis {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-grid-row.is-muted {
+  opacity: 0.6;
+}
+.c-page-note {
+  margin: 0;
+  padding: 16px 24px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-subtle);
+  max-width: 760px;
+}
+.c-pairs {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 14px;
+  margin: 0;
+  font-size: 12.5px;
+}
+.c-pairs dt {
+  color: var(--text-subtle);
+}
+.c-pairs dd {
+  margin: 0;
+  color: var(--text);
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.c-pairs a {
+  color: #79c0ff;
+  text-decoration: none;
+}
+.c-preset {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line-subtle);
+}
+.c-preset > .c-secondary {
+  align-self: flex-start;
+}
+.c-preset-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.c-diskfit {
+  position: relative;
+  display: block;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+}
+.c-diskfit-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 2px;
+  background: #3fb950;
+}
+.c-diskfit-bar.is-over {
+  background: #f85149;
+}
+.c-diskfit-tick {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--text-tertiary);
+}
+.c-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 24px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  border: 1px solid rgba(56, 139, 253, 0.4);
+  background: rgba(31, 111, 235, 0.1);
+  font-size: 12.5px;
+}
+.c-open-form {
+  padding: 18px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-bottom: 1px solid var(--line);
+}
+.c-path-input {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line-elevated);
+  background: var(--sunken);
+  color: var(--text);
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  outline: none;
+}
+.c-path-input:focus {
+  border-color: var(--primary);
+}
+.c-drop-note {
+  margin: 0;
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+.c-drop-note.is-hover {
+  color: var(--primary);
+}
+.c-open-import {
+  max-width: 760px;
+  margin-top: 6px;
+}
+.c-check-headline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  font-size: 13px;
+}
+.c-check-headline.is-ok {
+  color: var(--ok);
+}
+.c-check-headline.is-ok .c-dot {
+  background: #3fb950;
+}
+.c-check-headline.is-bad {
+  color: var(--danger);
+}
+.c-check-headline.is-bad .c-dot {
+  background: #f85149;
+}
+.c-checklist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12.5px;
+}
+.c-checklist li {
+  display: grid;
+  grid-template-columns: 14px 84px minmax(0, 1fr);
+  gap: 6px;
+  color: var(--text);
+}
+.c-checklist li > span:first-child {
+  color: var(--ok);
+}
+.c-checklist-label {
+  color: var(--text-subtle);
+}
+.c-sidebar-group-button {
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  font-family: inherit;
+  width: 100%;
+}
+.c-server-row {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px 40px;
+  padding: 14px 24px;
+  border-bottom: 1px solid var(--line);
+}
+.c-server-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 420px;
+}
+.c-server-actions {
+  margin-left: auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.c-server-report {
+  flex-basis: 100%;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.c-select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line-elevated);
+  background: var(--sunken);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+}
+.c-crumbs {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--text-subtle);
+}
+.c-crumbs strong {
+  color: var(--text);
+  font-weight: 500;
+}
+.c-crumb-sep {
+  margin: 0 6px;
+  color: var(--text-subtle);
+}
+.c-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 4px);
+  z-index: 20;
+  min-width: 160px;
+  padding: 4px;
+  border-radius: 8px;
+  border: 1px solid var(--line-elevated);
+  background: var(--panel);
+  box-shadow: var(--shadow);
+}
+.c-menu-item {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+.c-menu-item:hover {
+  background: var(--line);
+}
+.c-menu-item.is-danger {
+  color: var(--danger);
+}
+.c-primary-wide.is-blue {
+  background: rgba(31, 111, 235, 0.2);
+  border: 1px solid rgba(56, 139, 253, 0.55);
+  color: var(--text);
+}
+.c-primary-wide.is-blue:hover:not(:disabled) {
+  background: rgba(31, 111, 235, 0.32);
+}
+.c-banner.is-danger {
+  border-color: rgba(248, 81, 73, 0.45);
+  background: rgba(248, 81, 73, 0.1);
+  color: var(--danger);
+}
+
+/* New evaluation: the plan builder steps (docs/design/v0.1.1, New evaluation). */
+.c-steps {
+  display: flex;
+  flex-direction: column;
+  max-width: 760px;
+  padding: 16px 24px 24px;
+}
+.c-step {
+  display: grid;
+  grid-template-columns: 24px 1fr;
+  gap: 12px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-elevated);
+}
+.c-step-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: 1px solid var(--line-elevated);
+  color: var(--text-subtle);
+}
+.c-step.is-current .c-step-index {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}
+.c-step.is-done .c-step-index {
+  background: transparent;
+  border-color: var(--ok);
+  color: var(--ok);
+}
+.c-step-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.c-step-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-height: 22px;
+}
+.c-step-title {
+  font-weight: 600;
+  color: var(--text);
+}
+.c-step.is-locked .c-step-title {
+  color: var(--text-subtle);
+}
+.c-step-value {
+  color: var(--text-subtle);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-step-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.c-step-note {
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+.c-script {
+  margin: 0;
+  padding: 8px 10px;
+  max-height: 220px;
+  overflow: auto;
+  border-radius: 6px;
+  border: 1px solid var(--line-elevated);
+  background: var(--panel);
+  font: 11px/1.45 var(--font-mono, ui-monospace, monospace);
+  color: var(--text-subtle);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* Run history: state labels and filter chips. */
+.c-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text);
+}
+.c-state .c-dot {
+  width: 7px;
+  height: 7px;
+  background: var(--text-subtle);
+}
+.c-state.tone-ok .c-dot { background: #3fb950; }
+.c-state.tone-primary .c-dot { background: var(--primary); }
+.c-state.tone-warn .c-dot { background: #d29922; }
+.c-state.tone-danger .c-dot { background: #f85149; }
+.c-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.c-filter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line-elevated);
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.c-filter.is-active {
+  background: var(--text);
+  border-color: var(--text);
+  color: var(--bg);
+}
+.c-filter-count {
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.c-filter.is-active .c-filter-count {
+  color: inherit;
+  opacity: 0.7;
+}
+.c-inspector-section > .c-minibar {
+  display: flex;
+  flex: none;
+  width: 100%;
+}
+/* HPC workspace tabs fill the window, so each page's inspector runs full height. */
+.c-hpc-tab:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+main > .tab-panel:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  min-height: 100%;
+}
