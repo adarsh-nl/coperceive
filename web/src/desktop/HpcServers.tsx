@@ -358,8 +358,9 @@ export default function HpcServers() {
   usePageHeader("servers", {
     meta: "SSH via ssh-agent and ~/.ssh/config · never asks for a password or key",
     actions: (
-      <button type="button" className="c-header-action" onClick={startAdd}>
-        + Add server
+      // The "+" is drawn by CSS: e2e_mac.sh (Step 5h) finds this button by its exact text.
+      <button type="button" className="c-header-action has-plus" onClick={startAdd}>
+        Add server
       </button>
     ),
   });

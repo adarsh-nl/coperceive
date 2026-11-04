@@ -83,7 +83,7 @@ function ValidationBadge({ status }: { status: "valid" | "invalid" | "checking" 
   return (
     <span className={`library-badge is-${status}`} data-validate={status}>
       <span className="c-dot" />
-      {status === "checking" ? "Validating…" : status === "valid" ? "Valid" : "Check failed"}
+      {status === "checking" ? "Validating…" : status === "valid" ? "Valid ✓" : "Check failed"}
     </span>
   );
 }
@@ -350,8 +350,8 @@ export default function LibraryScreen({
           .join(" · ")
       : undefined,
     actions: (
-      <button type="button" className="c-header-action" onClick={onNavigateGetData}>
-        + Add scenes
+      <button type="button" className="c-header-action has-plus" onClick={onNavigateGetData}>
+        Add scenes
       </button>
     ),
   });

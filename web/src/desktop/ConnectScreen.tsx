@@ -581,16 +581,17 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           })}
         </nav>
 
-        {/* HPC workspace */}
-        <button
-          type="button"
-          className="c-sidebar-group c-sidebar-group-button"
-          style={{ marginTop: "12px" }}
-          onClick={() => navigateHpcSection("servers")}
-        >
-          HPC workspace
-        </button>
+        {/* HPC workspace. The group label is a button inside this nav whose text is
+            exactly "HPC Workspace": scripts/desktop/e2e_mac.sh (Step 5h) selects it so. */}
         <nav style={{ display: "flex", flexDirection: "column", gap: "1px" }} aria-label="HPC workspace navigation">
+          <button
+            type="button"
+            className="c-sidebar-group c-sidebar-group-button"
+            style={{ marginTop: "12px" }}
+            onClick={() => navigateHpcSection("servers")}
+          >
+            HPC Workspace
+          </button>
           {(
             [
               ["servers", "Servers", hpcServers.length > 0 ? String(hpcServers.length) : undefined],

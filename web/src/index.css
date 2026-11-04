@@ -2376,3 +2376,6 @@ main > .tab-panel:not([hidden]) {
   flex-direction: column;
   min-height: 100%;
 }
+.c-header-action.has-plus::before {
+  content: "+ ";
+}
