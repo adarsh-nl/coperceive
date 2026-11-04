@@ -483,7 +483,25 @@ function sceneGraphAudit(stage: Stage | null) {
   const points = stage.points.visible && pointAttr ? pointAttr.count : 0;
   const boxes =
     ((stage.boxes.visible && boxAttr ? boxAttr.count : 0) + (stage.dimmedBoxes.visible && dimAttr ? dimAttr.count : 0)) / 24;
-  return { token: sceneDrawToken, points, boxes, tagged };
+  // Where each camera's frustum and image plane are in the world, for the
+  // tests that check they follow their agent.
+  const worldPosition = (object: THREE.Object3D) => {
+    object.updateWorldMatrix(true, false);
+    const at = new THREE.Vector3().setFromMatrixPosition(object.matrixWorld);
+    return [at.x, at.y, at.z];
+  };
+  const frustums = stage.frustums.children.map((child) => ({
+    key: typeof child.userData.cameraKey === "string" ? child.userData.cameraKey : null,
+    position: worldPosition(child),
+  }));
+  const imagePlanes = [...stage.imagePlanes].map(([key, mesh]) => ({
+    key,
+    visible: mesh.visible && stage.images.visible,
+    position: worldPosition(mesh),
+    poseTimeUs: typeof mesh.userData.poseTimeUs === "number" ? mesh.userData.poseTimeUs : null,
+    imageTimeUs: typeof mesh.userData.imageTimeUs === "number" ? mesh.userData.imageTimeUs : null,
+  }));
+  return { token: sceneDrawToken, points, boxes, tagged, frustums, imagePlanes };
 }
 
 function clearGroup(group: THREE.Group) {
@@ -675,6 +693,25 @@ function drawBoxes(
   }
 }
 
+/**
+ * Pose every camera's image plane for the sample just drawn, in the same draw
+ * as its frustum lines: agent pose(t) x camera mount, from the frame document.
+ * A plane whose camera has no pose or no image at this sample is hidden, never
+ * left where it was. Showing a plane and its texture is the image effect's job
+ * (the image may still be on its way); this keeps the pose in step meanwhile.
+ */
+function poseImagePlanes(stage: Stage, frame: FrameDocument, hidden: Record<string, boolean>) {
+  for (const [key, mesh] of stage.imagePlanes) {
+    const frustum = frame.frustums.find((item) => cameraKey(item.agent_id, item.sensor_id) === key);
+    if (!frustum || !isPose(frustum.pose) || frustum.has_image === false || hidden[frustum.agent_id]) {
+      mesh.visible = false;
+      continue;
+    }
+    applyPose(mesh, frustum.pose);
+    mesh.userData.poseTimeUs = frame.time_us;
+  }
+}
+
 async function drawFrame(
   stage: Stage,
   frame: FrameDocument,
@@ -752,6 +789,7 @@ async function drawFrame(
       continue;
     }
     const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(types.get(frustum.agent_id) ?? ""));
+    lines.userData.cameraKey = cameraKey(frustum.agent_id, frustum.sensor_id);
     applyPose(lines, frustum.pose);
     stage.frustums.add(lines);
     pickable.push({
@@ -762,6 +800,7 @@ async function drawFrame(
     });
   }
   syncFrustumPicks(stage.frustumPicks, pickable);
+  poseImagePlanes(stage, frame, hidden);
 
   clearGroup(stage.agents);
   for (const agent of frame.agents) {
@@ -1041,6 +1080,8 @@ declare global {
       points: number;
       boxes: number;
       tagged: { kind: string; sceneId: string; loadId: number }[];
+      frustums: { key: string | null; position: number[] }[];
+      imagePlanes: { key: string; visible: boolean; position: number[]; poseTimeUs: number | null; imageTimeUs: number | null }[];
     } | null;
     __COPERCEIVE_FLUSH_STATE__?: () => Promise<void>;
   }
@@ -2782,6 +2823,7 @@ export default function Viewer({
           continue;
         }
         const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(curTypes.get(frustum.agent_id) ?? ""));
+        lines.userData.cameraKey = cameraKey(frustum.agent_id, frustum.sensor_id);
         applyPose(lines, frustum.pose);
         stage.frustums.add(lines);
         pickable.push({
@@ -2792,6 +2834,7 @@ export default function Viewer({
         });
       }
       syncFrustumPicks(stage.frustumPicks, pickable);
+      poseImagePlanes(stage, curFrame, hidden);
 
       clearGroup(stage.agents);
       for (const agent of curFrame.agents) {
@@ -2804,7 +2847,7 @@ export default function Viewer({
       }
 
       for (const [key, mesh] of stage.imagePlanes) {
-        const agentId = key.split(":")[0];
+        const agentId = key.split("/")[0]; // cameraKey is "agent/sensor"
         if (hidden[agentId]) {
           mesh.visible = false;
         }
@@ -2956,7 +2999,7 @@ export default function Viewer({
     let cancelled = false;
     const imageWanted = (key: string) => appearance.frustums && (poster || showCameraImage(appearance, key));
     const wanted = frame.frustums.filter((frustum) => {
-      if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+      if (hidden[frustum.agent_id] || !isPose(frustum.pose) || frustum.has_image === false) {
         return false;
       }
       const key = cameraKey(frustum.agent_id, frustum.sensor_id);
@@ -2974,17 +3017,44 @@ export default function Viewer({
       return;
     }
     const opacity = appearance.frustumOpacity;
+    const wantedKeys = new Set(wanted.map((frustum) => cameraKey(frustum.agent_id, frustum.sensor_id)));
+    for (const [key, mesh] of stage.imagePlanes) {
+      if (!wantedKeys.has(key)) {
+        mesh.visible = false;
+      }
+    }
     void (async () => {
-      const seen = new Set<string>();
       await Promise.all(
         wanted.map(async (frustum) => {
           const key = cameraKey(frustum.agent_id, frustum.sensor_id);
           const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, effectiveToken, FRUSTUM_TEXTURE);
-          if (cancelled || !bitmap) {
+          // Over a slow link the next sample is drawn before this image arrives.
+          // It is still shown (playback would otherwise never update the plane),
+          // unless a newer image is already up or the scene changed; the plane
+          // takes the pose of the sample drawn now, never this request's.
+          if (!bitmap || frame.scene_id !== sceneIdRef.current) {
             return;
           }
-          seen.add(key);
+          const drawnNow = latestRef.current?.frame;
+          if (!drawnNow || drawnNow.scene_id !== frame.scene_id) {
+            return;
+          }
+          const current = drawnNow.frustums.find((item) => cameraKey(item.agent_id, item.sensor_id) === key);
+          if (!current || !isPose(current.pose) || current.has_image === false || hidden[current.agent_id]) {
+            return;
+          }
           let mesh = stage.imagePlanes.get(key);
+          // Keep whichever image is closer to the sample drawn now: during
+          // playback a late image still replaces an older one; after scrubbing
+          // back, the image for the new sample wins.
+          const shownTime = mesh?.userData.imageSceneId === frame.scene_id ? mesh.userData.imageTimeUs : null;
+          if (
+            mesh?.visible &&
+            typeof shownTime === "number" &&
+            Math.abs(shownTime - drawnNow.time_us) < Math.abs(frame.time_us - drawnNow.time_us)
+          ) {
+            return;
+          }
           if (!mesh || mesh.userData.aspect !== frustum.aspect || mesh.userData.fov !== frustum.fov_y_rad) {
             if (mesh) {
               stage.images.remove(mesh);
@@ -2999,7 +3069,10 @@ export default function Viewer({
             stage.images.add(mesh);
             stage.imagePlanes.set(key, mesh);
           }
-          applyPose(mesh, frustum.pose);
+          applyPose(mesh, current.pose);
+          mesh.userData.poseTimeUs = drawnNow.time_us;
+          mesh.userData.imageTimeUs = frame.time_us;
+          mesh.userData.imageSceneId = frame.scene_id;
           const material = mesh.material;
           if (material instanceof THREE.MeshBasicMaterial) {
             material.opacity = opacity;
@@ -3011,11 +3084,6 @@ export default function Viewer({
       );
       if (cancelled) {
         return;
-      }
-      for (const [key, mesh] of stage.imagePlanes) {
-        if (!seen.has(key)) {
-          mesh.visible = false;
-        }
       }
       const nextTime = summary?.times_us[frameIndex + 1];
       if (typeof nextTime === "number") {
