@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 from coperceive.cli import main
+from coperceive.remote import scan as scan_module
 from coperceive.remote.scan import ScanError, ScanResult, scan_tree
 
 
@@ -316,3 +317,66 @@ def test_scan_rejects_out_of_range_bounds(tmp_path: Path) -> None:
         scan_tree(root, ".", max_entries=0)
     with pytest.raises(ScanError, match="max-total must be between 1 and 10000"):
         scan_tree(root, ".", max_total=0)
+
+
+def _opencood(root: Path, splits: tuple[str, ...], agents: tuple[str, ...]) -> None:
+    for split in splits:
+        for agent in agents:
+            (root / split / "2021_08_18_19_11_02" / agent).mkdir(parents=True)
+
+
+def test_scan_recognises_the_folders_it_lists(tmp_path: Path) -> None:
+    """'Recognised as' in the Servers browser: only what the listings say."""
+    root = tmp_path / "data"
+    _opencood(root / "opv2v", ("train", "test"), ("641", "650"))
+    _opencood(root / "v2xset", ("train",), ("-1", "641"))
+    for side in ("vehicle-side", "drone-side"):
+        (root / "griffin" / side).mkdir(parents=True)
+        (root / "griffin" / side / "scene_infos.json").write_text("{}", encoding="utf-8")
+    (root / "ckpts").mkdir()
+    for name in ("net_epoch30.pth", "net_epoch40.pth", "config.yaml"):
+        (root / "ckpts" / name).write_text("x", encoding="utf-8")
+    _opencood(root / "opencood" / "a", ("train",), ("641",))
+    _opencood(root / "opencood" / "b", ("test",), ("-1",))
+    _scene(root / "prepared" / "scene_one", "one")
+    (root / "plain" / "child").mkdir(parents=True)
+
+    labels = {
+        folder["path"]: folder["recognised"]
+        for folder in _scan(root, depth=2)["folders"]
+        if folder["depth"] == 1
+    }
+    assert labels == {
+        "opv2v": "OPV2V · train, test",
+        "v2xset": "V2XSet · train",
+        "griffin": "Griffin",
+        "ckpts": "Checkpoints · 2",
+        "opencood": "OpenCOOD root · 2 datasets",
+        "prepared": "Schema 1 scenes · 1",
+        "plain": None,
+    }
+    split = scan_tree(root, "opv2v", depth=1)
+    assert {f["path"]: f["recognised"] for f in split["folders"] if f["depth"] == 1} == {
+        "opv2v/test": "OPV2V · test split",
+        "opv2v/train": "OPV2V · train split",
+    }
+
+
+def test_scan_stops_recognising_at_the_deadline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = tmp_path / "data"
+    for name in ("a", "b"):
+        _opencood(root / name, ("train",), ("641",))
+    now = [0.0]
+    real = scan_module.recognise
+
+    def slow(folder: Path) -> str | None:
+        now[0] = 99.0  # the first label uses up the time budget
+        return real(folder)
+
+    monkeypatch.setattr(scan_module, "recognise", slow)
+    result = _scan(root, depth=1, timeout_s=5.0, clock=lambda: now[0])
+    labels = [folder["recognised"] for folder in result["folders"] if folder["depth"] == 1]
+    assert labels == ["OPV2V · train", None]
+    assert result["truncated"] is True and result["truncated_reason"] == "timeout"
