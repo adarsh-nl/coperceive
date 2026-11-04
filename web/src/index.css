@@ -3110,16 +3110,27 @@ main > .tab-panel:not([hidden]) {
 .viewer .side-card p.muted { font-size: 11.5px; margin: 8px 0 0; }
 
 /* Crash notice and diagnostics: calm, non-blocking, review-before-share. */
+/* Above whichever screen the main window shows (Library/HPC shell or viewer),
+   below the top bar, without moving the layout. */
 .crash-notice {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
   display: flex;
   gap: 0.4rem;
   align-items: center;
   justify-content: center;
   flex-wrap: wrap;
-  padding: 0.35rem 0.75rem;
+  max-width: calc(100vw - 32px);
+  padding: 0.4rem 0.85rem;
   font-size: 0.8rem;
-  background: var(--surface-2, #1b2230);
-  border-bottom: 1px solid var(--border, #2d3748);
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line-elevated);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
 }
 .link-button {
   background: none;

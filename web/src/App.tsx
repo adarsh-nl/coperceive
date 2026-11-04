@@ -149,7 +149,8 @@ export default function App() {
 
   useEffect(() => {
     if (!isTauri) return;
-    void startupCrash().then((record) => {
+    // The notice belongs to the main window; the viewer window does not repeat it.
+    if (!isViewerWindow()) void startupCrash().then((record) => {
       if (!record) return;
       let dismissed = false;
       try {
@@ -326,21 +327,44 @@ export default function App() {
 
   const jobRows: Job[] = jobs.data ?? [];
 
+  // The crash notice and the diagnostics dialog sit above whichever screen the
+  // main window shows: the Library/HPC shell (ConnectScreen), the viewer or the
+  // landing page. They used to live in the viewer shell only, so a relaunch
+  // after a crash, which opens on the Library, never showed the notice.
+  const crashLayer = (
+    <>
+      {crash ? (
+        <CrashNotice
+          crash={crash}
+          onShare={() => setDiagnosticsOpen(true)}
+          onDismiss={() => {
+            try {
+              localStorage.setItem(`coperceive-dismissed-crash-${crash.timestamp_unix}`, "1");
+            } catch {
+              // The notice can still be dismissed for this session.
+            }
+            setCrash(null);
+          }}
+        />
+      ) : null}
+      {diagnosticsOpen ? (
+        <DiagnosticsDialog
+          context={{
+            active_route: typeof window !== "undefined" ? window.location.hash || "#/" : "#/",
+            quick_copy_diagnostics: true,
+            last_ui_error:
+              (window as unknown as { __COPERCEIVE_LAST_ERROR__?: unknown }).__COPERCEIVE_LAST_ERROR__ ?? null,
+          }}
+          onClose={() => setDiagnosticsOpen(false)}
+        />
+      ) : null}
+    </>
+  );
+
   if ((isTauri && !connected) || route === "connect") {
     return (
-      <ConnectScreen
-        onConnected={(session) => {
-          setToken(session.token);
-          setConnected(true);
-          window.location.hash = "#/viewer";
-        }}
-      />
-    );
-  }
-
-  if (route === "home") {
-    if (isDesktop) {
-      return (
+      <>
+        {crashLayer}
         <ConnectScreen
           onConnected={(session) => {
             setToken(session.token);
@@ -348,6 +372,23 @@ export default function App() {
             window.location.hash = "#/viewer";
           }}
         />
+      </>
+    );
+  }
+
+  if (route === "home") {
+    if (isDesktop) {
+      return (
+        <>
+          {crashLayer}
+          <ConnectScreen
+            onConnected={(session) => {
+              setToken(session.token);
+              setConnected(true);
+              window.location.hash = "#/viewer";
+            }}
+          />
+        </>
       );
     }
     return (
@@ -381,31 +422,7 @@ export default function App() {
   return (
     <div className={tab === "viewer" || isDesktop ? "shell" : "shell shell-desk"}>
       {isDesktop && <UpdateBanner />}
-      {crash ? (
-        <CrashNotice
-          crash={crash}
-          onShare={() => setDiagnosticsOpen(true)}
-          onDismiss={() => {
-            try {
-              localStorage.setItem(`coperceive-dismissed-crash-${crash.timestamp_unix}`, "1");
-            } catch {
-              // The notice can still be dismissed for this session.
-            }
-            setCrash(null);
-          }}
-        />
-      ) : null}
-      {diagnosticsOpen ? (
-        <DiagnosticsDialog
-          context={{
-            active_route: typeof window !== "undefined" ? window.location.hash || "#/" : "#/",
-            quick_copy_diagnostics: true,
-            last_ui_error:
-              (window as unknown as { __COPERCEIVE_LAST_ERROR__?: unknown }).__COPERCEIVE_LAST_ERROR__ ?? null,
-          }}
-          onClose={() => setDiagnosticsOpen(false)}
-        />
-      ) : null}
+      {crashLayer}
       {/* Empty toolbar space moves the window and double-click zooms it. */}
       <header className="topbar" data-tauri-drag-region>
         <div className="top-cluster" data-tauri-drag-region>
