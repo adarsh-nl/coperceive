@@ -39,7 +39,7 @@ pub fn handle_fatal_error(err_msg: &str) {
         let _ = f.flush();
     }
 
-    if std::env::var("CI").is_err() && !coperceive_desktop::test_seams::test_env_active() {
+    if std::env::var("CI").is_err() && !crate::test_seams::test_env_active() {
         let _ = std::process::Command::new("zenity")
             .args(["--error", "--text", err_msg, "--title", "Coperceive Startup Error", "--timeout=15"])
             .status();

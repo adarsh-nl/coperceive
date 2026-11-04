@@ -46,9 +46,11 @@ $timeout = 45
 $elapsed = 0
 while (-not (Test-Path $MarkerFile) -and $elapsed -lt $timeout) {
     if ($proc.HasExited) {
-        Write-Error "App process exited prematurely with exit code $($proc.ExitCode)"
+        Write-Host "=== App stderr ==="
         if (Test-Path $StdErrFile) { Get-Content $StdErrFile }
+        Write-Host "=== App stdout ==="
         if (Test-Path $StdOutFile) { Get-Content $StdOutFile }
+        Write-Error "App process exited prematurely with exit code $($proc.ExitCode)"
         exit 2
     }
     Start-Sleep -Milliseconds 500
@@ -57,9 +59,16 @@ while (-not (Test-Path $MarkerFile) -and $elapsed -lt $timeout) {
 
 if (-not (Test-Path $MarkerFile)) {
     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-    Write-Error "Auto-connect marker file was not created within $timeout seconds"
+    Write-Host "=== App stderr ==="
     if (Test-Path $StdErrFile) { Get-Content $StdErrFile }
+    Write-Host "=== App stdout ==="
     if (Test-Path $StdOutFile) { Get-Content $StdOutFile }
+    Write-Host "=== Sidecar logs in temp ==="
+    Get-ChildItem -Path ([System.IO.Path]::GetTempPath()) -Filter "serve-*.log" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+        Write-Host "--- $($_.FullName) ---"
+        Get-Content $_.FullName
+    }
+    Write-Error "Auto-connect marker file was not created within $timeout seconds"
     exit 3
 }
 
