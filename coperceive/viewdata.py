@@ -239,6 +239,11 @@ def fov_y_rad(sensor: Sensor) -> float | None:
 
 def _frustums(scene: Scene, time_us: int) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    # Which cameras recorded an image at this sample: the viewer hides a camera's
+    # image plane where there is none, instead of leaving the last one in place.
+    imaged = {
+        (image.agent_id, image.sensor_id) for image in scene.images if image.time_us == time_us
+    }
     for sensor in scene.sensors:
         fov = fov_y_rad(sensor)
         if fov is None:
@@ -262,6 +267,7 @@ def _frustums(scene: Scene, time_us: int) -> list[dict[str, object]]:
                 "fy": sensor.fy,
                 "cx": sensor.cx,
                 "cy": sensor.cy,
+                "has_image": (sensor.agent_id, sensor.sensor_id) in imaged,
             }
         )
     return rows

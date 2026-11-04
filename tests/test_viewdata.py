@@ -14,6 +14,7 @@ from coperceive.model import (
     Annotation,
     BoxFrame,
     Clock,
+    ImageRef,
     Modality,
     PointCloud,
     Scene,
@@ -127,6 +128,37 @@ def test_listing_requires_complete_when_asked(tmp_path: Path) -> None:
     message = dataset_root_error(missing)
     assert message is not None
     assert "does not exist" in message
+
+
+def test_each_frustum_is_posed_at_its_sample_and_says_whether_it_has_an_image() -> None:
+    """agent pose(t) x camera mount at every sample; the image flag per sample."""
+    camera = Sensor(
+        "camera0", "vehicle", Modality.CAMERA, SE3.identity().translation(0.5, 0.0, 1.6),
+        image_width_px=64, image_height_px=48, fx=40.0, fy=40.0, cx=32.0, cy=24.0,
+    )  # fmt: skip
+    poses = tuple(
+        StampedPose(i * 100_000, SE3.identity().translation(float(i), 0.0, 0.0)) for i in range(3)
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="follow",
+        world_frame="ENU",
+        clock=Clock("us", "t"),
+        agents=(Agent("vehicle", AgentType.VEHICLE, poses),),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(
+            ImageRef("vehicle", "camera0", 0, "a.png"),
+            ImageRef("vehicle", "camera0", 200_000, "c.png"),
+        ),
+    )
+    for index, has_image in ((0, True), (1, False), (2, True)):
+        rows = cast(list[dict[str, object]], frame_document(scene, index * 100_000)["frustums"])
+        (row,) = rows
+        pose = cast(dict[str, object], row["pose"])
+        assert [pose["tx"], pose["ty"], pose["tz"]] == pytest.approx([index + 0.5, 0.0, 1.6])
+        assert row["has_image"] is has_image, index
 
 
 def test_camera_without_a_pinhole_has_no_frustum() -> None:

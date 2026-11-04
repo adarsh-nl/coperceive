@@ -742,12 +742,26 @@ assert pb_restored["loop"] == True, f"Expected default loop == True for scenes u
 
 print("Testing playback requirement (a): restore at the second-to-last sample, click Play, assert still playing 3 s later with frameIndex advanced >= 25...")
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 148)")
+time.sleep(0.5)
+frustums_before = {f["key"]: f["position"] for f in eval_js("window.__COPERCEIVE_SCENE_GRAPH__().frustums")}
 eval_js("document.querySelector('button.icon.primary')?.click()")
 time.sleep(3.0)
 pb_a = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 print(f"State 3s after Play click: {pb_a}")
 assert pb_a["playing"] == True, f"Expected still playing 3s later, got {pb_a}"
 assert pb_a["frameIndex"] >= 25, f"Expected frameIndex advanced >= 25, got {pb_a['frameIndex']}"
+# The camera frustums follow the vehicle (x = sample + 1.5 for cam_front in synth_001),
+# and any image plane shown sits on its frustum (v0.1.1: they used to lag behind).
+graph_a = eval_js("window.__COPERCEIVE_SCENE_GRAPH__()")
+front_before = frustums_before.get("vehicle/cam_front")
+front_now = {f["key"]: f["position"] for f in graph_a["frustums"]}.get("vehicle/cam_front")
+assert front_before and abs(front_before[0] - 149.5) < 1e-6, f"cam_front at seek 148: {front_before}"
+assert front_now and abs(front_now[0] - 1.5 - pb_a["frameIndex"]) <= 3, f"cam_front {front_now} at frame {pb_a['frameIndex']}"
+lines_now = {f["key"]: f["position"] for f in graph_a["frustums"]}
+for plane in graph_a["imagePlanes"]:
+    if plane["visible"]:
+        assert lines_now.get(plane["key"]) == plane["position"], f"image plane off its frustum: {plane}"
+print(f"Step 2 notices: cam_front frustum followed the vehicle from x={front_before[0]} to x={front_now[0]} during playback")
 eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (b): loop off, play to the end, assert Replay, click, assert it plays from 0...")
