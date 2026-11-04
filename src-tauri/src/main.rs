@@ -3884,13 +3884,12 @@ fn main() {
                 }
             }
 
+            let persistent = state::load_state();
+
             // 2. Set macOS native application menu
             #[cfg(target_os = "macos")]
-            {
-                let persistent = state::load_state();
-                if let Ok(menu) = build_app_menu(&handle, &persistent.recent_roots) {
-                    let _ = app.set_menu(menu);
-                }
+            if let Ok(menu) = build_app_menu(&handle, &persistent.recent_roots) {
+                let _ = app.set_menu(menu);
             }
 
             // 3. Auto-connect on launch if data root exists and is valid.
