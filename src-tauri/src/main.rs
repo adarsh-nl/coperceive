@@ -3525,9 +3525,16 @@ fn handle_fatal_error(err_msg: &str) {
 
 #[cfg(target_os = "macos")]
 fn main() {
-    std::panic::set_hook(Box::new(|info| {
+    let test_mode = coperceive_desktop::test_seams::test_env_active();
+    std::panic::set_hook(Box::new(move |info| {
         let msg = format!("Panic occurred: {info}");
-        handle_fatal_error(&msg);
+        if test_mode {
+            // The e2e harness must not block on a native alert while testing a
+            // real panic; the diagnostics hook below still writes the crash.
+            eprintln!("{msg}");
+        } else {
+            handle_fatal_error(&msg);
+        }
     }));
     // Keep the fatal-error hook above as the previous hook, and also write a
     // crash file. A marker left by a previous run means an unclean exit.
