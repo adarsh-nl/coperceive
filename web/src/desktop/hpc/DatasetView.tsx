@@ -923,7 +923,8 @@ export default function DatasetView({
     `${counts.total} scene${counts.total === 1 ? "" : "s"}`,
     counts.totalDur !== null ? fmtDur(counts.totalDur) : null,
     counts.cam || counts.lidar ? `${fmtNum(counts.cam)} cam + ${fmtNum(counts.lidar)} LiDAR frames` : null,
-    indexDoc ? formatStorageEstimate(indexDoc) : null,
+    // A size estimate of nothing says nothing: only for a split with scenes.
+    indexDoc && counts.total > 0 ? formatStorageEstimate(indexDoc) : null,
   ].filter(Boolean);
 
   const prepareLabel = counts.by.ready + counts.by.stale > 0 ? "Prepare remaining" : "Prepare whole dataset";
