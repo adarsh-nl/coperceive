@@ -520,7 +520,6 @@ export default function LibraryScreen({
                       onClick={() => void installTown03Map(selected)}
                       disabled={install !== undefined && !install.done && !install.error}
                       title="Downloads the official CARLA 0.9.15 Town03 OpenDRIVE (pinned SHA-256), ingests it and aligns it to this scene. Licence: CARLA 0.9.15 README says the town assets are CC-BY (no version stated)."
-                      aria-label={`Download map for ${selected.scene_id}`}
                     >
                       Download map for Town03 (CARLA 0.9.15, CC-BY)
                     </button>
@@ -552,7 +551,7 @@ export default function LibraryScreen({
               ) : null}
               <InspectorSection title={`${formatBytes(selected.size_bytes)} on disk`}>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
-                  <button type="button" className="c-secondary" onClick={() => revealInFinder(selected.path)} aria-label={`Show ${selected.scene_id} in Finder`}>
+                  <button type="button" className="c-secondary" onClick={() => revealInFinder(selected.path)}>
                     Show in Finder
                   </button>
                   <button
@@ -560,7 +559,6 @@ export default function LibraryScreen({
                     className="c-secondary"
                     onClick={() => void handleValidateNow(selected)}
                     disabled={validatingMap[selected.path]}
-                    aria-label={`Validate scene ${selected.scene_id}`}
                   >
                     {validatingMap[selected.path] ? "Checking…" : "Re-check"}
                   </button>
@@ -568,7 +566,6 @@ export default function LibraryScreen({
                     type="button"
                     className="c-secondary is-danger"
                     onClick={() => setDeleteConfirmScene(selected)}
-                    aria-label={`Delete scene ${selected.scene_id}`}
                   >
                     Remove…
                   </button>
