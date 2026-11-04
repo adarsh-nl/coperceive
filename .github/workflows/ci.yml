@@ -87,6 +87,12 @@ jobs:
             echo "::error title=BuiltBundleTracked::.gitignore no longer ignores coperceive/app/static/"
             exit 1
           }
+      - name: Shipped web source contains no personal identifiers
+        run: |
+          if grep -rnE "nanjaiyalathaa|ewi\.utwente\.nl" web/src; then
+            echo "::error title=PersonalIdentifiersFound::Personal identifiers found in web/src"
+            exit 1
+          fi
 
   test:
     runs-on: ubuntu-latest

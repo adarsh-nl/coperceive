@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-import { useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { ClusterDatasetSettings } from "./ClusterDatasetSettings";
 import {
   getPersistentState,
@@ -11,6 +11,44 @@ import {
 import { SettingRow } from "./components/SettingRow";
 import { Button } from "./components/Button";
 import { IconButton } from "./components/IconButton";
+
+function SettingsGroup({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section aria-label={title} style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+      <h3
+        style={{
+          margin: 0,
+          padding: "0 4px",
+          fontSize: "11px",
+          fontWeight: 600,
+          letterSpacing: "0.03em",
+          textTransform: "uppercase",
+          color: "var(--text-subtle)",
+        }}
+      >
+        {title}
+      </h3>
+      <div
+        style={{
+          backgroundColor: "var(--sunken)",
+          border: "1px solid var(--line, rgba(255,255,255,0.08))",
+          borderRadius: "8px",
+          padding: "4px 12px",
+          display: "flex",
+          flexDirection: "column",
+        }}
+      >
+        {children}
+      </div>
+    </section>
+  );
+}
 
 export function DesktopPreferences() {
   const [reopenLast, setReopenLast] = useState<boolean>(true);
@@ -114,62 +152,81 @@ export function DesktopPreferences() {
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minWidth: "260px" }}>
-      <SettingRow
-        checked={reopenLast}
-        title="Reopen last session on launch"
-        description="When unchecked, Coperceive starts at the Connect screen."
-        onChange={handleToggle}
-      />
-      <SettingRow
-        checked={autoUpdate}
-        title="Automatically download updates"
-        description="Prompt when new signed releases are available."
-        onChange={handleAutoUpdateToggle}
-      />
-      <SettingRow
-        checked={openFirstReady}
-        title="Open the viewer when the first scene is ready"
-        description="After preparing a cluster dataset, show its first ready scene; the rest appear in the viewer's scene menu as they finish."
-        onChange={handleOpenFirstReadyToggle}
-      />
-      <SettingRow
-        checked={autoNextScene}
-        title="Continue to the next scene automatically"
-        description="When a scene ends, play the next prepared one. Off: a note offers it instead."
-        onChange={handleAutoNextToggle}
-      />
-      {/* Cluster commands need the main window's backend access. */}
-      {isViewerWindow() ? null : <ClusterDatasetSettings />}
-
-      {storageRoot && (
-        <div
-          style={{
-            marginTop: "0.75rem",
-            borderTop: "1px solid var(--line, rgba(255, 255, 255, 0.1))",
-            paddingTop: "0.75rem",
-          }}
-        >
-          <div style={{ fontSize: "12px", fontWeight: 600, color: "var(--text)", marginBottom: "0.2rem" }}>
-            Storage
-          </div>
-          <p
-            className="muted"
+    <div style={{ display: "flex", flexDirection: "column", gap: "14px", minWidth: "260px" }}>
+      <SettingsGroup title="General">
+        <SettingRow
+          checked={reopenLast}
+          title="Reopen last session on launch"
+          description="When unchecked, Coperceive starts at the Connect screen."
+          onChange={handleToggle}
+        />
+        {storageRoot && (
+          <div
             style={{
-              fontSize: "11px",
-              color: "var(--text-tertiary, #a1a1a6)",
-              margin: "0 0 0.5rem 0",
-              wordBreak: "break-all",
-              fontFamily: "'Geist Mono', monospace",
+              borderTop: "1px solid var(--line-subtle)",
+              padding: "8px 0",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "12px",
             }}
           >
-            {storageRoot}
-          </p>
-          <Button variant="secondary" size="sm" onClick={handleShowInFinder}>
-            Show in Finder
-          </Button>
+            <div style={{ minWidth: 0 }}>
+              <div style={{ fontSize: "13px", fontWeight: 500, color: "var(--text)" }}>
+                Local library folder
+              </div>
+              <div
+                style={{
+                  fontSize: "11.5px",
+                  color: "var(--text-tertiary)",
+                  fontFamily: "'Geist Mono', ui-monospace, monospace",
+                  overflow: "hidden",
+                  textOverflow: "ellipsis",
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {storageRoot}
+              </div>
+            </div>
+            <Button variant="secondary" size="sm" onClick={handleShowInFinder}>
+              Show in Finder
+            </Button>
+          </div>
+        )}
+      </SettingsGroup>
+
+      <SettingsGroup title="Viewer">
+        <SettingRow
+          checked={openFirstReady}
+          title="Open the viewer when the first scene is ready"
+          description="After preparing a cluster dataset, show its first ready scene; the rest appear in the viewer's scene menu as they finish."
+          onChange={handleOpenFirstReadyToggle}
+        />
+        <div style={{ borderTop: "1px solid var(--line-subtle)" }}>
+          <SettingRow
+            checked={autoNextScene}
+            title="Continue to the next scene automatically"
+            description="When a scene ends, play the next prepared one. Off: a note offers it instead."
+            onChange={handleAutoNextToggle}
+          />
+        </div>
+      </SettingsGroup>
+
+      {/* Cluster commands need the main window's backend access. */}
+      {isViewerWindow() ? null : (
+        <div className="settings-cluster-card">
+          <ClusterDatasetSettings />
         </div>
       )}
+
+      <SettingsGroup title="Updates">
+        <SettingRow
+          checked={autoUpdate}
+          title="Automatically download updates"
+          description="Prompt when new signed releases are available."
+          onChange={handleAutoUpdateToggle}
+        />
+      </SettingsGroup>
     </div>
   );
 }
@@ -215,11 +272,11 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       <div
         style={{
           width: "100%",
-          maxWidth: "540px",
-          maxHeight: "85vh",
+          maxWidth: "560px",
+          maxHeight: "86vh",
           backgroundColor: "var(--panel, #1a1a1c)",
           border: "1px solid var(--line-elevated, rgba(255, 255, 255, 0.14))",
-          borderRadius: "var(--radius-lg, 10px)",
+          borderRadius: "10px",
           boxShadow: "0 20px 50px rgba(0, 0, 0, 0.5)",
           display: "flex",
           flexDirection: "column",
@@ -228,8 +285,8 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
       >
         <div
           style={{
-            height: "48px",
-            padding: "0 20px",
+            height: "44px",
+            padding: "0 18px",
             display: "flex",
             alignItems: "center",
             justifyContent: "space-between",
@@ -237,7 +294,7 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
             flexShrink: 0,
           }}
         >
-          <span style={{ fontSize: "14px", fontWeight: 600, color: "var(--text, #f5f5f7)" }}>
+          <span style={{ fontSize: "13.5px", fontWeight: 600, color: "var(--text, #f5f5f7)" }}>
             Settings
           </span>
           <IconButton size="sm" label="Close settings (Esc)" onClick={onClose}>
@@ -245,14 +302,14 @@ export function SettingsModal({ open, onClose }: SettingsModalProps) {
           </IconButton>
         </div>
 
-        <div style={{ flex: 1, overflowY: "auto", padding: "20px" }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 18px 24px" }}>
           <DesktopPreferences />
         </div>
 
         <div
           style={{
-            height: "48px",
-            padding: "0 20px",
+            height: "44px",
+            padding: "0 18px",
             display: "flex",
             alignItems: "center",
             justifyContent: "flex-end",

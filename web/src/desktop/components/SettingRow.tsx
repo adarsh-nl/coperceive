@@ -54,7 +54,15 @@ export function SettingRow({
         disabled={disabled}
         onChange={(event) => onChange(event.target.checked)}
         style={{
-          marginTop: "3px",
+          width: "14px",
+          height: "14px",
+          minWidth: "14px",
+          minHeight: "14px",
+          maxWidth: "14px",
+          maxHeight: "14px",
+          margin: "2px 0 0 0",
+          padding: 0,
+          flexShrink: 0,
           cursor: disabled ? "not-allowed" : "pointer",
           accentColor: "var(--primary, #1f6feb)",
         }}

@@ -57,7 +57,7 @@
   --text: #f5f5f7;
   --text-secondary: #c7c7cc;
   --text-tertiary: #a1a1a6;
-  --text-subtle: #6e6e73;
+  --text-subtle: #8e8e93;
   --muted: #a1a1a6;
   --primary: #1f6feb;
   --primary-hover: #388bfd;
@@ -351,10 +351,15 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 }
 .setting-row input,
 .settings-pop .setting-row input {
-  width: auto;
-  min-width: 0;
-  margin: 2px 0 0;
+  width: 14px;
+  height: 14px;
+  min-width: 14px;
+  min-height: 14px;
+  max-width: 14px;
+  max-height: 14px;
+  margin: 2px 0 0 0;
   padding: 0;
+  flex-shrink: 0;
 }
 .setting-row[data-disabled="true"] { cursor: default; opacity: 0.6; }
 .setting-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
@@ -363,6 +368,46 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
 .setting-note.error { color: var(--accent); }
 .settings-section { margin-top: 0.5rem; border-top: 1px solid var(--line); padding-top: 0.5rem; display: flex; flex-direction: column; gap: 6px; }
 .settings-heading { margin: 0; font-size: 12px; font-weight: 600; }
+.settings-cluster-card .settings-section {
+  margin-top: 0;
+  border-top: none;
+  padding: 10px 12px;
+  background-color: var(--sunken);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  gap: 8px;
+}
+.settings-cluster-card .settings-heading {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+.settings-cluster-card .settings-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.settings-cluster-card .settings-field select {
+  padding: 4px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--line-elevated);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+.settings-cluster-card .viewing-cache {
+  border-top: 1px solid var(--line-subtle);
+  padding-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
 .settings-pop .settings-field { font-weight: 400; }
 .settings-pop .settings-field select { width: 100%; }
 .confirm-row { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }

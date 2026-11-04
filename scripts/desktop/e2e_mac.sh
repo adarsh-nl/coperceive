@@ -1829,6 +1829,31 @@ if not res_json.get("hasLibrary") or not res_json.get("hasGetData"):
     print(f"E2E_FAIL step=5b missing nav tabs: {res_json}", flush=True)
     raise SystemExit(1)
 print("Step 5b verified: Connect window contains Library and Get Data catalog navigation.")
+
+# Verify bundled Geist and Geist Mono fonts are loaded in the packaged app
+font_eval_req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/eval",
+    data=json.dumps({"script": """
+        (async () => {
+            await document.fonts.ready;
+            const geist = document.fonts.check('13px "Geist"');
+            const geistMono = document.fonts.check('13px "Geist Mono"');
+            const loaded = [...document.fonts]
+                .filter(f => f.status === 'loaded')
+                .map(f => f.family.replace(/['"]/g, ''));
+            const loadedGeist = loaded.some(f => f.includes('Geist') && !f.includes('Mono'));
+            const loadedGeistMono = loaded.some(f => f.includes('Geist Mono'));
+            return JSON.stringify({ geist, geistMono, loadedGeist, loadedGeistMono });
+        })()
+    """}).encode("utf-8"),
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+)
+with urllib.request.urlopen(font_eval_req, timeout=10) as r:
+    font_resp = json.loads(r.read().decode("utf-8"))
+font_json = json.loads(font_resp.get("result", "{}"))
+assert font_json.get("geist") and font_json.get("loadedGeist"), f"Geist font not loaded in packaged app: {font_json}"
+assert font_json.get("geistMono") and font_json.get("loadedGeistMono"), f"Geist Mono font not loaded in packaged app: {font_json}"
+print(f"Step 5b verified: bundled Geist and Geist Mono loaded in packaged app: {font_json}")
 EOF
 
 echo ""
