@@ -645,4 +645,48 @@ mod tests {
         std::env::remove_var("COPERCEIVE_TEST_LOG_DIR");
         std::env::remove_var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH");
     }
+    #[test]
+    fn start_run_reads_and_writes_the_overridden_log_dir() {
+        // The e2e crash launch and relaunch both use COPERCEIVE_TEST_LOG_DIR:
+        // the marker the first run leaves and the record the second reads must
+        // live there, and nothing may be written under HOME.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let old_home = std::env::var("HOME").ok();
+        std::env::set_var("HOME", &home);
+        let log = home.join("override-logs");
+        std::env::set_var("COPERCEIVE_TEST_ENV", "1");
+        std::env::set_var("COPERCEIVE_TEST_LOG_DIR", &log);
+
+        assert!(start_run().is_none(), "no marker yet: no crash");
+        assert!(log.join("run-marker.json").is_file());
+
+        // The marker was not removed (no clean_exit): the next start reports it.
+        let record = start_run().expect("the leftover marker is an unclean exit");
+        assert_eq!(record.kind, "unclean-exit");
+        assert!(record.message.contains("closed unexpectedly"), "{}", record.message);
+        let crashes: Vec<_> = fs::read_dir(&log)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().starts_with("crash-"))
+            .collect();
+        assert_eq!(crashes.len(), 1);
+        assert!(log.join("run-marker.json").is_file(), "a fresh marker for this run");
+        let default_dir = home.join("Library/Logs/Coperceive");
+        assert_eq!(
+            fs::read_dir(&default_dir).map(|dir| dir.count()).unwrap_or(0),
+            0,
+            "nothing in HOME's Library/Logs/Coperceive"
+        );
+
+        clean_exit();
+        assert!(start_run().is_none(), "a clean exit leaves no crash");
+
+        std::env::remove_var("COPERCEIVE_TEST_LOG_DIR");
+        std::env::remove_var("COPERCEIVE_TEST_ENV");
+        match old_home {
+            Some(old) => std::env::set_var("HOME", old),
+            None => std::env::remove_var("HOME"),
+        }
+    }
 }
