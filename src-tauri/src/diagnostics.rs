@@ -31,11 +31,31 @@ pub struct CrashRecord {
 }
 
 pub fn log_dir() -> PathBuf {
+    // Test-only override, inert in production launches.
+    if crate::test_seams::test_env_active() {
+        if let Ok(path) = std::env::var("COPERCEIVE_TEST_LOG_DIR") {
+            if !path.trim().is_empty() {
+                return PathBuf::from(path);
+            }
+        }
+    }
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
     PathBuf::from(home)
         .join("Library")
         .join("Logs")
         .join("Coperceive")
+}
+
+/// Test-only destination for the save command; `None` means show the native
+/// dialog. Inert unless the app was launched by the e2e harness.
+pub fn test_save_path() -> Option<PathBuf> {
+    if !crate::test_seams::test_env_active() {
+        return None;
+    }
+    std::env::var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH")
+        .ok()
+        .filter(|path| !path.trim().is_empty())
+        .map(PathBuf::from)
 }
 
 fn marker_path() -> PathBuf {
@@ -250,6 +270,8 @@ fn redact(text: &str, servers: &[String]) -> String {
     )
     .expect("assignment regex");
     out = assignment.replace_all(&out, "$1[redacted]").into_owned();
+    let ssh_host = Regex::new(r"(?i)\bssh\s+(?:-[^\s]+\s+)*[A-Za-z0-9._-]+").expect("ssh host regex");
+    out = ssh_host.replace_all(&out, "ssh <server>").into_owned();
     let ssh_key = Regex::new(r"(?i)\bssh-(?:rsa|ed25519|dss|ecdsa)\s+[A-Za-z0-9+/=]+")
         .expect("ssh key regex");
     out = ssh_key.replace_all(&out, "[ssh key redacted]").into_owned();
@@ -605,5 +627,22 @@ mod tests {
         assert!(!text.contains("pass-secret"), "{text}");
         assert!(!text.contains("/Users/alice"), "{text}");
         if let Some(old) = old_home { std::env::set_var("HOME", old); }
+    }
+
+    #[test]
+    fn log_and_save_seams_only_apply_in_test_mode() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let log = std::env::temp_dir().join(format!("coperceive-seam-{}", std::process::id()));
+        let save = log.join("diag.zip");
+        std::env::set_var("COPERCEIVE_TEST_LOG_DIR", &log);
+        std::env::set_var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH", &save);
+        std::env::set_var("COPERCEIVE_TEST_ENV", "1");
+        assert_eq!(log_dir(), log);
+        assert_eq!(test_save_path(), Some(save.clone()));
+        std::env::remove_var("COPERCEIVE_TEST_ENV");
+        assert_ne!(log_dir(), log);
+        assert_eq!(test_save_path(), None);
+        std::env::remove_var("COPERCEIVE_TEST_LOG_DIR");
+        std::env::remove_var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH");
     }
 }

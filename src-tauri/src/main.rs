@@ -741,14 +741,19 @@ async fn diagnostics_save_zip(
     context: serde_json::Value,
 ) -> Result<Option<String>, String> {
     use tauri_plugin_dialog::DialogExt;
-    let choice = app
-        .dialog()
-        .file()
-        .set_file_name("coperceive-diagnostics.zip")
-        .add_filter("Zip archive", &["zip"])
-        .blocking_save_file();
-    let Some(destination) = choice.and_then(|path| path.into_path().ok()) else {
-        return Ok(None);
+    let destination = if let Some(path) = coperceive_desktop::diagnostics::test_save_path() {
+        path
+    } else {
+        let choice = app
+            .dialog()
+            .file()
+            .set_file_name("coperceive-diagnostics.zip")
+            .add_filter("Zip archive", &["zip"])
+            .blocking_save_file();
+        let Some(destination) = choice.and_then(|path| path.into_path().ok()) else {
+            return Ok(None);
+        };
+        destination
     };
     coperceive_desktop::diagnostics::save_zip(&destination, &context, &note)
         .map(|path| Some(path.display().to_string()))
