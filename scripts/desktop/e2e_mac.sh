@@ -3428,6 +3428,10 @@ while time.monotonic() < deadline:
         break
     time.sleep(0.3)
 notice = eval_js("(() => (document.querySelector('.crash-notice') || {}).textContent || '')()")
+print("Step 5i debug ipc:", repr(eval_js("(() => typeof window.__TAURI_INTERNALS__)()")))
+print("Step 5i debug invoke:", repr(eval_js("(() => { if (!window.__TAURI_INTERNALS__) return 'no-ipc'; window.__TAURI_INTERNALS__.invoke('diagnostics_startup_crash').then(x => { window.__CRASHDBG__ = JSON.stringify(x); }).catch(e => { window.__CRASHDBG__ = 'ERR:' + e; }); return 'called'; })()")))
+time.sleep(1.5)
+print("Step 5i debug crash-global:", repr(eval_js("(() => window.__CRASHDBG__ || null)()")))
 print("Step 5i debug notice:", repr(notice))
 print("Step 5i debug main body:", repr(eval_js("(() => document.body.innerText.slice(0, 500))()")))
 assert "closed unexpectedly" in notice, notice
