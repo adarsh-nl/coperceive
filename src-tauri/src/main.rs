@@ -3551,7 +3551,6 @@ fn main() {
     }
 
     let app_state = Arc::new(AppState::default());
-    let crash_for_notice = startup_crash.clone();
     if let Some(crash) = startup_crash {
         if let Ok(mut lock) = app_state.startup_crash.lock() {
             *lock = Some(crash);
@@ -3563,23 +3562,6 @@ fn main() {
     let state_for_exit = Arc::clone(&app_state);
 
     let builder = tauri::Builder::default()
-        .setup(move |app| {
-            if let Some(crash) = crash_for_notice.clone() {
-                let handle = app.handle().clone();
-                std::thread::spawn(move || {
-                    let payload = serde_json::to_string(&crash).unwrap_or_else(|_| "null".into());
-                    for _ in 0..12 {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        if let Some(main) = handle.get_webview_window("main") {
-                            let _ = main.eval(&format!(
-                                "window.__COPERCEIVE_STARTUP_CRASH__ = {payload}; window.dispatchEvent(new CustomEvent('coperceive-startup-crash', {{ detail: {payload} }}));"
-                            ));
-                        }
-                    }
-                });
-            }
-            Ok(())
-        })
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state)
