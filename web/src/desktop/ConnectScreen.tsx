@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { JobsIndicator } from "./JobsIndicator";
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   LocalExecutionTarget,
   cancelImport,
@@ -30,7 +30,16 @@ import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
 import type { ServerEntry } from "./hpc";
-import { GridTable, MiniBar, PageHeaderProvider, PageLayout, type PageHeaderSpec } from "./components/Page";
+import {
+  GridTable,
+  MiniBar,
+  NavCountButton,
+  PageHeaderProvider,
+  PageLayout,
+  PublishedActions,
+  PublishedMeta,
+  createPageHeaderStore,
+} from "./components/Page";
 import { FolderCheckPanel, OpenFolderHeader, recentColumns as folderColumns } from "./OpenFolder";
 import { datasetJobs as currentDatasetJobs, subscribeDatasetJobs, type DatasetJobs } from "./jobsStore";
 
@@ -76,18 +85,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [hpcSubTab, setHpcSubTab] = useState<WorkspaceTab>("servers");
   const [activeHpcDataset, setActiveHpcDataset] = useState<ActiveDatasetPayload | null>(null);
   // What each page shows in the one-line header and as its sidebar count.
-  const [headers, setHeaders] = useState<Record<string, PageHeaderSpec>>({});
-  const publishHeader = useCallback((page: string, spec: PageHeaderSpec | null) => {
-    setHeaders((current) => {
-      if (spec === null) {
-        if (!(page in current)) return current;
-        const next = { ...current };
-        delete next[page];
-        return next;
-      }
-      return { ...current, [page]: spec };
-    });
-  }, []);
+  // Held outside this component's state: see createPageHeaderStore.
+  const [headerStore] = useState(createPageHeaderStore);
   const [datasetJobs, setDatasetJobs] = useState<DatasetJobs[]>(() => currentDatasetJobs());
   useEffect(() => subscribeDatasetJobs(() => setDatasetJobs(currentDatasetJobs())), []);
   const [collapsedDatasets, setCollapsedDatasets] = useState<ReadonlySet<string>>(() => new Set());
@@ -412,7 +411,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
   const activeFooterServer = activeHpcDataset?.profile ?? hpcServers[0] ?? null;
   const pageKey = activeTab === "remote" ? hpcSubTab : activeTab;
-  const activeHeader = headers[pageKey];
   const pageTitle =
     ({
       library: "Library",
@@ -424,7 +422,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     } as Record<string, string>)[pageKey] ?? "HPC Workspace";
 
   return (
-    <PageHeaderProvider value={publishHeader}>
+    <PageHeaderProvider value={headerStore}>
     <div
       style={{
         position: "relative",
@@ -564,19 +562,18 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             ] as const
           ).map(([tabKey, label]) => {
             const selected = activeTab === tabKey;
-            const count = headers[tabKey]?.navCount;
             return (
-              <button
+              <NavCountButton
                 key={tabKey}
+                page={tabKey}
                 type="button"
                 role="tab"
                 aria-selected={selected}
                 onClick={() => setActiveTab(tabKey)}
                 className={`c-sidebar-item c-nav-item ${selected ? "active" : ""}`}
-                data-count={count || undefined}
               >
                 {label}
-              </button>
+              </NavCountButton>
             );
           })}
         </nav>
@@ -596,21 +593,23 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             [
               ["servers", "Servers", hpcServers.length > 0 ? String(hpcServers.length) : undefined],
               ["evaluation", "New evaluation", undefined],
-              ["history", "Run history", headers.history?.navCount],
+              ["history", "Run history", undefined],
             ] as const
           ).map(([secKey, label, count]) => {
             const isSelected = activeTab === "remote" && hpcSubTab === secKey;
             return (
-              <button
+              <NavCountButton
                 key={secKey}
+                page={secKey}
+                count={count}
+                liveClassName={secKey === "history" ? "is-live" : undefined}
                 type="button"
                 onClick={() => navigateHpcSection(secKey)}
-                className={`c-sidebar-item c-nav-item ${isSelected ? "active" : ""}${secKey === "history" && count ? " is-live" : ""}`}
+                className={`c-sidebar-item c-nav-item ${isSelected ? "active" : ""}`}
                 aria-current={isSelected ? "page" : undefined}
-                data-count={count || undefined}
               >
                 {label}
-              </button>
+              </NavCountButton>
             );
           })}
         </nav>
@@ -762,7 +761,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             )}
             <div className="c-header-title">
               <h1>{pageTitle}</h1>
-              {activeHeader?.meta ? <span className="c-header-meta">{activeHeader.meta}</span> : null}
+              <PublishedMeta page={pageKey} />
             </div>
           </div>
 
@@ -773,7 +772,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               </div>
             )}
             <JobsIndicator onOpenWorkspace={() => setActiveTab("remote")} />
-            {activeHeader?.actions}
+            <PublishedActions page={pageKey} />
           </div>
         </header>
 

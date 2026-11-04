@@ -952,3 +952,60 @@ def test_no_personal_identifiers_in_web_src() -> None:
                 if word in text:
                     matches.append(f"{path.relative_to(web_src)} contains '{word}'")
     assert not matches, f"Forbidden personal identifiers found in web/src: {matches}"
+
+
+_CLEAR_LIKE_E2E = """(id) => {
+    const el = document.getElementById(id);
+    el.focus();
+    el.value = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+}"""
+
+
+def test_pages_do_not_rerender_controlled_inputs_while_idle(
+    visual_browser: Browser, app_url: str
+) -> None:
+    """A page that publishes its header must not re-render itself in a loop.
+
+    scripts/desktop/e2e_mac.sh clears a field by setting its DOM value and firing `input`,
+    then types with System Events. That works only if nothing re-renders the controlled
+    input in between: a re-render puts the old state value back, and the typed text lands
+    after it ('<old>original-text'). The shell once kept page headers in its own state, so
+    each publish re-rendered the page, which published again, without end.
+    """
+    context = visual_browser.new_context(viewport={"width": 1280, "height": 800})
+    page = context.new_page()
+    try:
+        page.add_init_script(RICH_FIXTURE_INIT_SCRIPT)
+        page.goto(f"{app_url}/#/connect", wait_until="networkidle")
+        page.wait_for_selector(".c-sidebar", timeout=15000)
+        page.evaluate(SEED_FIXTURES_EVAL)
+
+        # Servers -> Add server, the way e2e_mac.sh Step 5h gets there.
+        page.locator("nav button", has_text="HPC Workspace").first.click()
+        page.locator("button", has_text="Add server").first.click()
+        page.wait_for_selector("#hpc-user", timeout=10000)
+        page.click("#hpc-user")
+        page.keyboard.type("previous")
+        page.evaluate(_CLEAR_LIKE_E2E, "hpc-user")
+        page.wait_for_timeout(300)
+        page.keyboard.type("original-text")
+        assert page.input_value("#hpc-user") == "original-text"
+
+        # New evaluation's controlled inputs behave the same.
+        page.locator(".c-sidebar button", has_text="New evaluation").first.click()
+        page.wait_for_timeout(250)
+        page.evaluate(
+            """() => window.dispatchEvent(new CustomEvent("coperceive-test-evaluation-seed", {
+                detail: { profiles: window.__SEEDED_HPC_PROFILES__ || [], pipelines: [] },
+            }))"""
+        )
+        page.wait_for_selector("#plan-custom", timeout=10000)
+        page.click("#plan-custom")
+        page.keyboard.type("/data/code/old.py")
+        page.evaluate(_CLEAR_LIKE_E2E, "plan-custom")
+        page.wait_for_timeout(300)
+        page.keyboard.type("/data/code/new.py")
+        assert page.input_value("#plan-custom") == "/data/code/new.py"
+    finally:
+        context.close()

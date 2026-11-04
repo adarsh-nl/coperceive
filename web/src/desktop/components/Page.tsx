@@ -7,7 +7,7 @@
  * Tables give every column a maximum width, so a wide window adds space after
  * the last column (and to the inspector), never between the columns of a row.
  */
-import React, { createContext, useContext, useEffect, useRef } from "react";
+import React, { createContext, useContext, useEffect, useRef, useSyncExternalStore } from "react";
 
 // -- header ---------------------------------------------------------------------
 
@@ -20,19 +20,102 @@ export interface PageHeaderSpec {
   navCount?: string;
 }
 
-type PublishHeader = (page: string, spec: PageHeaderSpec | null) => void;
+/**
+ * The published headers live in a small store outside React state. Only the
+ * shell's leaf components (header meta, header actions, sidebar counts)
+ * subscribe to it, so a page publishing its header never re-renders the page
+ * itself. (Keeping the headers in the shell's state did: every publish
+ * re-rendered the shell and with it the page, whose effect published again —
+ * an endless render loop that also reset controlled inputs mid-edit.)
+ */
+export interface PageHeaderStore {
+  get(page: string): PageHeaderSpec | undefined;
+  set(page: string, spec: PageHeaderSpec | null): void;
+  subscribe(listener: () => void): () => void;
+}
 
-const PageHeaderContext = createContext<PublishHeader>(() => undefined);
+export function createPageHeaderStore(): PageHeaderStore {
+  const specs = new Map<string, PageHeaderSpec>();
+  const listeners = new Set<() => void>();
+  return {
+    get: (page) => specs.get(page),
+    set: (page, spec) => {
+      if (spec === null) {
+        if (!specs.delete(page)) return;
+      } else {
+        specs.set(page, spec);
+      }
+      for (const listener of [...listeners]) listener();
+    },
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+  };
+}
+
+const PageHeaderContext = createContext<PageHeaderStore | null>(null);
 
 export const PageHeaderProvider = PageHeaderContext.Provider;
 
 /** Publish this page's header meta and actions to the shell while mounted. */
 export function usePageHeader(page: string, spec: PageHeaderSpec): void {
-  const publish = useContext(PageHeaderContext);
+  const store = useContext(PageHeaderContext);
   useEffect(() => {
-    publish(page, spec);
+    store?.set(page, spec);
   });
-  useEffect(() => () => publish(page, null), [page, publish]);
+  useEffect(() => () => store?.set(page, null), [page, store]);
+}
+
+/** What a page published; for the shell's leaf components only. */
+export function usePublishedHeader(page: string): PageHeaderSpec | undefined {
+  const store = useContext(PageHeaderContext);
+  return useSyncExternalStore(
+    store ? store.subscribe : noSubscribe,
+    () => store?.get(page),
+    () => undefined,
+  );
+}
+
+const noSubscribe = () => () => undefined;
+
+/** The header's meta line for a page. */
+export function PublishedMeta({ page }: { page: string }) {
+  const meta = usePublishedHeader(page)?.meta;
+  return meta ? <span className="c-header-meta">{meta}</span> : null;
+}
+
+/** The header's primary actions for a page. */
+export function PublishedActions({ page }: { page: string }) {
+  return <>{usePublishedHeader(page)?.actions ?? null}</>;
+}
+
+/**
+ * A sidebar button whose count ("4", "1 running") comes from what its page
+ * published, or from `count` when given. The count is drawn by CSS from
+ * `data-count`, so the button's text stays its label.
+ */
+export function NavCountButton({
+  page,
+  count,
+  liveClassName,
+  className,
+  children,
+  ...rest
+}: React.ButtonHTMLAttributes<HTMLButtonElement> & { page: string; count?: string; liveClassName?: string }) {
+  const published = usePublishedHeader(page)?.navCount;
+  const shown = count ?? published;
+  return (
+    <button
+      {...rest}
+      className={`${className ?? ""}${shown && liveClassName ? ` ${liveClassName}` : ""}`}
+      data-count={shown || undefined}
+    >
+      {children}
+    </button>
+  );
 }
 
 // -- layout ---------------------------------------------------------------------
