@@ -17,6 +17,98 @@ use crate::ssh::{run_ssh_command, shell_quote, CommandResult, SshTarget};
 
 pub const JOB_PREFIX: &str = "coperceive-";
 
+/// Fixed program that writes environment.json. The text matches
+/// `coperceive.repro.environment.CAPTURE_PROGRAM` (a test keeps them together).
+pub const ENVIRONMENT_CAPTURE_PROGRAM: &str = r#"import hashlib
+import json
+import os
+import platform
+import subprocess
+import sys
+from importlib import metadata
+
+out = sys.argv[1]
+wanted = ("numpy", "pyarrow", "torch", "pillow", "pyyaml")
+packages = {}
+for name in wanted:
+    try:
+        packages[name] = metadata.version(name)
+    except metadata.PackageNotFoundError:
+        continue
+freeze = None
+try:
+    done = subprocess.run(
+        [sys.executable, "-m", "pip", "freeze"],
+        capture_output=True,
+        timeout=20,
+        check=False,
+    )
+    if done.returncode == 0:
+        freeze = hashlib.sha256(done.stdout).hexdigest()
+except (OSError, subprocess.TimeoutExpired):
+    freeze = None
+loaded = os.environ.get("LOADEDMODULES", "")
+modules = [part for part in loaded.split(":") if part]
+cuda = None
+driver = None
+try:
+    smi = subprocess.run(
+        ["nvidia-smi"],
+        capture_output=True,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    if smi.returncode == 0:
+        marker = "CUDA Version:"
+        for line in smi.stdout.splitlines():
+            if marker in line:
+                tail = line.split(marker, 1)[1].strip()
+                cuda = tail.split()[0] if tail else None
+                break
+    query = subprocess.run(
+        ["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+        capture_output=True,
+        text=True,
+        timeout=8,
+        check=False,
+    )
+    if query.returncode == 0:
+        rows = [row.strip() for row in query.stdout.splitlines() if row.strip()]
+        if rows:
+            driver = rows[0].split(",")[0].strip() or None
+except (OSError, subprocess.TimeoutExpired):
+    pass
+digest = None
+for key in ("APPTAINER_IMAGE", "SINGULARITY_IMAGE"):
+    value = os.environ.get(key, "")
+    if value.startswith("sha256:"):
+        digest = value
+        break
+payload = {
+    "schema": "coperceive-environment",
+    "schema_version": 1,
+    "python": platform.python_version(),
+    "key_packages": packages,
+    "pip_freeze_sha256": freeze,
+    "modules": modules,
+    "container_image_digest": digest,
+    "cuda": cuda,
+    "driver": driver,
+}
+with open(out, "w", encoding="utf-8") as handle:
+    json.dump(payload, handle, sort_keys=True)
+    handle.write("\n")"#;
+
+/// Bash lines that write environment.json. `python` and `destination_shell`
+/// are shell words the caller has already quoted when they are not fixed text.
+pub fn environment_capture_lines(python: &str, destination_shell: &str) -> Vec<String> {
+    let mut lines = vec![format!("{python} - {destination_shell} <<'PY' || true")];
+    lines.extend(ENVIRONMENT_CAPTURE_PROGRAM.lines().map(str::to_string));
+    lines.push("PY".to_string());
+    lines
+}
+
 /// Runs one remote command. Implemented by SSH in production and by fixtures in
 /// tests, so the adapter is testable without a cluster.
 pub trait RemoteRunner: Send + Sync {
@@ -435,6 +527,10 @@ impl SchedulerAdapter for SlurmAdapter {
                 lines.push(String::new());
             }
         }
+
+        let root = shell_quote(profile.results_root.trim_end_matches('/'));
+        let destination = format!("{root}\"/environment-${{SLURM_JOB_ID:-0}}.json\"");
+        lines.extend(environment_capture_lines("python3", &destination));
 
         if request.command_argv.is_empty() {
             return Err(

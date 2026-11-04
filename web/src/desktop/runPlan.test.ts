@@ -12,6 +12,7 @@ import {
   historyCanRerun,
   historyStateLabel,
   historyTiming,
+  reproPreviewLines,
   isJobActive,
   jobStateLabel,
   metricsRows,
@@ -254,4 +255,24 @@ test("history rows show state, timing and whether re-run is possible", () => {
   assert.strictEqual(historyStateLabel(running), "RUNNING");
   assert.strictEqual(historyCanRerun(running), false);
   assert.strictEqual(historyTiming({ ...entry, elapsed: null, time_limit: null }), "—");
+});
+
+test("repro card preview names what is included and what is missing", () => {
+  const lines = reproPreviewLines({
+    dataset: { id: null, version: null },
+    split: { name: null, scene_ids: ["scene-a"] },
+    pipeline: { name: "synthetic" },
+    checkpoint: { file_name: "model.pt", sha256: null },
+    code: { git_commit: null },
+    coperceive: { version: "0.1.0" },
+    environment: { python: null },
+    metrics: null,
+    unknown: ["checkpoint.sha256", "environment.python", "metrics", "metrics.scene-a"],
+  } as Record<string, unknown>);
+  assert.ok(lines.included.some((line) => line.includes("synthetic")));
+  assert.ok(lines.included.some((line) => line.includes("has not scored")));
+  assert.ok(lines.missing.some((line) => line.includes("checkpoint hash")));
+  assert.ok(lines.missing.some((line) => line.includes("Python version")));
+  assert.ok(lines.missing.some((line) => line.includes("has not scored")));
+  assert.ok(lines.missing.some((line) => line.includes("metrics.scene-a")));
 });
