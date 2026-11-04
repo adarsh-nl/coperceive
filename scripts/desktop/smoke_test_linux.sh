@@ -26,33 +26,53 @@ if [ ! -d "${FIXTURE_ROOT}" ]; then
 fi
 
 TMPDIR="$(mktemp -d /tmp/coperceive-linux-smoke-XXXXXX)"
-trap 'rm -rf "${TMPDIR}"' EXIT
+XVFB_PID=""
+APP_PID=""
+
+cleanup() {
+    if [ -n "${APP_PID}" ]; then
+        kill -TERM "${APP_PID}" 2>/dev/null || true
+        wait "${APP_PID}" 2>/dev/null || true
+    fi
+    if [ -n "${XVFB_PID}" ]; then
+        kill "${XVFB_PID}" 2>/dev/null || true
+    fi
+    rm -rf "${TMPDIR}"
+}
+trap cleanup EXIT
 
 MARKER_FILE="${TMPDIR}/test_marker.txt"
 APP_STDOUT="${TMPDIR}/app_stdout.log"
 APP_STDERR="${TMPDIR}/app_stderr.log"
 
+export NO_AT_BRIDGE=1
 export WEBKIT_DISABLE_COMPOSITING_MODE=1
+export WEBKIT_DISABLE_DMABUF_RENDERER=1
+export WEBKIT_FORCE_SANDBOX=0
 export LIBGL_ALWAYS_SOFTWARE=1
 
 if [ -z "${COPERCEIVE_PYTHON:-}" ] && command -v python3 >/dev/null 2>&1; then
     export COPERCEIVE_PYTHON="$(command -v python3)"
 fi
 
-echo "Starting coperceive-desktop with auto-connect fixture under xvfb..."
-if command -v xvfb-run >/dev/null 2>&1 && [ -z "${DISPLAY:-}" ]; then
-    COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
-    COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
-    COPERCEIVE_STATE_DIR="${TMPDIR}/state" \
-    xvfb-run -a -s "-screen 0 1280x800x24" "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
-    APP_PID=$!
-else
-    COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
-    COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
-    COPERCEIVE_STATE_DIR="${TMPDIR}/state" \
-    "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
-    APP_PID=$!
+if [ -z "${DISPLAY:-}" ]; then
+    if command -v Xvfb >/dev/null 2>&1; then
+        echo "Starting Xvfb on display :99..."
+        Xvfb :99 -screen 0 1280x800x24 -ac &
+        XVFB_PID=$!
+        export DISPLAY=:99
+        sleep 1
+    elif command -v xvfb-run >/dev/null 2>&1; then
+        echo "Xvfb not found directly, falling back to xvfb-run wrapper"
+    fi
 fi
+
+echo "Starting coperceive-desktop with auto-connect fixture..."
+COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
+COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
+COPERCEIVE_STATE_DIR="${TMPDIR}/state" \
+"${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
+APP_PID=$!
 echo "App process spawned with PID ${APP_PID}"
 
 echo "Waiting for auto-connect and sidecar startup (up to 30s)..."
@@ -77,7 +97,6 @@ if [ ! -f "${MARKER_FILE}" ]; then
     cat "${APP_STDERR}" >&2
     echo "=== App stdout ===" >&2
     cat "${APP_STDOUT}" >&2
-    kill "${APP_PID}" 2>/dev/null || true
     exit 4
 fi
 
@@ -95,13 +114,8 @@ echo "Scenes response: ${SCENES_RESP}"
 SCENE_COUNT=$(printf '%s\n' "${SCENES_RESP}" | python3 -c "import sys, json; data=json.load(sys.stdin); print(len(data))")
 if [ "${SCENE_COUNT}" -lt 1 ]; then
     echo "Failure: expected >= 1 scene in response, got ${SCENE_COUNT}!" >&2
-    kill "${APP_PID}" 2>/dev/null || true
     exit 5
 fi
 
 echo "Verified: /api/scenes returned ${SCENE_COUNT} scene(s) with HTTP 200 OK."
-
-# Clean up app process gracefully
-kill -TERM "${APP_PID}" 2>/dev/null || true
-wait "${APP_PID}" 2>/dev/null || true
 echo "Linux Desktop smoke test PASSED successfully."

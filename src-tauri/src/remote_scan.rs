@@ -365,7 +365,6 @@ pub fn run_scan(
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
@@ -402,9 +401,13 @@ mod tests {
     fn fake_ssh(dir: &Path, script: &str) -> String {
         let bin = dir.join("ssh");
         fs::write(&bin, script).expect("write fake ssh");
-        let mut perms = fs::metadata(&bin).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&bin, perms).expect("chmod fake ssh");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&bin).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&bin, perms).expect("chmod fake ssh");
+        }
         bin.display().to_string()
     }
 
@@ -496,9 +499,13 @@ mod tests {
             "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$FAKE_COPER_LOG\"\n",
         )
         .expect("write fake coperceive");
-        let mut perms = fs::metadata(&fake).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake, perms).expect("chmod");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake, perms).expect("chmod");
+        }
 
         let marker = dir.join("pwned");
         let log = dir.join("argv.log");

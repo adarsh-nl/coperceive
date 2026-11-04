@@ -1054,7 +1054,6 @@ fn now_unix() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     const FAKE_SSH: &str = include_str!(concat!(
@@ -1096,8 +1095,12 @@ mod tests {
             std::fs::create_dir_all(&dir).expect("temp dir");
             let path = dir.join("fake_ssh.sh");
             std::fs::write(&path, FAKE_SSH).expect("write fake ssh");
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod fake ssh");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
+                    .expect("chmod fake ssh");
+            }
             Self {
                 bin: path.to_string_lossy().to_string(),
                 dir,

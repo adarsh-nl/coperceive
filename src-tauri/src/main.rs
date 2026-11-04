@@ -523,7 +523,8 @@ async fn switch_data_root(
         state::add_recent_root(&mut persistent, &new_path_str);
         let _ = state::save_state(&persistent);
 
-        // Update application menu with refreshed recent roots
+        // Update application menu with refreshed recent roots (macOS)
+        #[cfg(target_os = "macos")]
         if let Ok(menu) = build_app_menu(app, &persistent.recent_roots) {
             let _ = app.set_menu(menu);
         }
@@ -946,6 +947,7 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     Ok(port)
 }
 
+#[cfg(target_os = "macos")]
 fn build_app_menu(
     app: &tauri::AppHandle,
     recent_roots: &[String],
@@ -1157,7 +1159,8 @@ async fn start_local_session(
         state::add_recent_root(&mut persistent, &data_root);
         let _ = state::save_state(&persistent);
 
-        // Update application menu with refreshed recent roots
+        // Update application menu with refreshed recent roots (macOS)
+        #[cfg(target_os = "macos")]
         if let Ok(menu) = build_app_menu(app, &persistent.recent_roots) {
             let _ = app.set_menu(menu);
         }
@@ -3882,9 +3885,12 @@ fn main() {
             }
 
             // 2. Set macOS native application menu
-            let persistent = state::load_state();
-            if let Ok(menu) = build_app_menu(&handle, &persistent.recent_roots) {
-                let _ = app.set_menu(menu);
+            #[cfg(target_os = "macos")]
+            {
+                let persistent = state::load_state();
+                if let Ok(menu) = build_app_menu(&handle, &persistent.recent_roots) {
+                    let _ = app.set_menu(menu);
+                }
             }
 
             // 3. Auto-connect on launch if data root exists and is valid.

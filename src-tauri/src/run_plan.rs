@@ -3070,8 +3070,11 @@ mod tests {
             "#!/bin/sh\nfor last; do :; done\nprintf '%s\\n' \"$last\"\n",
         )
         .unwrap();
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&fake_realpath, std::fs::Permissions::from_mode(0o755)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake_realpath, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let output = std::process::Command::new("/bin/sh")
             .args(["-c", PATH_CHECK_BODY, "sh", "~/sub/file.txt"])
             .env("HOME", &home)
@@ -3283,7 +3286,6 @@ mod tests {
     #[test]
     fn real_fake_ssh_builds_and_saves_a_plan_without_submitting() {
         use crate::ssh::SshTarget;
-        use std::os::unix::fs::PermissionsExt;
 
         struct EnvGuard;
         impl Drop for EnvGuard {
@@ -3329,7 +3331,11 @@ mod tests {
             "{}/tests/fixtures/hpc/fake_ssh.sh",
             env!("CARGO_MANIFEST_DIR")
         );
-        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
         let runner = crate::slurm_adapter::SshRunner::new(fake, SshTarget::alias("cluster-b"));
         let entry = self::entry();
         let plan = build_run_plan(&runner, &entry, &request()).expect("build plan");
@@ -3342,8 +3348,12 @@ mod tests {
         let saved = save_run_plan(&runner, &entry, &plan, &request()).expect("save plan");
         let saved_path = saved.saved_path.expect("saved path");
         let local = format!("{}{}", root.display(), saved_path);
-        let mode = std::fs::metadata(&local).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&local).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode, 0o600);
+        }
         let text = std::fs::read_to_string(&local).unwrap();
         let stored: RunPlan = serde_json::from_str(&text).unwrap();
         assert_eq!(stored.nothing_submitted, true);
