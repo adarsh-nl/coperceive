@@ -3,57 +3,38 @@
 
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-#[cfg(target_os = "macos")]
 use std::fs;
-#[cfg(target_os = "macos")]
 use std::path::{Path, PathBuf};
-#[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
-#[cfg(target_os = "macos")]
 use std::sync::{Arc, Mutex};
-#[cfg(target_os = "macos")]
 use std::time::{Duration, Instant};
 
-#[cfg(target_os = "macos")]
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "macos")]
 use tauri::Manager;
 
-#[cfg(target_os = "macos")]
+use coperceive_desktop::platform;
 use coperceive_desktop::controller::{self, ControllerConfig};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::detect::{self, DetectOptions, DetectionReport};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::run_plan::{self, PipelineEntry, RunPlan, RunPlanRequest};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::job_submit::{
     self as job_submit, JobSubmitOutcome, SubmissionPreview, SubmitOptions,
 };
-#[cfg(target_os = "macos")]
 use coperceive_desktop::job_watch::{
     self as job_watch, JobCancelResult, JobLogTail, JobWatchStatus,
 };
-#[cfg(target_os = "macos")]
 use coperceive_desktop::job_report::{
     self as job_report, ImportedPredictions, MetricsReport, PredictionTail,
 };
-#[cfg(target_os = "macos")]
 use coperceive_desktop::job_history::{self as job_history, RunHistoryEntry};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
-#[cfg(target_os = "macos")]
 use coperceive_desktop::remote::{
     RemoteClient, RemoteSessionManager, RemoteStartOptions, RemoteStatusResponse,
 };
-#[cfg(target_os = "macos")]
 use coperceive_desktop::sidecar::SidecarSession;
-#[cfg(target_os = "macos")]
 use coperceive_desktop::slurm_adapter::SshRunner;
-#[cfg(target_os = "macos")]
 use coperceive_desktop::state::{self, AppPersistentState};
 
-#[cfg(target_os = "macos")]
 pub struct AppState {
     pub sidecar: Mutex<Option<SidecarSession>>,
     pub remote: Mutex<Option<RemoteSessionManager>>,
@@ -79,7 +60,6 @@ pub struct AppState {
         Mutex<Option<coperceive_desktop::dataset_jobs::PendingPrepare>>,
 }
 
-#[cfg(target_os = "macos")]
 impl Default for AppState {
     fn default() -> Self {
         Self {
@@ -103,7 +83,6 @@ impl Default for AppState {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionPayload {
     pub origin: String,
@@ -113,7 +92,6 @@ pub struct SessionPayload {
     pub target_type: String,
 }
 
-#[cfg(target_os = "macos")]
 #[derive(Debug, Serialize, Deserialize)]
 pub struct HealthPayload {
     pub healthy: bool,
@@ -123,17 +101,12 @@ pub struct HealthPayload {
 
 /// Resolves the bundled python-build-standalone interpreter from the Tauri resource directory.
 /// Falls back to dev python if running unbundled.
-#[cfg(target_os = "macos")]
 fn resolve_python_binary(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
 
     if let Ok(res_dir) = app.path().resource_dir() {
         // Pinned python-build-standalone inside Tauri resources
-        let candidates = [
-            res_dir.join("resources").join("python").join("bin").join("python3"),
-            res_dir.join("python").join("bin").join("python3"),
-            res_dir.join("python").join("install").join("bin").join("python3"),
-        ];
+        let candidates = platform::resolve_python_candidates(&res_dir);
         for candidate in &candidates {
             if candidate.is_file() {
                 return candidate.clone();
@@ -145,22 +118,26 @@ fn resolve_python_binary(app: &tauri::AppHandle) -> PathBuf {
         return PathBuf::from(env_py);
     }
 
-    PathBuf::from("python3")
+    #[cfg(target_os = "windows")]
+    {
+        PathBuf::from("python")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        PathBuf::from("python3")
+    }
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn get_persistent_state() -> Result<AppPersistentState, String> {
     Ok(state::load_state())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn is_remote_enabled() -> Result<bool, String> {
     Ok(std::env::var("COPERCEIVE_REMOTE").map(|v| v == "1" || v.to_lowercase() == "true").unwrap_or(false))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String> {
     // Test-only: e2e writes the answer into COPERCEIVE_MOCK_DIALOG_FILE so the
@@ -176,7 +153,6 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
     Ok(folder.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned()))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn pick_save_path(
     app: tauri::AppHandle,
@@ -207,7 +183,6 @@ async fn pick_save_path(
     Ok(chosen_path)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn save_exported_file(
     source_relative: Option<String>,
@@ -236,7 +211,6 @@ async fn save_exported_file(
 
 /// Poll until no window has `label`, up to `limit`. Never call on the main
 /// thread: closing a window needs the main event loop.
-#[cfg(target_os = "macos")]
 fn wait_for_window_gone(app: &tauri::AppHandle, label: &str, limit: Duration) -> bool {
     use tauri::Manager;
     let deadline = Instant::now() + limit;
@@ -249,7 +223,6 @@ fn wait_for_window_gone(app: &tauri::AppHandle, label: &str, limit: Duration) ->
     true
 }
 
-#[cfg(target_os = "macos")]
 fn open_viewer_window(
     app: &tauri::AppHandle,
     origin: &str,
@@ -367,12 +340,9 @@ fn open_viewer_window(
     .title(format!("coperceive — {}", basename))
     .min_inner_size(900.0, 600.0)
     .resizable(true)
-    // The unified toolbar: no native title bar, the traffic lights inline at
-    // the left of the app's own top bar (as in tauri.conf.json for main).
-    .title_bar_style(tauri::TitleBarStyle::Overlay)
-    .hidden_title(true)
-    .traffic_light_position(tauri::LogicalPosition::new(16.0, 18.0))
     .initialization_script(&init_script);
+
+    win_builder = platform::apply_viewer_window_chrome(win_builder);
 
     let monitors_info: Vec<state::MonitorInfo> = {
         let primary = app.primary_monitor().ok().flatten();
@@ -467,7 +437,6 @@ fn open_viewer_window(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 async fn switch_data_root(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -591,7 +560,6 @@ async fn switch_data_root(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 pub async fn trigger_open_dataset_dialog(app: &tauri::AppHandle, state: &AppState) {
     // Test-only: e2e answers the folder picker through COPERCEIVE_MOCK_DIALOG_FILE.
     // Inert unless the app was launched with COPERCEIVE_TEST_ENV / MARKER_FILE.
@@ -608,7 +576,6 @@ pub async fn trigger_open_dataset_dialog(app: &tauri::AppHandle, state: &AppStat
     }
 }
 
-#[cfg(target_os = "macos")]
 fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
     let version = coperceive_desktop::updater::app_version(&app.package_info().version);
     let commit = option_env!("GIT_COMMIT").unwrap_or("580691a");
@@ -673,17 +640,7 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
         if log_lines.is_empty() { "No logs recorded." } else { &log_lines }
     );
 
-    let mut copied = false;
-    if let Ok(mut child) = std::process::Command::new("pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-    {
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = std::io::Write::write_all(&mut stdin, diagnostics.as_bytes());
-            copied = true;
-        }
-        let _ = child.wait();
-    }
+    let copied = platform::copy_to_clipboard(&diagnostics);
 
     if let Some(viewer) = app.get_webview_window("viewer") {
         let msg = if copied {
@@ -700,7 +657,6 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
 /// Bring the main window forward on its Library. The viewer window stays the
 /// one viewer (opening a scene from the Library replaces it); it never renders
 /// the Library itself, because it has no Tauri IPC.
-#[cfg(target_os = "macos")]
 fn show_library_window(app: &tauri::AppHandle) -> bool {
     use tauri::{Emitter, Manager};
     let Some(main) = app.get_webview_window("main") else {
@@ -713,7 +669,6 @@ fn show_library_window(app: &tauri::AppHandle) -> bool {
     main.is_visible().unwrap_or(false)
 }
 
-#[cfg(target_os = "macos")]
 fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppState>) -> Result<u16, String> {
     let secret = coperceive_desktop::token::generate_secure_token().map_err(|e| e.to_string())?;
     let mut cfg = ControllerConfig::new(0, secret.clone(), None);
@@ -795,7 +750,6 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
             picker_state.pending_export.set(None);
             return Err("No mock dialog file path provided in test environment (seed COPERCEIVE_MOCK_DIALOG_FILE)".into());
         }
-        #[cfg(target_os = "macos")]
         {
             use tauri_plugin_dialog::DialogExt;
             let mut builder = picker_handle.dialog().file().set_file_name(default_name);
@@ -806,11 +760,6 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
             let path = choice.and_then(|fp| fp.into_path().ok()).map(|p| p.to_string_lossy().into_owned());
             picker_state.pending_export.set(path.as_deref().map(PathBuf::from));
             Ok(path)
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            picker_state.pending_export.set(None);
-            Ok(None)
         }
     }));
 
@@ -833,25 +782,12 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     let revealer_state = app_state.clone();
     cfg.finder_revealer = Some(Arc::new(move || {
         let dest_path = revealer_state.pending_export.last_saved()?;
-        #[cfg(target_os = "macos")]
-        {
-            std::process::Command::new("open")
-                .arg("-R")
-                .arg(&dest_path)
-                .spawn()
-                .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            let _ = dest_path;
-        }
-        Ok(())
+        platform::reveal_path(Path::new(&dest_path))
     }));
 
     let check_handle = app_handle.clone();
     let check_state = app_state.clone();
     cfg.updater_checker = Some(Arc::new(move |_is_manual: bool, override_url_opt: Option<String>| {
-        #[cfg(target_os = "macos")]
         {
             use tauri_plugin_updater::UpdaterExt;
             let effective_url = coperceive_desktop::updater::resolve_update_endpoint_override(override_url_opt.as_deref());
@@ -917,19 +853,11 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                 }
             }
         }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Ok(serde_json::json!({
-                "status": "uptodate",
-                "current_version": coperceive_desktop::updater::app_version(&check_handle.package_info().version),
-            }))
-        }
     }));
 
     let install_handle = app_handle.clone();
     let install_state = app_state.clone();
     cfg.updater_installer = Some(Arc::new(move |override_url_opt: Option<String>| {
-        #[cfg(target_os = "macos")]
         {
             let update_opt = {
                 let lock = install_state.pending_update.lock().map_err(|e| e.to_string())?;
@@ -970,16 +898,13 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
                     }
                     update.install(&bytes).map_err(|e| format!("Installation failed: {e}"))?;
                     install_handle.restart();
+                    #[allow(unreachable_code)]
                     Ok(())
                 }
                 Err(err) => {
                     Err(format!("Update rejected: {err}"))
                 }
             }
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            Ok(())
         }
     }));
 
@@ -1021,7 +946,6 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     Ok(port)
 }
 
-#[cfg(target_os = "macos")]
 fn build_app_menu(
     app: &tauri::AppHandle,
     recent_roots: &[String],
@@ -1138,7 +1062,6 @@ fn build_app_menu(
 /// The library's shared maps root, passed to the local server so maps installed
 /// from the Library card (library_root/maps) are found even when the server root
 /// is a single scene directory.
-#[cfg(target_os = "macos")]
 fn library_maps_root() -> Option<PathBuf> {
     let persistent = state::load_state();
     let root = persistent
@@ -1153,7 +1076,6 @@ fn library_maps_root() -> Option<PathBuf> {
     Some(root.join("maps"))
 }
 
-#[cfg(target_os = "macos")]
 async fn start_local_session(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -1200,9 +1122,9 @@ async fn start_local_session(
             let start = lines.len().saturating_sub(20);
             log_tail = lines[start..].join("\n");
         }
-        // Copy serve-<port>.log to ~/Library/Logs/Coperceive/
-        if let Some(home) = std::env::var_os("HOME") {
-            let log_dir = PathBuf::from(home).join("Library/Logs/Coperceive");
+        // Copy serve-<port>.log to log dir
+        {
+            let log_dir = platform::get_log_dir();
             let _ = fs::create_dir_all(&log_dir);
             let dest_log = log_dir.join(format!("serve-{}.log", session.port));
             let _ = fs::copy(&session.log_path, &dest_log);
@@ -1218,8 +1140,8 @@ async fn start_local_session(
 
     let elapsed = start_time.elapsed();
     println!("[local-serve] Local server started and became healthy in {:.2?}", elapsed);
-    if let Some(home) = std::env::var_os("HOME") {
-        let log_dir = PathBuf::from(home).join("Library/Logs/Coperceive");
+    {
+        let log_dir = platform::get_log_dir();
         let _ = fs::create_dir_all(&log_dir);
         let log_file = log_dir.join("desktop.log");
         if let Ok(mut f) = fs::OpenOptions::new().create(true).append(true).open(&log_file) {
@@ -1270,7 +1192,6 @@ async fn start_local_session(
     Ok(payload)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn start_local(
     app: tauri::AppHandle,
@@ -1293,7 +1214,6 @@ async fn start_local(
     start_local_session(&app, state.inner(), data_root).await
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn stop_local(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
@@ -1303,14 +1223,11 @@ async fn stop_local(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 static IMPORT_PID: Mutex<Option<u32>> = Mutex::new(None);
 
 /// One background library validation at a time.
-#[cfg(target_os = "macos")]
 static VALIDATION_RUNNING: AtomicBool = AtomicBool::new(false);
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn import_from_folder(
     app: tauri::AppHandle,
@@ -1395,7 +1312,6 @@ fn import_from_folder(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn cancel_import() -> Result<(), String> {
     let pid = {
@@ -1403,18 +1319,13 @@ fn cancel_import() -> Result<(), String> {
         slot.take()
     };
     if let Some(pid) = pid {
-        // SAFETY: pid is the id of the scene-pack child this process spawned.
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        let _ = platform::terminate_process(pid);
     }
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 static DATASET_JOB_PID: Mutex<Option<u32>> = Mutex::new(None);
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn library_thumbnail(scene_path: String) -> Result<Option<Vec<u8>>, String> {
     let p = state::load_state();
@@ -1425,14 +1336,12 @@ fn library_thumbnail(scene_path: String) -> Result<Option<Vec<u8>>, String> {
 }
 
 /// Open Folder's "Folder check": what a folder holds, read from its manifests.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn inspect_folder(path: String) -> coperceive_desktop::library::FolderCheck {
     let library_root = state::load_state().library_root.map(PathBuf::from);
     coperceive_desktop::library::inspect_folder(Path::new(&path), library_root.as_deref())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, String> {
     let p = state::load_state();
@@ -1443,7 +1352,6 @@ fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, Strin
     Ok(coperceive_desktop::library::get_storage_stats(Path::new(&root), is_configured))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_library_root(new_root: String) -> Result<coperceive_desktop::library::StorageStats, String> {
     let mut p = state::load_state();
@@ -1452,7 +1360,6 @@ fn set_library_root(new_root: String) -> Result<coperceive_desktop::library::Sto
     Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root), true))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::StorageStats, String> {
     let mut p = state::load_state();
@@ -1471,7 +1378,6 @@ fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::St
 /// download (pinned mirror + SHA), ingest as a shared map, align to the scene
 /// poses, store under library_root/maps. Progress events are streamed as
 /// `town-map-progress` payloads.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn download_town_map(
     app: tauri::AppHandle,
@@ -1572,7 +1478,6 @@ async fn download_town_map(
     .map_err(|error| format!("Town03 map install failed: {error}"))?
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn get_library_scenes(
     app: tauri::AppHandle,
@@ -1591,25 +1496,17 @@ fn get_library_scenes(
     Ok(scenes)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn delete_library_scene(scene_path: String) -> Result<(), String> {
     coperceive_desktop::library::delete_scene_to_trash(Path::new(&scene_path))
         .map_err(|e| format!("Failed to delete scene: {e}"))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn reveal_in_finder(path: String) -> Result<(), String> {
-    std::process::Command::new("open")
-        .arg("-R")
-        .arg(&path)
-        .spawn()
-        .map_err(|e| format!("Failed to reveal in Finder: {e}"))?;
-    Ok(())
+    platform::reveal_path(Path::new(&path))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn dataset_dry_run(
     app: tauri::AppHandle,
@@ -1659,7 +1556,6 @@ fn dataset_dry_run(
     ))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn start_dataset_job(
     app: tauri::AppHandle,
@@ -1772,7 +1668,6 @@ fn start_dataset_job(
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn cancel_dataset_job() -> Result<(), String> {
     let pid = {
@@ -1780,39 +1675,31 @@ fn cancel_dataset_job() -> Result<(), String> {
         slot.take()
     };
     if let Some(pid) = pid {
-        unsafe {
-            libc::kill(pid as i32, libc::SIGTERM);
-        }
+        let _ = platform::terminate_process(pid);
     }
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
-fn signal_dataset_job(signal: i32) -> Result<(), String> {
+#[tauri::command]
+fn pause_dataset_job() -> Result<(), String> {
     let slot = DATASET_JOB_PID.lock().map_err(|err| err.to_string())?;
     if let Some(pid) = *slot {
-        unsafe {
-            libc::kill(pid as i32, signal);
-        }
-        Ok(())
+        platform::pause_process(pid)
     } else {
         Err("No download is running.".into())
     }
 }
 
-#[cfg(target_os = "macos")]
-#[tauri::command]
-fn pause_dataset_job() -> Result<(), String> {
-    signal_dataset_job(libc::SIGSTOP)
-}
-
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn resume_dataset_job() -> Result<(), String> {
-    signal_dataset_job(libc::SIGCONT)
+    let slot = DATASET_JOB_PID.lock().map_err(|err| err.to_string())?;
+    if let Some(pid) = *slot {
+        platform::resume_process(pid)
+    } else {
+        Err("No download is running.".into())
+    }
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn dataset_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let python = resolve_python_binary(&app);
@@ -1830,7 +1717,6 @@ fn dataset_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
         .map_err(|err| format!("Could not read the dataset list. {err}"))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_auto_download_updates(enabled: bool) -> Result<(), String> {
     let mut persistent = state::load_state();
@@ -1838,7 +1724,6 @@ fn set_auto_download_updates(enabled: bool) -> Result<(), String> {
     state::save_state(&persistent)
 }
 
-#[cfg(target_os = "macos")]
 fn run_scene_validation(
     python: &Path,
     scene_path: &str,
@@ -1896,14 +1781,12 @@ fn run_scene_validation(
 }
 
 /// Frames per agent and pose time range of the one scene a validate report read.
-#[cfg(target_os = "macos")]
 #[derive(Default)]
 struct SceneTiming {
     frames: Option<usize>,
     time_range_us: Option<(i64, i64)>,
 }
 
-#[cfg(target_os = "macos")]
 impl SceneTiming {
     fn from_report(report: &serde_json::Value) -> Self {
         let scene = report.pointer("/scenes/0");
@@ -1921,7 +1804,6 @@ impl SceneTiming {
 }
 
 /// Remember a validation answer, keyed by the scene directory and manifest mtime.
-#[cfg(target_os = "macos")]
 fn remember_scene_validation(scene_path: &str, valid: bool, timing: SceneTiming) {
     let Some(mtime) = coperceive_desktop::library::manifest_mtime_ms(Path::new(scene_path)) else {
         return;
@@ -1945,7 +1827,6 @@ fn remember_scene_validation(scene_path: &str, valid: bool, timing: SceneTiming)
 }
 
 /// Validate a scene in the background and remember the answer in `state.json`.
-#[cfg(target_os = "macos")]
 fn store_scene_validation(python: &Path, scene_path: &str) -> Result<bool, String> {
     let (valid, _, _, timing) = run_scene_validation(python, scene_path)?;
     remember_scene_validation(scene_path, valid, timing);
@@ -1953,7 +1834,6 @@ fn store_scene_validation(python: &Path, scene_path: &str) -> Result<bool, Strin
 }
 
 /// Validate stale library scenes in the background. One run at a time.
-#[cfg(target_os = "macos")]
 fn spawn_library_validation(app: tauri::AppHandle, scenes: Vec<(String, bool)>) {
     if scenes.iter().all(|(_, fresh)| *fresh) {
         return;
@@ -1973,7 +1853,6 @@ fn spawn_library_validation(app: tauri::AppHandle, scenes: Vec<(String, bool)>) 
     });
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn validate_scene(
     app: tauri::AppHandle,
@@ -1990,7 +1869,6 @@ fn validate_scene(
     }))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload, String> {
     let mut lock = state.sidecar.lock().map_err(|e| e.to_string())?;
@@ -2012,12 +1890,10 @@ async fn health(state: tauri::State<'_, Arc<AppState>>) -> Result<HealthPayload,
 
 /// Local ssh binary. `COPERCEIVE_SSH_BIN` is used by tests and the CI
 /// packaged-app e2e harness; production uses the system ssh.
-#[cfg(target_os = "macos")]
 fn ssh_bin() -> String {
     std::env::var("COPERCEIVE_SSH_BIN").unwrap_or_else(|_| "ssh".to_string())
 }
 
-#[cfg(target_os = "macos")]
 fn ssh_config_path() -> PathBuf {
     std::env::var_os("HOME")
         .map(PathBuf::from)
@@ -2028,7 +1904,6 @@ fn ssh_config_path() -> PathBuf {
 
 /// Lists hosts from the user's `~/.ssh/config` so "Add server" can offer them.
 /// Only Host aliases are read; no key material or options are returned.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
     let path = ssh_config_path();
@@ -2040,27 +1915,23 @@ async fn list_ssh_config_hosts() -> Result<Vec<String>, String> {
 }
 
 /// Reads effective settings for a `~/.ssh/config` alias with `ssh -G`.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn read_ssh_host_settings(alias: String) -> Result<SshHostSettings, String> {
     detect::probe_ssh_alias(&alias, &ssh_bin())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn list_server_profiles() -> Result<Vec<ServerEntry>, String> {
     Ok(server_profiles::load_servers())
 }
 
 /// Saves a server profile locally. Rejects secret-like fields and unsafe paths.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn save_server_profile(entry: ServerEntry) -> Result<ServerEntry, String> {
     let mut servers = server_profiles::load_servers();
     server_profiles::upsert_server(&mut servers, entry)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn delete_server_profile(id: String) -> Result<(), String> {
     let mut servers = server_profiles::load_servers();
@@ -2069,7 +1940,6 @@ async fn delete_server_profile(id: String) -> Result<(), String> {
 
 /// Runs the read-only "Test connection" checks off the async runtime, bounded by
 /// per-check timeouts. The result can be applied to the draft profile in the UI.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn test_server_connection(entry: ServerEntry) -> Result<DetectionReport, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2080,7 +1950,6 @@ async fn test_server_connection(entry: ServerEntry) -> Result<DetectionReport, S
 }
 
 /// The saved server profile a plan/command belongs to.
-#[cfg(target_os = "macos")]
 fn find_server_entry(profile_id: &str) -> Result<ServerEntry, String> {
     server_profiles::load_servers()
         .into_iter()
@@ -2089,13 +1958,11 @@ fn find_server_entry(profile_id: &str) -> Result<ServerEntry, String> {
 }
 
 /// SSH runner for a saved profile, using the user's own ssh config and agent.
-#[cfg(target_os = "macos")]
 fn plan_runner(entry: &ServerEntry) -> Result<SshRunner, String> {
     Ok(SshRunner::new(ssh_bin(), entry.ssh_target()?))
 }
 
 /// Read-only dataset detection for a raw path on the cluster.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_detect(
     profile_id: String,
@@ -2115,7 +1982,6 @@ async fn dataset_detect(
 }
 
 /// Read-only scene index for a detected raw dataset.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_index(
     profile_id: String,
@@ -2141,7 +2007,6 @@ async fn dataset_index(
 /// Installed model plugins on the cluster, offered as built-in pipelines. A
 /// cluster without plugins returns an empty list; the UI also accepts a custom
 /// `coperceive-pipeline.json` script path.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn list_pipeline_options(profile_id: String) -> Result<Vec<PipelineEntry>, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2155,7 +2020,6 @@ async fn list_pipeline_options(profile_id: String) -> Result<Vec<PipelineEntry>,
 
 /// Reads a custom pipeline registration (`coperceive-pipeline.json` next to the
 /// script) read-only over SSH.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn read_custom_pipeline(
     profile_id: String,
@@ -2172,7 +2036,6 @@ async fn read_custom_pipeline(
 
 /// Builds and checks a run plan. Nothing is submitted: the plan only renders the
 /// argv, environment, checks and the contract-check script for the user to see.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn build_run_plan(
     profile_id: String,
@@ -2189,7 +2052,6 @@ async fn build_run_plan(
 
 /// Saves a checked plan under the profile's `results_root/plans/<id>.json`.
 /// Nothing is submitted.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn save_run_plan(
     profile_id: String,
@@ -2207,7 +2069,6 @@ async fn save_run_plan(
 
 /// Renders the complete job script for a saved plan without submitting anything.
 /// The UI shows this text and sends its `preview_hash` back on confirm.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn preview_submission(
     profile_id: String,
@@ -2226,7 +2087,6 @@ async fn preview_submission(
 
 /// Submits a saved plan after the user explicitly confirmed the previewed
 /// script. Unconfirmed calls and preview-hash mismatches submit nothing.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn submit_run_plan(
     profile_id: String,
@@ -2252,7 +2112,6 @@ async fn submit_run_plan(
 }
 
 /// Live state, elapsed and remaining wall time for a run submitted by this app.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn job_watch_status(
     profile_id: String,
@@ -2270,7 +2129,6 @@ async fn job_watch_status(
 
 /// State of a dataset prepare job this app submitted (Queued -> Preparing ->
 /// Ready in the dataset view); it must still carry the name the preview gave it.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_prepare_job_status(
     profile_id: String,
@@ -2291,7 +2149,6 @@ async fn dataset_prepare_job_status(
 }
 
 /// A bounded tail (10..=200 lines) of the run's stdout or stderr log.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn job_watch_logs(
     profile_id: String,
@@ -2310,7 +2167,6 @@ async fn job_watch_logs(
 }
 
 /// Cancels a running/pending job this app submitted, after an explicit confirm.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn cancel_run_job(
     profile_id: String,
@@ -2328,7 +2184,6 @@ async fn cancel_run_job(
 }
 
 /// One bounded read of the streamed predictions file for a saved run plan.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn prediction_stream(
     profile_id: String,
@@ -2353,7 +2208,6 @@ async fn prediction_stream(
 }
 
 /// The pipeline's own final metrics report, once it exists.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn run_metrics(
     profile_id: String,
@@ -2370,7 +2224,6 @@ async fn run_metrics(
 }
 
 /// Imports the run's predictions as a stored run and opens the viewer on it.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn open_predictions(
     app: tauri::AppHandle,
@@ -2420,7 +2273,6 @@ async fn open_predictions(
 }
 
 /// The app's submitted runs from Slurm accounting, newest first.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn list_run_history(
     profile_id: String,
@@ -2440,7 +2292,6 @@ async fn list_run_history(
 }
 
 /// Render the CPU-only Slurm script that prepares selected dataset scenes.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_prepare(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2573,7 +2424,6 @@ async fn dataset_prepare(
     }))
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_prepare_submit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2606,7 +2456,6 @@ async fn dataset_prepare_submit(
     .map_err(|error| format!("Dataset preparation submit could not finish: {error}"))?
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_status(
     profile_id: String,
@@ -2666,7 +2515,6 @@ async fn dataset_status(
 
 /// The open cluster dataset's scenes (id, state) from the dataset view, so the
 /// viewer's scene list can show the ones that are not prepared yet.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: serde_json::Value) {
     if let Ok(mut scenes) = state.dataset_scenes.lock() {
@@ -2676,7 +2524,6 @@ fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: se
 
 /// Remember the cluster dataset open in the HPC workspace (or forget it on
 /// Close), so the workspace reopens it after a restart.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn remember_cluster_dataset(profile_id: String, dataset: Option<serde_json::Value>) -> Result<(), String> {
     let mut persistent = state::load_state();
@@ -2696,7 +2543,6 @@ fn remember_cluster_dataset(profile_id: String, dataset: Option<serde_json::Valu
 }
 
 /// The dataset last open in the HPC workspace: `{ profile_id, dataset }`, or null.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn last_cluster_dataset() -> serde_json::Value {
     let persistent = state::load_state();
@@ -2713,7 +2559,6 @@ fn last_cluster_dataset() -> serde_json::Value {
 }
 
 /// Settings → Cluster datasets → "Camera images when preparing".
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn get_camera_images_setting(profile_id: Option<String>) -> state::CameraImagesSetting {
     state::load_state().camera_images(profile_id.as_deref())
@@ -2721,7 +2566,6 @@ fn get_camera_images_setting(profile_id: Option<String>) -> state::CameraImagesS
 
 /// Changes only what the next prepare preview starts with; prepared scenes keep
 /// their mode. `mode: null` clears the per-profile (or app-wide) choice.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn set_camera_images_setting(
     profile_id: Option<String>,
@@ -2735,7 +2579,6 @@ fn set_camera_images_setting(
 
 /// Disk used by camera previews in a profile's cache; `remove` deletes only the
 /// previews (the UI asks for confirmation first).
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_previews(profile_id: String, remove: bool) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -2750,7 +2593,6 @@ async fn dataset_previews(profile_id: String, remove: bool) -> Result<serde_json
 /// Where viewing over SSH keeps its local files: per-dataset mirrors of the
 /// scenes' small files and the size-capped cache of sweeps and images. This is
 /// the app's own cache directory; nothing is written on the cluster.
-#[cfg(target_os = "macos")]
 fn remote_view_cache_dir() -> PathBuf {
     if let Some(dir) = std::env::var_os("COPERCEIVE_REMOTE_VIEW_CACHE") {
         return PathBuf::from(dir);
@@ -2761,7 +2603,6 @@ fn remote_view_cache_dir() -> PathBuf {
         .join("Library/Caches/nl.adarsh.coperceive/remote-view")
 }
 
-#[cfg(target_os = "macos")]
 fn directory_bytes(dir: &Path) -> u64 {
     fs::read_dir(dir)
         .map(|entries| {
@@ -2779,7 +2620,6 @@ fn directory_bytes(dir: &Path) -> u64 {
 
 /// Settings → Cluster datasets → "Viewing cache": its cap, what it uses, and
 /// `clear` to empty it (sweeps and images only; they are fetched again).
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn remote_view_cache(cap_bytes: Option<u64>, clear: Option<bool>) -> Result<serde_json::Value, String> {
     let mut persistent = state::load_state();
@@ -2806,7 +2646,6 @@ fn remote_view_cache(cap_bytes: Option<u64>, clear: Option<bool>) -> Result<serd
 /// read-only streamer confined to this dataset's cache split and raw root
 /// (docs/datasets/cluster-datasets.md, "Viewing"). Opening another scene of
 /// the same dataset reuses the server and its connection.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn dataset_open(
     app: tauri::AppHandle,
@@ -2941,7 +2780,6 @@ async fn dataset_open(
 /// the fixture server, then calls the real `dataset_*` commands in order and
 /// records each response or error. A failing step does not stop the flow; the
 /// e2e asserts on every recorded outcome.
-#[cfg(target_os = "macos")]
 fn run_dataset_flow_probe(
     app: &tauri::AppHandle,
     request_path: &Path,
@@ -3099,14 +2937,12 @@ fn run_dataset_flow_probe(
 }
 
 /// What a remote viewer session serves: reused only for exactly the same thing.
-#[cfg(target_os = "macos")]
 fn viewer_session_key(alias: &str, profile_id: Option<&str>, data_root: &str, media_roots: &[String]) -> String {
     format!("{alias}|{}|{data_root}|{}", profile_id.unwrap_or(""), media_roots.join("\n"))
 }
 
 /// Point the open viewer at another scene of the same session, without a new
 /// window: the viewer reads `scene=` from its hash.
-#[cfg(target_os = "macos")]
 fn show_scene_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, scene_id: Option<&str>) -> bool {
     use tauri::Manager;
     let same_origin = state
@@ -3131,7 +2967,6 @@ fn show_scene_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, 
     true
 }
 
-#[cfg(target_os = "macos")]
 fn urlencoding_component(value: &str) -> String {
     value
         .bytes()
@@ -3142,7 +2977,6 @@ fn urlencoding_component(value: &str) -> String {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 async fn remote_connect(
@@ -3323,7 +3157,6 @@ async fn remote_connect(
     Ok(payload)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_status(
     alias: String,
@@ -3342,7 +3175,6 @@ async fn remote_status(
     client.status(uuid.as_deref(), job_id).map_err(|e| e.to_string())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_disconnect(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let mut lock = state.remote.lock().map_err(|e| e.to_string())?;
@@ -3358,7 +3190,6 @@ async fn remote_disconnect(state: tauri::State<'_, Arc<AppState>>) -> Result<(),
 /// Metadata only: the remote `coperceive remote scan` reads folder entries and
 /// scene manifests, never scene data, and it bounds depth, entries and time so
 /// the login node stays light. The result is the command's own JSON.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn remote_scan(
     profile_id: String,
@@ -3393,7 +3224,6 @@ async fn remote_scan(
 
 /// Simple loopback HTTP polling using TcpStream without external HTTP client crate.
 /// Reads until headers end (\r\n\r\n) rather than assuming a single buffer read.
-#[cfg(target_os = "macos")]
 fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(), String> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
@@ -3433,34 +3263,10 @@ fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(),
     Err("Health check probe timed out".to_string())
 }
 
-#[cfg(target_os = "macos")]
 fn handle_fatal_error(err_msg: &str) {
-    eprintln!("Fatal startup error: {err_msg}");
-    if let Some(home) = std::env::var_os("HOME") {
-        let log_dir = std::path::PathBuf::from(home).join("Library/Logs/Coperceive");
-        let _ = std::fs::create_dir_all(&log_dir);
-        let log_file = log_dir.join("startup-error.log");
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_file) {
-            use std::io::Write;
-            let now = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|d| d.as_secs())
-                .unwrap_or(0);
-            let _ = writeln!(f, "[{now}] Fatal startup error: {err_msg}");
-        }
-    }
-
-    let escaped = err_msg.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
-    let script = format!(
-        "display alert \"Coperceive Startup Error\" message \"{escaped}\" as critical giving up after 15"
-    );
-    let _ = std::process::Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .status();
+    platform::handle_fatal_error(err_msg);
 }
 
-#[cfg(target_os = "macos")]
 fn main() {
     std::panic::set_hook(Box::new(|info| {
         let msg = format!("Panic occurred: {info}");
@@ -4528,16 +4334,13 @@ fn main() {
         });
 
     let mut context = tauri::generate_context!();
-    #[cfg(target_os = "macos")]
-    {
-        if coperceive_desktop::test_seams::test_env_active() {
-            if let Some(updater_cfg) = context.config_mut().plugins.0.get_mut("updater") {
-                if let Some(map) = updater_cfg.as_object_mut() {
-                    map.insert(
-                        "dangerousInsecureTransportProtocol".to_string(),
-                        serde_json::Value::Bool(true),
-                    );
-                }
+    if coperceive_desktop::test_seams::test_env_active() {
+        if let Some(updater_cfg) = context.config_mut().plugins.0.get_mut("updater") {
+            if let Some(map) = updater_cfg.as_object_mut() {
+                map.insert(
+                    "dangerousInsecureTransportProtocol".to_string(),
+                    serde_json::Value::Bool(true),
+                );
             }
         }
     }
@@ -4570,7 +4373,3 @@ fn main() {
     });
 }
 
-#[cfg(not(target_os = "macos"))]
-fn main() {
-    println!("coperceive-desktop: macOS Apple Silicon target build.");
-}

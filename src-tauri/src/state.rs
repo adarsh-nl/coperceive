@@ -532,11 +532,7 @@ impl AppPersistentState {
 
 /// Returns the default library location: ~/coperceive-data.
 pub fn default_library_root() -> PathBuf {
-    if let Ok(home) = std::env::var("HOME") {
-        PathBuf::from(home).join("coperceive-data")
-    } else {
-        PathBuf::from("coperceive-data")
-    }
+    crate::platform::default_library_root()
 }
 
 impl Default for AppPersistentState {
@@ -585,33 +581,7 @@ impl Default for AppPersistentState {
 /// `COPERCEIVE_STATE_DIR` overrides the directory, as for `servers.json` (the
 /// e2e harnesses set it so the real store is untouched).
 pub fn get_state_file_path() -> PathBuf {
-    if let Some(dir) = std::env::var_os("COPERCEIVE_STATE_DIR") {
-        return PathBuf::from(dir).join("state.json");
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        #[cfg(target_os = "macos")]
-        {
-            return PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("nl.adarsh.coperceive")
-                .join("state.json");
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
-                return PathBuf::from(xdg)
-                    .join("nl.adarsh.coperceive")
-                    .join("state.json");
-            }
-            return PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("nl.adarsh.coperceive")
-                .join("state.json");
-        }
-    }
-    PathBuf::from(".coperceive-state.json")
+    crate::platform::get_state_file_path()
 }
 
 /// Adds a dataset root path to the front of `recent_roots`, deduplicating and
