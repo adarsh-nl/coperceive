@@ -985,6 +985,9 @@ def test_pages_do_not_rerender_controlled_inputs_while_idle(
         page.locator("nav button", has_text="HPC Workspace").first.click()
         page.locator("button", has_text="Add server").first.click()
         page.wait_for_selector("#hpc-user", timeout=10000)
+        # Let start-up work (profile and catalog loads) settle first: a render loop keeps
+        # resetting the field, so the check below still catches one; a slow start-up does not.
+        page.wait_for_timeout(500)
         page.click("#hpc-user")
         page.keyboard.type("previous")
         page.evaluate(_CLEAR_LIKE_E2E, "hpc-user")
@@ -1001,6 +1004,7 @@ def test_pages_do_not_rerender_controlled_inputs_while_idle(
             }))"""
         )
         page.wait_for_selector("#plan-custom", timeout=10000)
+        page.wait_for_timeout(500)
         page.click("#plan-custom")
         page.keyboard.type("/data/code/old.py")
         page.evaluate(_CLEAR_LIKE_E2E, "plan-custom")

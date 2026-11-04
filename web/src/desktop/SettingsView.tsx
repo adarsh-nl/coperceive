@@ -11,6 +11,8 @@ import {
 import { SettingRow } from "./components/SettingRow";
 import { Button } from "./components/Button";
 import { IconButton } from "./components/IconButton";
+import { useDatasetGrouping } from "./hpc/groupingSetting";
+import type { DatasetGrouping } from "./hpc/grouping";
 
 function SettingsGroup({
   title,
@@ -50,7 +52,14 @@ function SettingsGroup({
   );
 }
 
+const GROUPING_CHOICES: ReadonlyArray<readonly [DatasetGrouping, string, string]> = [
+  ["none", "None", "One list, sorted by scene name."],
+  ["state", "By state", "Failed, stale, preparing, queued, ready, then not prepared."],
+  ["day", "By recording day", "From scene names that hold a date (YYYY_MM_DD_HH_MM_SS): the day the data was recorded."],
+];
+
 export function DesktopPreferences() {
+  const [grouping, setGrouping] = useDatasetGrouping();
   const [reopenLast, setReopenLast] = useState<boolean>(true);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(true);
   const [autoNextScene, setAutoNextScene] = useState<boolean>(false);
@@ -209,6 +218,26 @@ export function DesktopPreferences() {
             description="When a scene ends, play the next prepared one. Off: a note offers it instead."
             onChange={handleAutoNextToggle}
           />
+        </div>
+      </SettingsGroup>
+
+      <SettingsGroup title="Datasets">
+        <div role="radiogroup" aria-label="Group scenes" style={{ display: "flex", flexDirection: "column" }}>
+          <div style={{ padding: "8px 0 2px", fontSize: "13px", fontWeight: 500, color: "var(--text)" }}>
+            Group scenes
+          </div>
+          {GROUPING_CHOICES.map(([value, title, description]) => (
+            <SettingRow
+              key={value}
+              type="radio"
+              name="dataset-grouping"
+              value={value}
+              checked={grouping === value}
+              title={title}
+              description={description}
+              onChange={() => setGrouping(value)}
+            />
+          ))}
         </div>
       </SettingsGroup>
 

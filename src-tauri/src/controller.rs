@@ -549,6 +549,9 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             if let Some(open_first) = val.get("open_first_ready_scene").and_then(|v| v.as_bool()) {
                 persistent.open_first_ready_scene = open_first;
             }
+            if let Some(grouping) = val.get("dataset_grouping").and_then(state::dataset_grouping_from) {
+                persistent.dataset_grouping = grouping;
+            }
             if let Some(vis) = val.get("agent_visibility") {
                 if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
                     persistent.agent_visibility = Some(map);

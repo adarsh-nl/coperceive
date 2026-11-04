@@ -8,6 +8,7 @@
  * supporting fixture injection for visual and E2E testing.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
+import type React from "react";
 import type { ServerEntry } from "../hpc";
 import {
   canPrepareWholeDataset,
@@ -24,7 +25,7 @@ import {
   recoverFromRefusedPrepareSubmit,
   type ClusterDetectDocument,
   type ClusterIndexDocument,
-  type ClusterSceneState,
+  type ClusterIndexScene,
   type ClusterSceneStatusEntry,
   type DatasetPreparePreview,
   type CameraImagesMode,
@@ -34,10 +35,19 @@ import {
   shareDatasetScenesWithViewer,
 } from "../clusterDatasets";
 import { SettingRow } from "../SettingRow";
-import { publishDatasetJobs, setViewerOpen } from "../jobsStore";
+import { datasetJobs, publishDatasetJobs, setViewerOpen, subscribeDatasetJobs } from "../jobsStore";
 import { getPersistentState } from "../local";
 import { isJobActive } from "../runPlan";
 import { errorDetails, errorText } from "../errors";
+import {
+  STATE_LABEL,
+  groupScenes,
+  recordingTime,
+  type DatasetGrouping,
+  type RecordingTime,
+  type SceneRowState,
+} from "./grouping";
+import { useDatasetGrouping } from "./groupingSetting";
 
 export interface SubmittedJob {
   jobId: string;
@@ -47,9 +57,6 @@ export interface SubmittedJob {
   state: string;
   reason: string | null;
 }
-
-const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const DOW = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function fmtNum(n: number): string {
   return n.toLocaleString("en-US");
@@ -63,46 +70,67 @@ function fmtDur(s: number | null | undefined): string {
   return `${s.toFixed(1)} s`;
 }
 
-interface ParsedSceneTimestamp {
-  datePart: string;
-  timePart: string;
-  dayKey: string;
-  dayLabel: string;
-  longDate: string;
+const STATE_ORDER: readonly SceneRowState[] = ["ready", "preparing", "queued", "stale", "failed", "not_prepared"];
+
+interface SceneRow {
+  scene: ClusterIndexScene;
+  scene_id: string;
+  id: string;
+  state: SceneRowState;
+  /** Why a scene is failed or stale; the row shows the first line, the inspector all of it. */
+  reason: string | null;
+  progress: number | null;
+  jobId: string | null;
+  time: RecordingTime | null;
+  dur: number | null;
+  frames: number;
+  rateHz: number | null;
+  agents: number;
+  sensors: number;
+  cam: number;
+  lidar: number;
+  images: CameraImagesMode | null;
+  sceneDir: string | null;
 }
 
-function parseSceneTimestamp(sceneId: string): ParsedSceneTimestamp {
-  const parts = sceneId.split("_");
-  if (
-    parts.length >= 6 &&
-    /^\d{4}$/.test(parts[0]) &&
-    /^\d{2}$/.test(parts[1]) &&
-    /^\d{2}$/.test(parts[2])
-  ) {
-    const year = Number(parts[0]);
-    const month = Number(parts[1]);
-    const day = Number(parts[2]);
-    const d = new Date(year, month - 1, day);
-    const dow = DOW[d.getDay()] ?? "Day";
-    const mon = MON[month - 1] ?? "Mon";
-    return {
-      datePart: `${parts[1]}-${parts[2]}`,
-      timePart: `${parts[3]}:${parts[4]}:${parts[5]}`,
-      dayKey: `${parts[0]}${parts[1]}${parts[2]}`,
-      dayLabel: `${dow} ${day} ${mon} ${parts[0]}`,
-      longDate: `${dow} ${day} ${mon} ${parts[0]}, ${parts[3]}:${parts[4]}:${parts[5]}`,
-    };
+/**
+ * A row's state from the scene's status, whether a prepare job this install
+ * submitted still covers it, and a failure this install saw that job end with.
+ */
+export function rowStateOf(
+  entry: Pick<ClusterSceneStatusEntry, "state" | "reason"> | undefined,
+  coveredByActiveJob: boolean,
+  jobFailure: string | null,
+): { state: SceneRowState; reason: string | null } {
+  const state = entry?.state ?? "not_prepared";
+  if (state === "ready" || state === "preparing") return { state, reason: null };
+  if (coveredByActiveJob) return { state: "queued", reason: null };
+  if (state === "failed") return { state, reason: entry?.reason || "The prepare step failed; see the job log on the cluster." };
+  if (state === "stale") return { state, reason: entry?.reason || "raw dataset fingerprint changed" };
+  if (jobFailure) return { state: "failed", reason: jobFailure };
+  return { state: "not_prepared", reason: null };
+}
+
+function firstLine(text: string): string {
+  return text.split("\n")[0] ?? text;
+}
+
+function stateExplanation(row: SceneRow, server: string): string {
+  switch (row.state) {
+    case "ready":
+      return `${row.images === "previews" ? "Prepared with camera previews." : row.images === "originals" ? "Prepared; camera images are read from the originals." : "Prepared."} Opens in the viewer over SSH from ${server}; no job runs.`;
+    case "preparing":
+      return row.jobId ? `Being prepared by job ${row.jobId}.` : "Being prepared.";
+    case "queued":
+      return row.jobId ? `Waiting for prepare job ${row.jobId} to reach this scene.` : "Waiting for its prepare job to reach this scene.";
+    case "stale":
+      return `The raw files changed since this scene was prepared (${row.reason ?? "fingerprint changed"}). Re-prepare it to view the data as it is now.`;
+    case "failed":
+      return row.reason ?? "The prepare step failed.";
+    default:
+      return "Not prepared yet. Prepare this scene, or the whole dataset, to view it.";
   }
-  return {
-    datePart: "",
-    timePart: sceneId,
-    dayKey: "all",
-    dayLabel: "Scenes",
-    longDate: sceneId,
-  };
 }
-
-
 
 function CameraImagesChoice({
   name,
@@ -183,12 +211,9 @@ export interface DatasetViewProps {
   initialSelectedSceneId?: string;
 }
 
-type FilterMode = "all" | "ready" | "preparing" | "queued";
-
 export default function DatasetView({
   profile,
   dataset,
-  onBack,
   onClose,
   initialIndexDoc = null,
   initialStatuses,
@@ -232,13 +257,18 @@ export default function DatasetView({
 
   // Filter & Selection
   const [filterQuery, setFilterQuery] = useState("");
-  const [statusFilter, setStatusFilter] = useState<FilterMode>("all");
+  const [statusFilter, setStatusFilter] = useState<"all" | SceneRowState>("all");
+  const [grouping, setGrouping] = useDatasetGrouping();
   const [selectedSceneId, setSelectedSceneId] = useState<string | null>(initialSelectedSceneId ?? null);
   const [wideWindow, setWideWindow] = useState<boolean>(() =>
     typeof window !== "undefined" ? window.innerWidth >= 1240 : true,
   );
 
   const [serverCacheRoot, setServerCacheRoot] = useState<string>(initialCacheRoot);
+  // Scenes a watched prepare job ended without preparing, with the reason.
+  const [jobFailures, setJobFailures] = useState<Map<string, string>>(() => new Map());
+  // When this install last read the scenes' status; nothing is shown before the first read.
+  const [lastStatusAt, setLastStatusAt] = useState<number | null>(null);
   const [submittedJobs, setSubmittedJobs] = useState<SubmittedJob[]>(initialSubmittedJobs ?? []);
   const submittedRef = useRef<SubmittedJob[]>(initialSubmittedJobs ?? []);
   submittedRef.current = submittedJobs;
@@ -272,6 +302,12 @@ export default function DatasetView({
     };
     submittedRef.current = [...submittedRef.current, entry];
     setSubmittedJobs(submittedRef.current);
+    setJobFailures((current) => {
+      if (current.size === 0) return current;
+      const next = new Map(current);
+      for (const id of scenes === "all" ? Array.from(current.keys()) : scenes) next.delete(id);
+      return next;
+    });
   };
 
   const [indexStartedAt, setIndexStartedAt] = useState(() => Date.now());
@@ -332,6 +368,7 @@ export default function DatasetView({
         nextMap.set(entry.scene_id, entry);
       }
       setStatuses(nextMap);
+      setLastStatusAt(Date.now());
 
       if (autoOpenSceneId && nextMap.get(autoOpenSceneId)?.state === "ready") {
         const idToOpen = autoOpenSceneId;
@@ -357,6 +394,21 @@ export default function DatasetView({
         );
         const ended = followed.filter((job) => !isJobActive(job.state));
         const failed = ended.filter((job) => job.state !== "completed");
+        if (ended.length > 0) {
+          // A job that ended without preparing a scene leaves it Failed, with the job's end
+          // state as the reason. Only jobs this install submitted and watched count.
+          setJobFailures((current) => {
+            const next = new Map(current);
+            for (const job of ended) {
+              const ids = job.scenes === "all" ? (indexRef.current?.scenes ?? []).map((s) => s.scene_id) : job.scenes;
+              for (const id of ids) {
+                if (nextMap.get(id)?.state === "ready") next.delete(id);
+                else if (job.state !== "completed") next.set(id, `Prepare job ${job.jobId} ended ${job.state}.`);
+              }
+            }
+            return next;
+          });
+        }
         if (failed.length > 0) {
           setPrepareOutcome(
             `Preparation job ${failed.map((job) => `${job.jobId} ended ${job.state}`).join(", ")}. Check the job log on the cluster, then prepare again.`,
@@ -398,7 +450,8 @@ export default function DatasetView({
           (id) => (nextMap.get(id)?.state ?? "not_prepared") === "not_prepared",
         ).length,
         total: indexRef.current?.scene_count ?? states.length,
-        viewerOpen: false,
+        // Keep what the viewer reported; a status poll knows nothing about it.
+        viewerOpen: datasetJobs().find((entry) => entry.key === datasetKey)?.viewerOpen ?? false,
         dataset,
       });
       if (finished) {
@@ -694,1077 +747,600 @@ export default function DatasetView({
     }
   };
 
-  // Compute decorated scenes and aggregates matching the Claude Design mock
-  const allScenes = indexDoc?.scenes ?? [];
-  const maxDur = useMemo(() => {
-    let m = 1;
-    for (const s of allScenes) {
-      if (s.duration_s && s.duration_s > m) m = s.duration_s;
-    }
-    return m;
-  }, [allScenes]);
+  // -- the rows: only what the index, the status and this install's own jobs say --
+  const allScenes = useMemo(() => indexDoc?.scenes ?? [], [indexDoc]);
+  const maxDur = useMemo(
+    () => allScenes.reduce((max, scene) => Math.max(max, scene.duration_s ?? 0), 1),
+    [allScenes],
+  );
 
-  const decoratedScenes = useMemo(() => {
-    return allScenes.map((scene) => {
-      const statusEntry = statuses.get(scene.scene_id);
-      const rawState: ClusterSceneState = statusEntry?.state ?? "not_prepared";
-      const queuedJob =
-        rawState === "not_prepared"
-          ? (submittedJobs.find(
-              (job) => job.scenes === "all" || job.scenes.includes(scene.scene_id),
-            ) ?? null)
-          : null;
-
-      const effectiveFilterState: "ready" | "preparing" | "queued" =
-        rawState === "ready"
-          ? "ready"
-          : rawState === "preparing"
-            ? "preparing"
-            : "queued";
-
-      const progress = statusEntry?.progress_percent ?? 0;
-      const jobId = statusEntry?.job_id || queuedJob?.jobId || null;
-
-      let dot = "rgba(121, 192, 255, 0.35)";
-      let statusColor = "var(--text-tertiary, #a1a1a6)";
-      let statusLabel = queuedJob || jobId ? "Queued" : "Not prepared";
-      let statusNote = jobId ? `job ${jobId}` : "on cluster";
-
-      if (rawState === "ready") {
-        dot = "#3fb950";
-        statusColor = "var(--ok, #7ee787)";
-        statusLabel = "Ready";
-        statusNote = statusEntry?.images === "originals" ? "camera originals" : "camera previews";
-      } else if (rawState === "preparing") {
-        dot = "#388bfd";
-        statusColor = "#79c0ff";
-        statusLabel = progress > 0 ? `Preparing ${progress}%` : "Preparing…";
-        statusNote = jobId ? `job ${jobId}` : "in progress";
-      } else if (rawState === "failed") {
-        dot = "#f85149";
-        statusColor = "var(--danger, #ff7b72)";
-        statusLabel = "Failed";
-        statusNote = statusEntry?.reason || "check cluster logs";
-      }
-
-      const ts = parseSceneTimestamp(scene.scene_id);
-      const dur = scene.duration_s ?? 0;
-      const cam = scene.sensors?.camera_samples ?? 0;
-      const lidar = scene.sensors?.lidar_samples ?? 0;
-      const agents = scene.agent_count ?? 1;
-      const framesPerAgent = scene.sample_count || (agents > 0 ? Math.round(lidar / agents) : 0);
-
-      return {
-        scene,
-        id: scene.scene_id,
-        rawState,
-        effectiveFilterState,
-        progress,
-        jobId,
-        dot,
-        statusColor,
-        statusLabel,
-        statusNote,
-        ...ts,
-        dur,
-        durLabel: fmtDur(scene.duration_s),
-        durPct: `${Math.min(100, Math.max(4, (dur / maxDur) * 100))}%`,
-        cam,
-        lidar,
-        camLabel: fmtNum(cam),
-        lidarLabel: fmtNum(lidar),
-        agents,
-        framesPerAgent,
-        agentDots: Array.from({ length: Math.min(agents, 8) }, (_, i) => i),
-        isReady: rawState === "ready",
-        isPrep: rawState === "preparing",
-        isQueued: rawState !== "ready" && rawState !== "preparing",
-        progPct: `${Math.min(100, Math.max(4, progress))}%`,
-        sensorsLabel: `${agents} agent${agents === 1 ? "" : "s"} · ${scene.sensors?.sensors ?? agents * 5} sensors`,
-        agentList: Array.from({ length: agents }, (_, i) => ({
-          name: i === 0 ? "Ego" : `Agent ${i + 1}`,
-        })),
-        imagesMode: statusEntry?.images ?? "previews",
-      };
-    });
-  }, [allScenes, statuses, submittedJobs, maxDur]);
+  const rows = useMemo<SceneRow[]>(
+    () =>
+      allScenes.map((scene) => {
+        const entry = statuses.get(scene.scene_id);
+        const job =
+          submittedJobs.find((candidate) => candidate.scenes === "all" || candidate.scenes.includes(scene.scene_id)) ??
+          null;
+        const { state, reason } = rowStateOf(entry, job !== null, jobFailures.get(scene.scene_id) ?? null);
+        const frames = scene.sample_count || 0;
+        const dur = scene.duration_s;
+        return {
+          scene,
+          scene_id: scene.scene_id,
+          id: scene.scene_id,
+          state,
+          reason,
+          progress: state === "preparing" ? (entry?.progress_percent ?? null) : null,
+          jobId: entry?.job_id || job?.jobId || null,
+          time: recordingTime(scene.scene_id),
+          dur,
+          frames,
+          rateHz: dur && frames > 1 ? frames / dur : null,
+          agents: scene.agent_count || 0,
+          sensors: scene.sensors?.sensors || 0,
+          cam: scene.sensors?.camera_samples ?? 0,
+          lidar: scene.sensors?.lidar_samples ?? 0,
+          images: entry?.images ?? null,
+          sceneDir: entry?.scene_dir ?? null,
+        };
+      }),
+    [allScenes, statuses, submittedJobs, jobFailures],
+  );
 
   const counts = useMemo(() => {
-    const nReady = decoratedScenes.filter((s) => s.effectiveFilterState === "ready").length;
-    const nPrep = decoratedScenes.filter((s) => s.effectiveFilterState === "preparing").length;
-    const nQueued = decoratedScenes.filter((s) => s.effectiveFilterState === "queued").length;
-    const total = decoratedScenes.length;
-    const totalDurSec = decoratedScenes.reduce((acc, s) => acc + s.dur, 0);
-    const totalCam = decoratedScenes.reduce((acc, s) => acc + s.cam, 0);
-    const totalLidar = decoratedScenes.reduce((acc, s) => acc + s.lidar, 0);
-    return {
-      nReady,
-      nPrep,
-      nQueued,
-      total,
-      remaining: nPrep + nQueued,
-      totalDur: fmtDur(totalDurSec),
-      totalCam: fmtNum(totalCam),
-      totalLidar: fmtNum(totalLidar),
-      readyPct: total > 0 ? `${(nReady / total) * 100}%` : "0%",
-      prepPct: total > 0 ? `${(nPrep / total) * 100}%` : "0%",
-      queuedPct: total > 0 ? `${(nQueued / total) * 100}%` : "0%",
+    const by: Record<SceneRowState, number> = {
+      ready: 0,
+      preparing: 0,
+      queued: 0,
+      stale: 0,
+      failed: 0,
+      not_prepared: 0,
     };
-  }, [decoratedScenes]);
+    for (const row of rows) by[row.state] += 1;
+    const durations = rows.map((row) => row.dur).filter((d): d is number => d !== null);
+    return {
+      by,
+      total: rows.length,
+      totalDur: durations.length ? durations.reduce((a, b) => a + b, 0) : null,
+      cam: rows.reduce((a, row) => a + row.cam, 0),
+      lidar: rows.reduce((a, row) => a + row.lidar, 0),
+      // What "Prepare remaining" would prepare: not started, failed or stale.
+      remaining: by.not_prepared + by.failed + by.stale,
+    };
+  }, [rows]);
 
-  const filteredScenes = useMemo(() => {
+  const visibleRows = useMemo(() => {
     const q = filterQuery.trim().toLowerCase().replace(/[-: ]/g, "_");
-    return decoratedScenes.filter((s) => {
-      if (statusFilter !== "all" && s.effectiveFilterState !== statusFilter) return false;
-      if (q && !s.id.toLowerCase().includes(q)) return false;
+    return rows.filter((row) => {
+      if (statusFilter !== "all" && row.state !== statusFilter) return false;
+      if (q && !row.id.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [decoratedScenes, statusFilter, filterQuery]);
+  }, [rows, statusFilter, filterQuery]);
 
-  const activeSelectedScene = useMemo(() => {
+  const groups = useMemo(() => groupScenes(visibleRows, grouping, (row) => row.state), [visibleRows, grouping]);
+  const ordered = useMemo(() => groups.flatMap((group) => group.rows), [groups]);
+
+  const selected = useMemo(() => {
     if (selectedSceneId) {
-      const found = decoratedScenes.find((s) => s.id === selectedSceneId);
+      const found = rows.find((row) => row.id === selectedSceneId);
       if (found) return found;
     }
-    return decoratedScenes.find((s) => s.isReady) ?? decoratedScenes[0] ?? null;
-  }, [decoratedScenes, selectedSceneId]);
-
-  const groups = useMemo(() => {
-    const result: Array<{
-      key: string;
-      label: string;
-      showHeader: boolean;
-      meta: string;
-      rows: typeof decoratedScenes;
-    }> = [];
-
-    for (const s of filteredScenes) {
-      let group = result.find((g) => g.key === s.dayKey);
-      if (!group) {
-        group = {
-          key: s.dayKey,
-          label: s.dayLabel,
-          showHeader: s.dayKey !== "all",
-          meta: "",
-          rows: [],
-        };
-        result.push(group);
-      }
-      group.rows.push(s);
-    }
-
-    for (const group of result) {
-      const readyInGroup = group.rows.filter((r) => r.isReady).length;
-      const sumDur = group.rows.reduce((acc, r) => acc + r.dur, 0);
-      group.meta = `${group.rows.length} scene${group.rows.length === 1 ? "" : "s"} · ${fmtDur(sumDur)}${
-        readyInGroup > 0 ? ` · ${readyInGroup} ready` : ""
-      }`;
-    }
-
-    return result;
-  }, [filteredScenes]);
+    return ordered.find((row) => row.state === "ready") ?? ordered[0] ?? null;
+  }, [rows, ordered, selectedSceneId]);
 
   const resolvedCacheRoot =
     serverCacheRoot ||
-    (indexDoc
-      ? `${profile.profile.results_root.replace(/\/+$/, "")}/${indexDoc.cache.relative_path}`
-      : "Known once the scenes are indexed");
-
-  const shortCacheSuffix = useMemo(() => {
-    const parts = resolvedCacheRoot.split("/").filter(Boolean);
-    if (parts.length >= 2) {
-      return `…/${parts.slice(-2).join("/")}`;
-    }
-    return resolvedCacheRoot;
-  }, [resolvedCacheRoot]);
+    (indexDoc ? `${profile.profile.results_root.replace(/\/+$/, "")}/${indexDoc.cache.relative_path}` : "");
 
   const licenceInfo = formatLicenceInfo(dataset.licence);
-  const adapterLower = (indexDoc?.adapter || dataset.adapter || "dataset").toLowerCase();
-  const adapterUpper = adapterLower.toUpperCase();
+  const adapterUpper = (indexDoc?.adapter || dataset.adapter || "dataset").toUpperCase();
   const splitName = indexDoc?.split ?? dataset.split ?? "";
-  const activeJobId =
-    submittedJobs[0]?.jobId ||
-    Array.from(statuses.values()).find((s) => s.job_id)?.job_id ||
-    null;
+  const showInspector = wideWindow && selected !== null;
 
-  const showInspector = wideWindow && activeSelectedScene !== null;
+  // The action a row offers, by state; none while its prepare is queued or running.
+  const rowAction = (row: SceneRow): { label: string; tone: "ok" | "danger" | "warn" | "plain" } | null => {
+    if (row.state === "ready") return { label: "Open", tone: "ok" };
+    if (row.state === "failed") return { label: "Retry", tone: "danger" };
+    if (row.state === "stale") return { label: "Re-prepare", tone: "warn" };
+    if (row.state === "not_prepared") return { label: "Prepare", tone: "plain" };
+    return null;
+  };
+  const runRowAction = (row: SceneRow) => {
+    if (rowAction(row)) void handleOpenScene(row.id);
+  };
+
+  // Keyboard: ↑↓ select, ↵ open or prepare, "/" filter (⌘\ is the shell's sidebar toggle).
+  const sectionRef = useRef<HTMLElement>(null);
+  const filterRef = useRef<HTMLInputElement>(null);
+  const onGridKeyDown = (event: React.KeyboardEvent) => {
+    if (ordered.length === 0) return;
+    const index = selected ? ordered.findIndex((row) => row.id === selected.id) : -1;
+    if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      const next = ordered[Math.max(0, Math.min(ordered.length - 1, index + (event.key === "ArrowDown" ? 1 : -1)))];
+      setSelectedSceneId(next.id);
+      sectionRef.current?.querySelector(`[data-scene-id="${CSS.escape(next.id)}"]`)?.scrollIntoView?.({ block: "nearest" });
+    } else if (event.key === "Enter" && selected) {
+      event.preventDefault();
+      runRowAction(selected);
+    }
+  };
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "/" || event.metaKey || event.ctrlKey || event.altKey) return;
+      const target = event.target as HTMLElement | null;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.tagName === "SELECT" || target.isContentEditable)) return;
+      // Only the dataset view that is on screen takes the key.
+      if (!sectionRef.current || sectionRef.current.offsetParent === null) return;
+      event.preventDefault();
+      filterRef.current?.focus();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+
+  // "Dataset info ▾"
+  const [infoOpen, setInfoOpen] = useState(false);
+  const infoRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!infoOpen) return;
+    const onDown = (event: MouseEvent) => {
+      if (infoRef.current && !infoRef.current.contains(event.target as Node)) setInfoOpen(false);
+    };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setInfoOpen(false);
+    };
+    window.addEventListener("mousedown", onDown);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onDown);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [infoOpen]);
+
+  // The viewer's real state, as the viewer reports it to the jobs store.
+  const [viewerOpenNow, setViewerOpenNow] = useState(
+    () => datasetJobs().find((entry) => entry.key === datasetKey)?.viewerOpen ?? false,
+  );
+  useEffect(
+    () =>
+      subscribeDatasetJobs(() =>
+        setViewerOpenNow(datasetJobs().find((entry) => entry.key === datasetKey)?.viewerOpen ?? false),
+      ),
+    [datasetKey],
+  );
+
+  // "updated N s ago" counts from this install's last status read.
+  const [clock, setClock] = useState(() => Date.now());
+  useEffect(() => {
+    if (!isPolling) return;
+    const timer = setInterval(() => setClock(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [isPolling]);
+
+  const metaParts = [
+    `${counts.total} scene${counts.total === 1 ? "" : "s"}`,
+    counts.totalDur !== null ? fmtDur(counts.totalDur) : null,
+    counts.cam || counts.lidar ? `${fmtNum(counts.cam)} cam + ${fmtNum(counts.lidar)} LiDAR frames` : null,
+    // A size estimate of nothing says nothing: only for a split with scenes.
+    indexDoc && counts.total > 0 ? formatStorageEstimate(indexDoc) : null,
+  ].filter(Boolean);
+
+  const prepareLabel = counts.by.ready + counts.by.stale > 0 ? "Prepare remaining" : "Prepare whole dataset";
+  const segments: Array<[SceneRowState, string]> = [
+    ["ready", "var(--dv-ready)"],
+    ["preparing", "var(--dv-preparing)"],
+    ["queued", "var(--dv-queued)"],
+    ["stale", "var(--dv-stale)"],
+    ["failed", "var(--dv-failed)"],
+  ];
 
   return (
     <section
+      ref={sectionRef}
       aria-label="Dataset view"
-      style={{
-        display: "grid",
-        gridTemplateColumns: showInspector ? "minmax(0, 1fr) 300px" : "minmax(0, 1fr)",
-        minHeight: "calc(100vh - 52px)",
-        backgroundColor: "var(--bg)",
-        color: "var(--text)",
-        fontSize: "13px",
-      }}
+      className={`dv${showInspector ? " has-inspector" : ""}`}
     >
-      <div style={{ display: "flex", flexDirection: "column", minWidth: 0, minHeight: 0 }}>
-        {/* Header & Dataset Summary */}
-        <div
-          style={{
-            padding: "18px 24px 16px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "16px",
-            borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "flex-start",
-              justifyContent: "space-between",
-              gap: "16px",
-              flexWrap: "wrap",
-            }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-              <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-                <button
-                  type="button"
-                  onClick={onBack}
-                  style={{
-                    background: "none",
-                    border: "none",
-                    padding: 0,
-                    color: "var(--text-subtle)",
-                    fontSize: "11.5px",
-                    cursor: "pointer",
-                  }}
-                >
-                  {profile.profile.name}
-                </button>
-                {" / "}
-                <span>{adapterLower}</span>
-                {splitName ? ` / ${splitName}` : ""}
-              </div>
-              <h1
-                style={{
-                  margin: 0,
-                  fontSize: "20px",
-                  fontWeight: 600,
-                  letterSpacing: "-0.01em",
-                  color: "var(--text)",
-                }}
+      <div className="dv-main">
+        <header className="dv-header">
+          <h1 className="dv-title">
+            {adapterUpper}
+            {splitName ? <span className="dv-split"> {splitName}</span> : null}
+          </h1>
+          <span className="dv-meta">{metaParts.join(" · ")}</span>
+          <span className="dv-header-actions">
+            <button type="button" className="c-secondary dv-small" onClick={onClose}>
+              Close
+            </button>
+            <div className="dv-info" ref={infoRef}>
+              <button
+                type="button"
+                className="c-secondary dv-small"
+                aria-expanded={infoOpen}
+                aria-controls="dv-info-panel"
+                onClick={() => setInfoOpen((open) => !open)}
               >
-                {adapterUpper}{" "}
-                {splitName ? (
-                  <span style={{ color: "var(--text-tertiary)", fontWeight: 400 }}>{splitName}</span>
-                ) : null}
-              </h1>
+                Dataset info <span aria-hidden="true">▾</span>
+              </button>
+              {infoOpen ? (
+                <div id="dv-info-panel" role="dialog" aria-label="Dataset info" className="dv-info-panel">
+                  <dl>
+                    <dt>Server</dt>
+                    <dd>{profile.profile.name}</dd>
+                    <dt>Raw root</dt>
+                    <dd className="c-mono">{dataset.raw_root || dataset.path}</dd>
+                    <dt>Cache</dt>
+                    <dd className="c-mono">{resolvedCacheRoot || "Known once the scenes are indexed"}</dd>
+                    <dt>Licence</dt>
+                    <dd>
+                      {dataset.licence?.status === "unknown"
+                        ? "Not published · research use on this cluster only"
+                        : licenceInfo.statusText}
+                      {licenceInfo.links.map((link, idx) => (
+                        <a key={link} href={link} target="_blank" rel="noreferrer" className="dv-link">
+                          {" "}[{idx + 1}]
+                        </a>
+                      ))}
+                    </dd>
+                  </dl>
+                </div>
+              ) : null}
             </div>
+            <button
+              type="button"
+              className="c-primary-wide is-blue dv-prepare"
+              onClick={() => void handlePrepareWholeDatasetClick()}
+              disabled={!canPrepareWholeDataset(indexDoc, loadingIndex)}
+            >
+              {prepareLabel}
+              {counts.remaining > 0 ? <span className="dv-badge">{counts.remaining}</span> : null}
+            </button>
+          </span>
+        </header>
 
-            <div style={{ display: "flex", gap: "8px", alignItems: "center" }}>
-              <button
-                type="button"
-                onClick={onClose}
-                style={{
-                  padding: "6px 12px",
-                  borderRadius: "6px",
-                  border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
-                  backgroundColor: "transparent",
-                  color: "var(--text)",
-                  fontSize: "13px",
-                  fontWeight: 500,
-                  cursor: "pointer",
-                }}
-              >
-                Close
-              </button>
-              <button
-                type="button"
-                onClick={() => void handlePrepareWholeDatasetClick()}
-                disabled={!canPrepareWholeDataset(indexDoc, loadingIndex)}
-                style={{
-                  padding: "6px 14px",
-                  borderRadius: "6px",
-                  border: "none",
-                  backgroundColor: "var(--primary, #1f6feb)",
-                  color: "#ffffff",
-                  fontSize: "13px",
-                  fontWeight: 500,
-                  cursor: canPrepareWholeDataset(indexDoc, loadingIndex) ? "pointer" : "not-allowed",
-                }}
-              >
-                {counts.remaining > 0 && counts.nReady > 0
-                  ? `Prepare remaining ${counts.remaining}`
-                  : "Prepare whole dataset"}
-              </button>
-            </div>
+        {indexDoc ? (
+          <div className="dv-progress" role="img" aria-label={`${counts.by.ready} of ${counts.total} scenes ready`}>
+            {segments.map(([state, color]) =>
+              counts.by[state] > 0 ? (
+                <span key={state} style={{ width: `${(counts.by[state] / Math.max(1, counts.total)) * 100}%`, background: color }} />
+              ) : null,
+            )}
           </div>
+        ) : null}
 
-          {/* 4-column Stats Row */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
-              gap: "12px 24px",
-            }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: "3px", minWidth: 0 }}>
-              <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Scenes</span>
-              <span style={{ fontSize: "15px", fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
-                {counts.total}{" "}
-                <span style={{ color: "var(--text-subtle)", fontSize: "12px" }}>
-                  · {counts.totalDur} total
-                </span>
-              </span>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "3px", minWidth: 0 }}>
-              <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Frames</span>
-              <span style={{ fontSize: "15px", fontVariantNumeric: "tabular-nums", color: "var(--text)" }}>
-                {counts.totalCam}{" "}
-                <span style={{ color: "var(--text-subtle)", fontSize: "12px" }}>cam</span> ·{" "}
-                {counts.totalLidar}{" "}
-                <span style={{ color: "var(--text-subtle)", fontSize: "12px" }}>LiDAR</span>
-              </span>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "3px", minWidth: 0 }}>
-              <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Cache size</span>
-              <span style={{ fontSize: "15px", color: "var(--text)" }}>
-                {indexDoc ? formatStorageEstimate(indexDoc) : "—"}{" "}
-                <span style={{ color: "var(--text-subtle)", fontSize: "12px" }}>est.</span>
-              </span>
-            </div>
-
-            <div style={{ display: "flex", flexDirection: "column", gap: "3px", minWidth: 0 }}>
-              <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Licence</span>
-              <span style={{ fontSize: "12.5px", lineHeight: 1.35, color: "var(--text-secondary)" }}>
-                {dataset.licence?.status === "unknown"
-                  ? "Not published · research use on this cluster only"
-                  : licenceInfo.statusText}
-                {licenceInfo.links.length > 0 ? (
+        {openError || prepareOutcome || showPrepareModal || (singleScenePrepare && singlePreparePreview) ? (
+          <div className="dv-panels">
+            {openError ? (
+              <div role="alert" style={{ color: "var(--danger)", fontSize: "12px" }}>
+                <ErrorLines text={openError} />
+              </div>
+            ) : null}
+            {prepareOutcome ? (
+              <div role="status" className="dv-outcome">
+                ✓ {prepareOutcome}
+              </div>
+            ) : null}
+            {showPrepareModal ? (
+              <div className="dv-prepare-panel">
+                <h2 style={{ margin: "0 0 4px", fontSize: "14px", color: "var(--text)" }}>
+                  Prepare whole dataset ({indexDoc?.scene_count ?? 0} scenes)
+                </h2>
+                <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-tertiary)" }}>
+                  Ingest all remaining raw scenes into the server results cache as schema-1 scenes. The job runs on CPU compute nodes.
+                </p>
+                {prepareError ? (
+                  <div role="alert" style={{ color: "var(--danger)", fontSize: "12px", marginBottom: "8px" }}>
+                    <ErrorLines text={prepareError} />
+                  </div>
+                ) : null}
+                {preparePreview ? (
                   <>
-                    {" "}
-                    {licenceInfo.links.map((link, idx) => (
-                      <a
-                        key={link}
-                        href={link}
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{
-                          color: "var(--primary-hover, #79c0ff)",
-                          textDecoration: "none",
-                          marginLeft: idx > 0 ? "4px" : "2px",
-                        }}
-                      >
-                        [{idx + 1}]
-                      </a>
-                    ))}
-                  </>
-                ) : null}
-              </span>
-            </div>
-          </div>
-
-          {/* Raw root & Cache paths */}
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "auto minmax(0, 1fr)",
-              columnGap: "14px",
-              rowGap: "4px",
-              fontSize: "11.5px",
-            }}
-          >
-            <span style={{ color: "var(--text-subtle)" }}>Raw root</span>
-            <span
-              style={{
-                fontFamily: "'Geist Mono', ui-monospace, monospace",
-                color: "var(--text-secondary)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {dataset.raw_root || dataset.path}
-            </span>
-            <span style={{ color: "var(--text-subtle)" }}>Cache</span>
-            <span
-              style={{
-                fontFamily: "'Geist Mono', ui-monospace, monospace",
-                color: "var(--primary-hover, #79c0ff)",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {resolvedCacheRoot}
-            </span>
-          </div>
-
-          {/* Segmented Ready / Preparing / Queued Progress Bar */}
-          <div style={{ display: "flex", flexDirection: "column", gap: "7px" }}>
-            <div
-              style={{
-                display: "flex",
-                height: "6px",
-                borderRadius: "3px",
-                overflow: "hidden",
-                backgroundColor: "var(--line, rgba(255,255,255,0.06))",
-                gap: "1px",
-              }}
-            >
-              <div
-                style={{
-                  width: counts.readyPct,
-                  backgroundColor: "#3fb950",
-                  transition: "width 0.4s",
-                }}
-              />
-              <div
-                style={{
-                  width: counts.prepPct,
-                  backgroundColor: "#388bfd",
-                  transition: "width 0.4s",
-                }}
-              />
-              <div
-                style={{
-                  width: counts.queuedPct,
-                  backgroundColor: "rgba(121, 192, 255, 0.28)",
-                  transition: "width 0.4s",
-                }}
-              />
-            </div>
-
-            <div
-              style={{
-                display: "flex",
-                gap: "18px",
-                flexWrap: "wrap",
-                fontSize: "12px",
-                color: "var(--text-tertiary)",
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "2px",
-                    backgroundColor: "#3fb950",
-                  }}
-                />
-                <span style={{ color: "var(--text)" }}>{counts.nReady}</span> ready
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "2px",
-                    backgroundColor: "#388bfd",
-                  }}
-                />
-                <span style={{ color: "var(--text)" }}>{counts.nPrep}</span> preparing
-              </span>
-              <span style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span
-                  style={{
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "2px",
-                    backgroundColor: "rgba(121, 192, 255, 0.28)",
-                  }}
-                />
-                <span style={{ color: "var(--text)" }}>{counts.nQueued}</span>{" "}
-                {activeJobId ? `queued · job ${activeJobId}` : "queued"}
-              </span>
-            </div>
-          </div>
-
-          {/* Alerts / Modals when triggered */}
-          {openError ? (
-            <div role="alert" style={{ color: "var(--danger)", fontSize: "12px" }}>
-              <ErrorLines text={openError} />
-            </div>
-          ) : null}
-          {prepareOutcome ? (
-            <div
-              role="status"
-              style={{
-                padding: "8px 12px",
-                borderRadius: "6px",
-                backgroundColor: "rgba(63,185,80,0.14)",
-                border: "1px solid rgba(63,185,80,0.35)",
-                color: "var(--ok)",
-                fontSize: "12px",
-              }}
-            >
-              ✓ {prepareOutcome}
-            </div>
-          ) : null}
-          {showPrepareModal ? (
-            <div
-              style={{
-                padding: "14px",
-                borderRadius: "8px",
-                border: "1px solid #1f6feb",
-                backgroundColor: "rgba(31, 111, 235, 0.1)",
-              }}
-            >
-              <h2 style={{ margin: "0 0 4px", fontSize: "14px", color: "var(--text)" }}>
-                Prepare whole dataset ({indexDoc?.scene_count ?? 0} scenes)
-              </h2>
-              <p style={{ margin: "0 0 8px", fontSize: "12px", color: "var(--text-tertiary)" }}>
-                Ingest all remaining raw scenes into the server results cache as schema-1 scenes. The job runs on CPU compute nodes.
-              </p>
-              {prepareError ? (
-                <div role="alert" style={{ color: "var(--danger)", fontSize: "12px", marginBottom: "8px" }}>
-                  <ErrorLines text={prepareError} />
-                </div>
-              ) : null}
-              {preparePreview ? (
-                <>
-                  <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
-                    Script preview (CPU only · No GPU requested · {preparePreview.array_tasks ?? preparePreview.cpus_per_task} task{(preparePreview.array_tasks ?? preparePreview.cpus_per_task) === 1 ? "" : "s"} of 1 CPU, one per scene · partition: {preparePreview.partition}):
-                  </div>
-                  <div role="note" style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
-                    {prepareEstimateLine(preparePreview)}
-                  </div>
-                  <label className="settings-field" style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px", display: "flex", alignItems: "center" }}>
-                    <span>Scenes at once</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={16}
-                      aria-label="Scenes at once"
-                      value={throttleDraft ?? String(preparePreview.throttle)}
-                      disabled={prepareBusy || wholeThrottlePending}
-                      onChange={(event) => setThrottleDraft(event.target.value)}
-                      onBlur={() => void handleWholeThrottleCommit()}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") void handleWholeThrottleCommit();
-                      }}
-                      style={{ width: "4.5em", marginLeft: "0.5rem" }}
-                    />
-                    <span style={{ color: "var(--text-tertiary)", marginLeft: "0.5rem" }}>
-                      At most {preparePreview.throttle} task{preparePreview.throttle === 1 ? "" : "s"} at once, each reading 16 raw files at a time: the shared filesystem, not CPUs, is the limit.
-                    </span>
-                  </label>
-                  <div style={{ fontSize: "11.5px", color: "var(--text-tertiary)", marginBottom: "8px" }}>
-                    Cache root:{" "}
-                    <span style={{ fontFamily: "'Geist Mono', monospace", color: "#79c0ff" }}>
-                      {preparePreview.cache_root}
-                    </span>
-                  </div>
-                  <CameraImagesChoice
-                    name="whole-camera-images"
-                    value={wholeImagesPending ?? preparePreview.images}
-                    previewBytes={preparePreview.estimated_preview_bytes}
-                    disabled={prepareBusy}
-                    onChange={(mode) => void handleWholeImagesChange(mode)}
-                  />
-                  {wholeImagesPending || wholeThrottlePending ? (
-                    <div role="status" style={{ fontSize: "12px", color: "#79c0ff", margin: "0 0 6px" }}>
-                      Updating preview…
+                    <div style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "4px" }}>
+                      Script preview (CPU only · No GPU requested · {preparePreview.array_tasks ?? preparePreview.cpus_per_task} task
+                      {(preparePreview.array_tasks ?? preparePreview.cpus_per_task) === 1 ? "" : "s"} of 1 CPU, one per scene · partition:{" "}
+                      {preparePreview.partition}):
                     </div>
-                  ) : null}
-                  <pre
-                    aria-label="Prepare job script"
-                    aria-busy={wholeImagesPending !== null || wholeThrottlePending}
-                    style={{
-                      margin: "0 0 10px",
-                      padding: "10px",
-                      borderRadius: "6px",
-                      backgroundColor: "var(--sunken)",
-                      border: "1px solid var(--line)",
-                      fontSize: "11.5px",
-                      color: "var(--text-secondary)",
-                      overflow: "auto",
-                      whiteSpace: "pre-wrap",
-                      maxHeight: "220px",
-                    }}
-                  >
-                    {preparePreview.script}
-                  </pre>
-                  <label
-                    style={{
-                      display: "flex",
-                      gap: "8px",
-                      alignItems: "center",
-                      fontSize: "12.5px",
-                      color: "var(--text)",
-                      cursor: "pointer",
-                    }}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={prepareConfirmed}
-                      onChange={(e) => setPrepareConfirmed(e.target.checked)}
+                    <div role="note" style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px" }}>
+                      {prepareEstimateLine(preparePreview)}
+                    </div>
+                    <label
+                      className="settings-field"
+                      style={{ fontSize: "12px", color: "var(--text-secondary)", marginBottom: "6px", display: "flex", alignItems: "center" }}
+                    >
+                      <span>Scenes at once</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={16}
+                        aria-label="Scenes at once"
+                        value={throttleDraft ?? String(preparePreview.throttle)}
+                        disabled={prepareBusy || wholeThrottlePending}
+                        onChange={(event) => setThrottleDraft(event.target.value)}
+                        onBlur={() => void handleWholeThrottleCommit()}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter") void handleWholeThrottleCommit();
+                        }}
+                        style={{ width: "4.5em", marginLeft: "0.5rem" }}
+                      />
+                      <span style={{ color: "var(--text-tertiary)", marginLeft: "0.5rem" }}>
+                        At most {preparePreview.throttle} task{preparePreview.throttle === 1 ? "" : "s"} at once, each reading 16 raw files at a
+                        time: the shared filesystem, not CPUs, is the limit.
+                      </span>
+                    </label>
+                    <div style={{ fontSize: "11.5px", color: "var(--text-tertiary)", marginBottom: "8px" }}>
+                      Cache root: <span className="c-mono dv-path">{preparePreview.cache_root}</span>
+                    </div>
+                    <CameraImagesChoice
+                      name="whole-camera-images"
+                      value={wholeImagesPending ?? preparePreview.images}
+                      previewBytes={preparePreview.estimated_preview_bytes}
+                      disabled={prepareBusy}
+                      onChange={(mode) => void handleWholeImagesChange(mode)}
                     />
-                    I have read the full job script above and confirm this preparation submission.
-                  </label>
-                  <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-                    <button
-                      type="button"
-                      className="c-button btn-primary"
-                      disabled={!prepareConfirmed || prepareBusy || wholeImagesPending !== null || wholeThrottlePending}
-                      onClick={() => void handleConfirmWholeDatasetSubmit()}
-                      style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12.5px" }}
+                    {wholeImagesPending || wholeThrottlePending ? (
+                      <div role="status" style={{ fontSize: "12px", color: "var(--dv-preparing)", margin: "0 0 6px" }}>
+                        Updating preview…
+                      </div>
+                    ) : null}
+                    <pre
+                      aria-label="Prepare job script"
+                      aria-busy={wholeImagesPending !== null || wholeThrottlePending}
+                      className="dv-script"
                     >
-                      {prepareBusy ? "Submitting…" : "Confirm and submit prepare job"}
-                    </button>
-                    <button
-                      type="button"
-                      className="c-button btn-secondary"
-                      onClick={() => setShowPrepareModal(false)}
-                      style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12.5px" }}
-                    >
-                      Cancel
-                    </button>
+                      {preparePreview.script}
+                    </pre>
+                    <label className="dv-confirm">
+                      <input type="checkbox" checked={prepareConfirmed} onChange={(e) => setPrepareConfirmed(e.target.checked)} />
+                      I have read the full job script above and confirm this preparation submission.
+                    </label>
+                    <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
+                      <button
+                        type="button"
+                        className="c-button btn-primary"
+                        disabled={!prepareConfirmed || prepareBusy || wholeImagesPending !== null || wholeThrottlePending}
+                        onClick={() => void handleConfirmWholeDatasetSubmit()}
+                        style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12.5px" }}
+                      >
+                        {prepareBusy ? "Submitting…" : "Confirm and submit prepare job"}
+                      </button>
+                      <button
+                        type="button"
+                        className="c-button btn-secondary"
+                        onClick={() => setShowPrepareModal(false)}
+                        style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12.5px" }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>Generating submission script preview…</div>
+                )}
+              </div>
+            ) : null}
+
+            {singleScenePrepare && singlePreparePreview ? (
+              <div className="dv-prepare-panel">
+                <h2 style={{ margin: "0 0 4px", fontSize: "13.5px", color: "var(--text)" }}>Prepare scene: {singleScenePrepare}</h2>
+                {singlePrepareError ? (
+                  <div role="alert" style={{ color: "var(--danger)", fontSize: "12px", marginBottom: "6px" }}>
+                    <ErrorLines text={singlePrepareError} />
                   </div>
-                </>
-              ) : (
-                <div style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
-                  Generating submission script preview…
+                ) : null}
+                <div role="note" style={{ fontSize: "11.5px", color: "var(--text-tertiary)", marginBottom: "6px" }}>
+                  {prepareEstimateLine(singlePreparePreview)} One 1-CPU task · Cache root:{" "}
+                  <span className="c-mono dv-path">{singlePreparePreview.cache_root}</span>
                 </div>
-              )}
-            </div>
-          ) : null}
-
-          {singleScenePrepare && singlePreparePreview ? (
-            <div
-              style={{
-                padding: "12px 14px",
-                borderRadius: "8px",
-                border: "1px solid #1f6feb",
-                backgroundColor: "rgba(31, 111, 235, 0.1)",
-              }}
-            >
-              <h2 style={{ margin: "0 0 4px", fontSize: "13.5px", color: "var(--text)" }}>
-                Prepare scene: {singleScenePrepare}
-              </h2>
-              {singlePrepareError ? (
-                <div role="alert" style={{ color: "var(--danger)", fontSize: "12px", marginBottom: "6px" }}>
-                  <ErrorLines text={singlePrepareError} />
-                </div>
-              ) : null}
-              <div role="note" style={{ fontSize: "11.5px", color: "var(--text-tertiary)", marginBottom: "6px" }}>
-                {prepareEstimateLine(singlePreparePreview)} One 1-CPU task · Cache root:{" "}
-                <span style={{ fontFamily: "'Geist Mono', monospace", color: "#79c0ff" }}>
-                  {singlePreparePreview.cache_root}
-                </span>
-              </div>
-              <CameraImagesChoice
-                name="single-camera-images"
-                value={singleImagesPending ?? singlePreparePreview.images}
-                previewBytes={singlePreparePreview.estimated_preview_bytes}
-                onChange={(mode) => void handleSingleImagesChange(mode)}
-              />
-              {singleImagesPending ? (
-                <div role="status" style={{ fontSize: "12px", color: "#79c0ff", margin: "0 0 6px" }}>
-                  Updating preview…
-                </div>
-              ) : null}
-              <pre
-                aria-label="Prepare scene script"
-                aria-busy={singleImagesPending !== null}
-                style={{
-                  margin: "0 0 8px",
-                  padding: "8px",
-                  borderRadius: "6px",
-                  backgroundColor: "var(--sunken)",
-                  border: "1px solid var(--line)",
-                  fontSize: "11px",
-                  color: "var(--text-secondary)",
-                  maxHeight: "180px",
-                  overflow: "auto",
-                  whiteSpace: "pre-wrap",
-                }}
-              >
-                {singlePreparePreview.script}
-              </pre>
-              <label style={{ display: "flex", gap: "8px", alignItems: "center", fontSize: "12px" }}>
-                <input
-                  type="checkbox"
-                  checked={singleConfirmed}
-                  onChange={(e) => setSingleConfirmed(e.target.checked)}
+                <CameraImagesChoice
+                  name="single-camera-images"
+                  value={singleImagesPending ?? singlePreparePreview.images}
+                  previewBytes={singlePreparePreview.estimated_preview_bytes}
+                  onChange={(mode) => void handleSingleImagesChange(mode)}
                 />
-                Confirm preparing scene {singleScenePrepare}
-              </label>
-              <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
-                <button
-                  type="button"
-                  className="c-button btn-primary"
-                  disabled={!singleConfirmed || singleImagesPending !== null}
-                  onClick={() => void handleConfirmSingleScenePrepare()}
-                  style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12px" }}
-                >
-                  Start preparation & view
-                </button>
-                <button
-                  type="button"
-                  className="c-button btn-secondary"
-                  onClick={() => {
-                    setSingleScenePrepare(null);
-                    setSinglePrepareError(null);
-                  }}
-                  style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12px" }}
-                >
-                  Cancel
-                </button>
+                {singleImagesPending ? (
+                  <div role="status" style={{ fontSize: "12px", color: "var(--dv-preparing)", margin: "0 0 6px" }}>
+                    Updating preview…
+                  </div>
+                ) : null}
+                <pre aria-label="Prepare scene script" aria-busy={singleImagesPending !== null} className="dv-script is-small">
+                  {singlePreparePreview.script}
+                </pre>
+                <label className="dv-confirm">
+                  <input type="checkbox" checked={singleConfirmed} onChange={(e) => setSingleConfirmed(e.target.checked)} />
+                  Confirm preparing scene {singleScenePrepare}
+                </label>
+                <div style={{ display: "flex", gap: "8px", marginTop: "8px" }}>
+                  <button
+                    type="button"
+                    className="c-button btn-primary"
+                    disabled={!singleConfirmed || singleImagesPending !== null}
+                    onClick={() => void handleConfirmSingleScenePrepare()}
+                    style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12px" }}
+                  >
+                    Start preparation & view
+                  </button>
+                  <button
+                    type="button"
+                    className="c-button btn-secondary"
+                    onClick={() => {
+                      setSingleScenePrepare(null);
+                      setSinglePrepareError(null);
+                    }}
+                    style={{ padding: "5px 12px", borderRadius: "6px", fontSize: "12px" }}
+                  >
+                    Cancel
+                  </button>
+                </div>
               </div>
-            </div>
-          ) : null}
-        </div>
+            ) : null}
+          </div>
+        ) : null}
 
-        {/* Filter Bar */}
-        <div
-          style={{
-            padding: "10px 24px",
-            display: "flex",
-            alignItems: "center",
-            gap: "12px",
-            flexWrap: "wrap",
-            borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-          }}
-        >
-          <input
-            type="search"
-            aria-label="Filter scene ID"
-            placeholder="Filter scene ID…"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            style={{
-              width: "200px",
-              padding: "5px 10px",
-              borderRadius: "6px",
-              border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
-              backgroundColor: "var(--sunken)",
-              color: "var(--text)",
-              font: "inherit",
-              fontSize: "12.5px",
-              outline: "none",
-            }}
-          />
-
-          <div
-            role="group"
-            aria-label="Filter scenes by status"
-            style={{
-              display: "flex",
-              gap: "2px",
-              padding: "2px",
-              borderRadius: "7px",
-              backgroundColor: "var(--line-subtle, rgba(255,255,255,0.05))",
-            }}
-          >
-            {(
-              [
-                ["all", `All ${counts.total}`],
-                ["ready", `Ready ${counts.nReady}`],
-                ["preparing", `Preparing ${counts.nPrep}`],
-                ["queued", `Queued ${counts.nQueued}`],
-              ] as const
-            ).map(([key, label]) => {
+        {/* Filters: every real state, the scene filter and the grouping */}
+        <div className="dv-toolbar">
+          <div role="group" aria-label="Filter scenes by status" className="dv-chips">
+            {(["all", ...STATE_ORDER] as const).map((key) => {
+              const count = key === "all" ? counts.total : counts.by[key];
               const active = statusFilter === key;
               return (
                 <button
                   key={key}
                   type="button"
+                  className={`dv-chip${active ? " is-active" : ""}`}
+                  aria-pressed={active}
                   onClick={() => setStatusFilter(key)}
-                  style={{
-                    padding: "3px 10px",
-                    borderRadius: "5px",
-                    border: "none",
-                    fontSize: "12px",
-                    fontWeight: active ? 500 : 400,
-                    cursor: "pointer",
-                    backgroundColor: active ? "var(--line-elevated, rgba(255,255,255,0.12))" : "transparent",
-                    color: active ? "var(--text)" : "var(--text-tertiary)",
-                  }}
                 >
-                  {label}
+                  {key !== "all" ? <span className={`dv-dot is-${key}`} aria-hidden="true" /> : null}
+                  {key === "all" ? "All" : STATE_LABEL[key]} <span className="dv-chip-count">{count}</span>
                 </button>
               );
             })}
           </div>
-
-          <div
-            style={{
-              marginLeft: "auto",
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
-              fontSize: "12px",
-              color: "var(--text-subtle)",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {isPolling && (
-              <span style={{ display: "inline-flex", alignItems: "center", gap: "6px", color: "var(--text-tertiary)" }}>
-                <span style={{ width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#79c0ff" }} />
-                <span>Polling every 5 s · updated 0 s ago</span>
-              </span>
-            )}
-            <span>
-              {filteredScenes.length === counts.total
-                ? `${counts.total} scenes`
-                : `${filteredScenes.length} of ${counts.total} scenes`}
-            </span>
-          </div>
+          <span className="dv-toolbar-end">
+            <select
+              aria-label="Group scenes"
+              className="c-select dv-group"
+              value={grouping}
+              onChange={(event) => setGrouping(event.target.value as DatasetGrouping)}
+            >
+              <option value="none">No grouping</option>
+              <option value="state">Group by state</option>
+              <option value="day">Group by recording day</option>
+            </select>
+            <input
+              ref={filterRef}
+              type="search"
+              aria-label="Filter scene ID"
+              placeholder="Filter scene ID…   /"
+              value={filterQuery}
+              onChange={(e) => setFilterQuery(e.target.value)}
+              className="dv-filter"
+            />
+          </span>
         </div>
 
-        {/* Dense Grouped Scene Table */}
-        <div style={{ flex: 1, minHeight: 0, overflow: "auto" }}>
+        {/* The scene table */}
+        <div className="dv-table-scroll">
           {loadingIndex ? (
-            <div style={{ padding: "40px 24px", textAlign: "center", color: "var(--text-subtle)" }}>
-              {indexingLabel(now - indexStartedAt)}
-            </div>
+            <div className="dv-empty">{indexingLabel(now - indexStartedAt)}</div>
           ) : indexError ? (
-            <div role="alert" style={{ padding: "16px 24px", color: "var(--danger)" }}>
+            <div role="alert" className="dv-empty is-error">
               <ErrorLines text={indexError} />
             </div>
           ) : (
-            <div style={{ minWidth: "760px" }}>
-              {/* Sticky Column Headers */}
-              <div
-                style={{
-                  position: "sticky",
-                  top: 0,
-                  zIndex: 2,
-                  display: "grid",
-                  gridTemplateColumns:
-                    "minmax(150px,1.3fr) minmax(130px,1.2fr) 84px 84px 84px minmax(150px,1fr) 76px",
-                  alignItems: "center",
-                  gap: "12px",
-                  padding: "0 24px",
-                  height: "30px",
-                  backgroundColor: "var(--panel)",
-                  borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-                  fontSize: "11px",
-                  color: "var(--text-subtle)",
-                }}
-              >
-                <span>Scene · start time</span>
-                <span>Duration</span>
-                <span>Agents</span>
-                <span style={{ textAlign: "right" }}>Cam frames</span>
-                <span style={{ textAlign: "right" }}>LiDAR frames</span>
-                <span>Status</span>
-                <span />
+            <div
+              role="grid"
+              aria-label="Scenes"
+              aria-rowcount={ordered.length + 1}
+              tabIndex={0}
+              onKeyDown={onGridKeyDown}
+              className="dv-grid"
+            >
+              <div role="row" className="dv-row dv-head">
+                <span role="columnheader">Scene · start time</span>
+                <span role="columnheader">Duration</span>
+                <span role="columnheader">Agents</span>
+                <span role="columnheader" className="is-right">
+                  Frames
+                </span>
+                <span role="columnheader">Status</span>
+                <span role="columnheader" aria-label="Action" />
               </div>
-
-              {groups.length === 0 ? (
-                <div style={{ padding: "40px 24px", color: "var(--text-subtle)", textAlign: "center" }}>
-                  No scenes match this filter.
+              {ordered.length === 0 ? (
+                <div className="dv-empty">
+                  {rows.length === 0 ? "No scenes in this split." : "No scenes match this filter."}
                 </div>
               ) : (
                 groups.map((group) => (
-                  <div key={group.key}>
-                    {group.showHeader && (
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "baseline",
-                          gap: "10px",
-                          padding: "14px 24px 6px",
-                          fontSize: "12px",
-                        }}
-                      >
-                        <span style={{ color: "var(--text)", fontWeight: 500 }}>{group.label}</span>
-                        <span style={{ color: "var(--text-subtle)", fontVariantNumeric: "tabular-nums" }}>
-                          {group.meta}
+                  <div key={group.key} role="rowgroup" aria-label={group.label || "Scenes"}>
+                    {group.label ? (
+                      <div role="row" className="dv-group-head">
+                        <span role="gridcell">
+                          <strong>{group.label}</strong>
+                          <span className="dv-group-meta">
+                            {group.rows.length} scene{group.rows.length === 1 ? "" : "s"}
+                            {grouping !== "state"
+                              ? ` · ${group.rows.filter((row) => row.state === "ready").length}/${group.rows.length} ready`
+                              : ""}
+                          </span>
                         </span>
                       </div>
-                    )}
-                    {group.rows.map((s) => {
-                      const isSelected = activeSelectedScene?.id === s.id;
+                    ) : null}
+                    {group.rows.map((row) => {
+                      const isSelected = selected?.id === row.id;
+                      const action = rowAction(row);
                       return (
                         <div
-                          key={s.id}
-                          onClick={() => setSelectedSceneId(s.id)}
-                          className="c-table-row"
-                          style={{
-                            display: "grid",
-                            gridTemplateColumns:
-                              "minmax(150px,1.3fr) minmax(130px,1.2fr) 84px 84px 84px minmax(150px,1fr) 76px",
-                            alignItems: "center",
-                            gap: "12px",
-                            padding: "0 24px",
-                            height: "34px",
-                            borderBottom: "1px solid var(--line-subtle, rgba(255,255,255,0.04))",
-                            cursor: "default",
-                            backgroundColor: isSelected ? "rgba(31, 111, 235, 0.16)" : "transparent",
-                            boxShadow: isSelected ? "inset 2px 0 0 #388bfd" : "none",
-                          }}
+                          key={row.id}
+                          role="row"
+                          aria-selected={isSelected}
+                          data-scene-id={row.id}
+                          data-state={row.state}
+                          className={`dv-row${isSelected ? " is-selected" : ""}`}
+                          onClick={() => setSelectedSceneId(row.id)}
+                          onDoubleClick={() => runRowAction(row)}
                         >
-                          {/* Scene · start time */}
-                          <span
-                            style={{
-                              fontFamily: "'Geist Mono', ui-monospace, monospace",
-                              fontSize: "12.5px",
-                              fontVariantNumeric: "tabular-nums",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            {s.datePart ? (
+                          <span role="gridcell" className="c-mono dv-name">
+                            {row.time ? (
                               <>
-                                <span style={{ color: "var(--text-subtle)" }}>{s.datePart}</span>{" "}
-                                <span style={{ color: "var(--text)" }}>{s.timePart}</span>
+                                <span className="dv-subtle">{row.time.short.slice(0, 5)}</span> {row.time.short.slice(6)}
                               </>
                             ) : (
-                              <span style={{ color: "var(--text)" }}>{s.timePart}</span>
+                              row.id
                             )}
                           </span>
-
-                          {/* Duration + bar */}
-                          <span
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "8px",
-                              fontVariantNumeric: "tabular-nums",
-                              color: "var(--text-secondary)",
-                            }}
-                          >
-                            <span style={{ width: "40px", textAlign: "right" }}>{s.durLabel}</span>
-                            <span
-                              style={{
-                                flex: 1,
-                                maxWidth: "110px",
-                                height: "4px",
-                                borderRadius: "2px",
-                                backgroundColor: "var(--line, rgba(255,255,255,0.06))",
-                              }}
-                            >
-                              <span
-                                style={{
-                                  display: "block",
-                                  height: "100%",
-                                  borderRadius: "2px",
-                                  backgroundColor: "#8e8e93",
-                                  width: s.durPct,
-                                }}
-                              />
-                            </span>
+                          <span role="gridcell" className="dv-dur">
+                            <span className="dv-num">{fmtDur(row.dur)}</span>
+                            {row.dur !== null ? (
+                              <span className="dv-bar">
+                                <span style={{ width: `${Math.max(4, (row.dur / maxDur) * 100)}%` }} />
+                              </span>
+                            ) : null}
                           </span>
-
-                          {/* Agents + ticks */}
-                          <span
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "8px",
-                              color: "var(--text-secondary)",
-                              fontVariantNumeric: "tabular-nums",
-                            }}
-                          >
-                            <span style={{ width: "8px" }}>{s.agents}</span>
-                            <span style={{ display: "flex", gap: "2px" }}>
-                              {s.agentDots.map((d) => (
-                                <span
-                                  key={d}
-                                  style={{
-                                    width: "6px",
-                                    height: "10px",
-                                    borderRadius: "1px",
-                                    backgroundColor: "#8e8e93",
-                                  }}
-                                />
+                          <span role="gridcell" className="dv-agents">
+                            <span className="dv-num">{row.agents}</span>
+                            <span className="dv-blocks" aria-hidden="true">
+                              {Array.from({ length: Math.min(row.agents, 8) }, (_, i) => (
+                                <span key={i} />
                               ))}
                             </span>
                           </span>
-
-                          {/* Cam frames */}
-                          <span
-                            style={{
-                              textAlign: "right",
-                              fontVariantNumeric: "tabular-nums",
-                              color: "var(--text-secondary)",
-                            }}
-                          >
-                            {s.camLabel}
+                          <span role="gridcell" className="dv-num is-right">
+                            {fmtNum(row.frames)}
                           </span>
-
-                          {/* LiDAR frames */}
-                          <span
-                            style={{
-                              textAlign: "right",
-                              fontVariantNumeric: "tabular-nums",
-                              color: "var(--text-secondary)",
-                            }}
-                          >
-                            {s.lidarLabel}
-                          </span>
-
-                          {/* Status */}
-                          <span
-                            style={{
-                              display: "flex",
-                              alignItems: "center",
-                              gap: "8px",
-                              fontSize: "12.5px",
-                              whiteSpace: "nowrap",
-                            }}
-                          >
-                            <span
-                              style={{
-                                width: "7px",
-                                height: "7px",
-                                borderRadius: "50%",
-                                flexShrink: 0,
-                                backgroundColor: s.dot,
-                              }}
-                            />
-                            <span style={{ color: s.statusColor }}>{s.statusLabel}</span>
-                            {s.isPrep && (
-                              <span
-                                style={{
-                                  width: "56px",
-                                  height: "3px",
-                                  borderRadius: "2px",
-                                  backgroundColor: "rgba(56, 139, 253, 0.2)",
-                                }}
-                              >
-                                <span
-                                  style={{
-                                    display: "block",
-                                    height: "100%",
-                                    borderRadius: "2px",
-                                    backgroundColor: "#388bfd",
-                                    transition: "width 0.6s",
-                                    width: s.progPct,
-                                  }}
-                                />
+                          <span role="gridcell" className="dv-status">
+                            <span className={`dv-dot is-${row.state}`} aria-hidden="true" />
+                            <span className={`dv-state is-${row.state}`}>
+                              {row.state === "preparing" && row.progress !== null && row.progress > 0
+                                ? `Preparing ${row.progress}%`
+                                : STATE_LABEL[row.state]}
+                            </span>
+                            {row.state === "preparing" && row.progress !== null && row.progress > 0 ? (
+                              <span className="dv-bar is-progress">
+                                <span style={{ width: `${Math.min(100, row.progress)}%` }} />
                               </span>
-                            )}
-                            {s.isReady && (
-                              <span style={{ color: "var(--text-subtle)", fontSize: "11.5px" }}>
-                                {s.imagesMode}
+                            ) : null}
+                            {row.state === "queued" && row.jobId ? <span className="dv-reason">job {row.jobId}</span> : null}
+                            {(row.state === "failed" || row.state === "stale") && row.reason ? (
+                              <span className="dv-reason" title={row.reason}>
+                                {firstLine(row.reason)}
                               </span>
-                            )}
+                            ) : null}
                           </span>
-
-                          {/* Open button */}
-                          <span style={{ display: "flex", justifyContent: "flex-end" }}>
-                            {s.isReady ? (
+                          <span role="gridcell" className="dv-action">
+                            {action ? (
                               <button
                                 type="button"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  void handleOpenScene(s.id);
-                                }}
-                                style={{
-                                  padding: "3px 12px",
-                                  borderRadius: "5px",
-                                  border: "1px solid rgba(63, 185, 80, 0.6)",
-                                  backgroundColor: "transparent",
-                                  color: "var(--ok, #7ee787)",
-                                  fontSize: "12px",
-                                  fontWeight: 500,
-                                  cursor: "pointer",
+                                className={`dv-row-button is-${action.tone}`}
+                                aria-label={`${action.label} ${row.id}`}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  setSelectedSceneId(row.id);
+                                  runRowAction(row);
                                 }}
                               >
-                                Open
+                                {action.label}
                               </button>
                             ) : null}
                           </span>
@@ -1778,277 +1354,125 @@ export default function DatasetView({
           )}
         </div>
 
-        {/* Footer */}
-        <footer
-          style={{
-            flexShrink: 0,
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "16px",
-            padding: "7px 24px",
-            borderTop: "1px solid var(--line, rgba(255,255,255,0.08))",
-            backgroundColor: "var(--sunken)",
-            fontSize: "11.5px",
-            color: "var(--text-subtle)",
-          }}
-        >
-          <span>
-            {viewerStart ? `Opening ${viewerStart}…` : ""}
+        <footer className="dv-footer">
+          <span className="dv-hints" aria-label="Keyboard shortcuts">
+            <span>
+              <kbd>↑↓</kbd> select
+            </span>
+            <span>
+              <kbd>↵</kbd> open / prepare
+            </span>
+            <span>
+              <kbd>/</kbd> filter
+            </span>
+            <span>
+              <kbd>⌘\</kbd> sidebar
+            </span>
           </span>
-          <span style={{ color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
-            {indexDoc?.scene_count ? `${indexDoc.scene_count} scenes` : ""}
+          <span className="dv-footer-state" role="status">
+            {isPolling && lastStatusAt !== null ? (
+              <span>
+                Status every 5 s · updated {Math.max(0, Math.round((clock - lastStatusAt) / 1000))} s ago
+              </span>
+            ) : null}
+            <span>
+              <span className={`dv-dot${viewerStart || viewerOpenNow ? " is-ready" : ""}`} aria-hidden="true" />{" "}
+              {viewerStart
+                ? `Opening ${viewerStart} over SSH…`
+                : viewerOpenNow
+                  ? `Viewer open · streaming over SSH from ${profile.profile.name}`
+                  : `Viewer closed · scenes stream over SSH from ${profile.profile.name}`}
+            </span>
           </span>
         </footer>
       </div>
 
-      {/* Inspector Panel on Wide Windows (>= 1240 px) */}
-      {showInspector && activeSelectedScene ? (
-        <aside
-          aria-label="Scene inspector"
-          style={{
-            borderLeft: "1px solid var(--line, rgba(255,255,255,0.08))",
-            backgroundColor: "var(--sunken)",
-            display: "flex",
-            flexDirection: "column",
-            minHeight: 0,
-            overflow: "auto",
-          }}
-        >
-          <div
-            style={{
-              padding: "18px 20px 16px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "6px",
-              borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-            }}
-          >
-            <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Selected scene</span>
-            <span
-              style={{
-                fontFamily: "'Geist Mono', ui-monospace, monospace",
-                fontSize: "14px",
-                color: "var(--text)",
-                wordBreak: "break-all",
-              }}
-            >
-              {activeSelectedScene.id}
-            </span>
-            <span style={{ fontSize: "12px", color: "var(--text-tertiary)" }}>
-              {activeSelectedScene.longDate}
-            </span>
-          </div>
+      {showInspector && selected ? (
+        <aside aria-label="Scene inspector" className="dv-inspector">
+          <section className="dv-insp-section">
+            <span className="dv-insp-label">Selected scene</span>
+            <span className="c-mono dv-insp-id">{selected.id}</span>
+            {selected.time ? <span className="dv-subtle">{selected.time.recorded}</span> : null}
+          </section>
 
-          <div
-            style={{
-              padding: "16px 20px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "12px",
-              borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <span
-                style={{
-                  width: "8px",
-                  height: "8px",
-                  borderRadius: "50%",
-                  backgroundColor: activeSelectedScene.dot,
-                }}
-              />
-              <span style={{ fontWeight: 500, color: activeSelectedScene.statusColor }}>
-                {activeSelectedScene.statusLabel}
+          <section className="dv-insp-section">
+            <span className="dv-status">
+              <span className={`dv-dot is-${selected.state}`} aria-hidden="true" />
+              <strong className={`dv-state is-${selected.state}`}>{STATE_LABEL[selected.state]}</strong>
+            </span>
+            {selected.state === "preparing" && selected.progress !== null ? (
+              <span className="dv-bar is-progress is-wide">
+                <span style={{ width: `${Math.min(100, selected.progress)}%` }} />
               </span>
-              <span style={{ marginLeft: "auto", fontSize: "11.5px", color: "var(--text-subtle)" }}>
-                {activeSelectedScene.statusNote}
-              </span>
-            </div>
+            ) : null}
+            <span className="dv-explain">{stateExplanation(selected, profile.profile.name)}</span>
+            {(() => {
+              const action = rowAction(selected);
+              if (!action) return null;
+              return (
+                <button
+                  type="button"
+                  className={`dv-insp-button is-${action.tone}`}
+                  onClick={() => runRowAction(selected)}
+                >
+                  {action.label === "Open" ? "Open scene" : action.label === "Prepare" ? "Prepare this scene" : action.label}
+                </button>
+              );
+            })()}
+          </section>
 
-            {activeSelectedScene.isPrep && (
-              <div
-                style={{
-                  height: "4px",
-                  borderRadius: "2px",
-                  backgroundColor: "rgba(56, 139, 253, 0.2)",
-                }}
-              >
-                <div
-                  style={{
-                    height: "100%",
-                    borderRadius: "2px",
-                    backgroundColor: "#388bfd",
-                    transition: "width 0.6s",
-                    width: activeSelectedScene.progPct,
-                  }}
-                />
+          <section className="dv-insp-section">
+            <dl className="c-facts">
+              <div className="c-fact">
+                <dt>Duration</dt>
+                <dd>{fmtDur(selected.dur)}</dd>
               </div>
-            )}
-
-            {activeSelectedScene.isReady && (
-              <button
-                type="button"
-                onClick={() => void handleOpenScene(activeSelectedScene.id)}
-                style={{
-                  textAlign: "center",
-                  padding: "7px 0",
-                  borderRadius: "6px",
-                  border: "none",
-                  backgroundColor: "#238636",
-                  color: "#ffffff",
-                  fontWeight: 500,
-                  fontSize: "13px",
-                  cursor: "pointer",
-                  width: "100%",
-                }}
-              >
-                Open scene
-              </button>
-            )}
-
-            {activeSelectedScene.isQueued && (
-              <span style={{ fontSize: "12px", lineHeight: 1.45, color: "var(--text-tertiary)" }}>
-                {activeSelectedScene.jobId
-                  ? `Waiting for prepare job ${activeSelectedScene.jobId} to reach this scene. It opens automatically once ready.`
-                  : "Not prepared yet. Prepare this scene or the whole dataset to view it."}
-              </span>
-            )}
-          </div>
-
-          {/* 2x2 Metrics Grid */}
-          <div
-            style={{
-              padding: "16px 20px",
-              display: "grid",
-              gridTemplateColumns: "1fr 1fr",
-              gap: "14px 12px",
-              borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-            }}
-          >
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Duration</span>
-              <span style={{ fontSize: "15px", fontVariantNumeric: "tabular-nums" }}>
-                {activeSelectedScene.durLabel}
-              </span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Frames / agent</span>
-              <span style={{ fontSize: "15px", fontVariantNumeric: "tabular-nums" }}>
-                {activeSelectedScene.framesPerAgent}
-              </span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Cam frames</span>
-              <span style={{ fontSize: "15px", fontVariantNumeric: "tabular-nums" }}>
-                {activeSelectedScene.camLabel}
-              </span>
-            </div>
-            <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-              <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>LiDAR frames</span>
-              <span style={{ fontSize: "15px", fontVariantNumeric: "tabular-nums" }}>
-                {activeSelectedScene.lidarLabel}
-              </span>
-            </div>
-          </div>
-
-          {/* Per-agent Sensor Breakdown */}
-          <div
-            style={{
-              padding: "16px 20px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "8px",
-              borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-            }}
-          >
-            <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>
-              {activeSelectedScene.sensorsLabel}
-            </span>
-            {activeSelectedScene.agentList.map((a) => (
-              <div
-                key={a.name}
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "62px 1fr auto",
-                  alignItems: "center",
-                  gap: "8px",
-                  fontSize: "12px",
-                }}
-              >
-                <span style={{ color: "var(--text-secondary)" }}>{a.name}</span>
-                <span style={{ display: "flex", gap: "3px", alignItems: "center" }}>
-                  <span
-                    style={{
-                      width: "14px",
-                      height: "10px",
-                      borderRadius: "2px",
-                      backgroundColor: "var(--line-elevated, rgba(255,255,255,0.18))",
-                    }}
-                  />
-                  <span
-                    style={{
-                      width: "14px",
-                      height: "10px",
-                      borderRadius: "2px",
-                      backgroundColor: "var(--line-elevated, rgba(255,255,255,0.18))",
-                    }}
-                  />
-                  <span
-                    style={{
-                      width: "14px",
-                      height: "10px",
-                      borderRadius: "2px",
-                      backgroundColor: "var(--line-elevated, rgba(255,255,255,0.18))",
-                    }}
-                  />
-                  <span
-                    style={{
-                      width: "14px",
-                      height: "10px",
-                      borderRadius: "2px",
-                      backgroundColor: "var(--line-elevated, rgba(255,255,255,0.18))",
-                    }}
-                  />
-                  <span
-                    style={{
-                      width: "10px",
-                      height: "10px",
-                      borderRadius: "50%",
-                      backgroundColor: "#8e8e93",
-                      marginLeft: "3px",
-                    }}
-                  />
-                </span>
-                <span style={{ color: "var(--text-subtle)", fontSize: "11px" }}>
-                  4 cam · 1 LiDAR
-                </span>
+              <div className="c-fact">
+                <dt>Frames / agent</dt>
+                <dd>
+                  {fmtNum(selected.frames)}
+                  {selected.rateHz !== null ? <span className="dv-subtle"> @ {Math.round(selected.rateHz)} Hz</span> : null}
+                </dd>
               </div>
-            ))}
-          </div>
-
-          {/* Cache Location */}
-          <div
-            style={{
-              padding: "16px 20px",
-              display: "flex",
-              flexDirection: "column",
-              gap: "4px",
-            }}
-          >
-            <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}>Cache location</span>
-            <span
-              style={{
-                fontFamily: "'Geist Mono', ui-monospace, monospace",
-                fontSize: "11px",
-                lineHeight: 1.5,
-                color: "var(--primary-hover, #79c0ff)",
-                wordBreak: "break-all",
-              }}
-            >
-              {shortCacheSuffix}/{activeSelectedScene.id}
+              <div className="c-fact">
+                <dt>Cam frames</dt>
+                <dd>{fmtNum(selected.cam)}</dd>
+              </div>
+              <div className="c-fact">
+                <dt>LiDAR frames</dt>
+                <dd>{fmtNum(selected.lidar)}</dd>
+              </div>
+            </dl>
+            <span className="dv-subtle">
+              {selected.agents} agent{selected.agents === 1 ? "" : "s"}
+              {selected.sensors > 0 ? ` · ${selected.sensors} sensors` : ""}
             </span>
-          </div>
+          </section>
+
+          {selected.images || selected.sceneDir || resolvedCacheRoot ? (
+            <section className="dv-insp-section">
+              {selected.images ? (
+                <>
+                  <span className="dv-insp-label">Camera images</span>
+                  <span>
+                    {selected.images === "previews"
+                      ? "Previews saved in the results folder"
+                      : "Read from the raw dataset (originals)"}
+                  </span>
+                </>
+              ) : null}
+              {selected.sceneDir || resolvedCacheRoot ? (
+                <>
+                  <span className="dv-insp-label">Cache location</span>
+                  <span className="c-mono dv-path">
+                    {selected.sceneDir && selected.sceneDir.startsWith("/")
+                      ? selected.sceneDir
+                      : `${resolvedCacheRoot}/${selected.sceneDir || selected.id}`}
+                  </span>
+                </>
+              ) : null}
+            </section>
+          ) : null}
         </aside>
       ) : null}
     </section>
