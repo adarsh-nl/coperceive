@@ -90,6 +90,14 @@ import {
 import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
 import Timeline, { type Marker } from "./timeline";
 import { neighbourScene } from "./sceneNav";
+import {
+  agentRole,
+  boxesInView,
+  compactCount,
+  formatDistance,
+  scaleBar,
+  sweepGaps as findSweepGaps,
+} from "./sceneStats";
 import { sceneCapabilities, viewpointFor } from "./capabilities";
 import {
   cameraKey,
@@ -142,6 +150,8 @@ type Stage = {
   images: THREE.Group;
   imagePlanes: Map<string, THREE.Mesh>;
   highlight: THREE.Mesh;
+  /** The selected object's name, drawn above its box. */
+  pickTag: CSS2DObject;
   /** Prediction wires per status (and per run in compare mode), ADR 0010. */
   predictions: THREE.Group;
   /** Invisible pick meshes for the drawn prediction rows. */
@@ -1252,6 +1262,10 @@ export default function Viewer({
   // Every scene of the open cluster dataset (ready or not), in dataset order.
   const [datasetScenes, setDatasetScenes] = useState<string[]>([]);
   const [viewerJob, setViewerJob] = useState<ViewerJob | null>(null);
+  // The cluster dataset's name ("V2XSET train") and server, from the main window.
+  const [datasetAbout, setDatasetAbout] = useState<{ label: string; server: string } | null>(null);
+  // The agent whose cameras the strip shows and the radar centres on.
+  const [focusAgent, setFocusAgent] = useState<string | null>(null);
   // "Continue to the next scene automatically" (Settings); off by default.
   const [autoNext, setAutoNext] = useState<boolean>(
     () => Boolean((window.__COPERCEIVE_INITIAL_STATE__ as { auto_next_scene?: boolean } | undefined)?.auto_next_scene),
@@ -1362,6 +1376,9 @@ export default function Viewer({
         const dataset = await getDatasetScenes();
         if (stopped || !dataset) return;
         setDatasetScenes(dataset.scenes.map((scene) => scene.scene_id));
+        setDatasetAbout(
+          dataset.label || dataset.server ? { label: dataset.label ?? "", server: dataset.server ?? "" } : null,
+        );
         setDatasetSceneStatuses(Object.fromEntries(dataset.scenes.map((scene) => [scene.scene_id, scene.state])));
       } catch {
         // No controller answer: keep what we have.
@@ -1448,7 +1465,9 @@ export default function Viewer({
     boxes: number[];
     agentSpeed: Record<string, number[]>;
     markers: Marker[];
-  }>({ points: [], speeds: [], boxes: [], agentSpeed: {}, markers: [] });
+    /** Lidar sensors with points at each sample, for the sweep-gap markers. */
+    sweeps: number[];
+  }>({ points: [], speeds: [], boxes: [], agentSpeed: {}, markers: [], sweeps: [] });
   const [liveSpeed, setLiveSpeed] = useState<Record<string, number>>({});
   const [appearance, setAppearance] = useState<Appearance>(initialSavedAppearance);
   const appearanceRef = useRef(appearance);
@@ -1787,6 +1806,9 @@ export default function Viewer({
   const onEvalPickRef = useRef<(value: EvalPick | null) => void>(() => undefined);
   const framedScene = useRef("");
   const modeRef = useRef<Viewpoint>(initialSavedViewpoint());
+  // The stage's scale bar and extent chip, updated on each draw without a React render.
+  const scaleBarRef = useRef<HTMLDivElement>(null);
+  const extentRef = useRef<HTMLSpanElement>(null);
   const cameraKeyRef = useRef("");
   const latestRef = useRef<{ frame: FrameDocument; types: Map<string, string> } | null>(null);
   // "scene|time" of the sample whose points and boxes are on screen. Playback waits
@@ -1984,6 +2006,13 @@ export default function Viewer({
     );
     highlight.visible = false;
     highlight.frustumCulled = false;
+    const pickTagElement = document.createElement("div");
+    pickTagElement.className = "pick-tag num";
+    const pickTag = new CSS2DObject(pickTagElement);
+    pickTag.center.set(0.5, 1.4);
+    pickTag.position.set(0, 0, 0.5);
+    pickTag.visible = false;
+    highlight.add(pickTag);
     const agents = new THREE.Group();
     const solids = new THREE.Group();
     frustums.renderOrder = 3;
@@ -2063,6 +2092,25 @@ export default function Viewer({
       }
       camera.updateProjectionMatrix();
       bloom.render();
+      {
+        // Metres per pixel at the view's centre (the orbit target); the camera view has none.
+        const reach = camera.position.distanceTo(controls.target);
+        const perPixel = (2 * reach * Math.tan((camera.fov * Math.PI) / 360)) / height;
+        const bar = mode === "camera" ? null : scaleBar(perPixel, 96);
+        const barHost = scaleBarRef.current;
+        if (barHost) {
+          barHost.hidden = bar === null;
+          if (bar) {
+            barHost.style.setProperty("--bar", `${bar.px.toFixed(1)}px`);
+            const text = barHost.querySelector("span");
+            if (text) text.textContent = formatDistance(bar.metres);
+          }
+        }
+        const extent = extentRef.current;
+        if (extent) {
+          extent.textContent = mode === "camera" || !Number.isFinite(perPixel) ? "" : ` · ${formatDistance(Math.round(perPixel * width))}`;
+        }
+      }
       labelRenderer.render(scene, camera);
       if (labelHost instanceof HTMLElement) {
         clampDroneTags(labelHost);
@@ -2220,6 +2268,7 @@ export default function Viewer({
       images,
       imagePlanes,
       highlight,
+      pickTag,
       predictions,
       predictionPicks,
       dimmedBoxes,
@@ -3367,6 +3416,7 @@ export default function Viewer({
       mesh.quaternion.set(row.pose.qx, row.pose.qy, row.pose.qz, row.pose.qw);
       mesh.scale.set(row.size_lwh[0] ?? 1, row.size_lwh[1] ?? 1, row.size_lwh[2] ?? 1).multiplyScalar(1.04);
       mesh.visible = true;
+      stage.pickTag.visible = false;
       stage.requestRender();
       return;
     }
@@ -3384,6 +3434,7 @@ export default function Viewer({
       : undefined;
     if (!(match instanceof THREE.Mesh)) {
       mesh.visible = false;
+      stage.pickTag.visible = false;
       stage.requestRender();
       return;
     }
@@ -3391,6 +3442,8 @@ export default function Viewer({
     mesh.quaternion.copy(match.quaternion);
     mesh.scale.copy(match.scale).multiplyScalar(1.04);
     mesh.visible = true;
+    stage.pickTag.element.textContent = pick?.trackId ?? pick?.category ?? "";
+    stage.pickTag.visible = Boolean(pick);
     stage.requestRender();
   }, [pick, cameraFrame, liveEvalPick]);
 
@@ -3801,6 +3854,7 @@ export default function Viewer({
         agentSpeed[agent.agent_id] = [];
       }
       const markers: Marker[] = [];
+      const sweeps: number[] = [];
       let previous: FrameDocument | null = null;
       let previousTime = 0;
       for (let index = 0; index < times.length; index += 1) {
@@ -3822,6 +3876,7 @@ export default function Viewer({
           }
         }
         points.push(pointCount);
+        sweeps.push(frame.point_sensors.filter((sensor) => sensor.count > 0).length);
         boxes.push(frame.boxes.filter((box) => boxShown(box, hidden, appearance)).length);
         for (const agent of summary.agents) {
           const current = frame.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
@@ -3832,7 +3887,7 @@ export default function Viewer({
         const lead = vehicleId ? agentSpeed[vehicleId] : undefined;
         speeds.push(lead && lead.length > 0 ? (lead[lead.length - 1] ?? 0) : 0);
         if (previous && time - previousTime > 150_000 && markers.length < 24) {
-          markers.push({ index, label: "Sweep gap" });
+          markers.push({ index, label: "Time gap over 0.15 s" });
         }
         const vehicleNow = frame.agents.find((item) => item.agent_id === vehicleId)?.pose;
         const vehicleThen = previous?.agents.find((item) => item.agent_id === vehicleId)?.pose;
@@ -3885,6 +3940,7 @@ export default function Viewer({
             boxes: [...boxes],
             agentSpeed: Object.fromEntries(Object.entries(agentSpeed).map(([id, values]) => [id, [...values]])),
             markers: [...markers],
+            sweeps: [...sweeps],
           });
         }
       }
@@ -4008,6 +4064,14 @@ export default function Viewer({
     return rows;
   }, [cameraFrame]);
   cameraKeysRef.current = cameraChoices.map((row) => row.key);
+  // What the Layers rows count at this sample, after the agent and class filters.
+  const pointsNow =
+    cameraFrame?.point_sensors
+      .filter((sensor) => !hidden[sensor.agent_id])
+      .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
+  const boxesNow = cameraFrame?.boxes.filter((box) => boxShown(box, hidden, appearance)).length ?? 0;
+  const frustumsNow = cameraFrame?.frustums.filter((item) => !hidden[item.agent_id]).length ?? 0;
+  const imagesOn = cameraChoices.filter((row) => showCameraImage(appearance, row.key)).length;
   onFrustumRef.current = (key) => {
     setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current));
   };
@@ -4194,7 +4258,7 @@ export default function Viewer({
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (
     <div className="crumb">
-      {isDesktop && (
+      {isDesktop && !datasetAbout && (
         <div className="dataset-badge" title={dataRoot || undefined}>
           <span className="dataset-folder-icon" aria-hidden="true">📁</span>
           <span className="dataset-name">{dataBasename || "Dataset"}</span>
@@ -4209,8 +4273,26 @@ export default function Viewer({
           </button>
         </div>
       )}
-      <span className="crumb-dataset">{sceneId ? sceneStem : "Scenes"}</span>
+      <span
+        className="crumb-dataset"
+        title={datasetAbout?.server ? `${datasetAbout.label} on ${datasetAbout.server}` : undefined}
+      >
+        {datasetAbout?.label || (sceneId && sceneStem !== sceneId ? sceneStem : "Scenes")}
+      </span>
       <span className="crumb-sep" aria-hidden="true">/</span>
+      <span className="scene-nav">
+      {sceneOrder.length > 1 ? (
+        <button
+          type="button"
+          className="icon ghost scene-step"
+          disabled={!prevScene}
+          aria-label="Previous scene (P)"
+          title="Previous scene (P)"
+          onClick={() => goScene(-1)}
+        >
+          ‹
+        </button>
+      ) : null}
       <Menu
         id="scene-id"
         ariaLabel="Scene"
@@ -4250,11 +4332,42 @@ export default function Viewer({
           setSceneId(id);
         }}
       />
+      {sceneOrder.length > 1 ? (
+        <button
+          type="button"
+          className="icon ghost scene-step"
+          disabled={!nextScene}
+          aria-label="Next scene (N)"
+          title="Next scene (N)"
+          onClick={() => goScene(1)}
+        >
+          ›
+        </button>
+      ) : null}
+      </span>
+      {sceneOrder.length > 1 && sceneOrder.indexOf(sceneId) >= 0 ? (
+        <span className="crumb-count num">
+          {sceneOrder.indexOf(sceneId) + 1} of {sceneOrder.length}
+        </span>
+      ) : null}
     </div>
   );
   const jobText = jobBadge(viewerJob);
+  // Where the scene comes from, as the app knows it: the cluster over SSH, this
+  // Mac's folder, or the server this page was loaded from.
+  const connectionText = datasetAbout?.server
+    ? `Streaming over SSH from ${datasetAbout.server}`
+    : viewerJob
+      ? "Streaming over SSH"
+      : isDesktop
+        ? `Local folder${dataBasename ? ` · ${dataBasename}` : ""}`
+        : `Server · ${typeof window !== "undefined" ? window.location.host : ""}`;
   const actionTools = (
     <div className="top-actions">
+      <span className={`conn-state ${tone}`} title={status}>
+        <i aria-hidden="true" />
+        {connectionText}
+      </span>
       {jobText ? (
         <span className="job-badge" title="This viewer runs as a small CPU job on the cluster; it is reused while it runs.">
           {jobText}
@@ -4339,24 +4452,62 @@ export default function Viewer({
       <div ref={workspaceRef} className={isFullScreen ? "workspace is-fullscreen" : "workspace"}>
         <aside className="panel" aria-label="Layers and agents" style={{ width: `${layout.left_px}px` }}>
           <details open>
-            <summary>Layers</summary>
+            <summary>
+              Layers
+              {pointsNow > 0 ? <span className="summary-meta num">{compactCount(pointsNow)} pts</span> : null}
+            </summary>
             <div className="checks">
-              {(
-                [
-                  ["points", "Points"],
-                  ["boxes", "Boxes"],
-                  ["frustums", "Frustums"],
-                  ["map", "Map"],
-                  ["axes", "Axes"],
-                ] as const
-              ).filter(([key]) => key !== "frustums" || capabilities.cameras).map(([key, label]) => (
+              <EyeToggle
+                on={appearance.points}
+                label="Points"
+                meta={lidarNote(summary) ? null : compactCount(pointsNow)}
+                onChange={() => setAppearance((current) => ({ ...current, points: !current.points }))}
+              />
+              <EyeToggle
+                on={appearance.boxes}
+                label="Boxes"
+                meta={boxesNow}
+                onChange={() => setAppearance((current) => ({ ...current, boxes: !current.boxes }))}
+              />
+              {capabilities.cameras ? (
                 <EyeToggle
-                  key={key}
-                  on={appearance[key]}
-                  label={label}
-                  onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
+                  on={appearance.frustums}
+                  label="Camera frustums"
+                  meta={frustumsNow}
+                  onChange={() => setAppearance((current) => ({ ...current, frustums: !current.frustums }))}
                 />
-              ))}
+              ) : null}
+              {capabilities.cameras ? (
+                <EyeToggle
+                  on={appearance.frustumImages}
+                  label="Frustum images"
+                  meta={appearance.frustumImages && cameraChoices.length > 0 ? `${imagesOn} of ${cameraChoices.length}` : null}
+                  onChange={() => setAppearance((current) => toggleFrustumImages(current))}
+                />
+              ) : null}
+              {mapInfo?.available ? (
+                <EyeToggle
+                  on={appearance.map}
+                  label="Road map"
+                  meta={mapInfo?.map_name ? mapInfo.map_name.split("/").pop() : null}
+                  onChange={() => setAppearance((current) => ({ ...current, map: !current.map }))}
+                />
+              ) : null}
+              <EyeToggle
+                on={appearance.axes}
+                label="Axes"
+                onChange={() => setAppearance((current) => ({ ...current, axes: !current.axes }))}
+              />
+              {appearance.frustumImages && capabilities.cameras ? (
+                <Slider
+                  label="Image opacity"
+                  value={appearance.frustumOpacity}
+                  min={0.15}
+                  max={1}
+                  step={0.05}
+                  onChange={(value) => setAppearance((current) => ({ ...current, frustumOpacity: value }))}
+                />
+              ) : null}
               {lidarNote(summary) ? <p className="muted empty-state">Points: {lidarNote(summary)}</p> : null}
               {mapInfo && !mapInfo.available ? (
                 <div className="muted empty-state">
@@ -4395,21 +4546,7 @@ export default function Viewer({
                   ) : null}
                 </div>
               ) : null}
-              <EyeToggle
-                on={appearance.frustumImages}
-                label="Frustum images"
-                onChange={() => setAppearance((current) => toggleFrustumImages(current))}
-              />
-              {appearance.frustumImages ? (
-                <Slider
-                  label="Image opacity"
-                  value={appearance.frustumOpacity}
-                  min={0.15}
-                  max={1}
-                  step={0.05}
-                  onChange={(value) => setAppearance((current) => ({ ...current, frustumOpacity: value }))}
-                />
-              ) : null}
+              {capabilities.cameras ? (
               <details className="cam-fold">
                 <summary>
                   Cameras
@@ -4439,17 +4576,24 @@ export default function Viewer({
                   ))}
                 </div>
               </details>
+              ) : null}
             </div>
           </details>
           <details open>
-            <summary>Agents</summary>
+            <summary>
+              Agents
+              {(summary?.agents.length ?? 0) > 0 ? (
+                <span className="summary-meta num">
+                  {(summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).length} of {summary?.agents.length} shown
+                </span>
+              ) : null}
+            </summary>
             <ul className="agent-list">
               {(summary?.agents ?? []).map((agent) => {
                 const points =
                   cameraFrame?.point_sensors
                     .filter((sensor) => sensor.agent_id === agent.agent_id)
                     .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
-                const boxes = cameraFrame?.boxes.filter((box) => box.agent_id === agent.agent_id).length ?? 0;
                 return (
                   <li key={agent.agent_id}>
                     <SwatchToggle
@@ -4459,8 +4603,10 @@ export default function Viewer({
                       color={AGENT_INK[agent.agent_type] ?? "#b7b1a6"}
                       meta={
                         <>
-                          <span className="num">{points}</span>
-                          <span className="num">{boxes}</span>
+                          <span className="agent-role">{agentRole(agent.agent_type)}</span>
+                          <span className="num agent-points" title={`${points} points at this sample`}>
+                            {compactCount(points)}
+                          </span>
                         </>
                       }
                       onChange={() =>
@@ -4476,28 +4622,42 @@ export default function Viewer({
             </ul>
           </details>
           <details open>
-            <summary>Classes</summary>
-            {categories.length === 0 ? <p className="muted">No classes in this sample.</p> : null}
-            <div className="checks">
-              {categories.map((category) => (
-                <SwatchToggle
-                  key={category}
-                  on={!appearance.hiddenClasses.includes(category)}
-                  label={category}
-                  color={cssColor(classColor(category))}
-                  onChange={() =>
-                    setAppearance((current) => {
-                      const next = new Set(current.hiddenClasses);
-                      if (next.has(category)) {
-                        next.delete(category);
-                      } else {
-                        next.add(category);
-                      }
-                      return { ...current, hiddenClasses: [...next] };
-                    })
-                  }
-                />
-              ))}
+            <summary>Appearance</summary>
+            <div className="stack">
+              <Segmented
+                label="Colour by"
+                value={appearance.colorBy}
+                options={[
+                  { value: "agent", label: "Agent" },
+                  { value: "class", label: "Class" },
+                ]}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, colorBy: value === "class" ? "class" : "agent" }))
+                }
+              />
+              <Segmented
+                label="Boxes"
+                value={appearance.boxStyle}
+                options={[
+                  { value: "wire", label: "Wire" },
+                  { value: "solid", label: "Solid" },
+                ]}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, boxStyle: value === "solid" ? "solid" : "wire" }))
+                }
+              />
+              <Slider
+                label="Point size"
+                value={appearance.pointSize}
+                min={1}
+                max={4}
+                step={1}
+                valueText={`${appearance.pointSize} px`}
+                onChange={(value) => setAppearance((current) => ({ ...current, pointSize: Math.round(value) }))}
+              />
+              <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
+                Reset view
+              </button>
             </div>
           </details>
           <PredictionsBlock
@@ -4528,39 +4688,28 @@ export default function Viewer({
             onScore={(value) => setAppearance((current) => ({ ...current, predictionScore: value }))}
           />
           <details>
-            <summary>Display</summary>
-            <div className="stack">
-              <Segmented
-                label="Color"
-                value={appearance.colorBy}
-                options={[
-                  { value: "agent", label: "Agent" },
-                  { value: "class", label: "Class" },
-                ]}
-                onChange={(value) =>
-                  setAppearance((current) => ({ ...current, colorBy: value === "class" ? "class" : "agent" }))
-                }
-              />
-              <Segmented
-                label="Point size"
-                value={String(appearance.pointSize)}
-                options={[1, 2, 3, 4].map((size) => ({ value: String(size), label: String(size) }))}
-                onChange={(value) => setAppearance((current) => ({ ...current, pointSize: Number(value) }))}
-              />
-              <Segmented
-                label="Boxes"
-                value={appearance.boxStyle}
-                options={[
-                  { value: "wire", label: "Wire" },
-                  { value: "solid", label: "Solid" },
-                ]}
-                onChange={(value) =>
-                  setAppearance((current) => ({ ...current, boxStyle: value === "solid" ? "solid" : "wire" }))
-                }
-              />
-              <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
-                Reset view
-              </button>
+            <summary>Classes</summary>
+            {categories.length === 0 ? <p className="muted">No classes in this sample.</p> : null}
+            <div className="checks">
+              {categories.map((category) => (
+                <SwatchToggle
+                  key={category}
+                  on={!appearance.hiddenClasses.includes(category)}
+                  label={category}
+                  color={cssColor(classColor(category))}
+                  onChange={() =>
+                    setAppearance((current) => {
+                      const next = new Set(current.hiddenClasses);
+                      if (next.has(category)) {
+                        next.delete(category);
+                      } else {
+                        next.add(category);
+                      }
+                      return { ...current, hiddenClasses: [...next] };
+                    })
+                  }
+                />
+              ))}
             </div>
           </details>
         </aside>
@@ -4613,12 +4762,24 @@ export default function Viewer({
             </button>
           </div>
         ) : null}
-            <div className="glass status-pill">
+            <div className="glass status-pill" title={summary ? summary.scene_id : undefined}>
               <i className={tone} aria-hidden="true" />
               <span>
-                {summary ? summary.scene_id : "No scene"} · {viewpointLabel}
+                {summary ? `${viewpointLabel} · t = ${typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s"}` : "No scene"}
               </span>
             </div>
+            {summary ? (
+              <div className="glass frame-pill" title="The scene's world frame, and the width the view shows at its centre">
+                <span>{summary.world_frame || "world"} frame</span>
+                <span ref={extentRef} />
+              </div>
+            ) : null}
+            {summary ? (
+              <div className="scale-bar" ref={scaleBarRef} hidden aria-hidden="true">
+                <b />
+                <span />
+              </div>
+            ) : null}
             {missing.length > 0 ? (
               <ul className="glass empty-pill" aria-label="Missing data">
                 {missing.map((item) => (
@@ -4641,6 +4802,7 @@ export default function Viewer({
                   aria-checked={viewpoint === item.id}
                   aria-label={`${item.label} viewpoint (${item.shortcut})`}
                   aria-keyshortcuts={item.shortcut}
+                  data-key={item.shortcut}
                   onClick={() => chooseViewpoint(item.id)}
                 >
                   {item.id === "chase" ? "Chase" : item.label}
@@ -4734,6 +4896,9 @@ export default function Viewer({
                 setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
               }
               heightPx={layout.strip_px}
+              focusAgent={focusAgent}
+              onSwitchAgent={setFocusAgent}
+              boxCount={(camera) => boxesInView(camera, cameraFrame.boxes.filter((box) => boxShown(box, hidden, appearance)))}
             />
           ) : null}
           {sceneNotice ? (
@@ -4771,6 +4936,30 @@ export default function Viewer({
             </div>
           ) : null}
           <p className="status-line">{status}</p>
+          <Timeline
+            length={summary?.times_us.length ?? 0}
+            index={Math.min(frameIndex, last)}
+            timeUs={typeof timeUs === "number" ? timeUs : null}
+            times={summary?.times_us ?? []}
+            playing={playing}
+            buffering={buffering}
+            speed={speed}
+            loop={loop}
+            disabled={!summary || (summary.times_us.length < 2)}
+            boxes={series.boxes}
+            markers={series.markers}
+            sweepGaps={findSweepGaps(series.sweeps, (summary?.point_sweeps ?? 0) > 0 || series.sweeps.some((count) => count > 0))}
+            evalSeries={evalSeries}
+            evalCompare={evalCompare}
+            onIndex={(index) => setFrameIndex(index)}
+            onStep={(delta) => {
+              setPlaying(false);
+              setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loop));
+            }}
+            onToggle={handleTogglePlay}
+            onSpeed={setSpeed}
+            onLoop={handleToggleLoop}
+          />
         </div>
         <div
           className="panel-resizer panel-resizer-vertical panel-resizer-right"
@@ -4788,7 +4977,31 @@ export default function Viewer({
           onKeyDown={onRightKeyDown}
         />
         <aside className="panel panel-right" aria-label="Agent telemetry" style={{ width: `${layout.right_px}px` }}>
-              <h2>Telemetry</h2>
+              <SceneCard summary={summary} frame={cameraFrame} evalSummary={evalSummary} />
+              <Inspector
+                pick={pick}
+                frame={cameraFrame}
+                summary={summary}
+                token={effectiveToken}
+                cache={cacheRef.current}
+                evalPick={liveEvalPick}
+                gtDetail={gtDetail}
+                onClear={() => {
+                  setPick(null);
+                  setEvalPick(null);
+                }}
+              />
+              <Radar
+                frame={cameraFrame}
+                pick={pick}
+                types={agentTypes}
+                names={agentNames}
+                focus={focusAgent}
+                open={appearance.radarOpen}
+                onToggle={() => setAppearance((current) => ({ ...current, radarOpen: !current.radarOpen }))}
+              />
+              <details className="side-fold">
+                <summary>Telemetry</summary>
               {(!summary || (summary.agents ?? []).filter((agent) => !hidden[agent.agent_id]).length === 0) ? (
                 <PanelState
                   compact
@@ -4843,46 +5056,9 @@ export default function Viewer({
                   </article>
                 );
               }))}
-              <SceneCard summary={summary} frame={cameraFrame} evalSummary={evalSummary} />
-              <Inspector
-                pick={pick}
-                frame={cameraFrame}
-                summary={summary}
-                token={effectiveToken}
-                cache={cacheRef.current}
-                evalPick={liveEvalPick}
-                gtDetail={gtDetail}
-              />
-              <Radar frame={cameraFrame} pick={pick} types={agentTypes} />
+              </details>
             </aside>
       </div>
-      <Timeline
-        length={summary?.times_us.length ?? 0}
-        index={Math.min(frameIndex, last)}
-        timeUs={typeof timeUs === "number" ? timeUs : null}
-        times={summary?.times_us ?? []}
-        playing={playing}
-        buffering={buffering}
-        speed={speed}
-        loop={loop}
-        disabled={!summary || (summary.times_us.length < 2)}
-        points={series.points}
-        speeds={series.speeds}
-        boxes={series.boxes}
-        markers={series.markers}
-        evalSeries={evalSeries}
-        evalCompare={evalCompare}
-        onIndex={(index) => setFrameIndex(index)}
-        onStep={(delta) => {
-          setPlaying(false);
-          setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loop));
-        }}
-        onToggle={handleTogglePlay}
-        onSpeed={setSpeed}
-        onLoop={handleToggleLoop}
-        onPrevScene={prevScene ? () => goScene(-1) : undefined}
-        onNextScene={nextScene ? () => goScene(1) : undefined}
-      />
       <ExportDialog
         open={exportOpen}
         onClose={() => setExportOpen(false)}

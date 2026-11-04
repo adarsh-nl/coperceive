@@ -14,7 +14,7 @@ import {
   type PickRecord,
 } from "./inspect";
 import type { EvalPick, EvalSummary, GtEvalDetail } from "./predictionTypes";
-import { formatMetres, formatSpeed } from "./telemetry";
+import { formatMetres } from "./telemetry";
 import type { FrameDocument, SceneSummary } from "./types";
 import { agentLabel, isPose } from "./types";
 
@@ -134,7 +134,7 @@ export function SceneCard({
           <dd className="num">{summary?.agents.length ?? 0}</dd>
         </div>
         <div>
-          <dt>Boxes</dt>
+          <dt>Boxes now</dt>
           <dd className="num">{frame?.boxes.length ?? 0}</dd>
         </div>
       </dl>
@@ -282,6 +282,49 @@ function GtEvalRows({ detail }: { detail: GtEvalDetail }) {
   );
 }
 
+/** "16.1 km/h"; the inspector's speed, in the unit people drive by. */
+function formatKmh(value: number | null): string {
+  return value === null || !Number.isFinite(value) ? "—" : `${(value * 3.6).toFixed(1)} km/h`;
+}
+
+/**
+ * Distance from the selected object to each agent with a pose, as a bar. Rows
+ * of agents that did not see the object (no box of theirs near it) are faded.
+ */
+function DistanceRows({
+  current,
+  frame,
+  summary,
+}: {
+  current: PickRecord;
+  frame: FrameDocument;
+  summary: SceneSummary | null;
+}) {
+  const rows = agentDistances(current, frame);
+  const seen = new Set(visibleAgents(current, frame.boxes));
+  const posed = rows.filter((row) => row.metres !== null);
+  const far = posed.reduce((max, row) => Math.max(max, row.metres ?? 0), 1);
+  return (
+    <>
+      <p className="dist-head">
+        Distance · seen by {rows.filter((row) => seen.has(row.agentId)).length} of {rows.length}
+      </p>
+      <ul className="distance-list">
+        {rows.map((row) => (
+          <li key={row.agentId} className={seen.has(row.agentId) ? undefined : "unseen"}>
+            <span title={row.agentId}>{agentLabel(summary, row.agentId)}</span>
+            <span className="dist-bar" aria-hidden="true">
+              <i style={{ width: `${row.metres === null ? 0 : Math.max(3, (row.metres / far) * 100)}%` }} />
+            </span>
+            <span className="num">{row.metres === null ? "—" : formatMetres(row.metres)}</span>
+          </li>
+        ))}
+      </ul>
+      <p className="muted dist-note">Bar = distance; faded rows have no box of their own near this object.</p>
+    </>
+  );
+}
+
 export function Inspector({
   pick,
   frame,
@@ -290,6 +333,7 @@ export function Inspector({
   cache,
   evalPick = null,
   gtDetail = null,
+  onClear,
 }: {
   pick: PickRecord | null;
   frame: FrameDocument | null;
@@ -300,6 +344,8 @@ export function Inspector({
   evalPick?: EvalPick | null;
   /** The clicked ground-truth box's status per output and who else sees it. */
   gtDetail?: GtEvalDetail | null;
+  /** Clear the selection. */
+  onClear?: () => void;
 }) {
   const current = frame && pick ? followPick(frame, pick) : null;
   const [objectSpeed, setObjectSpeed] = useState<number | null>(null);
@@ -346,7 +392,14 @@ export function Inspector({
 
   return (
     <section className="side-card" aria-label="Selected object" aria-live="polite">
-      <h3>Selected</h3>
+      <h3>
+        Selected
+        {(current || evalPick) && onClear ? (
+          <button type="button" className="link side-card-action" onClick={onClear}>
+            Clear
+          </button>
+        ) : null}
+      </h3>
       {evalPick ? <PredictionInspector pick={evalPick} frame={frame} /> : null}
       {!evalPick && (!current || !frame) ? (
         <PanelState
@@ -358,13 +411,23 @@ export function Inspector({
       ) : null}
       {!evalPick && current && frame ? (
         <>
+          <p className="sel-title">
+            <strong>{current.category.charAt(0).toUpperCase() + current.category.slice(1)}</strong>
+            <span className="num">{current.trackId ?? ""}</span>
+          </p>
           <dl className="stat-grid">
-            <div className="span-2">
-              <dt>Class</dt>
-              <dd>{current.category}</dd>
+            <div>
+              <dt>Speed</dt>
+              <dd className="num">{formatKmh(objectSpeed)}</dd>
+            </div>
+            <div>
+              <dt>Size l×w×h</dt>
+              <dd className="num">
+                {current.size.map((value) => value.toFixed(1)).join(" × ")} m
+              </dd>
             </div>
             <div className="span-2">
-              <dt>Agent</dt>
+              <dt>Annotated by</dt>
               <dd>
                 {agentLabel(summary, current.agentId)}
                 {agentLabel(summary, current.agentId) !== current.agentId ? (
@@ -372,27 +435,8 @@ export function Inspector({
                 ) : null}
               </dd>
             </div>
-            <div className="span-2">
-              <dt>Id</dt>
-              <dd className="num">{current.trackId ?? current.agentId}</dd>
-            </div>
-            <div className="span-2">
-              <dt>Speed</dt>
-              <dd className="num">{formatSpeed(objectSpeed)}</dd>
-            </div>
-            <div className="span-2">
-              <dt>Seen by</dt>
-              <dd>{visibleAgents(current, frame.boxes).join(", ")}</dd>
-            </div>
           </dl>
-          <ul className="distance-list">
-            {agentDistances(current, frame).map((row) => (
-              <li key={row.agentId}>
-                <span title={row.agentId}>{agentLabel(summary, row.agentId)}</span>
-                <span className="num">{row.metres === null ? "—" : formatMetres(row.metres)}</span>
-              </li>
-            ))}
-          </ul>
+          <DistanceRows current={current} frame={frame} summary={summary} />
           {gtDetail ? <GtEvalRows detail={gtDetail} /> : null}
         </>
       ) : null}
@@ -400,17 +444,36 @@ export function Inspector({
   );
 }
 
+const RADAR_INK: Record<string, string> = {
+  vehicle: "#F58A1F",
+  uav: "#3C8DFF",
+  infrastructure: "#B7B1A6",
+};
+
 export function Radar({
   frame,
   pick,
   types,
+  names,
+  focus = null,
+  open = true,
+  onToggle,
 }: {
   frame: FrameDocument | null;
   pick: PickRecord | null;
   types: Map<string, string>;
+  /** `agent_id -> display name`. */
+  names?: Map<string, string>;
+  /** The agent to centre on (the camera strip's); else the first vehicle with a pose. */
+  focus?: string | null;
+  open?: boolean;
+  onToggle?: () => void;
 }) {
-  const vehicle = frame?.agents.find((agent) => types.get(agent.agent_id) === "vehicle" && isPose(agent.pose))
-    ?? frame?.agents.find((agent) => isPose(agent.pose));
+  const focused = focus ? frame?.agents.find((agent) => agent.agent_id === focus && isPose(agent.pose)) : undefined;
+  const vehicle =
+    focused ??
+    frame?.agents.find((agent) => types.get(agent.agent_id) === "vehicle" && isPose(agent.pose)) ??
+    frame?.agents.find((agent) => isPose(agent.pose));
   const origin = isPose(vehicle?.pose) ? vehicle.pose : null;
   const current = frame && pick ? followPick(frame, pick) : null;
   const range = 80;
@@ -427,41 +490,70 @@ export function Radar({
     }
     return [sx, sy];
   }
+  const centreName = vehicle ? (names?.get(vehicle.agent_id) ?? vehicle.agent_id) : null;
   return (
     <section className="side-card radar-card" aria-label="Bird's-eye radar, 80 metres">
-      <h3>Radar</h3>
-      <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Agents and boxes within 80 metres, north up">
-        <rect width={size} height={size} rx="8" fill="#141414" />
-        {[20, 40, 60, 80].map((ring) => (
-          <circle key={ring} cx={half} cy={half} r={((ring / range) * (half - 10))} fill="none" stroke="#2e2e2e" />
-        ))}
-        <path d={`M${half} 12 V${size - 12} M12 ${half} H${size - 12}`} stroke="#2a2a2a" />
-        <text x={half + 4} y="18" fill="#a3a3a3" fontSize="9">N</text>
-        {(frame?.boxes ?? []).map((box, index) => {
-          const center = boxCenter(box);
-          if (!center) {
-            return null;
-          }
-          const point = place(center[0], center[1]);
-          if (!point) {
-            return null;
-          }
-          const selected = current?.index === index && current.agentId === box.agent_id;
-          return <circle key={`${box.agent_id}-${index}`} cx={point[0]} cy={point[1]} r={selected ? 3.5 : 1.6} fill={selected ? "#f4f4ed" : "#8a8a8a"} />;
-        })}
-        {(frame?.agents ?? []).map((agent) => {
-          if (!isPose(agent.pose)) {
-            return null;
-          }
-          const point = place(agent.pose.tx, agent.pose.ty);
-          if (!point) {
-            return null;
-          }
-          const drone = types.get(agent.agent_id) === "uav";
-          return <circle key={agent.agent_id} cx={point[0]} cy={point[1]} r="4" fill={drone ? "#3C8DFF" : "#F58A1F"} />;
-        })}
-      </svg>
-      <p className="muted">80 m around the first posed agent. North is up.</p>
+      <h3>
+        Radar · {range} m
+        {onToggle ? (
+          <button type="button" className="link side-card-action" aria-expanded={open} onClick={onToggle}>
+            {open ? "Hide" : "Show"}
+          </button>
+        ) : null}
+      </h3>
+      {open ? (
+        <div className="radar-body">
+          <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Agents and boxes within 80 metres, north up">
+            <rect width={size} height={size} rx="8" className="radar-bg" />
+            {[20, 40, 60, 80].map((ring) => (
+              <circle key={ring} cx={half} cy={half} r={((ring / range) * (half - 10))} fill="none" className="radar-ring" />
+            ))}
+            <path d={`M${half} 12 V${size - 12} M12 ${half} H${size - 12}`} className="radar-ring" />
+            <text x={half + 4} y="18" className="radar-text" fontSize="9">N</text>
+            {(frame?.boxes ?? []).map((box, index) => {
+              const center = boxCenter(box);
+              if (!center) {
+                return null;
+              }
+              const point = place(center[0], center[1]);
+              if (!point) {
+                return null;
+              }
+              const selected = current?.index === index && current.agentId === box.agent_id;
+              return (
+                <circle
+                  key={`${box.agent_id}-${index}`}
+                  cx={point[0]}
+                  cy={point[1]}
+                  r={selected ? 3.5 : 1.6}
+                  className={selected ? "radar-picked" : "radar-box"}
+                />
+              );
+            })}
+            {(frame?.agents ?? []).map((agent) => {
+              if (!isPose(agent.pose)) {
+                return null;
+              }
+              const point = place(agent.pose.tx, agent.pose.ty);
+              if (!point) {
+                return null;
+              }
+              return (
+                <circle
+                  key={agent.agent_id}
+                  cx={point[0]}
+                  cy={point[1]}
+                  r="4"
+                  fill={RADAR_INK[types.get(agent.agent_id) ?? ""] ?? "#B7B1A6"}
+                />
+              );
+            })}
+          </svg>
+          <p className="muted">
+            {centreName ? `Centred on ${centreName}, north up.` : "No agent has a pose at this sample."} Rings every 20 m.
+          </p>
+        </div>
+      ) : null}
     </section>
   );
 }

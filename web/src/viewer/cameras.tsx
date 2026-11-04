@@ -6,6 +6,7 @@ import type { FrameCache } from "./cache";
 import { IconImage } from "./controls";
 import { cameraKey, type FrameBox, type FrameFrustum, type FrameSensor } from "./types";
 import { projectToImage, type Pinhole } from "./project";
+import { stripAgents } from "./sceneStats";
 
 type Cloud = { agentId: string; xyz: Float32Array };
 
@@ -470,6 +471,7 @@ function Thumb({
   imageOn,
   onToggleImage,
   playing = false,
+  boxes = null,
 }: {
   camera: FrameFrustum;
   agentLabel: string;
@@ -483,6 +485,8 @@ function Thumb({
   imageOn: boolean;
   onToggleImage: () => void;
   playing?: boolean;
+  /** Boxes in this camera's image at this sample; null hides the count. */
+  boxes?: number | null;
 }) {
   const hostRef = useRef<HTMLButtonElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -564,6 +568,11 @@ function Thumb({
       >
         {picture ? <canvas ref={canvasRef} /> : <span className="cam-thumb-empty">{picture === null ? "no image" : "…"}</span>}
         <span className="cam-thumb-name">{camera.sensor_id}</span>
+        {typeof boxes === "number" ? (
+          <span className="cam-thumb-count num">
+            {boxes} {boxes === 1 ? "box" : "boxes"}
+          </span>
+        ) : null}
       </button>
       <button
         type="button"
@@ -597,6 +606,9 @@ export default function CameraStrip({
   missingText = "No image file for this sample.",
   playing = false,
   heightPx,
+  focusAgent = null,
+  onSwitchAgent,
+  boxCount,
 }: {
   token: string;
   sceneId: string;
@@ -621,6 +633,12 @@ export default function CameraStrip({
   playing?: boolean;
   /** Optional custom open height in pixels when resized. */
   heightPx?: number;
+  /** The agent whose cameras are shown; the first agent with cameras when null or gone. */
+  focusAgent?: string | null;
+  /** "Switch agent": show the next agent's cameras. */
+  onSwitchAgent?: (agentId: string) => void;
+  /** Boxes whose centre falls in this camera's image, or null when it cannot be told. */
+  boxCount?: (camera: FrameFrustum) => number | null;
 }) {
   const sceneRef = useRef(sceneId);
   useEffect(() => {
@@ -634,7 +652,8 @@ export default function CameraStrip({
   if (frustums.length === 0) {
     return null;
   }
-  const groups = agentOrder(frustums);
+  const { current, next } = stripAgents(frustums, focusAgent);
+  const groups = agentOrder(frustums).filter((group) => group.agentId === current);
   return (
     <section
       className="cam-strip"
@@ -663,9 +682,21 @@ export default function CameraStrip({
               className="cam-group"
               style={{ ["--agent" as string]: colorFor(types.get(group.agentId) ?? "") }}
             >
-              <span className="cam-group-name" title={group.agentId}>
-                {names.get(group.agentId) ?? group.agentId}
-              </span>
+              <div className="cam-group-head">
+                <span className="cam-group-name" title={group.agentId}>
+                  {names.get(group.agentId) ?? group.agentId}
+                </span>
+                {next && onSwitchAgent ? (
+                  <button
+                    type="button"
+                    className="link cam-switch"
+                    title={`Show ${names.get(next) ?? next}'s cameras`}
+                    onClick={() => onSwitchAgent(next)}
+                  >
+                    Switch agent
+                  </button>
+                ) : null}
+              </div>
               <div className="cam-thumbs">
                 {group.cameras.map((camera) => {
                   const key = cameraKey(camera.agent_id, camera.sensor_id);
@@ -684,6 +715,7 @@ export default function CameraStrip({
                       onOpen={() => onSplit(key)}
                       imageOn={imageOn(key)}
                       onToggleImage={() => onToggleImage(key)}
+                      boxes={boxCount ? boxCount(camera) : null}
                     />
                   );
                 })}
