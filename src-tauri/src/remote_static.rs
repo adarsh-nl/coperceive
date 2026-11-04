@@ -239,6 +239,23 @@ fn upload_static(alias: &str, local: &Path, remote_rel: &str, scp: &str) -> Resu
     }
 }
 
+/// A temporary path no other call in this process gets. pid and the clock are
+/// not enough: macOS clocks tick in whole microseconds, and two starts at the
+/// same moment shared one manifest file, so one deleted the other's fetched copy
+/// and the cache looked missing (an unneeded re-upload).
+fn unique_temp_path(prefix: &str) -> PathBuf {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    std::env::temp_dir().join(format!(
+        "{prefix}-{}-{sequence}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos())
+            .unwrap_or_default()
+    ))
+}
+
 /// Ensures the remote cache holds this app version's static bundle and returns
 /// the remote directory to pass as `--static` (a `~/...` path).
 pub fn prepare_remote_static(alias: &str, version: &str) -> Result<String, String> {
@@ -266,14 +283,7 @@ fn prepare_remote_static_with(
     let remote_rel = format!("{STATIC_REL}/{version}");
     let remote_display = format!("~/{remote_rel}");
 
-    let temporary = std::env::temp_dir().join(format!(
-        "coperceive-static-manifest-{}-{}",
-        std::process::id(),
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos())
-            .unwrap_or_default()
-    ));
+    let temporary = unique_temp_path("coperceive-static-manifest");
     let existing = fetch_remote_manifest(alias, &remote_rel, &temporary, scp)?;
     let _ = fs::remove_file(&temporary);
     let runner = SshRunner::new(ssh, SshTarget::alias(alias));
@@ -374,14 +384,7 @@ esac
     }
 
     fn temp_root(label: &str) -> PathBuf {
-        std::env::temp_dir().join(format!(
-            "coperceive-static-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .expect("time")
-                .as_nanos()
-        ))
+        unique_temp_path(&format!("coperceive-static-{label}"))
     }
 
     fn uploads(scp_log: &Path) -> usize {
@@ -415,6 +418,63 @@ esac
         assert_eq!(uploads(&scp_log), 1, "a complete cache is not uploaded again");
         assert_eq!(ssh_writes(&ssh_log), 3, "only the cache verification runs");
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn temporary_names_are_unique_across_threads_in_one_process() {
+        // The cause of the flaky cache test: pid + clock (whole microseconds on
+        // macOS) gave two starts the same manifest file.
+        let threads: Vec<_> = (0..64)
+            .map(|_| std::thread::spawn(|| (0..100).map(|_| unique_temp_path("t")).collect::<Vec<_>>()))
+            .collect();
+        let names: Vec<PathBuf> = threads.into_iter().flat_map(|t| t.join().expect("thread")).collect();
+        let distinct: std::collections::HashSet<&PathBuf> = names.iter().collect();
+        assert_eq!(distinct.len(), names.len(), "two temporary names collided");
+    }
+
+    #[test]
+    fn concurrent_starts_each_keep_their_own_fetched_manifest() {
+        // Each start fetches the remote manifest into a temporary file. Starts in
+        // one process at the same moment must not share it: with a pid+clock name
+        // (whole microseconds on macOS) one start deleted another's fetched
+        // manifest, which then looked like a missing cache and re-uploaded.
+        const STARTS: usize = 16;
+        let setups: Vec<_> = (0..STARTS)
+            .map(|index| setup_with_logs(&format!("concurrent-{index}")))
+            .collect();
+        for (_, local, _, ssh, scp, _, _) in &setups {
+            prepare_remote_static_with("cluster-a", "0.1.0", local, ssh.to_str().unwrap(), scp.to_str().unwrap())
+                .expect("first upload");
+        }
+        for round in 0..4 {
+            let barrier = std::sync::Arc::new(std::sync::Barrier::new(STARTS));
+            let handles: Vec<_> = setups
+                .iter()
+                .map(|(_, local, _, ssh, scp, _, _)| {
+                    let (local, ssh, scp) = (local.clone(), ssh.clone(), scp.clone());
+                    let barrier = std::sync::Arc::clone(&barrier);
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        prepare_remote_static_with(
+                            "cluster-a",
+                            "0.1.0",
+                            &local,
+                            ssh.to_str().unwrap(),
+                            scp.to_str().unwrap(),
+                        )
+                    })
+                })
+                .collect();
+            for handle in handles {
+                handle.join().expect("thread").expect("start");
+            }
+            for (index, (_, _, _, _, _, _, scp_log)) in setups.iter().enumerate() {
+                assert_eq!(uploads(scp_log), 1, "start {index}, round {round}: a complete cache was uploaded again");
+            }
+        }
+        for (root, ..) in setups {
+            let _ = fs::remove_dir_all(&root);
+        }
     }
 
     #[test]
