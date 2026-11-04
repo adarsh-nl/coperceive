@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import { JobsIndicator } from "./JobsIndicator";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   LocalExecutionTarget,
   cancelImport,
@@ -27,6 +27,8 @@ import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
 import type { ServerEntry } from "./hpc";
+import { MiniBar, PageHeaderProvider, type PageHeaderSpec } from "./components/Page";
+import { datasetJobs as currentDatasetJobs, subscribeDatasetJobs, type DatasetJobs } from "./jobsStore";
 
 interface ConnectScreenProps {
   onConnected: (session: ConnectionSession) => void;
@@ -69,6 +71,22 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const [hpcServers, setHpcServers] = useState<ServerEntry[]>([]);
   const [hpcSubTab, setHpcSubTab] = useState<WorkspaceTab>("servers");
   const [activeHpcDataset, setActiveHpcDataset] = useState<ActiveDatasetPayload | null>(null);
+  // What each page shows in the one-line header and as its sidebar count.
+  const [headers, setHeaders] = useState<Record<string, PageHeaderSpec>>({});
+  const publishHeader = useCallback((page: string, spec: PageHeaderSpec | null) => {
+    setHeaders((current) => {
+      if (spec === null) {
+        if (!(page in current)) return current;
+        const next = { ...current };
+        delete next[page];
+        return next;
+      }
+      return { ...current, [page]: spec };
+    });
+  }, []);
+  const [datasetJobs, setDatasetJobs] = useState<DatasetJobs[]>(() => currentDatasetJobs());
+  useEffect(() => subscribeDatasetJobs(() => setDatasetJobs(currentDatasetJobs())), []);
+  const [collapsedDatasets, setCollapsedDatasets] = useState<ReadonlySet<string>>(() => new Set());
 
   // Import dialog state
   const [importOpen, setImportOpen] = useState<boolean>(false);
@@ -343,8 +361,20 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   };
 
   const activeFooterServer = activeHpcDataset?.profile ?? hpcServers[0] ?? null;
+  const pageKey = activeTab === "remote" ? hpcSubTab : activeTab;
+  const activeHeader = headers[pageKey];
+  const pageTitle =
+    ({
+      library: "Library",
+      get_data: "Get Data",
+      local: "Open Folder",
+      servers: "Servers",
+      evaluation: "New evaluation",
+      history: "Run history",
+    } as Record<string, string>)[pageKey] ?? "HPC Workspace";
 
   return (
+    <PageHeaderProvider value={publishHeader}>
     <div
       style={{
         position: "relative",
@@ -469,17 +499,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           </div>
         }
       >
-        {/* Local / General Section */}
-        <div
-          style={{
-            padding: "4px 8px 4px",
-            fontSize: "11px",
-            fontWeight: 500,
-            color: "var(--text-subtle)",
-          }}
-        >
-          Local
-        </div>
+        {/* Local */}
+        <div className="c-sidebar-group">Local</div>
         <nav
           style={{ display: "flex", flexDirection: "column", gap: "1px" }}
           role="tablist"
@@ -493,6 +514,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             ] as const
           ).map(([tabKey, label]) => {
             const selected = activeTab === tabKey;
+            const count = headers[tabKey]?.navCount;
             return (
               <button
                 key={tabKey}
@@ -500,144 +522,57 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                 role="tab"
                 aria-selected={selected}
                 onClick={() => setActiveTab(tabKey)}
-                className={`c-sidebar-item ${selected ? "active" : ""}`}
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "5px 8px",
-                  borderRadius: "6px",
-                  fontSize: "13px",
-                  fontWeight: selected ? 500 : 400,
-                  color: selected ? "var(--text)" : "var(--text-secondary)",
-                  backgroundColor: selected ? "var(--line, rgba(255, 255, 255, 0.08))" : "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  width: "100%",
-                }}
+                className={`c-sidebar-item c-nav-item ${selected ? "active" : ""}`}
+                data-count={count || undefined}
               >
-                <span>{label}</span>
+                {label}
               </button>
             );
           })}
         </nav>
 
-        {/* HPC Workspace Section in Sidebar (matching Claude Design mock) */}
-        <nav
-          style={{ display: "flex", flexDirection: "column", gap: "1px", marginTop: "12px" }}
-          aria-label="HPC workspace navigation"
-        >
-          <button
-            type="button"
-            onClick={() => navigateHpcSection("servers")}
-            style={{
-              padding: "6px 8px 4px",
-              fontSize: "11px",
-              fontWeight: 500,
-              color: "var(--text-subtle)",
-              background: "transparent",
-              border: "none",
-              cursor: "pointer",
-              textAlign: "left",
-              width: "100%",
-            }}
-          >
-            HPC Workspace
-          </button>
+        {/* HPC workspace */}
+        <div className="c-sidebar-group" style={{ marginTop: "12px" }}>
+          HPC workspace
+        </div>
+        <nav style={{ display: "flex", flexDirection: "column", gap: "1px" }} aria-label="HPC workspace navigation">
           {(
             [
               ["servers", "Servers", hpcServers.length > 0 ? String(hpcServers.length) : undefined],
               ["evaluation", "New evaluation", undefined],
-              ["history", "Run history", undefined],
+              ["history", "Run history", headers.history?.navCount],
             ] as const
-          ).map(([secKey, label, badge]) => {
+          ).map(([secKey, label, count]) => {
             const isSelected = activeTab === "remote" && hpcSubTab === secKey;
             return (
               <button
                 key={secKey}
                 type="button"
                 onClick={() => navigateHpcSection(secKey)}
-                className="c-sidebar-item"
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  padding: "5px 8px",
-                  borderRadius: "6px",
-                  fontSize: "13px",
-                  fontWeight: isSelected ? 500 : 400,
-                  color: isSelected ? "var(--text)" : "var(--text-secondary)",
-                  backgroundColor: isSelected
-                    ? "var(--line, rgba(255, 255, 255, 0.08))"
-                    : "transparent",
-                  border: "none",
-                  cursor: "pointer",
-                  textAlign: "left",
-                  width: "100%",
-                }}
+                className={`c-sidebar-item c-nav-item ${isSelected ? "active" : ""}${secKey === "history" && count ? " is-live" : ""}`}
+                aria-current={isSelected ? "page" : undefined}
+                data-count={count || undefined}
               >
-                <span>{label}</span>
-                {badge ? (
-                  <span
-                    style={{
-                      fontSize: "11px",
-                      color: "var(--text-tertiary)",
-                      fontWeight: 400,
-                      fontVariantNumeric: "tabular-nums",
-                    }}
-                  >
-                    {badge}
-                  </span>
-                ) : null}
+                {label}
               </button>
             );
           })}
         </nav>
 
-        {/* Servers Tree in Sidebar (matching Claude Design mock) */}
-        <div
-          style={{
-            marginTop: "12px",
-            display: "flex",
-            flexDirection: "column",
-            gap: "1px",
-          }}
-        >
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              padding: "6px 8px 4px",
-            }}
-          >
-            <span style={{ fontSize: "11px", fontWeight: 500, color: "var(--text-subtle)" }}>
-              Servers
-            </span>
+        {/* Servers tree: server, its dataset, the split's progress, browse */}
+        <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "1px" }}>
+          <div className="c-sidebar-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>Servers</span>
             <button
               type="button"
               title="Add server"
               aria-label="New server profile"
+              className="c-sidebar-add"
               onClick={() => {
                 navigateHpcSection("servers");
                 setTimeout(() => {
                   window.dispatchEvent(new CustomEvent("coperceive-hpc-add-server"));
                 }, 0);
-              }}
-              style={{
-                width: "18px",
-                height: "18px",
-                padding: 0,
-                display: "grid",
-                placeItems: "center",
-                borderRadius: "4px",
-                border: "none",
-                background: "transparent",
-                color: "var(--text-tertiary)",
-                fontSize: "15px",
-                lineHeight: 1,
-                cursor: "pointer",
               }}
             >
               +
@@ -648,124 +583,75 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             const srvName = srv.profile?.name || srv.id;
             const hasDataset = activeHpcDataset && activeHpcDataset.profile.id === srv.id;
             const dsDoc = hasDataset ? activeHpcDataset.dataset : null;
-            const isDatasetSelected =
-              activeTab === "remote" && hpcSubTab === "dataset" && hasDataset;
+            const isDatasetSelected = activeTab === "remote" && hpcSubTab === "dataset" && Boolean(hasDataset);
+            const jobs = dsDoc ? datasetJobs.find((entry) => entry.profileId === srv.id) : undefined;
+            const expanded = !collapsedDatasets.has(srv.id);
+            const adapter = (dsDoc?.adapter || "dataset").toUpperCase();
             return (
               <div key={srv.id} style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: "8px",
-                    padding: "5px 8px",
-                    color: "var(--text)",
-                    fontSize: "13px",
-                  }}
-                >
-                  <span
-                    style={{
-                      width: "7px",
-                      height: "7px",
-                      borderRadius: "50%",
-                      backgroundColor: "#3fb950",
-                      flexShrink: 0,
-                    }}
-                  />
-                  <span
-                    style={{
-                      fontWeight: 500,
-                      overflow: "hidden",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {srvName}
-                  </span>
+                <div className="c-tree-server">
+                  <span className="c-dot" style={{ backgroundColor: "#3fb950" }} />
+                  <span className="c-tree-name">{srvName}</span>
                 </div>
-
-                <div
-                  style={{
-                    padding: "0 8px 0 23px",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: "1px",
-                  }}
-                >
-                  {dsDoc && (
-                    <>
-                      <div
-                        style={{
-                          fontFamily: "'Geist Mono', ui-monospace, monospace",
-                          fontSize: "11px",
-                          color: "var(--text-subtle)",
-                          padding: "0 0 4px",
-                        }}
-                      >
-                        {(dsDoc.adapter || "dataset").toLowerCase()}
-                      </div>
+                {dsDoc ? (
+                  <>
+                    <button
+                      type="button"
+                      className="c-sidebar-item c-tree-dataset"
+                      aria-expanded={expanded}
+                      onClick={() =>
+                        setCollapsedDatasets((current) => {
+                          const next = new Set(current);
+                          if (next.has(srv.id)) next.delete(srv.id);
+                          else next.add(srv.id);
+                          return next;
+                        })
+                      }
+                    >
+                      <span aria-hidden="true" className="c-tree-caret">{expanded ? "▾" : "▸"}</span>
+                      {adapter}
+                    </button>
+                    {expanded ? (
                       <button
                         type="button"
                         onClick={() => navigateHpcSection("dataset")}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          padding: "5px 8px",
-                          marginLeft: "-8px",
-                          borderRadius: "6px",
-                          border: "none",
-                          backgroundColor: isDatasetSelected
-                            ? "rgba(31, 111, 235, 0.22)"
-                            : "transparent",
-                          color: "var(--text)",
-                          fontSize: "12.5px",
-                          fontWeight: isDatasetSelected ? 500 : 400,
-                          cursor: "pointer",
-                          textAlign: "left",
-                        }}
+                        className={`c-sidebar-item c-tree-split ${isDatasetSelected ? "active" : ""}`}
+                        aria-current={isDatasetSelected ? "page" : undefined}
+                        title={jobs ? `${jobs.ready} of ${jobs.total} scenes ready` : `${dsDoc.scene_count} scenes`}
                       >
                         <span>{dsDoc.split || "all"}</span>
-                        <span
-                          style={{
-                            fontSize: "11px",
-                            color: isDatasetSelected ? "var(--primary-hover, #a5c8ff)" : "var(--text-tertiary)",
-                            fontVariantNumeric: "tabular-nums",
-                            fontFamily: "'Geist Mono', ui-monospace, monospace",
-                          }}
-                        >
-                          {dsDoc.scene_count}
-                        </span>
+                        {jobs && jobs.total > 0 ? (
+                          <>
+                            <MiniBar value={jobs.ready / jobs.total} tone="ok" />
+                            <span className="c-tree-count">
+                              {jobs.ready}/{jobs.total}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="c-tree-count" style={{ marginLeft: "auto" }}>
+                            {dsDoc.scene_count}
+                          </span>
+                        )}
                       </button>
-                    </>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      navigateHpcSection("servers");
-                      setTimeout(() => {
-                        window.dispatchEvent(
-                          new CustomEvent("coperceive-hpc-browse-server", {
-                            detail: { profile: srv },
-                          }),
-                        );
-                      }, 0);
-                    }}
-                    className="c-sidebar-item"
-                    style={{
-                      padding: "5px 8px",
-                      marginLeft: "-8px",
-                      borderRadius: "6px",
-                      border: "none",
-                      background: "transparent",
-                      color: "var(--text-tertiary)",
-                      fontSize: "12.5px",
-                      textAlign: "left",
-                      cursor: "pointer",
-                    }}
-                  >
-                    Browse data…
-                  </button>
-                </div>
+                    ) : null}
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigateHpcSection("servers");
+                    setTimeout(() => {
+                      window.dispatchEvent(
+                        new CustomEvent("coperceive-hpc-browse-server", {
+                          detail: { profile: srv },
+                        }),
+                      );
+                    }, 0);
+                  }}
+                  className="c-sidebar-item c-tree-browse"
+                >
+                  Browse data…
+                </button>
               </div>
             );
           })}
@@ -818,12 +704,10 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                 <BrandWordmark fontSize="13px" />
               </div>
             )}
-            <h1 style={{ fontSize: "13.5px", fontWeight: 500, margin: 0, color: "var(--text)" }}>
-              {activeTab === "library" && "Library"}
-              {activeTab === "get_data" && "Get Data"}
-              {activeTab === "local" && "Open Local Folder"}
-              {activeTab === "remote" && "HPC Workspace"}
-            </h1>
+            <div className="c-header-title">
+              <h1>{pageTitle}</h1>
+              {activeHeader?.meta ? <span className="c-header-meta">{activeHeader.meta}</span> : null}
+            </div>
           </div>
 
           <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
@@ -833,6 +717,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               </div>
             )}
             <JobsIndicator onOpenWorkspace={() => setActiveTab("remote")} />
+            {activeHeader?.actions}
           </div>
         </header>
 
@@ -846,6 +731,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               key={libraryKey}
               onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
               onNavigateGetData={() => setActiveTab("get_data")}
+              onNavigateOpenFolder={() => setActiveTab("local")}
+              onNavigateServers={() => navigateHpcSection("servers")}
             />
           </div>
 
@@ -1348,5 +1235,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
 
       <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
+    </PageHeaderProvider>
   );
 }

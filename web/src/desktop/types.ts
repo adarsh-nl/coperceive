@@ -95,14 +95,29 @@ export interface StorageStats {
   readonly scene_count: number;
 }
 
+export interface LibraryAgent {
+  readonly agent_id: string;
+  readonly agent_type: string;
+  readonly display_name?: string | null;
+  readonly cameras: number;
+  readonly lidars: number;
+}
+
 export interface LibrarySceneInfo {
   readonly scene_id: string;
   readonly path: string;
+  /** What the desktop library sends. */
+  readonly dataset?: string;
+  /** Older name, still used by seeded test fixtures. */
   readonly dataset_name?: string;
-  readonly town?: string;
-  readonly duration_s?: number;
+  readonly town?: string | null;
+  /** Unset when the scene does not record it (never a default). */
+  readonly duration_s?: number | null;
   readonly agent_count?: number;
-  readonly sample_count?: number;
+  readonly sample_count?: number | null;
+  readonly rate_hz?: number | null;
+  readonly agents?: readonly LibraryAgent[];
+  readonly sensor_modalities?: readonly string[];
   readonly size_bytes: number;
   readonly has_images: "full" | "preview" | "none";
   /** A 640 px preview was written at import time (thumbnail.jpg). */

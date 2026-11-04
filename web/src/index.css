@@ -1454,3 +1454,503 @@ form.stack, .stack { display: flex; flex-direction: column; gap: 8px; }
   padding: 8px 10px 8px 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
   box-shadow: 0 8px 28px rgba(0, 0, 0, 0.3); font-size: 13px;
 }
+
+/* ---- v0.1.1 page pattern (components/Page.tsx) --------------------------- */
+.c-page {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  min-height: 100%;
+}
+.c-page.has-inspector {
+  grid-template-columns: minmax(0, 1fr) clamp(300px, 22vw, 420px);
+}
+.c-page-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.c-inspector {
+  background: var(--sunken);
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: auto;
+}
+@media (max-width: 1100px) {
+  .c-page.has-inspector {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .c-inspector {
+    border-left: none;
+    border-top: 1px solid var(--line);
+  }
+}
+.c-page-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+.c-page-toolbar .c-toolbar-end {
+  margin-left: auto;
+}
+.c-inspector-section {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 12.5px;
+  color: var(--text-secondary);
+}
+.c-inspector-label {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-subtle);
+}
+.c-facts {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px 16px;
+  margin: 0;
+}
+.c-fact dt {
+  font-size: 11px;
+  color: var(--text-subtle);
+  margin-bottom: 2px;
+}
+.c-fact dd {
+  margin: 0;
+  font-size: 14px;
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.c-minibar {
+  display: inline-flex;
+  flex: 1;
+  min-width: 24px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line);
+  overflow: hidden;
+}
+.c-minibar > span {
+  display: block;
+  height: 100%;
+  border-radius: 2px;
+  background: var(--text-subtle);
+}
+.c-minibar.tone-ok > span { background: #3fb950; }
+.c-minibar.tone-primary > span { background: var(--primary); }
+.c-minibar.tone-warn > span { background: #d29922; }
+.c-minibar.tone-danger > span { background: #f85149; }
+
+.c-grid-scroll {
+  overflow-x: auto;
+  flex-shrink: 0;
+}
+.c-grid {
+  outline: none;
+  font-size: 12.5px;
+}
+.c-grid:focus-visible {
+  box-shadow: inset 0 0 0 1px var(--primary);
+}
+.c-grid-head,
+.c-grid-row {
+  display: grid;
+  gap: 12px;
+  align-items: center;
+  padding: 0 24px;
+}
+.c-grid-head {
+  height: 30px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--text-subtle);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.c-grid-row {
+  border-bottom: 1px solid var(--line-subtle);
+  color: var(--text-secondary);
+  cursor: default;
+}
+.c-grid-row:hover {
+  background: var(--line-subtle);
+}
+.c-grid-row.is-selected {
+  background: rgba(31, 111, 235, 0.14);
+  box-shadow: inset 2px 0 0 var(--primary);
+}
+.c-grid-head > span,
+.c-grid-row > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-grid .is-right {
+  text-align: right;
+  justify-self: end;
+}
+.c-grid-empty {
+  padding: 24px;
+  color: var(--text-subtle);
+  font-size: 12.5px;
+}
+.c-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid var(--line-elevated);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 16px;
+}
+.c-chip.is-off {
+  border-color: var(--line);
+  color: var(--text-subtle);
+  opacity: 0.6;
+}
+.c-mono {
+  font-family: "Geist Mono", ui-monospace, monospace;
+}
+.c-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.c-sidebar-count {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.c-sidebar-count.is-active {
+  color: #79c0ff;
+}
+:root:not([data-theme="dark"]) .c-sidebar-count.is-active,
+:root[data-theme="light"] .c-sidebar-count.is-active {
+  color: var(--primary);
+}
+
+/* ---- v0.1.1 shell: sidebar groups, counts, servers tree, header ---------- */
+.c-sidebar-group {
+  padding: 6px 8px 4px;
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-subtle);
+}
+.c-nav-item {
+  display: flex;
+  align-items: center;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+}
+.c-nav-item.active {
+  color: var(--text);
+  font-weight: 500;
+  background: var(--line);
+}
+/* The count is generated content, so the button's text stays its label
+   (the e2e scripts find nav buttons by their exact text). */
+.c-nav-item[data-count]::after {
+  content: attr(data-count);
+  margin-left: auto;
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+}
+.c-nav-item.is-live[data-count]::after {
+  color: #79c0ff;
+}
+:root:not([data-theme="dark"]) .c-nav-item.is-live[data-count]::after {
+  color: var(--primary);
+}
+.c-sidebar-add {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 4px;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+}
+.c-sidebar-add:hover {
+  background: var(--line);
+}
+.c-tree-server {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+.c-tree-name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.c-tree-dataset,
+.c-tree-split,
+.c-tree-browse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  border-radius: 6px;
+}
+.c-tree-dataset {
+  padding: 4px 8px 4px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+}
+.c-tree-caret {
+  width: 10px;
+  font-size: 10px;
+  color: var(--text-subtle);
+}
+.c-tree-split {
+  padding: 4px 8px 4px 32px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.c-tree-split.active {
+  background: rgba(31, 111, 235, 0.22);
+  color: var(--text);
+}
+.c-tree-count {
+  font-size: 11px;
+  color: var(--text-subtle);
+  font-variant-numeric: tabular-nums;
+  font-family: "Geist Mono", ui-monospace, monospace;
+}
+.c-tree-browse {
+  padding: 4px 8px 4px 32px;
+  font-size: 12px;
+  color: var(--text-tertiary);
+}
+.c-header-title {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  min-width: 0;
+}
+.c-header-title h1 {
+  font-size: 15px;
+  font-weight: 600;
+  margin: 0;
+  color: var(--text);
+  white-space: nowrap;
+}
+.c-header-meta {
+  font-size: 12px;
+  color: var(--text-subtle);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+/* ---- v0.1.1 controls ------------------------------------------------------ */
+.c-header-action {
+  padding: 5px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(56, 139, 253, 0.55);
+  background: rgba(31, 111, 235, 0.16);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.c-header-action:hover {
+  background: rgba(31, 111, 235, 0.28);
+}
+.c-row-open {
+  padding: 3px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(63, 185, 80, 0.55);
+  background: transparent;
+  color: var(--ok);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.c-row-open:hover {
+  background: rgba(63, 185, 80, 0.12);
+}
+.c-primary-wide {
+  width: 100%;
+  padding: 7px 12px;
+  border-radius: 6px;
+  border: none;
+  background: #238636;
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.c-primary-wide:hover {
+  background: #2ea043;
+}
+.c-primary-wide:disabled {
+  background: var(--line);
+  color: var(--text-subtle);
+  cursor: default;
+}
+.c-secondary {
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line-elevated);
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.c-secondary:hover {
+  background: var(--line-subtle);
+}
+.c-secondary:disabled {
+  color: var(--text-subtle);
+  cursor: default;
+}
+.c-secondary.is-danger {
+  color: var(--danger);
+  border-color: rgba(248, 81, 73, 0.45);
+}
+.c-link {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-tertiary);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.c-link:hover {
+  color: var(--text);
+}
+.c-search {
+  width: 240px;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--line-elevated);
+  background: var(--sunken);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.c-search:focus {
+  border-color: var(--primary);
+}
+.c-agent-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+.c-add-more {
+  padding: 22px 24px;
+}
+.c-add-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 320px));
+  gap: 10px;
+}
+.c-add-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--sunken);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.c-add-card:hover {
+  border-color: var(--line-elevated);
+}
+.c-add-title {
+  font-weight: 500;
+  font-size: 13px;
+}
+.c-add-note {
+  font-size: 12px;
+  color: var(--text-subtle);
+}
+.library-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12.5px;
+  color: var(--text-tertiary);
+}
+.library-badge .c-dot {
+  width: 7px;
+  height: 7px;
+  background: #8e8e93;
+}
+.library-badge.is-valid {
+  color: var(--ok);
+}
+.library-badge.is-valid .c-dot {
+  background: #3fb950;
+}
+.library-badge.is-invalid {
+  color: var(--danger);
+}
+.library-badge.is-invalid .c-dot {
+  background: #f85149;
+}
+.c-page {
+  flex: 1;
+}
+.c-add-more {
+  max-width: 1100px;
+}
+.c-add-cards {
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+}

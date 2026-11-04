@@ -17,6 +17,18 @@ import {
   validateScene,
 } from "./local";
 import { errorText } from "./errors";
+import {
+  Facts,
+  GridTable,
+  InspectorSection,
+  MiniBar,
+  PageLayout,
+  PageToolbar,
+  useDefaultSelection,
+  usePageHeader,
+  type GridColumn,
+} from "./components/Page";
+import { datasetJobs, subscribeDatasetJobs, type DatasetJobs } from "./jobsStore";
 
 function formatBytes(bytes: number): string {
   if (bytes <= 0) return "0 B";
@@ -28,9 +40,60 @@ function formatBytes(bytes: number): string {
 interface Props {
   onOpenScene: (scenePath: string) => void;
   onNavigateGetData: () => void;
+  onNavigateOpenFolder?: () => void;
+  onNavigateServers?: () => void;
 }
 
-export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props) {
+function formatSeconds(seconds: number): string {
+  return `${seconds.toFixed(1)} s`;
+}
+
+function formatHz(hz: number): string {
+  return `${Math.abs(hz - Math.round(hz)) < 0.05 ? Math.round(hz) : hz.toFixed(1)} Hz`;
+}
+
+/** The library sends `dataset`; seeded test fixtures use `dataset_name`. */
+function datasetLabel(scene: LibrarySceneInfo): string {
+  return scene.dataset || scene.dataset_name || "Scene";
+}
+
+function modalityChips(scene: LibrarySceneInfo): Array<[string, boolean]> {
+  const modalities = scene.sensor_modalities ?? [];
+  const chips: Array<[string, boolean]> = [["Cam", scene.has_images !== "none" || modalities.includes("camera")]];
+  // LiDAR is known only from the manifest's sensors; without them, say nothing.
+  if (scene.sensor_modalities) chips.push(["LiDAR", modalities.includes("lidar")]);
+  chips.push(["Map", scene.has_map]);
+  return chips;
+}
+
+function agentTypeLabel(type: string): string {
+  return { vehicle: "Vehicle", uav: "Drone", drone: "Drone", rsu: "RSU", infrastructure: "RSU" }[type] ?? type;
+}
+
+function sensorsLabel(agent: { cameras: number; lidars: number }): string {
+  const parts = [];
+  if (agent.cameras) parts.push(`${agent.cameras} cam`);
+  if (agent.lidars) parts.push(`${agent.lidars} LiDAR`);
+  return parts.join(" · ") || "no sensors";
+}
+
+const sceneKey = (scene: LibrarySceneInfo) => scene.path;
+
+function ValidationBadge({ status }: { status: "valid" | "invalid" | "checking" }) {
+  return (
+    <span className={`library-badge is-${status}`} data-validate={status}>
+      <span className="c-dot" />
+      {status === "checking" ? "Validating…" : status === "valid" ? "Valid" : "Check failed"}
+    </span>
+  );
+}
+
+export default function LibraryScreen({
+  onOpenScene,
+  onNavigateGetData,
+  onNavigateOpenFolder,
+  onNavigateServers,
+}: Props) {
   const [scenes, setScenes] = useState<LibrarySceneInfo[]>([]);
   const [storage, setStorage] = useState<StorageStats | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
@@ -45,17 +108,10 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
   const [mapInstall, setMapInstall] = useState<
     Record<string, { percent: number; message: string; error: string; done: boolean }>
   >({});
-  const [viewMode, setViewMode] = useState<"table" | "grid">("table");
   const [filterQuery, setFilterQuery] = useState<string>("");
-  const [openActionPath, setOpenActionPath] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (!openActionPath) return;
-    const handleClick = () => setOpenActionPath(null);
-    window.addEventListener("click", handleClick);
-    return () => window.removeEventListener("click", handleClick);
-  }, [openActionPath]);
-
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [clusterProgress, setClusterProgress] = useState<DatasetJobs | null>(() => datasetJobs()[0] ?? null);
+  useEffect(() => subscribeDatasetJobs(() => setClusterProgress(datasetJobs()[0] ?? null)), []);
   const applyScenes = (list: LibrarySceneInfo[]) => {
     setScenes(list);
     setValidateStatusMap((previous) => {
@@ -278,872 +334,361 @@ export default function LibraryScreen({ onOpenScene, onNavigateGetData }: Props)
     [scenes],
   );
 
+  // The first row is selected by default (and again if the selected one goes).
+  useDefaultSelection(filteredScenes, sceneKey, selectedPath, setSelectedPath);
+  const selected = filteredScenes.find((scene) => scene.path === selectedPath) ?? null;
+  const knownDurations = scenes.filter((scene) => typeof scene.duration_s === "number");
+  usePageHeader("library", {
+    navCount: loading ? undefined : String(scenes.length),
+    meta: scenes.length
+      ? [
+          `${scenes.length} ${scenes.length === 1 ? "scene" : "scenes"}`,
+          knownDurations.length === scenes.length ? formatSeconds(totalDurationSec) : null,
+          formatBytes(scenes.reduce((sum, scene) => sum + scene.size_bytes, 0)),
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : undefined,
+    actions: (
+      <button type="button" className="c-header-action" onClick={onNavigateGetData}>
+        + Add scenes
+      </button>
+    ),
+  });
+
+  const columns: GridColumn<LibrarySceneInfo>[] = [
+    {
+      key: "scene",
+      header: "Scene",
+      min: 130,
+      max: 260,
+      render: (scene) => (
+        <span className="c-mono" style={{ color: "var(--text)", fontSize: "12.5px" }} aria-label={`Scene ${scene.scene_id}`}>
+          {scene.scene_id}
+        </span>
+      ),
+    },
+    {
+      key: "dataset",
+      header: "Dataset · town",
+      min: 150,
+      max: 320,
+      render: (scene) => (
+        <>
+          {datasetLabel(scene)}
+          {scene.town ? <span style={{ color: "var(--text-subtle)" }}> · {scene.town}</span> : null}
+        </>
+      ),
+    },
+    {
+      key: "duration",
+      header: "Duration",
+      min: 110,
+      max: 110,
+      render: (scene) =>
+        typeof scene.duration_s === "number" ? (
+          <span style={{ display: "flex", alignItems: "center", gap: "8px", fontVariantNumeric: "tabular-nums" }}>
+            <span style={{ width: "40px", textAlign: "right" }}>{formatSeconds(scene.duration_s)}</span>
+            <MiniBar value={scene.duration_s / maxDuration} />
+          </span>
+        ) : (
+          <span style={{ color: "var(--text-subtle)" }} title="Not recorded yet; the background check fills it in">
+            —
+          </span>
+        ),
+    },
+    {
+      key: "agents",
+      header: "Agents",
+      min: 64,
+      max: 64,
+      render: (scene) => (
+        <span style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+          {scene.agent_count ?? "—"}
+          <span style={{ display: "flex", gap: "2px" }} aria-hidden="true">
+            {Array.from({ length: Math.min(scene.agent_count ?? 0, 6) }).map((_, index) => (
+              <span key={index} style={{ width: "4px", height: "10px", borderRadius: "1px", background: "var(--text-subtle)" }} />
+            ))}
+          </span>
+        </span>
+      ),
+    },
+    {
+      key: "modalities",
+      header: "Modalities",
+      min: 150,
+      max: 150,
+      render: (scene) => (
+        <span style={{ display: "flex", gap: "4px" }}>
+          {modalityChips(scene).map(([label, on]) => (
+            <span key={label} className={`c-chip${on ? "" : " is-off"}`} title={on ? `Has ${label}` : `No ${label}`}>
+              {label}
+            </span>
+          ))}
+        </span>
+      ),
+    },
+    {
+      key: "size",
+      header: "Size",
+      min: 72,
+      max: 72,
+      align: "right",
+      render: (scene) => <span style={{ fontVariantNumeric: "tabular-nums" }}>{formatBytes(scene.size_bytes)}</span>,
+    },
+    {
+      key: "check",
+      header: "Check",
+      min: 96,
+      max: 96,
+      render: (scene) => <ValidationBadge status={validateStatusMap[scene.path] ?? "checking"} />,
+    },
+    {
+      key: "open",
+      header: "",
+      min: 64,
+      max: 64,
+      align: "right",
+      render: (scene) => (
+        <button
+          type="button"
+          className="c-row-open"
+          onClick={(event) => {
+            event.stopPropagation();
+            onOpenScene(scene.path);
+          }}
+          aria-label={`Open scene ${scene.scene_id}`}
+        >
+          Open
+        </button>
+      ),
+    },
+  ];
+
+  const prepared = clusterProgress;
+  const install = selected ? mapInstall[selected.path] : undefined;
+
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 52px)", fontSize: "13px" }}>
-      {/* Compact Page Header matching Claude Design mock */}
-      <section
-        style={{
-          padding: "18px 24px 14px",
-          display: "flex",
-          flexDirection: "column",
-          gap: "12px",
-          borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-        }}
+      <PageLayout
+        inspectorLabel="Selected scene"
+        inspector={
+          selected ? (
+            <>
+              <InspectorSection title="Selected scene">
+                <div className="c-mono" style={{ fontSize: "14px", color: "var(--text)" }}>
+                  {selected.scene_id}
+                </div>
+                <div style={{ color: "var(--text-subtle)", fontSize: "12px" }}>
+                  {[datasetLabel(selected), selected.map_name ? selected.map_name.replace("Carla/Maps/", "CARLA ") : selected.town]
+                    .filter(Boolean)
+                    .join(" · ")}
+                </div>
+                {thumbnails[selected.path] ? (
+                  <img
+                    src={thumbnails[selected.path]}
+                    alt={`First camera frame of ${selected.scene_id}`}
+                    style={{ width: "100%", borderRadius: "6px", border: "1px solid var(--line)" }}
+                  />
+                ) : null}
+                <button type="button" className="c-primary-wide" onClick={() => onOpenScene(selected.path)}>
+                  Open in viewer
+                </button>
+              </InspectorSection>
+              <InspectorSection>
+                <Facts
+                  items={[
+                    typeof selected.duration_s === "number" && ["Duration", formatSeconds(selected.duration_s)],
+                    typeof selected.sample_count === "number" && [
+                      "Frames / agent",
+                      <>
+                        {selected.sample_count}
+                        {typeof selected.rate_hz === "number" ? (
+                          <span style={{ fontSize: "11px", color: "var(--text-subtle)" }}> @ {formatHz(selected.rate_hz)}</span>
+                        ) : null}
+                      </>,
+                    ],
+                    ["Camera images", { full: "Full", preview: "Previews", none: "None" }[selected.has_images]],
+                    ["HD map", selected.has_map ? "Yes" : "No"],
+                  ]}
+                />
+                {!selected.has_map && selected.map_name === "Carla/Maps/Town03" ? (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
+                    <button
+                      type="button"
+                      className="c-secondary"
+                      onClick={() => void installTown03Map(selected)}
+                      disabled={install !== undefined && !install.done && !install.error}
+                      title="Downloads the official CARLA 0.9.15 Town03 OpenDRIVE (pinned SHA-256), ingests it and aligns it to this scene. Licence: CARLA 0.9.15 README says the town assets are CC-BY (no version stated)."
+                      aria-label={`Download map for ${selected.scene_id}`}
+                    >
+                      Download map for Town03 (CARLA 0.9.15, CC-BY)
+                    </button>
+                    <a
+                      href="https://github.com/carla-simulator/carla/blob/0.9.15/README.md"
+                      target="_blank"
+                      rel="noreferrer"
+                      style={{ color: "var(--text-subtle)", fontSize: "11px" }}
+                    >
+                      Licence: CARLA 0.9.15 assets are CC-BY (README; version not stated)
+                    </a>
+                    {install ? (
+                      <span style={{ color: "var(--text-tertiary)", fontSize: "11px" }}>
+                        {install.error ? `Could not install: ${install.error}` : `${install.percent}% · ${install.message}`}
+                      </span>
+                    ) : null}
+                  </div>
+                ) : null}
+              </InspectorSection>
+              {selected.agents && selected.agents.length > 0 ? (
+                <InspectorSection title={`${selected.agents.length} ${selected.agents.length === 1 ? "agent" : "agents"}`}>
+                  {selected.agents.map((agent) => (
+                    <div key={agent.agent_id} className="c-agent-row">
+                      <span style={{ color: "var(--text)" }}>{agent.display_name || agentTypeLabel(agent.agent_type)}</span>
+                      <span style={{ color: "var(--text-subtle)", fontSize: "11px" }}>{sensorsLabel(agent)}</span>
+                    </div>
+                  ))}
+                </InspectorSection>
+              ) : null}
+              <InspectorSection title={`${formatBytes(selected.size_bytes)} on disk`}>
+                <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
+                  <button type="button" className="c-secondary" onClick={() => revealInFinder(selected.path)} aria-label={`Show ${selected.scene_id} in Finder`}>
+                    Show in Finder
+                  </button>
+                  <button
+                    type="button"
+                    className="c-secondary"
+                    onClick={() => void handleValidateNow(selected)}
+                    disabled={validatingMap[selected.path]}
+                    aria-label={`Validate scene ${selected.scene_id}`}
+                  >
+                    {validatingMap[selected.path] ? "Checking…" : "Re-check"}
+                  </button>
+                  <button
+                    type="button"
+                    className="c-secondary is-danger"
+                    onClick={() => setDeleteConfirmScene(selected)}
+                    aria-label={`Delete scene ${selected.scene_id}`}
+                  >
+                    Remove…
+                  </button>
+                </div>
+              </InspectorSection>
+            </>
+          ) : null
+        }
       >
-        <div
-          style={{
-            display: "flex",
-            alignItems: "flex-start",
-            justifyContent: "space-between",
-            gap: "16px",
-            flexWrap: "wrap",
-          }}
-        >
-          <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
-            <div style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-              Local workspace · library
-            </div>
-            <div style={{ display: "flex", alignItems: "baseline", gap: "12px", flexWrap: "wrap" }}>
-              <h2
-                style={{
-                  margin: 0,
-                  fontSize: "20px",
-                  fontWeight: 600,
-                  letterSpacing: "-0.01em",
-                  color: "var(--text)",
-                }}
-              >
-                Library
-              </h2>
-              <span style={{ fontSize: "12.5px", color: "var(--text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
-                {scenes.length} scene{scenes.length === 1 ? "" : "s"} ready for cooperative playback and evaluation
-                {totalDurationSec > 0 ? ` · ${totalDurationSec.toFixed(1)}s total` : ""}
-              </span>
-            </div>
-          </div>
-
-          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-            {scenes.length > 0 && (
-              <div
-                role="group"
-                aria-label="Library view mode"
-                style={{
-                  display: "flex",
-                  gap: "2px",
-                  padding: "2px",
-                  borderRadius: "6px",
-                  backgroundColor: "var(--line-subtle, rgba(255,255,255,0.05))",
-                  border: "1px solid var(--line)",
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => setViewMode("table")}
-                  style={{
-                    padding: "3px 9px",
-                    borderRadius: "4px",
-                    border: "none",
-                    fontSize: "11.5px",
-                    fontWeight: viewMode === "table" ? 500 : 400,
-                    backgroundColor: viewMode === "table" ? "var(--line-elevated)" : "transparent",
-                    color: viewMode === "table" ? "var(--text)" : "var(--text-tertiary)",
-                    cursor: "pointer",
-                  }}
-                >
-                  Table
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode("grid")}
-                  style={{
-                    padding: "3px 9px",
-                    borderRadius: "4px",
-                    border: "none",
-                    fontSize: "11.5px",
-                    fontWeight: viewMode === "grid" ? 500 : 400,
-                    backgroundColor: viewMode === "grid" ? "var(--line-elevated)" : "transparent",
-                    color: viewMode === "grid" ? "var(--text)" : "var(--text-tertiary)",
-                    cursor: "pointer",
-                  }}
-                >
-                  Grid
-                </button>
-              </div>
-            )}
-
-            <button
-              type="button"
-              onClick={onNavigateGetData}
-              style={{
-                background: "var(--primary, #1f6feb)",
-                border: "none",
-                borderRadius: "6px",
-                color: "#fff",
-                padding: "6px 14px",
-                fontSize: "13px",
-                fontWeight: 500,
-                cursor: "pointer",
-                display: "inline-flex",
-                alignItems: "center",
-                gap: "6px",
-              }}
-            >
-              <span>+</span> Get Data
+        {storage ? (
+          <PageToolbar>
+            <span>Folder</span>
+            <span className="c-mono" style={{ color: "var(--text)" }}>
+              {storage.library_root}
+            </span>
+            <button type="button" className="c-link" onClick={() => revealInFinder(storage.library_root)}>
+              Show in Finder
             </button>
-          </div>
-        </div>
+            <button type="button" className="c-link" onClick={() => setShowSettingsModal(true)}>
+              Change location…
+            </button>
+            <span className="c-toolbar-end" style={{ display: "flex", alignItems: "center", gap: "10px" }}>
+              {storage.total_bytes > 0 ? (
+                <span title={storage.volume_name} style={{ width: "160px", display: "flex" }}>
+                  <MiniBar value={storage.used_bytes / storage.total_bytes} tone="primary" />
+                </span>
+              ) : null}
+              <span style={{ color: "var(--text-secondary)" }}>
+                {formatBytes(storage.used_bytes)} library · {formatBytes(storage.free_bytes)} free
+              </span>
+            </span>
+          </PageToolbar>
+        ) : null}
 
-        {/* Compact Storage Line */}
-        {storage && (
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "space-between",
-              gap: "12px",
-              flexWrap: "wrap",
-              fontSize: "12px",
-              paddingTop: "4px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0, flexWrap: "wrap" }}>
-              <span style={{ color: "var(--text-subtle)" }}>Library:</span>
-              <span
-                style={{
-                  color: "var(--text-secondary)",
-                  fontFamily: "'Geist Mono', ui-monospace, monospace",
-                  fontSize: "11.5px",
-                }}
-              >
-                {storage.library_root}
-              </span>
-              <span style={{ color: "var(--text-subtle)" }}>·</span>
-              <span style={{ color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
-                {formatBytes(storage.used_bytes)} used
-              </span>
-              <span style={{ color: "var(--text-subtle)" }}>·</span>
-              <span style={{ color: "var(--text-tertiary)", fontVariantNumeric: "tabular-nums" }}>
-                {formatBytes(storage.free_bytes)} free on {storage.volume_name}
-              </span>
-            </div>
+        {scenes.length > 0 ? (
+          <PageToolbar>
+            <input
+              type="search"
+              placeholder="Filter scene or dataset"
+              aria-label="Filter library scenes"
+              value={filterQuery}
+              onChange={(event) => setFilterQuery(event.target.value)}
+              className="c-search"
+            />
+            <span className="c-toolbar-end">
+              {filteredScenes.length === scenes.length
+                ? `${scenes.length} ${scenes.length === 1 ? "scene" : "scenes"}`
+                : `${filteredScenes.length} of ${scenes.length} scenes`}
+            </span>
+          </PageToolbar>
+        ) : null}
 
-            <div style={{ display: "flex", gap: "6px", flexShrink: 0 }}>
-              <button
-                type="button"
-                onClick={() => revealInFinder(storage.library_root)}
-                style={{
-                  background: "transparent",
-                  border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
-                  borderRadius: "5px",
-                  color: "var(--text-secondary)",
-                  padding: "3px 10px",
-                  fontSize: "11.5px",
-                  cursor: "pointer",
-                }}
-              >
-                Show in Finder
-              </button>
-              <button
-                type="button"
-                onClick={() => setShowSettingsModal(true)}
-                style={{
-                  background: "transparent",
-                  border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
-                  borderRadius: "5px",
-                  color: "var(--text-secondary)",
-                  padding: "3px 10px",
-                  fontSize: "11.5px",
-                  cursor: "pointer",
-                }}
-              >
-                Change location…
-              </button>
-            </div>
+        {loading && (
+          <div style={{ padding: "24px" }}>
+            <PanelState
+              kind="loading"
+              title={PANEL_DEFINITIONS.library.loading.title}
+              description={PANEL_DEFINITIONS.library.loading.description}
+            />
           </div>
         )}
-      </section>
-
-      {/* Filter Bar when scenes exist */}
-      {scenes.length > 0 && (
-        <div
-          style={{
-            padding: "8px 24px",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "space-between",
-            gap: "12px",
-            borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-          }}
-        >
-          <input
-            type="search"
-            aria-label="Filter library scenes"
-            placeholder="Filter scene ID or dataset…"
-            value={filterQuery}
-            onChange={(e) => setFilterQuery(e.target.value)}
-            style={{
-              width: "220px",
-              padding: "4px 10px",
-              borderRadius: "6px",
-              border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
-              backgroundColor: "var(--sunken)",
-              color: "var(--text)",
-              font: "inherit",
-              fontSize: "12px",
-              outline: "none",
-            }}
-          />
-          <span
-            style={{
-              fontSize: "12px",
-              color: "var(--text-subtle)",
-              fontVariantNumeric: "tabular-nums",
-            }}
-          >
-            {filteredScenes.length === scenes.length
-              ? `${scenes.length} scene${scenes.length === 1 ? "" : "s"}`
-              : `${filteredScenes.length} of ${scenes.length} scenes`}
-          </span>
-        </div>
-      )}
-
-      {/* Panel States: Loading, Error, and Empty */}
-      {loading && (
-        <div style={{ padding: "24px" }}>
-          <PanelState
-            kind="loading"
-            title={PANEL_DEFINITIONS.library.loading.title}
-            description={PANEL_DEFINITIONS.library.loading.description}
-          />
-        </div>
-      )}
-      {!loading && loadError && (
-        <div style={{ padding: "24px" }}>
-          <PanelState
-            kind="error"
-            title={PANEL_DEFINITIONS.library.error.title}
-            description={PANEL_DEFINITIONS.library.error.description}
-            actionLabel={PANEL_DEFINITIONS.library.error.actionLabel}
-            onAction={() => void loadData()}
-          />
-        </div>
-      )}
-      {!loading && !loadError && scenes.length === 0 && (
-        <div style={{ padding: "24px" }}>
-          <PanelState
-            kind="empty"
-            title={PANEL_DEFINITIONS.library.empty.title}
-            description={PANEL_DEFINITIONS.library.empty.description}
-            actionLabel={PANEL_DEFINITIONS.library.empty.actionLabel}
-            onAction={onNavigateGetData}
-          />
-        </div>
-      )}
-
-      {/* Dense Table View (default) */}
-      {scenes.length > 0 && viewMode === "table" && (
-        <div style={{ flex: 1, overflowX: "auto" }}>
-          <div style={{ minWidth: "820px" }}>
-            <div
-              style={{
-                position: "sticky",
-                top: 0,
-                zIndex: 2,
-                display: "grid",
-                gridTemplateColumns:
-                  "minmax(140px, 1.3fr) minmax(160px, 1.5fr) 80px 58px minmax(130px, 1.1fr) 68px 84px 96px",
-                alignItems: "center",
-                gap: "12px",
-                padding: "0 24px",
-                height: "30px",
-                backgroundColor: "var(--panel)",
-                borderBottom: "1px solid var(--line, rgba(255,255,255,0.08))",
-                fontSize: "11px",
-                color: "var(--text-subtle)",
-              }}
-            >
-              <span>Scene ID</span>
-              <span>Dataset · Town</span>
-              <span>Duration</span>
-              <span>Agents</span>
-              <span>Modalities</span>
-              <span style={{ textAlign: "right" }}>Size</span>
-              <span>Status</span>
-              <span style={{ textAlign: "right" }}>Actions</span>
-            </div>
-
-            {filteredScenes.map((scene) => {
-              const isValidating = validatingMap[scene.path];
-              const validateStatus = validateStatusMap[scene.path];
-              const dur = scene.duration_s ?? 0;
-              const durPct = `${Math.min(100, Math.max(6, (dur / maxDuration) * 100))}%`;
-              const agents = scene.agent_count ?? 1;
-              const needsTown03Map = !scene.has_map && scene.map_name === "Carla/Maps/Town03";
-
-              return (
-                <div
-                  key={scene.path}
-                  tabIndex={0}
-                  role="region"
-                  aria-label={`Scene ${scene.scene_id}`}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" || e.key === " ") {
-                      e.preventDefault();
-                      onOpenScene(scene.path);
-                    }
-                  }}
-                  className="library-scene-card c-table-row"
-                  style={{
-                    display: "flex",
-                    flexDirection: "column",
-                    borderBottom: "1px solid var(--line-subtle, rgba(255,255,255,0.04))",
-                  }}
-                >
-                  <div
-                    style={{
-                      display: "grid",
-                      gridTemplateColumns:
-                        "minmax(140px, 1.3fr) minmax(160px, 1.5fr) 80px 58px minmax(130px, 1.1fr) 68px 84px 96px",
-                      alignItems: "center",
-                      gap: "12px",
-                      padding: "0 24px",
-                      minHeight: "38px",
-                    }}
-                  >
-                    {/* Scene ID + mini thumb */}
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px", minWidth: 0 }}>
-                      {thumbnails[scene.path] ? (
-                        <img
-                          src={thumbnails[scene.path]}
-                          alt={`Preview of ${scene.scene_id}`}
-                          style={{
-                            width: "28px",
-                            height: "20px",
-                            objectFit: "cover",
-                            borderRadius: "3px",
-                            flexShrink: 0,
-                            backgroundColor: "var(--sunken)",
-                          }}
-                        />
-                      ) : (
-                        <span
-                          role="img"
-                          aria-label="No preview for this scene"
-                          style={{
-                            width: "6px",
-                            height: "6px",
-                            borderRadius: "50%",
-                            backgroundColor:
-                              validateStatus === "valid"
-                                ? "#3fb950"
-                                : validateStatus === "invalid"
-                                  ? "#f85149"
-                                  : "#8e8e93",
-                            flexShrink: 0,
-                          }}
-                        />
-                      )}
-                      <span
-                        style={{
-                          fontFamily: "'Geist Mono', ui-monospace, monospace",
-                          fontSize: "12.5px",
-                          fontWeight: 500,
-                          color: "var(--text)",
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          whiteSpace: "nowrap",
-                        }}
-                      >
-                        {scene.scene_id}
-                      </span>
-                    </div>
-
-                    {/* Dataset / Town */}
-                    <span
-                      style={{
-                        color: "var(--text-secondary)",
-                        fontSize: "12.5px",
-                        overflow: "hidden",
-                        textOverflow: "ellipsis",
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {scene.dataset_name || "Cooperative Scene"}
-                      {scene.town ? (
-                        <span style={{ color: "var(--text-subtle)" }}> · {scene.town}</span>
-                      ) : null}
-                    </span>
-
-                    {/* Duration + bar */}
-                    <span
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "8px",
-                        fontVariantNumeric: "tabular-nums",
-                        color: "var(--text-secondary)",
-                        fontSize: "12.5px",
-                      }}
-                    >
-                      <span style={{ width: "38px", textAlign: "right" }}>
-                        {scene.duration_s != null ? `${scene.duration_s.toFixed(1)}s` : "—"}
-                      </span>
-                      <span
-                        style={{
-                          flex: 1,
-                          maxWidth: "60px",
-                          height: "4px",
-                          borderRadius: "2px",
-                          backgroundColor: "var(--line, rgba(255,255,255,0.06))",
-                        }}
-                      >
-                        <span
-                          style={{
-                            display: "block",
-                            height: "100%",
-                            borderRadius: "2px",
-                            backgroundColor: "#8e8e93",
-                            width: durPct,
-                          }}
-                        />
-                      </span>
-                    </span>
-
-                    {/* Agents */}
-                    <span
-                      style={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "6px",
-                        color: "var(--text-secondary)",
-                        fontVariantNumeric: "tabular-nums",
-                        fontSize: "12.5px",
-                      }}
-                    >
-                      <span style={{ width: "10px" }}>{scene.agent_count ?? "—"}</span>
-                      <span style={{ display: "flex", gap: "2px" }}>
-                        {Array.from({ length: Math.min(agents, 5) }, (_, idx) => (
-                          <span
-                            key={idx}
-                            style={{
-                              width: "5px",
-                              height: "9px",
-                              borderRadius: "1px",
-                              backgroundColor: "#8e8e93",
-                            }}
-                          />
-                        ))}
-                      </span>
-                    </span>
-
-                    {/* Modalities */}
-                    <span style={{ fontSize: "12px", color: "var(--text-tertiary)", whiteSpace: "nowrap" }}>
-                      images: <span style={{ color: "var(--text-secondary)" }}>{scene.has_images}</span> · map:{" "}
-                      <span style={{ color: "var(--text-secondary)" }}>{scene.has_map ? "yes" : "no"}</span>
-                    </span>
-
-                    {/* Size */}
-                    <span
-                      style={{
-                        textAlign: "right",
-                        fontFamily: "'Geist Mono', ui-monospace, monospace",
-                        fontSize: "12px",
-                        fontVariantNumeric: "tabular-nums",
-                        color: "var(--text-tertiary)",
-                      }}
-                    >
-                      {formatBytes(scene.size_bytes)}
-                    </span>
-
-                    {/* Status Pill */}
-                    <span>
-                      <span
-                        className="library-badge"
-                        data-validate={validateStatus}
-                        style={{
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "5px",
-                          fontSize: "12px",
-                          fontWeight: 500,
-                          color:
-                            validateStatus === "valid"
-                              ? "var(--ok)"
-                              : validateStatus === "invalid"
-                                ? "var(--danger)"
-                                : "var(--text-tertiary)",
-                        }}
-                      >
-                        {validateStatus !== "valid" ? (
-                          <span
-                            style={{
-                              width: "6px",
-                              height: "6px",
-                              borderRadius: "50%",
-                              backgroundColor:
-                                validateStatus === "invalid"
-                                  ? "#f85149"
-                                  : "#8e8e93",
-                            }}
-                          />
-                        ) : null}
-                        {validateStatus === "checking"
-                          ? "Validating…"
-                          : validateStatus === "valid"
-                            ? "Valid ✓"
-                            : validateStatus === "invalid"
-                              ? "Check failed"
-                              : "Schema 1"}
-                      </span>
-                    </span>
-
-                    {/* Actions */}
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "flex-end",
-                        alignItems: "center",
-                        gap: "6px",
-                        position: "relative",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => onOpenScene(scene.path)}
-                        aria-label={`Open scene ${scene.scene_id}`}
-                        style={{
-                          padding: "3px 10px",
-                          borderRadius: "5px",
-                          border: "1px solid rgba(63, 185, 80, 0.6)",
-                          backgroundColor: "transparent",
-                          color: "var(--ok)",
-                          fontSize: "12px",
-                          fontWeight: 500,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Open
-                      </button>
-                      <button
-                        type="button"
-                        style={{
-                          padding: "3px 7px",
-                          borderRadius: "5px",
-                          border: "1px solid var(--line-elevated, rgba(255,255,255,0.14))",
-                          backgroundColor: "transparent",
-                          color: "var(--text-secondary)",
-                          fontSize: "11.5px",
-                          cursor: "pointer",
-                          lineHeight: 1,
-                        }}
-                        aria-label={`More actions for scene ${scene.scene_id}`}
-                        aria-haspopup="true"
-                        aria-expanded={openActionPath === scene.path}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          setOpenActionPath((curr) => (curr === scene.path ? null : scene.path));
-                        }}
-                      >
-                        ⋯
-                      </button>
-
-                      {openActionPath === scene.path && (
-                        <div
-                          role="menu"
-                          onClick={(e) => e.stopPropagation()}
-                          style={{
-                            position: "absolute",
-                            right: 0,
-                            top: "100%",
-                            marginTop: "4px",
-                            zIndex: 20,
-                            backgroundColor: "var(--panel, #1c1c1e)",
-                            border: "1px solid var(--line-elevated, rgba(255, 255, 255, 0.16))",
-                            borderRadius: "6px",
-                            boxShadow: "0 8px 24px rgba(0, 0, 0, 0.5)",
-                            padding: "4px",
-                            minWidth: "120px",
-                            display: "flex",
-                            flexDirection: "column",
-                            gap: "2px",
-                          }}
-                        >
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              setOpenActionPath(null);
-                              revealInFinder(scene.path);
-                            }}
-                            title="Show in Finder"
-                            aria-label={`Show ${scene.scene_id} in Finder`}
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              color: "var(--text)",
-                              fontSize: "12px",
-                              padding: "5px 8px",
-                              borderRadius: "4px",
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                          >
-                            Finder
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              setOpenActionPath(null);
-                              handleValidateNow(scene);
-                            }}
-                            disabled={isValidating}
-                            title="Validate scene metadata against schema"
-                            aria-label={`Validate scene ${scene.scene_id}`}
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              color: "var(--text-secondary)",
-                              fontSize: "12px",
-                              padding: "5px 8px",
-                              borderRadius: "4px",
-                              textAlign: "left",
-                              cursor: isValidating ? "wait" : "pointer",
-                            }}
-                          >
-                            {isValidating ? "Validating…" : "Validate"}
-                          </button>
-                          <button
-                            type="button"
-                            role="menuitem"
-                            onClick={() => {
-                              setOpenActionPath(null);
-                              setDeleteConfirmScene(scene);
-                            }}
-                            title="Move scene to Trash"
-                            aria-label={`Delete scene ${scene.scene_id}`}
-                            style={{
-                              background: "transparent",
-                              border: "none",
-                              color: "var(--danger, #ff453a)",
-                              fontSize: "12px",
-                              padding: "5px 8px",
-                              borderRadius: "4px",
-                              textAlign: "left",
-                              cursor: "pointer",
-                            }}
-                          >
-                            Delete
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-
-                  {needsTown03Map && (
-                    <div
-                      style={{
-                        padding: "0 24px 8px 46px",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "12px",
-                        flexWrap: "wrap",
-                        fontSize: "11.5px",
-                      }}
-                    >
-                      <button
-                        type="button"
-                        onClick={() => void installTown03Map(scene)}
-                        disabled={
-                          mapInstall[scene.path] !== undefined &&
-                          !mapInstall[scene.path]?.done &&
-                          !mapInstall[scene.path]?.error
-                        }
-                        title="Downloads the official CARLA 0.9.15 Town03 OpenDRIVE (pinned SHA-256), ingests it and aligns it to this scene. Licence: CARLA 0.9.15 README says the town assets are CC-BY (no version stated)."
-                        aria-label={`Download map for ${scene.scene_id}`}
-                        style={{
-                          background: "var(--sunken)",
-                          color: "var(--text)",
-                          border: "1px solid var(--line-elevated)",
-                          borderRadius: "4px",
-                          padding: "2px 8px",
-                          fontSize: "11.5px",
-                          fontWeight: 500,
-                          cursor: "pointer",
-                        }}
-                      >
-                        Download map for Town03 (CARLA 0.9.15, CC-BY)
-                      </button>
-                      <a
-                        href="https://github.com/carla-simulator/carla/blob/0.9.15/README.md"
-                        target="_blank"
-                        rel="noreferrer"
-                        style={{ color: "var(--text-subtle)", fontSize: "11px" }}
-                      >
-                        Licence: CARLA 0.9.15 assets are CC-BY (README; version not stated)
-                      </a>
-                      {mapInstall[scene.path] ? (
-                        <span style={{ color: "var(--text-tertiary)", fontSize: "11px" }}>
-                          {mapInstall[scene.path]?.error
-                            ? `Could not install: ${mapInstall[scene.path]?.error}`
-                            : `${mapInstall[scene.path]?.percent ?? 0}% · ${mapInstall[scene.path]?.message ?? ""}`}
-                        </span>
-                      ) : null}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+        {!loading && loadError && (
+          <div style={{ padding: "24px" }}>
+            <PanelState
+              kind="error"
+              title={PANEL_DEFINITIONS.library.error.title}
+              description={PANEL_DEFINITIONS.library.error.description}
+              actionLabel={PANEL_DEFINITIONS.library.error.actionLabel}
+              onAction={() => void loadData()}
+            />
           </div>
-        </div>
-      )}
+        )}
+        {!loading && !loadError && scenes.length === 0 && (
+          <div style={{ padding: "24px" }}>
+            <PanelState
+              kind="empty"
+              title={PANEL_DEFINITIONS.library.empty.title}
+              description={PANEL_DEFINITIONS.library.empty.description}
+              actionLabel={PANEL_DEFINITIONS.library.empty.actionLabel}
+              onAction={onNavigateGetData}
+            />
+          </div>
+        )}
 
-      {/* Compact Cards Grid View (when toggled) */}
-      {scenes.length > 0 && viewMode === "grid" && (
-        <div
-          style={{
-            padding: "16px 24px",
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
-            gap: "12px",
-          }}
-        >
-          {filteredScenes.map((scene) => {
-            const isValidating = validatingMap[scene.path];
-            const validateStatus = validateStatusMap[scene.path];
-            return (
-              <div
-                key={scene.path}
-                tabIndex={0}
-                role="region"
-                aria-label={`Scene ${scene.scene_id}`}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    onOpenScene(scene.path);
-                  }
-                }}
-                className="library-scene-card"
-                style={{
-                  background: "var(--panel)",
-                  border: "1px solid var(--line)",
-                  borderRadius: "8px",
-                  padding: "12px",
-                  display: "flex",
-                  flexDirection: "column",
-                  justifyContent: "space-between",
-                  gap: "10px",
-                }}
-              >
-                <div>
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-                    <div>
-                      <h4
-                        style={{
-                          margin: 0,
-                          fontSize: "13px",
-                          fontFamily: "'Geist Mono', monospace",
-                          color: "var(--text)",
-                          fontWeight: 500,
-                        }}
-                      >
-                        {scene.scene_id}
-                      </h4>
-                      <span style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
-                        {scene.dataset_name || "Cooperative Scene"}
-                        {scene.town ? ` · ${scene.town}` : ""}
-                      </span>
-                    </div>
-                    <span
-                      className="library-badge"
-                      data-validate={validateStatus}
-                      style={{
-                        fontSize: "11px",
-                        color:
-                          validateStatus === "valid"
-                            ? "var(--ok)"
-                            : validateStatus === "invalid"
-                              ? "var(--danger)"
-                              : "var(--text-tertiary)",
-                        fontWeight: 500,
-                      }}
-                    >
-                      {validateStatus === "checking"
-                        ? "Validating…"
-                        : validateStatus === "valid"
-                          ? "Valid ✓"
-                          : validateStatus === "invalid"
-                            ? "Check failed"
-                            : "Schema 1"}
-                    </span>
-                  </div>
-                  <div style={{ display: "flex", flexWrap: "wrap", gap: "6px", marginTop: "8px", fontSize: "11.5px", color: "var(--text-secondary)" }}>
-                    {scene.duration_s != null && <span>{scene.duration_s.toFixed(1)}s</span>}
-                    {scene.agent_count != null && <span>· {scene.agent_count} agents</span>}
-                    <span>· images: {scene.has_images}</span>
-                    <span>· map: {scene.has_map ? "yes" : "no"}</span>
-                    <span>· {formatBytes(scene.size_bytes)}</span>
-                  </div>
-                </div>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", paddingTop: "8px", borderTop: "1px solid var(--line-subtle)" }}>
-                  <div style={{ display: "flex", gap: "6px" }}>
-                    <button
-                      type="button"
-                      onClick={() => onOpenScene(scene.path)}
-                      aria-label={`Open scene ${scene.scene_id}`}
-                      style={{
-                        padding: "3px 10px",
-                        borderRadius: "5px",
-                        border: "1px solid rgba(63, 185, 80, 0.6)",
-                        background: "transparent",
-                        color: "var(--ok)",
-                        fontSize: "12px",
-                        fontWeight: 500,
-                      }}
-                    >
-                      Open
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => revealInFinder(scene.path)}
-                      aria-label={`Show ${scene.scene_id} in Finder`}
-                      style={{
-                        padding: "3px 8px",
-                        borderRadius: "5px",
-                        border: "1px solid var(--line-elevated)",
-                        background: "transparent",
-                        color: "var(--text-secondary)",
-                        fontSize: "11.5px",
-                      }}
-                    >
-                      Finder
-                    </button>
-                  </div>
-                  <div style={{ display: "flex", gap: "6px" }}>
-                    <button
-                      type="button"
-                      onClick={() => handleValidateNow(scene)}
-                      disabled={isValidating}
-                      aria-label={`Validate scene ${scene.scene_id}`}
-                      style={{ background: "transparent", border: "none", fontSize: "11.5px", color: "var(--text-tertiary)" }}
-                    >
-                      {isValidating ? "Validating…" : "Validate"}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setDeleteConfirmScene(scene)}
-                      aria-label={`Delete scene ${scene.scene_id}`}
-                      style={{ background: "transparent", border: "none", fontSize: "11.5px", color: "var(--danger)" }}
-                    >
-                      Delete
-                    </button>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
+        {scenes.length > 0 ? (
+          <GridTable
+            label="Library scenes"
+            columns={columns}
+            rows={filteredScenes}
+            rowKey={sceneKey}
+            selectedKey={selected?.path ?? null}
+            onSelect={(scene) => setSelectedPath(scene.path)}
+            onActivate={(scene) => onOpenScene(scene.path)}
+          />
+        ) : null}
+
+        <section className="c-add-more" aria-label="Add more scenes">
+          <div className="c-inspector-label" style={{ padding: "0 0 10px" }}>
+            Add more scenes
+          </div>
+          <div className="c-add-cards">
+            <button type="button" className="c-add-card" onClick={onNavigateGetData}>
+              <span className="c-add-title">Download from catalog →</span>
+              <span className="c-add-note">Datasets with a recorded licence, measured before you download</span>
+            </button>
+            <button type="button" className="c-add-card" onClick={onNavigateOpenFolder}>
+              <span className="c-add-title">Import a local folder →</span>
+              <span className="c-add-note">Any folder holding schema 1 scenes</span>
+            </button>
+            <button type="button" className="c-add-card" onClick={onNavigateServers}>
+              <span className="c-add-title">Prepare on HPC →</span>
+              <span className="c-add-note">
+                {prepared
+                  ? `${prepared.label} · ${prepared.ready} of ${prepared.total} ready`
+                  : "Prepare a dataset on a cluster you reach over SSH"}
+              </span>
+            </button>
+          </div>
+        </section>
+      </PageLayout>
 
       {/* First Run Storage Location Modal */}
       {showFirstRunModal && (
