@@ -427,6 +427,74 @@ fn parse_scene_info_with_cache(
     })
 }
 
+/// What Open Folder shows about a folder before opening it ("Folder check").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct FolderCheck {
+    pub path: String,
+    /// "scene" (the folder is a scene), "library" (the app's library root),
+    /// "folder" (holds scenes), or "none" (missing, not a folder, no scenes).
+    pub kind: String,
+    pub scene_ids: Vec<String>,
+    pub modalities: Vec<String>,
+    pub has_map: bool,
+    pub size_bytes: u64,
+    /// The folder is the library or inside it.
+    pub in_library: bool,
+    /// Why it cannot be opened, when it cannot.
+    pub problem: Option<String>,
+}
+
+/// Inspect a folder the way Open Folder would open it, reading only manifests.
+pub fn inspect_folder(path: &Path, library_root: Option<&Path>) -> FolderCheck {
+    let display = path.to_string_lossy().into_owned();
+    let in_library = library_root
+        .and_then(|root| {
+            let root = fs::canonicalize(root).ok()?;
+            Some(fs::canonicalize(path).ok()?.starts_with(root))
+        })
+        .unwrap_or(false);
+    let none = |problem: String| FolderCheck {
+        path: display.clone(),
+        kind: "none".to_string(),
+        scene_ids: Vec::new(),
+        modalities: Vec::new(),
+        has_map: false,
+        size_bytes: 0,
+        in_library,
+        problem: Some(problem),
+    };
+    if let Err(problem) = crate::state::validate_dataset_root(path) {
+        return none(problem);
+    }
+    let root = library_root.unwrap_or(path);
+    let is_scene = path.join("manifest.json").is_file() && path.join("COMPLETE.json").is_file();
+    let scenes = if is_scene {
+        parse_scene_info_with_cache(path, &HashMap::new(), root).into_iter().collect()
+    } else {
+        scan_library_scenes(path)
+    };
+    let mut modalities: Vec<String> = scenes
+        .iter()
+        .flat_map(|scene| scene.sensor_modalities.iter().cloned())
+        .collect::<HashSet<_>>()
+        .into_iter()
+        .collect();
+    modalities.sort();
+    let is_library = library_root
+        .and_then(|root| Some(fs::canonicalize(root).ok()? == fs::canonicalize(path).ok()?))
+        .unwrap_or(false);
+    FolderCheck {
+        path: display,
+        kind: if is_scene { "scene" } else if is_library { "library" } else { "folder" }.to_string(),
+        scene_ids: scenes.iter().map(|scene| scene.scene_id.clone()).collect(),
+        has_map: scenes.iter().any(|scene| scene.has_map),
+        size_bytes: scenes.iter().map(|scene| scene.size_bytes).sum(),
+        modalities,
+        in_library,
+        problem: None,
+    }
+}
+
 /// The scene's agreed `platform.map_name`, if every agent that sets one agrees.
 pub fn scene_map_name(scene_dir: &Path) -> Option<String> {
     let manifest: serde_json::Value =
@@ -738,6 +806,41 @@ mod tests {
             .collect();
         assert_eq!(agents, vec![("veh1", 2, 1), ("uav1", 1, 0)]);
         assert_eq!(bare.agents[0].display_name.as_deref(), Some("Vehicle 1"));
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn a_folder_check_reads_only_what_the_scenes_record() {
+        let tmp = std::env::temp_dir().join(format!("coperceive-test-folder-check-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&tmp);
+        let library = tmp.join("library");
+        let manifest = |id: &str, modality: &str| {
+            format!(
+                r#"{{"schema_version": 1, "scene_id": "{id}", "agents": [{{"agent_id": "a", "agent_type": "vehicle"}}],
+                "sensors": [{{"sensor_id": "s", "agent_id": "a", "modality": "{modality}"}}]}}"#
+            )
+        };
+        for (dir, id, modality) in [("library/A", "A", "lidar"), ("library/B", "B", "camera"), ("loose/C", "C", "lidar")] {
+            let scene = tmp.join(dir);
+            fs::create_dir_all(&scene).expect("scene");
+            fs::write(scene.join("manifest.json"), manifest(id, modality)).expect("manifest");
+            fs::write(scene.join("COMPLETE.json"), "{}").expect("complete");
+        }
+        let whole = inspect_folder(&library, Some(&library));
+        assert_eq!(whole.kind, "library");
+        assert_eq!(whole.scene_ids, vec!["A".to_string(), "B".to_string()]);
+        assert_eq!(whole.modalities, vec!["camera".to_string(), "lidar".to_string()]);
+        assert!(whole.in_library && whole.problem.is_none());
+        let one = inspect_folder(&tmp.join("loose/C"), Some(&library));
+        assert_eq!((one.kind.as_str(), one.scene_ids.len(), one.in_library), ("scene", 1, false));
+        let loose = inspect_folder(&tmp.join("loose"), Some(&library));
+        assert_eq!((loose.kind.as_str(), loose.scene_ids.clone()), ("folder", vec!["C".to_string()]));
+        let missing = inspect_folder(&tmp.join("nope"), Some(&library));
+        assert_eq!(missing.kind, "none");
+        assert!(missing.problem.unwrap().contains("does not exist"));
+        let empty = tmp.join("empty");
+        fs::create_dir_all(&empty).expect("empty");
+        assert!(inspect_folder(&empty, None).problem.unwrap().contains("No coperceive scenes"));
         let _ = fs::remove_dir_all(&tmp);
     }
 

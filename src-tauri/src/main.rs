@@ -1424,6 +1424,14 @@ fn library_thumbnail(scene_path: String) -> Result<Option<Vec<u8>>, String> {
     coperceive_desktop::library::read_thumbnail_bytes(Path::new(&root), &scene_path)
 }
 
+/// Open Folder's "Folder check": what a folder holds, read from its manifests.
+#[cfg(target_os = "macos")]
+#[tauri::command]
+fn inspect_folder(path: String) -> coperceive_desktop::library::FolderCheck {
+    let library_root = state::load_state().library_root.map(PathBuf::from);
+    coperceive_desktop::library::inspect_folder(Path::new(&path), library_root.as_deref())
+}
+
 #[cfg(target_os = "macos")]
 #[tauri::command]
 fn get_storage_info() -> Result<coperceive_desktop::library::StorageStats, String> {
@@ -3478,6 +3486,7 @@ fn main() {
             import_from_folder,
             cancel_import,
             get_storage_info,
+            inspect_folder,
             set_library_root,
             move_library_root,
             get_library_scenes,
