@@ -44,7 +44,7 @@ def _ingested(tmp_path: Path, scene: SceneSpec | None = None, name: str = "opv2v
 def _points(scene: Scene, agent_id: str, time_us: int) -> list[Vec3]:
     cloud = next(c for c in scene.point_clouds if c.agent_id == agent_id and c.time_us == time_us)
     flat = np.frombuffer(cloud.xyz_i_f32, dtype=np.float32)  # pyright: ignore[reportUnknownMemberType]
-    values = [float(v) for v in cast(list[float], flat.tolist())]
+    values = [float(v) for v in flat.tolist()]
     return [(values[i], values[i + 1], values[i + 2]) for i in range(0, len(values), 4)]
 
 

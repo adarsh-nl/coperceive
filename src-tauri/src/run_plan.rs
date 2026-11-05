@@ -810,7 +810,7 @@ fn artifact_from_check(path: &str, values: &BTreeMap<String, String>) -> PlanArt
         path: path.to_string(),
         sha256: values
             .get("SHA256")
-            .map(|value| value.trim().to_string())
+            .map(|value| value.trim().trim_start_matches('\\').to_string())
             .filter(|value| !value.is_empty()),
         kind: if !exists {
             "missing".to_string()
@@ -3285,7 +3285,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn real_fake_ssh_builds_and_saves_a_plan_without_submitting() {
         use crate::ssh::SshTarget;
 

@@ -7,7 +7,34 @@ pub fn apply_viewer_window_chrome<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
     builder: tauri::WebviewWindowBuilder<'a, R, M>,
 ) -> tauri::WebviewWindowBuilder<'a, R, M> {
     // Native decorations on Windows
-    builder
+    builder.decorations(true)
+}
+
+pub fn create_command(bin: &str) -> std::process::Command {
+    if bin.ends_with(".sh") {
+        let sh_bin = find_sh();
+        let mut cmd = std::process::Command::new(sh_bin);
+        cmd.arg(bin);
+        return cmd;
+    }
+    std::process::Command::new(bin)
+}
+
+fn find_sh() -> String {
+    for candidate in [
+        "sh",
+        "bash",
+        r"C:\Program Files\Git\bin\sh.exe",
+        r"C:\Program Files\Git\usr\bin\sh.exe",
+        r"C:\Program Files (x86)\Git\bin\sh.exe",
+    ] {
+        if let Ok(status) = std::process::Command::new(candidate).arg("-c").arg("exit 0").status() {
+            if status.success() {
+                return candidate.to_string();
+            }
+        }
+    }
+    "sh".to_string()
 }
 
 pub fn reveal_path(path: &Path) -> Result<(), String> {
@@ -57,12 +84,106 @@ pub fn terminate_process(pid: u32) -> Result<(), String> {
     Ok(())
 }
 
-pub fn pause_process(_pid: u32) -> Result<(), String> {
-    Err("Pausing dataset jobs is not supported on Windows yet".into())
+// Windows native process suspend/resume via NtSuspendProcess and NtResumeProcess in ntdll.dll
+#[link(name = "kernel32")]
+extern "system" {
+    fn OpenProcess(dwDesiredAccess: u32, bInheritHandle: i32, dwProcessId: u32) -> *mut std::ffi::c_void;
+    fn CloseHandle(hObject: *mut std::ffi::c_void) -> i32;
+    fn GetProcAddress(hModule: *mut std::ffi::c_void, lpProcName: *const u8) -> *const std::ffi::c_void;
+    fn GetModuleHandleA(lpModuleName: *const u8) -> *mut std::ffi::c_void;
 }
 
-pub fn resume_process(_pid: u32) -> Result<(), String> {
-    Err("Resuming dataset jobs is not supported on Windows yet".into())
+type NtSuspendProcessFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> i32;
+type NtResumeProcessFn = unsafe extern "system" fn(*mut std::ffi::c_void) -> i32;
+
+pub fn pause_process(pid: u32) -> Result<(), String> {
+    unsafe {
+        let handle = OpenProcess(0x0800 | 0x0002, 0, pid); // PROCESS_SUSPEND_RESUME | PROCESS_TERMINATE
+        if handle.is_null() {
+            return Err(format!("Failed to open process {pid} for suspend"));
+        }
+        let ntdll = GetModuleHandleA(b"ntdll.dll\0".as_ptr());
+        if ntdll.is_null() {
+            CloseHandle(handle);
+            return Err("Failed to get ntdll.dll handle".into());
+        }
+        let func_ptr = GetProcAddress(ntdll, b"NtSuspendProcess\0".as_ptr());
+        if func_ptr.is_null() {
+            CloseHandle(handle);
+            return Err("NtSuspendProcess not found in ntdll.dll".into());
+        }
+        let nt_suspend: NtSuspendProcessFn = std::mem::transmute(func_ptr);
+        let status = nt_suspend(handle);
+        CloseHandle(handle);
+        if status != 0 {
+            return Err(format!("NtSuspendProcess failed with status {status:#x}"));
+        }
+    }
+    Ok(())
+}
+
+pub fn resume_process(pid: u32) -> Result<(), String> {
+    unsafe {
+        let handle = OpenProcess(0x0800 | 0x0002, 0, pid);
+        if handle.is_null() {
+            return Err(format!("Failed to open process {pid} for resume"));
+        }
+        let ntdll = GetModuleHandleA(b"ntdll.dll\0".as_ptr());
+        if ntdll.is_null() {
+            CloseHandle(handle);
+            return Err("Failed to get ntdll.dll handle".into());
+        }
+        let func_ptr = GetProcAddress(ntdll, b"NtResumeProcess\0".as_ptr());
+        if func_ptr.is_null() {
+            CloseHandle(handle);
+            return Err("NtResumeProcess not found in ntdll.dll".into());
+        }
+        let nt_resume: NtResumeProcessFn = std::mem::transmute(func_ptr);
+        let status = nt_resume(handle);
+        CloseHandle(handle);
+        if status != 0 {
+            return Err(format!("NtResumeProcess failed with status {status:#x}"));
+        }
+    }
+    Ok(())
+}
+
+/// Restricts file ACLs to the current user only using `icacls`.
+pub fn protect_file_current_user(path: &Path) -> Result<(), String> {
+    let username = std::env::var("USERNAME").unwrap_or_else(|_| "%USERNAME%".to_string());
+    let grant = format!("{username}:(F)");
+    let output = std::process::Command::new("icacls")
+        .arg(path)
+        .arg("/inheritance:r")
+        .arg("/grant:r")
+        .arg(&grant)
+        .output()
+        .map_err(|e| format!("Failed to run icacls: {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("icacls failed: {err}"));
+    }
+    Ok(())
+}
+
+/// Verifies that the file ACLs do not grant read access to Everyone or Authenticated Users.
+pub fn verify_file_current_user(path: &Path) -> Result<(), String> {
+    let output = std::process::Command::new("icacls")
+        .arg(path)
+        .output()
+        .map_err(|e| format!("Failed to run icacls: {e}"))?;
+    if !output.status.success() {
+        let err = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("icacls check failed: {err}"));
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let forbidden = ["everyone", "builtin\\users", "nt authority\\authenticated users"];
+    for group in forbidden {
+        if stdout.to_lowercase().contains(group) {
+            return Err(format!("File has loose permissions allowing {group}"));
+        }
+    }
+    Ok(())
 }
 
 pub fn get_log_dir() -> PathBuf {

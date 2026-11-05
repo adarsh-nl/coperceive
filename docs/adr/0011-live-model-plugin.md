@@ -28,7 +28,7 @@ Constraints that bind the design (ADR 0004, ADR 0009, `CLAUDE.md`):
 
 ### Plugin interface
 
-1. **A Python protocol in the entry point**, like adapters (`coperceive/adapters/registry.py`). Simple, but the plugin would import into coperceive's interpreter, and the Griffin stack cannot (Python 3.8 against coperceive's 3.10+).
+1. **A Python protocol in the entry point**, like adapters (`coperceive/adapters/registry.py`). Simple, but the plugin would import into coperceive's interpreter, and the Griffin stack cannot (Python 3.8 against coperceive's 3.11+).
 2. **A manifest file named by the entry point**, read without importing the plugin, plus a worker the manifest names. The manifest can be hashed and inspected from any interpreter.
 3. **Metadata in `pyproject.toml`.** Not one hashable file, not usable for an uninstalled plugin on a compute node.
 

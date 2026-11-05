@@ -23,6 +23,7 @@ from pathlib import Path
 from PIL import Image
 from PIL.Image import Image as PilImage
 
+from coperceive.images import open_image
 from coperceive.model import Scene
 from coperceive.viewdata import image_path, pose_times
 
@@ -293,7 +294,7 @@ def _confine(root: Path, relative: str) -> Path:
 
 def _open_rgb(blob: bytes) -> PilImage:
     try:
-        image = Image.open(io.BytesIO(blob))
+        image = open_image(io.BytesIO(blob))
         image.load()
         converted = image.convert("RGB")
     except Exception as exc:

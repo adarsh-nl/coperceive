@@ -29,6 +29,7 @@ import { errorText } from "./errors";
 import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
+import { isTitlebarOverlay, getModifierKey, getSshConfigLabel } from "./platform";
 import type { ServerEntry } from "./hpc";
 import {
   GridTable,
@@ -508,7 +509,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     color: "var(--text-subtle)",
                   }}
                 >
-                  Signs in with your ssh-agent and ~/.ssh/config. Never asks for a password or key.
+                  Signs in with your ssh-agent and {getSshConfigLabel()}. Never asks for a password or key.
                 </p>
               </div>
             ) : null}
@@ -750,16 +751,18 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
           <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
             {!sidebarOpen && (
               <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <div
-                  data-tauri-drag-region
-                  className="traffic-lights-spacer"
-                  style={{ width: "78px", flexShrink: 0, height: "100%" }}
-                  aria-hidden="true"
-                />
+                {isTitlebarOverlay() && (
+                  <div
+                    data-tauri-drag-region
+                    className="traffic-lights-spacer"
+                    style={{ width: "78px", flexShrink: 0, height: "100%" }}
+                    aria-hidden="true"
+                  />
+                )}
                 <span className="update-dot-host">
                   <IconButton
                     size="sm"
-                    label="Open sidebar (⌘\)"
+                    label={`Open sidebar (${getModifierKey()}\\)`}
                     onClick={() => setSidebarOpen(true)}
                   >
                     <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
