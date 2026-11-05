@@ -519,7 +519,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <button
                 type="button"
-                aria-label={`Settings (${getModifierKey()},)`}
+                aria-label="Settings (⌘,)"
                 onClick={() => setSettingsOpen(true)}
                 className="c-sidebar-item"
                 style={{
@@ -543,6 +543,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                 </svg>
                 <span>Settings</span>
                 <span
+                  aria-hidden="true"
                   style={{
                     marginLeft: "auto",
                     fontSize: "11px",

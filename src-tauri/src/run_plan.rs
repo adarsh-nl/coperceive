@@ -810,7 +810,7 @@ fn artifact_from_check(path: &str, values: &BTreeMap<String, String>) -> PlanArt
         path: path.to_string(),
         sha256: values
             .get("SHA256")
-            .map(|value| value.trim().to_string())
+            .map(|value| value.trim().trim_start_matches('\\').to_string())
             .filter(|value| !value.is_empty()),
         kind: if !exists {
             "missing".to_string()

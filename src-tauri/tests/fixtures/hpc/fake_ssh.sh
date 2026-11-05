@@ -267,9 +267,9 @@ case "${remote}" in
         fi
         sha=""
         if [ -f "${local_path}" ]; then
-            sha=$(sha256sum "${local_path}" 2>/dev/null | cut -d" " -f1)
+            sha=$(sha256sum < "${local_path}" 2>/dev/null | awk '{print $1}' | tr -dc 'a-f0-9A-F')
             if [ -z "${sha}" ]; then
-                sha=$(shasum -a 256 "${local_path}" 2>/dev/null | cut -d" " -f1)
+                sha=$(shasum -a 256 < "${local_path}" 2>/dev/null | awk '{print $1}' | tr -dc 'a-f0-9A-F')
             fi
         fi
         exec_flag=0

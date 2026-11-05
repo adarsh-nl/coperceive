@@ -959,6 +959,11 @@ pub mod tests {
 
     #[test]
     fn test_body_split_across_packets_saved() {
+        let temp_dir = std::env::temp_dir().join(format!("cp-state-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let orig_state_dir = std::env::var_os("COPERCEIVE_STATE_DIR");
+        std::env::set_var("COPERCEIVE_STATE_DIR", &temp_dir);
+
         let config = make_test_config();
         let payload = r#"{"scene_id":"synth_001","sample_index":3,"timestamp_us":300000}"#;
         let header = format!(
@@ -992,6 +997,13 @@ pub mod tests {
         assert_eq!(loaded.last_scene_id, Some("synth_001".into()));
         assert_eq!(loaded.last_sample_index, Some(3));
         assert_eq!(loaded.last_timestamp_us, Some(300000));
+
+        if let Some(orig) = orig_state_dir {
+            std::env::set_var("COPERCEIVE_STATE_DIR", orig);
+        } else {
+            std::env::remove_var("COPERCEIVE_STATE_DIR");
+        }
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
