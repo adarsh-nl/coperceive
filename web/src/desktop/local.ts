@@ -1049,3 +1049,53 @@ export async function startupCrash(): Promise<StartupCrash | null> {
     return null;
   }
 }
+
+export interface CarlaMapTown {
+  town: string;
+  map_name: string;
+  download_bytes: number;
+  sha256: string;
+  source_url: string;
+  licence: string;
+  verified: boolean;
+  verification: "carla-0.9.15-package" | "public-mirrors-not-package";
+  verification_label: string;
+  installed: boolean;
+  installed_info: { directory: string; bytes: number; source?: { licence?: string; retrieved_from?: string } } | null;
+}
+
+export interface CarlaMapList {
+  schema: string;
+  towns: CarlaMapTown[];
+}
+
+export async function listCarlaMaps(): Promise<CarlaMapList | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<CarlaMapList>("list_carla_maps");
+  } catch {
+    return null;
+  }
+}
+
+export async function installCarlaMap(town: string): Promise<unknown> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke("install_carla_map", { town });
+}
+
+export async function removeCarlaMap(town: string): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("remove_carla_map", { town });
+}
+
+export async function onCarlaMapProgress(
+  handler: (event: { stage?: string; percent?: number; message?: string }) => void,
+): Promise<() => void> {
+  if (!isTauriEnvironment()) return () => undefined;
+  const { listen } = await import("@tauri-apps/api/event");
+  return await listen<{ stage?: string; percent?: number; message?: string }>(
+    "carla-map-progress",
+    (event) => handler(event.payload),
+  );
+}
