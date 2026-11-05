@@ -252,11 +252,12 @@ def install_command(args: argparse.Namespace) -> None:
 def install_town_command(args: argparse.Namespace) -> None:
     import json
 
-
     progress: Progress | None = None
     if args.progress_json:
+
         def emit(stage: str, percent: int, message: str) -> None:
             print(json.dumps({"stage": stage, "percent": percent, "message": message}), flush=True)
+
         progress = emit
     try:
         report = install_verified_town(
@@ -299,17 +300,19 @@ def list_command(args: argparse.Namespace) -> None:
     table = []
     for town in VERIFIED_TOWNS:
         name = f"Carla/Maps/{town}"
-        table.append({
-            "town": town,
-            "map_name": name,
-            "download_bytes": TOWN_BYTES[town],
-            "sha256": TOWN_SHA256[town],
-            "source_url": town_url(town),
-            "licence": "CC-BY",
-            "verified": True,
-            "installed": name in installed,
-            "installed_info": installed.get(name),
-        })
+        table.append(
+            {
+                "town": town,
+                "map_name": name,
+                "download_bytes": TOWN_BYTES[town],
+                "sha256": TOWN_SHA256[town],
+                "source_url": town_url(town),
+                "licence": "CC-BY",
+                "verified": True,
+                "installed": name in installed,
+                "installed_info": installed.get(name),
+            }
+        )
     print(json.dumps({"schema": "coperceive-carla-maps-1", "towns": table}, indent=2))
 
 
