@@ -310,7 +310,7 @@ jobs:
           restore-keys: |
             bundled-python-${{ runner.os }}-
       - name: Bundle Python Standalone Runtime
-        run: python3 scripts/desktop/bundle_python.py --target x86_64-unknown-linux-gnu
+        run: python3 scripts/desktop/bundle_python.py --target x86_64-unknown-linux-gnu --skip-web-build
       - name: Run Rust unit tests
         run: cargo test --lib --verbose --color=never
         working-directory: src-tauri
@@ -388,7 +388,7 @@ jobs:
             bundled-python-${{ runner.os }}-
       - name: Bundle Python Standalone Runtime
         shell: bash
-        run: python scripts/desktop/bundle_python.py --target x86_64-pc-windows-msvc
+        run: python scripts/desktop/bundle_python.py --target x86_64-pc-windows-msvc --skip-web-build
       - name: Run Rust unit tests
         run: cargo test --lib --verbose --color=never
         working-directory: src-tauri
@@ -633,7 +633,7 @@ jobs:
           path: ${{ env.DMG_PATH }}
           if-no-files-found: error
       - name: Bundle Python Standalone Runtime for Intel Mac
-        run: python3 scripts/desktop/bundle_python.py --target x86_64-apple-darwin
+        run: python3 scripts/desktop/bundle_python.py --target x86_64-apple-darwin --skip-web-build
       - name: Build Tauri Desktop Intel DMG
         run: bash scripts/desktop/build_dmg.sh x86_64-apple-darwin
       - name: Locate and Measure Intel DMG

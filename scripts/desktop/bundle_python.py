@@ -305,17 +305,24 @@ def main(argv: list[str] | None = None) -> int:
 
     # Ensure web static is built
     static_index = repo_root / "coperceive" / "app" / "static" / "index.html"
-    if not args.skip_web_build or not static_index.is_file():
+    if not args.skip_web_build and not static_index.is_file():
         print("Building viewer bundle into coperceive/app/static...")
         build_script = repo_root / "scripts" / "build_web_static.sh"
         if sys.platform.startswith("win"):
-            # Run bash if available, else run npm directly
-            if shutil.which("bash"):
-                subprocess.run(["bash", str(build_script)], cwd=repo_root, check=True)
+            # Avoid WSL launcher (C:\Windows\System32\bash.exe)
+            git_bash = Path("C:/Program Files/Git/bin/bash.exe")
+            if not git_bash.is_file():
+                git_bash = Path("C:/Program Files/Git/usr/bin/bash.exe")
+            if git_bash.is_file():
+                subprocess.run([str(git_bash), str(build_script)], cwd=repo_root, check=True)
             else:
-                subprocess.run(["npm", "run", "build"], cwd=repo_root / "web", check=True)
+                subprocess.run(
+                    ["npm", "run", "build"], cwd=repo_root / "web", check=True, shell=True
+                )
         else:
             subprocess.run(["bash", str(build_script)], cwd=repo_root, check=True)
+    elif static_index.is_file():
+        print("Viewer bundle already present at coperceive/app/static.")
 
     # Check lock file
     lockfile_path = script_dir / lockfile_name

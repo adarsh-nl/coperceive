@@ -543,6 +543,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                 </svg>
                 <span>Settings</span>
                 <span
+                  aria-hidden="true"
                   style={{
                     marginLeft: "auto",
                     fontSize: "11px",
