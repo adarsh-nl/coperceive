@@ -92,7 +92,7 @@ if ($sceneCount -lt 1) {
 
 Write-Host "Verified: /api/scenes returned $sceneCount scene(s) with HTTP 200 OK."
 
-$ScreenshotDir = Join-Path $env:TEMP "e2e-shots"
+$ScreenshotDir = if ($env:RUNNER_TEMP) { Join-Path $env:RUNNER_TEMP "e2e-shots" } else { Join-Path $env:TEMP "e2e-shots" }
 New-Item -ItemType Directory -Path $ScreenshotDir -Force | Out-Null
 
 function Capture-ScreenShot([string]$filename) {
@@ -118,10 +118,14 @@ Start-Sleep -Seconds 2
 Capture-ScreenShot "viewer.png"
 
 if ($ctrlPort -ne 0 -and $ctrlSecret) {
+    $headers = @{
+        "Authorization" = "Bearer $ctrlSecret"
+        "Content-Type"  = "application/json"
+    }
+
     Write-Host "Showing Library and capturing screenshot..."
     try {
-        $body = @{ secret = $ctrlSecret } | ConvertTo-Json
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/show-library" -Method Post -Body $body -ContentType "application/json"
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/show-library" -Method Post -Headers $headers -Body "{}"
         Start-Sleep -Seconds 2
         Capture-ScreenShot "library.png"
     } catch {
@@ -131,10 +135,9 @@ if ($ctrlPort -ne 0 -and $ctrlSecret) {
     Write-Host "Navigating to Dataset View and capturing screenshot..."
     try {
         $evalBody = @{
-            secret = $ctrlSecret
-            js = "window.location.hash = '#/connect?tab=hpc';"
+            script = "window.location.hash = '#/connect?tab=hpc';"
         } | ConvertTo-Json
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Body $evalBody -ContentType "application/json"
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $headers -Body $evalBody
         Start-Sleep -Seconds 2
         Capture-ScreenShot "dataset_view.png"
     } catch {
@@ -146,7 +149,7 @@ Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
 
 # Measure fake-SSH dataset open time
 Write-Host "Measuring fake-SSH dataset open time..."
-$fakeSshPath = (Resolve-Path "tests\fixtures\hpc\fake_ssh.sh").Path
+$fakeSshPath = (Resolve-Path "src-tauri\tests\fixtures\hpc\fake_ssh.sh").Path
 $clusterFixture = (Resolve-Path "src-tauri\tests\fixtures\hpc\cluster-a.json").Path
 $openPayload = @{
     server = $clusterFixture

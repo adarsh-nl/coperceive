@@ -158,12 +158,12 @@ CTRL_SECRET=$(sed -n '5p' "${MARKER_FILE}" || true)
 
 if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
     echo "Showing Library and capturing screenshot..."
-    curl -s -X POST -H "Content-Type: application/json" -d "{\"secret\":\"${CTRL_SECRET}\"}" "http://127.0.0.1:${CTRL_PORT}/show-library" >/dev/null || true
+    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:${CTRL_PORT}/show-library" >/dev/null || true
     sleep 2
     capture_screenshot "library"
 
     echo "Navigating to Dataset View and capturing screenshot..."
-    curl -s -X POST -H "Content-Type: application/json" -d "{\"secret\":\"${CTRL_SECRET}\",\"js\":\"window.location.hash='#/connect?tab=hpc';\"}" "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || true
+    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{\"script\":\"window.location.hash='#/connect?tab=hpc';\"}" "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || true
     sleep 2
     capture_screenshot "dataset_view"
 fi
