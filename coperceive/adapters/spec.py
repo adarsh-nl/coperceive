@@ -309,6 +309,7 @@ class SensorsSpec:
     agent_field: str | None
     sample: str | None = None  # first: fill {frame}/{sample} in path with the agent's first sample
     records_prefix: str | None = None  # sensors are the record's keys with this prefix
+    records_optional: bool = False  # no matching record keys is allowed (e.g. LiDAR-only)
     fixed: tuple[FixedSensor, ...] = ()  # identity sensors no file describes
 
 
@@ -880,9 +881,11 @@ def _sensors(node: _Node | None, extra: frozenset[str]) -> SensorsSpec:
         raise SpecError(f"{node.at('modality')}: the last rule must be default")
     sample = node.opt_str("sample", choices=("first",))
     records_prefix = None
+    records_optional = False
     rnode = node.sub("records", optional=True)
     if rnode is not None:
         records_prefix = rnode.str("prefix")
+        records_optional = rnode.bool("optional", False) if rnode.has("optional") else False
         rnode.done()
     fixed: list[FixedSensor] = []
     raw_fixed = node.any("fixed", optional=True)
@@ -908,6 +911,7 @@ def _sensors(node: _Node | None, extra: frozenset[str]) -> SensorsSpec:
         node.opt_str("agent_field"),
         sample,
         records_prefix,
+        records_optional,
         tuple(fixed),
     )
     if reader in _table_readers() and spec.sensor_field is None:

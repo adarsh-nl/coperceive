@@ -92,6 +92,11 @@ handedness/mirror** by looking at which side of the road the cars are on.
   global infrastructure→vehicle calibration as in DAIR-V2X-C: each agent's own
   `lidar_pose` is the calibration. The official loader's `x_to_world` is the
   transform used by OpenCOOD; no reflection is applied there.
+- **Time:** real stems increase by 1 and the V2V4Real paper (CVPR 2023, §3) says
+  “We sample the frames at 10Hz”, so the step is **0.1 s**; a 147-frame scenario
+  is 14.6 s from first to last. The manifest uses `time_us = stem * 100000`.
+  This was checked on the extracted cluster copy. OPV2V/V2XSet keep their own
+  0.05 s / step-2 convention from their `data_protocol.yaml`.
 - **Cameras:** `camera0`…`camera3` records with `extrinsic` (camera→LiDAR) and
   `intrinsic`; 800×600 PNGs. The manifest derives image size as
   `2 × principal point`, as for OPV2V.

@@ -223,3 +223,78 @@ def test_real_field_shapes_and_angle_units_are_accepted(tmp_path: Path) -> None:
     # No camera records in the real tree: only the fixed lidar sensor.
     assert {sensor.modality.value for sensor in loaded.sensors} == {"lidar"}
     assert loaded.images == ()
+
+
+def test_real_stems_are_100ms_apart_and_147_frames_last_14_6s(tmp_path: Path) -> None:
+    root = tmp_path / "v2v4real"
+    write_release(
+        root,
+        "test",
+        [
+            SceneSpec(
+                SCENE,
+                [
+                    AgentTrack(
+                        "0",
+                        poses=[((0.0, float(i), 1.9), (0.0, 0.0, 0.0)) for i in range(3)],
+                        cameras=False,
+                    ),
+                    AgentTrack("1", poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))], cameras=False),
+                ],
+                stems=(0, 1, 2),
+            )
+        ],
+    )
+    adapter = resolve_adapter("v2v4real")
+    ref = adapter.scenes(root, {"split": "test"})[0]
+    scene = adapter.load(root, ref)
+    times = [pose.time_us for pose in scene.agent("0").poses]
+    assert times == [0, 100_000, 200_000]
+
+    long_root = tmp_path / "v2v4real-long"
+    stems = tuple(range(147))
+    write_release(
+        long_root,
+        "test",
+        [
+            SceneSpec(
+                SCENE,
+                [
+                    AgentTrack(
+                        "0",
+                        poses=[((0.0, float(i), 1.9), (0.0, 0.0, 0.0)) for i in stems],
+                        cameras=False,
+                    ),
+                    AgentTrack("1", poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))], cameras=False),
+                ],
+                stems=stems,
+            )
+        ],
+    )
+    long_ref = adapter.scenes(long_root, {"split": "test"})[0]
+    long_scene = adapter.load(long_root, long_ref)
+    long_times = [pose.time_us for pose in long_scene.agent("0").poses]
+    assert long_times[-1] - long_times[0] == 14_600_000
+
+
+def test_opv2v_still_rejects_a_frame_without_camera_records(tmp_path: Path) -> None:
+    from coperceive.adapters.registry import resolve_adapter as resolve
+
+    root = tmp_path / "opv2v"
+    write_release(
+        root,
+        "test",
+        [
+            SceneSpec(
+                "scene-1",
+                [
+                    AgentTrack("641", poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))], cameras=False),
+                    AgentTrack("650", poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))], cameras=False),
+                ],
+                stems=(0,),
+            )
+        ],
+    )
+    report = resolve("opv2v").check(root, {"split": "test"})
+    assert report.errors
+    assert "no key starts with 'camera'" in report.errors[0]
