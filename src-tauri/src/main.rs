@@ -657,7 +657,6 @@ fn copy_diagnostics_to_clipboard(app: &tauri::AppHandle, state: &AppState) {
     }
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn diagnostics_build_report(
     state: tauri::State<'_, Arc<AppState>>,
@@ -673,13 +672,11 @@ fn diagnostics_build_report(
     coperceive_desktop::diagnostics::report(&context)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn diagnostics_copy_text(context: serde_json::Value, note: String) -> Result<(), String> {
     coperceive_desktop::diagnostics::copy(&context, &note)
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 fn diagnostics_startup_crash(
     state: tauri::State<'_, Arc<AppState>>,
@@ -691,7 +688,6 @@ fn diagnostics_startup_crash(
         .and_then(|lock| lock.clone())
 }
 
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn diagnostics_save_zip(
     app: tauri::AppHandle,
