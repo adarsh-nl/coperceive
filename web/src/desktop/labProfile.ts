@@ -92,11 +92,25 @@ export function reviewFields(
                 : `${argument.name} (${argument.kind})`;
             })
             .join("; ");
+    const penv = pipeline.environment;
     rows.push(
       { label: `Pipeline${number} name`, value: plain(pipeline.name) },
       { label: `Pipeline${number} script`, value: plain(pipeline.script) },
       { label: `Pipeline${number} command`, value: joined(pipeline.interpreter) },
       { label: `Pipeline${number} arguments`, value: args },
+      { label: `Pipeline${number} environment`, value: plain(penv.kind) },
+      { label: `Pipeline${number} modules`, value: joined(penv.modules) },
+      { label: `Pipeline${number} Python interpreter`, value: plain(penv.interpreter) },
+      { label: `Pipeline${number} container image`, value: plain(penv.container_image) },
+      {
+        label: `Pipeline${number} coperceive command`,
+        value: joined(penv.coperceive_command),
+      },
+      { label: `Pipeline${number} wheels folder`, value: plain(penv.wheelhouse) },
+      {
+        label: `Pipeline${number} compute nodes can download packages`,
+        value: yesNo(penv.compute_has_internet),
+      },
     );
   });
   return rows;

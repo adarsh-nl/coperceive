@@ -172,7 +172,9 @@ pub fn prepare_lab_import(
     let alias = clean_alias(&identity.ssh_alias)?;
     reject_identity_value("user name", &identity.user)?;
     reject_identity_value("home directory", &identity.home)?;
+    reject_identity_path("home directory", &identity.home, false)?;
     reject_identity_value("scratch folder", &identity.scratch)?;
+    reject_identity_path("scratch folder", &identity.scratch, true)?;
     let mut profile_value = serde_json::to_value(&parsed.profile)
         .map_err(|error| format!("This lab profile could not be read: {error}"))?;
     map_strings(&mut profile_value, &mut |text| expand_text(text, identity))?;
@@ -499,6 +501,9 @@ fn clean_alias(alias: &str) -> Result<String, String> {
                 .to_string(),
         );
     }
+    if alias.starts_with('-') {
+        return Err("The SSH alias may not start with '-'.".to_string());
+    }
     if alias
         .chars()
         .any(|ch| ch.is_whitespace() || ch.is_control())
@@ -542,6 +547,23 @@ fn reject_unsafe(
     }
     if !allow_dollar && value.contains('$') {
         return Err(format!("The {label} may not contain a shell variable."));
+    }
+    Ok(())
+}
+
+/// A home/scratch value is a plain path (scratch may use the four job tokens).
+fn reject_identity_path(label: &str, value: &str, allow_tokens: bool) -> Result<(), String> {
+    let mut rest = value.to_string();
+    if allow_tokens {
+        for token in ["${SLURM_JOB_ID}", "${USER}", "$SLURM_JOB_ID", "$USER"] {
+            rest = rest.replace(token, "");
+        }
+    }
+    let allowed = |ch: char| ch.is_ascii_alphanumeric() || "._/~-".contains(ch);
+    if rest.is_empty() || !rest.chars().all(allowed) {
+        return Err(format!(
+            "The {label} must be a plain path (letters, digits, '.', '_', '/', '~' and '-')."
+        ));
     }
     Ok(())
 }
@@ -734,6 +756,19 @@ mod tests {
         let mut shell_alias = student();
         shell_alias.ssh_alias = "alias|cat /etc/passwd".to_string();
         assert!(prepare_lab_import(&clean, &shell_alias).is_err());
+
+        let mut option_alias = student();
+        option_alias.ssh_alias = "-oProxyJump=evil".to_string();
+        assert!(prepare_lab_import(&clean, &option_alias).is_err());
+
+        for bad in ["/x$(id)", "/x`id`", "/x${IFS}"] {
+            let mut home = student();
+            home.home = bad.to_string();
+            assert!(prepare_lab_import(&clean, &home).is_err(), "home {bad}");
+            let mut scratch = student();
+            scratch.scratch = bad.to_string();
+            assert!(prepare_lab_import(&clean, &scratch).is_err(), "scratch {bad}");
+        }
 
         let mut shell_host = value.clone();
         shell_host["profile"]["host"] = serde_json::json!("host; rm -rf /");

@@ -317,6 +317,10 @@ export function ImportPanel({
       <h3 style={{ margin: "0 0 0.35rem", color: "#f5f5f7", fontSize: "1.05rem" }}>
         Import lab profile
       </h3>
+      <p style={{ margin: "0 0 0.75rem", color: "#ffb84d", fontSize: "0.82rem" }}>
+        Commands, modules and containers in this file will run on the cluster under your
+        account. Import only from someone you trust.
+      </p>
       <p style={{ margin: "0 0 0.75rem", color: "#8b949e", fontSize: "0.82rem" }}>
         Read every field, then enter the SSH alias from your own config. Test the connection
         before saving.

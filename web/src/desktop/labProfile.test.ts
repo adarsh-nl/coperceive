@@ -88,6 +88,15 @@ test("the review names every profile field in plain language", () => {
   assert.ok(labels.includes("Pipeline script"));
   assert.ok(labels.includes("Pipeline command"));
   assert.ok(labels.includes("Pipeline arguments"));
+  assert.ok(labels.includes("Pipeline environment"));
+  assert.ok(labels.includes("Pipeline modules"));
+  assert.ok(labels.includes("Pipeline container image"));
+  pipeline.environment.kind = "container";
+  pipeline.environment.modules = ["python/3.12"];
+  pipeline.environment.container_image = "registry.example/lab:1";
+  const withEnv = new Map(reviewFields(fullProfile(), [pipeline]).map((row) => [row.label, row.value]));
+  assert.equal(withEnv.get("Pipeline modules"), "python/3.12");
+  assert.equal(withEnv.get("Pipeline container image"), "registry.example/lab:1");
   const byLabel = new Map(rows.map((row) => [row.label, row.value]));
   assert.equal(byLabel.get("SSH alias"), "Not set");
   assert.equal(byLabel.get("Scratch folder"), "your scratch folder");
