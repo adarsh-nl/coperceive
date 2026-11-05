@@ -399,6 +399,9 @@ mod tests {
     }
 
     fn fake_ssh(dir: &Path, script: &str) -> String {
+        #[cfg(windows)]
+        let bin = dir.join("fake_ssh.sh");
+        #[cfg(not(windows))]
         let bin = dir.join("ssh");
         fs::write(&bin, script).expect("write fake ssh");
         #[cfg(unix)]
@@ -525,9 +528,11 @@ mod tests {
             )
         );
 
+        let path_sep = if cfg!(windows) { ";" } else { ":" };
         let path_env = format!(
-            "{}:{}",
+            "{}{}{}",
             bin_dir.display(),
+            path_sep,
             std::env::var("PATH").unwrap_or_default()
         );
         let status = Command::new("sh")

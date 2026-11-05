@@ -10,6 +10,10 @@ pub fn apply_viewer_window_chrome<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
     builder
 }
 
+pub fn create_command(bin: &str) -> std::process::Command {
+    std::process::Command::new(bin)
+}
+
 pub fn reveal_path(path: &Path) -> Result<(), String> {
     let target = if path.is_file() {
         path.parent().unwrap_or(path)

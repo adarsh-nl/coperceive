@@ -22,6 +22,7 @@ serde_json = "1.0"
 tauri = { version = "2.0.0", features = [] }
 tauri-plugin-dialog = "2.0.0"
 tauri-plugin-updater = "2"
+zip = { version = "9.1.3", default-features = false, features = ["deflate"] }
 
 [build-dependencies]
 tauri-build = { version = "2.0.0", features = [] }

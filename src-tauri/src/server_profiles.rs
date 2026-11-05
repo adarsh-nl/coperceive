@@ -326,6 +326,10 @@ pub fn save_servers_to_path(servers: &[ServerEntry], path: &Path) -> Result<(), 
     {
         std::fs::write(path, serialized)
             .map_err(|e| format!("Could not save the server list: {e}"))?;
+        #[cfg(target_os = "windows")]
+        {
+            let _ = crate::platform::protect_file_current_user(path);
+        }
     }
     Ok(())
 }

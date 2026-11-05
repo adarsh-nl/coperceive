@@ -38,6 +38,7 @@ import { SettingRow } from "../SettingRow";
 import { datasetJobs, publishDatasetJobs, setViewerOpen, subscribeDatasetJobs } from "../jobsStore";
 import { getPersistentState } from "../local";
 import { isJobActive } from "../runPlan";
+import { getModifierKey } from "../platform";
 import { errorDetails, errorText } from "../errors";
 import {
   STATE_LABEL,
@@ -1372,7 +1373,7 @@ export default function DatasetView({
               <kbd>/</kbd> filter
             </span>
             <span>
-              <kbd>⌘\</kbd> sidebar
+              <kbd>{getModifierKey()}\</kbd> sidebar
             </span>
           </span>
           <span className="dv-footer-state" role="status">

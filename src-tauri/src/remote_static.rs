@@ -13,7 +13,6 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::slurm_adapter::{RemoteRunner, SshRunner};
@@ -206,7 +205,7 @@ fn fetch_remote_manifest(
     scp: &str,
 ) -> Result<Option<String>, String> {
     let _ = fs::remove_file(destination);
-    let output = Command::new(scp)
+    let output = crate::platform::create_command(scp)
         .args(["-q", "-p"])
         .arg(format!("{alias}:{remote_rel}/{MANIFEST_NAME}"))
         .arg(destination)
@@ -223,7 +222,7 @@ fn fetch_remote_manifest(
 fn upload_static(alias: &str, local: &Path, remote_rel: &str, scp: &str) -> Result<(), String> {
     let source = format!("{}/.", local.display());
     let destination = format!("{alias}:{remote_rel}");
-    let output = Command::new(scp)
+    let output = crate::platform::create_command(scp)
         .args(["-r", "-q", "-p"])
         .arg(&source)
         .arg(&destination)

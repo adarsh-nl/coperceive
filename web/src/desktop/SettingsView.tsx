@@ -15,6 +15,7 @@ import { IconButton } from "./components/IconButton";
 import { useDatasetGrouping } from "./hpc/groupingSetting";
 import { useCameraStripMode, type CameraStripMode } from "../viewer/cameraStripSetting";
 import type { DatasetGrouping } from "./hpc/grouping";
+import { getRevealLabel } from "./platform";
 
 function SettingsGroup({
   title,
@@ -206,7 +207,7 @@ export function DesktopPreferences() {
               </div>
             </div>
             <Button variant="secondary" size="sm" onClick={handleShowInFinder}>
-              Show in Finder
+              {getRevealLabel()}
             </Button>
           </div>
         )}

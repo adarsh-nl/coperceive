@@ -893,6 +893,33 @@ def _resolve_token(args: argparse.Namespace) -> str | None:
                     file=sys.stderr,
                 )
                 raise SystemExit(2)
+        else:
+            try:
+                import subprocess
+
+                proc = subprocess.run(
+                    ["icacls", str(token_path)],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                if proc.returncode == 0:
+                    out_lower = proc.stdout.lower()
+                    forbidden = [
+                        "everyone",
+                        "builtin\\users",
+                        "nt authority\\authenticated users",
+                    ]
+                    for f in forbidden:
+                        if f in out_lower:
+                            tf = args.token_file
+                            print(
+                                f"--token-file {tf} has loose permissions allowing {f}",
+                                file=sys.stderr,
+                            )
+                            raise SystemExit(2)
+            except Exception:
+                pass
         token = token_path.read_text(encoding="utf-8").strip() or None
     elif "COPERCEIVE_TOKEN" in os.environ and os.environ["COPERCEIVE_TOKEN"].strip():
         token = os.environ["COPERCEIVE_TOKEN"].strip()

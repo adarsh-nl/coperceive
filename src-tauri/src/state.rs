@@ -766,6 +766,10 @@ pub fn save_state_to_path(state: &AppPersistentState, path: &Path) -> Result<(),
     {
         fs::write(path, serialized)
             .map_err(|e| format!("Failed to write state file {}: {}", path.display(), e))?;
+        #[cfg(target_os = "windows")]
+        {
+            let _ = crate::platform::protect_file_current_user(path);
+        }
     }
 
     Ok(())
