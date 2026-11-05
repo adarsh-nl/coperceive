@@ -797,11 +797,18 @@ def test_agent_display_names_label_the_panels_and_raw_ids_stay_in_tooltips(
     assert shown == expected
     if not _strip_open(session):
         page.keyboard.press("C")
+    # The filmstrip (the default) names the agent on each thumbnail ...
+    thumb = page.locator(".cam-thumb[data-camera='vehicle/cam_front']")
+    session.wait_for(lambda: thumb.count() == 1, "the vehicle's camera thumbnail")
+    assert thumb.locator(".cam-thumb-agent").text_content() == "Vehicle 1"
+    assert thumb.get_attribute("title") == "Vehicle 1 cam_front (vehicle)"
+    # ... and "One agent at a time" names the agent's group.
+    page.locator(".cam-mode [role=radio]", has_text="Agent").click()
     group = page.locator(".cam-group-name[title='vehicle']")
     session.wait_for(lambda: group.count() == 1, "the vehicle's camera group")
     assert group.text_content() == "Vehicle 1"
-    thumb = page.locator(".cam-thumb[data-camera='vehicle/cam_front']")
-    assert thumb.get_attribute("title") == "Vehicle 1 cam_front (vehicle)"
+    page.locator(".cam-mode [role=radio]", has_text="All").click()
+    session.wait_for(lambda: page.locator(".cam-group-name").count() == 0, "the filmstrip")
     thumb.click()
     session.wait_for(lambda: page.locator(".camera-split").count() == 1, "the split view")
     bar = page.locator(".camera-split-bar strong span")
@@ -1371,20 +1378,21 @@ def test_updater_bad_signature_is_rejected_with_error(
     session = _Session(page, viewer_url)
 
     try:
-        session.open()
-        session.wait_status(SCENE_FULL)
+        # The update notice is the main window's sidebar card (the Library), not a
+        # banner over the viewer.
+        session.page.goto(f"{viewer_url}/#/connect", wait_until="networkidle")
 
-        # Update banner appears
-        session.page.wait_for_selector("div[role='banner']", timeout=10000)
-        banner_text = session.page.locator("div[role='banner']").inner_text() or ""
+        # Update card appears
+        session.page.wait_for_selector(".update-card", timeout=10000)
+        banner_text = session.page.locator(".update-card").inner_text() or ""
         assert "coperceive 0.2.0 is ready" in banner_text
 
-        # Click Restart now
-        session.page.click("button:has-text('Restart now')")
+        # Click Install (restart into the update; the old "Restart now")
+        session.page.locator(".update-card button", has_text="Install").click()
 
         # Expect error alert to appear with Retry button
-        session.page.wait_for_selector("div[role='alert']", timeout=5000)
-        alert_text = session.page.locator("div[role='alert']").inner_text() or ""
+        session.page.wait_for_selector(".update-card[role='alert']", timeout=5000)
+        alert_text = session.page.locator(".update-card[role='alert']").inner_text() or ""
         assert "Retry" in alert_text
         assert any(
             term in alert_text.lower()
@@ -1845,7 +1853,7 @@ def test_the_top_bar_places_the_scene_and_names_the_connection(session: _Session
     session.wait_status(order[1])
     assert page.locator(".crumb-count").inner_text() == f"2 of {len(order)}"
     host = session.base.split("://", 1)[1]
-    assert page.locator(".top-actions .conn-state").inner_text() == f"Server · {host}"
+    assert page.locator(".topbar .crumb .conn-state").inner_text() == f"Server · {host}"
 
 
 def test_layer_rows_count_what_the_sample_draws(session: _Session) -> None:

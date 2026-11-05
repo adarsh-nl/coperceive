@@ -6,7 +6,7 @@ import { BrandWordmark } from "./desktop/Brand";
 import ConnectScreen from "./desktop/ConnectScreen";
 import { isTauriEnvironment, isViewerWindow, showLibrary } from "./desktop/local";
 import { DesktopPreferences } from "./desktop/SettingsView";
-import UpdateBanner from "./desktop/UpdateBanner";
+import { ViewerUpdates } from "./desktop/UpdateBanner";
 import { CrashNotice } from "./desktop/CrashNotice";
 import { DiagnosticsDialog } from "./desktop/DiagnosticsDialog";
 import { startupCrash, type StartupCrash } from "./desktop/local";
@@ -144,6 +144,7 @@ export default function App() {
   const [tab, setTab] = useState<"viewer" | "desk">("viewer");
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
+  const [updateSlot, setUpdateSlot] = useState<HTMLSpanElement | null>(null);
   const [crash, setCrash] = useState<StartupCrash | null>(null);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
@@ -421,7 +422,7 @@ export default function App() {
 
   return (
     <div className={tab === "viewer" || isDesktop ? "shell" : "shell shell-desk"}>
-      {isDesktop && <UpdateBanner />}
+      {isDesktop ? <ViewerUpdates slot={updateSlot} /> : null}
       {crashLayer}
       {/* Empty toolbar space moves the window and double-click zooms it. */}
       <header className="topbar" data-tauri-drag-region>
@@ -470,6 +471,7 @@ export default function App() {
           </div>
         )}
         <div className="top-cluster top-end" data-tauri-drag-region>
+          <span className="top-update" ref={setUpdateSlot} />
           <div className="top-actions" ref={setActions} />
           <details className="settings">
             <summary className="icon ghost" aria-label="Settings">

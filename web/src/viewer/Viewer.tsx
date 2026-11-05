@@ -67,6 +67,7 @@ import {
 import PredictionsBlock, { LineSample } from "./predictions";
 import PanelState from "../desktop/PanelState";
 import { PANEL_DEFINITIONS } from "../desktop/panelStates";
+import { useCameraStripMode } from "./cameraStripSetting";
 import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
 import { SPLIT_MAX, SPLIT_MIN } from "./appearance";
 import {
@@ -1266,6 +1267,8 @@ export default function Viewer({
   const [datasetAbout, setDatasetAbout] = useState<{ label: string; server: string } | null>(null);
   // The agent whose cameras the strip shows and the radar centres on.
   const [focusAgent, setFocusAgent] = useState<string | null>(null);
+  // Settings → Viewer → "Camera strip": the filmstrip of every camera, or one agent's.
+  const [stripMode, setStripMode] = useCameraStripMode();
   // "Continue to the next scene automatically" (Settings); off by default.
   const [autoNext, setAutoNext] = useState<boolean>(
     () => Boolean((window.__COPERCEIVE_INITIAL_STATE__ as { auto_next_scene?: boolean } | undefined)?.auto_next_scene),
@@ -2108,7 +2111,7 @@ export default function Viewer({
         }
         const extent = extentRef.current;
         if (extent) {
-          extent.textContent = mode === "camera" || !Number.isFinite(perPixel) ? "" : ` · ${formatDistance(Math.round(perPixel * width))}`;
+          extent.textContent = mode === "camera" || !Number.isFinite(perPixel) ? "" : formatDistance(Math.round(perPixel * width));
         }
       }
       labelRenderer.render(scene, camera);
@@ -4255,6 +4258,34 @@ export default function Viewer({
     }
   };
 
+  const jobText = jobBadge(viewerJob);
+  // Where the scene comes from, as the app knows it: the cluster over SSH, this
+  // Mac's folder, or the server this page was loaded from.
+  const connectionText = datasetAbout?.server
+    ? `Streaming over SSH from ${datasetAbout.server}`
+    : viewerJob
+      ? "Streaming over SSH"
+      : isDesktop
+        ? `Local folder${dataBasename ? ` · ${dataBasename}` : ""}`
+        : `Server · ${typeof window !== "undefined" ? window.location.host : ""}`;
+  // In the crumb row, after the scene counter: the one part of the top bar that
+  // gives way (ellipsis, full text in the tooltip) before anything overlaps.
+  const connectionState = (
+    <>
+      <span className={`conn-state ${tone}`} title={status ? `${connectionText}\n${status}` : connectionText}>
+        <i aria-hidden="true" />
+        <span className="conn-text">{connectionText}</span>
+      </span>
+      {jobText ? (
+        <span
+          className="job-badge"
+          title={`${jobText}. This viewer runs as a small CPU job on the cluster; it is reused while it runs.`}
+        >
+          {jobText}
+        </span>
+      ) : null}
+    </>
+  );
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (
     <div className="crumb">
@@ -4350,29 +4381,11 @@ export default function Viewer({
           {sceneOrder.indexOf(sceneId) + 1} of {sceneOrder.length}
         </span>
       ) : null}
+      {connectionState}
     </div>
   );
-  const jobText = jobBadge(viewerJob);
-  // Where the scene comes from, as the app knows it: the cluster over SSH, this
-  // Mac's folder, or the server this page was loaded from.
-  const connectionText = datasetAbout?.server
-    ? `Streaming over SSH from ${datasetAbout.server}`
-    : viewerJob
-      ? "Streaming over SSH"
-      : isDesktop
-        ? `Local folder${dataBasename ? ` · ${dataBasename}` : ""}`
-        : `Server · ${typeof window !== "undefined" ? window.location.host : ""}`;
   const actionTools = (
     <div className="top-actions">
-      <span className={`conn-state ${tone}`} title={status}>
-        <i aria-hidden="true" />
-        {connectionText}
-      </span>
-      {jobText ? (
-        <span className="job-badge" title="This viewer runs as a small CPU job on the cluster; it is reused while it runs.">
-          {jobText}
-        </span>
-      ) : null}
       <button
         type="button"
         className="ghost"
@@ -4750,43 +4763,27 @@ export default function Viewer({
             <p className="mono">{webglError}</p>
           </div>
         ) : null}
-        {isFullScreen ? (
-          <div className="glass status-pill" style={{ right: "12px", left: "auto" }}>
-            <button
-              type="button"
-              className="fullscreen-exit-btn"
-              onClick={() => setIsFullScreen(false)}
-              aria-label="Exit full screen (Esc or F)"
-            >
-              Exit full screen <kbd>Esc</kbd>
-            </button>
-          </div>
-        ) : null}
-            <div className="glass status-pill" title={summary ? summary.scene_id : undefined}>
-              <i className={tone} aria-hidden="true" />
-              <span>
-                {summary ? `${viewpointLabel} · t = ${typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s"}` : "No scene"}
-              </span>
-            </div>
-            {summary ? (
-              <div className="glass frame-pill" title="The scene's world frame, and the width the view shows at its centre">
-                <span>{summary.world_frame || "world"} frame</span>
-                <span ref={extentRef} />
-              </div>
-            ) : null}
             {summary ? (
               <div className="scale-bar" ref={scaleBarRef} hidden aria-hidden="true">
                 <b />
                 <span />
               </div>
             ) : null}
-            {missing.length > 0 ? (
-              <ul className="glass empty-pill" aria-label="Missing data">
-                {missing.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            ) : null}
+            <div className="stage-chips">
+            <div
+              className="glass status-pill"
+              title={summary ? `${summary.scene_id} · ${viewpointLabel} · t = ${typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s"}` : undefined}
+            >
+              <i className={tone} aria-hidden="true" />
+              {summary ? (
+                <span className="chip-text">
+                  <span className="chip-long">{viewpointLabel} · </span>t = {typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s"}
+                </span>
+              ) : (
+                <span className="chip-text">No scene</span>
+              )}
+            </div>
+            <div className="view-row">
             <div
               className="glass view-pill"
               role="group"
@@ -4808,6 +4805,36 @@ export default function Viewer({
                   {item.id === "chase" ? "Chase" : item.label}
                 </button>
               ))}
+            </div>
+            </div>
+            <div className="chip-end">
+            {isFullScreen ? (
+              <div className="glass exit-pill">
+                <button
+                  type="button"
+                  className="fullscreen-exit-btn"
+                  onClick={() => setIsFullScreen(false)}
+                  aria-label="Exit full screen (Esc or F)"
+                >
+                  Exit full screen <kbd>Esc</kbd>
+                </button>
+              </div>
+            ) : null}
+            {summary ? (
+              <div className="glass frame-pill" title="The scene's world frame, and the width the view shows at its centre">
+                <span className="chip-long">{summary.world_frame || "world"} frame</span>
+                <span className="chip-long frame-sep"> · </span>
+                <span className="frame-extent" ref={extentRef} />
+              </div>
+            ) : null}
+            </div>
+            {missing.length > 0 ? (
+              <ul className="glass empty-pill" aria-label="Missing data">
+                {missing.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : null}
             </div>
             <div className="glass legend" aria-label="Legend">
               {legendTypes.map((kind) => (
@@ -4898,6 +4925,9 @@ export default function Viewer({
               heightPx={layout.strip_px}
               focusAgent={focusAgent}
               onSwitchAgent={setFocusAgent}
+              mode={stripMode}
+              onMode={setStripMode}
+              selectedKey={appearance.splitCamera ?? (viewpoint === "camera" ? cameraId || null : null)}
               boxCount={(camera) => boxesInView(camera, cameraFrame.boxes.filter((box) => boxShown(box, hidden, appearance)))}
             />
           ) : null}
