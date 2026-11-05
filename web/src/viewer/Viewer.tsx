@@ -38,6 +38,7 @@ import {
   saveExportedFile,
   type ViewerJob,
 } from "../desktop/local";
+import { getRevealLabel, getModifierKey } from "../desktop/platform";
 import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
 import {
   clampLeft,
@@ -4297,8 +4298,8 @@ export default function Viewer({
             type="button"
             className="btn-open-dataset"
             onClick={triggerOpenFolder}
-            aria-label="Open dataset folder (⌘O)"
-            title="Open dataset folder (⌘O)"
+            aria-label={`Open dataset folder (${getModifierKey()}O)`}
+            title={`Open dataset folder (${getModifierKey()}O)`}
           >
             Open…
           </button>
@@ -5216,9 +5217,9 @@ export default function Viewer({
               className="ghost"
               onClick={() => void revealInFinder(lastSavedPath)}
               style={{ whiteSpace: "nowrap", flexShrink: 0 }}
-              aria-label="Show exported file in Finder"
+              aria-label={`Show exported file in ${getRevealLabel()}`}
             >
-              Show in Finder
+              {getRevealLabel()}
             </button>
           )}
         </div>

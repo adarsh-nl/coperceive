@@ -3285,7 +3285,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn real_fake_ssh_builds_and_saves_a_plan_without_submitting() {
         use crate::ssh::SshTarget;
 

@@ -7,7 +7,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, PartialEq, Eq, Clone)]
@@ -113,15 +113,29 @@ pub fn standard_ssh_args(target: &SshTarget) -> Vec<String> {
     let mut args = vec![
         "-o".to_string(),
         "BatchMode=yes".to_string(),
-        "-o".to_string(),
-        "ControlMaster=auto".to_string(),
-        "-o".to_string(),
-        "ControlPath=~/.coperceive/ssh-%C".to_string(),
-        "-o".to_string(),
-        "ControlPersist=10m".to_string(),
+    ];
+    #[cfg(not(target_os = "windows"))]
+    {
+        args.extend([
+            "-o".to_string(),
+            "ControlMaster=auto".to_string(),
+            "-o".to_string(),
+            "ControlPath=~/.coperceive/ssh-%C".to_string(),
+            "-o".to_string(),
+            "ControlPersist=10m".to_string(),
+        ]);
+    }
+    #[cfg(target_os = "windows")]
+    {
+        args.extend([
+            "-o".to_string(),
+            "ControlMaster=no".to_string(),
+        ]);
+    }
+    args.extend([
         "-o".to_string(),
         "ConnectTimeout=8".to_string(),
-    ];
+    ]);
     if let Some(port) = target.port {
         args.push("-p".to_string());
         args.push(port.to_string());
@@ -241,7 +255,7 @@ pub fn run_local_command(
     stdin: Option<&str>,
 ) -> std::io::Result<CommandResult> {
     ensure_control_dir();
-    let mut child = Command::new(bin)
+    let mut child = crate::platform::create_command(bin)
         .args(args)
         .stdin(if stdin.is_some() {
             Stdio::piped()

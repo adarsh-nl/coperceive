@@ -17,6 +17,7 @@ import {
   validateScene,
 } from "./local";
 import { errorText } from "./errors";
+import { getRevealLabel } from "./platform";
 import {
   Facts,
   GridTable,
@@ -552,7 +553,7 @@ export default function LibraryScreen({
               <InspectorSection title={`${formatBytes(selected.size_bytes)} on disk`}>
                 <div style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}>
                   <button type="button" className="c-secondary" onClick={() => revealInFinder(selected.path)}>
-                    Show in Finder
+                    {getRevealLabel()}
                   </button>
                   <button
                     type="button"
@@ -582,7 +583,7 @@ export default function LibraryScreen({
               {storage.library_root}
             </span>
             <button type="button" className="c-link" onClick={() => revealInFinder(storage.library_root)}>
-              Show in Finder
+              {getRevealLabel()}
             </button>
             <button type="button" className="c-link" onClick={() => setShowSettingsModal(true)}>
               Change location…

@@ -12,6 +12,10 @@ pub fn apply_viewer_window_chrome<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
         .traffic_light_position(tauri::LogicalPosition::new(16.0, 18.0))
 }
 
+pub fn create_command(bin: &str) -> std::process::Command {
+    std::process::Command::new(bin)
+}
+
 pub fn reveal_path(path: &Path) -> Result<(), String> {
     std::process::Command::new("open")
         .arg("-R")

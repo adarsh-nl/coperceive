@@ -133,5 +133,40 @@ if [ "${SCENE_COUNT}" -lt 1 ]; then
 fi
 
 echo "Verified: /api/scenes returned ${SCENE_COUNT} scene(s) with HTTP 200 OK."
+
+SCREENSHOT_DIR="/tmp/e2e-shots"
+mkdir -p "${SCREENSHOT_DIR}"
+
+capture_screenshot() {
+    local name="$1"
+    if command -v import >/dev/null 2>&1; then
+        import -window root "${SCREENSHOT_DIR}/${name}.png" 2>/dev/null || true
+    elif command -v xwd >/dev/null 2>&1 && command -v convert >/dev/null 2>&1; then
+        xwd -root -silent | convert xwd:- "${SCREENSHOT_DIR}/${name}.png" 2>/dev/null || true
+    fi
+    if [ -f "${SCREENSHOT_DIR}/${name}.png" ]; then
+        echo "Captured screenshot: ${SCREENSHOT_DIR}/${name}.png ($(wc -c < "${SCREENSHOT_DIR}/${name}.png") bytes)"
+    fi
+}
+
+echo "Capturing viewer screenshot..."
+sleep 2
+capture_screenshot "viewer"
+
+CTRL_PORT=$(sed -n '4p' "${MARKER_FILE}" || true)
+CTRL_SECRET=$(sed -n '5p' "${MARKER_FILE}" || true)
+
+if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
+    echo "Showing Library and capturing screenshot..."
+    curl -s -X POST -H "Content-Type: application/json" -d "{\"secret\":\"${CTRL_SECRET}\"}" "http://127.0.0.1:${CTRL_PORT}/show-library" >/dev/null || true
+    sleep 2
+    capture_screenshot "library"
+
+    echo "Navigating to Dataset View and capturing screenshot..."
+    curl -s -X POST -H "Content-Type: application/json" -d "{\"secret\":\"${CTRL_SECRET}\",\"js\":\"window.location.hash='#/connect?tab=hpc';\"}" "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || true
+    sleep 2
+    capture_screenshot "dataset_view"
+fi
+
 SMOKE_SUCCESS=1
 echo "Linux Desktop smoke test PASSED successfully."

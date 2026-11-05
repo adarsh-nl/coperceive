@@ -233,7 +233,7 @@ impl RemoteClient {
         let remote_cmd = remote_command_line(&self.coperceive_command, args);
         let ssh_args = build_ssh_command(&self.alias, &remote_cmd);
 
-        let output = Command::new(&self.ssh_bin)
+        let output = crate::platform::create_command(&self.ssh_bin)
             .args(&ssh_args)
             .output()
             .map_err(|e| SshErrorKind::Other(format!("Could not start SSH: {}", e)))?;
@@ -404,7 +404,7 @@ impl SshTunnel {
         let bin = ssh_bin.unwrap_or("ssh");
         let args = build_ssh_tunnel_command(alias, local_port, remote_ip, remote_port);
 
-        let mut child = Command::new(bin)
+        let mut child = crate::platform::create_command(bin)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -1234,9 +1234,11 @@ exit 1
             line,
             format!("coperceive remote start --root '{}'", malicious)
         );
+        let path_sep = if cfg!(windows) { ";" } else { ":" };
         let path = format!(
-            "{}:{}",
+            "{}{}{}",
             bin_dir.display(),
+            path_sep,
             std::env::var("PATH").unwrap_or_default()
         );
         let status = Command::new("sh")

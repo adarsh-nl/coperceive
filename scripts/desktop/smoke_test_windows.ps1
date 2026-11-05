@@ -75,6 +75,9 @@ if (-not (Test-Path $MarkerFile)) {
 $lines = Get-Content $MarkerFile
 $origin = $lines[0]
 $token = $lines[1]
+$sidecarLog = if ($lines.Count -ge 3) { $lines[2] } else { "" }
+$ctrlPort = if ($lines.Count -ge 4) { $lines[3] } else { 0 }
+$ctrlSecret = if ($lines.Count -ge 5) { $lines[4] } else { "" }
 
 Write-Host "Auto-connected to origin: $origin"
 
@@ -89,6 +92,89 @@ if ($sceneCount -lt 1) {
 
 Write-Host "Verified: /api/scenes returned $sceneCount scene(s) with HTTP 200 OK."
 
+$ScreenshotDir = Join-Path $env:TEMP "e2e-shots"
+New-Item -ItemType Directory -Path $ScreenshotDir -Force | Out-Null
+
+function Capture-ScreenShot([string]$filename) {
+    try {
+        Add-Type -AssemblyName System.Windows.Forms
+        Add-Type -AssemblyName System.Drawing
+        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+        $dest = Join-Path $ScreenshotDir $filename
+        $bitmap.Save($dest, [System.Drawing.Imaging.ImageFormat]::Png)
+        $graphics.Dispose()
+        $bitmap.Dispose()
+        Write-Host "Captured screenshot: $dest"
+    } catch {
+        Write-Warning "Screenshot capture failed: $_"
+    }
+}
+
+Write-Host "Capturing viewer screenshot..."
+Start-Sleep -Seconds 2
+Capture-ScreenShot "viewer.png"
+
+if ($ctrlPort -ne 0 -and $ctrlSecret) {
+    Write-Host "Showing Library and capturing screenshot..."
+    try {
+        $body = @{ secret = $ctrlSecret } | ConvertTo-Json
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/show-library" -Method Post -Body $body -ContentType "application/json"
+        Start-Sleep -Seconds 2
+        Capture-ScreenShot "library.png"
+    } catch {
+        Write-Warning "show-library request failed: $_"
+    }
+
+    Write-Host "Navigating to Dataset View and capturing screenshot..."
+    try {
+        $evalBody = @{
+            secret = $ctrlSecret
+            js = "window.location.hash = '#/connect?tab=hpc';"
+        } | ConvertTo-Json
+        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Body $evalBody -ContentType "application/json"
+        Start-Sleep -Seconds 2
+        Capture-ScreenShot "dataset_view.png"
+    } catch {
+        Write-Warning "eval dataset view request failed: $_"
+    }
+}
+
 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+
+# Measure fake-SSH dataset open time
+Write-Host "Measuring fake-SSH dataset open time..."
+$fakeSshPath = (Resolve-Path "tests\fixtures\hpc\fake_ssh.sh").Path
+$clusterFixture = (Resolve-Path "src-tauri\tests\fixtures\hpc\cluster-a.json").Path
+$openPayload = @{
+    server = $clusterFixture
+    steps = @(
+        @{
+            command = "dataset_open"
+            args = @{
+                profileId = "cluster-a"
+                adapter = "v2xset"
+                rawRoot = "/data/v2xset"
+            }
+        }
+    )
+}
+$tempRequest = Join-Path $TempDir "open_request.json"
+$tempResult = Join-Path $TempDir "open_result.json"
+$openPayload | ConvertTo-Json -Depth 5 | Set-Content -Path $tempRequest
+
+$sw = [System.Diagnostics.Stopwatch]::StartNew()
+$probeProc = Start-Process -FilePath $AppExe -ArgumentList "--dry-run" -Environment @{
+    COPERCEIVE_TEST_ENV = "1"
+    COPERCEIVE_SSH_BIN = $fakeSshPath
+    COPERCEIVE_TEST_DATASET_FLOW_REQUEST = $tempRequest
+    COPERCEIVE_TEST_DATASET_FLOW_RESULT = $tempResult
+    COPERCEIVE_STATE_DIR = $StateDir
+} -PassThru -NoNewWindow -Wait
+$sw.Stop()
+Write-Host "Fake-SSH dataset open completed in $($sw.ElapsedMilliseconds) ms"
+
 Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Windows Desktop smoke test PASSED successfully."

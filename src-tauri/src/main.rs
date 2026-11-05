@@ -304,15 +304,25 @@ fn open_viewer_window(
     let update_url = std::env::var("COPERCEIVE_UPDATE_URL").unwrap_or_default();
     let escaped_update = update_url.replace('\\', "\\\\").replace('"', "\\\"");
 
+    let titlebar_mode = if cfg!(target_os = "macos") { "overlay" } else { "native" };
+    let os_name = if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "linux") {
+        "linux"
+    } else {
+        "macos"
+    };
+
     let init_script = format!(
         r#"
         (function() {{
             try {{
                 window.__COPERCEIVE_DESKTOP__ = true;
+                window.__COPERCEIVE_OS__ = "{os_name}";
                 // Tauri injects its IPC object here too, but no command is
                 // permitted for this window (capabilities: main only).
                 window.__COPERCEIVE_VIEWER_WINDOW__ = true;
-                window.__COPERCEIVE_TITLEBAR__ = "overlay";
+                window.__COPERCEIVE_TITLEBAR__ = "{titlebar_mode}";
                 window.__COPERCEIVE_TEST_ENV__ = {test_env};
                 window.__COPERCEIVE_FORCE_MOTION__ = {force_motion};
                 window.__COPERCEIVE_UPDATE_URL__ = "{escaped_update}";
@@ -525,8 +535,7 @@ async fn switch_data_root(
         state::add_recent_root(&mut persistent, &new_path_str);
         let _ = state::save_state(&persistent);
 
-        // Update application menu with refreshed recent roots (macOS)
-        #[cfg(target_os = "macos")]
+        // Update application menu with refreshed recent roots
         if let Ok(menu) = build_app_menu(app, &persistent.recent_roots) {
             let _ = app.set_menu(menu);
         }
@@ -1005,21 +1014,13 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     Ok(port)
 }
 
-#[cfg(target_os = "macos")]
 fn build_app_menu(
     app: &tauri::AppHandle,
     recent_roots: &[String],
 ) -> Result<tauri::menu::Menu<tauri::Wry>, tauri::Error> {
     use tauri::menu::*;
 
-    // App Submenu
-    let app_submenu = SubmenuBuilder::new(app, "Coperceive")
-        .item(&MenuItem::with_id(app, "about_coperceive", "About Coperceive", true, None::<&str>)?)
-        .separator()
-        .item(&MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrControl+,"))?)
-        .separator()
-        .quit()
-        .build()?;
+    let is_macos = cfg!(target_os = "macos");
 
     // File Submenu
     let mut file_builder = SubmenuBuilder::new(app, "File")
@@ -1045,9 +1046,19 @@ fn build_app_menu(
         }
     }
     let recent_submenu = recent_builder.build()?;
-    file_builder = file_builder.item(&recent_submenu)
-        .separator()
-        .close_window();
+    file_builder = file_builder.item(&recent_submenu);
+
+    if !is_macos {
+        file_builder = file_builder
+            .separator()
+            .item(&MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrControl+,"))?)
+            .separator()
+            .item(&MenuItem::with_id(app, "quit", "Exit", true, Some("CmdOrControl+Q"))?);
+    } else {
+        file_builder = file_builder
+            .separator()
+            .close_window();
+    }
     let file_submenu = file_builder.build()?;
 
     // Edit Submenu
@@ -1096,7 +1107,13 @@ fn build_app_menu(
         .build()?;
 
     // Help Submenu
-    let help_submenu = SubmenuBuilder::new(app, "Help")
+    let mut help_builder = SubmenuBuilder::new(app, "Help");
+    if !is_macos {
+        help_builder = help_builder
+            .item(&MenuItem::with_id(app, "about_coperceive", "About Coperceive", true, None::<&str>)?)
+            .separator();
+    }
+    let help_submenu = help_builder
         .item(&MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?)
         .separator()
         .item(&MenuItem::with_id(app, "help_logs", "Show Logs", true, None::<&str>)?)
@@ -1108,16 +1125,36 @@ fn build_app_menu(
         .item(&MenuItem::with_id(app, "help_issue", "Report Issue", true, None::<&str>)?)
         .build()?;
 
-    MenuBuilder::new(app)
-        .items(&[
-            &app_submenu,
-            &file_submenu,
-            &edit_submenu,
-            &view_submenu,
-            &playback_submenu,
-            &help_submenu,
-        ])
-        .build()
+    let menu_builder = MenuBuilder::new(app);
+    if is_macos {
+        let app_submenu = SubmenuBuilder::new(app, "Coperceive")
+            .item(&MenuItem::with_id(app, "about_coperceive", "About Coperceive", true, None::<&str>)?)
+            .separator()
+            .item(&MenuItem::with_id(app, "settings", "Settings…", true, Some("CmdOrControl+,"))?)
+            .separator()
+            .quit()
+            .build()?;
+        menu_builder
+            .items(&[
+                &app_submenu,
+                &file_submenu,
+                &edit_submenu,
+                &view_submenu,
+                &playback_submenu,
+                &help_submenu,
+            ])
+            .build()
+    } else {
+        menu_builder
+            .items(&[
+                &file_submenu,
+                &edit_submenu,
+                &view_submenu,
+                &playback_submenu,
+                &help_submenu,
+            ])
+            .build()
+    }
 }
 
 /// The library's shared maps root, passed to the local server so maps installed
@@ -1218,8 +1255,7 @@ async fn start_local_session(
         state::add_recent_root(&mut persistent, &data_root);
         let _ = state::save_state(&persistent);
 
-        // Update application menu with refreshed recent roots (macOS)
-        #[cfg(target_os = "macos")]
+        // Update application menu with refreshed recent roots
         if let Ok(menu) = build_app_menu(app, &persistent.recent_roots) {
             let _ = app.set_menu(menu);
         }
@@ -1957,11 +1993,11 @@ fn ssh_bin() -> String {
 }
 
 fn ssh_config_path() -> PathBuf {
-    std::env::var_os("HOME")
+    let base = std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."))
-        .join(".ssh")
-        .join("config")
+        .unwrap_or_else(|| PathBuf::from("."));
+    base.join(".ssh").join("config")
 }
 
 /// Lists hosts from the user's `~/.ssh/config` so "Add server" can offer them.
@@ -3468,8 +3504,17 @@ fn main() {
                 .replace('"', "\\\"");
             let import_js = import_source.replace('\\', "\\\\").replace('"', "\\\"");
             let update_js = update_url.replace('\\', "\\\\").replace('"', "\\\"");
+            let titlebar_mode = if cfg!(target_os = "macos") { "overlay" } else { "native" };
+            let os_name = if cfg!(target_os = "windows") {
+                "windows"
+            } else if cfg!(target_os = "linux") {
+                "linux"
+            } else {
+                "macos"
+            };
             let _ = webview.eval(&format!(
-                r#"window.__COPERCEIVE_TITLEBAR__ = "overlay";
+                r#"window.__COPERCEIVE_OS__ = "{os_name}";
+                window.__COPERCEIVE_TITLEBAR__ = "{titlebar_mode}";
                 window.dispatchEvent(new Event("coperceive-titlebar"));
                 window.__COPERCEIVE_CTRL_PORT__ = {port};
                 window.__COPERCEIVE_CTRL_SECRET__ = "{secret}";
@@ -3976,10 +4021,15 @@ fn main() {
 
             let persistent = state::load_state();
 
-            // 2. Set macOS native application menu
-            #[cfg(target_os = "macos")]
+            // 2. Set native application menu
             if let Ok(menu) = build_app_menu(&handle, &persistent.recent_roots) {
                 let _ = app.set_menu(menu);
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            if let Some(main) = app.get_webview_window("main") {
+                let _ = main.set_decorations(true);
+                let _ = main.set_title("Coperceive");
             }
 
             // 3. Auto-connect on launch if data root exists and is valid.
@@ -4088,6 +4138,9 @@ fn main() {
                         .message(&about_text)
                         .title("About Coperceive")
                         .show(|_| {});
+                }
+                "quit" => {
+                    app.exit(0);
                 }
                 "settings" => {
                     if let Some(v) = app.get_webview_window("viewer") {

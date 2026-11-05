@@ -416,41 +416,35 @@ pub fn copy(context: &Value, note: &str) -> Result<(), String> {
 }
 
 /// Save the exact redacted bundle as a zip: report.txt plus one file per
-/// preview section. Nothing unredacted is copied.
+/// preview section. Nothing unredacted is copied. Pure Rust zip implementation.
 pub fn save_zip(destination: &Path, context: &Value, note: &str) -> Result<PathBuf, String> {
+    use std::io::Write;
+    use zip::write::SimpleFileOptions;
+    use zip::CompressionMethod;
+
     let bundle = build_bundle(context);
     let report_text = copy_text(context, note);
     let parent = destination.parent().ok_or_else(|| "Choose a folder for diagnostics.".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-    let staging = std::env::temp_dir().join(format!("coperceive-diagnostics-{}", std::process::id()));
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging).map_err(|error| error.to_string())?;
-    fs::write(staging.join("report.txt"), &report_text).map_err(|error| error.to_string())?;
-    for (name, text) in &bundle.files {
-        fs::write(staging.join(name), text).map_err(|error| error.to_string())?;
-    }
+
     let mut zip_path = destination.to_path_buf();
     if zip_path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
         zip_path.set_extension("zip");
     }
-    let status = match std::process::Command::new("zip")
-        .current_dir(&staging)
-        .arg("-qr")
-        .arg(&zip_path)
-        .arg(".")
-        .status()
-    {
-        Ok(status) => status,
-        Err(error) => {
-            let _ = fs::remove_dir_all(&staging);
-            if error.kind() == std::io::ErrorKind::NotFound {
-                return Err("Creating a diagnostics zip is not supported on this OS yet (zip command not found).".into());
-            }
-            return Err(format!("Could not create the zip: {error}"));
-        }
-    };
-    let _ = fs::remove_dir_all(&staging);
-    if !status.success() { return Err("zip failed".into()); }
+
+    let file = fs::File::create(&zip_path).map_err(|error| format!("Could not create zip: {error}"))?;
+    let mut zip = zip::ZipWriter::new(file);
+    let options = SimpleFileOptions::default().compression_method(CompressionMethod::Deflated);
+
+    zip.start_file("report.txt", options).map_err(|error| error.to_string())?;
+    zip.write_all(report_text.as_bytes()).map_err(|error| error.to_string())?;
+
+    for (name, text) in &bundle.files {
+        zip.start_file(name, options).map_err(|error| error.to_string())?;
+        zip.write_all(text.as_bytes()).map_err(|error| error.to_string())?;
+    }
+
+    zip.finish().map_err(|error| format!("Could not finish zip: {error}"))?;
     Ok(zip_path)
 }
 
@@ -541,7 +535,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(unix)]
     fn every_shared_file_is_redacted_and_the_zip_matches_the_preview() {
         use std::io::Read;
 
@@ -587,15 +580,20 @@ mod tests {
         }
         assert!(preview.contains("shadow bad road"), "normal text was mangled");
         let zip = save_zip(&home.join("report.zip"), &context, "").unwrap();
-        let mut archive = std::fs::File::open(&zip).unwrap();
-        let mut bytes = Vec::new();
-        archive.read_to_end(&mut bytes).unwrap();
-        assert!(!bytes.is_empty());
-        let output = std::process::Command::new("unzip")
-            .arg("-p").arg(&zip)
-            .output()
-            .expect("unzip");
-        let all = String::from_utf8_lossy(&output.stdout);
+        let archive_file = std::fs::File::open(&zip).unwrap();
+        let mut archive = zip::ZipArchive::new(archive_file).unwrap();
+        assert!(!archive.is_empty());
+        let mut all = String::new();
+        let mut names = String::new();
+        for i in 0..archive.len() {
+            let mut file = archive.by_index(i).unwrap();
+            names.push_str(&file.name().unwrap());
+            names.push('\n');
+            let mut content = String::new();
+            file.read_to_string(&mut content).unwrap();
+            all.push_str(&content);
+            all.push('\n');
+        }
         for secret in [
             "url-secret", "json-secret", "json-password", "auth-secret", "cookie-secret",
             "body-secret-base64", "BEGIN OPENSSH", "/Users/alice", "hpc-alias", "hpc.example.org",
@@ -603,27 +601,9 @@ mod tests {
         ] {
             assert!(!all.contains(secret), "{secret} leaked into the zip:\n{all}");
         }
-        let names = std::process::Command::new("unzip").arg("-Z1").arg(&zip).output().unwrap();
-        let names = String::from_utf8_lossy(&names.stdout);
         assert!(names.contains("report.txt"), "{names}");
         assert!(names.contains("crash-"), "{names}");
         assert!(names.contains("desktop.log"), "{names}");
-    }
-
-    #[test]
-    #[cfg(windows)]
-    fn zip_not_supported_on_windows_returns_clear_error() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let home = temp_home();
-        let _env = isolate_test_home(&home);
-        let context = serde_json::json!({"servers": []});
-        let result = save_zip(&home.join("report.zip"), &context, "");
-        if let Err(e) = result {
-            assert!(
-                e.contains("Creating a diagnostics zip is not supported on this OS yet (zip command not found)."),
-                "unexpected error: {e}"
-            );
-        }
     }
 
     #[test]
