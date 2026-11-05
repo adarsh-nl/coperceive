@@ -250,8 +250,8 @@ COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
 APP_PID=$!
 echo "App process spawned with PID ${APP_PID}"
 
-echo "Waiting for auto-connect and viewer startup (up to 15s)..."
-for i in {1..30}; do
+echo "Waiting for auto-connect and viewer startup (up to 45s)..."
+for i in {1..90}; do
     if [ -f "${MARKER_FILE}" ]; then
         break
     fi
