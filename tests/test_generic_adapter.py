@@ -112,6 +112,7 @@ def test_validator_errors_are_clear(tmp_path: Path, mutate, message: str) -> Non
     with pytest.raises(GenericError, match=re.escape(message)):
         GenericAdapter().validate(root)
 
+
 def test_generic_is_listed_and_detected_by_the_marker(tmp_path: Path) -> None:
     root = _copy_example(tmp_path, "driving")
     assert "generic" in {row.name for row in list_adapters()}

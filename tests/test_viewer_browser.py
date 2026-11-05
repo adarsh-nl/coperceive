@@ -213,10 +213,6 @@ def _write_roots(base: Path) -> tuple[Path, Path, Path]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(_PNG)
     write_scene(_bare_scene(), scenes / SCENE_BARE)
-    # A generic multi-view example: two fixed cameras and one fixed lidar, no boxes,
-    # no vehicle. It must open with Orbit only.
-    examples = Path(__file__).resolve().parents[1] / "examples" / "generic" / "inspection"
-    ingest(GenericAdapter(), examples, scenes, params={}, workers=1)
     for scene_id in FILLER_SCENES:
         write_scene(_filler_scene(scene_id), scenes / scene_id)
     for child in scenes.iterdir():
@@ -1736,19 +1732,41 @@ def _viewpoints(session: _Session) -> list[str]:
     return [buttons.nth(i).inner_text().strip() for i in range(buttons.count())]
 
 
-def test_generic_inspection_scene_opens_with_orbit_only(session: _Session) -> None:
+def test_generic_inspection_scene_opens_with_orbit_only(browser: Browser, tmp_path: Path) -> None:
     """A generic fixed-camera/fixed-LiDAR scene has no vehicle/UAV, so Orbit is the
     only viewpoint; it still plays and lists its cameras."""
-    session.choose_scene("generic-inspection")
-    session.wait_for(
-        lambda: session.page.locator("#scene-id").inner_text() == "generic-inspection",
-        "the generic inspection scene",
-    )
-    views = _viewpoints(session)
-    assert "Orbit" in views
-    assert "Chase" not in views
-    assert "Drone" not in views
-    assert session.page.get_by_role("switch", name="Road map", exact=True).count() == 0
+    bundle = _bundle_dir()
+    if bundle is None:
+        _unavailable("no web bundle: set COPERCEIVE_WEB_DIST to a vite build directory")
+    scenes = tmp_path / "scenes"
+    examples = Path(__file__).resolve().parents[1] / "examples" / "generic" / "inspection"
+    ingest(GenericAdapter(), examples, scenes, params={}, workers=1)
+    app = create_app(root=scenes, token=None, static=bundle)
+    port = _free_port()
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="warning"))
+    thread = threading.Thread(target=server.run, name="viewer-generic-e2e", daemon=True)
+    thread.start()
+    deadline = time.monotonic() + 20
+    while not server.started and time.monotonic() < deadline:
+        time.sleep(0.05)
+    assert server.started, "uvicorn did not start"
+    page = browser.new_page(viewport={"width": 1400, "height": 900})
+    page.add_init_script("window.__COPERCEIVE_TEST_ENV__ = true;")
+    session = _Session(page, f"http://127.0.0.1:{port}")
+    try:
+        session.open()
+        session.wait_for(
+            lambda: page.locator("#scene-id").inner_text() == "generic-inspection",
+            "the generic inspection scene",
+        )
+        views = _viewpoints(session)
+        assert "Orbit" in views
+        assert "Chase" not in views
+        assert "Drone" not in views
+        assert page.get_by_role("switch", name="Road map", exact=True).count() == 0
+    finally:
+        page.close()
+        server.should_exit = True
 
 
 def test_views_and_layers_follow_what_the_scene_has(session: _Session) -> None:
