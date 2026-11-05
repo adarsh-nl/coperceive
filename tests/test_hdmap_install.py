@@ -172,13 +172,9 @@ def test_the_verified_town_table_matches_adr_0008_and_is_pinned() -> None:
     assert TOWN_SHA256 == expected
     from coperceive.hdmap.install import TOWN_VERIFICATION
 
-    package = {
-        town for town, level in TOWN_VERIFICATION.items() if level == "carla-0.9.15-package"
-    }
+    package = {town for town, level in TOWN_VERIFICATION.items() if level == "carla-0.9.15-package"}
     mirrors = {
-        town
-        for town, level in TOWN_VERIFICATION.items()
-        if level == "public-mirrors-not-package"
+        town for town, level in TOWN_VERIFICATION.items() if level == "public-mirrors-not-package"
     }
     assert package == {"Town03", "Town06", "Town07", "Town10HD"}
     assert mirrors == {"Town01", "Town02", "Town04", "Town05"}
