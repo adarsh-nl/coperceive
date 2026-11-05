@@ -57,6 +57,10 @@ def list_adapters() -> tuple[AdapterInfo, ...]:
 
 def resolve_adapter(spec: str) -> Adapter:
     """A built-in name, an entry point name, or a path to a manifest file."""
+    if spec == "dair-v2x-c":
+        from coperceive.adapters.dair_v2x_c import DairV2XCAdapter
+
+        return DairV2XCAdapter(Path("."))
     path = Path(spec)
     if spec.endswith((".yaml", ".yml")) or path.is_file():
         if not path.is_file():

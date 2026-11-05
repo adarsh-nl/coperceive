@@ -15,6 +15,8 @@ from pathlib import Path
 SPLITS = {
     "opv2v": ("train", "validate", "test", "test_culver_city"),
     "v2xset": ("train", "validate", "test"),
+    "v2v4real": ("train", "test"),
+    "dair-v2x-c": ("train", "val"),
 }
 GRIFFIN_SUBSETS = ("25m", "40m", "55m", "random")
 DETECT_PROBE_SCENES = 8
@@ -51,6 +53,30 @@ def is_v2xset(
     return False
 
 
+def is_v2v4real(
+    raw_root: Path, scenes: list[str], split: str, probe: int = DETECT_PROBE_SCENES
+) -> bool:
+    """V2V4Real scenarios start ``testoutput_CAV_data_`` and hold vehicle agents 0/1."""
+    for scene in scenes[:probe]:
+        if not scene.startswith("testoutput_CAV_data_"):
+            continue
+        try:
+            with os.scandir(raw_root / split / scene) as agents:
+                names = {agent.name for agent in agents if agent.is_dir()}
+        except OSError:
+            continue
+        if "0" in names and "1" in names:
+            return True
+    return False
+
+
+def is_dair_v2x_c(folder: Path) -> bool:
+    cvi = folder / "cooperative-vehicle-infrastructure"
+    return (cvi / "cooperative" / "data_info.json").is_file() or (
+        folder / "cooperative" / "data_info.json"
+    ).is_file()
+
+
 def is_griffin(folder: Path) -> bool:
     return (folder / "vehicle-side" / "scene_infos.json").is_file() and (
         folder / "drone-side" / "scene_infos.json"
@@ -68,13 +94,20 @@ def _opencood(folder: Path) -> tuple[str, list[str]] | None:
         return None
     if not scenes:
         return None
-    name = "V2XSet" if is_v2xset(folder, scenes, splits[0], SCAN_PROBE_SCENES) else "OPV2V"
+    if is_v2xset(folder, scenes, splits[0], SCAN_PROBE_SCENES):
+        name = "V2XSet"
+    elif is_v2v4real(folder, scenes, splits[0], SCAN_PROBE_SCENES):
+        name = "V2V4Real"
+    else:
+        name = "OPV2V"
     return name, splits
 
 
 def recognise(folder: Path) -> str | None:
     """A short label for a folder, or None when nothing here says what it is."""
     try:
+        if is_dair_v2x_c(folder):
+            return "DAIR-V2X-C · train, val"
         if is_griffin(folder):
             return "Griffin"
         subsets = [name for name in GRIFFIN_SUBSETS if is_griffin(folder / name)]

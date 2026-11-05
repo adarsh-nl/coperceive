@@ -294,7 +294,7 @@ pub fn render_prepare_script_with_estimate(
     }
     let tasks = scene_ids.len() as u32;
     let throttle = request.workers.min(tasks);
-    if !matches!(request.adapter.as_str(), "griffin" | "opv2v" | "v2xset") {
+    if !matches!(request.adapter.as_str(), "griffin" | "opv2v" | "v2xset" | "v2v4real" | "dair-v2x-c") {
         return Err(format!("{} is not a built-in cluster adapter.", request.adapter));
     }
     let partition = profile

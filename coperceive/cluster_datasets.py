@@ -36,6 +36,8 @@ from coperceive.remote.recognise import (
     DETECT_PROBE_SCENES,
     GRIFFIN_SUBSETS,
     SPLITS,
+    is_dair_v2x_c,
+    is_v2v4real,
     is_v2xset,
     scene_dirs,
 )
@@ -49,7 +51,7 @@ CACHE_DIR = "coperceive-cache"
 DEFAULT_MAX_ENTRIES = 200_000
 DEFAULT_MAX_SCENES = 5_000
 DEFAULT_TIMEOUT_S = 30.0
-_BUILTIN = ("griffin", "opv2v", "v2xset")
+_BUILTIN = ("griffin", "opv2v", "v2xset", "v2v4real", "dair-v2x-c")
 # Shared with the folder scan's "Recognised as" (coperceive/remote/recognise.py).
 _SPLITS = SPLITS
 _GRIFFIN_SUBSETS = GRIFFIN_SUBSETS
@@ -65,7 +67,7 @@ def _real(path: str | Path) -> Path:
 
 def _licence(adapter: object) -> dict[str, object] | None:
     spec = getattr(adapter, "spec", None)
-    licence = getattr(spec, "licence", None)
+    licence = getattr(spec, "licence", None) or getattr(adapter, "licence", None)
     if licence is None:
         return None
     return {
@@ -77,6 +79,12 @@ def _licence(adapter: object) -> dict[str, object] | None:
 
 
 def _params_for(adapter: str, path: Path, split: str | None = None) -> dict[str, str]:
+    if adapter == "dair-v2x-c":
+        if split not in ("train", "val"):
+            raise DatasetError(
+                "cannot tell whether this DAIR-V2X-C copy has train or val annotations"
+            )
+        return {"split": split}
     if adapter in _SPLITS:
         chosen = split or _split_for(adapter, path)
         if chosen is None:
@@ -786,8 +794,17 @@ def detect_cluster_dataset(
         raw_root = griffin
         split = None
         scene_names: list[str] = []
+    elif is_dair_v2x_c(candidate):
+        adapter_name = "dair-v2x-c"
+        raw_root = candidate
+        split = (
+            "train"
+            if (candidate / "DAIR-V2X-C_Complemented_Anno" / "train.json").is_file()
+            else "val"
+        )
+        scene_names = []
     else:
-        accepted = (*_SPLITS["opv2v"], *_SPLITS["v2xset"])
+        accepted = (*_SPLITS["opv2v"], *_SPLITS["v2xset"], *_SPLITS["v2v4real"])
         if candidate.name in accepted and candidate.is_dir():
             raw_root = candidate.parent
             split = candidate.name
@@ -802,13 +819,18 @@ def detect_cluster_dataset(
         except OSError as exc:
             result["reason"] = f"cannot list {raw_root / split}: {exc.strerror or exc}"
             return result
-        adapter_name = "v2xset" if _is_v2xset(raw_root, scene_names, split) else "opv2v"
+        if _is_v2xset(raw_root, scene_names, split):
+            adapter_name = "v2xset"
+        elif is_v2v4real(raw_root, scene_names, split):
+            adapter_name = "v2v4real"
+        else:
+            adapter_name = "opv2v"
         if split not in _SPLITS[adapter_name]:
             adapter_name = "opv2v"
     params = _params_for(adapter_name, raw_root, split)
     try:
         adapter = resolve_adapter(adapter_name)
-        if split is None:
+        if split is None or adapter_name == "dair-v2x-c":
             scene_count = len(adapter.scenes(raw_root, params))
         else:
             # OPV2V/V2XSet: the split listing is the scene list. Listing every
@@ -849,15 +871,27 @@ def index_cluster_dataset(
     raw = _real(raw_root)
     if not raw.is_dir():
         raise DatasetError(f"raw root is not a directory: {raw}")
-    raw, split = _raw_and_split(adapter_name, raw, split)
-    params = _params_for(adapter_name, raw, split)
-    adapter = cast(ManifestAdapter, resolve_adapter(adapter_name))
     errors: list[str] = []
-    refs = list(adapter.scenes(raw, params, errors=errors))
+    if adapter_name == "dair-v2x-c":
+        split = split or (
+            "train" if (raw / "DAIR-V2X-C_Complemented_Anno" / "train.json").is_file() else "val"
+        )
+        params = _params_for(adapter_name, raw, split)
+        adapter = resolve_adapter(adapter_name)
+        refs = list(adapter.scenes(raw, params))
+        scale_us = 0
+        fingerprint_root = raw
+        estimate_method = "not estimated: DAIR-V2X-C sensor tree is absent on the cluster"
+    else:
+        raw, split = _raw_and_split(adapter_name, raw, split)
+        params = _params_for(adapter_name, raw, split)
+        adapter = cast(ManifestAdapter, resolve_adapter(adapter_name))
+        refs = list(adapter.scenes(raw, params, errors=errors))
+        scale_us = adapter.spec.clock.scale_us or 0
+        fingerprint_root = raw / split if split else raw
+        estimate_method = "sum of file sizes under each scene directory, metadata only"
     if len(refs) > max_scenes:
         refs = refs[:max_scenes]
-    scale_us = adapter.spec.clock.scale_us or 0
-    fingerprint_root = raw / split if split else raw
     sizes: dict[str, int] = {}
     fingerprint = _fingerprint(
         fingerprint_root,
@@ -869,7 +903,16 @@ def index_cluster_dataset(
     estimated_cache_bytes = 0
     for ref in refs:
         try:
-            counts = adapter.summarise(raw, ref)
+            if adapter_name == "dair-v2x-c":
+                dair_scene = adapter.load(raw, ref)  # type: ignore[union-attr]
+                counts = {
+                    "agents": len(dair_scene.agents),
+                    "sensors": len(dair_scene.sensors),
+                    "images": len(dair_scene.images),
+                    "lidar": len(dair_scene.point_clouds),
+                }
+            else:
+                counts = adapter.summarise(raw, ref)  # type: ignore[union-attr]
         except (CoperceiveError, ValueError, OSError) as exc:
             # One unreadable scene is an entry in errors, not a failed index.
             errors.append(_scene_error(ref.scene_id, exc))
@@ -891,7 +934,9 @@ def index_cluster_dataset(
                 "raw": {"scene_id": ref.scene_id},
             }
         )
-        if split and not fingerprint["truncated"]:
+        if adapter_name == "dair-v2x-c":
+            pass
+        elif split and not fingerprint["truncated"]:
             estimated_cache_bytes += sizes.get(ref.scene_id, 0)
         else:
             scene_dir = raw / split / ref.scene_id if split else raw / ref.scene_id
@@ -913,9 +958,7 @@ def index_cluster_dataset(
         },
         "scene_count": len(scenes),
         "estimated_cache_bytes": estimated_cache_bytes,
-        "estimated_cache_bytes_method": (
-            "sum of file sizes under each scene directory, metadata only"
-        ),
+        "estimated_cache_bytes_method": estimate_method,
         "scenes": scenes,
         "errors": errors,
         "truncated": len(refs) >= max_scenes,

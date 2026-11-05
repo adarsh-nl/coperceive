@@ -292,7 +292,7 @@ pub fn index(
     split: Option<&str>,
 ) -> Result<Value, String> {
     let adapter = adapter.trim();
-    if !matches!(adapter, "griffin" | "opv2v" | "v2xset") {
+    if !matches!(adapter, "griffin" | "opv2v" | "v2xset" | "v2v4real" | "dair-v2x-c") {
         return Err(format!("{adapter:?} is not a built-in cluster adapter."));
     }
     if raw_root.trim().is_empty() {

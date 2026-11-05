@@ -73,7 +73,7 @@ def test_catalog_structure() -> None:
     assert v2xset["licence"] == "unknown"
 
     v2v4real = by_id["v2v4real"]
-    assert v2v4real["status"] == "planned"
+    assert v2v4real["status"] == "local-import"
     assert v2v4real["licence"] == "unknown"
     assert v2v4real["paper_url"] == "https://arxiv.org/abs/2303.07601"
 
