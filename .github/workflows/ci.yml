@@ -330,7 +330,7 @@ jobs:
           echo "=== Debian Package Size ==="
           ls -lh "${DEB_FILE}"
           echo "=== Top 25 Largest Files in .deb ==="
-          dpkg-deb -c "${DEB_FILE}" | sort -k3 -n -r | head -n 25
+          (dpkg-deb -c "${DEB_FILE}" | sort -k3 -n -r || true) | head -n 25
           echo "=== AppImage Package Size ==="
           ls -lh "${APPIMAGE_FILE}"
       - name: Run Linux Smoke Test on Installed Debian Package
