@@ -10,6 +10,7 @@ parallel run, ``.partial/`` and ``COMPLETE.json``.
 from __future__ import annotations
 
 import math
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -19,6 +20,7 @@ import numpy as np
 
 from coperceive.adapters.naming import display_names
 from coperceive.adapters.paths import PathError, Template, confine
+from coperceive.adapters.prefetch import prefetching
 from coperceive.adapters.readers import registry as readers
 from coperceive.adapters.readers.calib import pinhole_from_matrix
 from coperceive.adapters.readers.lidar import LidarError, read_bin_f32, read_pcd, read_ply
@@ -117,14 +119,28 @@ class ManifestAdapter:
         self._reflect: Reflection | None = None
         if spec.conventions.source_handedness == "left":
             self._reflect = Reflection.parse(spec.conventions.reflect_axis or "y")
+        # scenes() lists each agent's samples; summarise() reuses that listing once.
+        self._listed: dict[tuple[str, str], list[tuple[_AgentCtx, tuple[Sample, ...]]]] = {}
+        # While one agent is built: each record file parsed once (poses, sensors
+        # and boxes all read the same per-frame record in OPV2V/V2XSet).
+        self._records: dict[Path, dict[str, object]] | None = None
 
     # -- discovery ---------------------------------------------------------------
 
-    def scenes(self, raw_root: Path, params: Mapping[str, str]) -> tuple[SceneRef, ...]:
+    def scenes(
+        self,
+        raw_root: Path,
+        params: Mapping[str, str],
+        *,
+        errors: list[str] | None = None,
+    ) -> tuple[SceneRef, ...]:
+        """Every scene. With ``errors``, a scene that cannot be listed is skipped
+        and its one-line reason appended there instead of failing the whole call."""
         checked = self._params(params)
         values: dict[str, object] = dict(checked)
         index = self.spec.scenes.index
         refs: list[SceneRef] = []
+        self._listed.clear()
         if index is not None:
             file = self._path(raw_root, index.file, values)
             rows = _read_table_file(file, index.file.text)
@@ -146,21 +162,83 @@ class ManifestAdapter:
         assert glob is not None
         for found in glob.path.discover(raw_root, values, "scene"):
             scene_id = _scene_id(found["scene"])
-            agents = self._agents(raw_root, scene_id, checked)
-            stream = getattr(self.spec.streams, glob.sample_source)
-            template: Template = stream.path
-            free = "frame" if "frame" in template.placeholders else "sample"
-            keys: set[Sample] = set()
-            for ctx in agents:
-                for hit in template.discover(raw_root, ctx.values, free):
-                    value = hit[free]
-                    keys.add(value if isinstance(value, int) else str(value))
-            if not keys:
-                raise BuildError(f"{scene_id}: no samples found with streams.{glob.sample_source}")
-            samples = tuple(sorted(keys, key=lambda s: (isinstance(s, str), s)))
-            platform = self._platform(glob.platform, {}, checked, scene_id)
+            try:
+                per_agent = self._agent_samples(raw_root, scene_id, checked)
+                keys = {sample for _, own in per_agent for sample in own}
+                samples = tuple(sorted(keys, key=lambda s: (isinstance(s, str), s)))
+                if not samples:
+                    raise BuildError(
+                        f"{scene_id}: no samples found with streams.{glob.sample_source}"
+                    )
+                platform = self._platform(glob.platform, {}, checked, scene_id)
+            except (CoperceiveError, ValueError, OSError) as exc:
+                if errors is None:
+                    raise
+                errors.append(_one_line(scene_id, exc))
+                continue
+            self._listed[(str(raw_root), scene_id)] = per_agent
             refs.append(SceneRef(scene_id, samples, platform, tuple(sorted(checked.items()))))
         return tuple(refs)
+
+    def _agent_samples(
+        self, raw_root: Path, scene_id: str, params: Mapping[str, str]
+    ) -> list[tuple[_AgentCtx, tuple[Sample, ...]]]:
+        """Each agent and the samples its sample-source files exist for (listings only)."""
+        glob = self.spec.scenes.glob
+        assert glob is not None
+        stream = getattr(self.spec.streams, glob.sample_source)
+        template: Template = stream.path
+        free = "frame" if "frame" in template.placeholders else "sample"
+        out: list[tuple[_AgentCtx, tuple[Sample, ...]]] = []
+        for ctx in self._agents(raw_root, scene_id, params):
+            keys: set[Sample] = set()
+            for hit in template.discover(raw_root, ctx.values, free):
+                value = hit[free]
+                keys.add(value if isinstance(value, int) else str(value))
+            out.append((ctx, tuple(sorted(keys, key=lambda s: (isinstance(s, str), s)))))
+        return out
+
+    def summarise(self, raw_root: Path, ref: SceneRef) -> dict[str, int]:
+        """Agent, sensor, camera-sample and lidar-sample counts for one scene, cheaply.
+
+        Agents and their samples come from directory listings; the sensors from
+        each agent's first calibration record (one file per agent); lidar samples
+        from the listing of the point-cloud folders. No pose, box or point data
+        is read, unlike :meth:`check`.
+        """
+        params = dict(ref.params)
+        listed = self._listed.pop((str(raw_root), ref.scene_id), None)
+        if listed is not None:
+            per_agent = listed
+        elif self.spec.scenes.glob is not None:
+            per_agent = self._agent_samples(raw_root, ref.scene_id, params)
+        else:
+            per_agent = [(ctx, ref.samples) for ctx in self._agents(raw_root, ref.scene_id, params)]
+        tally: dict[str, int] = {"agents": len(per_agent)}
+        listings: dict[str, frozenset[str]] = {}
+        for ctx, samples in per_agent:
+            if not samples:
+                continue
+            sensors = self._sensors(raw_root, ctx, samples, tally)
+            if self.spec.streams.images is not None:
+                cameras = sum(1 for s in sensors if s.modality is Modality.CAMERA)
+                tally["images"] = tally.get("images", 0) + cameras * len(samples)
+            lidar = self.spec.streams.lidar
+            if lidar is None or (lidar.agents is not None and ctx.agent_id not in lidar.agents):
+                continue
+            if not any(s.sensor_id == lidar.sensor for s in sensors):
+                continue
+            for sample in samples:
+                relative = lidar.path.expand(_with_sample(ctx.values, sample))
+                folder, _, name = relative.rpartition("/")
+                if folder not in listings:
+                    try:
+                        listings[folder] = frozenset(os.listdir(confine(raw_root, folder or ".")))
+                    except OSError:
+                        listings[folder] = frozenset()
+                if name in listings[folder]:
+                    _count(tally, "lidar")
+        return tally
 
     def load(self, raw_root: Path, ref: SceneRef) -> Scene:
         return self._build(raw_root, ref, ref.samples)
@@ -229,25 +307,39 @@ class ManifestAdapter:
         images: list[ImageRef] = []
         clouds: list[PointCloud] = []
         for ctx in agents_ctx:
-            poses, times = self._poses(raw_root, ctx, samples, tally)
-            agents.append(
-                Agent(
-                    agent_id=ctx.agent_id,
-                    agent_type=ctx.agent_type,  # type: ignore[arg-type]
-                    poses=tuple(poses),
-                    platform=ref.platform,
-                )
-            )
-            agent_sensors = self._sensors(raw_root, ctx, samples, tally)
-            sensors.extend(agent_sensors)
-            if self.spec.streams.boxes is not None:
-                annotations.extend(
-                    self._boxes(raw_root, ctx, samples, agent_sensors, times, tally, variants)
-                )
-            if self.spec.streams.images is not None:
-                images.extend(self._images(raw_root, ctx, samples, agent_sensors, times, tally))
-            if self.spec.streams.lidar is not None:
-                clouds.extend(self._lidar(raw_root, ctx, samples, agent_sensors, times, tally))
+            # The agent's records and sweeps are read ahead, several at a time
+            # (coperceive/adapters/prefetch.py): on a shared filesystem the wait
+            # per cold file, not the parsing, is most of the time.
+            self._records = {}
+            try:
+                with prefetching(raw_root, self._raw_plan(raw_root, ctx, samples)):
+                    poses, times = self._poses(raw_root, ctx, samples, tally)
+                    agents.append(
+                        Agent(
+                            agent_id=ctx.agent_id,
+                            agent_type=ctx.agent_type,  # type: ignore[arg-type]
+                            poses=tuple(poses),
+                            platform=ref.platform,
+                        )
+                    )
+                    agent_sensors = self._sensors(raw_root, ctx, samples, tally)
+                    sensors.extend(agent_sensors)
+                    if self.spec.streams.boxes is not None:
+                        annotations.extend(
+                            self._boxes(
+                                raw_root, ctx, samples, agent_sensors, times, tally, variants
+                            )
+                        )
+                    if self.spec.streams.images is not None:
+                        images.extend(
+                            self._images(raw_root, ctx, samples, agent_sensors, times, tally)
+                        )
+                    if self.spec.streams.lidar is not None:
+                        clouds.extend(
+                            self._lidar(raw_root, ctx, samples, agent_sensors, times, tally)
+                        )
+            finally:
+                self._records = None
         try:
             return Scene(
                 schema_version=SCHEMA_VERSION,
@@ -844,7 +936,38 @@ class ManifestAdapter:
         except PathError as exc:
             raise BuildError(str(exc)) from None
 
+    def _raw_plan(self, raw_root: Path, ctx: _AgentCtx, samples: Sequence[Sample]) -> list[Path]:
+        """The agent's per-sample record and point files, in the order the build reads them.
+
+        Paths are joined without touching the filesystem; a file that is not
+        where the plan says (a symlink inside the dataset) is simply read when
+        asked for.
+        """
+        base = raw_root.resolve()
+        streams = self.spec.streams
+        plan: list[Path] = []
+        for stream in (streams.poses, streams.boxes, streams.lidar):
+            if stream is None:
+                continue
+            if stream is not streams.lidar and stream.reader not in ("yaml_record", "json_record"):
+                continue  # tables are read once anyway
+            for sample in samples:
+                try:
+                    plan.append(base / stream.path.expand(_with_sample(ctx.values, sample)))
+                except PathError:
+                    continue
+        return plan
+
     def _record(self, reader: str, path: Path) -> dict[str, object]:
+        if self._records is not None and path in self._records:
+            return dict(self._records[path])
+        record = self._read_record(reader, path)
+        if self._records is not None:
+            self._records[path] = record
+            return dict(record)
+        return record
+
+    def _read_record(self, reader: str, path: Path) -> dict[str, object]:
         try:
             if reader == "json_record":
                 return read_json_record(path)
@@ -1014,6 +1137,11 @@ def _with_sample(values: Mapping[str, object], sample: Sample) -> dict[str, obje
 
 def _key(sample: object) -> str:
     return str(sample)
+
+
+def _one_line(scene_id: str, exc: BaseException) -> str:
+    text = " ".join(str(exc).split()) or type(exc).__name__
+    return text if text.startswith(f"{scene_id}:") else f"{scene_id}: {text}"
 
 
 def _count(tally: dict[str, int] | None, name: str) -> None:

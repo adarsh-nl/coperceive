@@ -4,6 +4,13 @@ import { isFrame, type FrameDocument } from "./types";
 const FRAME_LIMIT = 16;
 const POINT_LIMIT = 48;
 
+export type FrameCacheStats = {
+  frame_hits: number;
+  frame_misses: number;
+  point_hits: number;
+  point_misses: number;
+};
+
 export type FrameCache = {
   loadFrame: (sceneId: string, timeUs: number, token: string) => Promise<FrameDocument>;
   loadPoints: (
@@ -14,7 +21,13 @@ export type FrameCache = {
     token: string,
   ) => Promise<ArrayBuffer>;
   clear: () => void;
+  stats: FrameCacheStats;
 };
+
+/** A load that `clear()` cancelled; callers stay quiet instead of reporting it as a failure. */
+export function isAbortError(error: unknown): boolean {
+  return error instanceof Error && error.name === "AbortError";
+}
 
 function remember<T>(map: Map<string, T>, key: string, value: T, limit: number) {
   if (map.has(key)) {
@@ -35,27 +48,53 @@ export function createFrameCache(): FrameCache {
   const points = new Map<string, ArrayBuffer>();
   const frameInflight = new Map<string, Promise<FrameDocument>>();
   const pointInflight = new Map<string, Promise<ArrayBuffer>>();
+  // A scene switch clears the cache. In-flight requests for the old scene are aborted so they
+  // stop holding the browser's connections (the new scene's summary must not queue behind them)
+  // and a late reply never enters the cleared cache. The generation makes a load that slips past
+  // the abort resolve as stale instead of being remembered under the old scene's key.
+  const controllers = new Set<AbortController>();
+  let generation = 0;
+  const stats: FrameCacheStats = {
+    frame_hits: 0,
+    frame_misses: 0,
+    point_hits: 0,
+    point_misses: 0,
+  };
 
   return {
+    stats,
     clear() {
+      generation += 1;
+      for (const controller of controllers) {
+        controller.abort();
+      }
+      controllers.clear();
       frames.clear();
       points.clear();
+      frameInflight.clear();
+      pointInflight.clear();
     },
     loadFrame(sceneId, timeUs, token) {
       const key = `${sceneId}|${timeUs}`;
       const cached = frames.get(key);
       if (cached) {
+        stats.frame_hits += 1;
         remember(frames, key, cached, FRAME_LIMIT);
         return Promise.resolve(cached);
       }
       const pending = frameInflight.get(key);
       if (pending) {
+        stats.frame_hits += 1;
         return pending;
       }
+      stats.frame_misses += 1;
+      const mine = generation;
+      const controller = new AbortController();
+      controllers.add(controller);
       const promise = (async () => {
         const response = await fetch(
           `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/frame?time_us=${timeUs}`,
-          { headers: authHeaders(token) },
+          { headers: authHeaders(token), signal: controller.signal },
         );
         if (!response.ok) {
           throw new Error(await errorDetail(response));
@@ -64,9 +103,13 @@ export function createFrameCache(): FrameCache {
         if (!isFrame(body)) {
           throw new Error("The frame document was incomplete.");
         }
+        if (mine !== generation || controller.signal.aborted) {
+          throw new DOMException("The scene changed while the frame was loading.", "AbortError");
+        }
         remember(frames, key, body, FRAME_LIMIT);
         return body;
       })().finally(() => {
+        controllers.delete(controller);
         frameInflight.delete(key);
       });
       frameInflight.set(key, promise);
@@ -76,25 +119,35 @@ export function createFrameCache(): FrameCache {
       const key = `${sceneId}|${timeUs}|${agentId}|${sensorId}`;
       const cached = points.get(key);
       if (cached) {
+        stats.point_hits += 1;
         remember(points, key, cached, POINT_LIMIT);
         return Promise.resolve(cached);
       }
       const pending = pointInflight.get(key);
       if (pending) {
+        stats.point_hits += 1;
         return pending;
       }
+      stats.point_misses += 1;
+      const mine = generation;
+      const controller = new AbortController();
+      controllers.add(controller);
       const promise = (async () => {
         const response = await fetch(
           `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/points?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}`,
-          { headers: authHeaders(token) },
+          { headers: authHeaders(token), signal: controller.signal },
         );
         if (!response.ok) {
           throw new Error(await errorDetail(response));
         }
         const buffer = await response.arrayBuffer();
+        if (mine !== generation || controller.signal.aborted) {
+          throw new DOMException("The scene changed while the points were loading.", "AbortError");
+        }
         remember(points, key, buffer, POINT_LIMIT);
         return buffer;
       })().finally(() => {
+        controllers.delete(controller);
         pointInflight.delete(key);
       });
       pointInflight.set(key, promise);

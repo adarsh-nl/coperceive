@@ -32,6 +32,11 @@ def build_parser() -> argparse.ArgumentParser:
     schema = sub.add_parser("schema", help="Print the on-disk schema version.")
     schema.set_defaults(func=_schema)
 
+    capabilities = sub.add_parser(
+        "capabilities", help="Print what this build supports, as JSON (for the desktop app)."
+    )
+    capabilities.set_defaults(func=_capabilities)
+
     serve = sub.add_parser("serve", help="Serve the local web app.")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8731)
@@ -81,7 +86,60 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Exact origin allowed for cross-origin requests.",
     )
+    serve.add_argument(
+        "--remote-stream-argv",
+        default=None,
+        help=(
+            "JSON argv of a `coperceive dataset stream` reached over SSH: --root is then "
+            "the local mirror of that cluster dataset (no Slurm job)."
+        ),
+    )
+    serve.add_argument(
+        "--remote-cache-dir", default=None, help="Local disk cache for --remote-stream-argv."
+    )
+    serve.add_argument(
+        "--remote-cache-bytes", type=int, default=None, help="Cap of the local disk cache (bytes)."
+    )
     serve.set_defaults(func=_serve)
+
+    scene = sub.add_parser("scene", help="Copy a scene into a self-contained library folder.")
+    scene_sub = scene.add_subparsers(dest="scene_command", required=True)
+    pack = scene_sub.add_parser(
+        "pack",
+        help="Pack one scene. Image paths are materialised as real files.",
+    )
+    pack.add_argument("source", help="Scene directory (manifest.json plus tables).")
+    pack.add_argument("dest", help="Library directory. The scene is written as a child of this.")
+    pack.add_argument(
+        "--images",
+        default="full",
+        choices=("full", "preview", "none"),
+        help="full copies image bytes, preview writes 640 px JPEG quality 85, none skips images.",
+    )
+    pack.add_argument(
+        "--media-root",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="A symlink target may resolve here. Repeatable.",
+    )
+    pack.add_argument(
+        "--griffin-root",
+        default=None,
+        metavar="DIR",
+        help="Raw Griffin release root. Image paths may resolve here.",
+    )
+    pack.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print the byte count for the chosen image option and do not write.",
+    )
+    pack.add_argument(
+        "--force",
+        action="store_true",
+        help="Pack even if the plan is more than 3× the listed images plus scene files.",
+    )
+    pack.set_defaults(func=_scene_pack)
 
     add_parser(sub)
     add_adapters_parser(sub)
@@ -156,7 +214,7 @@ def build_parser() -> argparse.ArgumentParser:
         "validate",
         help="Write a JSON report and a Markdown report for schema 1 scenes.",
     )
-    validate.add_argument("root", help="Directory of scene directories.")
+    validate.add_argument("root", help="A scene directory, or a directory of scene directories.")
     validate.add_argument(
         "--json",
         default="coperceive-validate.json",
@@ -251,6 +309,114 @@ def build_parser() -> argparse.ArgumentParser:
     overlay_export.add_argument("--theme", choices=("dark", "light"), default="dark")
     overlay_export.add_argument("--color", choices=("agent", "class"), default="agent")
     overlay_export.set_defaults(func=_export_overlay)
+
+    dataset = sub.add_parser("dataset", help="Dataset catalog and operations.")
+    dataset_sub = dataset.add_subparsers(dest="dataset_command", required=True)
+
+    catalog_parser = dataset_sub.add_parser("catalog", help="Print dataset catalog as JSON.")
+    catalog_parser.set_defaults(func=_dataset_catalog)
+
+    dry_run_parser = dataset_sub.add_parser("dry-run", help="Dry run dataset preset download.")
+    dry_run_parser.add_argument("dataset", help="Dataset ID (e.g. griffin).")
+    dry_run_parser.add_argument("preset", help="Preset ID (e.g. dev, one-scene, full).")
+    dry_run_parser.add_argument("--dest", required=True, help="Destination directory.")
+    dry_run_parser.set_defaults(func=_dataset_dry_run)
+
+    prepare_parser = dataset_sub.add_parser(
+        "prepare", help="Prepare selected scenes into the cluster cache (CPU-only)."
+    )
+    prepare_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
+    prepare_parser.add_argument("--raw-root", required=True)
+    prepare_parser.add_argument(
+        "--split", default=None, help="The split to prepare (OPV2V/V2XSet)."
+    )
+    prepare_parser.add_argument("--cache", required=True, help="The split cache directory.")
+    prepare_parser.add_argument("--scenes", default=None, help="Comma-separated scene ids.")
+    prepare_parser.add_argument("--all", action="store_true", help="Prepare every scene.")
+    prepare_parser.add_argument("--workers", type=int, default=1)
+    prepare_parser.add_argument(
+        "--images",
+        choices=("originals", "previews"),
+        default="originals",
+        help="Camera images: read the dataset's originals, or also save 640 px previews.",
+    )
+    prepare_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
+    prepare_parser.set_defaults(func=_dataset_prepare)
+
+    status_parser = dataset_sub.add_parser(
+        "status", help="Per-scene states from a cache directory."
+    )
+    status_parser.add_argument("--cache", required=True)
+    status_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
+    status_parser.set_defaults(func=_dataset_status)
+
+    previews_parser = dataset_sub.add_parser(
+        "previews", help="Disk used by camera previews in a cache; --remove deletes them."
+    )
+    previews_parser.add_argument(
+        "--cache-root", required=True, help="<results_root>/coperceive-cache"
+    )
+    previews_parser.add_argument(
+        "--remove", action="store_true", help="Delete the previews (only), keeping the scenes."
+    )
+    previews_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
+    previews_parser.set_defaults(func=_dataset_previews)
+
+    stream_parser = dataset_sub.add_parser(
+        "stream",
+        help="Read-only file streamer for viewing a prepared dataset over SSH (stdin/stdout).",
+    )
+    stream_parser.add_argument(
+        "--root",
+        action="append",
+        required=True,
+        help="Allowed root; the first is the cache split directory paths start from.",
+    )
+    stream_parser.set_defaults(func=_dataset_stream)
+
+    detect_parser = dataset_sub.add_parser(
+        "detect", help="Identify a raw cluster dataset's built-in adapter and split."
+    )
+    detect_parser.add_argument("--path", required=True, help="A raw dataset or split directory.")
+    detect_parser.add_argument("--max-scenes", type=int, default=5000)
+    detect_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
+    detect_parser.set_defaults(func=_dataset_detect)
+
+    index_parser = dataset_sub.add_parser(
+        "index", help="List every scene of a raw cluster dataset (metadata only)."
+    )
+    index_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
+    index_parser.add_argument("--raw-root", required=True)
+    index_parser.add_argument(
+        "--split",
+        default=None,
+        help="The split to index (OPV2V/V2XSet). Required when the root holds several.",
+    )
+    index_parser.add_argument("--max-scenes", type=int, default=5000)
+    index_parser.add_argument("--max-entries", type=int, default=200000)
+    index_parser.add_argument("--timeout", type=float, default=30.0)
+    index_parser.add_argument(
+        "--verbose", action="store_true", help="Print the full traceback on failure."
+    )
+    index_parser.set_defaults(func=_dataset_index)
+
+    job_parser = dataset_sub.add_parser("download", help="Download and convert dataset preset.")
+    job_parser.add_argument("dataset", help="Dataset ID (e.g. griffin).")
+    job_parser.add_argument("preset", help="Preset ID (e.g. dev, one-scene, full).")
+    job_parser.add_argument("--dest", required=True, help="Destination library root.")
+    job_parser.add_argument(
+        "--accept-terms", action="store_true", help="Accept dataset licence terms."
+    )
+    job_parser.set_defaults(func=_dataset_download)
+
     return parser
 
 
@@ -262,6 +428,24 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
     func(args)
+
+
+def _scene_pack(args: argparse.Namespace) -> None:
+    from coperceive.scene.pack import PackError, pack_scene
+
+    try:
+        pack_scene(
+            Path(args.source),
+            Path(args.dest),
+            images=args.images,
+            media_roots=[Path(item) for item in args.media_root],
+            griffin_root=None if args.griffin_root is None else Path(args.griffin_root),
+            dry_run=args.dry_run,
+            force=args.force,
+        )
+    except PackError as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(3) from exc
 
 
 def _validate(args: argparse.Namespace) -> None:
@@ -469,8 +653,210 @@ def _export_rerun(args: argparse.Namespace) -> None:
     print(f"samples {samples}")
 
 
+def _failure_line(exc: BaseException) -> str:
+    """One plain line for a failed dataset command: no traceback, no newlines."""
+    import yaml
+
+    from coperceive.adapters.readers.records import yaml_error_line
+
+    if isinstance(exc, OSError) and exc.filename:
+        reason = exc.strerror or type(exc).__name__
+        return f"could not read {exc.filename}: {reason}"
+    if isinstance(exc, yaml.YAMLError):
+        return f"could not read a YAML file: {yaml_error_line(exc)}"
+    text = " ".join(str(exc).split())
+    return text or type(exc).__name__
+
+
+def _dataset_failure(
+    args: argparse.Namespace, exc: BaseException, *, known: type[BaseException]
+) -> str:
+    """Print the one-line error to stderr (the traceback with --verbose) and return it."""
+    import traceback
+
+    import yaml
+
+    line = _failure_line(exc)
+    if not isinstance(exc, (known, ValueError, OSError, yaml.YAMLError)):
+        line = f"{type(exc).__name__}: {line}"
+    print(f"coperceive dataset {args.dataset_command}: {line}", file=sys.stderr)
+    if getattr(args, "verbose", False):
+        traceback.print_exception(exc, file=sys.stderr)
+    else:
+        print("Run again with --verbose for the full traceback.", file=sys.stderr)
+    return line
+
+
+def _dataset_prepare(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.cluster_datasets import DatasetError, prepare_cluster_dataset
+
+    scenes = (
+        None if args.all or not args.scenes else [part for part in args.scenes.split(",") if part]
+    )
+
+    def progress(event: dict[str, object]) -> None:
+        print(json.dumps(event), flush=True)
+
+    try:
+        status = prepare_cluster_dataset(
+            args.adapter,
+            args.raw_root,
+            args.cache,
+            scenes=scenes,
+            workers=max(1, args.workers),
+            progress=progress,
+            split=args.split,
+            images=args.images,
+        )
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        error = _dataset_failure(args, exc, known=DatasetError)
+        print(json.dumps({"schema": "coperceive-cluster-scene-status-1", "error": error}, indent=2))
+        raise SystemExit(1) from None
+    print(json.dumps(status, indent=2))
+    if any(scene["state"] == "failed" for scene in status.get("scenes", [])):
+        raise SystemExit(2)
+
+
+def _dataset_stream(args: argparse.Namespace) -> None:
+    from coperceive.remote_view.stream import StreamError, main
+
+    try:
+        main(args.root)
+    except StreamError as exc:
+        print(f"coperceive dataset stream: {exc}", file=sys.stderr)
+        raise SystemExit(2) from None
+
+
+def _dataset_previews(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.camera_images import PREVIEWS_SCHEMA, CameraImageError, previews_usage
+
+    try:
+        document = previews_usage(args.cache_root, remove=args.remove)
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        error = _dataset_failure(args, exc, known=CameraImageError)
+        print(json.dumps({"schema": PREVIEWS_SCHEMA, "error": error}, indent=2))
+        raise SystemExit(1) from None
+    print(json.dumps(document, indent=2))
+
+
+def _dataset_status(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.cluster_datasets import DatasetError, dataset_status_document
+
+    try:
+        status = dataset_status_document(args.cache)
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        error = _dataset_failure(args, exc, known=DatasetError)
+        print(json.dumps({"schema": "coperceive-cluster-scene-status-1", "error": error}, indent=2))
+        raise SystemExit(1) from None
+    print(json.dumps(status, indent=2))
+
+
+def _dataset_detect(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.cluster_datasets import DatasetError, detect_cluster_dataset
+
+    try:
+        result = detect_cluster_dataset(args.path, max_scenes=args.max_scenes)
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        result = {
+            "schema": "coperceive-cluster-detect-1",
+            "status": "error",
+            "reason": _dataset_failure(args, exc, known=DatasetError),
+        }
+        print(json.dumps(result, indent=2))
+        raise SystemExit(1) from None
+    print(json.dumps(result, indent=2))
+
+
+def _dataset_index(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.cluster_datasets import DatasetError, index_cluster_dataset
+
+    try:
+        result = index_cluster_dataset(
+            args.adapter,
+            args.raw_root,
+            max_scenes=args.max_scenes,
+            max_entries=args.max_entries,
+            timeout_s=args.timeout,
+            split=args.split,
+        )
+    except Exception as exc:  # noqa: BLE001 - one line for the user, the rest behind --verbose
+        error = _dataset_failure(args, exc, known=DatasetError)
+        print(
+            json.dumps(
+                {"schema": "coperceive-cluster-index-1", "status": "error", "error": error},
+                indent=2,
+            )
+        )
+        raise SystemExit(1) from None
+    print(json.dumps(result, indent=2))
+
+
+def _dataset_catalog(_args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.catalog import load_catalog
+
+    print(json.dumps(load_catalog(), indent=2))
+
+
+def _dataset_dry_run(args: argparse.Namespace) -> None:
+    import json
+
+    from coperceive.catalog import dry_run_preset
+
+    result = dry_run_preset(args.dataset, args.preset, Path(args.dest))
+    print(json.dumps(result, indent=2))
+
+
+def _dataset_download(args: argparse.Namespace) -> None:
+    from coperceive.catalog import run_dataset_job
+
+    run_dataset_job(args.dataset, args.preset, Path(args.dest), accept_terms=args.accept_terms)
+
+
 def _schema(_args: argparse.Namespace) -> None:
     print(SCHEMA_VERSION)
+
+
+# The desktop app checks for these before it runs a cluster command; a build
+# without the `capabilities` command at all predates them.
+# cluster-datasets-2: dataset detect/index/prepare/status, numpy-tagged
+# OPV2V/V2XSet records, per-scene index errors.
+# cluster-datasets-3: index/prepare --split.
+# cluster-datasets-4: prepare --images originals|previews, dataset previews.
+# cluster-datasets-5: dataset stream (viewing over SSH, no Slurm job).
+CAPABILITIES = (
+    "cluster-datasets-2",
+    "cluster-datasets-3",
+    "cluster-datasets-4",
+    "cluster-datasets-5",
+)
+
+
+def _capabilities(_args: argparse.Namespace) -> None:
+    import importlib.metadata
+    import json
+
+    try:
+        version = importlib.metadata.version("coperceive")
+    except importlib.metadata.PackageNotFoundError:
+        version = __version__
+    document = {
+        "schema": "coperceive-capabilities-1",
+        "version": version,
+        "capabilities": list(CAPABILITIES),
+    }
+    print(json.dumps(document))
 
 
 def _download_griffin(args: argparse.Namespace) -> None:
@@ -530,7 +916,18 @@ def _serve(args: argparse.Namespace) -> None:
             raise SystemExit(2)
     from coperceive.viewdata import dataset_root_error
 
-    root_error = dataset_root_error(Path(args.root))
+    stream_argv: list[str] | None = None
+    if args.remote_stream_argv:
+        import json
+
+        parsed: object = json.loads(args.remote_stream_argv)
+        items: list[object] = list(cast(list[object], parsed)) if isinstance(parsed, list) else []
+        if not items or not all(isinstance(item, str) for item in items):
+            print("--remote-stream-argv must be a JSON list of strings", file=sys.stderr)
+            raise SystemExit(2)
+        stream_argv = [str(item) for item in items]
+        Path(args.root).mkdir(parents=True, exist_ok=True)
+    root_error = None if stream_argv else dataset_root_error(Path(args.root))
     if root_error is not None:
         print(root_error, file=sys.stderr)
         raise SystemExit(2)
@@ -549,6 +946,9 @@ def _serve(args: argparse.Namespace) -> None:
         static=args.static,
         media_roots=tuple(args.media_root),
         allow_origin=args.allow_origin,
+        remote_stream_argv=stream_argv,
+        remote_cache_dir=args.remote_cache_dir,
+        remote_cache_bytes=args.remote_cache_bytes,
     )
 
 

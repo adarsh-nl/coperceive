@@ -23,6 +23,12 @@ pub const MAX_BODY_SIZE: usize = 65536;
 pub const OPEN_DIALOG_RATE_LIMIT: Duration = Duration::from_millis(1000);
 
 pub type EvalSender = std::sync::mpsc::Sender<serde_json::Value>;
+pub type ExportPicker = Arc<dyn Fn(&str, &str) -> Result<Option<String>, String> + Send + Sync>;
+pub type ExportSaver = Arc<dyn Fn(Option<&str>, Option<&[u8]>) -> Result<String, String> + Send + Sync>;
+pub type FinderRevealer = Arc<dyn Fn() -> Result<(), String> + Send + Sync>;
+pub type UpdaterChecker = Arc<dyn Fn(bool, Option<String>) -> Result<serde_json::Value, String> + Send + Sync>;
+pub type UpdaterInstaller = Arc<dyn Fn(Option<String>) -> Result<(), String> + Send + Sync>;
+pub type EvalDispatcher = Arc<dyn Fn(String, Option<String>) -> Result<(), String> + Send + Sync>;
 
 /// Configuration for the loopback controller.
 #[derive(Clone)]
@@ -33,8 +39,26 @@ pub struct ControllerConfig {
     pub last_open_dialog: Arc<Mutex<Option<Instant>>>,
     pub eval_callbacks: Arc<Mutex<HashMap<u64, EvalSender>>>,
     pub eval_counter: Arc<Mutex<u64>>,
-    pub eval_dispatcher: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// Runs a script in a window: the viewer when there is one, else main; or
+    /// the window the request names (`"window": "main"`).
+    pub eval_dispatcher: Option<EvalDispatcher>,
     pub window_closer: Option<Arc<dyn Fn(&str) + Send + Sync>>,
+    /// Shows and focuses the main window on its Library; returns whether it is visible.
+    pub library_shower: Option<Arc<dyn Fn() -> bool + Send + Sync>>,
+    pub export_picker: Option<ExportPicker>,
+    pub export_saver: Option<ExportSaver>,
+    pub finder_revealer: Option<FinderRevealer>,
+    pub updater_checker: Option<UpdaterChecker>,
+    pub updater_installer: Option<UpdaterInstaller>,
+    /// The remote viewer job (id, state, time left), or null without one.
+    pub viewer_session: Option<Arc<dyn Fn() -> serde_json::Value + Send + Sync>>,
+    /// Every scene of the open cluster dataset with its state, as the main
+    /// window last saw it, so the viewer can list scenes that are not ready.
+    pub dataset_scenes: Arc<Mutex<serde_json::Value>>,
+    /// Asks the main window to show the prepare preview for one scene.
+    pub scene_preparer: Option<Arc<dyn Fn(String) -> bool + Send + Sync>>,
+    /// Names the viewer window after the scene it shows.
+    pub viewer_titler: Option<Arc<dyn Fn(String) + Send + Sync>>,
 }
 
 impl ControllerConfig {
@@ -48,6 +72,16 @@ impl ControllerConfig {
             eval_counter: Arc::new(Mutex::new(0)),
             eval_dispatcher: None,
             window_closer: None,
+            library_shower: None,
+            export_picker: None,
+            export_saver: None,
+            finder_revealer: None,
+            updater_checker: None,
+            updater_installer: None,
+            viewer_session: None,
+            dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
+            scene_preparer: None,
+            viewer_titler: None,
         }
     }
 
@@ -65,6 +99,7 @@ fn read_request_body<R: Read, W: Write>(
     header_buf: &[u8],
     header_pos: usize,
     cors_origin: Option<&str>,
+    max_size: usize,
 ) -> Result<Option<Vec<u8>>, std::io::Error> {
     let content_type = headers.get("content-type").cloned().unwrap_or_default();
     if !content_type.starts_with("application/json") {
@@ -92,13 +127,13 @@ fn read_request_body<R: Read, W: Write>(
         }
     };
 
-    if content_len > MAX_BODY_SIZE {
+    if content_len > max_size {
         write_response(
             writer,
             413,
             "Payload Too Large",
             cors_origin,
-            b"Payload exceeds 64 KB limit",
+            b"Payload exceeds allowed size limit",
         )?;
         return Ok(None);
     }
@@ -133,6 +168,15 @@ fn read_request_body<R: Read, W: Write>(
     }
 
     Ok(Some(body))
+}
+
+/// Clamps a client-provided eval timeout (in seconds) to the allowed range [1, 60].
+/// Defaults to 10 seconds if omitted or invalid.
+pub fn parse_eval_timeout(val: &serde_json::Value) -> u64 {
+    val.get("timeout")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(10)
+        .clamp(1, 60)
 }
 
 /// Dispatches an incoming HTTP connection over any read/write stream.
@@ -221,9 +265,11 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         if let Some(ref origin) = cors_origin {
             let resp = format!(
                 "HTTP/1.1 204 No Content\r\n\
+                 Connection: close\r\n\
                  Access-Control-Allow-Origin: {}\r\n\
                  Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n\
                  Access-Control-Allow-Headers: Authorization, Content-Type\r\n\
+                 Access-Control-Max-Age: 86400\r\n\
                  Content-Length: 0\r\n\r\n",
                 origin
             );
@@ -283,8 +329,87 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         return Ok(());
     }
 
+    // The viewer window has no Tauri IPC: its wordmark asks for the main
+    // window's Library here instead of rendering the shell itself.
+    if method == "POST" && path == "/show-library" {
+        let started = std::time::Instant::now();
+        let shown = config.library_shower.as_ref().map(|show| show()).unwrap_or(false);
+        eprintln!(
+            "[viewer] show-library -> shown={shown} ({} ms)",
+            started.elapsed().as_millis()
+        );
+        let payload = serde_json::to_vec(&serde_json::json!({ "shown": shown }))
+            .unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
+    if method == "GET" && path == "/viewer-session" {
+        let session = config
+            .viewer_session
+            .as_ref()
+            .map(|session| session())
+            .unwrap_or(serde_json::Value::Null);
+        let payload = serde_json::to_vec(&serde_json::json!({ "session": session }))
+            .unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
+    if method == "GET" && path == "/dataset-scenes" {
+        let scenes = config
+            .dataset_scenes
+            .lock()
+            .map(|scenes| scenes.clone())
+            .unwrap_or(serde_json::Value::Null);
+        let payload = serde_json::to_vec(&serde_json::json!({ "dataset": scenes }))
+            .unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/prepare-scene" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let scene_id = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("scene_id").and_then(|id| id.as_str()).map(str::to_string))
+            .filter(|id| !id.is_empty() && id.len() <= 256);
+        let Some(scene_id) = scene_id else {
+            write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), b"{\"error\":\"scene_id is required\"}")?;
+            return Ok(());
+        };
+        let shown = config
+            .scene_preparer
+            .as_ref()
+            .map(|prepare| prepare(scene_id))
+            .unwrap_or(false);
+        let payload = serde_json::to_vec(&serde_json::json!({ "shown": shown })).unwrap_or_else(|_| b"{}".to_vec());
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/viewer-title" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let scene = serde_json::from_slice::<serde_json::Value>(&body)
+            .ok()
+            .and_then(|value| value.get("scene").and_then(|scene| scene.as_str()).map(str::to_string))
+            .map(|scene| scene.chars().filter(|c| !c.is_control()).take(200).collect::<String>())
+            .filter(|scene| !scene.trim().is_empty());
+        if let (Some(scene), Some(titler)) = (scene, config.viewer_titler.as_ref()) {
+            titler(scene);
+        }
+        write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+        return Ok(());
+    }
+
     if method == "POST" && path == "/eval-result" {
-        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
             Some(b) => b,
             None => return Ok(()),
         };
@@ -300,7 +425,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
     }
 
     if method == "POST" && path == "/eval" {
-        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
             Some(b) => b,
             None => return Ok(()),
         };
@@ -312,6 +437,8 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             }
         };
         let script = val.get("script").and_then(|v| v.as_str()).unwrap_or("");
+        let target = val.get("window").and_then(|v| v.as_str()).map(str::to_string);
+        let timeout_secs = parse_eval_timeout(&val);
         if let Some(ref dispatcher) = config.eval_dispatcher {
             let req_id = {
                 let mut c = config.eval_counter.lock().unwrap();
@@ -335,6 +462,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                     try {{
                         fetch("http://127.0.0.1:{}/eval-result", {{
                             method: "POST",
+                            keepalive: true,
                             headers: {{
                                 "Authorization": "Bearer {}",
                                 "Content-Type": "application/json"
@@ -346,9 +474,17 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                 script_json, config.ctrl_port, escaped_secret, req_id
             );
 
-            dispatcher(wrapper);
+            if let Err(dispatch_err) = dispatcher(wrapper, target) {
+                config.eval_callbacks.lock().unwrap().remove(&req_id);
+                let err_payload = serde_json::to_vec(&serde_json::json!({
+                    "status": "error",
+                    "error": dispatch_err
+                })).unwrap_or_else(|_| b"{}".to_vec());
+                write_json_response(writer, 502, "Bad Gateway", cors_origin.as_deref(), &err_payload)?;
+                return Ok(());
+            }
 
-            match rx.recv_timeout(Duration::from_secs(10)) {
+            match rx.recv_timeout(Duration::from_secs(timeout_secs)) {
                 Ok(result_val) => {
                     let payload = serde_json::to_vec(&result_val).unwrap_or_else(|_| b"{}".to_vec());
                     write_json_response(writer, 200, "OK", cors_origin.as_deref(), &payload)?;
@@ -366,7 +502,7 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
     }
 
     if method == "POST" && path == "/state" {
-        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref())? {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
             Some(b) => b,
             None => return Ok(()),
         };
@@ -391,11 +527,33 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             if let Some(looping) = val.get("loop").and_then(|v| v.as_bool()) {
                 persistent.last_loop = Some(looping);
             }
-            if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
-                persistent.last_theme = Some(th.to_string());
+            if let Some(th) = val.get("theme_override") {
+                if th.is_null() {
+                    persistent.theme_override = None;
+                } else if let Some(s) = th.as_str() {
+                    if s == "light" || s == "dark" {
+                        persistent.theme_override = Some(s.to_string());
+                    }
+                }
+            } else if let Some(th) = val.get("theme").and_then(|v| v.as_str()) {
+                if th == "light" || th == "dark" {
+                    persistent.theme_override = Some(th.to_string());
+                }
             }
             if let Some(reopen) = val.get("reopen_last_session").and_then(|v| v.as_bool()) {
                 persistent.reopen_last_session = reopen;
+            }
+            if let Some(auto_next) = val.get("auto_next_scene").and_then(|v| v.as_bool()) {
+                persistent.auto_next_scene = auto_next;
+            }
+            if let Some(open_first) = val.get("open_first_ready_scene").and_then(|v| v.as_bool()) {
+                persistent.open_first_ready_scene = open_first;
+            }
+            if let Some(grouping) = val.get("dataset_grouping").and_then(state::dataset_grouping_from) {
+                persistent.dataset_grouping = grouping;
+            }
+            if let Some(strip) = val.get("camera_strip").and_then(state::camera_strip_from) {
+                persistent.camera_strip = strip;
             }
             if let Some(vis) = val.get("agent_visibility") {
                 if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
@@ -418,6 +576,12 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                     persistent.panel_collapse = Some(pcs);
                 }
             }
+            if let Some(l) = val.get("layout") {
+                if let Ok(mut layout) = serde_json::from_value::<state::LayoutSizes>(l.clone()) {
+                    layout.clamp();
+                    persistent.layout = Some(layout);
+                }
+            }
             if let Some(win) = val.get("window_state") {
                 if let Ok(ws) = serde_json::from_value::<WindowState>(win.clone()) {
                     persistent.window_state = Some(ws);
@@ -428,6 +592,205 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
         }
 
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/export-pick" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let val: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => {
+                write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"Invalid JSON\"}")?;
+                return Ok(());
+            }
+        };
+        let default_name = val.get("default_name").and_then(|v| v.as_str()).unwrap_or("export");
+        let extension = val.get("extension").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(ref picker) = config.export_picker {
+            match picker(default_name, extension) {
+                Ok(chosen_path) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "ok",
+                        "path": chosen_path
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), &resp)?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No export picker registered\"}")?;
+        }
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/export-save" {
+        let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), 15 * 1024 * 1024)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        let val: serde_json::Value = match serde_json::from_slice(&body) {
+            Ok(v) => v,
+            Err(_) => {
+                write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"Invalid JSON\"}")?;
+                return Ok(());
+            }
+        };
+        let source_relative = val.get("source_relative").and_then(|v| v.as_str());
+        let bytes_vec = if let Some(bytes_val) = val.get("bytes") {
+            let arr = match bytes_val.as_array() {
+                Some(a) => a,
+                None => {
+                    write_json_response(
+                        writer,
+                        400,
+                        "Bad Request",
+                        cors_origin.as_deref(),
+                        b"{\"status\":\"error\",\"error\":\"Field 'bytes' must be an array of integers\"}",
+                    )?;
+                    return Ok(());
+                }
+            };
+            if arr.len() > crate::export::MAX_EXPORT_BYTES {
+                let err_msg = format!(
+                    "Byte array exceeds maximum allowed export size of {} bytes (effective JSON body cap is 15 MB, got {} items)",
+                    crate::export::MAX_EXPORT_BYTES,
+                    arr.len()
+                );
+                let resp = serde_json::to_vec(&serde_json::json!({
+                    "status": "error",
+                    "error": err_msg
+                })).unwrap_or_else(|_| b"{}".to_vec());
+                write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                return Ok(());
+            }
+            let mut v = Vec::with_capacity(arr.len());
+            for item in arr {
+                let n = match item.as_u64() {
+                    Some(num) if num <= 255 => num as u8,
+                    _ => {
+                        let resp = serde_json::to_vec(&serde_json::json!({
+                            "status": "error",
+                            "error": "Invalid byte value in export payload: must be integers between 0 and 255"
+                        })).unwrap_or_else(|_| b"{}".to_vec());
+                        write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                        return Ok(());
+                    }
+                };
+                v.push(n);
+            }
+            Some(v)
+        } else {
+            None
+        };
+        if let Some(ref saver) = config.export_saver {
+            match saver(source_relative, bytes_vec.as_deref()) {
+                Ok(dest_path) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "ok",
+                        "path": dest_path
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), &resp)?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No export saver registered\"}")?;
+        }
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/reveal-in-finder" {
+        let _ = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+            Some(b) => b,
+            None => return Ok(()),
+        };
+        if let Some(ref revealer) = config.finder_revealer {
+            match revealer() {
+                Ok(()) => {
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No finder revealer registered\"}")?;
+        }
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/updater-check" {
+        if let Some(ref checker) = config.updater_checker {
+            let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+                Some(b) => b,
+                None => return Ok(()),
+            };
+            let val: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+            let is_manual = val.get("is_manual").and_then(|v| v.as_bool()).unwrap_or(false);
+            let raw_url = val.get("update_url").and_then(|v| v.as_str());
+            let override_url = crate::updater::resolve_update_endpoint_override(raw_url);
+            match checker(is_manual, override_url) {
+                Ok(outcome) => {
+                    let bytes = serde_json::to_vec(&outcome).unwrap_or_default();
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), &bytes)?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 500, "Internal Server Error", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No updater checker registered\"}")?;
+        }
+        return Ok(());
+    }
+
+    if method == "POST" && path == "/updater-install" {
+        if let Some(ref installer) = config.updater_installer {
+            let body = match read_request_body(reader, writer, &headers, &header_buf, header_pos, cors_origin.as_deref(), MAX_BODY_SIZE)? {
+                Some(b) => b,
+                None => return Ok(()),
+            };
+            let val: serde_json::Value = serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
+            let raw_url = val.get("update_url").and_then(|v| v.as_str());
+            let override_url = crate::updater::resolve_update_endpoint_override(raw_url);
+            match installer(override_url) {
+                Ok(()) => {
+                    write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
+                }
+                Err(err) => {
+                    let resp = serde_json::to_vec(&serde_json::json!({
+                        "status": "error",
+                        "error": err
+                    })).unwrap_or_else(|_| b"{}".to_vec());
+                    write_json_response(writer, 400, "Bad Request", cors_origin.as_deref(), &resp)?;
+                }
+            }
+        } else {
+            write_json_response(writer, 501, "Not Implemented", cors_origin.as_deref(), b"{\"status\":\"error\",\"error\":\"No updater installer registered\"}")?;
+        }
         return Ok(());
     }
 
@@ -449,7 +812,7 @@ fn write_response<W: Write>(
     cors_origin: Option<&str>,
     body: &[u8],
 ) -> Result<(), std::io::Error> {
-    let mut resp = format!("HTTP/1.1 {} {}\r\n", code, reason);
+    let mut resp = format!("HTTP/1.1 {} {}\r\nConnection: close\r\n", code, reason);
     if let Some(origin) = cors_origin {
         resp.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", origin));
         resp.push_str("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
@@ -469,7 +832,7 @@ fn write_json_response<W: Write>(
     cors_origin: Option<&str>,
     body: &[u8],
 ) -> Result<(), std::io::Error> {
-    let mut resp = format!("HTTP/1.1 {} {}\r\n", code, reason);
+    let mut resp = format!("HTTP/1.1 {} {}\r\nConnection: close\r\n", code, reason);
     if let Some(origin) = cors_origin {
         resp.push_str(&format!("Access-Control-Allow-Origin: {}\r\n", origin));
         resp.push_str("Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n");
@@ -680,7 +1043,7 @@ pub mod tests {
         let mut config = make_test_config();
         let config_for_dispatcher = config.clone();
 
-        config.eval_dispatcher = Some(Arc::new(move |script: String| {
+        config.eval_dispatcher = Some(Arc::new(move |script: String, _window: Option<String>| {
             if let Some(pos) = script.find("req_id: ") {
                 let rest = &script[pos + 8..];
                 let end = rest.find(',').unwrap_or(rest.len());
@@ -704,6 +1067,7 @@ pub mod tests {
                     let _ = handle_client(&mut reader, &mut writer, &cfg, &|| {});
                 });
             }
+            Ok(())
         }));
 
         let eval_payload = r#"{"script":"21 * 2"}"#;
@@ -735,7 +1099,7 @@ pub mod tests {
         let port_holder = Arc::new(Mutex::new(0u16));
         let port_holder_clone = port_holder.clone();
 
-        config.eval_dispatcher = Some(Arc::new(move |script: String| {
+        config.eval_dispatcher = Some(Arc::new(move |script: String, _window: Option<String>| {
             let port = *port_holder_clone.lock().unwrap();
             if let Some(pos) = script.find("req_id: ") {
                 let rest = &script[pos + 8..];
@@ -759,6 +1123,7 @@ pub mod tests {
                     stream.write_all(req.as_bytes()).unwrap();
                 });
             }
+            Ok(())
         }));
 
         let (port, _handle) = spawn_controller(config, || {}).unwrap();
@@ -786,5 +1151,308 @@ pub mod tests {
 
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
         assert!(resp.contains("\"result\":100"));
+    }
+
+    #[test]
+    fn test_eval_dispatcher_error_returns_502() {
+        let mut config = make_test_config();
+        config.eval_dispatcher = Some(Arc::new(move |_script: String, _window: Option<String>| {
+            Err("Window not found".into())
+        }));
+
+        let eval_payload = r#"{"script":"21 * 2"}"#;
+        let req = format!(
+            "POST /eval HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            eval_payload.len(),
+            eval_payload
+        );
+
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+
+        assert!(resp.starts_with("HTTP/1.1 502 Bad Gateway"), "Expected 502 Bad Gateway, got: {}", resp);
+        assert!(resp.contains("Window not found"));
+    }
+
+    #[test]
+    fn test_eval_timeout_clamping() {
+        // Default when missing or null
+        assert_eq!(parse_eval_timeout(&serde_json::json!({})), 10);
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": null})), 10);
+        // Valid in-range values
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": 1})), 1);
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": 15})), 15);
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": 60})), 60);
+        // Out-of-range low clamped to 1
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": 0})), 1);
+        // Out-of-range high clamped to 60
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": 61})), 60);
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": 100})), 60);
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": 999999})), 60);
+        // Negative or non-integer types fall back to default
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": -5})), 10);
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": "fast"})), 10);
+        assert_eq!(parse_eval_timeout(&serde_json::json!({"timeout": false})), 10);
+    }
+
+    #[test]
+    fn test_export_pick_endpoint() {
+        let mut config = make_test_config();
+        config.export_picker = Some(Arc::new(|default_name: &str, ext: &str| {
+            if default_name == "fail" {
+                Err("Picker failed".into())
+            } else {
+                Ok(Some(format!("/tmp/{}.{}", default_name, ext)))
+            }
+        }));
+
+        // Success case
+        let payload = r#"{"default_name":"test_clip","extension":"mp4"}"#;
+        let req = format!(
+            "POST /export-pick HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("/tmp/test_clip.mp4"));
+
+        // Error case
+        let err_payload = r#"{"default_name":"fail","extension":"mp4"}"#;
+        let err_req = format!(
+            "POST /export-pick HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            err_payload.len(),
+            err_payload
+        );
+        let mut reader = Cursor::new(err_req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(resp.contains("Picker failed"));
+    }
+
+    #[test]
+    fn test_export_save_endpoint() {
+        let mut config = make_test_config();
+        config.export_saver = Some(Arc::new(|src_rel: Option<&str>, bytes: Option<&[u8]>| {
+            if let Some(src) = src_rel {
+                if src == "missing.png" {
+                    return Err("Source file missing".into());
+                }
+                return Ok(format!("/saved/dest/{}", src));
+            }
+            if let Some(b) = bytes {
+                return Ok(format!("/saved/bytes/len_{}", b.len()));
+            }
+            Err("No export source".into())
+        }));
+
+        let payload = r#"{"source_relative":"clip.mp4"}"#;
+        let req = format!(
+            "POST /export-save HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("/saved/dest/clip.mp4"));
+
+        // Bytes case
+        let bytes_payload = r#"{"bytes":[1,2,3,4,5]}"#;
+        let bytes_req = format!(
+            "POST /export-save HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            bytes_payload.len(),
+            bytes_payload
+        );
+        let mut reader = Cursor::new(bytes_req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(resp.contains("/saved/bytes/len_5"));
+    }
+
+    #[test]
+    fn test_export_save_byte_validation() {
+        let mut config = make_test_config();
+        config.export_saver = Some(Arc::new(|_, _| Ok("/saved".into())));
+
+        // Value above 255 rejected
+        let invalid_val_payload = r#"{"bytes":[0, 100, 256, 1]}"#;
+        let req = format!(
+            "POST /export-save HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            invalid_val_payload.len(),
+            invalid_val_payload
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(resp.contains("Invalid byte value in export payload: must be integers between 0 and 255"));
+
+        // Negative value rejected
+        let negative_val_payload = r#"{"bytes":[0, -5, 20]}"#;
+        let req = format!(
+            "POST /export-save HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            negative_val_payload.len(),
+            negative_val_payload
+        );
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(resp.contains("Invalid byte value in export payload"));
+    }
+
+    #[test]
+    fn test_reveal_in_finder_endpoint() {
+        let mut config = make_test_config();
+        let reveal_called = Arc::new(Mutex::new(false));
+        let called_clone = reveal_called.clone();
+        config.finder_revealer = Some(Arc::new(move || {
+            *called_clone.lock().unwrap() = true;
+            Ok(())
+        }));
+
+        let payload = r#"{}"#;
+        let req = format!(
+            "POST /reveal-in-finder HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let mut reader = Cursor::new(req.clone().into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
+        assert!(*reveal_called.lock().unwrap());
+
+        // Error case (e.g. no export saved yet)
+        config.finder_revealer = Some(Arc::new(|| Err("No exported file has been saved yet".into())));
+        let mut reader = Cursor::new(req.into_bytes());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 400 Bad Request"), "Expected 400, got: {}", resp);
+        assert!(resp.contains("No exported file has been saved yet"));
+    }
+
+    #[test]
+    fn test_viewer_endpoints_report_the_session_dataset_scenes_and_ask_to_prepare() {
+        let mut config = ControllerConfig::new(51234, "secret".to_string(), Some("http://127.0.0.1:8000".to_string()));
+        let asked = Arc::new(Mutex::new(Vec::<String>::new()));
+        let record = asked.clone();
+        config.scene_preparer = Some(Arc::new(move |scene: String| {
+            record.lock().unwrap().push(scene);
+            true
+        }));
+        config.viewer_session = Some(Arc::new(|| serde_json::json!({"job_id": 7, "time_left": "3:59:00"})));
+        *config.dataset_scenes.lock().unwrap() = serde_json::json!({"scenes": [{"scene_id": "a", "state": "ready"}]});
+        let call = |request: String| {
+            let mut writer = Vec::new();
+            let mut reader = Cursor::new(request.into_bytes());
+            handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+            String::from_utf8(writer).unwrap()
+        };
+        let get = |path: &str, auth: &str| {
+            format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1:51234\r\nOrigin: http://127.0.0.1:8000\r\nAuthorization: Bearer {auth}\r\n\r\n")
+        };
+        assert!(call(get("/viewer-session", "wrong")).starts_with("HTTP/1.1 401"));
+        assert!(call(get("/viewer-session", "secret")).contains("\"time_left\":\"3:59:00\""));
+        assert!(call(get("/dataset-scenes", "secret")).contains("\"scene_id\":\"a\""));
+        let post = |body: &str| {
+            format!(
+                "POST /prepare-scene HTTP/1.1\r\nHost: 127.0.0.1:51234\r\nOrigin: http://127.0.0.1:8000\r\nAuthorization: Bearer secret\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+        };
+        assert!(call(post("{}")).starts_with("HTTP/1.1 400"));
+        assert!(call(post("{\"scene_id\":\"scene_0002\"}")).contains("\"shown\":true"));
+        assert_eq!(*asked.lock().unwrap(), vec!["scene_0002".to_string()]);
+    }
+
+    #[test]
+    fn test_show_library_endpoint_needs_the_secret_and_calls_the_shower() {
+        let mut config = make_test_config();
+        let calls = Arc::new(Mutex::new(0));
+        let counter = calls.clone();
+        config.library_shower = Some(Arc::new(move || {
+            *counter.lock().unwrap() += 1;
+            true
+        }));
+        let request = |auth: &str| {
+            format!(
+                "POST /show-library HTTP/1.1\r\n\
+                 Host: 127.0.0.1:51234\r\n\
+                 Origin: http://127.0.0.1:8000\r\n\
+                 Authorization: Bearer {auth}\r\n\
+                 Content-Length: 0\r\n\r\n"
+            )
+        };
+
+        let mut writer = Vec::new();
+        let mut reader = Cursor::new(request("wrong").into_bytes());
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        assert!(String::from_utf8(writer).unwrap().starts_with("HTTP/1.1 401"));
+        assert_eq!(*calls.lock().unwrap(), 0);
+
+        let mut writer = Vec::new();
+        let mut reader = Cursor::new(request("secret-token-test-123").into_bytes());
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "{resp}");
+        assert!(resp.ends_with(r#"{"shown":true}"#), "{resp}");
+        assert_eq!(*calls.lock().unwrap(), 1);
     }
 }

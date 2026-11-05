@@ -109,74 +109,6 @@ pub fn parse_credentials_file(contents: &str) -> Result<(String, u16, String), S
     }
 }
 
-/// Generates an sbatch script that allocates a compute node, writes a 0600 credentials file,
-/// and runs `coperceive serve` binding on the compute node's internal network.
-pub fn generate_desktop_sbatch_script(
-    session_uuid: &str,
-    walltime: &str,
-    partition: &str,
-    python_bin: &str,
-    data_root: &str,
-    creds_path: &str,
-    token: &str,
-) -> String {
-    format!(
-        r#"#!/bin/bash
-#SBATCH --job-name={prefix}{uuid}
-#SBATCH --partition={partition}
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=8G
-#SBATCH --time={walltime}
-#SBATCH --output=/tmp/coperceive-serve-%j.log
-#SBATCH --error=/tmp/coperceive-serve-%j.log
-
-set -euo pipefail
-
-# Discover internal node IP
-NODE_IP=$(hostname -I | awk '{{print $1}}')
-
-# Find an available ephemeral port
-PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
-
-# Create credentials file with strict mode 0600
-CREDS_FILE="{creds_path}"
-mkdir -p "$(dirname "$CREDS_FILE")"
-touch "$CREDS_FILE"
-chmod 0600 "$CREDS_FILE"
-
-cat <<EOF > "$CREDS_FILE"
-NODE=$NODE_IP
-PORT=$PORT
-TOKEN={token}
-EOF
-
-# Write token into a mode 0600 token file for coperceive serve
-TOKEN_FILE="${{CREDS_FILE}}.token"
-touch "$TOKEN_FILE"
-chmod 0600 "$TOKEN_FILE"
-echo "{token}" > "$TOKEN_FILE"
-
-# Clean up credentials on exit
-trap 'rm -f "$CREDS_FILE" "$TOKEN_FILE"' EXIT
-
-# Start server: token read from 0600 file (never on argv), bound to cluster node IP
-exec "{python_bin}" -m coperceive.app.serve \
-    --host "$NODE_IP" \
-    --port "$PORT" \
-    --token-file "$TOKEN_FILE" \
-    --root "{data_root}"
-"#,
-        prefix = DESKTOP_JOB_PREFIX,
-        uuid = session_uuid,
-        partition = partition,
-        walltime = walltime,
-        creds_path = creds_path,
-        token = token,
-        python_bin = python_bin,
-        data_root = data_root,
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -231,23 +163,4 @@ JOBID|NAME|STATE|REASON|TIME|TIME_LIMIT|NODELIST
         assert_eq!(token, "a1b2c3d4e5f6");
     }
 
-    #[test]
-    fn test_generate_desktop_sbatch_script_contains_security_constraints() {
-        let script = generate_desktop_sbatch_script(
-            "sess-uuid-99",
-            "02:00:00",
-            "ps,main-cpu",
-            "/home/user/.venv/bin/python",
-            "/datasets/eemcs",
-            "/home/user/.coperceive/session.creds",
-            "secrettokenhex",
-        );
-        assert!(script.contains("#SBATCH --job-name=coperceive-desktop-sess-uuid-99"));
-        assert!(script.contains("#SBATCH --partition=ps,main-cpu"));
-        assert!(script.contains("chmod 0600"));
-        assert!(script.contains("--token-file"));
-        assert!(script.contains("--host \"$NODE_IP\"")); // Bound to cluster node IP, not 0.0.0.0
-        assert!(!script.contains("--host 0.0.0.0"));
-        assert!(!script.contains("--token secrettokenhex")); // Token never on argv
-    }
 }

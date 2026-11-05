@@ -1,4 +1,6 @@
-import { Menu, Slider } from "./controls";
+import { IconInfo, Menu, Slider } from "./controls";
+import PanelState from "../desktop/PanelState";
+import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { COOPERATIVE_VIEWS, STATUS_CHIPS, STATUS_STYLES, STATUS_WORDS, type StatusChip } from "./predictionLayer";
 import { outputKey, type CooperativeCounts, type CooperativeView, type RunInfo, type RunTag } from "./predictionTypes";
 
@@ -110,8 +112,42 @@ export default function PredictionsBlock({
   return (
     <details open>
       <summary>Predictions</summary>
-      {runs === null ? <p className="muted">Looking for prediction runs…</p> : null}
-      {runs !== null && runs.length === 0 ? <p className="muted">{note || "No prediction runs for this scene."}</p> : null}
+      {runs === null ? (
+        <PanelState
+          compact
+          kind="loading"
+          title={PANEL_DEFINITIONS.predictions.loading.title}
+          description={PANEL_DEFINITIONS.predictions.loading.description}
+        />
+      ) : null}
+      {runs !== null && runs.length === 0 ? (
+        <div className="pred-empty">
+          <div className="pred-empty-row">
+            <span>No run loaded</span>
+            <button
+              type="button"
+              className="ghost"
+              title="Open Evaluation, where finished prediction runs are imported or started"
+              onClick={() => {
+                if (typeof sessionStorage !== "undefined") {
+                  try {
+                    sessionStorage.setItem("coperceive-connect-tab", "remote");
+                    sessionStorage.setItem("coperceive-hpc-tab", "evaluation");
+                  } catch {}
+                }
+                window.location.hash = "#/connect/evaluation";
+                window.dispatchEvent(new CustomEvent("coperceive-open-evaluation"));
+              }}
+            >
+              Load run…
+            </button>
+          </div>
+          <p className="muted">
+            {PANEL_DEFINITIONS.predictions.empty.description} Overlay detections from a finished evaluation to
+            compare single-agent and fused results.
+          </p>
+        </div>
+      ) : null}
       {runs !== null && runs.length > 0 ? (
         <div className="stack">
           <Menu
@@ -122,9 +158,13 @@ export default function PredictionsBlock({
             onChange={onRun}
           />
           {run && !run.evaluated ? (
-            <p className="muted">
-              Imported, not evaluated. Run <code>coperceive eval run {run.run_id}</code> to see matches.
-            </p>
+            <PanelState
+              compact
+              kind="empty"
+              icon={<IconInfo />}
+              title={PANEL_DEFINITIONS.predictions.error.title}
+              description={PANEL_DEFINITIONS.predictions.error.description}
+            />
           ) : null}
           {run?.evaluated ? (
             <>
@@ -173,7 +213,15 @@ export default function PredictionsBlock({
                   />
                 ))}
               </div>
-              <Slider label={`Score ≥ ${score.toFixed(2)}`} value={score} min={0} max={1} step={0.01} onChange={onScore} />
+              <Slider
+                label={`Score ≥ ${score.toFixed(2)}`}
+                value={score}
+                min={0}
+                max={1}
+                step={0.01}
+                valueText={score.toFixed(2)}
+                onChange={onScore}
+              />
               {scoreDefault !== null && Math.abs(score - scoreDefault) > 1e-9 ? (
                 <button type="button" className="ghost" onClick={() => onScore(null)}>
                   Back to the run's {scoreDefault.toFixed(2)}

@@ -48,6 +48,11 @@ fi
 
 echo "Python runtime extracted: $("${PYTHON_BIN}" --version)"
 
+# Build the viewer bundle into coperceive/app/static so the wheel install below
+# contains it (the built files are not committed).
+echo "Building the viewer bundle for the bundled Python environment..."
+bash "${REPO_ROOT}/scripts/build_web_static.sh"
+
 # Install coperceive and locked dependencies into bundled Python environment
 echo "Installing locked dependencies into bundled Python environment..."
 cd "${REPO_ROOT}"
@@ -64,6 +69,9 @@ fi
 echo "Installing coperceive package into bundled Python environment..."
 "${PYTHON_BIN}" -m pip install --no-deps --no-warn-script-location .
 
+BUNDLED_STATIC="${PYTHON_DEST}/lib/python3.13/site-packages/coperceive/app/static"
+"${PYTHON_BIN}" "${REPO_ROOT}/scripts/check_bundle_assets.py" --static "${BUNDLED_STATIC}"
+
 # Clean up console scripts with host-specific shebangs from bin/
 # The sidecar executes `python3 -m coperceive serve` directly.
 echo "Cleaning up console scripts with host-specific shebangs from bin/..."
@@ -72,8 +80,37 @@ find "${PYTHON_DEST}/bin" -type l ! -name "python*" -delete
 rm -f "${PYTHON_DEST}/bin"/python*-config || true
 chmod +x "${PYTHON_DEST}/bin"/python*
 
-# Strip caches to keep bundle compact
+# Strip pip, ensurepip, setuptools from the bundle after installation
+echo "Stripping pip, ensurepip, and build tools from bundle..."
+rm -rf "${PYTHON_DEST}/lib/python3.13/site-packages/pip"*
+rm -rf "${PYTHON_DEST}/lib/python3.13/site-packages/setuptools"*
+rm -rf "${PYTHON_DEST}/lib/python3.13/site-packages/wheel"*
+rm -rf "${PYTHON_DEST}/lib/python3.13/ensurepip"
+
+# Strip test suites from standard library and site-packages (do not delete *.testing packages)
+echo "Stripping test suites from bundle..."
+rm -rf "${PYTHON_DEST}/lib/python3.13/test"
+rm -rf "${PYTHON_DEST}/lib/python3.13/unittest/test"
+rm -rf "${PYTHON_DEST}/lib/python3.13/ctypes/test"
+rm -rf "${PYTHON_DEST}/lib/python3.13/sqlite3/test"
+find "${PYTHON_DEST}/lib/python3.13/site-packages" -type d -name "tests" -exec rm -rf {} + 2>/dev/null || true
+
+# Strip C headers
+echo "Stripping C/C++ header files from bundle..."
+rm -rf "${PYTHON_DEST}/include"
+find "${PYTHON_DEST}" -type d -name "include" -exec rm -rf {} + 2>/dev/null || true
+
+# Strip unused standard library GUI/demo modules
+echo "Stripping unused standard library modules..."
+rm -rf "${PYTHON_DEST}/lib/python3.13/idlelib"
+rm -rf "${PYTHON_DEST}/lib/python3.13/tkinter"
+rm -rf "${PYTHON_DEST}/lib/python3.13/turtledemo"
+rm -f "${PYTHON_DEST}/lib/python3.13/turtle.py"
+
+# Strip caches and compiled bytecode to keep bundle compact
+echo "Stripping caches and .pyc/.pyo files..."
 find "${PYTHON_DEST}" -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
 find "${PYTHON_DEST}" -name "*.pyc" -delete 2>/dev/null || true
+find "${PYTHON_DEST}" -name "*.pyo" -delete 2>/dev/null || true
 
 echo "Bundled Python environment ready at: ${PYTHON_DEST}"

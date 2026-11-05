@@ -247,6 +247,35 @@ def plan_files(
     return tuple(selected)
 
 
+def archive_names(entries: list[RemoteFile], folder: str) -> tuple[str, ...]:
+    """Archive basenames in ``datasets/<folder>/``, excluding ``md5.txt``.
+
+    A split archive (``name.z01`` plus ``name.zip``) contributes one basename.
+    """
+    prefix = f"datasets/{folder}/"
+    names: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if not entry.path.startswith(prefix):
+            continue
+        name = entry.path[len(prefix) :]
+        if "/" in name or not name or name == "md5.txt":
+            continue
+        if name.endswith(".zip"):
+            base = name[: -len(".zip")]
+        else:
+            match = _PART.fullmatch(name)
+            if match is None:
+                continue
+            base = match.group("base")
+        if base not in seen:
+            seen.add(base)
+            names.append(base)
+    if not names:
+        raise ValueError(f"no archives in datasets/{folder}")
+    return tuple(names)
+
+
 def _parts_for(archive: str, by_name: dict[str, RemoteFile]) -> list[str]:
     parts: list[tuple[int, str]] = []
     zip_name = f"{archive}.zip"
@@ -302,11 +331,20 @@ def download_griffin(
     extract: bool = True,
     when: str | None = None,
 ) -> DownloadReport:
-    """Download one subset into ``dest / <folder>`` and, by default, extract it."""
+    """Download one subset into ``dest / <folder>`` and, by default, extract it.
+
+    ``components="*"`` selects every archive in the Hub folder. Sizes come from
+    that listing. This function does not substitute a stored estimate.
+    """
     folder = folder_for(subset)
-    archives = archives_for(preset=preset, components=components)
     client = hub if hub is not None else HfHub(_token_or_resolve(token))
-    files = plan_files(client.list_files(folder), folder, archives)
+    if components == "*":
+        listed = client.list_files(folder)
+        archives = archive_names(listed, folder)
+        files = plan_files(listed, folder, archives)
+    else:
+        archives = archives_for(preset=preset, components=components)
+        files = plan_files(client.list_files(folder), folder, archives)
     notice = assert_mit(client.read_dataset_card(), client.read_toolkit_license())
     need = required_free_bytes(files, extract=extract)
     ack = ack_file if ack_file is not None else ack_path()

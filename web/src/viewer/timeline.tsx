@@ -1,7 +1,7 @@
-import { IconLoop, IconPlay, IconStep, Menu } from "./controls";
+import { IconPlay, IconStep } from "./controls";
 import { SPEEDS, formatClock, type Speed } from "./playback";
 import type { EvalSeries } from "./predictionTypes";
-import { sparkPaths } from "./telemetry";
+import { histogram } from "./sceneStats";
 
 export type Marker = { index: number; label: string };
 
@@ -68,13 +68,16 @@ type TimelineProps = {
   timeUs: number | null;
   times: readonly number[];
   playing: boolean;
+  /** Playback is holding on a sample until its point clouds arrive. */
+  buffering?: boolean;
   speed: Speed;
   loop: boolean;
   disabled: boolean;
-  points: number[];
-  speeds: number[];
+  /** Boxes drawn at each sample (agents and classes shown), for the histogram. */
   boxes: number[];
   markers: Marker[];
+  /** Samples where the scene has lidar but no sweep arrived. */
+  sweepGaps?: readonly number[];
   /** Per-sample precision, recall and FP count of the selected output of run A. */
   evalSeries?: EvalSeries | null;
   /** The same for run B in compare mode, drawn thinner. */
@@ -92,13 +95,13 @@ export default function Timeline({
   timeUs,
   times,
   playing,
+  buffering = false,
   speed,
   loop,
   disabled,
-  points,
-  speeds,
   boxes,
   markers,
+  sweepGaps = [],
   evalSeries = null,
   evalCompare = null,
   onIndex,
@@ -136,17 +139,24 @@ export default function Timeline({
       });
     }
   }
-  const charts = [
-    ["Points", points, "#F58A1F"],
-    ["Speed", speeds, "#3C8DFF"],
-    ["Boxes", boxes, "#6B6B6B"],
-  ] as const;
+  const bars = histogram(boxes, 120);
+  const total = times.length > 0 ? formatClock(times[times.length - 1] ?? 0) : "0.0 s";
+  const speedChoices = SPEEDS.filter((item) => item <= 2 || item === speed);
 
   const isReplay = !playing && !loop && index >= last && length > 1;
 
   return (
     <section className="timeline" aria-label="Timeline">
       <div className="timeline-tools">
+        <button
+          type="button"
+          className="icon ghost"
+          disabled={disabled}
+          aria-label="Step back"
+          onClick={() => onStep(-1)}
+        >
+          <IconStep direction={-1} />
+        </button>
         <button
           type="button"
           className="icon primary"
@@ -162,42 +172,42 @@ export default function Timeline({
           type="button"
           className="icon ghost"
           disabled={disabled}
-          aria-label="Step back"
-          onClick={() => onStep(-1)}
-        >
-          <IconStep direction={-1} />
-        </button>
-        <button
-          type="button"
-          className="icon ghost"
-          disabled={disabled}
           aria-label="Step forward"
           onClick={() => onStep(1)}
         >
           <IconStep direction={1} />
         </button>
-        <Menu
-          id="speed"
-          label="Speed"
-          value={String(speed)}
-          options={SPEEDS.map((item) => ({ value: String(item), label: `${item}×` }))}
-          onChange={(next) => {
-            const value = Number(next);
-            if (SPEEDS.includes(value as Speed)) {
-              onSpeed(value as Speed);
-            }
-          }}
-        />
-        <button type="button" className="icon ghost" aria-pressed={loop} aria-label="Loop" onClick={onLoop}>
-          <IconLoop />
-        </button>
         <p className="clock num">
-          {stamp}
-          <span>
+          <strong>{stamp}</strong>
+          <span className="clock-total"> / {total}</span>
+          <span className="clock-sample">
             {" "}
             · sample {length === 0 ? 0 : Math.min(index, last) + 1} / {length}
           </span>
+          {buffering ? (
+            <span className="buffering" role="status" title="Waiting for this sample's point clouds before moving on">
+              {" "}
+              · Buffering…
+            </span>
+          ) : null}
         </p>
+        <span className="timeline-spacer" />
+        <div className="seg speed-seg" role="group" aria-label="Speed">
+          {speedChoices.map((item) => (
+            <button
+              key={item}
+              type="button"
+              aria-pressed={item === speed}
+              aria-label={`Speed ${item}×`}
+              onClick={() => onSpeed(item)}
+            >
+              {item}×
+            </button>
+          ))}
+        </div>
+        <button type="button" className="ghost loop-btn" aria-pressed={loop} aria-label="Loop" title="Loop (L)" onClick={onLoop}>
+          Loop
+        </button>
         <details className="keys">
           <summary>Keys</summary>
           <div className="keys-pop" role="region" aria-label="Keyboard shortcuts">
@@ -214,6 +224,9 @@ export default function Timeline({
               <kbd>[</kbd> <kbd>]</kbd> speed
             </p>
             <p>
+              <kbd>P</kbd> <kbd>N</kbd> previous or next scene
+            </p>
+            <p>
               <kbd>1</kbd>–<kbd>5</kbd> viewpoints
             </p>
             <p>
@@ -228,133 +241,141 @@ export default function Timeline({
           </div>
         </details>
       </div>
-      <div className="timeline-chart">
-        <div className="ticks" aria-hidden="true">
-          {ticks.map((tick) => (
-            <span key={tick.left} className={`tick ${tick.edge} num`} style={{ left: `${tick.left}%` }}>
-              {tick.label}
-            </span>
-          ))}
-        </div>
-        <div
-          className="track"
-          role="slider"
-          aria-label="Sample"
-          aria-valuemin={0}
-          aria-valuemax={last}
-          aria-valuenow={Math.min(index, last)}
-          aria-valuetext={`${stamp}, sample ${length === 0 ? 0 : Math.min(index, last) + 1} of ${length}`}
-          tabIndex={0}
-          onPointerDown={(event) => {
-            if (event.button !== 0) {
-              return;
-            }
-            const track = event.currentTarget;
-            track.setPointerCapture(event.pointerId);
-            seek(event.clientX, track);
-          }}
-          onPointerMove={(event) => {
-            if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
-              return;
-            }
-            seek(event.clientX, event.currentTarget);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End") {
-              event.stopPropagation();
-            }
-            if (event.key === "ArrowLeft") {
-              event.preventDefault();
-              onStep(-1);
-            } else if (event.key === "ArrowRight") {
-              event.preventDefault();
-              onStep(1);
-            } else if (event.key === "Home") {
-              onIndex(0);
-            } else if (event.key === "End") {
-              onIndex(last);
-            }
-          }}
-        >
-          {markers.map((marker) => (
-            <span
-              key={`${marker.index}-${marker.label}`}
-              className="marker"
-              style={{ left: `${length > 1 ? (marker.index / last) * 100 : 0}%` }}
-              title={marker.label}
-            />
-          ))}
-          {dropRanges.map((range) => (
-            <span
-              key={`recall-${range.start}`}
-              className="marker marker-range"
-              style={{
-                left: `${length > 1 ? (range.start / last) * 100 : 0}%`,
-                width: `${length > 1 ? ((range.end - range.start) / last) * 100 : 0}%`,
-              }}
-              title={`Recall below the scene median by more than ${RECALL_DROP}`}
-            />
-          ))}
-        </div>
-        <div className="sparks" aria-hidden="true">
-          {charts.map(([label, values, color]) => {
-            const paths = sparkPaths(values, 28);
-            const gradient = `spark-${label}`;
-            return (
-              <div key={label} className="spark">
-                <span>{label}</span>
-                <svg viewBox="0 0 100 28" preserveAspectRatio="none">
-                  <defs>
-                    <linearGradient id={gradient} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={color} stopOpacity="0.38" />
-                      <stop offset="100%" stopColor={color} stopOpacity="0" />
-                    </linearGradient>
-                  </defs>
-                  <path d={paths.area} fill={`url(#${gradient})`} />
-                  <path d={paths.line} fill="none" stroke={color} />
+      <div className="timeline-body">
+        <span className="hist-label">boxes in range</span>
+        <div className="timeline-chart">
+          <div className="ticks" aria-hidden="true">
+            {ticks.map((tick) => (
+              <span key={tick.left} className={`tick ${tick.edge} num`} style={{ left: `${tick.left}%` }}>
+                {tick.label}
+              </span>
+            ))}
+          </div>
+          <div className="hist" aria-hidden="true" title="Boxes drawn at each sample">
+            {bars.bars.map((value, item) => (
+              <i
+                key={item}
+                className={bars.bars.length > 1 && item / (bars.bars.length - 1) <= place / 100 ? "past" : undefined}
+                style={{ height: `${bars.max > 0 ? Math.max(4, (value / bars.max) * 100) : 4}%` }}
+              />
+            ))}
+          </div>
+          <div
+            className="track"
+            role="slider"
+            aria-label="Sample"
+            aria-valuemin={0}
+            aria-valuemax={last}
+            aria-valuenow={Math.min(index, last)}
+            aria-valuetext={`${stamp}, sample ${length === 0 ? 0 : Math.min(index, last) + 1} of ${length}`}
+            tabIndex={0}
+            onPointerDown={(event) => {
+              if (event.button !== 0) {
+                return;
+              }
+              const track = event.currentTarget;
+              track.setPointerCapture(event.pointerId);
+              seek(event.clientX, track);
+            }}
+            onPointerMove={(event) => {
+              if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+                return;
+              }
+              seek(event.clientX, event.currentTarget);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "ArrowLeft" || event.key === "ArrowRight" || event.key === "Home" || event.key === "End") {
+                event.stopPropagation();
+              }
+              if (event.key === "ArrowLeft") {
+                event.preventDefault();
+                onStep(-1);
+              } else if (event.key === "ArrowRight") {
+                event.preventDefault();
+                onStep(1);
+              } else if (event.key === "Home") {
+                onIndex(0);
+              } else if (event.key === "End") {
+                onIndex(last);
+              }
+            }}
+          >
+            <span className="track-fill" style={{ width: `${place}%` }} />
+            {markers.map((marker) => (
+              <span
+                key={`${marker.index}-${marker.label}`}
+                className="marker"
+                style={{ left: `${length > 1 ? (marker.index / last) * 100 : 0}%` }}
+                title={marker.label}
+              />
+            ))}
+            {sweepGaps.map((gap) => (
+              <span
+                key={`gap-${gap}`}
+                className="marker marker-gap"
+                style={{ left: `${length > 1 ? (gap / last) * 100 : 0}%` }}
+                title={`No lidar sweep at sample ${gap + 1}`}
+              />
+            ))}
+            {dropRanges.map((range) => (
+              <span
+                key={`recall-${range.start}`}
+                className="marker marker-range"
+                style={{
+                  left: `${length > 1 ? (range.start / last) * 100 : 0}%`,
+                  width: `${length > 1 ? ((range.end - range.start) / last) * 100 : 0}%`,
+                }}
+                title={`Recall below the scene median by more than ${RECALL_DROP}`}
+              />
+            ))}
+            <span className="track-thumb" style={{ left: `${place}%` }} aria-hidden="true" />
+          </div>
+          {evalSeries ? (
+            <div className="sparks" aria-hidden="true">
+              <div className="spark spark-eval">
+                <span>Precision · Recall</span>
+                <svg viewBox={`0 0 100 ${evalHeight}`} preserveAspectRatio="none">
+                  {evalCompare ? (
+                    <>
+                      <path className="b" d={scaledPath(evalCompare.precision, evalHeight, 1)} fill="none" stroke="var(--eval-tp)" />
+                      <path className="b" d={scaledPath(evalCompare.recall, evalHeight, 1)} fill="none" stroke="var(--eval-miss)" />
+                    </>
+                  ) : null}
+                  <path d={scaledPath(evalSeries.precision, evalHeight, 1)} fill="none" stroke="var(--eval-tp)" />
+                  <path d={scaledPath(evalSeries.recall, evalHeight, 1)} fill="none" stroke="var(--eval-miss)" />
                 </svg>
               </div>
-            );
-          })}
-          {evalSeries ? (
-            <div className="spark spark-eval">
-              <span>Precision · Recall</span>
-              <svg viewBox={`0 0 100 ${evalHeight}`} preserveAspectRatio="none">
-                {evalCompare ? (
-                  <>
-                    <path className="b" d={scaledPath(evalCompare.precision, evalHeight, 1)} fill="none" stroke="var(--eval-tp)" />
-                    <path className="b" d={scaledPath(evalCompare.recall, evalHeight, 1)} fill="none" stroke="var(--eval-miss)" />
-                  </>
-                ) : null}
-                <path d={scaledPath(evalSeries.precision, evalHeight, 1)} fill="none" stroke="var(--eval-tp)" />
-                <path d={scaledPath(evalSeries.recall, evalHeight, 1)} fill="none" stroke="var(--eval-miss)" />
-              </svg>
+              <div className="spark spark-eval">
+                <span>FP</span>
+                <svg viewBox={`0 0 100 ${evalHeight}`} preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="spark-eval-fp" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="var(--eval-fp)" stopOpacity="0.38" />
+                      <stop offset="100%" stopColor="var(--eval-fp)" stopOpacity="0" />
+                    </linearGradient>
+                  </defs>
+                  <path
+                    d={`${scaledPath(evalSeries.fp, evalHeight, fpMax)} L100 ${evalHeight.toFixed(2)} L0 ${evalHeight.toFixed(2)} Z`}
+                    fill="url(#spark-eval-fp)"
+                  />
+                  {evalCompare ? (
+                    <path className="b" d={scaledPath(evalCompare.fp, evalHeight, fpMax)} fill="none" stroke="var(--eval-fp)" />
+                  ) : null}
+                  <path d={scaledPath(evalSeries.fp, evalHeight, fpMax)} fill="none" stroke="var(--eval-fp)" />
+                </svg>
+              </div>
             </div>
           ) : null}
-          {evalSeries ? (
-            <div className="spark spark-eval">
-              <span>FP</span>
-              <svg viewBox={`0 0 100 ${evalHeight}`} preserveAspectRatio="none">
-                <defs>
-                  <linearGradient id="spark-eval-fp" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor="var(--eval-fp)" stopOpacity="0.38" />
-                    <stop offset="100%" stopColor="var(--eval-fp)" stopOpacity="0" />
-                  </linearGradient>
-                </defs>
-                <path
-                  d={`${scaledPath(evalSeries.fp, evalHeight, fpMax)} L100 ${evalHeight.toFixed(2)} L0 ${evalHeight.toFixed(2)} Z`}
-                  fill="url(#spark-eval-fp)"
-                />
-                {evalCompare ? (
-                  <path className="b" d={scaledPath(evalCompare.fp, evalHeight, fpMax)} fill="none" stroke="var(--eval-fp)" />
-                ) : null}
-                <path d={scaledPath(evalSeries.fp, evalHeight, fpMax)} fill="none" stroke="var(--eval-fp)" />
-              </svg>
-            </div>
-          ) : null}
+          <span className="playhead" style={{ left: `${place}%` }}>
+            <span className={place > 84 ? "flag num end" : "flag num"}>{stamp}</span>
+          </span>
         </div>
-        <span className="playhead" style={{ left: `${place}%` }}>
-          <span className={place > 84 ? "flag num end" : "flag num"}>{stamp}</span>
+        <span className="gap-legend num" title="Samples where the scene has lidar but no sweep arrived">
+          {sweepGaps.length > 0 ? (
+            <>
+              <i aria-hidden="true" /> {sweepGaps.length} sweep {sweepGaps.length === 1 ? "gap" : "gaps"}
+            </>
+          ) : null}
         </span>
       </div>
     </section>

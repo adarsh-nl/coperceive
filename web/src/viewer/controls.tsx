@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
-export type MenuOption = { value: string; label: string };
+export type MenuOption = { value: string; label: string; disabled?: boolean };
 
 export function Menu({
   id,
@@ -69,11 +69,15 @@ export function Menu({
               <button
                 type="button"
                 role="option"
+                disabled={option.disabled}
+                aria-disabled={option.disabled}
                 aria-selected={option.value === value}
                 onClick={() => {
+                  if (option.disabled) return;
                   onChange(option.value);
                   setOpen(false);
                 }}
+                style={option.disabled ? { opacity: 0.5, cursor: "not-allowed" } : undefined}
               >
                 {option.label}
               </button>
@@ -89,10 +93,13 @@ export function EyeToggle({
   on,
   label,
   onChange,
+  meta,
 }: {
   on: boolean;
   label: string;
   onChange: () => void;
+  /** A count or note at the row's end ("70.1k", "Town05"); the switch's name stays `label`. */
+  meta?: ReactNode;
 }) {
   return (
     <button
@@ -106,6 +113,7 @@ export function EyeToggle({
     >
       <EyeIcon open={on} />
       <span>{label}</span>
+      {meta !== undefined && meta !== null ? <span className="eye-meta num">{meta}</span> : null}
     </button>
   );
 }
@@ -226,6 +234,7 @@ export function Slider({
   max,
   step,
   onChange,
+  valueText,
 }: {
   label: string;
   value: number;
@@ -233,6 +242,8 @@ export function Slider({
   max: number;
   step: number;
   onChange: (value: number) => void;
+  /** What the value reads as, e.g. "2 px"; a share ("60%") by default. */
+  valueText?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const ratio = max <= min ? 0 : (value - min) / (max - min);
@@ -256,7 +267,7 @@ export function Slider({
         aria-valuemin={min}
         aria-valuemax={max}
         aria-valuenow={value}
-        aria-valuetext={`${Math.round(value * 100)}%`}
+        aria-valuetext={valueText ?? `${Math.round(value * 100)}%`}
         aria-label={label}
         style={{ ["--at" as string]: `${ratio * 100}%` }}
         onPointerDown={(event) => {
@@ -280,6 +291,9 @@ export function Slider({
       >
         <i style={{ width: `${ratio * 100}%` }} />
       </div>
+      <span className="slider-value num" aria-hidden="true">
+        {valueText ?? `${Math.round(value * 100)}%`}
+      </span>
     </div>
   );
 }
@@ -316,6 +330,16 @@ export function IconGear() {
     <svg viewBox="0 0 16 16" width="15" height="15" aria-hidden="true">
       <circle cx="8" cy="8" r="2.1" fill="none" stroke="currentColor" strokeWidth="1.4" />
       <path stroke="currentColor" strokeWidth="1.4" d="M8 1.4v2M8 12.6v2M1.4 8h2M12.6 8h2M3.2 3.2l1.4 1.4M11.4 11.4l1.4 1.4M12.8 3.2 11.4 4.6M4.6 11.4 3.2 12.8" />
+    </svg>
+  );
+}
+
+export function IconInfo() {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+      <circle cx="8" cy="8" r="6.5" fill="none" stroke="currentColor" strokeWidth="1.3" />
+      <circle cx="8" cy="5.2" r="0.9" fill="currentColor" />
+      <path stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" d="M8 7.5v4" />
     </svg>
   );
 }

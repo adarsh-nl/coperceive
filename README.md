@@ -11,6 +11,7 @@ Python 3.10–3.13.
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[app,griffin]"
+bash scripts/build_web_static.sh   # build the viewer page for this checkout
 coperceive --help
 ```
 
@@ -26,7 +27,7 @@ coperceive serve --root /path/to/a/workdir --maps /path/to/maps
 
 The default bind is `127.0.0.1:8731`. A non-loopback host requires `--token`. Behind a proxy, pass `--root-path` with the prefix the proxy adds.
 
-The page in the wheel is the Vite build in `coperceive/app/static`. Rebuild it from `web/` with `npm run build` after a UI change. To view a build without committing it, `npx vite build --outDir DIR --emptyOutDir` and `coperceive serve --static DIR`. The Viewer tab lists scene directories under `--root`, plays recorded pose times, and can hide an agent. Viewpoints are orbit, bird's-eye, chase, drone, and a camera frustum. A strip under the transport shows each camera image for the current sample, with boxes and lidar projected onto it when those files exist beside the scene. Export Rerun writes `exports/<scene_id>.rrd` under that root and needs the `viewer` extra. Export sequence writes a camera MP4, GIF, or PNG sequence, and the page can also save the live 3D view. A view row toggles layers, colors, point size, box style, categories, and dark or light, and stores that in `localStorage` without the bearer token. The same exports from a terminal:
+The page is the Vite build in `coperceive/app/static`, built (not committed) by `scripts/build_web_static.sh` — run it after a UI change and in a source checkout before `coperceive serve`; it needs Node.js. A release wheel already contains the built page. To view a build from elsewhere, `npx vite build --outDir DIR --emptyOutDir` and `coperceive serve --static DIR`. The Viewer tab lists scene directories under `--root`, plays recorded pose times, and can hide an agent. Viewpoints are orbit, bird's-eye, chase, drone, and a camera frustum. A strip under the transport shows each camera image for the current sample, with boxes and lidar projected onto it when those files exist beside the scene. Export Rerun writes `exports/<scene_id>.rrd` under that root and needs the `viewer` extra. Export sequence writes a camera MP4, GIF, or PNG sequence, and the page can also save the live 3D view. A view row toggles layers, colors, point size, box style, categories, and dark or light, and stores that in `localStorage` without the bearer token. The same exports from a terminal:
 
 ```bash
 coperceive export rerun /path/scene --out /path/scene.rrd

@@ -1,191 +1,53 @@
 # Handover
 
-The desktop application is now the top priority per Adarsh's instructions (pausing V2V4Real, release work, and small fixes until the desktop app works end-to-end).
+The desktop application is the primary active focus (M2/M3/M4) per Adarsh's instructions.
+All engineering tasks and work items are tracked in **[TASKS.md](TASKS.md)** and on the **[Coperceive Notion Board](https://www.notion.so)**.
 
-## M1 close-out (2026-10-22)
+---
 
-Task status lives in `TASKS.md`. `origin/main` is `fffda8a`. The installable desktop build is `feat/desktop` `d35dddd`, green 9/9: https://github.com/adarsh-nl/coperceive/actions/runs/39923652622. Dmg `Coperceive_0.1.0_aarch64.dmg`, 84305283 bytes. Artifact `coperceive-desktop-macos-arm64`, 83982684 bytes. A later docs commit that only records these numbers is not that build.
+## Current State: Desktop Application (`feat/m2-import` & `feat/desktop`)
 
-e2e notices from that run: "Step 2b verified: loop stayed off across quit and relaunch."; "Step 2 verified: All restored values from DOM and scene-graph counts match perfectly."; "Playback requirement (c) verified: max frame gap = 207.0ms, loop wraps observed = 1, frames seen = 156." The desktop job is green, so step 3b's view-settings and scene-graph asserts passed. That line is not in the published notices; the workflow only emitted Step 2, Step 2b, and the playback line.
+- **Architecture (ADR 0007 / ADR 0014)**:
+  - Native Apple Silicon desktop application built on **Tauri v2** (`tauri` 2.x, `tauri-plugin-dialog`, `@tauri-apps/api`, `@tauri-apps/cli`).
+  - Bundled pinned `python-build-standalone` (`cpython-3.13.1+20250115-aarch64-apple-darwin`), locked dependencies (`scripts/desktop/requirements-darwin-arm64.lock`), and stripped runtime in `Contents/Resources/resources/python`.
+  - Installed `.app` bundle size: **~213 MB**; packaged `.dmg`: **~61 MB**.
+  - Local sidecar execution target: allocates ephemeral loopback port (`127.0.0.1:0`), mode 0600 token authentication, constant-time token comparison (`hmac.compare_digest`), auto-terminates child process on window destruction or application quit.
+  - Remote HPC execution target: Slurm session manager (`coperceive remote ...`), SSH local port forward tunnel (`ssh -L`), heartbeat lease watchdog, and bounded connection tests.
 
-- Loop choice is `last_loop` in Rust `state.json` (`f3820a0`). The fixed-port web app still uses `localStorage` key `coperceive-loop-preference`.
-- Frame advance does not wait on image decode. The playback clock is `setTimeout` from `indexAfter` in `web/src/viewer/Viewer.tsx`; frustum images load in a separate effect via `loadImage`. `paintWait` is only the export path.
-- `coperceive serve` and `GET /api/scenes` require `manifest.json` and `COMPLETE.json`, matching `validate_dataset_root` in `src-tauri/src/state.rs`.
-- Backdrop CPU on that run: motion `animated`, 60 samples after a 5 s warm-up, median 0.6, p95 0.8. The series is in `docs/media/measurements/backdrop-cpu.md`. Run [39828222428](https://github.com/adarsh-nl/coperceive/actions/runs/39828222428) does not count (`reduceMotion=1`).
+- **Security & Conformance**:
+  - Tokens are never passed on argv or stored in URLs. Tokens are strictly passed via `COPERCEIVE_TOKEN` or `--token-file` (file mode `0600` or `0400` enforced).
+  - Path confinement: all scene file loads and export destinations are strictly confined within the active dataset root (`confine()`).
 
-Adarsh still does Mac acceptance (M1-5) and the merge (M1-6).
-
-## Desktop App Status (feat/desktop)
-
-- **ADR 0014**: Committed to `main` at `662fa84` and `feat/desktop` at `c423630`.
-- **Phase 1: Complete**
-  - **Token Security**: Tokens are never passed on argv. `coperceive serve` now supports `COPERCEIVE_TOKEN` and `--token-file` (strictly enforcing file mode `0600` or `0400`, refusing on loose permissions). `--token` is deprecated with a warning.
-  - **Rust Tauri Core (`src-tauri/`)**:
-    - `token.rs`: Cryptographic 128-bit hex token generation and mode 0600 file read/write verification.
-    - `port.rs`: Dynamic ephemeral loopback port discovery (`127.0.0.1:0`).
-    - `ssh.rs`: System SSH wrapper enforcing `BatchMode=yes`, `ControlMaster=auto`, `ControlPersist=10m`, `ConnectTimeout=8`. Classifies stderr into `PublicKeyAuthRequired` (advises `ssh-add`), `EduVpnOrNetworkUnreachable` (advises eduVPN check), or host key mismatch.
-    - `slurm.rs`: Slurm session generator (`coperceive-desktop-<uuid>`, 2h walltime on `ps,main-cpu`), `squeue` output parser for PENDING queue reasons and elapsed time, walltime expiry monitor (warn 10 min before end), orphaned job scanner, and 0600 credentials parser.
-    - 13 Rust unit tests passing.
-  - **TypeScript Bindings**: `web/src/desktop/types.ts` defining `ExecutionTarget`, `ConnectionSession`, `TargetStatus`, `SlurmJobInfo`.
-  - **Gates**: Job `631229` green on `hpc-node12` (`gates rc=0`, 572 passed, 2 skipped, 8 warnings in 165.76s).
-
-- **Phase 2: Complete (Full Tauri v2 Implementation & Bundled Python)**
-  - **Constant-Time Token Comparison**: Updated `coperceive/app/server.py` auth middleware to enforce constant-time verification using `hmac.compare_digest(header[len(prefix):], expected)`.
-  - **Cluster Node-IP Binding**: Updated `src-tauri/src/slurm.rs` sbatch template to bind `--host "$NODE_IP"` (derived from `hostname -I`) instead of `0.0.0.0`.
-  - **Tauri v2 Application (`src-tauri/` & `web/`)**:
-    - `web/package.json`: Upgraded with `@tauri-apps/api@^2.12.4`, `@tauri-apps/plugin-dialog@^2.8.3`, and `@tauri-apps/cli@^2.0.0`.
-    - `src-tauri/Cargo.toml`: Added `tauri = { version = "2.2.5", ... }` and `tauri-plugin-dialog = "2.2.0"` under macOS target dependencies, and `tauri-build = "2.0.5"` build dependency. Non-macOS target retains standard Rust unit tests without GTK3/WebKitGTK dependencies.
-    - `src-tauri/capabilities/default.json`: Grants `core:default` and `dialog:default`.
-    - `src-tauri/tauri.conf.json`: Configures Tauri v2 bundle targets `["app", "dmg"]` with `resources: ["resources/**/*"]`.
-    - `src-tauri/src/main.rs`: Full Tauri application runtime with `#[tauri::command]` handlers:
-      - `pick_data_root`: Invokes `tauri_plugin_dialog::DialogExt::file().blocking_pick_folder()`.
-      - `start_local`: Spawns bundled Python running `coperceive serve` on ephemeral port with mode 0600 token-file; polls `/api/health` with Bearer auth; returns `LocalServeResult { origin, token, port }`.
-      - `stop_local`: Sends SIGTERM, waits up to 3s, then SIGKILL to child process; cleans up token file.
-      - `health`: Probes `/api/health` with Bearer token.
-      - Application lifecycle hooks (`WindowEvent::Destroyed` and `RunEvent::Exit`) terminate any active child process cleanly.
-  - **UI Connection Flow (`web/src/desktop/ConnectScreen.tsx`, `web/src/App.tsx`, `web/src/desktop/local.ts`)**:
-    - Detects Tauri environment via `window.__TAURI_INTERNALS__`.
-    - Shows `ConnectScreen` with Local and Remote options.
-    - Folder picker -> calls `start_local` -> stores token in `sessionStorage` -> transitions into full viewer UI -> plays scenes.
-  - **Bundled Python Standalone (`scripts/desktop/bundle_python.sh`)**:
-    - Packages `python-build-standalone` (`cpython-3.13.1+20250115-aarch64-apple-darwin-install_only.tar.gz`, pinned SHA-256 `d00ac75b15a05da2f6bc0057fe36f6944f9d513239f1c7af12766e03f288fe65`).
-    - Builds `coperceive` wheel and installs into bundled python without torch or viewer extras.
-    - Runtime resolver in `src-tauri/src/main.rs` locates `Contents/Resources/python/bin/python3` via `tauri::path::PathResolver::resource_dir()`, with fallback to `which python3` for development.
-  - **Smoke Test & Verification (`scripts/desktop/smoke_test.sh`)**:
-    - Validates bundled interpreter and `coperceive --help`.
-    - Spawns `coperceive serve` on dynamic port with mode 0600 `--token-file`.
-    - Asserts `/api/health` returns HTTP 401 without token and HTTP 200 with Bearer auth.
-    - Asserts server terminates cleanly on SIGTERM.
-    - Records measured `.app` and `.dmg` bundle sizes.
-  - **CI Workflow (`.github/workflows/ci.yml`)**:
-    - `desktop-macos` job runs on `macos-14` (Apple Silicon arm64).
-    - Standalone Python hash-locked (`scripts/desktop/requirements-darwin-arm64.lock` generated with `uv pip compile --generate-hashes --python-platform aarch64-apple-darwin --python-version 3.13`), installed via `--require-hashes`.
-    - Bundles standalone Python, runs `npm run tauri build -- --target aarch64-apple-darwin`, runs `scripts/desktop/smoke_test.sh`, and uploads `.app` and `.dmg` artifacts.
-    - Verified green in CI run [`39462553220`](https://github.com/adarsh-nl/coperceive/actions/runs/39462553220) (all jobs passed in 6m 40s; artifact `coperceive-desktop-macos-arm64` ID `12284290394`, 352.9 MB; measured `Coperceive.app`: 368 MB, `Coperceive .dmg`: 179 MB).
-  - **Gates**: Job `631378` green on `hpc-node12` (`gates rc=0`, 574 passed, 2 skipped, 8 warnings in 154.16s).
-  - **Branch**: `feat/desktop` pushed to `origin/feat/desktop` (commit `98c625c`).
-
-- **Phase 3: Complete (Cluster Remote Serve, Heartbeat Lease, and Rust SSH Target)**
-  - **Slurm Remote Serve Job (`scripts/desktop/remote_serve.sbatch`)**:
-    - Partition `ps` (UTwente HPC nodes `hpc-node[11-12,14]`), 2 CPUs, 8 GB memory, default walltime 2 hours (configurable).
-    - Session job name `coperceive-desktop-<uuid>`.
-    - Ephemeral cluster IP binding: discovers node IP via `hostname -I` (or `127.0.0.1`), picks an unbound port dynamically.
-    - Security: Token is never placed on argv; read strictly from `~/.coperceive/tokens/<uuid>.token` (mode `0600`). Session state `{uuid, node, ip, port, pid, started_at, last_heartbeat}` written to `~/.coperceive/sessions/<uuid>.json` (mode `0600`). Base directory enforced mode `0700`.
-    - Signal handling: Traps SIGTERM and EXIT, cleanly terminating `coperceive serve`, removing all credentials, and exiting 0.
-    - Heartbeat lease watchdog: background watchdog checks `~/.coperceive/sessions/<uuid>.heartbeat` every 5s; terminates serve and cleans up if heartbeat age >= `COPERCEIVE_HEARTBEAT_TIMEOUT` (default: 600s / 10 min, configurable via env, 0 to disable).
-  - **Cluster Remote CLI (`coperceive remote ...`)**:
-    - Pure machine-readable JSON output for seamless integration with Tauri Rust backend:
-      - `coperceive remote start --root <dir> [--partition ps] [--time 02:00:00] [--cpus 2] [--mem 8G] [--uuid <uuid>]`: Submits sbatch, polls until RUNNING, probes health with Bearer token, returns session JSON.
-      - `coperceive remote status [--uuid <uuid>] [--job-id <id>]`: Reports state (`RUNNING`, `PENDING`, `STOPPED`), elapsed time, time left, queue reason, `last_heartbeat_age_s`, `stopped_reason` (mapped to `cancelled`, `timeout`, `completed`, `failed`), and health check. Emits early warning when walltime has < 10 minutes remaining. Reconstructs state via `sacct` if session file was removed.
-      - `coperceive remote stop [--uuid <uuid>] [--job-id <id>]`: Terminates Slurm job via `scancel` and removes credentials.
-      - `coperceive remote heartbeat --uuid <uuid>`: Touches `<uuid>.heartbeat` (mode 0600) and updates `last_heartbeat` in session JSON; returns `{"status":"ok","uuid":...,"timestamp":...}`.
-      - `coperceive remote list`: Lists active sessions from `~/.coperceive/sessions/` and Slurm jobs owned by user matching `coperceive-desktop-*`; detects and flags orphan jobs (`is_orphan: true`), including sessions with `last_heartbeat_age_s > 180s` (`orphan_reason: "heartbeat_timeout"`).
-  - **Rust SSH Target Core (`src-tauri/src/remote.rs`, `src-tauri/src/ssh.rs`)**:
-    - `RemoteClient`: Runs `coperceive remote start|status|stop|heartbeat|list` over SSH using ControlMaster multiplexing, parsing typed JSON outputs and mapping SSH error stderr.
-    - `SshTunnel`: Manages `ssh -N -L 127.0.0.1:<lp>:<ip>:<port>` subprocess; verifies process liveness, cleanly shuts down on exit/drop.
-    - `RemoteSessionManager`: Manages connection lifecycle and seamlessly reattaches to existing sessions given a UUID.
-    - Tauri commands: `remote_connect`, `remote_status`, `remote_disconnect` under `#[cfg(target_os = "macos")]`; window event listeners ensure background tunnels terminate on close.
-    - 19 Rust unit tests passing in 0.32s (`cargo test --lib`).
-  - **Cluster Drills & Empirical Verification**:
-    - *Heartbeat Drill*: Job `632152` (`af6be217d126533c`) with 45s timeout; `status` showed age 30.7s; heartbeat renewal reduced age to 3.4s; stopping heartbeats triggered watchdog at 46s (`Heartbeat lease expired (46s >= 45s), stopping serve...`) with graceful shutdown and exit 0.
-    - *Walltime Drill*: Job `632153` with 2-minute walltime; trap exited 0 cleanly, sacct state mapped to `stopped_reason`.
-    - *Login-Node Forwarding*: `ssh -N -L localhost` is blocked: port 22 refused on loopback (sshd binds only public IP `130.89.6.42`), and SSH to `spark-head1` gives `Permission denied (publickey)` as login node has no self-referential keys in `~/.ssh/authorized_keys`.
-  - **Unit and Integration Tests**:
-    - 11 fast Python unit tests in `tests/test_remote.py` passing in ~1.2s.
-    - 19 Rust unit tests in `src-tauri/` passing in ~0.3s.
-    - CI Run [`39467524258`](https://github.com/adarsh-nl/coperceive/actions/runs/39467524258) green across all jobs.
-  - **Gates**: Job `632157` green on `hpc-node12` (`gates rc=0`, 586 passed, 2 skipped, 8 warnings in 203.24s).
-
-## Phase 2 Mac Acceptance Instructions
-
-- **Scene to copy**: `Town03-000` (6.9 MB, 149 frames, vehicle + drone with bounding boxes and annotations).
-- **SCP Command from Mac**:
-  ```bash
-  mkdir -p ~/coperceive-data
-  scp -r nanjaiyalathaa@hpc-head1.ewi.utwente.nl:~/results/reference-stepb-20261020/staged-scenes/Town03-000 ~/coperceive-data/
-  ```
-- **Opening Unsigned App on macOS**:
-  1. Download `coperceive-desktop-macos-arm64` artifact from GitHub Actions run on `feat/desktop`.
-  2. Open the `.dmg` and drag `Coperceive.app` into `/Applications` (or Desktop).
-  3. Bypass Apple Gatekeeper for the unsigned build:
+- **Mac Acceptance Instructions**:
+  1. **Scene to copy**: `Town03-000` (6.9 MB, 149 frames, vehicle + drone with bounding boxes and annotations):
+     ```bash
+     mkdir -p ~/coperceive-data
+     scp -r nanjaiyalathaa@hpc-head1.ewi.utwente.nl:~/results/reference-stepb-20261020/staged-scenes/Town03-000 ~/coperceive-data/
+     ```
+  2. **Opening Unsigned App on macOS**:
+     Download the `coperceive-desktop-macos-arm64` DMG from CI artifacts, mount it, copy `Coperceive.app` to `/Applications`, and clear the quarantine bit:
      ```bash
      xattr -cr /Applications/Coperceive.app
      ```
-     *(Alternatively: Right-click `Coperceive.app` in Finder -> select **Open** -> click **Open** in the security dialog).*
-  4. Launch the app, select **Local**, choose folder `~/coperceive-data`, and confirm `Town03-000` loads and plays.
+     *(Alternatively: Right-click `Coperceive.app` in Finder -> select **Open** -> click **Open**).*
 
-## Cluster Empirical Findings (UTwente HPC)
+---
 
-- **Login-Node Policy**: "Login-node commands stay under 1 minute. Heavy work goes through sbatch" (source: user handover rules & UTwente EEMCS HPC documentation at `https://hpc.wiki.utwente.nl/eemcs-hpc`). Persistent server daemons serving point cloud queries on `hpc-head1` are prohibited.
-- **Partitions**: `ps,main-cpu` verified via `sinfo -p ps,main-cpu` (yielding `hpc-node[11-12]` on `ps` and `spark-head[1-4],caserta,ctit087` on `main-cpu`).
-- **Remote Bind Architecture & Evidence**:
-  - Direct SSH from login node to compute nodes (`ssh -o BatchMode=yes hpc-node11`) returns `Permission denied (publickey,password,keyboard-interactive)`.
-  - `/etc/pam.d/slurm` contains only `pam_localuser.so, pam_unix.so, pam_limits.so`; `pam_slurm_adopt` is not installed.
-  - Direct user SSH to compute nodes (and SSH `ProxyJump`) is blocked.
-  - **Architecture**: `coperceive serve` binds to compute node IP (`10.20.240.x`) inside the Slurm job with `--token-file` (mode 0600), and an SSH local port forward tunnels from macOS loopback through the login node (`hpc-head1`): `ssh -L 127.0.0.1:<local_port>:<node_ip>:<port> <hpc_alias> -N`.
-
-## Goal
-
-An independent cooperative perception data platform Adarsh owns. Schema 1 scenes stay the contract in `docs/spec/format.md`. A CARLA town is a sidecar map, drawn under the lidar and used by `coperceive validate`. The page plays those samples and can sit in orbit, bird's-eye, chase, drone, or a camera frustum. The distribution, import, and command name are `coperceive`.
-
-Clean-room rule: do not install, import, copy, paraphrase, or model naming or schema on kesai-labs/py123d or the adarsh-nl fork. Neither was opened. The only outside idea used is a shared HD-map layer per town, drawn with the sensors. The Griffin toolkit was not re-opened. Altitude bands and official scene counts are the figures already recorded in `docs/design/griffin-verification.md`.
-
-## State
-
-- `coperceive maps fetch` extracts `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr` from CARLA 0.9.15 (`https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`). `maps ingest` writes `maps/<town>/manifest.json`, `polylines.parquet`, and `vertices.bin`. `maps align` stores `world_from_opendrive`. The `.xodr` bytes and the map directories are not in git.
-- The map format is `coperceive-hdmap` version 1. Vertices stay in the OpenDRIVE frame. The transform is a 3×3 matrix plus a translation, because a reflection is allowed and a quaternion cannot store one. Schema version stays `1`.
-- The viewer draws lane centres and road edges under the lidar. `GET /api/scenes/{id}/map/lines` returns the world-frame blob. A missing map is 404 and the status ends in `no map.`
-- The status line counts boxes and frustums for agents that are still shown. Orbit frames the vehicle pose and lidar points within 80 m horizontally once per scene. Later scrubs do not move an orbit camera. `GET /favicon.ico` returns `favicon.svg`.
-- Playback uses the recorded gap between pose times at 0.25×, 0.5×, 1×, 2×, and 4×. The page caches 16 frame documents and 48 point sweeps and requests the next four samples. Viewpoints ease over 180 ms. Look-through uses sensor +Z as forward and sensor −Y as up. The checklist is `docs/design/viewer-features.md`.
-- `GET /api/scenes/{id}/image` returns the file named in `images.parquet` for that sample. The path is confined to the scene directory. A path that leaves the scene is 400. A missing row or a missing file is 404. The page shows one panel per camera. Boxes start on and Lidar starts off. The strip keeps the last complete sample until the next images arrive. Image bytes are not in git.
-- Sequence export writes every recorded sample from the start time through the end time as one frame. `fps` is the file's playback rate. `coperceive export sequence` reads one camera. The page can also post bitmaps of the live 3D view, at most 60 frames. A camera export accepts 600. MP4 needs `ffmpeg` on `PATH` with `shell` false. GIF and PNG use Pillow. Files land in `exports/` under the server root. Rerun export is unchanged.
-- View settings live in `localStorage` under `coperceive-view`. The object is layers, color, point size, box style, hidden classes, and theme. It has no token. The bearer token stays in `sessionStorage` under `coperceive-token`. Defaults are every layer on, color by agent, 2 px points, wire boxes, and light. Class color applies to boxes. Points and frustums stay colored by agent. The photo strip keeps its own Boxes and Lidar checkboxes.
-- `coperceive validate --maps` adds a centreline block. It is a measurement. It is not a hard failure. With no maps directory the block says `not measured`.
-- The desktop plan is still `docs/adr/0007-desktop.md`. Tauri is the planned shell. Electron is the fallback. Neither is built.
-
-## Decisions already in the code
-
-- The map is a sidecar keyed by `platform.map_name`. Geometry is not copied into each scene.
-- Driving-lane centre is the primary centreline. The OpenDRIVE reference line is reported beside it.
-- Alignment candidates keep z up. A horizontal translation is stored only when it cuts the median residual by at least 1 m. `tz` stays 0.
-- On Griffin-25m against CARLA 0.9.15, every town selected `identity`. Griffin `+X` equals OpenDRIVE `+X`. The header CRS is transverse Mercator, so in PROJ that axis is easting. This is the file frame, not a compass survey.
-- Positive OpenDRIVE lane ids are driven against `+s`. The nearest-segment heading for those lanes is reversed by π.
-- Centreline distance does not fail validate. `lane_centre_median_minus_claim_m` subtracts 0.24 m from the measured median.
-- Phase 5 choices stand: three.js in the page, Rerun as an `.rrd` export, lidar points at 2 CSS pixels, loopback bind unless `--token` is set.
-- Phase 4 choices stand: warnings for speed and acceleration, the size-scaled computed gate, exit 0 unless `--strict`.
-- Phase 3 and Phase 2 choices stand, including schema `1`, null visibility, and `time_us = frame_id * 100000`.
-
-## Open questions for Adarsh
+## Open Decisions & Questions for Adarsh
 
 1. 40 m/s and 20 m/s² stay warnings. Smoothed acceleration uses the same 20 m/s² and a 0.5 s trailing window. On Griffin-25m the smoothed check warns on 0 steps.
 2. The computed gate is `max(2 m, 0.5 * the longer box length)`. Griffin-25m has 11 computed pairs, centre median 4.071134798976429 m, max 4.518411314835206 m.
 3. Is the 2 m / 5-frame / 40% phase rule the split you want? It labels only Town06-001.
 4. “About 150” frames stays informational. Every Griffin-25m scene is 147, 148, or 149.
 5. The default exit is 0. `--strict` exits 1 on an unreadable scene, a missing frame, or a cross-agent pose miss. The centreline block does not count.
-6. `Scene.at` still returns the discrete sample.
-7. Is +Z depth, with no pixel rounding, the camera contract to keep?
-8. `CooperativeDataset` indexes one reference agent.
-9. Identity collate versus a padded cloud batch. Training code was not added.
-10. On the Phase 3 machine, more DataLoader workers were slower than `num_workers=0`.
-11. Visibility. Keep null when the field is absent, or store `1.0`?
-12. Drone lidar calibs with no clouds. Keep them as sensors, or drop stems that have no point files?
-13. East is Griffin `+X` = OpenDRIVE `+X` = PROJ easting on these four files. Say if you want a compass check on top of that.
-14. The 0.24 m claim is not the measured median. Lane-centre median is 0.013712643507518118 m. Reference-line median is 1.7860191236754484 m. Say which quantity the 0.24 m figure was meant to be.
-15. Town07's lane-centre median is 0.1647962688524098 m, with `identity` still ahead of the next candidate by metres. Say if another CARLA package should be ingested.
-16. Sample step is 1.0 m. Say if the sidecar should be finer.
-17. Image paths are written for every camera even when the file is absent. On this machine only Town03-000 has the PNG bytes, under the scene directory, outside git. Other scenes return 404.
-18. Schema number. Still `1`. The map is `coperceive-hdmap` version 1, separate from the scene schema.
-19. Desktop shell. Tauri is the plan and Electron is the fallback. The shell was not built.
-20. Lidar points are 2 CSS pixels. Say if 2 is still too large or too small.
-21. Town03-000's nine cameras were unpacked one archive at a time. A full extract of all nine archives for every scene was not done: the dry-run `required_free_bytes` for that was 324550526424. Say if more scenes should be unpacked.
-22. Light is the default. Dark is stored with the other view settings. The viewport stays `#141414` in both. Say if the light palette should change.
-23. Look-through uses sensor −Y as up because the Town03-000 front camera's +Y points down. Say if another dataset uses the opposite axis.
-24. Sequence export keeps one frame per recorded sample. 10 fps is realtime on Griffin. Say if a chosen fps should resample the timeline instead.
-25. The live 3D view export stops at 60 frames because those bitmaps are uploaded. A camera export reads files on the server and stops at 600. Say if the view cap should be higher.
 
-## Griffin-25m map check
+---
 
-Downloaded and converted on this machine on 2026-10-15. `coperceive download griffin --subset 25m --preset dev --dest /tmp/griffin-raw --accept-griffin-terms`, then `coperceive convert griffin --subset 25m --raw-root /tmp/griffin-raw/griffin_50scenes_25m/griffin-release --out /tmp/griffin-scenes`. 47 scenes. Recordings are not in git.
+## Historical Engineering Logs (`docs/log/`)
+
+Detailed historical logs, benchmark results, Slurm batch execution records, and slice-by-slice verification gates have been moved to dated logs in `docs/log/`:
+
+## From main (merged 2026-11-02)
 
 CARLA package `/tmp/CARLA_0.9.15.tar.gz`: 8,386,636,048 bytes, SHA-256 `7b2f432ce74b251593f95dcc8dee6d99ad9625c2a71a2d6d48f24d879de19ef7`. OpenDRIVE SHA-256 values are in `docs/adr/0008-hd-map.md`.
 
@@ -928,3 +790,9 @@ Started after PR #20 merged at `494c35f`. Follows ADR 0011, `docs/spec/model-plu
   - Smoke test passed in 15s: verified bundled Python interpreter, confirmed `coperceive` imports from bundled site-packages, confirmed `Server is healthy!`, confirmed HTTP 401 on unauthenticated access, confirmed HTTP 200 on authenticated access, and clean child termination.
   - Uploaded artifact: `coperceive-desktop-macos-arm64` (`size_in_bytes: 352864650`, SHA-256 `65abd05dce2687e87e60f23e1a67f06d2c7339cd524f8cf275c2534b14aff13e`).
 
+- **[2026-10-25](docs/log/2026-10-25.md)**: CARLA town CC-BY licensing notes, Griffin dataset download dry-run and node capacity checks.
+- **[2026-10-22](docs/log/2026-10-22.md)**: Milestone 1 (M1) close-out, e2e verification notices, loop persistence in `state.json`, and backdrop CPU measurements.
+- **[2026-10-18](docs/log/2026-10-18.md)**: OPV2V and V2XSet adapters (ADR 0012 left-handed reflection, town identification), Evaluation Step B batch mode, and Slurm jobs 630818/630821.
+- **[2026-10-17](docs/log/2026-10-17.md)**: Dataset adapters, Evaluation engine Step A (format 1 predictions, matching, AP metrics), Task 12 Griffin run, viewer check, and camera strip.
+- **[2026-10-16](docs/log/2026-10-16.md)**: Phase 6 playback, camera checks, figures export, sequence export, view settings, and UI redesign verification gates.
+- **[2026-10-15](docs/log/2026-10-15.md)**: UTwente HPC cluster empirical findings, project goals, foundational architecture decisions, and clean-room rules.

@@ -12,6 +12,7 @@ use crate::token::{generate_secure_token, write_token_file};
 
 pub static ACTIVE_SIDECAR_PID: AtomicI32 = AtomicI32::new(0);
 
+#[cfg(unix)]
 extern "C" fn sidecar_exit_handler() {
     let pid = ACTIVE_SIDECAR_PID.swap(0, Ordering::SeqCst);
     if pid > 0 {
@@ -23,6 +24,7 @@ extern "C" fn sidecar_exit_handler() {
     }
 }
 
+#[cfg(unix)]
 extern "C" fn sidecar_signal_handler(_sig: libc::c_int) {
     sidecar_exit_handler();
     unsafe {
@@ -31,12 +33,15 @@ extern "C" fn sidecar_signal_handler(_sig: libc::c_int) {
 }
 
 pub fn register_process_exit_cleaner() {
-    static ONCE: std::sync::Once = std::sync::Once::new();
-    ONCE.call_once(|| unsafe {
-        libc::atexit(sidecar_exit_handler);
-        libc::signal(libc::SIGTERM, sidecar_signal_handler as *const () as usize);
-        libc::signal(libc::SIGINT, sidecar_signal_handler as *const () as usize);
-    });
+    #[cfg(unix)]
+    {
+        static ONCE: std::sync::Once = std::sync::Once::new();
+        ONCE.call_once(|| unsafe {
+            libc::atexit(sidecar_exit_handler);
+            libc::signal(libc::SIGTERM, sidecar_signal_handler as *const () as usize);
+            libc::signal(libc::SIGINT, sidecar_signal_handler as *const () as usize);
+        });
+    }
 }
 
 #[derive(Debug)]
@@ -51,12 +56,41 @@ pub struct SidecarSession {
 }
 
 impl SidecarSession {
+    /// Exit code if the server process ended on its own (not via stop()).
+    pub fn unexpected_exit(&mut self) -> Option<i32> {
+        match self.child.try_wait() {
+            Ok(Some(status)) => Some(status.code().unwrap_or(-1)),
+            _ => None,
+        }
+    }
+
     /// Launches a local `coperceive serve` sidecar process.
     /// Allocates an ephemeral loopback port and a mode 0600 token file.
     pub fn spawn(
         python_bin: &Path,
         data_root: &Path,
         allow_origin: Option<&str>,
+    ) -> io::Result<Self> {
+        Self::spawn_with_maps(python_bin, data_root, None, allow_origin)
+    }
+
+    pub fn spawn_with_maps(
+        python_bin: &Path,
+        data_root: &Path,
+        maps_root: Option<&Path>,
+        allow_origin: Option<&str>,
+    ) -> io::Result<Self> {
+        Self::spawn_with_args(python_bin, data_root, maps_root, allow_origin, &[])
+    }
+
+    /// The same, with extra `coperceive serve` arguments (e.g. the remote-view
+    /// options that read a cluster dataset over SSH into `data_root`, a mirror).
+    pub fn spawn_with_args(
+        python_bin: &Path,
+        data_root: &Path,
+        maps_root: Option<&Path>,
+        allow_origin: Option<&str>,
+        extra_args: &[String],
     ) -> io::Result<Self> {
         let port = find_free_loopback_port()?;
         let token = generate_secure_token()?;
@@ -86,9 +120,13 @@ impl SidecarSession {
             .arg("--root")
             .arg(data_root);
 
+        if let Some(maps_root) = maps_root {
+            cmd.arg("--maps").arg(maps_root);
+        }
         if let Some(origin) = allow_origin {
             cmd.arg("--allow-origin").arg(origin);
         }
+        cmd.args(extra_args);
 
         let child = cmd
             .stdout(Stdio::from(log_file))
@@ -124,9 +162,14 @@ impl SidecarSession {
         if ACTIVE_SIDECAR_PID.load(Ordering::SeqCst) == pid {
             ACTIVE_SIDECAR_PID.store(0, Ordering::SeqCst);
         }
-        // Send SIGTERM
+        // Send SIGTERM on Unix, or kill on Windows
+        #[cfg(unix)]
         unsafe {
             libc::kill(pid, libc::SIGTERM);
+        }
+        #[cfg(not(unix))]
+        {
+            let _ = self.child.kill();
         }
 
         let deadline = Instant::now() + Duration::from_millis(3000);
@@ -168,6 +211,7 @@ impl Drop for SidecarSession {
 mod tests {
     use super::*;
 
+    #[cfg(unix)]
     #[test]
     fn test_sidecar_lifecycle_mock() {
         // Test lifecycle with python -c 'import time; time.sleep(10)'

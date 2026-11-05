@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  # A tag builds whatever commit it points at; the release must not ship a
+  # commit whose tests fail (docs/release/v0.1.0-checklist.md, gap G4). The same
+  # checks as ci.yml's lint, test and web jobs, on one Python.
+  checks:
+    runs-on: ubuntu-latest
+    # Only the build job publishes the release; the checks only read.
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: python -m venv .venv
+      - run: .venv/bin/pip install -e ".[app,griffin,dev,viewer]"
+      - run: .venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Lint
+        run: |
+          .venv/bin/ruff check .
+          .venv/bin/ruff format --check .
+          .venv/bin/pyright
+      - name: Python tests
+        run: .venv/bin/pytest -q --tb=line
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --legacy-peer-deps
+        working-directory: web
+      - name: Web tests
+        working-directory: web
+        run: |
+          npx tsc -b
+          npm test
+
+  build-release:
+    needs: checks
+    runs-on: macos-15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      # --legacy-peer-deps: openapi-typescript's peer range predates TypeScript 6
+      # (see web/package.json); npm 10+ refuses the install without this.
+      - run: npm ci --legacy-peer-deps
+        working-directory: web
+      - run: bash scripts/build_web_static.sh
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          shared-key: "macos-tauri"
+      - name: Cache bundled Python runtime and pip downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coperceive-desktop
+            ~/Library/Caches/pip
+          key: bundled-python-${{ runner.os }}-${{ hashFiles('scripts/desktop/requirements-darwin-arm64.lock') }}
+          restore-keys: |
+            bundled-python-${{ runner.os }}-
+      - name: Bundle Python Standalone Runtime
+        run: bash scripts/desktop/bundle_python.sh
+      - name: Sync Desktop Bundle Version
+        run: bash scripts/desktop/sync_version.sh
+      # Updater artifacts (Coperceive.app.tar.gz + .sig) need the signing key, which
+      # only release builds have. Enable them here, in the CI workspace only, so
+      # ordinary CI builds keep building without the secret.
+      - name: Enable updater artifacts for the release build
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: |
+          if [ -z "${TAURI_SIGNING_PRIVATE_KEY}" ]; then
+            echo "::error title=UpdaterKey::TAURI_SIGNING_PRIVATE_KEY is not set; see docs/desktop/updates.md" >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          import json
+          path = "src-tauri/tauri.conf.json"
+          with open(path) as f:
+              conf = json.load(f)
+          conf["bundle"]["createUpdaterArtifacts"] = True
+          with open(path, "w") as f:
+              json.dump(conf, f, indent=2)
+          PY
+      - name: Build Tauri Desktop & Updater Bundle
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: bash scripts/desktop/build_dmg.sh
+      - name: Report Tauri Build Failure
+        if: failure()
+        run: |
+          if [ -f /tmp/tauri_build.log ]; then
+            echo "### Tauri Build Failures" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 80 /tmp/tauri_build.log >> $GITHUB_STEP_SUMMARY 2>&1 || true
+            echo '```' >> $GITHUB_STEP_SUMMARY
+            tail -n 45 /tmp/tauri_build.log | while IFS= read -r line; do
+              echo "::error title=TauriBuildError::$line"
+            done
+          fi
+      - name: Verify packaged app ships the viewer bundle
+        run: |
+          APP="$(find src-tauri/target -type d -name Coperceive.app | head -n 1)"
+          test -n "${APP}" || { echo "No Coperceive.app found" >&2; exit 1; }
+          python3 scripts/check_bundle_assets.py --app "${APP}"
+      - name: Prepare Release Assets
+        run: |
+          mkdir -p release-assets
+          find src-tauri/target/aarch64-apple-darwin/release/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" \) -exec cp {} release-assets/ \;
+          ls -la release-assets/
+      # The Tauri bundler writes the .tar.gz and .sig but not latest.json (that file
+      # normally comes from tauri-action). Write it here from the signature and the
+      # bundle version, and refuse a tag that does not match the app version: an
+      # app that reports the old version after updating would offer the same
+      # update forever.
+      - name: Write latest.json for the updater
+        run: |
+          python3 scripts/desktop/write_latest_json.py \
+            --conf src-tauri/tauri.conf.json \
+            --tag "${GITHUB_REF_NAME}" \
+            --assets release-assets \
+            --repo "${GITHUB_REPOSITORY}" \
+            --out release-assets/latest.json
+          cat release-assets/latest.json
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          draft: false
+          prerelease: false
+          generate_release_notes: true

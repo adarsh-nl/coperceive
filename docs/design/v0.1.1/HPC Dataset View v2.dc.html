@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;height:100%;background:#141415;color:#f5f5f7;font-family:"Geist",-apple-system,"Helvetica Neue",sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#79c0ff;text-decoration:none}a:hover{color:#a5d6ff;text-decoration:underline}
+input::placeholder{color:#6e6e73}
+::-webkit-scrollbar{width:10px;height:10px}::-webkit-scrollbar-thumb{background:rgba(255,255,255,.12);border-radius:5px;border:2px solid #141415}::-webkit-scrollbar-corner{background:transparent}
+</style>
+</helmet>
+<div style="height:100vh;min-height:640px;display:grid;grid-template-columns:{{ rootCols }};background:#141415;font-size:13px;overflow:hidden">
+
+  <sc-if value="{{ sidebarOpen }}" hint-placeholder-val="{{ true }}">
+  <aside style="display:flex;flex-direction:column;background:#1a1a1c;border-right:1px solid rgba(255,255,255,0.08);min-height:0">
+    <div style="height:52px;display:flex;align-items:center;gap:22px;padding:0 10px 0 16px;flex-shrink:0">
+      <div style="display:flex;gap:8px">
+        <span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span>
+        <span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span>
+      </div>
+      <div style="display:flex;align-items:flex-end;gap:2px;font-family:'Geist Mono',ui-monospace,monospace;font-size:15px;font-weight:500;letter-spacing:-0.01em;color:#f5f5f7">
+        <span>coperceive</span><span style="width:8px;height:2px;background:#D9482B;margin-bottom:4px"></span>
+      </div>
+      <span title="Hide sidebar (⌘\)" onClick="{{ toggleSidebar }}" style="margin-left:auto;width:28px;height:24px;display:grid;place-items:center;border-radius:5px;color:#8e8e93;cursor:pointer;flex-shrink:0" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7"><span style="width:16px;height:13px;border:1.5px solid currentColor;border-radius:3px;display:flex;padding:1.5px"><span style="width:4px;height:100%;background:currentColor;border-radius:1px"></span></span></span>
+    </div>
+
+    <div style="padding:8px 10px 0;display:flex;flex-direction:column;gap:1px">
+      <div style="padding:6px 8px 4px;font-size:11px;font-weight:500;color:#6e6e73">HPC workspace</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:6px;background:rgba(255,255,255,0.08);color:#f5f5f7;font-weight:500">Servers <span style="font-size:11px;color:#a1a1a6;font-weight:400">1</span></div>
+      <div style="padding:5px 8px;border-radius:6px;color:#c7c7cc" style-hover="background:rgba(255,255,255,0.04)">New evaluation</div>
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 8px;border-radius:6px;color:#c7c7cc" style-hover="background:rgba(255,255,255,0.04)">Run history <span style="display:flex;align-items:center;gap:5px;font-size:11px;color:#79c0ff"><span style="width:6px;height:6px;border-radius:50%;background:#388bfd"></span>1 running</span></div>
+    </div>
+
+    <div style="padding:14px 10px 0;display:flex;flex-direction:column;gap:1px">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 8px 4px">
+        <span style="font-size:11px;font-weight:500;color:#6e6e73">Servers</span>
+        <span title="Add server" style="width:18px;height:18px;display:grid;place-items:center;border-radius:4px;color:#a1a1a6;font-size:15px;line-height:1;cursor:pointer" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7">+</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;color:#f5f5f7">
+        <span style="width:7px;height:7px;border-radius:50%;background:#3fb950;flex-shrink:0"></span>
+        <span style="font-weight:500">Example HPC</span>
+        <span style="margin-left:auto;font-size:11px;color:#6e6e73">connected</span>
+      </div>
+      <div style="padding:0 8px 0 23px;display:flex;flex-direction:column;gap:1px">
+        <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;margin-left:-8px;font-size:13px;font-weight:500;color:#e5e5ea"><span style="font-size:8px;color:#8e8e93">▼</span>V2XSET<span style="margin-left:auto;font-size:11px;font-weight:400;color:#6e6e73">1 split</span></div>
+        <div style="display:flex;align-items:center;gap:8px;padding:4px 8px;margin-left:6px;border-radius:6px;background:rgba(31,111,235,0.22);color:#f5f5f7;font-size:12px">
+          <span>train</span>
+          <span style="flex:1;height:3px;border-radius:2px;background:rgba(255,255,255,0.1);display:flex;overflow:hidden"><span style="background:#3fb950;width:{{ readyPct }}"></span></span>
+          <span style="font-size:11px;color:#a5c8ff;font-variant-numeric:tabular-nums">{{ nReady }}/{{ N }}</span>
+        </div>
+        <div style="padding:4px 8px;margin-left:6px;border-radius:6px;color:#a1a1a6;font-size:12px" style-hover="background:rgba(255,255,255,0.04)">Browse data…</div>
+      </div>
+    </div>
+
+    <div style="margin-top:auto;padding:14px 18px 16px;border-top:1px solid rgba(255,255,255,0.08);display:flex;flex-direction:column;gap:10px">
+      <div style="display:grid;grid-template-columns:auto 1fr;column-gap:10px;row-gap:4px;font-size:11.5px">
+        <span style="color:#6e6e73">Host</span><span style="font-family:'Geist Mono',monospace;color:#c7c7cc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">hpc.example.org</span>
+        <span style="color:#6e6e73">Scheduler</span><span style="color:#c7c7cc">Slurm · partition ps</span>
+        <span style="color:#6e6e73">Checked</span><span style="color:#c7c7cc">25 partitions found</span>
+      </div>
+      <div style="display:flex;gap:6px">
+        <span style="flex:1;text-align:center;padding:4px 0;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:11.5px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Test</span>
+        <span style="flex:1;text-align:center;padding:4px 0;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:11.5px;color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Edit</span>
+        <span style="flex:1;text-align:center;padding:4px 0;border-radius:5px;border:1px solid rgba(255,255,255,0.14);font-size:11.5px;color:#ff7b72;cursor:pointer" style-hover="background:rgba(248,81,73,0.1)">Remove</span>
+      </div>
+      <p style="margin:0;font-size:11px;line-height:1.45;color:#6e6e73;text-wrap:pretty">Signs in with your ssh-agent and ~/.ssh/config. Never asks for a password or key.</p>
+    </div>
+  </aside>
+  </sc-if>
+
+  <div style="display:flex;flex-direction:column;min-width:0;min-height:0">
+    <header style="height:52px;flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:0 20px;border-bottom:1px solid rgba(255,255,255,0.08)">
+      <div style="display:flex;align-items:center;gap:16px;min-width:0">
+        <sc-if value="{{ sidebarClosed }}" hint-placeholder-val="{{ false }}">
+          <div style="display:flex;align-items:center;gap:14px;margin-left:-4px">
+            <div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+            <div style="display:flex;align-items:flex-end;gap:2px;margin-left:8px;font-family:'Geist Mono',ui-monospace,monospace;font-size:15px;font-weight:500;letter-spacing:-0.01em;color:#f5f5f7;white-space:nowrap"><span>coperceive</span><span style="width:8px;height:2px;background:#D9482B;margin-bottom:4px"></span></div>
+            <span title="Show sidebar (⌘\)" onClick="{{ toggleSidebar }}" style="width:28px;height:24px;display:grid;place-items:center;border-radius:5px;color:#8e8e93;cursor:pointer;flex-shrink:0" style-hover="background:rgba(255,255,255,0.08);color:#f5f5f7"><span style="width:16px;height:13px;border:1.5px solid currentColor;border-radius:3px;display:flex;padding:1.5px"><span style="width:4px;height:100%;background:currentColor;border-radius:1px"></span></span></span>
+          </div>
+        </sc-if>
+        <nav style="display:flex;gap:2px;padding:2px;border-radius:8px;background:rgba(255,255,255,0.05)">
+          <span style="white-space:nowrap;padding:4px 12px;border-radius:6px;color:#a1a1a6;cursor:pointer" style-hover="color:#f5f5f7">Library</span>
+          <span style="white-space:nowrap;padding:4px 12px;border-radius:6px;color:#a1a1a6;cursor:pointer" style-hover="color:#f5f5f7">Get Data</span>
+          <span style="white-space:nowrap;padding:4px 12px;border-radius:6px;color:#a1a1a6;cursor:pointer" style-hover="color:#f5f5f7">Open Folder</span>
+          <span style="white-space:nowrap;padding:4px 12px;border-radius:6px;background:rgba(255,255,255,0.12);color:#f5f5f7;font-weight:500">HPC Workspace</span>
+        </nav>
+      </div>
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:#a1a1a6;min-width:0">
+        <span style="width:6px;height:6px;border-radius:50%;flex-shrink:0;background:{{ pollDot }}"></span>
+        <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0">{{ pollLabel }}</span>
+        <span onClick="{{ refresh }}" style="flex-shrink:0;padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Refresh</span>
+      </div>
+    </header>
+
+    <div style="flex:1;min-height:0;display:grid;grid-template-columns:{{ mainCols }}">
+      <main style="display:flex;flex-direction:column;min-width:0;min-height:0">
+        <section style="padding:16px 24px 14px;display:flex;flex-direction:column;gap:12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+            <div style="display:flex;align-items:baseline;gap:12px;min-width:0;flex-wrap:wrap">
+              <h1 style="margin:0;font-size:20px;font-weight:600;letter-spacing:-0.01em;white-space:nowrap">V2XSET <span style="color:#a1a1a6;font-weight:400">train</span></h1>
+              <span style="font-size:12px;color:#a1a1a6;font-variant-numeric:tabular-nums">{{ N }} scenes · {{ totalDur }} · {{ totalCam }} cam + {{ totalLidar }} LiDAR frames · ~4.8 GB</span>
+            </div>
+            <div style="display:flex;gap:8px;flex-shrink:0">
+              <span onClick="{{ togglePaths }}" style="display:flex;align-items:center;gap:6px;padding:6px 12px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer;white-space:nowrap" style-hover="background:rgba(255,255,255,0.06)">Dataset info <span style="font-size:9px;color:#8e8e93">{{ pathsChevron }}</span></span>
+              <span onClick="{{ prepareRemaining }}" style="display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:6px;white-space:nowrap;border:1px solid {{ prepBorder }};cursor:{{ prepCursor }};background:{{ prepBg }};color:{{ prepColor }}" style-hover="filter:brightness(1.15)">{{ prepLabel }}<sc-if value="{{ hasRemaining }}" hint-placeholder-val="{{ true }}"><span style="min-width:20px;padding:0 6px;border-radius:9px;background:rgba(56,139,253,0.3);color:#cfe2ff;font-size:11px;line-height:17px;text-align:center;font-variant-numeric:tabular-nums">{{ remaining }}</span></sc-if></span>
+            </div>
+          </div>
+
+          <sc-if value="{{ showPaths }}" hint-placeholder-val="{{ false }}">
+            <div style="display:grid;grid-template-columns:auto minmax(0,1fr) auto;column-gap:14px;row-gap:6px;align-items:center;padding:10px 12px;border-radius:8px;background:rgba(0,0,0,0.3);font-size:11.5px">
+              <span style="color:#6e6e73">Raw root</span>
+              <span style="font-family:'Geist Mono',monospace;color:#c7c7cc;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/datasets/group/ps/cv/opencood/v2xset</span>
+              <span style="color:#8e8e93;cursor:pointer" style-hover="color:#f5f5f7">Copy</span>
+              <span style="color:#6e6e73">Cache</span>
+              <span style="font-family:'Geist Mono',monospace;color:#79c0ff;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">/home/alice/results/coperceive-cache/v2xset/cd4d1b066ed1/train</span>
+              <span style="color:#8e8e93;cursor:pointer" style-hover="color:#f5f5f7">Copy</span>
+              <span style="color:#6e6e73">Licence</span>
+              <span style="color:#e5e5ea">Not published · research use on this cluster only <a href="#">[1]</a> <a href="#">[2]</a></span>
+              <span></span>
+            </div>
+          </sc-if>
+
+          <div style="display:flex;height:8px;border-radius:2px;overflow:hidden;background:rgba(255,255,255,0.06);gap:1px">
+            <sc-for list="{{ barSegs }}" as="b" hint-placeholder-count="5">
+              <div title="{{ b.title }}" style="transition:width .5s;width:{{ b.w }};background:{{ b.c }}"></div>
+            </sc-for>
+          </div>
+
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <div style="display:flex;gap:2px;padding:2px;border-radius:7px;background:rgba(255,255,255,0.05);flex-wrap:wrap">
+              <sc-for list="{{ filters }}" as="f" hint-placeholder-count="6">
+                <span onClick="{{ f.pick }}" style="display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:5px;font-size:12px;cursor:pointer;white-space:nowrap;font-variant-numeric:tabular-nums;background:{{ f.bg }};color:{{ f.color }}">
+                  <span style="width:8px;height:8px;border-radius:2px;background:{{ f.swatch }}"></span>{{ f.label }} <span style="color:{{ f.countColor }}">{{ f.count }}</span>
+                </span>
+              </sc-for>
+            </div>
+            <input id="scene-filter" type="search" placeholder="Filter scene ID   /" value="{{ q }}" onInput="{{ onQuery }}" style="margin-left:auto;width:200px;padding:5px 10px;border-radius:6px;border:1px solid rgba(255,255,255,0.14);background:rgba(0,0,0,0.25);color:#f5f5f7;font:inherit;font-size:12.5px;outline:none">
+          </div>
+        </section>
+
+        <div ref="{{ scrollRef }}" style="flex:1;min-height:0;overflow:auto;position:relative">
+          <div style="min-width:580px">
+            <div style="position:sticky;top:0;z-index:2;display:grid;grid-template-columns:minmax(132px,1.3fr) minmax(90px,1.2fr) 64px 64px minmax(110px,1fr) 84px;align-items:center;gap:12px;padding:0 24px;height:30px;background:#1a1a1c;border-bottom:1px solid rgba(255,255,255,0.08);font-size:11px;color:#6e6e73">
+              <span>Scene · start time</span><span>Duration</span><span>Agents</span><span style="text-align:right">Frames</span><span>Status</span><span></span>
+            </div>
+            <sc-for list="{{ groups }}" as="g" hint-placeholder-count="1">
+              <sc-if value="{{ g.showHeader }}" hint-placeholder-val="{{ true }}">
+                <div style="display:flex;align-items:center;gap:10px;padding:14px 24px 6px;font-size:12px">
+                  <span style="color:#e5e5ea;font-weight:500;white-space:nowrap">{{ g.label }}</span>
+                  <span style="color:#6e6e73;font-variant-numeric:tabular-nums;white-space:nowrap">{{ g.meta }}</span>
+                  <div title="Recording times across the day" style="margin-left:auto;flex:0 1 200px;min-width:0;display:{{ stripDisplay }};align-items:center;gap:6px;font-size:10px;color:#6e6e73;font-variant-numeric:tabular-nums">
+                    <span>00</span>
+                    <div style="position:relative;flex:1;min-width:60px;height:12px;border-radius:2px;background:rgba(255,255,255,0.05);overflow:hidden">
+                      <span style="position:absolute;left:0;top:0;bottom:0;width:25%;background:rgba(0,0,0,0.35)"></span>
+                      <span style="position:absolute;right:0;top:0;bottom:0;width:16.7%;background:rgba(0,0,0,0.35)"></span>
+                      <span style="position:absolute;left:50%;top:0;bottom:0;width:1px;background:rgba(255,255,255,0.08)"></span>
+                      <sc-for list="{{ g.marks }}" as="m" hint-placeholder-count="3">
+                        <span style="position:absolute;top:2px;bottom:2px;width:2px;border-radius:1px;left:{{ m.left }};background:{{ m.c }}"></span>
+                      </sc-for>
+                    </div>
+                    <span>24</span>
+                  </div>
+                </div>
+              </sc-if>
+              <sc-for list="{{ g.rows }}" as="s" hint-placeholder-count="8">
+                <div data-row="{{ s.id }}" onClick="{{ s.select }}" onDoubleClick="{{ s.act }}" style="display:grid;grid-template-columns:minmax(132px,1.3fr) minmax(90px,1.2fr) 64px 64px minmax(110px,1fr) 84px;align-items:center;gap:12px;padding:0 24px;height:34px;border-bottom:1px solid rgba(255,255,255,0.04);cursor:default;background:{{ s.bg }};box-shadow:{{ s.edge }}" style-hover="background:rgba(255,255,255,0.03)">
+                  <span style="font-family:'Geist Mono',monospace;font-size:12.5px;font-variant-numeric:tabular-nums;white-space:nowrap"><span style="color:#6e6e73">{{ s.datePart }}</span> <span style="color:#f5f5f7">{{ s.timePart }}</span></span>
+                  <span style="display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums;color:#c7c7cc">
+                    <span style="width:40px;text-align:right">{{ s.durLabel }}</span>
+                    <span style="flex:1;max-width:110px;height:4px;border-radius:2px;background:rgba(255,255,255,0.06)"><span style="display:block;height:100%;border-radius:2px;background:#8e8e93;width:{{ s.durPct }}"></span></span>
+                  </span>
+                  <span title="{{ s.sensorsLabel }}" style="display:flex;align-items:center;gap:8px;color:#c7c7cc;font-variant-numeric:tabular-nums">
+                    <span style="width:8px">{{ s.agents }}</span>
+                    <span style="display:flex;gap:2px"><sc-for list="{{ s.agentDots }}" as="d" hint-placeholder-count="2"><span style="width:6px;height:10px;border-radius:1px;background:#8e8e93"></span></sc-for></span>
+                  </span>
+                  <span title="{{ s.framesTitle }}" style="text-align:right;font-variant-numeric:tabular-nums;color:#c7c7cc">{{ s.framesLabel }}</span>
+                  <span title="{{ s.statusNote }}" style="display:flex;align-items:center;gap:8px;font-size:12.5px;white-space:nowrap;min-width:0">
+                    <span style="width:7px;height:7px;border-radius:50%;flex-shrink:0;background:{{ s.dot }}"></span>
+                    <span style="color:{{ s.statusColor }}">{{ s.statusLabel }}</span>
+                    <sc-if value="{{ s.isPrep }}" hint-placeholder-val="{{ false }}">
+                      <span style="width:56px;height:3px;border-radius:2px;background:rgba(56,139,253,0.2)"><span style="display:block;height:100%;border-radius:2px;background:#388bfd;transition:width .8s;width:{{ s.progPct }}"></span></span>
+                    </sc-if>
+                    <sc-if value="{{ s.hasReason }}" hint-placeholder-val="{{ false }}">
+                      <span style="color:#6e6e73;font-size:11.5px;overflow:hidden;text-overflow:ellipsis">{{ s.reasonShort }}</span>
+                    </sc-if>
+                  </span>
+                  <span style="display:flex;justify-content:flex-end">
+                    <sc-if value="{{ s.hasAction }}" hint-placeholder-val="{{ false }}">
+                      <span onClick="{{ s.act }}" style="padding:3px 10px;border-radius:5px;font-size:12px;font-weight:500;cursor:pointer;white-space:nowrap;border:1px solid {{ s.actBorder }};color:{{ s.actColor }}" style-hover="background:rgba(255,255,255,0.06)">{{ s.actLabel }}</span>
+                    </sc-if>
+                  </span>
+                </div>
+              </sc-for>
+            </sc-for>
+            <sc-if value="{{ empty }}" hint-placeholder-val="{{ false }}">
+              <div style="padding:40px 24px;color:#6e6e73;text-align:center">No scenes match this filter.</div>
+            </sc-if>
+          </div>
+        </div>
+
+        <footer style="flex-shrink:0;display:flex;align-items:center;justify-content:space-between;gap:16px;padding:7px 24px;border-top:1px solid rgba(255,255,255,0.08);background:#18181a;font-size:11.5px;color:#6e6e73">
+          <span style="display:flex;gap:14px;white-space:nowrap;overflow:hidden">
+            <span><span style="color:#a1a1a6">↑↓</span> select</span>
+            <span><span style="color:#a1a1a6">↵</span> open / prepare</span>
+            <span><span style="color:#a1a1a6">/</span> filter</span>
+            <span><span style="color:#a1a1a6">⌘\</span> sidebar</span>
+          </span>
+          <span style="display:flex;align-items:center;gap:6px;color:#a1a1a6;white-space:nowrap"><span style="width:6px;height:6px;border-radius:50%;background:{{ viewerDot }}"></span>{{ viewerLabel }}</span>
+        </footer>
+      </main>
+
+      <sc-if value="{{ showInspector }}" hint-placeholder-val="{{ true }}">
+        <aside style="border-left:1px solid rgba(255,255,255,0.08);background:#18181a;display:flex;flex-direction:column;min-height:0;overflow:auto">
+          <div style="padding:18px 20px 16px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">Selected scene</span>
+            <span style="font-family:'Geist Mono',monospace;font-size:14px;color:#f5f5f7;word-break:break-all">{{ sel.id }}</span>
+            <span style="font-size:12px;color:#a1a1a6">{{ sel.longDate }}</span>
+          </div>
+
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="width:8px;height:8px;border-radius:50%;background:{{ sel.dot }}"></span>
+              <span style="font-weight:500;color:{{ sel.statusColor }}">{{ sel.statusLabel }}</span>
+            </div>
+            <span style="font-size:12px;line-height:1.5;color:#a1a1a6;text-wrap:pretty">{{ sel.statusNote }}</span>
+            <sc-if value="{{ sel.isPrep }}" hint-placeholder-val="{{ false }}">
+              <div style="height:4px;border-radius:2px;background:rgba(56,139,253,0.2)"><div style="height:100%;border-radius:2px;background:#388bfd;transition:width .8s;width:{{ sel.progPct }}"></div></div>
+            </sc-if>
+            <sc-if value="{{ sel.hasAction }}" hint-placeholder-val="{{ false }}">
+              <span onClick="{{ sel.act }}" style="text-align:center;padding:7px 0;border-radius:6px;color:#fff;font-weight:500;cursor:pointer;background:{{ sel.primaryBg }}" style-hover="filter:brightness(1.12)">{{ sel.primaryLabel }}</span>
+            </sc-if>
+          </div>
+
+          <div style="padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:14px 12px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Duration</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ sel.durLabel }}</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Frames / agent</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ sel.framesLabel }} <span style="font-size:11px;color:#6e6e73">@ 20 Hz</span></span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Cam frames</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ sel.camLabel }}</span></div>
+            <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">LiDAR frames</span><span style="font-size:15px;font-variant-numeric:tabular-nums">{{ sel.lidarLabel }}</span></div>
+          </div>
+
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.08)">
+            <span style="font-size:11px;color:#6e6e73">{{ sel.sensorsLabel }}</span>
+            <sc-for list="{{ sel.agentList }}" as="a" hint-placeholder-count="2">
+              <div style="display:grid;grid-template-columns:62px 1fr auto;align-items:center;gap:8px;font-size:12px">
+                <span style="color:#e5e5ea">{{ a.name }}</span>
+                <span style="display:flex;gap:3px">
+                  <span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span>
+                  <span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span>
+                  <span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span>
+                  <span style="width:14px;height:10px;border-radius:2px;background:rgba(255,255,255,0.18)"></span>
+                  <span style="width:10px;height:10px;border-radius:50%;background:#8e8e93;margin-left:3px"></span>
+                </span>
+                <span style="color:#6e6e73;font-size:11px">4 cam · 1 LiDAR</span>
+              </div>
+            </sc-for>
+          </div>
+
+          <div style="padding:16px 20px;display:flex;flex-direction:column;gap:10px">
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <span style="font-size:11px;color:#6e6e73">Camera images</span>
+              <span style="font-size:12px;color:#c7c7cc">{{ sel.cameraMode }}</span>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px">
+              <span style="font-size:11px;color:#6e6e73">Cache location</span>
+              <span style="font-family:'Geist Mono',monospace;font-size:11px;line-height:1.5;color:#79c0ff;word-break:break-all">…/cd4d1b066ed1/train/{{ sel.id }}</span>
+            </div>
+          </div>
+        </aside>
+      </sc-if>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;showInspector&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;groupByDay&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;},&quot;simulate&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;label&quot;:&quot;Simulate status polling&quot;}}">
+const RAW = [
+  ["2021_08_18_19_11_02",10.7,4,"r"],["2021_08_18_21_38_28",12.1,2,"r"],["2021_08_18_22_16_12",30.9,3,"p"],["2021_08_18_23_23_19",9.2,2,"r"],
+  ["2021_08_20_16_20_46",4.0,2,"r"],["2021_08_20_20_39_00",18.8,2,"p"],["2021_08_20_21_00_19",7.2,2,"r"],
+  ["2021_08_21_09_09_41",10.1,4,"f"],["2021_08_21_15_41_04",4.3,2,"r"],["2021_08_21_17_00_32",5.0,2,"p"],["2021_08_21_21_35_56",11.8,3,"q"],["2021_08_21_22_41_37",23.4,3,"q"],
+  ["2021_08_22_07_52_02",14.6,2,"r"],["2021_08_22_08_39_59",8.8,3,"q"],["2021_08_22_09_08_29",16.2,2,"q"],["2021_08_22_09_43_53",6.4,4,"s"],["2021_08_22_10_10_40",21.7,3,"q"],["2021_08_22_10_46_58",12.9,2],["2021_08_22_11_29_38",9.6,2],
+  ["2021_08_23_10_47_16",17.3,3],["2021_08_23_11_06_41",5.8,2,"r"],["2021_08_23_12_13_48",13.4,4],["2021_08_23_12_58_19",7.9,2],["2021_08_23_13_10_47",26.1,3],["2021_08_23_15_19_19",10.4,2],["2021_08_23_16_06_26",4.7,2,"r"],["2021_08_23_17_07_55",19.5,3],["2021_08_23_19_42_07",8.1,2],["2021_08_23_20_47_11",11.2,4],["2021_08_23_21_07_10",15.0,2],["2021_08_23_21_47_19",6.9,3,"r"],["2021_08_23_22_31_01",12.6,2],["2021_08_23_23_13_15",9.9,2]
+];
+const CODE = { r: "ready", p: "preparing", q: "queued", f: "failed", s: "stale" };
+const MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+const DOW = ["Sun","Mon","Tue","Wed","Thu","Fri","Sat"];
+const fmt = n => n.toLocaleString("en-US");
+const fmtDur = s => s >= 60 ? `${Math.floor(s/60)}m ${Math.round(s%60)}s` : `${s.toFixed(1)} s`;
+const ST = {
+  ready:     { c: "#3fb950", text: "#7ee787", label: "Ready" },
+  preparing: { c: "#388bfd", text: "#79c0ff", label: "Preparing" },
+  queued:    { c: "rgba(121,192,255,0.35)", text: "#a1a1a6", label: "Queued" },
+  stale:     { c: "#d29922", text: "#e3b341", label: "Stale" },
+  failed:    { c: "#f85149", text: "#ff7b72", label: "Failed" },
+  not_prepared: { c: "rgba(255,255,255,0.14)", text: "#8e8e93", label: "Not prepared" },
+};
+const ORDER = ["ready", "preparing", "queued", "stale", "failed", "not_prepared"];
+
+class Component extends DCLogic {
+  state = {
+    scenes: RAW.map(([id, dur, agents, c], i) => {
+      const frames = Math.round(dur * 19.9);
+      const state = CODE[c] || "not_prepared";
+      return { id, dur, agents, frames, cam: frames * agents * 4, lidar: frames * agents, state,
+        progress: state === "preparing" ? [58, 22, 6][["2021_08_18_22_16_12","2021_08_20_20_39_00","2021_08_21_17_00_32"].indexOf(id)] : 0,
+        reason: state === "failed" ? "Missing LiDAR frames for agent 3 (000142.pcd)" : state === "stale" ? "Raw files changed since last prepare" : null };
+    }),
+    q: "", filter: "all", selId: "2021_08_18_23_23_19", tick: 0, sidebarOpen: true, showPaths: false,
+    viewer: "idle", job: 4417382,
+  };
+  scrollRef = React.createRef();
+
+  componentDidMount() {
+    this.onResize = () => { const w = window.innerWidth >= 1240, ws = window.innerWidth >= 860; if (w !== this.state.wide || ws !== this.state.wideStrip) this.setState({ wide: w, wideStrip: ws }); };
+    window.addEventListener("resize", this.onResize); this.onResize();
+    this.onKey = e => {
+      const tag = (e.target.tagName || "").toLowerCase();
+      if ((e.metaKey || e.ctrlKey) && e.key === "\\") { e.preventDefault(); this.setState(s => ({ sidebarOpen: !s.sidebarOpen })); return; }
+      if (tag === "input") { if (e.key === "Escape") e.target.blur(); return; }
+      if (e.key === "/") { e.preventDefault(); document.getElementById("scene-filter")?.focus(); return; }
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+        e.preventDefault();
+        const ids = this.visibleIds || [];
+        const i = ids.indexOf(this.state.selId);
+        const next = ids[Math.max(0, Math.min(ids.length - 1, (i < 0 ? 0 : i + (e.key === "ArrowDown" ? 1 : -1))))];
+        if (next) this.setState({ selId: next }, () => this.reveal(next));
+      }
+      if (e.key === "Enter") this.act(this.state.selId);
+    };
+    window.addEventListener("keydown", this.onKey);
+    this.timer = setInterval(() => {
+      this.setState(st => {
+        const tick = (st.tick + 1) % 5;
+        if (this.props.simulate === false) return { tick };
+        const scenes = st.scenes.map(s => ({ ...s }));
+        scenes.forEach(s => {
+          if (s.state !== "preparing") return;
+          s.progress = Math.min(100, s.progress + 1 + Math.round(Math.random() * 3 * 10 / Math.max(6, s.dur)));
+          if (s.progress >= 100) { s.state = "ready"; s.progress = 0; s.reason = null; }
+        });
+        let active = scenes.filter(s => s.state === "preparing").length;
+        for (const s of scenes) { if (active >= 3) break; if (s.state === "queued") { s.state = "preparing"; s.progress = 1; active++; } }
+        return { scenes, tick };
+      });
+    }, 1000);
+  }
+  componentWillUnmount() { clearInterval(this.timer); window.removeEventListener("resize", this.onResize); window.removeEventListener("keydown", this.onKey); }
+
+  reveal(id) {
+    const box = this.scrollRef.current; if (!box) return;
+    const row = box.querySelector(`[data-row="${id}"]`); if (!row) return;
+    const top = row.offsetTop, h = row.offsetHeight, head = 30;
+    if (top - head < box.scrollTop) box.scrollTop = top - head - 8;
+    else if (top + h > box.scrollTop + box.clientHeight) box.scrollTop = top + h - box.clientHeight + 8;
+  }
+
+  act(id) {
+    const s = this.state.scenes.find(x => x.id === id); if (!s) return;
+    if (s.state === "ready") {
+      this.setState({ viewer: `starting · opening ${s.id}` });
+      clearTimeout(this.vt); this.vt = setTimeout(() => this.setState({ viewer: `running · ${s.id}` }), 1800);
+    } else if (["not_prepared", "failed", "stale"].includes(s.state)) {
+      this.setState(st => ({ scenes: st.scenes.map(x => x.id === id ? { ...x, state: "queued", reason: null } : x) }));
+    }
+  }
+
+  decorate(s, maxDur) {
+    const p = s.id.split("_");
+    const d = new Date(+p[0], +p[1] - 1, +p[2]);
+    const st = ST[s.state];
+    const isPrep = s.state === "preparing";
+    const needs = ["not_prepared", "failed", "stale"].includes(s.state);
+    const notes = {
+      ready: "Prepared with camera previews. Opening starts or reuses the viewer job.",
+      preparing: `Prepare job ${this.state.job} is ingesting this scene.`,
+      queued: `Waiting for prepare job ${this.state.job} to reach this scene.`,
+      stale: s.reason + ". Re-prepare to refresh the cache.",
+      failed: s.reason + ". Check the job log, then retry.",
+      not_prepared: "Not in the results cache yet. Preparing runs a CPU-only Slurm job.",
+    };
+    const actLabel = s.state === "ready" ? "Open" : s.state === "failed" ? "Retry" : s.state === "stale" ? "Re-prepare" : needs ? "Prepare" : "";
+    return {
+      ...s, dot: st.c, statusColor: st.text,
+      statusLabel: isPrep ? `Preparing ${s.progress}%` : st.label, statusNote: notes[s.state],
+      hasReason: !!s.reason, reasonShort: s.reason,
+      datePart: `${p[1]}-${p[2]}`, timePart: `${p[3]}:${p[4]}:${p[5]}`,
+      dayKey: `${p[0]}${p[1]}${p[2]}`, hour: +p[3] + +p[4] / 60,
+      dayLabel: `${DOW[d.getDay()]} ${+p[2]} ${MON[+p[1] - 1]}`,
+      longDate: `${DOW[d.getDay()]} ${+p[2]} ${MON[+p[1] - 1]} ${p[0]}, ${p[3]}:${p[4]}:${p[5]}`,
+      durLabel: fmtDur(s.dur), durPct: `${(s.dur / maxDur) * 100}%`,
+      framesLabel: fmt(s.frames), framesTitle: `${fmt(s.cam)} cam + ${fmt(s.lidar)} LiDAR frames in total`,
+      camLabel: fmt(s.cam), lidarLabel: fmt(s.lidar),
+      agentDots: Array.from({ length: s.agents }, (_, i) => i),
+      isPrep, progPct: `${s.progress}%`,
+      sensorsLabel: `${s.agents} agents · ${s.agents * 5} sensors`,
+      agentList: Array.from({ length: s.agents }, (_, i) => ({ name: i === 0 ? "Ego" : `Agent ${i + 1}` })),
+      cameraMode: s.state === "ready" ? "Previews saved in results folder" : "Previews will be saved on prepare",
+      hasAction: !!actLabel, actLabel,
+      actBorder: s.state === "ready" ? "rgba(63,185,80,0.55)" : s.state === "failed" ? "rgba(248,81,73,0.5)" : s.state === "stale" ? "rgba(210,153,34,0.5)" : "rgba(255,255,255,0.16)",
+      actColor: s.state === "ready" ? "#7ee787" : s.state === "failed" ? "#ff7b72" : s.state === "stale" ? "#e3b341" : "#e5e5ea",
+      primaryLabel: s.state === "ready" ? "Open scene" : s.state === "failed" ? "Retry prepare" : s.state === "stale" ? "Re-prepare" : "Prepare & open",
+      primaryBg: s.state === "ready" ? "#238636" : "#1f6feb",
+      act: e => { e && e.stopPropagation && e.stopPropagation(); this.act(s.id); },
+    };
+  }
+
+  renderVals() {
+    const { scenes, q, filter, selId } = this.state;
+    const maxDur = Math.max(...scenes.map(s => s.dur));
+    const all = scenes.map(s => this.decorate(s, maxDur));
+    const N = all.length;
+    const count = k => all.filter(s => s.state === k).length;
+    const counts = Object.fromEntries(ORDER.map(k => [k, count(k)]));
+    const qq = q.trim().replace(/[-: ]/g, "_");
+    const filtered = all.filter(s => (filter === "all" || s.state === filter) && (!qq || s.id.includes(qq)));
+    this.visibleIds = filtered.map(s => s.id);
+    const groupBy = this.props.groupByDay ?? true;
+    const groups = [];
+    for (const s of filtered) {
+      const sel = s.id === selId;
+      const row = { ...s, select: () => this.setState({ selId: s.id }), bg: sel ? "rgba(31,111,235,0.16)" : "transparent", edge: sel ? "inset 2px 0 0 #388bfd" : "none" };
+      const key = groupBy ? s.dayKey : "all";
+      let g = groups.find(x => x.key === key);
+      if (!g) { g = { key, label: s.dayLabel, showHeader: groupBy, rows: [] }; groups.push(g); }
+      g.rows.push(row);
+    }
+    groups.forEach(g => {
+      const r = g.rows.filter(x => x.state === "ready").length;
+      g.meta = `${g.rows.length} scene${g.rows.length > 1 ? "s" : ""} · ${fmtDur(g.rows.reduce((a, x) => a + x.dur, 0))} · ${r}/${g.rows.length} ready`;
+      g.marks = g.rows.map(x => ({ left: `${(x.hour / 24) * 100}%`, c: x.dot }));
+    });
+    const filters = [["all", "All", N, "transparent"], ...ORDER.filter(k => counts[k] > 0 || k === filter).map(k => [k, ST[k].label, counts[k], ST[k].c])].map(([k, l, c, sw]) => ({
+      label: l, count: c, swatch: sw, pick: () => this.setState({ filter: filter === k ? "all" : k }),
+      bg: filter === k ? "rgba(255,255,255,0.12)" : "transparent", color: filter === k ? "#f5f5f7" : "#a1a1a6",
+      countColor: filter === k ? "#c7c7cc" : "#6e6e73",
+    }));
+    const barSegs = ORDER.filter(k => counts[k] > 0).map(k => ({ w: `${counts[k] / N * 100}%`, c: ST[k].c, title: `${counts[k]} ${ST[k].label.toLowerCase()}` }));
+    const remaining = counts.not_prepared + counts.stale + counts.failed;
+    const showInspector = (this.props.showInspector ?? true) && this.state.wide !== false;
+    const sel = all.find(s => s.id === selId) || all[0];
+    const busy = counts.preparing + counts.queued > 0;
+    return {
+      groups, filters, barSegs, sel, showInspector, q, N,
+      empty: filtered.length === 0,
+      nReady: counts.ready, readyPct: `${counts.ready / N * 100}%`,
+      sidebarOpen: this.state.sidebarOpen, sidebarClosed: !this.state.sidebarOpen,
+      rootCols: this.state.sidebarOpen ? "236px minmax(0,1fr)" : "minmax(0,1fr)",
+      stripDisplay: this.state.wideStrip === false ? "none" : "flex",
+      mainCols: showInspector ? "minmax(0,1fr) 300px" : "minmax(0,1fr)",
+      toggleSidebar: () => this.setState(s => ({ sidebarOpen: !s.sidebarOpen })),
+      showPaths: this.state.showPaths, pathsChevron: this.state.showPaths ? "▲" : "▼",
+      togglePaths: () => this.setState(s => ({ showPaths: !s.showPaths })),
+      onQuery: e => this.setState({ q: e.target.value }),
+      refresh: () => this.setState({ tick: 0 }),
+      pollDot: busy && this.props.simulate !== false ? "#79c0ff" : "#6e6e73",
+      pollLabel: this.props.simulate === false ? "Polling paused" : busy ? `Polling every 5 s · updated ${this.state.tick} s ago` : "Up to date",
+      prepLabel: remaining ? "Prepare remaining" : "All scenes prepared", remaining, hasRemaining: remaining > 0,
+      prepBorder: remaining ? "rgba(56,139,253,0.5)" : "rgba(255,255,255,0.08)",
+      prepBg: remaining ? "rgba(31,111,235,0.14)" : "transparent", prepColor: remaining ? "#a5c8ff" : "#6e6e73", prepCursor: remaining ? "pointer" : "default",
+      prepareRemaining: () => remaining && this.setState(st => ({ scenes: st.scenes.map(x => ["not_prepared", "failed", "stale"].includes(x.state) ? { ...x, state: "queued", reason: null } : x) })),
+      totalDur: fmtDur(scenes.reduce((a, s) => a + s.dur, 0)),
+      totalCam: fmt(scenes.reduce((a, s) => a + s.cam, 0)),
+      totalLidar: fmt(scenes.reduce((a, s) => a + s.lidar, 0)),
+      viewerLabel: `Viewer job ${this.state.viewer}`,
+      viewerDot: this.state.viewer === "idle" ? "#6e6e73" : this.state.viewer.startsWith("running") ? "#3fb950" : "#d29922",
+      scrollRef: this.scrollRef,
+    };
+  }
+}
+</script>
+</body>
+</html>

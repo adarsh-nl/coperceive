@@ -516,8 +516,6 @@ name = "coperceive"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
-    { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "numpy", version = "2.2.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "numpy", version = "2.4.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version == '3.11.*'" },
     { name = "numpy", version = "2.5.4", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.12'" },
@@ -531,6 +529,8 @@ dependencies = [
 [package.optional-dependencies]
 app = [
     { name = "fastapi" },
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "pydantic" },
     { name = "uvicorn" },
 ]
@@ -538,6 +538,8 @@ dev = [
     { name = "httpx" },
     { name = "hypothesis", version = "6.168.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "hypothesis", version = "6.170.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
     { name = "playwright" },
     { name = "pyright" },
     { name = "pytest" },
@@ -550,6 +552,10 @@ docs = [
 ]
 griffin = [
     { name = "huggingface-hub" },
+]
+plot = [
+    { name = "matplotlib", version = "3.10.9", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
+    { name = "matplotlib", version = "3.11.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
 ]
 torch = [
     { name = "torch" },
@@ -565,7 +571,9 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'griffin'", specifier = ">=0.26" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
-    { name = "matplotlib", specifier = ">=3.8" },
+    { name = "matplotlib", marker = "extra == 'app'", specifier = ">=3.8" },
+    { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.8" },
+    { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.8" },
     { name = "mkdocs-material", marker = "extra == 'docs'", specifier = ">=9.5" },
     { name = "numpy", specifier = ">=1.26.4" },
     { name = "pillow", specifier = ">=10.4" },
@@ -583,7 +591,7 @@ requires-dist = [
     { name = "uvicorn", marker = "extra == 'app'", specifier = ">=0.30" },
     { name = "viser", marker = "extra == 'viewer'", specifier = "==0.2.23" },
 ]
-provides-extras = ["torch", "viewer", "app", "griffin", "docs", "dev"]
+provides-extras = ["torch", "viewer", "plot", "app", "griffin", "docs", "dev"]
 
 [[package]]
 name = "coverage"

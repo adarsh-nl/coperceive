@@ -1,9 +1,8 @@
 #!/bin/bash
 # SPDX-License-Identifier: Apache-2.0
-#SBATCH --partition=ps
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=8G
-#SBATCH --time=02:00:00
+# Partition, account, QoS, time, CPU and memory are supplied by the caller's
+# server profile as sbatch flags; this script has no site defaults. Omitted flags
+# fall back to the cluster's own partition defaults.
 #SBATCH --signal=B:SIGTERM@30
 
 # Remote coperceive serve session on Slurm compute node
@@ -40,13 +39,15 @@ fi
 # Allocate a free loopback/cluster port
 PORT=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1]); s.close()')
 
-# Resolve Python interpreter
+# Resolve Python interpreter: the server profile's chosen interpreter first,
+# then whatever python3 the compute node provides. Never install anything here.
 if [ -n "${COPERCEIVE_REMOTE_PYTHON:-}" ] && [ -x "${COPERCEIVE_REMOTE_PYTHON}" ]; then
     PYTHON_BIN="${COPERCEIVE_REMOTE_PYTHON}"
-elif [ -x "${HOME}/coperceive/.venv/bin/python" ]; then
-    PYTHON_BIN="${HOME}/coperceive/.venv/bin/python"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
 else
-    PYTHON_BIN="python3"
+    echo "Error: no Python 3 interpreter was found on this compute node. Set the interpreter in the server profile, or ask your cluster administrators." >&2
+    exit 1
 fi
 
 if [ -n "${COPERCEIVE_REPO_ROOT:-}" ] && [ -d "${COPERCEIVE_REPO_ROOT}/coperceive" ]; then
@@ -91,6 +92,28 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT EXIT
 
+# The desktop app uploads its built viewer bundle to a per-version cache dir
+# under the login home (shared with compute nodes on this cluster) and passes it
+# as COPERCEIVE_REMOTE_STATIC; serve it so Remote mode has a page without Node
+# or a build on the login node.
+STATIC_ARGS=()
+if [ -n "${COPERCEIVE_REMOTE_STATIC:-}" ]; then
+    if [ ! -f "${COPERCEIVE_REMOTE_STATIC}/index.html" ]; then
+        echo "Remote viewer page missing at ${COPERCEIVE_REMOTE_STATIC}" >&2
+        exit 1
+    fi
+    STATIC_ARGS=(--static "${COPERCEIVE_REMOTE_STATIC}")
+fi
+
+# Camera images of a cluster dataset are read from its raw root: one allow-listed
+# directory per line, each passed as its own argument.
+MEDIA_ARGS=()
+if [ -n "${COPERCEIVE_REMOTE_MEDIA_ROOTS:-}" ]; then
+    while IFS= read -r media; do
+        [ -n "${media}" ] && MEDIA_ARGS+=(--media-root "${media}")
+    done <<< "${COPERCEIVE_REMOTE_MEDIA_ROOTS}"
+fi
+
 # Launch server binding to cluster IP with token-file
 # Note: Token is in a 0600 file and NEVER on argv
 "${PYTHON_BIN}" -m coperceive serve \
@@ -98,6 +121,8 @@ trap cleanup SIGTERM SIGINT EXIT
     --port "${PORT}" \
     --token-file "${TOKEN_FILE}" \
     --root "${DATA_ROOT}" \
+    ${STATIC_ARGS[@]+"${STATIC_ARGS[@]}"} \
+    ${MEDIA_ARGS[@]+"${MEDIA_ARGS[@]}"} \
     ${COPERCEIVE_EXTRA_ARGS:-} &
 SERVE_PID=$!
 

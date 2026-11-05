@@ -25,6 +25,8 @@ export type Appearance = {
   splitCamera: string | null;
   /** Share of the row the 3D view keeps in the split view. */
   splitRatio: number;
+  /** The radar card in the right panel is shown (its Hide button turns it off). */
+  radarOpen: boolean;
 };
 
 export const VIEW_KEY = "coperceive-view";
@@ -43,6 +45,39 @@ const CLASS_COLORS: Record<string, number> = {
 
 const FALLBACK = [0xb06a9a, 0x5aa0c4, 0xc4a15a, 0x7dcea0];
 
+export const THEME_OVERRIDE_KEY = "coperceive-theme-override";
+
+export function getThemeOverride(): ThemeName | null {
+  if (typeof window === "undefined") return null;
+  const initTheme = (window as unknown as { __COPERCEIVE_INITIAL_STATE__?: { theme_override?: string } }).__COPERCEIVE_INITIAL_STATE__?.theme_override;
+  if (initTheme === "dark" || initTheme === "light") {
+    return initTheme;
+  }
+  try {
+    const local = localStorage.getItem(THEME_OVERRIDE_KEY);
+    if (local === "dark" || local === "light") {
+      return local;
+    }
+  } catch {}
+  return null;
+}
+
+export function setThemeOverride(theme: ThemeName): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(THEME_OVERRIDE_KEY, theme);
+  } catch {}
+}
+
+export function systemTheme(): ThemeName {
+  const override = getThemeOverride();
+  if (override) return override;
+  if (typeof window !== "undefined" && window.matchMedia) {
+    return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  }
+  return "light";
+}
+
 export function defaultAppearance(): Appearance {
   return {
     points: true,
@@ -54,7 +89,7 @@ export function defaultAppearance(): Appearance {
     pointSize: 2,
     boxStyle: "wire",
     hiddenClasses: [],
-    theme: "light",
+    theme: systemTheme(),
     frustumImages: false,
     frustumOpacity: 0.85,
     frustumImageCameras: null,
@@ -62,6 +97,7 @@ export function defaultAppearance(): Appearance {
     stripOpen: true,
     splitCamera: null,
     splitRatio: 0.58,
+    radarOpen: true,
   };
 }
 
@@ -144,7 +180,7 @@ export function loadAppearance(): Appearance {
       pointSize: pointSize(row.pointSize),
       boxStyle: row.boxStyle === "solid" ? "solid" : "wire",
       hiddenClasses: classes(row.hiddenClasses),
-      theme: row.theme === "dark" ? "dark" : row.theme === "light" ? "light" : base.theme,
+      theme: getThemeOverride() ?? base.theme,
       frustumImages: "frustumImageCameras" in row ? bool(row.frustumImages, false) : false,
       frustumOpacity: opacity(row.frustumOpacity, base.frustumOpacity),
       frustumImageCameras: cameraChoice(row.frustumImageCameras),
@@ -152,6 +188,7 @@ export function loadAppearance(): Appearance {
       stripOpen: bool(row.stripOpen, base.stripOpen),
       splitCamera: typeof row.splitCamera === "string" && row.splitCamera.length < 160 ? row.splitCamera : null,
       splitRatio: ratio(row.splitRatio, base.splitRatio),
+      radarOpen: bool(row.radarOpen, base.radarOpen),
     };
   } catch {
     return base;
@@ -185,6 +222,7 @@ function writeAppearance(value: Appearance): void {
     stripOpen: value.stripOpen,
     splitCamera: value.splitCamera,
     splitRatio: value.splitRatio,
+    radarOpen: value.radarOpen,
   };
   localStorage.setItem(VIEW_KEY, JSON.stringify(stored));
 }

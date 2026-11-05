@@ -8,7 +8,9 @@ Griffin stores `map_name` on each agent, for example `Carla/Maps/Town03`. The 25
 
 The public description of an HD-map layer drawn with the sensors is the only outside idea used here. kesai-labs/py123d and the adarsh-nl fork were not installed, imported, or opened. The on-disk layout, the names, and the parser are written for schema 1: a JSON manifest, a Parquet table, and a float32 blob.
 
-CARLA 0.9.15 is the package. Its Git tag does not contain the town OpenDRIVE files. They are members of `https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`. The file on this machine is 8,386,636,048 bytes, SHA-256 `7b2f432ce74b251593f95dcc8dee6d99ad9625c2a71a2d6d48f24d879de19ef7`. The four files used are `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr`. CARLA is MIT. Those bytes are not committed. `coperceive maps fetch` extracts them into a directory the caller chooses.
+CARLA 0.9.15 is the package. Its Git tag does not contain the town OpenDRIVE files. They are members of `https://downloads.carlasim.com/Linux/CARLA_0.9.15.tar.gz`. The file on this machine is 8,386,636,048 bytes, SHA-256 `7b2f432ce74b251593f95dcc8dee6d99ad9625c2a71a2d6d48f24d879de19ef7`. The four files used are `Town03.xodr`, `Town06.xodr`, `Town07.xodr`, and `Town10HD.xodr`. Those bytes are not committed. `coperceive maps fetch` extracts them into a directory the caller chooses.
+
+The 0.9.15 README, fetched 2026-10-25 from `https://github.com/carla-simulator/carla/blob/0.9.15/README.md` (raw `https://raw.githubusercontent.com/carla-simulator/carla/0.9.15/README.md`), says CARLA-specific code is MIT and CARLA-specific assets are CC-BY. It does not say CC-BY 4.0. A maintainer reply on 2024-07-31 in `https://github.com/carla-simulator/carla/discussions/7984` repeats that split and also gives no version. The town files travel in the packaged assets, not in the MIT git tree, so the map licence recorded by `coperceive maps ingest` is CC-BY. The earlier sentence "CARLA is MIT" is the code licence. It is the wrong licence for `Town03.xodr`. The brief's "CC-BY 4.0" names the right family and a version the README does not state.
 
 ## Options
 
@@ -108,3 +110,31 @@ Polyline counts at 1.0 m: Town03 1,097 (42,748 vertices), Town06 847 (46,009), T
 - Re-alignment rewrites the manifest transform. It does not rewrite `vertices.bin`.
 - Town07's median, 0.165 m, is larger than the other three towns. Identity still wins by metres. A different CARLA package was not tried.
 - The package SHA-256 above is `sha256sum` of the file downloaded on this machine.
+
+## One-click Town03 install
+
+The desktop app can install Town03 from the Library card or the viewer's "no map" notice
+(`coperceive maps install-town03`, Tauri command `download_town_map`). It downloads one
+OpenDRIVE file — never the CARLA tarball — into a temporary file, verifies the bytes against
+the pinned SHA-256 above, ingests it with `parse_opendrive`/`write_map`, aligns it with
+`align_maps`, and stores the result under `<library_root>/maps/Town03`.
+
+Source used by the installer (public mirror, pinned to commit `13d68ba8e9ea7c45f13250c37f6c2350829146f6`;
+checked 2026-10-30):
+<https://raw.githubusercontent.com/hihuaweizhu/scenic-carla/13d68ba8e9ea7c45f13250c37f6c2350829146f6/maps/CARLA/Town03.xodr>.
+Downloaded bytes: 4,589,872, SHA-256
+`abf177bcd9b66cfefb7ac4919f6456815f1384f4229f1343c8a6a90bbb7713c9`, equal to the
+Town03 row above. The manifest records the source URL, SHA-256, licence, licence URL and
+attribution. If the pinned source cannot be fetched or the bytes do not match, the
+app shows "Map source unavailable; install from a CARLA package with coperceive
+maps ingest" instead of a hash comparison. The map is parsed and aligned in a
+staging directory; it is moved to `<library_root>/maps/Town03` only after the
+alignment is measured, so a failed alignment leaves neither a partial nor an
+unaligned map behind.
+
+Licence, verified against the official **CARLA 0.9.15 README**
+(<https://github.com/carla-simulator/carla/blob/0.9.15/README.md>): CARLA-specific code is
+MIT and the open digital assets (including the town files) are **CC-BY**. That README does
+**not** state a CC-BY version, so the app says "CC-BY", not "CC-BY 4.0", and the manifest
+records `licence: "CC-BY"` with the README URL. The mirror's own README claims MIT for the
+directory; because these bytes are CARLA assets, that claim is not used.

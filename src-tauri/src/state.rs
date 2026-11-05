@@ -244,11 +244,103 @@ impl Default for PanelCollapseState {
     }
 }
 
+pub const DEFAULT_LEFT_PX: f64 = 248.0;
+pub const DEFAULT_RIGHT_PX: f64 = 268.0;
+pub const DEFAULT_STRIP_PX: f64 = 96.0;
+
+pub const MIN_LEFT_PX: f64 = 180.0;
+pub const MAX_LEFT_PX: f64 = 480.0;
+
+pub const MIN_RIGHT_PX: f64 = 200.0;
+pub const MAX_RIGHT_PX: f64 = 480.0;
+
+pub const MIN_STRIP_PX: f64 = 64.0;
+pub const MAX_STRIP_PX: f64 = 240.0;
+
+fn default_left_px() -> f64 {
+    DEFAULT_LEFT_PX
+}
+
+fn default_right_px() -> f64 {
+    DEFAULT_RIGHT_PX
+}
+
+fn default_strip_px() -> f64 {
+    DEFAULT_STRIP_PX
+}
+
+/// Panel and camera strip layout sizes in pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LayoutSizes {
+    #[serde(default = "default_left_px")]
+    pub left_px: f64,
+    #[serde(default = "default_right_px")]
+    pub right_px: f64,
+    #[serde(default = "default_strip_px")]
+    pub strip_px: f64,
+}
+
+impl Default for LayoutSizes {
+    fn default() -> Self {
+        Self {
+            left_px: DEFAULT_LEFT_PX,
+            right_px: DEFAULT_RIGHT_PX,
+            strip_px: DEFAULT_STRIP_PX,
+        }
+    }
+}
+
+impl LayoutSizes {
+    pub fn clamp(&mut self) {
+        self.left_px = self.left_px.clamp(MIN_LEFT_PX, MAX_LEFT_PX);
+        self.right_px = self.right_px.clamp(MIN_RIGHT_PX, MAX_RIGHT_PX);
+        self.strip_px = self.strip_px.clamp(MIN_STRIP_PX, MAX_STRIP_PX);
+    }
+}
+
+/// A Griffin download that stopped before it finished.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingDownload {
+    pub dataset_id: String,
+    pub preset_id: String,
+}
+
+/// One cached `coperceive validate` result for a scene directory.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ValidationRecord {
+    /// True when the report read one scene, failed none, and had no hard failures.
+    pub valid: bool,
+    /// `manifest.json` modification time in milliseconds since the epoch when checked.
+    pub manifest_mtime_ms: u64,
+    /// The most samples any agent has, from the validate report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frames: Option<usize>,
+    /// First and last pose time (µs), from the validate report.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time_range_us: Option<(i64, i64)>,
+}
+
 /// Persistent desktop application state.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_data_root: Option<String>,
+
+    /// Dedicated storage location for imported and downloaded datasets (default ~/coperceive-data).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library_root: Option<String>,
+
+    /// Background `coperceive validate` results for library scenes, keyed by scene directory.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation_cache: Option<HashMap<String, ValidationRecord>>,
+
+    /// Download updates in the background. Default on.
+    #[serde(default = "default_true")]
+    pub auto_download_updates: bool,
+
+    /// Set while a catalog download is unfinished so the next launch can resume it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_download: Option<PendingDownload>,
 
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_scene_id: Option<String>,
@@ -272,8 +364,14 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_loop: Option<bool>,
 
+    /// Explicit user theme override ("light" or "dark"). None means follow system appearance.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub last_theme: Option<String>,
+    pub theme_override: Option<String>,
+
+    /// Legacy field from older versions: `last_theme: "dark"`.
+    /// Deserialized for backwards compatibility, but ignored and never sets `theme_override`.
+    #[serde(default, skip_serializing, rename = "last_theme")]
+    pub _legacy_last_theme: Option<String>,
 
     /// Reopen last session on launch (default true).
     #[serde(default = "default_true")]
@@ -299,33 +397,202 @@ pub struct AppPersistentState {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub panel_collapse: Option<PanelCollapseState>,
 
+    /// Resizable panel and camera strip layout sizes in pixels.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout: Option<LayoutSizes>,
+
     /// Window geometry and state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_state: Option<WindowState>,
 
     #[serde(default)]
     pub recent_roots: Vec<String>,
+
+    /// Camera images when preparing a cluster dataset, app-wide: "originals"
+    /// (read the dataset's files, no extra disk) or "previews". None = originals.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub camera_images_default: Option<String>,
+
+    /// The same choice per server profile id; it wins over the app-wide default.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub camera_images_by_profile: HashMap<String, String>,
+
+    /// Remote viewer sessions to reattach to after a restart, by what they
+    /// serve (server, cache directory, media roots) → session id.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub viewer_sessions: HashMap<String, String>,
+
+    /// At the end of a scene, move on to the next prepared one. Off by default.
+    #[serde(default)]
+    pub auto_next_scene: bool,
+
+    /// The cluster dataset last open per server profile (its detect document),
+    /// reopened in the HPC workspace after a restart.
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub last_cluster_datasets: HashMap<String, serde_json::Value>,
+
+    /// The server whose dataset was open last.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_cluster_profile: Option<String>,
+
+    /// After a prepare, open the viewer when the first scene is ready. On by default.
+    #[serde(default = "default_true")]
+    pub open_first_ready_scene: bool,
+
+    /// Cap of the local cache of sweeps and images read over SSH (Settings →
+    /// "Viewing cache"). 2 GB by default.
+    #[serde(default = "default_remote_view_cache_bytes")]
+    pub remote_view_cache_bytes: u64,
+
+    /// How the dataset view groups its scenes (Settings → Datasets → "Group
+    /// scenes"): "none" (a flat list by scene name), "state" or "day" (the
+    /// recording day read from the scene name). "none" by default.
+    #[serde(default = "default_dataset_grouping")]
+    pub dataset_grouping: String,
+
+    /// The viewer's camera strip (Settings → Viewer → "Camera strip", and the
+    /// strip's own toggle): "all" (every camera in one horizontally scrolling
+    /// filmstrip) or "agent" (one agent's cameras with Switch agent). "all" by default.
+    #[serde(default = "default_camera_strip")]
+    pub camera_strip: String,
+}
+
+/// The values "Group scenes" may hold; anything else is ignored.
+pub const DATASET_GROUPINGS: [&str; 3] = ["none", "state", "day"];
+
+/// The values "Camera strip" may hold; anything else is ignored.
+pub const CAMERA_STRIP_MODES: [&str; 2] = ["all", "agent"];
+
+fn default_camera_strip() -> String {
+    "all".to_string()
+}
+
+/// A camera strip mode from a settings update, when it is one of [`CAMERA_STRIP_MODES`].
+pub fn camera_strip_from(value: &serde_json::Value) -> Option<String> {
+    let text = value.as_str()?;
+    CAMERA_STRIP_MODES.contains(&text).then(|| text.to_string())
+}
+
+fn default_dataset_grouping() -> String {
+    "none".to_string()
+}
+
+/// A grouping from a settings update, when it is one of [`DATASET_GROUPINGS`].
+pub fn dataset_grouping_from(value: &serde_json::Value) -> Option<String> {
+    let text = value.as_str()?;
+    DATASET_GROUPINGS.contains(&text).then(|| text.to_string())
+}
+
+pub const DEFAULT_REMOTE_VIEW_CACHE_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+pub const MIN_REMOTE_VIEW_CACHE_BYTES: u64 = 256 * 1024 * 1024;
+
+fn default_remote_view_cache_bytes() -> u64 {
+    DEFAULT_REMOTE_VIEW_CACHE_BYTES
+}
+
+/// Camera-image modes for cluster dataset preparation.
+pub const CAMERA_IMAGE_MODES: [&str; 2] = ["originals", "previews"];
+
+/// What the next prepare preview starts with, and where that came from.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct CameraImagesSetting {
+    pub default: String,
+    pub profile: Option<String>,
+    pub effective: String,
+}
+
+impl AppPersistentState {
+    pub fn camera_images(&self, profile_id: Option<&str>) -> CameraImagesSetting {
+        let valid = |mode: &String| CAMERA_IMAGE_MODES.contains(&mode.as_str());
+        let default = self
+            .camera_images_default
+            .clone()
+            .filter(valid)
+            .unwrap_or_else(|| "originals".to_string());
+        let profile = profile_id
+            .and_then(|id| self.camera_images_by_profile.get(id))
+            .cloned()
+            .filter(valid);
+        let effective = profile.clone().unwrap_or_else(|| default.clone());
+        CameraImagesSetting {
+            default,
+            profile,
+            effective,
+        }
+    }
+
+    /// Set the per-profile choice (or the app-wide one without a profile);
+    /// `None` clears it so the fallback applies.
+    pub fn set_camera_images(
+        &mut self,
+        profile_id: Option<&str>,
+        mode: Option<&str>,
+    ) -> Result<(), String> {
+        if let Some(mode) = mode {
+            if !CAMERA_IMAGE_MODES.contains(&mode) {
+                return Err(format!(
+                    "Camera images must be \"originals\" or \"previews\", not {mode:?}."
+                ));
+            }
+        }
+        match (profile_id, mode) {
+            (Some(id), Some(mode)) => {
+                self.camera_images_by_profile
+                    .insert(id.to_string(), mode.to_string());
+            }
+            (Some(id), None) => {
+                self.camera_images_by_profile.remove(id);
+            }
+            (None, mode) => self.camera_images_default = mode.map(str::to_string),
+        }
+        Ok(())
+    }
+}
+
+/// Returns the default library location: ~/coperceive-data.
+pub fn default_library_root() -> PathBuf {
+    if let Ok(home) = std::env::var("HOME") {
+        PathBuf::from(home).join("coperceive-data")
+    } else {
+        PathBuf::from("coperceive-data")
+    }
 }
 
 impl Default for AppPersistentState {
     fn default() -> Self {
         Self {
             last_data_root: None,
+            library_root: None,
+            validation_cache: None,
+            auto_download_updates: true,
+            pending_download: None,
             last_scene_id: None,
             last_sample_index: None,
             last_timestamp_us: None,
             _legacy_timestamp_ns: None,
             last_viewpoint: Some("orbit".into()),
             last_loop: None,
-            last_theme: Some("dark".into()),
+            theme_override: None,
+            _legacy_last_theme: None,
             reopen_last_session: true,
             agent_visibility: None,
             layer_toggles: Some(LayerToggles::default()),
             selected_camera: None,
             split_view: None,
             panel_collapse: Some(PanelCollapseState::default()),
+            layout: None,
             window_state: None,
             recent_roots: Vec::new(),
+            camera_images_default: None,
+            camera_images_by_profile: HashMap::new(),
+            viewer_sessions: HashMap::new(),
+            auto_next_scene: false,
+            last_cluster_datasets: HashMap::new(),
+            last_cluster_profile: None,
+            open_first_ready_scene: true,
+            remote_view_cache_bytes: DEFAULT_REMOTE_VIEW_CACHE_BYTES,
+            dataset_grouping: default_dataset_grouping(),
+            camera_strip: default_camera_strip(),
         }
     }
 }
@@ -334,7 +601,13 @@ impl Default for AppPersistentState {
 ///
 /// macOS: `~/Library/Application Support/nl.adarsh.coperceive/state.json`
 /// Other Unix: `$XDG_DATA_HOME/nl.adarsh.coperceive/state.json` or `~/.local/share/nl.adarsh.coperceive/state.json`
+///
+/// `COPERCEIVE_STATE_DIR` overrides the directory, as for `servers.json` (the
+/// e2e harnesses set it so the real store is untouched).
 pub fn get_state_file_path() -> PathBuf {
+    if let Some(dir) = std::env::var_os("COPERCEIVE_STATE_DIR") {
+        return PathBuf::from(dir).join("state.json");
+    }
     if let Some(home) = std::env::var_os("HOME") {
         #[cfg(target_os = "macos")]
         {
@@ -375,11 +648,33 @@ pub fn add_recent_root(state: &mut AppPersistentState, root: &str) {
     }
 }
 
+fn name_ends_with_partial(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.ends_with(".partial"))
+}
+
 /// Validates whether a directory is a valid Coperceive dataset root.
 ///
 /// A valid dataset root is an existing directory that either:
 /// 1. Directly contains `manifest.json` and `COMPLETE.json` (single scene root), or
 /// 2. Contains at least one direct subdirectory containing `manifest.json` and `COMPLETE.json` (multi-scene root).
+/// A restored scene id is usable only when it is a plain name and that scene is
+/// still present under the current library/data root.
+pub fn restored_scene_exists(root: &Path, scene_id: &str) -> bool {
+    let trimmed = scene_id.trim();
+    if trimmed.is_empty()
+        || trimmed == "."
+        || trimmed == ".."
+        || trimmed.contains('/')
+        || trimmed.contains('\\')
+        || trimmed.starts_with('.')
+    {
+        return false;
+    }
+    root.join(trimmed).is_dir()
+}
+
 pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
     if !path.exists() {
         return Err(format!("Dataset directory does not exist: {}", path.display()));
@@ -388,7 +683,10 @@ pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
         return Err(format!("Path is not a directory: {}", path.display()));
     }
 
-    if path.join("manifest.json").is_file() && path.join("COMPLETE.json").is_file() {
+    if !name_ends_with_partial(path)
+        && path.join("manifest.json").is_file()
+        && path.join("COMPLETE.json").is_file()
+    {
         return Ok(());
     }
 
@@ -396,6 +694,7 @@ pub fn validate_dataset_root(path: &Path) -> Result<(), String> {
     for entry in entries.flatten() {
         let child_path = entry.path();
         if child_path.is_dir()
+            && !name_ends_with_partial(&child_path)
             && child_path.join("manifest.json").is_file()
             && child_path.join("COMPLETE.json").is_file()
         {
@@ -503,8 +802,95 @@ pub fn save_state_to_path(state: &AppPersistentState, path: &Path) -> Result<(),
 }
 
 #[cfg(test)]
-pub mod tests {
+mod camera_images_tests {
     use super::*;
+
+    #[test]
+    fn the_profile_choice_wins_over_the_app_default_which_wins_over_originals() {
+        let mut state = AppPersistentState::default();
+        assert_eq!(state.camera_images(Some("a")).effective, "originals");
+        state.set_camera_images(None, Some("previews")).unwrap();
+        assert_eq!(state.camera_images(Some("a")).effective, "previews");
+        state.set_camera_images(Some("a"), Some("originals")).unwrap();
+        let setting = state.camera_images(Some("a"));
+        assert_eq!(
+            (setting.default.as_str(), setting.profile.as_deref(), setting.effective.as_str()),
+            ("previews", Some("originals"), "originals")
+        );
+        assert_eq!(state.camera_images(Some("b")).effective, "previews");
+        state.set_camera_images(Some("a"), None).unwrap();
+        assert_eq!(state.camera_images(Some("a")).effective, "previews");
+        assert!(state.set_camera_images(None, Some("all")).is_err());
+        let json = serde_json::to_string(&state).unwrap();
+        let back: AppPersistentState = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.camera_images(Some("b")).effective, "previews");
+    }
+}
+
+#[cfg(test)]
+pub mod tests {
+    #[test]
+    fn camera_strip_defaults_to_all_and_accepts_only_known_values() {
+        assert_eq!(AppPersistentState::default().camera_strip, "all");
+        // A state.json written before the setting existed reads as the filmstrip.
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert_eq!(old.camera_strip, "all");
+        for value in CAMERA_STRIP_MODES {
+            assert_eq!(camera_strip_from(&serde_json::json!(value)).as_deref(), Some(value));
+        }
+        for value in [serde_json::json!("one"), serde_json::json!(""), serde_json::json!(2), serde_json::Value::Null] {
+            assert_eq!(camera_strip_from(&value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn dataset_grouping_defaults_to_none_and_accepts_only_known_values() {
+        assert_eq!(AppPersistentState::default().dataset_grouping, "none");
+        // A state.json written before the setting existed reads as "none".
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert_eq!(old.dataset_grouping, "none");
+        for value in DATASET_GROUPINGS {
+            assert_eq!(dataset_grouping_from(&serde_json::json!(value)).as_deref(), Some(value));
+        }
+        for value in [serde_json::json!("date"), serde_json::json!(""), serde_json::json!(1), serde_json::Value::Null] {
+            assert_eq!(dataset_grouping_from(&value), None, "{value}");
+        }
+    }
+
+    use super::*;
+
+    #[test]
+    fn restored_scene_must_still_be_under_the_library_root() {
+        let root = std::env::temp_dir().join(format!(
+            "coperceive-restore-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("time")
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(root.join("Town03-000")).expect("scene dir");
+        assert!(restored_scene_exists(&root, "Town03-000"));
+        assert!(!restored_scene_exists(&root, "synth_001"));
+        assert!(!restored_scene_exists(&root, "../Town03-000"));
+        assert!(!restored_scene_exists(&root, "Town03-000/.."));
+        assert!(!restored_scene_exists(&root, "../Town03-000"));
+        assert!(!restored_scene_exists(&root, ".hidden"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn layer_defaults_keep_points_and_boxes_on() {
+        let defaults = LayerToggles::default();
+        assert!(defaults.points);
+        assert!(defaults.boxes);
+        let parsed: LayerToggles = serde_json::from_str("{}").expect("empty layer toggles");
+        assert!(parsed.points);
+        assert!(parsed.boxes);
+        let explicit: LayerToggles =
+            serde_json::from_str(r#"{"points":false,"boxes":false}"#).expect("explicit");
+        assert!(!explicit.points && !explicit.boxes);
+    }
 
     #[test]
     fn test_state_serialize_deserialize() {
@@ -514,13 +900,18 @@ pub mod tests {
 
         let state = AppPersistentState {
             last_data_root: Some("/path/to/data".into()),
+            library_root: Some("/path/to/coperceive-data".into()),
+            validation_cache: None,
+            auto_download_updates: true,
+            pending_download: None,
             last_scene_id: Some("Town03-000".into()),
             last_sample_index: Some(42),
             last_timestamp_us: Some(4200000),
             _legacy_timestamp_ns: None,
             last_viewpoint: Some("chase".into()),
             last_loop: Some(false),
-            last_theme: Some("light".into()),
+            theme_override: Some("light".into()),
+            _legacy_last_theme: None,
             reopen_last_session: true,
             agent_visibility: Some(visibility),
             layer_toggles: Some(LayerToggles {
@@ -540,6 +931,11 @@ pub mod tests {
                 right_collapsed: false,
                 camera_strip_open: false,
             }),
+            layout: Some(LayoutSizes {
+                left_px: 300.0,
+                right_px: 320.0,
+                strip_px: 110.0,
+            }),
             window_state: Some(WindowState {
                 width: 1400.0,
                 height: 900.0,
@@ -550,6 +946,16 @@ pub mod tests {
                 scale_factor: Some(2.0),
             }),
             recent_roots: vec!["/path/to/data".into(), "/path/to/prev".into()],
+            camera_images_default: Some("previews".into()),
+            camera_images_by_profile: HashMap::from([("cluster-a".into(), "originals".into())]),
+            viewer_sessions: HashMap::from([("alias|p|/r|".into(), "abc123".into())]),
+            auto_next_scene: true,
+            last_cluster_datasets: HashMap::from([("p".into(), serde_json::json!({"path": "/d/opv2v/test"}))]),
+            last_cluster_profile: Some("p".into()),
+            open_first_ready_scene: false,
+            remote_view_cache_bytes: 512 * 1024 * 1024,
+            dataset_grouping: "day".into(),
+            camera_strip: "agent".into(),
         };
 
         let json = serde_json::to_string(&state).expect("serialize");
@@ -584,7 +990,42 @@ pub mod tests {
         let loaded = load_state_from_path(&state_path);
         assert_eq!(loaded, AppPersistentState::default());
         assert_eq!(loaded.last_viewpoint, Some("orbit".into()));
-        assert_eq!(loaded.last_theme, Some("dark".into()));
+        assert_eq!(loaded.theme_override, None);
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn test_legacy_last_theme_does_not_set_theme_override() {
+        let tmp = std::env::temp_dir().join(format!("coperceive-test-theme-migration-{}", std::process::id()));
+        let _ = fs::create_dir_all(&tmp);
+        let state_path = tmp.join("state.json");
+
+        // Old state.json with `last_theme: "dark"`
+        fs::write(
+            &state_path,
+            r#"{"last_data_root":"/tmp","last_theme":"dark","last_scene_id":"synth_001"}"#,
+        )
+        .expect("write old state");
+
+        let loaded = load_state_from_path(&state_path);
+        // Migration rule: an old last_theme alone does not set an override!
+        assert_eq!(loaded.theme_override, None);
+
+        // When saved back, last_theme is dropped and theme_override is omitted
+        save_state_to_path(&loaded, &state_path).expect("save state");
+        let raw = fs::read_to_string(&state_path).expect("read migrated state");
+        assert!(!raw.contains("last_theme"), "legacy last_theme should not be re-serialized");
+        assert!(!raw.contains("theme_override"), "unset theme_override should not be serialized");
+
+        // An explicit theme_override IS loaded and preserved
+        fs::write(
+            &state_path,
+            r#"{"last_data_root":"/tmp","theme_override":"dark","last_scene_id":"synth_001"}"#,
+        )
+        .expect("write explicit override state");
+        let loaded_override = load_state_from_path(&state_path);
+        assert_eq!(loaded_override.theme_override, Some("dark".to_string()));
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -667,6 +1108,21 @@ pub mod tests {
         assert!(validate_dataset_root(&multi_root).is_err());
         fs::write(child_scene.join("COMPLETE.json"), "{}").expect("write complete");
         assert!(validate_dataset_root(&multi_root).is_ok());
+
+        // An import still in <scene>.partial/ is not a scene, even with both markers.
+        let partial = multi_root.join("scene_002.partial");
+        let _ = fs::create_dir_all(&partial);
+        fs::write(partial.join("manifest.json"), "{}").expect("write partial manifest");
+        fs::write(partial.join("COMPLETE.json"), "{}").expect("write partial complete");
+        assert!(validate_dataset_root(&partial).is_err());
+        assert!(validate_dataset_root(&multi_root).is_ok());
+
+        let only_partial = tmp.join("only_partial");
+        let only_child = only_partial.join("scene_003.partial");
+        let _ = fs::create_dir_all(&only_child);
+        fs::write(only_child.join("manifest.json"), "{}").expect("write only manifest");
+        fs::write(only_child.join("COMPLETE.json"), "{}").expect("write only complete");
+        assert!(validate_dataset_root(&only_partial).is_err());
 
         let _ = fs::remove_dir_all(&tmp);
     }
@@ -913,5 +1369,52 @@ pub mod tests {
             assert_eq!(resolved.height, 800.0);
             assert_eq!(resolved.monitor, primary.name);
         }
+    }
+
+    #[test]
+    fn test_layout_sizes_default_and_clamp() {
+        let mut layout = LayoutSizes::default();
+        assert_eq!(layout.left_px, DEFAULT_LEFT_PX);
+        assert_eq!(layout.right_px, DEFAULT_RIGHT_PX);
+        assert_eq!(layout.strip_px, DEFAULT_STRIP_PX);
+
+        // Clamping lower bounds
+        layout.left_px = 50.0;
+        layout.right_px = 100.0;
+        layout.strip_px = 20.0;
+        layout.clamp();
+        assert_eq!(layout.left_px, MIN_LEFT_PX);
+        assert_eq!(layout.right_px, MIN_RIGHT_PX);
+        assert_eq!(layout.strip_px, MIN_STRIP_PX);
+
+        // Clamping upper bounds
+        layout.left_px = 999.0;
+        layout.right_px = 999.0;
+        layout.strip_px = 999.0;
+        layout.clamp();
+        assert_eq!(layout.left_px, MAX_LEFT_PX);
+        assert_eq!(layout.right_px, MAX_RIGHT_PX);
+        assert_eq!(layout.strip_px, MAX_STRIP_PX);
+    }
+
+    #[test]
+    fn test_layout_sizes_state_round_trip() {
+        let json_data = serde_json::json!({
+            "layout": {
+                "left_px": 310.0,
+                "right_px": 350.0,
+                "strip_px": 120.0
+            }
+        });
+        let state: AppPersistentState = serde_json::from_value(json_data).unwrap();
+        assert!(state.layout.is_some());
+        let layout = state.layout.unwrap();
+        assert_eq!(layout.left_px, 310.0);
+        assert_eq!(layout.right_px, 350.0);
+        assert_eq!(layout.strip_px, 120.0);
+
+        let serialized = serde_json::to_string(&layout).unwrap();
+        let deserialized: LayoutSizes = serde_json::from_str(&serialized).unwrap();
+        assert_eq!(deserialized, layout);
     }
 }

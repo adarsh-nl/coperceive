@@ -1,0 +1,541 @@
+// SPDX-License-Identifier: Apache-2.0
+import test from "node:test";
+import assert from "node:assert";
+import {
+  canPrepareWholeDataset,
+  formatDetectBannerTitle,
+  formatIndexHeader,
+  indexingLabel,
+  wholeDatasetOffer,
+  splitErrorText,
+  formatDuration,
+  formatEstimate,
+  prepareEstimateLine,
+  formatLicenceInfo,
+  formatSensorsSummary,
+  formatStorageEstimate,
+  datasetDetect,
+  datasetIndex,
+  datasetStatus,
+  datasetPrepare,
+  datasetPrepareSubmit,
+  datasetOpen,
+  recoverFromRefusedPrepareSubmit,
+  _resetStubStore,
+  _setStubSceneState,
+  _setInvokeForTesting,
+  type ClusterDetectDocument,
+  type ClusterIndexDocument,
+} from "./clusterDatasets.ts";
+
+test("formatDetectBannerTitle formats adapter, split, and scene count plainly", () => {
+  const docOpv2v: ClusterDetectDocument = {
+    schema: "coperceive-cluster-detect-1",
+    path: "/datasets/opv2v/test",
+    adapter: "opv2v",
+    raw_root: "/datasets/opv2v",
+    split: "test",
+    params: { split: "test" },
+    licence: null,
+    scene_count: 16,
+    status: "ok",
+    reason: null,
+  };
+  assert.strictEqual(formatDetectBannerTitle(docOpv2v), "OPV2V · test · 16 scenes");
+
+  const docGriffin: ClusterDetectDocument = {
+    schema: "coperceive-cluster-detect-1",
+    path: "/datasets/griffin",
+    adapter: "griffin",
+    raw_root: "/datasets/griffin",
+    split: null,
+    params: {},
+    licence: null,
+    scene_count: 1,
+    status: "ok",
+    reason: null,
+  };
+  assert.strictEqual(formatDetectBannerTitle(docGriffin), "GRIFFIN · 1 scene");
+});
+
+test("formatLicenceInfo formats known and unknown licence metadata with links", () => {
+  const unknownLicence = {
+    status: "unknown",
+    spdx: null,
+    notice: "No licence published.",
+    links: ["https://mobility-lab.seas.ucla.edu/opv2v/"],
+  };
+  const resUnknown = formatLicenceInfo(unknownLicence);
+  assert.strictEqual(
+    resUnknown.statusText,
+    "licence not published — research use on this cluster only",
+  );
+  assert.deepStrictEqual(resUnknown.links, ["https://mobility-lab.seas.ucla.edu/opv2v/"]);
+
+  const knownLicence = {
+    status: "known",
+    spdx: "Apache-2.0",
+    notice: "Apache License 2.0",
+    links: ["https://example.com/license"],
+  };
+  const resKnown = formatLicenceInfo(knownLicence);
+  assert.strictEqual(resKnown.statusText, "SPDX: Apache-2.0");
+  assert.deepStrictEqual(resKnown.links, ["https://example.com/license"]);
+
+  const nullLicence = formatLicenceInfo(null);
+  assert.strictEqual(nullLicence.statusText, "Licence not specified.");
+  assert.deepStrictEqual(nullLicence.links, []);
+});
+
+test("formatDuration and formatSensorsSummary handle missing and populated data", () => {
+  assert.strictEqual(formatDuration(null), "—");
+  assert.strictEqual(formatDuration(undefined), "—");
+  assert.strictEqual(formatDuration(6), "6.0s");
+  assert.strictEqual(formatDuration(3.24), "3.2s");
+
+  assert.strictEqual(formatSensorsSummary(null), "—");
+  assert.strictEqual(
+    formatSensorsSummary({
+      sensors: 2,
+      camera_samples: 240,
+      lidar_samples: 60,
+    }),
+    "240 cam / 60 lidar (2 sensors)",
+  );
+});
+
+test("formatStorageEstimate gives sensible bounds from byte sizes or scene counts", () => {
+  const mockDoc: ClusterIndexDocument = {
+    schema: "coperceive-cluster-index-1",
+    adapter: "opv2v",
+    raw_root: "/data/opv2v",
+    split: "test",
+    params: {},
+    licence: null,
+    fingerprint: { algorithm: "sha1-mtime-size-v1", digest: "abc", entries: 10, truncated: false },
+    cache: { relative_path: "coperceive-cache/opv2v/abc/test" },
+    scene_count: 16,
+    scenes: [],
+    errors: [],
+    truncated: false,
+    elapsed_ms: 100,
+    storage_estimate_bytes: 2.5 * 1024 * 1024 * 1024,
+  };
+  assert.strictEqual(formatStorageEstimate(mockDoc), "~2.5 GB");
+
+  delete mockDoc.storage_estimate_bytes;
+  assert.strictEqual(formatStorageEstimate(mockDoc), "~2.3 GB");
+});
+
+test("datasetPrepare returns preview matching the backend contract", async () => {
+  const preview = await datasetPrepare("profile-1", {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opv2v",
+    split: "test",
+    scenes: "all",
+  });
+
+  assert.strictEqual(preview.job_name, "coperceive-prepare-opv2v");
+  assert.ok(preview.script.includes("# No GPU requested (CPU-only job)."));
+  assert.ok(preview.script.includes("--adapter \"opv2v\""));
+  assert.ok(preview.script.includes('--scenes "$SCENE"'));
+  assert.ok(preview.script.includes("#SBATCH --array=0-2%3"), preview.script);
+  assert.ok(preview.preview_hash.length > 0);
+  assert.strictEqual(preview.gres, null);
+  assert.strictEqual(preview.cpus_per_task, 1);
+  assert.ok(preview.cache_root.length > 0);
+
+  // Test optional workers
+  const previewWorkers = await datasetPrepare("profile-1", {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opv2v",
+    split: "test",
+    scenes: ["scene_0001", "scene_0002"],
+    workers: 2,
+  });
+  assert.strictEqual(previewWorkers.cpus_per_task, 1);
+  assert.strictEqual(previewWorkers.array_tasks, 2);
+  assert.strictEqual(previewWorkers.throttle, 2);
+  assert.ok(previewWorkers.script.includes("#SBATCH --array=0-1%2"));
+  assert.ok(previewWorkers.script.includes("SCENES=(scene_0001 scene_0002)"));
+});
+
+test("datasetDetect and datasetIndex provide typed cluster contract shapes", async () => {
+  const detectRes = await datasetDetect("profile-1", "/datasets/opv2v/test");
+  assert.strictEqual(detectRes.schema, "coperceive-cluster-detect-1");
+  assert.strictEqual(detectRes.status, "ok");
+  assert.strictEqual(detectRes.adapter, "opv2v");
+  assert.strictEqual(detectRes.scene_count, 16);
+
+  const indexRes = await datasetIndex("profile-1", "opv2v", "/datasets/opv2v", "test");
+  assert.strictEqual(indexRes.schema, "coperceive-cluster-index-1");
+  assert.strictEqual(indexRes.adapter, "opv2v");
+  assert.strictEqual(indexRes.scene_count, 16);
+  assert.strictEqual(indexRes.scenes.length, 16);
+  assert.strictEqual(indexRes.scenes[0]?.scene_id, "scene_0001");
+  assert.strictEqual(indexRes.scenes[0]?.sample_count, 60);
+  assert.strictEqual(indexRes.scenes[0]?.sensors.camera_samples, 240);
+  assert.strictEqual(indexRes.scenes[0]?.sensors.lidar_samples, 60);
+});
+
+test("datasetStatus tracks scene status states plainly", async () => {
+  _resetStubStore();
+  const ds = { adapter: "opv2v", rawRoot: "/datasets/opv2v", split: "test" };
+
+  // Initially empty
+  const initialStatus = await datasetStatus("profile-1", ds);
+  assert.strictEqual(initialStatus.schema, "coperceive-cluster-scene-status-1");
+  assert.strictEqual(initialStatus.scenes.length, 0);
+
+  // Mark scenes in different states
+  _setStubSceneState(ds, "scene_0001", "ready");
+  _setStubSceneState(ds, "scene_0002", "preparing", null, "651911");
+  _setStubSceneState(ds, "scene_0003", "failed", "vehicle-side/pose/000000.json: missing");
+  _setStubSceneState(ds, "scene_0004", "stale");
+
+  const statusDoc = await datasetStatus("profile-1", ds);
+  assert.strictEqual(statusDoc.scenes.length, 4);
+
+  const s1 = statusDoc.scenes.find((s) => s.scene_id === "scene_0001");
+  assert.strictEqual(s1?.state, "ready");
+  assert.strictEqual(s1?.reason, null);
+
+  const s2 = statusDoc.scenes.find((s) => s.scene_id === "scene_0002");
+  assert.strictEqual(s2?.state, "preparing");
+  assert.strictEqual(s2?.job_id, "651911");
+
+  const s3 = statusDoc.scenes.find((s) => s.scene_id === "scene_0003");
+  assert.strictEqual(s3?.state, "failed");
+  assert.strictEqual(s3?.reason, "vehicle-side/pose/000000.json: missing");
+
+  const s4 = statusDoc.scenes.find((s) => s.scene_id === "scene_0004");
+  assert.strictEqual(s4?.state, "stale");
+});
+
+test("datasetPrepareSubmit requires a valid preview hash and confirmation", async () => {
+  await assert.rejects(
+    async () => {
+      await datasetPrepareSubmit("profile-1", "", true);
+    },
+    {
+      name: "Error",
+      message: /valid preview hash is required/,
+    },
+  );
+
+  await assert.rejects(
+    async () => {
+      await datasetPrepareSubmit("profile-1", "hash-123", false);
+    },
+    {
+      name: "Error",
+      message: /not confirmed/,
+    },
+  );
+
+  const submitRes = await datasetPrepareSubmit("profile-1", "hash-123", true);
+  assert.strictEqual(submitRes.state, "pending");
+  assert.ok(submitRes.job_id.length > 0);
+});
+
+test("opening a ready scene completes with contract return shape", async () => {
+  const ds = { adapter: "opv2v", rawRoot: "/datasets/opv2v", split: "test" };
+  const openRes = await datasetOpen("profile-1", "scene_0001", ds);
+  assert.strictEqual(openRes.target_type, "remote");
+  assert.ok(openRes.origin.length > 0);
+  assert.ok(openRes.token.length > 0);
+});
+
+test("in Tauri mode, a rejected invoke throws an error and returns no job id (no silent fallback)", async () => {
+  // Simulate packaged desktop Tauri environment
+  (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window = {
+    __TAURI_INTERNALS__: {},
+  };
+
+  _setInvokeForTesting(async (cmd) => {
+    throw new Error(`Tauri IPC rejected command '${cmd}': Slurm sbatch error: QOSMaxSubmitJobPerUserLimit`);
+  });
+
+  try {
+    // datasetPrepareSubmit must reject and never fall back to a random job id
+    await assert.rejects(
+      async () => {
+        await datasetPrepareSubmit("profile-1", "preview-hash-999", true);
+      },
+      {
+        name: "Error",
+        message: /Slurm sbatch error: QOSMaxSubmitJobPerUserLimit/,
+      },
+    );
+
+    // datasetPrepare must reject and never return a client-generated fake script
+    await assert.rejects(
+      async () => {
+        await datasetPrepare("profile-1", {
+          adapter: "opv2v",
+          rawRoot: "/datasets/opv2v",
+          split: "test",
+        });
+      },
+      {
+        name: "Error",
+        message: /Tauri IPC rejected command 'dataset_prepare'/,
+      },
+    );
+
+    // datasetStatus must reject and never return stubbed scene entries
+    await assert.rejects(
+      async () => {
+        await datasetStatus("profile-1", {
+          adapter: "opv2v",
+          rawRoot: "/datasets/opv2v",
+          split: "test",
+        });
+      },
+      {
+        name: "Error",
+        message: /Tauri IPC rejected command 'dataset_status'/,
+      },
+    );
+
+    // datasetOpen must reject and never return a mock token
+    await assert.rejects(
+      async () => {
+        await datasetOpen("profile-1", "scene_0001", {
+          adapter: "opv2v",
+          rawRoot: "/datasets/opv2v",
+          split: "test",
+        });
+      },
+      {
+        name: "Error",
+        message: /Tauri IPC rejected command 'dataset_open'/,
+      },
+    );
+  } finally {
+    _setInvokeForTesting(null);
+    delete (globalThis as unknown as { window?: unknown }).window;
+  }
+});
+
+test("a mock submit error → preview regenerated → confirm unchecked → Submit disabled", async () => {
+  const profileId = "profile-mock-submit";
+  const params = {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opv2v",
+    split: "test",
+    scenes: "all" as const,
+  };
+
+  // 1. Initial preview generation
+  const initialPreview = await datasetPrepare(profileId, params);
+  assert.ok(initialPreview.preview_hash.length > 0);
+  assert.ok(initialPreview.script.length > 0);
+
+  // User confirms preview
+  let confirmed = true;
+  let submitDisabled = !confirmed || !initialPreview;
+  assert.strictEqual(submitDisabled, false, "Submit should be enabled once confirmed");
+
+  // 2. Mock submit error (refused submit from backend e.g. stale hash or unconfirmed)
+  const submitError = new Error("dataset_prepare_submit refused: stale preview hash; pending preview discarded");
+
+  // Small delay to ensure timestamp in fallback preview_hash differs
+  await new Promise((r) => setTimeout(r, 2));
+
+  // 3. Recovery flow runs
+  const recovery = await recoverFromRefusedPrepareSubmit(profileId, params, submitError);
+
+  // 4. Assertions:
+  // - Error shown in plain words
+  assert.strictEqual(
+    recovery.error,
+    "dataset_prepare_submit refused: stale preview hash; pending preview discarded",
+  );
+  // - Confirm unchecked
+  assert.strictEqual(recovery.confirmed, false);
+  confirmed = recovery.confirmed;
+  // - Preview regenerated with new script and new preview hash
+  assert.ok(recovery.newPreview !== null);
+  assert.ok(recovery.newPreview!.script.length > 0);
+  assert.notStrictEqual(recovery.newPreview!.preview_hash, initialPreview.preview_hash);
+  // - Submit disabled
+  submitDisabled = !confirmed || !recovery.newPreview;
+  assert.strictEqual(submitDisabled, true, "Submit must be disabled until user confirms new preview");
+  assert.strictEqual(recovery.submitDisabled, true);
+});
+
+test("in Tauri mode: refused submit regenerates preview and keeps submit disabled until re-confirmed", async () => {
+  (globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } }).window = {
+    __TAURI_INTERNALS__: {},
+  };
+
+  let prepareCalls = 0;
+  _setInvokeForTesting(async (cmd) => {
+    if (cmd === "dataset_prepare") {
+      prepareCalls++;
+      return {
+        plan_id: `plan-call-${prepareCalls}`,
+        job_name: "coperceive-dataset-prepare",
+        partition: "ps",
+        walltime: "04:00:00",
+        cpus_per_task: 1,
+        array_tasks: 4,
+        throttle: 4,
+        estimated_seconds: 120,
+        estimate_note: "6816 raw files; the shared filesystem is the limit",
+        gres: null,
+        cache_root: "/results/cache/opv2v",
+        estimated_cache_bytes: 52428800,
+        script: `#!/bin/bash\n# regenerated script v${prepareCalls}`,
+        preview_hash: `hash-v${prepareCalls}`,
+      };
+    }
+    if (cmd === "dataset_prepare_submit") {
+      throw new Error("Tauri IPC: sbatch refused submit for stale hash");
+    }
+    throw new Error(`Unexpected command: ${cmd}`);
+  });
+
+  try {
+    const profileId = "profile-tauri-recovery";
+    const params = { adapter: "opv2v", rawRoot: "/raw", split: "test", scenes: "all" as const };
+
+    const firstPreview = await datasetPrepare(profileId, params);
+    assert.strictEqual(firstPreview.preview_hash, "hash-v1");
+
+    let confirmed = true;
+    let submitDisabled = !confirmed || !firstPreview;
+    assert.strictEqual(submitDisabled, false);
+
+    let caughtError: unknown = null;
+    try {
+      await datasetPrepareSubmit(profileId, firstPreview.preview_hash, true);
+    } catch (e) {
+      caughtError = e;
+    }
+    assert.ok(caughtError !== null);
+
+    const recovery = await recoverFromRefusedPrepareSubmit(profileId, params, caughtError);
+    assert.strictEqual(recovery.error, "Tauri IPC: sbatch refused submit for stale hash");
+    assert.strictEqual(recovery.confirmed, false);
+    assert.strictEqual(recovery.newPreview?.preview_hash, "hash-v2");
+    assert.strictEqual(recovery.newPreview?.script, "#!/bin/bash\n# regenerated script v2");
+    assert.strictEqual(recovery.submitDisabled, true);
+  } finally {
+    _setInvokeForTesting(null);
+    delete (globalThis as unknown as { window?: unknown }).window;
+  }
+});
+
+test("Prepare whole dataset waits for at least one indexed scene", () => {
+  const index = (count: number) =>
+    ({ scenes: Array.from({ length: count }, (_, i) => ({ scene_id: `s${i}` })) }) as unknown as ClusterIndexDocument;
+  assert.equal(canPrepareWholeDataset(null, true), false);
+  assert.equal(canPrepareWholeDataset(null, false), false);
+  assert.equal(canPrepareWholeDataset(index(0), false), false);
+  assert.equal(canPrepareWholeDataset(index(3), true), false);
+  assert.equal(canPrepareWholeDataset(index(3), false), true);
+});
+
+test("indexing shows elapsed whole seconds", () => {
+  assert.equal(indexingLabel(0), "Indexing scenes on the cluster (metadata only)… 0 s");
+  assert.equal(indexingLabel(40_900), "Indexing scenes on the cluster (metadata only)… 40 s");
+});
+
+test("a backend error splits into its first line and details", () => {
+  assert.deepEqual(splitErrorText("\ncould not read 000068.yaml: bad tag\n  line 152\n"), {
+    line: "could not read 000068.yaml: bad tag",
+    details: "line 152",
+  });
+  assert.deepEqual(splitErrorText("one line"), { line: "one line", details: "" });
+});
+
+test("datasetIndex sends the detected split to the backend", async () => {
+  const globals = globalThis as unknown as { window?: { __TAURI_INTERNALS__?: unknown } };
+  const previous = globals.window;
+  globals.window = { __TAURI_INTERNALS__: {} };
+  const calls: Array<{ cmd: string; args: Record<string, unknown> | undefined }> = [];
+  _setInvokeForTesting(async <T,>(cmd: string, args?: Record<string, unknown>) => {
+    calls.push({ cmd, args });
+    return { schema: "coperceive-cluster-index-1", adapter: "opv2v", split: "test" } as T;
+  });
+  try {
+    await datasetIndex("profile-1", "opv2v", "/datasets/opencood/opv2v", "test");
+    await datasetIndex("profile-1", "griffin", "/datasets/griffin", null);
+  } finally {
+    _setInvokeForTesting(null);
+    globals.window = previous;
+  }
+  assert.deepStrictEqual(calls, [
+    {
+      cmd: "dataset_index",
+      args: { profileId: "profile-1", adapter: "opv2v", rawRoot: "/datasets/opencood/opv2v", split: "test" },
+    },
+    {
+      cmd: "dataset_index",
+      args: { profileId: "profile-1", adapter: "griffin", rawRoot: "/datasets/griffin", split: null },
+    },
+  ]);
+});
+
+test("formatIndexHeader titles the view from the index document, not detect", () => {
+  assert.strictEqual(formatIndexHeader(null, "opv2v"), "OPV2V");
+  assert.strictEqual(formatIndexHeader(null, null), "Dataset");
+  const index = {
+    schema: "coperceive-cluster-index-1",
+    adapter: "opv2v",
+    raw_root: "/datasets/opencood/opv2v",
+    split: "test",
+    params: { split: "test" },
+    licence: null,
+    fingerprint: { algorithm: "sha1-mtime-size-v1", digest: "abc", entries: 1, truncated: false },
+    cache: { relative_path: "coperceive-cache/opv2v/abc/test" },
+    scene_count: 16,
+    scenes: [],
+    errors: [],
+    truncated: false,
+    elapsed_ms: 1,
+  } as ClusterIndexDocument;
+  assert.strictEqual(formatIndexHeader(index, "opv2v"), "OPV2V · test · 16 scenes");
+  assert.strictEqual(formatIndexHeader({ ...index, split: null, scene_count: 1 }, "x"), "OPV2V · 1 scene");
+});
+
+test("wholeDatasetOffer leads with the whole dataset while nothing is prepared", () => {
+  const index = {
+    schema: "coperceive-cluster-index-1",
+    adapter: "opv2v",
+    raw_root: "/d/opv2v",
+    split: "test",
+    params: {},
+    licence: null,
+    fingerprint: { algorithm: "sha1-mtime-size-v1", digest: "x", entries: 1, truncated: false },
+    cache: { relative_path: "coperceive-cache/opv2v/x/test" },
+    scene_count: 16,
+    estimated_cache_bytes: 21 * 1024 ** 3,
+    scenes: [],
+    errors: [],
+    truncated: false,
+    elapsed_ms: 1,
+  } as unknown as ClusterIndexDocument;
+  const offer = wholeDatasetOffer(index, 0);
+  assert.ok(offer && offer.kind === "offer");
+  assert.strictEqual(offer.button, "Prepare whole dataset (~21.0 GB, 16 one-CPU tasks)");
+  assert.match(offer.detail, /all 16 scenes once/);
+  assert.strictEqual(wholeDatasetOffer(index, 3), null);
+  const done = wholeDatasetOffer(index, 16);
+  assert.ok(done && done.kind === "done");
+  assert.match(done.detail, /no further preparation/);
+  assert.strictEqual(wholeDatasetOffer(null, 0), null);
+});
+
+test("prepareEstimateLine states the time, its basis and that queueing is extra", () => {
+  assert.strictEqual(formatEstimate(42), "~42 s");
+  assert.strictEqual(formatEstimate(12 * 60 + 10), "~12 min");
+  assert.strictEqual(formatEstimate(100 * 60), "~1 h 40 min");
+  assert.strictEqual(formatEstimate(0), "under a minute");
+  assert.strictEqual(
+    prepareEstimateLine({ estimated_seconds: 720, estimate_note: "from the last run's timing on this cluster (3 scenes, 100 ms per raw file)" }),
+    "Estimated time once running: ~12 min (from the last run's timing on this cluster (3 scenes, 100 ms per raw file)). Queue time comes on top.",
+  );
+});

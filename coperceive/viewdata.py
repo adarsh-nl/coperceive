@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportUnknownMemberType=false
 """JSON frames for the in-app viewer.
 
 The page draws these with three.js. This module does not import a web
@@ -10,10 +11,10 @@ sample is omitted rather than interpolated.
 
 from __future__ import annotations
 
-import array
 import math
-import sys
 from pathlib import Path
+
+import numpy as np
 
 from coperceive.diagnostics import annotation_center_world
 from coperceive.errors import CoperceiveError
@@ -47,6 +48,14 @@ _BOX_EDGES = (
 )
 
 
+def is_hidden_scene_name(name: str) -> bool:
+    """Names the viewer and validator must not list.
+
+    ``.partial`` is an import that has not been renamed into place yet.
+    """
+    return name.startswith(".") or name.endswith(".partial")
+
+
 def _has_scene_marker(path: Path, *, require_complete: bool) -> bool:
     if not (path / "manifest.json").is_file():
         return False
@@ -64,11 +73,13 @@ def scene_directories(root: Path, *, require_complete: bool = False) -> list[Pat
     """
     if not root.is_dir():
         raise FileNotFoundError(root)
+    if is_hidden_scene_name(root.name):
+        return []
     if _has_scene_marker(root, require_complete=require_complete):
         return [root]
     found: list[Path] = []
     for child in sorted(root.iterdir(), key=lambda path: path.name):
-        if child.name.startswith(".") or not child.is_dir():
+        if is_hidden_scene_name(child.name) or not child.is_dir():
             continue
         if _has_scene_marker(child, require_complete=require_complete):
             found.append(child)
@@ -176,23 +187,44 @@ def frame_points(scene: Scene, time_us: int, agent_id: str, sensor_id: str) -> b
 
 
 def world_points(scene: Scene, cloud: PointCloud) -> bytes:
-    """Map sensor-frame ``x, y, z, intensity`` bytes into world ``x, y, z``."""
+    """Map sensor-frame ``x, y, z, intensity`` bytes into world ``x, y, z``.
+
+    Vectorised over the sweep with exactly the arithmetic of ``SE3.apply``
+    (``q·(0,p)·q̄ + t`` in float64, then float32), so the bytes are the same as a
+    point-by-point loop, about fifty times faster: a 56 000-point sweep was ~60 ms
+    of CPU per request, the limit of playback over the cluster link.
+    """
     pose = lookup_pose(scene.agent(cloud.agent_id), cloud.time_us, max_gap_us=0)
     sensor = scene.sensor(cloud.agent_id, cloud.sensor_id)
     world_from_sensor = pose.compose(sensor.body_from_sensor)
     if cloud.count == 0:
         return b""
-    values = array.array("f")
-    values.frombytes(cloud.xyz_i_f32)
-    if sys.byteorder != "little":
-        values.byteswap()
-    out = array.array("f")
-    for index in range(cloud.count):
-        base = index * 4
-        point = world_from_sensor.apply((values[base], values[base + 1], values[base + 2]))
-        out.extend(point)
-    if sys.byteorder != "little":
-        out.byteswap()
+    xyz = (
+        np.frombuffer(cloud.xyz_i_f32, dtype="<f4")
+        .reshape(cloud.count, 4)[:, :3]
+        .astype(np.float64)
+    )
+    px, py, pz = xyz[:, 0], xyz[:, 1], xyz[:, 2]
+    aw, ax, ay, az = (
+        world_from_sensor.qw,
+        world_from_sensor.qx,
+        world_from_sensor.qy,
+        world_from_sensor.qz,
+    )
+    # m = q * (0, p)
+    mw = aw * 0.0 - ax * px - ay * py - az * pz
+    mx = aw * px + ax * 0.0 + ay * pz - az * py
+    my = aw * py - ax * pz + ay * 0.0 + az * px
+    mz = aw * pz + ax * py - ay * px + az * 0.0
+    # r = m * conj(q), conj(q) = (aw, -ax, -ay, -az)
+    cw, cx, cy, cz = aw, -ax, -ay, -az
+    rx = mw * cx + mx * cw + my * cz - mz * cy
+    ry = mw * cy - mx * cz + my * cw + mz * cx
+    rz = mw * cz + mx * cy - my * cx + mz * cw
+    out = np.empty((cloud.count, 3), dtype="<f4")
+    out[:, 0] = rx + world_from_sensor.tx
+    out[:, 1] = ry + world_from_sensor.ty
+    out[:, 2] = rz + world_from_sensor.tz
     return out.tobytes()
 
 
@@ -207,6 +239,11 @@ def fov_y_rad(sensor: Sensor) -> float | None:
 
 def _frustums(scene: Scene, time_us: int) -> list[dict[str, object]]:
     rows: list[dict[str, object]] = []
+    # Which cameras recorded an image at this sample: the viewer hides a camera's
+    # image plane where there is none, instead of leaving the last one in place.
+    imaged = {
+        (image.agent_id, image.sensor_id) for image in scene.images if image.time_us == time_us
+    }
     for sensor in scene.sensors:
         fov = fov_y_rad(sensor)
         if fov is None:
@@ -230,6 +267,7 @@ def _frustums(scene: Scene, time_us: int) -> list[dict[str, object]]:
                 "fy": sensor.fy,
                 "cx": sensor.cx,
                 "cy": sensor.cy,
+                "has_image": (sensor.agent_id, sensor.sensor_id) in imaged,
             }
         )
     return rows

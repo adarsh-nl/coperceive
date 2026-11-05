@@ -7,12 +7,14 @@ import json
 from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from coperceive.evaluation.config import DEFAULT_CONFIG
 from coperceive.evaluation.evaluate import evaluate_run
 from coperceive.evaluation.predictions import read_boxes, read_run_meta
 from coperceive.store import write_scene
 from scripts.griffin import griffin_to_predictions as conv
 from scripts.griffin import scene_infos_val as trim
+from scripts.griffin import stage_viewer
 
 from tests.cooperative import cooperative_scene
 from tests.griffin_release import write_release
@@ -152,3 +154,13 @@ def test_append_folds_drone_and_fused_outputs_into_one_run(tmp_path: Path) -> No
     metrics = json.loads((predictions / "coop" / "Town03-000" / "metrics.json").read_text("utf-8"))
     evaluated = {(o["agent_id"], o["source"]) for o in metrics["outputs"]}
     assert evaluated == outputs
+
+
+def test_stage_viewer_staging_root_can_come_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.delenv("SLURM_JOB_ID", raising=False)
+    monkeypatch.setenv("COPERCEIVE_STAGE_ROOT", str(tmp_path / "stage"))
+    assert stage_viewer.default_scratch() == tmp_path / "stage"
+    monkeypatch.delenv("COPERCEIVE_STAGE_ROOT")
+    assert stage_viewer.default_scratch() is None

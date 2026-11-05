@@ -6,6 +6,28 @@ import type {
   LocalConnectOptions,
   TargetStatus,
 } from "./types";
+import type {
+  DetectionReport,
+  ScanDocument,
+  ServerEntry,
+  SshHostSettings,
+} from "./hpc";
+import type {
+  ImportedPredictions,
+  JobCancelResult,
+  JobLogTail,
+  JobSubmitOutcome,
+  JobWatchStatus,
+  MetricsReport,
+  PipelineEntry,
+  PredictionTail,
+  RunHistoryEntry,
+  RunPlan,
+  RunPlanRequest,
+  SubmissionPreview,
+  SubmitOptions,
+} from "./runPlan";
+import { apiBase } from "../api/client";
 
 interface SessionPayload {
   origin: string;
@@ -24,6 +46,11 @@ interface HealthPayload {
 declare global {
   interface Window {
     __TAURI_INTERNALS__?: unknown;
+    __COPERCEIVE_CTRL_PORT__?: number;
+    __COPERCEIVE_VIEWER_WINDOW__?: boolean;
+    /** "overlay": no native title bar; the traffic lights sit in the app's top bar. */
+    __COPERCEIVE_TITLEBAR__?: string;
+    __COPERCEIVE_CTRL_SECRET__?: string;
   }
 }
 
@@ -32,11 +59,21 @@ export function isTauriEnvironment(): boolean {
 }
 
 export interface AppPersistentState {
+  /** After a prepare, open the viewer when the first scene is ready (default on). */
+  open_first_ready_scene?: boolean;
+  /** Dataset view "Group scenes": "none" (default), "state" or "day". */
+  dataset_grouping?: string;
+  /** Viewer "Camera strip": "all" (filmstrip, default) or "agent". */
+  camera_strip?: string;
   last_data_root?: string;
+  library_root?: string;
+  auto_download_updates?: boolean;
+  pending_download?: { dataset_id: string; preset_id: string } | null;
   last_scene_id?: string;
   last_sample_index?: number;
   last_timestamp_ns?: number;
   last_viewpoint?: string;
+  theme_override?: string;
   last_theme?: string;
   recent_roots: string[];
 }
@@ -63,6 +100,177 @@ export async function isRemoteEnabled(): Promise<boolean> {
     }
   }
   return false;
+}
+
+/** Hosts from the user's ~/.ssh/config (aliases only, no secrets). */
+export async function listSshConfigHosts(): Promise<string[]> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string[]>("list_ssh_config_hosts");
+    } catch {
+      return [];
+    }
+  }
+  return [];
+}
+
+/** Effective settings for one ssh alias, read with `ssh -G`. */
+export async function readSshHostSettings(alias: string): Promise<SshHostSettings | null> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<SshHostSettings>("read_ssh_host_settings", { alias });
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function listServerProfiles(): Promise<ServerEntry[]> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<ServerEntry[]>("list_server_profiles");
+  }
+  return [];
+}
+
+export async function saveServerProfile(entry: ServerEntry): Promise<ServerEntry> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<ServerEntry>("save_server_profile", { entry });
+  }
+  throw new Error("Saving server profiles is only available in the desktop app.");
+}
+
+export async function deleteServerProfile(id: string): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_server_profile", { id });
+    return;
+  }
+  throw new Error("Deleting server profiles is only available in the desktop app.");
+}
+
+/**
+ * Runs the read-only "Test connection" checks (reachable, signed in, scheduler,
+ * partitions/GPUs, environment, scratch). Each step is time-bounded in Rust.
+ */
+/**
+ * Describes one folder inside a server's data folder (metadata only), over the
+ * same reused SSH connection as the rest of the HPC workspace.
+ */
+export async function remoteScan(
+  profileId: string,
+  root: string,
+  path: string,
+): Promise<ScanDocument> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Browsing a cluster's folders is only available in the desktop app.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<ScanDocument>("remote_scan", { profileId, root, path });
+}
+
+export async function testServerConnection(entry: ServerEntry): Promise<DetectionReport> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<DetectionReport>("test_server_connection", { entry });
+  }
+  throw new Error("Testing a connection is only available in the desktop app.");
+}
+
+/** Installed model plugins on the cluster, offered as built-in pipelines. */
+export async function listPipelineOptions(profileId: string): Promise<PipelineEntry[]> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<PipelineEntry[]>("list_pipeline_options", { profileId });
+  }
+  return [];
+}
+
+/** Reads a custom coperceive-pipeline.json registration over SSH (read-only). */
+export async function readCustomPipeline(
+  profileId: string,
+  scriptPath: string,
+): Promise<PipelineEntry> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<PipelineEntry>("read_custom_pipeline", { profileId, scriptPath });
+  }
+  throw new Error("Reading a pipeline registration is only available in the desktop app.");
+}
+
+/**
+ * Builds and checks a run plan (read-only remote checks). Nothing is submitted.
+ */
+export async function buildRunPlan(
+  profileId: string,
+  request: RunPlanRequest,
+): Promise<RunPlan> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<RunPlan>("build_run_plan", { profileId, request });
+  }
+  throw new Error("Building a run plan is only available in the desktop app.");
+}
+
+/** Saves a checked plan under the profile's results_root. Nothing is submitted. */
+export async function saveRunPlan(
+  profileId: string,
+  plan: RunPlan,
+  request: RunPlanRequest,
+): Promise<RunPlan> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<RunPlan>("save_run_plan", { profileId, plan, request });
+  }
+  throw new Error("Saving a run plan is only available in the desktop app.");
+}
+
+/**
+ * Renders the complete job script for a saved plan without submitting anything.
+ * The UI shows this text; its preview_hash is sent back with the confirmation.
+ */
+export async function previewSubmission(
+  profileId: string,
+  planId: string,
+  options: SubmitOptions,
+): Promise<SubmissionPreview> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<SubmissionPreview>("preview_submission", {
+      profileId,
+      planId,
+      options,
+    });
+  }
+  throw new Error("Rendering a submission script is only available in the desktop app.");
+}
+
+/**
+ * Submits a saved plan after the user confirmed the previewed script on screen.
+ * The backend refuses when `confirmed` is false or the preview hash changed.
+ */
+export async function submitRunPlan(
+  profileId: string,
+  planId: string,
+  options: SubmitOptions,
+  previewHash: string,
+  confirmed: boolean,
+): Promise<JobSubmitOutcome> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<JobSubmitOutcome>("submit_run_plan", {
+      profileId,
+      planId,
+      options,
+      previewHash,
+      confirmed,
+    });
+  }
+  throw new Error("Submitting a run plan is only available in the desktop app.");
 }
 
 export async function pickDataRoot(): Promise<string | null> {
@@ -187,5 +395,657 @@ export class LocalExecutionTarget implements ExecutionTarget {
     for (const listener of this.statusListeners) {
       listener(status);
     }
+  }
+}
+
+export type ImportImages = "full" | "preview" | "none";
+
+export interface ImportProgress {
+  event: string;
+  path?: string;
+  error?: string;
+  line?: string;
+  done?: number;
+  total?: number;
+  bytes?: number;
+  code?: number;
+  skipped?: boolean;
+}
+
+export async function startImport(options: {
+  source: string;
+  dest: string;
+  images: ImportImages;
+  mediaRoots: string[];
+  griffinRoot: string;
+}): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("import_from_folder", {
+    source: options.source,
+    dest: options.dest,
+    images: options.images,
+    mediaRoots: options.mediaRoots,
+    griffinRoot: options.griffinRoot || null,
+  });
+}
+
+export async function cancelImport(): Promise<void> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("cancel_import");
+}
+
+export async function onImportProgress(
+  callback: (event: ImportProgress) => void,
+): Promise<() => void> {
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<ImportProgress>("import-progress", (event) => {
+    callback(event.payload);
+  });
+}
+
+export async function getStorageInfo(): Promise<import("./types").StorageStats | null> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<import("./types").StorageStats>("get_storage_info");
+    } catch {
+      return null;
+    }
+  }
+  return {
+    library_root: "/scenes",
+    total_bytes: 1084227600384,
+    free_bytes: 107374182400,
+    used_bytes: 1048576,
+    scene_count: 1,
+    volume_name: "Macintosh HD",
+    is_configured: true,
+  };
+}
+
+export async function setLibraryRoot(newRoot: string): Promise<import("./types").StorageStats | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<import("./types").StorageStats>("set_library_root", { newRoot });
+  }
+  return null;
+}
+
+export async function moveLibraryRoot(newRoot: string): Promise<import("./types").StorageStats | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<import("./types").StorageStats>("move_library_root", { newRoot });
+  }
+  return null;
+}
+
+export async function getLibraryScenes(): Promise<import("./types").LibrarySceneInfo[]> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<import("./types").LibrarySceneInfo[]>("get_library_scenes");
+    } catch {
+      return [];
+    }
+  }
+  try {
+    const res = await fetch(`${apiBase()}/api/scenes`);
+    if (res.ok) {
+      const data = (await res.json()) as unknown;
+      if (Array.isArray(data)) {
+        return data.map((s: { scene_id?: string; has_thumbnail?: boolean }) => ({
+          scene_id: s.scene_id ?? "scene",
+          path: s.scene_id ?? "scene",
+          dataset_name: "Local Scenes",
+          size_bytes: 1048576,
+          agent_count: 1,
+          has_images: "full" as const,
+          has_map: true,
+          is_complete: true,
+          is_valid: true,
+          has_thumbnail: Boolean(s.has_thumbnail),
+        }));
+      }
+    }
+  } catch {}
+  return [];
+}
+
+/** Reads the small import-time preview for a library card (null when absent). */
+export async function libraryThumbnail(scenePath: string): Promise<number[] | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<number[] | null>("library_thumbnail", { scenePath });
+  }
+  return null;
+}
+
+export async function deleteLibraryScene(scenePath: string): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("delete_library_scene", { scenePath });
+  }
+}
+
+async function controllerPost<T>(endpoint: string, body: unknown): Promise<T> {
+  const port = window.__COPERCEIVE_CTRL_PORT__;
+  const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+  const res = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${secret}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    throw new Error(`Controller request failed (${res.status}): ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+/**
+ * True in the viewer window: a desktop page served by the scene server. Tauri
+ * injects its IPC object there too, but no backend command is permitted for
+ * that window, so screens that need them (Library, Get data, HPC) must never
+ * render here; it reaches the app through the loopback controller instead.
+ */
+export function isViewerWindow(): boolean {
+  return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_VIEWER_WINDOW__);
+}
+
+async function controllerGet<T>(endpoint: string): Promise<T> {
+  const port = window.__COPERCEIVE_CTRL_PORT__;
+  const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+  const res = await fetch(`http://127.0.0.1:${port}${endpoint}`, {
+    headers: { Authorization: `Bearer ${secret}` },
+  });
+  if (!res.ok) {
+    throw new Error(`Controller request failed (${res.status})`);
+  }
+  return res.json() as Promise<T>;
+}
+
+/** Every scene of the open cluster dataset and its state, as the main window last saw it. */
+export interface DatasetSceneList {
+  scenes: { scene_id: string; state: string }[];
+  /** The dataset's name ("V2XSET train") and its server; absent from an older main window. */
+  label?: string;
+  server?: string;
+}
+
+export async function getDatasetScenes(): Promise<DatasetSceneList | null> {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+    return null;
+  }
+  const body = await controllerGet<{ dataset: DatasetSceneList | null }>("/dataset-scenes");
+  return body.dataset && Array.isArray(body.dataset.scenes) ? body.dataset : null;
+}
+
+/** The Slurm job serving a cluster dataset's viewer, or null for a local scene. */
+export interface ViewerJob {
+  job_id: number | null;
+  status: string;
+  state?: string | null;
+  time_left?: string | null;
+  time_left_seconds?: number | null;
+}
+
+export async function getViewerJob(): Promise<ViewerJob | null> {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+    return null;
+  }
+  const body = await controllerGet<{ session: ViewerJob | null }>("/viewer-session");
+  return body.session ?? null;
+}
+
+/** Name the viewer window after the scene it shows. */
+export async function setViewerTitle(scene: string): Promise<void> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__ && window.__COPERCEIVE_VIEWER_WINDOW__) {
+    await controllerPost("/viewer-title", { scene });
+  }
+}
+
+/** Ask the main window to show the prepare preview for one scene (confirmed there). */
+export async function prepareSceneInMainWindow(sceneId: string): Promise<boolean> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const resp = await controllerPost<{ shown?: boolean }>("/prepare-scene", { scene_id: sceneId });
+    return Boolean(resp.shown);
+  }
+  return false;
+}
+
+/** Bring the main window forward on its Library (from the viewer window). */
+export async function showLibrary(): Promise<boolean> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const resp = await controllerPost<{ shown?: boolean }>("/show-library", {});
+    return Boolean(resp.shown);
+  }
+  return false;
+}
+
+export async function revealInFinder(path?: string): Promise<void> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    await controllerPost("/reveal-in-finder", {});
+    return;
+  }
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("reveal_in_finder", { path: path || "" });
+  }
+}
+
+export async function pickSavePath(
+  defaultName: string,
+  extension: string,
+): Promise<string | null> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    try {
+      const resp = await controllerPost<{ status: string; path?: string | null }>("/export-pick", {
+        default_name: defaultName,
+        extension,
+      });
+      return resp.path ?? null;
+    } catch {
+      return null;
+    }
+  }
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string | null>("pick_save_path", {
+        defaultName,
+        extension,
+      });
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function saveExportedFile(
+  sourceRelative?: string,
+  bytes?: Uint8Array,
+): Promise<string> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const resp = await controllerPost<{ status: string; path: string }>("/export-save", {
+      source_relative: sourceRelative,
+      bytes: bytes ? Array.from(bytes) : undefined,
+    });
+    return resp.path;
+  }
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string>("save_exported_file", {
+      sourceRelative,
+      bytes: bytes ? Array.from(bytes) : undefined,
+    });
+  }
+  throw new Error("Desktop export only available in desktop environment");
+}
+
+export async function datasetDryRun(
+  datasetId: string,
+  presetId: string,
+): Promise<import("./types").DryRunResult> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<import("./types").DryRunResult>("dataset_dry_run", {
+      datasetId,
+      presetId,
+    });
+  }
+  throw new Error("Tauri environment required for dry-run");
+}
+
+export async function startDatasetJob(
+  datasetId: string,
+  presetId: string,
+  acceptTerms: boolean,
+): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("start_dataset_job", {
+      datasetId,
+      presetId,
+      acceptTerms,
+    });
+  }
+}
+
+export async function loadDatasetCatalog(): Promise<import("./types").CatalogDataset[]> {
+  if (!isTauriEnvironment()) {
+    throw new Error("Open the desktop app to see the dataset list.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<import("./types").CatalogDataset[]>("dataset_catalog");
+}
+
+export async function setAutoDownloadUpdates(enabled: boolean): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("set_auto_download_updates", { enabled });
+}
+
+export async function pauseDatasetJob(): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("pause_dataset_job");
+}
+
+export async function resumeDatasetJob(): Promise<void> {
+  if (!isTauriEnvironment()) return;
+  const { invoke } = await import("@tauri-apps/api/core");
+  await invoke("resume_dataset_job");
+}
+
+export async function cancelDatasetJob(): Promise<void> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("cancel_dataset_job");
+  }
+}
+
+export async function onDatasetProgress(
+  callback: (event: import("./types").DatasetProgressEvent) => void,
+): Promise<() => void> {
+  if (isTauriEnvironment()) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<import("./types").DatasetProgressEvent>("dataset-progress", (event) => {
+      callback(event.payload);
+    });
+  }
+  return () => {};
+}
+
+export async function validateScene(
+  scenePath: string,
+): Promise<{ scene_path: string; valid: boolean; stdout: string; stderr: string }> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke("validate_scene", { scenePath });
+  }
+  return { scene_path: scenePath, valid: true, stdout: "", stderr: "" };
+}
+
+/** Live state of a run submitted from this app. */
+export async function jobWatchStatus(
+  profileId: string,
+  planId: string,
+  jobId: string,
+): Promise<JobWatchStatus> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<JobWatchStatus>("job_watch_status", { profileId, planId, jobId });
+  }
+  throw new Error("Watching a run is only available in the desktop app.");
+}
+
+/** A bounded tail of the run's stdout or stderr log. */
+export async function jobWatchLogs(
+  profileId: string,
+  planId: string,
+  jobId: string,
+  stream: "stdout" | "stderr",
+  lines = 50,
+): Promise<JobLogTail> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<JobLogTail>("job_watch_logs", { profileId, planId, jobId, stream, lines });
+  }
+  throw new Error("Reading a job log is only available in the desktop app.");
+}
+
+/** Cancels a pending/running job after the user confirmed it. */
+export async function cancelRunJob(
+  profileId: string,
+  planId: string,
+  jobId: string,
+  confirmed: boolean,
+): Promise<JobCancelResult> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<JobCancelResult>("cancel_run_job", { profileId, planId, jobId, confirmed });
+  }
+  throw new Error("Cancelling a run is only available in the desktop app.");
+}
+
+/** One bounded read of the run's streamed predictions.jsonl. */
+export async function predictionStream(
+  profileId: string,
+  planId: string,
+  offset: number,
+  maxBytes = 65536,
+): Promise<PredictionTail> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<PredictionTail>("prediction_stream", { profileId, planId, offset, maxBytes });
+  }
+  throw new Error("Following a run's predictions is only available in the desktop app.");
+}
+
+/** The pipeline's final metrics.json, or null while it does not exist. */
+export async function runMetrics(profileId: string, planId: string): Promise<MetricsReport | null> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<MetricsReport | null>("run_metrics", { profileId, planId });
+  }
+  throw new Error("The run report is only available in the desktop app.");
+}
+
+/** Imports the run's predictions and opens the viewer on the stored run. */
+export async function openPredictions(
+  profileId: string,
+  planId: string,
+): Promise<ImportedPredictions> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<ImportedPredictions>("open_predictions", { profileId, planId });
+  }
+  throw new Error("Opening predictions is only available in the desktop app.");
+}
+
+/** The app's submitted runs from Slurm accounting, newest first. */
+export async function listRunHistory(profileId: string, limit = 50): Promise<RunHistoryEntry[]> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<RunHistoryEntry[]>("list_run_history", { profileId, limit });
+  }
+  throw new Error("The run history is only available in the desktop app.");
+}
+
+export interface TownMapProgress {
+  event?: string;
+  stage?: string;
+  percent?: number;
+  message?: string;
+}
+
+export interface TownMapResult {
+  map_name: string;
+  maps_root: string;
+  directory: string;
+  source: string;
+  licence: string;
+  licence_url: string;
+  sha256: string;
+  alignment: { measured: boolean; chosen?: string; residual_median_m?: number | null };
+}
+
+/** Download, ingest and align the official Town03 map for a library scene. */
+export async function downloadTownMap(scenePath: string): Promise<TownMapResult> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<TownMapResult>("download_town_map", { scenePath });
+  }
+  throw new Error("Map download is only available in the desktop app.");
+}
+
+/** Progress events emitted while the map is downloaded, parsed and aligned. */
+export async function onTownMapProgress(
+  callback: (event: TownMapProgress) => void,
+): Promise<() => void> {
+  if (isTauriEnvironment()) {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<TownMapProgress>("town-map-progress", (event) => callback(event.payload));
+  }
+  return () => {};
+}
+
+export interface DesktopUpdateCheckResult {
+  status: "available" | "uptodate" | "error";
+  version?: string;
+  notes?: string;
+  pub_date?: string;
+  error?: string;
+  is_network?: boolean;
+}
+
+/** Checks for application updates via the loopback controller. */
+export async function checkDesktopUpdate(isManual = false, updateUrl?: string): Promise<DesktopUpdateCheckResult> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const override = updateUrl || (typeof window !== "undefined" ? window.__COPERCEIVE_UPDATE_URL__ : undefined);
+    return await controllerPost<DesktopUpdateCheckResult>("/updater-check", {
+      is_manual: isManual,
+      update_url: override,
+    });
+  }
+  throw new Error("Controller not available");
+}
+
+/** Downloads, verifies signature and installs the pending update via the loopback controller. */
+export async function installDesktopUpdate(updateUrl?: string): Promise<void> {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    const override = updateUrl || (typeof window !== "undefined" ? window.__COPERCEIVE_UPDATE_URL__ : undefined);
+    await controllerPost<{ status: string }>("/updater-install", {
+      update_url: override,
+    });
+    return;
+  }
+  throw new Error("Controller not available");
+}
+
+
+/** What Open Folder's folder check shows; read from the folder's scene manifests. */
+export interface FolderCheck {
+  path: string;
+  kind: "scene" | "library" | "folder" | "none";
+  scene_ids: string[];
+  modalities: string[];
+  has_map: boolean;
+  size_bytes: number;
+  in_library: boolean;
+  problem: string | null;
+}
+
+export async function inspectFolder(path: string): Promise<FolderCheck | null> {
+  if (!path.trim() || !isTauriEnvironment()) {
+    return null;
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<FolderCheck>("inspect_folder", { path });
+}
+
+/**
+ * Call `handler` with the first path dropped anywhere on the window (Tauri's
+ * webview drag-drop; a browser drop carries no path, so it is ignored there).
+ * `onHover` says whether something is being dragged over the window.
+ */
+export async function onFolderDrop(
+  handler: (path: string) => void,
+  onHover?: (hovering: boolean) => void,
+): Promise<() => void> {
+  if (!isTauriEnvironment()) {
+    return () => undefined;
+  }
+  const { getCurrentWebview } = await import("@tauri-apps/api/webview");
+  return await getCurrentWebview().onDragDropEvent((event) => {
+    const payload = event.payload;
+    if (payload.type === "enter" || payload.type === "over") {
+      onHover?.(true);
+    } else if (payload.type === "leave") {
+      onHover?.(false);
+    } else if (payload.type === "drop") {
+      onHover?.(false);
+      const first = payload.paths[0];
+      if (first) handler(first);
+    }
+  });
+}
+
+export type DiagnosticsInvoke = (cmd: string, args?: Record<string, unknown>) => Promise<unknown>;
+
+let diagnosticsInvoke: DiagnosticsInvoke | null = null;
+
+/** Test-only injection for the diagnostics commands; production leaves it null. */
+export function _setDiagnosticsInvokeForTesting(fn: DiagnosticsInvoke | null): void {
+  diagnosticsInvoke = fn;
+}
+
+async function invokeDiagnostics<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  if (diagnosticsInvoke) return (await diagnosticsInvoke(cmd, args)) as T;
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<T>(cmd, args);
+}
+export interface DiagnosticsReport {
+  preview: string;
+  crashes: number;
+  bytes: number;
+}
+
+export interface StartupCrash {
+  schema: string;
+  kind: string;
+  timestamp_unix: number;
+  version: string;
+  commit: string;
+  message: string;
+  location?: string | null;
+}
+
+export async function buildDiagnosticsReport(context: Record<string, unknown>): Promise<DiagnosticsReport | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    return await invokeDiagnostics<DiagnosticsReport>("diagnostics_build_report", { context });
+  } catch {
+    return null;
+  }
+}
+
+export async function copyDiagnosticsText(
+  context: Record<string, unknown>,
+  note: string,
+): Promise<boolean> {
+  if (!isTauriEnvironment()) {
+    return false;
+  }
+  try {
+    await invokeDiagnostics("diagnostics_copy_text", { context, note });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function saveDiagnosticsZip(
+  context: Record<string, unknown>,
+  note: string,
+): Promise<string | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    return await invokeDiagnostics<string | null>("diagnostics_save_zip", { context, note });
+  } catch {
+    return null;
+  }
+}
+
+export async function startupCrash(): Promise<StartupCrash | null> {
+  if (!isTauriEnvironment()) return null;
+  try {
+    return await invokeDiagnostics<StartupCrash | null>("diagnostics_startup_crash");
+  } catch {
+    return null;
   }
 }

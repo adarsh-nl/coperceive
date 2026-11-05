@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false, reportUnknownParameterType=false, reportMissingParameterType=false
+# pyright: reportUnknownMemberType=false, reportUnknownArgumentType=false, reportUnknownLambdaType=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportUnknownVariableType=false
 """Unit and integration tests for remote coperceive serve session management."""
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from pathlib import Path
 import pytest
 from coperceive.remote.manager import (
     generate_secure_token,
+    get_session_token,
     get_status,
     list_sessions,
     map_stopped_reason,
@@ -97,6 +98,7 @@ def test_remote_start_with_fake_sbatch(tmp_path: Path, monkeypatch: pytest.Monke
 
     res = start_session(
         data_root=data_dir,
+        partition="test-partition",
         session_uuid=uuid_test,
         sbatch_script=fake_sbatch_script,
         wait_timeout=2,
@@ -109,6 +111,86 @@ def test_remote_start_with_fake_sbatch(tmp_path: Path, monkeypatch: pytest.Monke
     assert res["ip"] == "10.20.240.48"
     assert res["port"] == 8731
     assert len(res["token"]) == 32
+
+
+def test_remote_start_uploads_static_dir_via_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The desktop uploads its viewer page; the server must receive that dir."""
+    coperceive_dir = tmp_path / ".coperceive"
+    monkeypatch.setattr("coperceive.remote.manager.get_base_dir", lambda: coperceive_dir)
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_sessions_dir", lambda: coperceive_dir / "sessions"
+    )
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_tokens_dir", lambda: coperceive_dir / "tokens"
+    )
+    monkeypatch.setattr("coperceive.remote.manager.get_logs_dir", lambda: coperceive_dir / "logs")
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    fake_sbatch_script = tmp_path / "fake.sbatch"
+    fake_sbatch_script.touch()
+    static_dir = tmp_path / "remote-static"
+    static_dir.mkdir()
+
+    # Without a built page the desktop app would leave Remote mode with a 404;
+    # refuse before submitting anything.
+    missing = start_session(
+        data_root=data_dir,
+        partition="test-partition",
+        sbatch_script=fake_sbatch_script,
+        static_dir=static_dir,
+        wait_timeout=1,
+    )
+    assert missing["status"] == "error"
+    assert "no index.html" in missing["error"]
+
+    (static_dir / "index.html").write_text('<script src="./a.js"></script>\n', encoding="utf-8")
+    (static_dir / "a.js").write_text("console.log('viewer')\n", encoding="utf-8")
+    captured: dict[str, str] = {}
+
+    def fake_subprocess_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "sbatch" or cmd[0].endswith("sbatch"):
+            captured.update(kwargs.get("env", {}))
+            return subprocess.CompletedProcess(cmd, 0, stdout="778899\n", stderr="")
+        if cmd[0] == "squeue":
+            return subprocess.CompletedProcess(cmd, 0, stdout="RUNNING|None\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    uuid_test = "test-static-uuid"
+    session_file = coperceive_dir / "sessions" / f"{uuid_test}.json"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                "uuid": uuid_test,
+                "job_id": 778899,
+                "node": "hpc-node11",
+                "ip": "10.20.240.48",
+                "port": 8731,
+                "pid": 5544,
+                "started_at": 1700000000,
+                "data_root": str(data_dir),
+                "token_file": str(coperceive_dir / "tokens" / f"{uuid_test}.token"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr("shutil.which", lambda prog: f"/usr/bin/{prog}")
+    monkeypatch.setattr(
+        "coperceive.remote.manager.probe_health", lambda ip, port, token, timeout: True
+    )
+    res = start_session(
+        data_root=data_dir,
+        partition="test-partition",
+        session_uuid=uuid_test,
+        sbatch_script=fake_sbatch_script,
+        static_dir=static_dir,
+        wait_timeout=2,
+    )
+    assert res["status"] == "running"
+    assert captured.get("COPERCEIVE_REMOTE_STATIC") == str(static_dir.resolve())
 
 
 def test_remote_start_pending_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -139,6 +221,7 @@ def test_remote_start_pending_reason(tmp_path: Path, monkeypatch: pytest.MonkeyP
 
     res = start_session(
         data_root=data_dir,
+        partition="test-partition",
         session_uuid="pending-uuid-5678",
         sbatch_script=fake_sbatch_script,
         wait_timeout=1,
@@ -528,6 +611,7 @@ def test_cluster_remote_session_integration(tmp_path: Path) -> None:
 
     res = start_session(
         data_root=data_dir,
+        partition="integration-test",
         walltime="00:03:00",
         wait_timeout=45,
     )
@@ -556,3 +640,259 @@ def test_cluster_remote_session_integration(tmp_path: Path) -> None:
 
     post_status = get_status(session_uuid=session_uuid, job_id=job_id)
     assert post_status["status"] == "stopped"
+
+
+def _isolate_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    coperceive_dir = tmp_path / ".coperceive"
+    monkeypatch.setattr("coperceive.remote.manager.get_base_dir", lambda: coperceive_dir)
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_sessions_dir", lambda: coperceive_dir / "sessions"
+    )
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_tokens_dir", lambda: coperceive_dir / "tokens"
+    )
+    monkeypatch.setattr("coperceive.remote.manager.get_logs_dir", lambda: coperceive_dir / "logs")
+    return coperceive_dir
+
+
+def test_start_refuses_missing_partition_with_plain_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """No product partition default: without a profile choice, start explains it."""
+    _isolate_dirs(tmp_path, monkeypatch)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    script = tmp_path / "fake.sbatch"
+    script.touch()
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout="1\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    res = start_session(data_root=data_dir, sbatch_script=script)
+    assert res["status"] == "error"
+    assert "No partition was chosen" in res["error"]
+    assert calls == [], "nothing may be submitted without a chosen partition"
+
+
+def test_start_uses_profile_values_and_omits_absent_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _isolate_dirs(tmp_path, monkeypatch)
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    script = tmp_path / "fake.sbatch"
+    script.touch()
+    seen: list[list[str]] = []
+
+    def fake_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        seen.append(list(cmd))
+        if cmd[0].endswith("sbatch"):
+            return subprocess.CompletedProcess(cmd, 0, stdout="4242\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="PENDING|Priority\n", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr("shutil.which", lambda prog: f"/usr/bin/{prog}")
+
+    start_session(
+        data_root=data_dir,
+        partition="gpu-h100",
+        walltime="01:00:00",
+        cpus=4,
+        mem="16G",
+        session_uuid="profile-resources-uuid",
+        sbatch_script=script,
+        wait_timeout=0,
+    )
+    sbatch_cmd = next(cmd for cmd in seen if cmd[0].endswith("sbatch"))
+    assert "--partition=gpu-h100" in sbatch_cmd
+    assert "--time=01:00:00" in sbatch_cmd
+    assert "--cpus-per-task=4" in sbatch_cmd
+    assert "--mem=16G" in sbatch_cmd
+
+    seen.clear()
+    start_session(
+        data_root=data_dir,
+        partition="main-cpu",
+        session_uuid="profile-minimal-uuid",
+        sbatch_script=script,
+        wait_timeout=0,
+    )
+    sbatch_cmd = next(cmd for cmd in seen if cmd[0].endswith("sbatch"))
+    assert "--partition=main-cpu" in sbatch_cmd
+    assert not any(flag.startswith("--time=") for flag in sbatch_cmd)
+    assert not any(flag.startswith("--cpus-per-task=") for flag in sbatch_cmd)
+    assert not any(flag.startswith("--mem=") for flag in sbatch_cmd)
+
+
+def test_session_token_is_read_over_ssh_and_stays_a_remote_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    coperceive_dir = _isolate_dirs(tmp_path, monkeypatch)
+    uuid_val = "token-uuid-42"
+    token = "0123456789abcdef0123456789abcdef"
+    token_file = coperceive_dir / "tokens" / f"{uuid_val}.token"
+    write_token_file(token_file, token)
+    session_file = coperceive_dir / "sessions" / f"{uuid_val}.json"
+    session_file.parent.mkdir(parents=True, exist_ok=True)
+    session_file.write_text(
+        json.dumps(
+            {
+                "uuid": uuid_val,
+                "job_id": 7,
+                "node": "compute-1",
+                "ip": "192.0.2.5",
+                "port": 9000,
+                "pid": 10,
+                "started_at": 1,
+                "data_root": "/data",
+                "token_file": str(token_file),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    res = get_session_token(session_uuid=uuid_val)
+    assert res["status"] == "ok"
+    assert res["token"] == token
+    # The token is only read, never copied to another local file.
+    assert sorted(p.name for p in (coperceive_dir / "tokens").iterdir()) == [token_file.name]
+
+    assert get_session_token(session_uuid="unknown-uuid")["status"] == "error"
+    assert get_session_token(session_uuid="../escape")["status"] == "error"
+
+
+def test_session_token_refuses_symlink_escape(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    coperceive_dir = _isolate_dirs(tmp_path, monkeypatch)
+    outside = tmp_path / "outside.token"
+    outside.write_text("stolen", encoding="utf-8")
+    tokens_dir = coperceive_dir / "tokens"
+    tokens_dir.mkdir(parents=True, exist_ok=True)
+    (tokens_dir / "escape-uuid.token").symlink_to(outside)
+    res = get_session_token(session_uuid="escape-uuid")
+    assert res["status"] == "error"
+
+
+def test_no_site_defaults_in_remote_code_or_sbatch_script() -> None:
+    root = Path(__file__).resolve().parent.parent
+    product_sources = {
+        "coperceive/remote/manager.py": root / "coperceive" / "remote" / "manager.py",
+        "coperceive/remote/commands.py": root / "coperceive" / "remote" / "commands.py",
+        "coperceive/models/slurm.py": root / "coperceive" / "models" / "slurm.py",
+        "coperceive/models/commands.py": root / "coperceive" / "models" / "commands.py",
+        "scripts/desktop/remote_serve.sbatch": root / "scripts" / "desktop" / "remote_serve.sbatch",
+    }
+    sources = {name: path.read_text(encoding="utf-8") for name, path in product_sources.items()}
+    all_text = "\n".join(sources.values())
+    for site_value in [
+        "DEFAULT_PARTITION",
+        "ps,main-gpu",
+        "ps,main-cpu",
+        "utwente",
+        "hpc-node",
+        "hpc-head",
+        "/datasets/eemcs",
+        "main-gpu",
+    ]:
+        assert site_value not in all_text, f"site-specific value {site_value!r} in product code"
+    assert "--partition=ps" not in all_text
+    sbatch = sources["scripts/desktop/remote_serve.sbatch"]
+    for flag in ["--partition=", "--cpus-per-task=", "--mem=", "--time="]:
+        assert f"#SBATCH {flag}" not in sbatch, f"{flag} must come from the profile, not the script"
+    # The model-run sbatch takes its partition from the CLI/profile too.
+    models = sources["coperceive/models/slurm.py"]
+    assert "--slurm-partition" in models or "COPERCEIVE_SLURM_PARTITION" in models
+    assert "partition=partition" in models or "#SBATCH --partition={partition}" in models
+
+
+def test_committed_portability_fixtures_are_generic_and_distinct() -> None:
+    """The same fixtures drive the Rust portability tests and this check."""
+    fixtures_dir = (
+        Path(__file__).resolve().parent.parent / "src-tauri" / "tests" / "fixtures" / "hpc"
+    )
+    names = sorted(p.name for p in fixtures_dir.glob("cluster-*.json"))
+    assert names == ["cluster-a.json", "cluster-b.json", "cluster-none.json", "cluster-save.json"]
+
+    profiles = []
+    for name in names:
+        data = json.loads((fixtures_dir / name).read_text(encoding="utf-8"))
+        profile = data["profile"]
+        profiles.append(profile)
+        serialised = json.dumps(data).lower()
+        for forbidden in [
+            "utwente",
+            "hpc-node",
+            " hpc-head",
+            '"ps"',
+            "partition=ps",
+            "password",
+            "token",
+        ]:
+            assert forbidden not in serialised, f"{name} contains site/credential value {forbidden}"
+        assert profile["defaults"]["partition"] is None or profile["scheduler"] == "slurm"
+
+    partitions = {profile["defaults"]["partition"] for profile in profiles}
+    assert partitions == {"gpu-a100", "main-cpu", None}
+    assert [p["scheduler"] for p in profiles].count("none") == 1
+    assert "gpu:a100:1" in json.dumps(profiles[0])
+    assert "gpu:h100:2" not in json.dumps(profiles[0])
+
+    fake_ssh = (fixtures_dir / "fake_ssh.sh").read_text(encoding="utf-8")
+    assert "gpu:a100:4" in fake_ssh and "gpu:h100:2" in fake_ssh
+    assert "proxyjump jump.example.org" in fake_ssh
+
+
+def _session_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    coperceive_dir = tmp_path / ".coperceive"
+    monkeypatch.setattr("coperceive.remote.manager.get_base_dir", lambda: coperceive_dir)
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_sessions_dir", lambda: coperceive_dir / "sessions"
+    )
+    monkeypatch.setattr(
+        "coperceive.remote.manager.get_tokens_dir", lambda: coperceive_dir / "tokens"
+    )
+    (coperceive_dir / "sessions").mkdir(parents=True, exist_ok=True)
+    return coperceive_dir
+
+
+def test_a_running_job_without_its_session_file_yet_is_starting_not_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The cluster case behind "Cannot reattach: session … is not running (state:
+    RUNNING)": squeue already says RUNNING, the job has not written its session
+    file, and the lookup by session id fell back to sacct, which said "stopped"."""
+    _session_dirs(tmp_path, monkeypatch)
+
+    def fake_subprocess_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "sacct":
+            return subprocess.CompletedProcess(cmd, 0, stdout="55123|RUNNING\n", stderr="")
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    status = get_status(session_uuid="55bef61ccf2f60b8")
+    assert status["status"] == "pending", status
+    assert status["state"] == "RUNNING" and status["job_id"] == 55123
+    assert "starting" in status["reason"]
+
+
+def test_running_needs_a_known_session_address(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Looked up by job id, a RUNNING job with no session yet is still starting."""
+    _session_dirs(tmp_path, monkeypatch)
+
+    def fake_subprocess_run(cmd: list[str], *args, **kwargs):  # type: ignore[no-untyped-def]
+        if cmd[0] == "squeue":
+            return subprocess.CompletedProcess(
+                cmd, 0, stdout="RUNNING|00:00:05|03:59:55|None|node3\n", stderr=""
+            )
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+    status = get_status(job_id=55123)
+    assert (status["status"], status["state"]) == ("pending", "RUNNING"), status
+    assert "starting" in status["reason"]

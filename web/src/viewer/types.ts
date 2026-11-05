@@ -50,6 +50,8 @@ export type FrameFrustum = {
   fy?: number | null;
   cx?: number | null;
   cy?: number | null;
+  /** False when this camera recorded no image at this sample (older servers omit it). */
+  has_image?: boolean;
 };
 export type FrameSensor = { agent_id: string; sensor_id: string; count: number };
 export type FrameDocument = {

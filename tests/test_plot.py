@@ -406,3 +406,20 @@ def test_cli_bev_run_with_nul_or_overlong_id_prints_one_line(tmp_path: Path) -> 
                 ]
             )
         assert caught.value.code == 2
+
+
+def test_plot_raises_when_matplotlib_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import sys
+
+    import coperceive.plot as plot_mod
+
+    monkeypatch.setattr(plot_mod, "_mpl_cache", None)
+    for k in list(sys.modules):
+        if k.startswith("matplotlib"):
+            monkeypatch.delitem(sys.modules, k, raising=False)
+    monkeypatch.setitem(sys.modules, "matplotlib", None)
+    msg = "matplotlib is required for plotting and figure export"
+    with pytest.raises(plot_mod.PlotError, match=msg):
+        plot_mod._get_mpl()  # pyright: ignore[reportPrivateUsage]

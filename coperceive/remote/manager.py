@@ -14,10 +14,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-DEFAULT_PARTITION = "ps"
-DEFAULT_WALLTIME = "02:00:00"
-DEFAULT_CPUS = 2
-DEFAULT_MEM = "8G"
+# No partition, account, QoS or resource default lives here: every value comes
+# from the user's per-server profile (see docs/adr/0015). Submitting without a
+# chosen partition is an error, never a guess.
 
 
 def get_base_dir() -> Path:
@@ -206,22 +205,62 @@ def record_heartbeat(session_uuid: str) -> dict[str, Any]:
 def start_session(
     *,
     data_root: str | Path,
-    partition: str = DEFAULT_PARTITION,
-    walltime: str = DEFAULT_WALLTIME,
-    cpus: int = DEFAULT_CPUS,
-    mem: str = DEFAULT_MEM,
+    partition: str | None = None,
+    walltime: str | None = None,
+    cpus: int | None = None,
+    mem: str | None = None,
+    python: str | None = None,
+    static_dir: str | Path | None = None,
     session_uuid: str | None = None,
     sbatch_script: str | Path | None = None,
     wait_timeout: int = 45,
     extra_args: list[str] | None = None,
+    media_roots: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Submits a remote serve Slurm job and waits for RUNNING readiness."""
+    """Submits a remote serve Slurm job and waits for RUNNING readiness.
+
+    Partition and resources come from the selected server profile (the desktop
+    app passes them through); this module never invents a site default.
+    """
+    resolved_partition = (partition or os.environ.get("COPERCEIVE_REMOTE_PARTITION") or "").strip()
+    if not resolved_partition:
+        return {
+            "status": "error",
+            "error": (
+                "No partition was chosen for this server. Pick one in the server profile "
+                "(resources) and try again."
+            ),
+        }
     data_root_path = Path(data_root).resolve()
     if not data_root_path.is_dir():
         return {
             "status": "error",
             "error": f"Data root directory does not exist: {data_root}",
         }
+
+    static_path: Path | None = None
+    if static_dir is not None:
+        # The desktop app uploads its built viewer bundle to the login home;
+        # `~` is expanded here, on the server, not in the app. Refuse before a
+        # job is submitted rather than starting a Remote session with a 404.
+        static_path = Path(static_dir).expanduser().resolve()
+        if not (static_path / "index.html").is_file():
+            return {
+                "status": "error",
+                "error": (
+                    f"Viewer page directory has no index.html: {static_path}. "
+                    "Reconnect from the desktop app so it uploads the page again."
+                ),
+            }
+
+    # Directories the server may read camera images from (a cluster dataset's raw
+    # root). Each is passed as its own argument, never word-split by the shell.
+    media_paths: list[Path] = []
+    for media in media_roots or []:
+        media_path = Path(media).expanduser().resolve()
+        if not media_path.is_dir() or "\n" in str(media_path):
+            return {"status": "error", "error": f"Media root is not a directory: {media}"}
+        media_paths.append(media_path)
 
     uuid_val = session_uuid or secrets.token_hex(8)
     token = generate_secure_token()
@@ -269,20 +308,31 @@ def start_session(
     env["COPERCEIVE_REMOTE_UUID"] = uuid_val
     env["COPERCEIVE_REMOTE_ROOT"] = str(data_root_path)
     env["COPERCEIVE_REMOTE_TOKEN_FILE"] = str(token_file)
+    if python:
+        env["COPERCEIVE_REMOTE_PYTHON"] = python
     if extra_args:
         env["COPERCEIVE_EXTRA_ARGS"] = " ".join(extra_args)
+    if static_path is not None:
+        env["COPERCEIVE_REMOTE_STATIC"] = str(static_path)
+    if media_paths:
+        env["COPERCEIVE_REMOTE_MEDIA_ROOTS"] = "\n".join(str(path) for path in media_paths)
 
+    # Only the values the profile chose are passed; omitted flags fall back to
+    # the cluster's own partition defaults, not to a Coperceive guess.
     cmd = [
         sbatch_bin,
         "--parsable",
-        f"--partition={partition}",
-        f"--time={walltime}",
-        f"--cpus-per-task={cpus}",
-        f"--mem={mem}",
+        f"--partition={resolved_partition}",
         f"--job-name={job_name}",
         f"--output={log_file}",
-        str(script_path),
     ]
+    if walltime:
+        cmd.append(f"--time={walltime}")
+    if cpus is not None and cpus > 0:
+        cmd.append(f"--cpus-per-task={cpus}")
+    if mem:
+        cmd.append(f"--mem={mem}")
+    cmd.append(str(script_path))
 
     try:
         proc = subprocess.run(
@@ -364,6 +414,76 @@ def start_session(
     }
 
 
+def _token_path_for_session(session_uuid: str) -> Path | None:
+    """Returns the token path for a session, refusing escapes from ~/.coperceive.
+
+    The token stays a 0600 file on the cluster; the desktop app reads it over the
+    encrypted SSH channel and keeps it in memory only.
+    """
+    base = get_base_dir().resolve()
+    session_file = get_sessions_dir() / f"{session_uuid}.json"
+    candidate: Path | None = None
+    if session_file.is_file():
+        try:
+            data = json.loads(session_file.read_text(encoding="utf-8"))
+            token_file = str(data.get("token_file", "")).strip()
+            if token_file:
+                candidate = Path(token_file)
+        except Exception:
+            candidate = None
+    if candidate is None:
+        candidate = get_tokens_dir() / f"{session_uuid}.token"
+    try:
+        resolved = candidate.resolve()
+        resolved.relative_to(base)
+    except (OSError, ValueError):
+        return None
+    if resolved.is_symlink() or not resolved.is_file():
+        return None
+    return resolved
+
+
+def get_session_token(*, session_uuid: str) -> dict[str, Any]:
+    """Returns the running session's bearer token over the SSH channel.
+
+    The caller (desktop app) keeps it in memory only; this function never logs
+    it and never writes it anywhere new.
+    """
+    uuid_val = (session_uuid or "").strip()
+    if not uuid_val:
+        return {"status": "error", "error": "A session id is required."}
+    if any(ch in uuid_val for ch in "/\\\x00"):
+        return {"status": "error", "error": "That session id is not valid."}
+    token_path = _token_path_for_session(uuid_val)
+    if token_path is None:
+        return {
+            "status": "error",
+            "error": (
+                "Coperceive could not find the session key on the server. "
+                "Disconnect and start a new session."
+            ),
+        }
+    try:
+        token = token_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return {
+            "status": "error",
+            "error": "Coperceive could not read the session key on the server.",
+        }
+    if not token:
+        return {
+            "status": "error",
+            "error": "Coperceive found an empty session key on the server.",
+        }
+    return {"status": "ok", "uuid": uuid_val, "token": token}
+
+
+# Slurm states of a job that has not ended.
+_ACTIVE_STATES = frozenset(
+    {"PENDING", "CONFIGURING", "RUNNING", "COMPLETING", "SUSPENDED", "RESIZING"}
+)
+
+
 def get_status(
     *,
     session_uuid: str | None = None,
@@ -410,6 +530,19 @@ def get_status(
                 except ValueError:
                     pass
                 sacct_state = first[1] if len(first) > 1 else "COMPLETED"
+                if sacct_state.split()[0] in _ACTIVE_STATES:
+                    # The job runs (or waits) but has not written its session file
+                    # yet: it is starting, not stopped. Calling it "stopped" made the
+                    # desktop refuse to attach to a RUNNING job.
+                    return {
+                        "status": "pending",
+                        "state": sacct_state,
+                        "uuid": session_uuid,
+                        "job_id": resolved_id,
+                        "healthy": False,
+                        "last_heartbeat_age_s": None,
+                        "reason": "starting: the viewer has not written its session yet",
+                    }
                 stopped_reason = map_stopped_reason(sacct_state)
                 # Clean up token and heartbeat files
                 (get_tokens_dir() / f"{session_uuid}.token").unlink(missing_ok=True)
@@ -478,8 +611,12 @@ def get_status(
         if state == "RUNNING" and ip and port and token:
             healthy = probe_health(ip, port, token, timeout=health_timeout)
 
+        # "running" means reachable: the job runs and its session (node address,
+        # port) is known. A RUNNING job whose session file is not written yet is
+        # still starting.
+        reachable = state == "RUNNING" and bool(ip) and bool(port)
         return {
-            "status": "running" if state == "RUNNING" else "pending",
+            "status": "running" if reachable else "pending",
             "state": state,
             "uuid": session_uuid or (session.uuid if session else ""),
             "job_id": job_id,
@@ -491,7 +628,9 @@ def get_status(
             "time_left_seconds": time_left_sec,
             "healthy": healthy,
             "last_heartbeat_age_s": last_hb_age,
-            "reason": reason if state == "PENDING" else None,
+            "reason": reason
+            if state == "PENDING"
+            else (None if reachable else "starting: the viewer has not written its session yet"),
             "warning": warning,
         }
 

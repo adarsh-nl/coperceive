@@ -1,35 +1,331 @@
 // SPDX-License-Identifier: Apache-2.0
+import { JobsIndicator } from "./JobsIndicator";
 import { useEffect, useState } from "react";
-import { LocalExecutionTarget, getPersistentState, isRemoteEnabled, pickDataRoot } from "./local";
+import {
+  LocalExecutionTarget,
+  cancelImport,
+  getPersistentState,
+  getStorageInfo,
+  inspectFolder,
+  isTauriEnvironment,
+  listServerProfiles,
+  onImportProgress,
+  pickDataRoot,
+  onFolderDrop,
+  startImport,
+  type FolderCheck,
+  type ImportImages,
+} from "./local";
 import type { ConnectionSession } from "./types";
-import ConnectBackdrop from "./backdrop/ConnectBackdrop";
+import { BrandWordmark } from "./Brand";
+import IdentifierInput from "./IdentifierInput";
+import HpcWorkspace, { type ActiveDatasetPayload, type WorkspaceTab } from "./HpcWorkspace";
+import LibraryScreen from "./LibraryScreen";
+import GetDataScreen from "./GetDataScreen";
+import { UpdateCard, UpdateDot, useUpdater } from "./UpdateBanner";
+import PanelState from "./PanelState";
+import { PANEL_DEFINITIONS } from "./panelStates";
+import { errorText } from "./errors";
+import { Sidebar } from "./components/Sidebar";
+import { IconButton } from "./components/IconButton";
+import { SettingsModal } from "./SettingsView";
+import type { ServerEntry } from "./hpc";
+import {
+  GridTable,
+  MiniBar,
+  NavCountButton,
+  PageHeaderProvider,
+  PageLayout,
+  PublishedActions,
+  PublishedMeta,
+  createPageHeaderStore,
+} from "./components/Page";
+import { FolderCheckPanel, OpenFolderHeader, recentColumns as folderColumns } from "./OpenFolder";
+import { datasetJobs as currentDatasetJobs, subscribeDatasetJobs, type DatasetJobs } from "./jobsStore";
 
 interface ConnectScreenProps {
   onConnected: (session: ConnectionSession) => void;
 }
 
+type TabMode = "library" | "get_data" | "local" | "remote";
+
 export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
+  const [activeTab, setActiveTab] = useState<TabMode>(() => {
+    if (typeof window !== "undefined") {
+      try {
+        if (sessionStorage.getItem("coperceive-connect-tab") === "remote") {
+          sessionStorage.removeItem("coperceive-connect-tab");
+          return "remote";
+        }
+      } catch {}
+      if (window.location.hash.includes("evaluation")) {
+        return "remote";
+      }
+    }
+    return "library";
+  });
+  // A tab mounts the first time it is shown and then stays mounted (hidden),
+  // so nothing remote is read at launch and nothing is lost by switching.
+  const [visitedTabs, setVisitedTabs] = useState<ReadonlySet<TabMode>>(() => new Set([activeTab]));
+  useEffect(() => {
+    setVisitedTabs((current) => (current.has(activeTab) ? current : new Set([...current, activeTab])));
+  }, [activeTab]);
+  // Bumped when the Library is asked for again, so it re-reads the scenes.
+  const [libraryKey, setLibraryKey] = useState(0);
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  // "Update available" lives in the sidebar (a card above Settings, or a dot on
+  // the collapsed sidebar's toggle).
+  const updater = useUpdater();
+  const openSidebarOnUpdate = () => {
+    setSidebarOpen(true);
+    window.setTimeout(() => document.getElementById("update-card")?.focus(), 250);
+  };
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [dataRoot, setDataRoot] = useState<string>("");
   const [recentRoots, setRecentRoots] = useState<string[]>([]);
-  const [showRemote, setShowRemote] = useState<boolean>(false);
   const [status, setStatus] = useState<string>("");
   const [error, setError] = useState<string>("");
   const [busy, setBusy] = useState<boolean>(false);
 
+  // HPC sidebar state synced with HpcWorkspace
+  const [hpcServers, setHpcServers] = useState<ServerEntry[]>([]);
+  const [hpcSubTab, setHpcSubTab] = useState<WorkspaceTab>("servers");
+  const [activeHpcDataset, setActiveHpcDataset] = useState<ActiveDatasetPayload | null>(null);
+  // What each page shows in the one-line header and as its sidebar count.
+  // Held outside this component's state: see createPageHeaderStore.
+  const [headerStore] = useState(createPageHeaderStore);
+  const [datasetJobs, setDatasetJobs] = useState<DatasetJobs[]>(() => currentDatasetJobs());
+  useEffect(() => subscribeDatasetJobs(() => setDatasetJobs(currentDatasetJobs())), []);
+  const [collapsedDatasets, setCollapsedDatasets] = useState<ReadonlySet<string>>(() => new Set());
+  // Open Folder: the folder check for the chosen path and each recent folder.
+  const [folderChecks, setFolderChecks] = useState<Record<string, FolderCheck | null>>({});
+  const [dropHover, setDropHover] = useState(false);
   useEffect(() => {
+    const wanted = [dataRoot, ...recentRoots].filter((root) => root && !(root in folderChecks));
+    if (wanted.length === 0) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      for (const root of wanted) {
+        void inspectFolder(root)
+          .then((check) => {
+            if (!cancelled) setFolderChecks((current) => ({ ...current, [root]: check }));
+          })
+          .catch(() => undefined);
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [dataRoot, recentRoots, folderChecks]);
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let disposed = false;
+    void onFolderDrop(
+      (path) => {
+        setDataRoot(path);
+        setError("");
+        setActiveTab("local");
+      },
+      setDropHover,
+    ).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      disposed = true;
+      stop?.();
+    };
+  }, []);
+  const recentColumns = folderColumns(folderChecks);
+
+  // Import dialog state
+  const [importOpen, setImportOpen] = useState<boolean>(false);
+  const [importSource, setImportSource] = useState<string>("");
+  const [importDest, setImportDest] = useState<string>("");
+  const [importImages, setImportImages] = useState<ImportImages>("full");
+  const [importMedia, setImportMedia] = useState<string>("");
+  const [importGriffin, setImportGriffin] = useState<string>("");
+  const [importing, setImporting] = useState<boolean>(false);
+  const [importPercent, setImportPercent] = useState<number>(0);
+  const [importNote, setImportNote] = useState<string>("");
+
+  useEffect(() => {
+    const applyTestImport = () => {
+      const src = window.__COPERCEIVE_TEST_IMPORT_SOURCE__;
+      if (typeof src === "string" && src.length > 0) {
+        setImportSource(src);
+        setImportImages("none");
+      }
+    };
+    applyTestImport();
+    window.addEventListener("coperceive-test-import", applyTestImport);
+
+    const handleTestPanelState = (event: Event) => {
+      if (
+        typeof window !== "undefined" &&
+        !window.__COPERCEIVE_TEST_ENV__ &&
+        import.meta.env.MODE !== "test"
+      ) {
+        return;
+      }
+      const custom = event as CustomEvent<{ busy?: boolean; error?: string; tab?: TabMode }>;
+      if (typeof custom.detail?.busy === "boolean") setBusy(custom.detail.busy);
+      if (typeof custom.detail?.error === "string") setError(custom.detail.error);
+      if (custom.detail?.tab) setActiveTab(custom.detail.tab);
+    };
+    window.addEventListener("coperceive-test-panel-state", handleTestPanelState);
+
+    const handleOpenFolderSeed = (event: Event) => {
+      const custom = event as CustomEvent<{
+        dataRoot?: string;
+        recentRoots?: string[];
+        checks?: Record<string, FolderCheck | null>;
+      }>;
+      if (custom.detail?.dataRoot !== undefined) setDataRoot(custom.detail.dataRoot);
+      if (custom.detail?.recentRoots !== undefined) setRecentRoots(custom.detail.recentRoots);
+      if (custom.detail?.checks !== undefined) setFolderChecks(custom.detail.checks);
+    };
+    window.addEventListener("coperceive-test-open-folder-seed", handleOpenFolderSeed);
+
+    const handleHpcState = (event: Event) => {
+      const custom = event as CustomEvent<{
+        tab?: WorkspaceTab;
+        activeDataset?: ActiveDatasetPayload | null;
+      }>;
+      if (custom.detail?.tab) setHpcSubTab(custom.detail.tab);
+      if (custom.detail?.activeDataset !== undefined) {
+        setActiveHpcDataset(custom.detail.activeDataset);
+        if (custom.detail.activeDataset?.profile) {
+          const prof = custom.detail.activeDataset.profile;
+          setHpcServers((prev) =>
+            prev.some((s) => s.id === prof.id) ? prev : [prof, ...prev],
+          );
+        }
+      }
+    };
+    window.addEventListener("coperceive-hpc-state", handleHpcState);
+
+    const handleHpcProfilesUpdated = (event: Event) => {
+      const custom = event as CustomEvent<{ profiles?: ServerEntry[] }>;
+      if (custom.detail?.profiles) {
+        setHpcServers(custom.detail.profiles);
+      }
+    };
+    window.addEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
+
+    const handleOpenDatasetNav = () => {
+      setActiveTab("remote");
+    };
+    window.addEventListener("coperceive-open-dataset", handleOpenDatasetNav);
+
     void (async () => {
       const state = await getPersistentState();
       if (state?.recent_roots && state.recent_roots.length > 0) {
         setRecentRoots(state.recent_roots);
-        // Pre-select the most recent data root if not yet set
         if (!dataRoot && state.last_data_root) {
           setDataRoot(state.last_data_root);
         }
       }
-      const remote = await isRemoteEnabled();
-      setShowRemote(remote);
+      const stats = await getStorageInfo();
+      if (stats?.library_root) {
+        setImportDest(stats.library_root);
+      }
+      try {
+        const profiles = await listServerProfiles();
+        if (Array.isArray(profiles) && profiles.length > 0) {
+          setHpcServers(profiles);
+        }
+      } catch {}
     })();
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === ",") {
+        e.preventDefault();
+        setSettingsOpen((prev) => !prev);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+
+    if (!isTauriEnvironment()) {
+      return () => {
+        window.removeEventListener("coperceive-test-import", applyTestImport);
+        window.removeEventListener("coperceive-test-panel-state", handleTestPanelState);
+        window.removeEventListener("coperceive-test-open-folder-seed", handleOpenFolderSeed);
+        window.removeEventListener("coperceive-hpc-state", handleHpcState);
+        window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
+        window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+    }
+
+    let unlistenImport: (() => void) | undefined;
+    let unlistenGetData: (() => void) | undefined;
+    let unlistenLibrary: (() => void) | undefined;
+    let unlistenOpenFolder: (() => void) | undefined;
+    let unlistenHpcWorkspace: (() => void) | undefined;
+    let unlistenToggleSidebar: (() => void) | undefined;
+    let unlistenSettings: (() => void) | undefined;
+
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      unlistenImport = await listen("import-request", () => {
+        setImportOpen(true);
+        setActiveTab("local");
+      });
+      unlistenGetData = await listen("navigate-get-data", () => {
+        setActiveTab("get_data");
+      });
+      unlistenLibrary = await listen("navigate-library", () => {
+        setActiveTab("library");
+        setLibraryKey((key) => key + 1);
+      });
+      unlistenOpenFolder = await listen("navigate-open-folder", () => {
+        setActiveTab("local");
+      });
+      unlistenHpcWorkspace = await listen("navigate-hpc-workspace", () => {
+        setActiveTab("remote");
+      });
+      unlistenToggleSidebar = await listen("toggle-sidebar", () => {
+        setSidebarOpen((open) => !open);
+      });
+      unlistenSettings = await listen("open-settings", () => {
+        setSettingsOpen(true);
+      });
+    })();
+
+    const handleOpenEval = () => {
+      setActiveTab("remote");
+    };
+    window.addEventListener("coperceive-open-evaluation", handleOpenEval);
+
+    return () => {
+      window.removeEventListener("coperceive-test-import", applyTestImport);
+      window.removeEventListener("coperceive-test-panel-state", handleTestPanelState);
+      window.removeEventListener("coperceive-test-open-folder-seed", handleOpenFolderSeed);
+      window.removeEventListener("coperceive-hpc-state", handleHpcState);
+      window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
+      window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
+      window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
+      window.removeEventListener("keydown", handleKeyDown);
+      unlistenImport?.();
+      unlistenGetData?.();
+      unlistenLibrary?.();
+      unlistenOpenFolder?.();
+      unlistenHpcWorkspace?.();
+      unlistenToggleSidebar?.();
+      unlistenSettings?.();
+    };
   }, []);
+
+  const navigateHpcSection = (section: WorkspaceTab) => {
+    setActiveTab("remote");
+    setVisitedTabs((current) => (current.has("remote") ? current : new Set([...current, "remote"])));
+    setHpcSubTab(section);
+    setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("coperceive-hpc-section", { detail: { tab: section } }));
+    }, 0);
+  };
 
   const handlePickFolder = async () => {
     try {
@@ -40,6 +336,49 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       }
     } catch (e) {
       setError(String(e));
+    }
+  };
+
+  const handleImport = async () => {
+    if (!importSource) {
+      setError("Choose the scene folder to import.");
+      return;
+    }
+    setImporting(true);
+    setImportPercent(0);
+    setImportNote("Starting…");
+    setError("");
+    const stop = await onImportProgress((event) => {
+      if (event.event === "file" && event.total) {
+        setImportPercent(Math.round(((event.done ?? 0) / event.total) * 100));
+        setImportNote(`${event.done ?? 0} / ${event.total}${event.skipped ? " (already copied)" : ""}`);
+      } else if (event.event === "error") {
+        setImportNote(event.error ?? "A file was skipped.");
+      } else if (event.event === "exit") {
+        setImporting(false);
+        stop();
+        if (event.code === 0) {
+          setImportNote("Import finished.");
+          if (importDest) {
+            setDataRoot(importDest);
+          }
+        } else {
+          setError("Import stopped. Choose the same folders to resume.");
+        }
+      }
+    });
+    try {
+      await startImport({
+        source: importSource,
+        dest: importDest,
+        images: importImages,
+        mediaRoots: importMedia ? [importMedia] : [],
+        griffinRoot: importGriffin,
+      });
+    } catch (e) {
+      setImporting(false);
+      setError(errorText(e));
+      stop();
     }
   };
 
@@ -58,283 +397,749 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       setStatus(`Starting server… ${seconds} s`);
     }, 1000);
 
+    const target = new LocalExecutionTarget();
     try {
-      const target = new LocalExecutionTarget();
       const session = await target.connect({
         type: "local",
         dataRoot: rootToUse,
         startFresh,
       });
       clearInterval(timer);
-      setStatus("Connected! Initializing 3D viewer...");
-      onConnected(session);
-    } catch (e) {
-      clearInterval(timer);
-      setError(e instanceof Error ? e.message : String(e));
+      setBusy(false);
       setStatus("");
-    } finally {
+      onConnected(session);
+    } catch (err: unknown) {
       clearInterval(timer);
       setBusy(false);
+      setStatus("");
+      setError(errorText(err));
     }
   };
 
+  const activeFooterServer = activeHpcDataset?.profile ?? hpcServers[0] ?? null;
+  const pageKey = activeTab === "remote" ? hpcSubTab : activeTab;
+  const pageTitle =
+    ({
+      library: "Library",
+      get_data: "Get Data",
+      local: "Open Folder",
+      servers: "Servers",
+      evaluation: "New evaluation",
+      history: "Run history",
+    } as Record<string, string>)[pageKey] ?? "HPC Workspace";
+
   return (
+    <PageHeaderProvider value={headerStore}>
     <div
       style={{
         position: "relative",
         display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        minHeight: "100vh",
-        padding: "2rem",
-        backgroundColor: "#000000",
-        color: "#f5f5f7",
+        height: "100vh",
+        width: "100vw",
+        overflow: "hidden",
+        backgroundColor: "var(--bg)",
+        color: "var(--text)",
         fontFamily: "'Geist', system-ui, -apple-system, sans-serif",
       }}
     >
-      <ConnectBackdrop hasRecent={recentRoots.length > 0} />
-
-      <div
-        className="connect-card"
-        style={{
-          position: "relative",
-          zIndex: 1,
-          maxWidth: "500px",
-          width: "100%",
-          backgroundColor: "rgba(28, 28, 30, 0.78)",
-          backdropFilter: "blur(22px)",
-          WebkitBackdropFilter: "blur(22px)",
-          borderRadius: "14px",
-          border: "1px solid rgba(255, 255, 255, 0.14)",
-          padding: "2rem",
-          boxShadow: "0 20px 50px rgba(0, 0, 0, 0.6)",
-        }}
-      >
-        <h1 style={{ fontSize: "1.5rem", marginBottom: "0.5rem", fontWeight: 600, color: "#f5f5f7" }}>
-          Coperceive
-        </h1>
-        <p style={{ color: "#a1a1a6", fontSize: "0.9rem", marginBottom: "1.5rem" }}>
-          Choose a local cooperative perception dataset to launch the viewer.
-        </p>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
-          <div
-            style={{
-              padding: "1rem",
-              borderRadius: "10px",
-              border: "1px solid rgba(255, 255, 255, 0.08)",
-              backgroundColor: "rgba(0, 0, 0, 0.35)",
-            }}
-          >
-            <h2 style={{ fontSize: "1rem", marginBottom: "0.5rem", color: "#f5f5f7", fontWeight: 500 }}>
-              Local Dataset
-            </h2>
-            <p style={{ fontSize: "0.85rem", color: "#86868b", marginBottom: "1rem" }}>
-              Run bundled server locally on converted scenes.
-            </p>
-
-            <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.75rem" }}>
-              <input
-                type="text"
-                readOnly
-                placeholder="No directory selected..."
-                value={dataRoot}
-                aria-label="Selected dataset folder"
+      <Sidebar
+        collapsed={!sidebarOpen}
+        onToggle={() => setSidebarOpen((open) => !open)}
+        footer={
+          <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+            {activeTab === "remote" && activeFooterServer ? (
+              <div
                 style={{
-                  flex: 1,
-                  padding: "0.5rem 0.75rem",
-                  fontSize: "0.85rem",
-                  borderRadius: "6px",
-                  border: "1px solid rgba(255, 255, 255, 0.14)",
-                  backgroundColor: "rgba(0, 0, 0, 0.5)",
-                  color: "#f5f5f7",
-                  fontFamily: "'Geist Mono', ui-monospace, monospace",
-                }}
-              />
-              <button
-                type="button"
-                onClick={handlePickFolder}
-                disabled={busy}
-                aria-label="Choose dataset folder"
-                style={{
-                  padding: "0.5rem 1rem",
-                  fontSize: "0.85rem",
-                  borderRadius: "6px",
-                  cursor: "pointer",
-                  border: "1px solid rgba(255, 255, 255, 0.14)",
-                  backgroundColor: "rgba(255, 255, 255, 0.08)",
-                  color: "#f5f5f7",
-                  fontWeight: 500,
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: "8px",
+                  paddingBottom: "10px",
+                  borderBottom: "1px solid var(--line-subtle)",
                 }}
               >
-                Choose…
-              </button>
-            </div>
-
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                type="button"
-                onClick={() => handleConnectLocal()}
-                disabled={busy || !dataRoot}
-                aria-label="Open Local Viewer"
-                style={{
-                  flex: 1,
-                  padding: "0.6rem 1rem",
-                  fontSize: "0.9rem",
-                  fontWeight: 500,
-                  borderRadius: "6px",
-                  cursor: busy || !dataRoot ? "not-allowed" : "pointer",
-                  border: "none",
-                  backgroundColor: busy || !dataRoot ? "rgba(255, 255, 255, 0.1)" : "#2878dc",
-                  color: "#fff",
-                }}
-              >
-                {busy ? "Connecting…" : "Open Local Viewer"}
-              </button>
-              <button
-                type="button"
-                onClick={() => handleConnectLocal(undefined, true)}
-                disabled={busy || !dataRoot}
-                title="Connect without restoring saved session state"
-                aria-label="Start fresh without restoring saved session state"
-                style={{
-                  padding: "0.6rem 0.85rem",
-                  fontSize: "0.85rem",
-                  fontWeight: 500,
-                  borderRadius: "6px",
-                  cursor: busy || !dataRoot ? "not-allowed" : "pointer",
-                  border: "1px solid rgba(255, 255, 255, 0.14)",
-                  backgroundColor: "rgba(0, 0, 0, 0.3)",
-                  color: "#a1a1a6",
-                  whiteSpace: "nowrap",
-                }}
-              >
-                Start fresh
-              </button>
-            </div>
-
-            {recentRoots.length > 0 && (
-              <div style={{ marginTop: "1rem", borderTop: "1px solid rgba(255, 255, 255, 0.08)", paddingTop: "0.75rem" }}>
-                <p style={{ fontSize: "0.75rem", color: "#86868b", marginBottom: "0.4rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                  Recent Datasets
-                </p>
-                <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
-                  {recentRoots.map((root) => {
-                    const base = root.split("/").filter(Boolean).pop() || root;
-                    return (
-                      <button
-                        key={root}
-                        type="button"
-                        onClick={() => {
-                          setDataRoot(root);
-                          setError("");
-                        }}
-                        aria-label={`Select recent dataset ${base}`}
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          textAlign: "left",
-                          padding: "0.4rem 0.6rem",
-                          fontSize: "0.8rem",
-                          backgroundColor: dataRoot === root ? "rgba(40, 120, 220, 0.2)" : "rgba(255, 255, 255, 0.04)",
-                          color: "#f5f5f7",
-                          border: `1px solid ${dataRoot === root ? "#2878dc" : "rgba(255, 255, 255, 0.08)"}`,
-                          borderRadius: "6px",
-                          cursor: "pointer",
-                        }}
-                      >
-                        <span style={{ fontWeight: 500 }}>📁 {base}</span>
-                        <span style={{ color: "#86868b", fontSize: "0.72rem", maxWidth: "220px", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "'Geist Mono', ui-monospace, monospace" }}>
-                          {root}
-                        </span>
-                      </button>
-                    );
-                  })}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "auto 1fr",
+                    columnGap: "10px",
+                    rowGap: "3px",
+                    fontSize: "11.5px",
+                  }}
+                >
+                  <span style={{ color: "var(--text-subtle)" }}>Host</span>
+                  <span
+                    style={{
+                      fontFamily: "'Geist Mono', ui-monospace, monospace",
+                      color: "var(--text-secondary)",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    {activeFooterServer.profile.host ||
+                      activeFooterServer.ssh?.hostname ||
+                      activeFooterServer.profile.ssh_alias ||
+                      activeFooterServer.profile.name}
+                  </span>
+                  <span style={{ color: "var(--text-subtle)" }}>Scheduler</span>
+                  <span style={{ color: "var(--text-secondary)" }}>
+                    {activeFooterServer.profile.scheduler === "slurm"
+                      ? `Slurm${
+                          activeFooterServer.profile.defaults?.partition
+                            ? ` · partition ${activeFooterServer.profile.defaults.partition}`
+                            : ""
+                        }`
+                      : "Files only"}
+                  </span>
+                  {activeFooterServer.discovered?.partitions ? (
+                    <>
+                      <span style={{ color: "var(--text-subtle)" }}>Checked</span>
+                      <span style={{ color: "var(--text-secondary)" }}>
+                        {activeFooterServer.discovered.partitions.length} partitions found
+                      </span>
+                    </>
+                  ) : null}
                 </div>
+                <p
+                  style={{
+                    margin: 0,
+                    fontSize: "11px",
+                    lineHeight: 1.4,
+                    color: "var(--text-subtle)",
+                  }}
+                >
+                  Signs in with your ssh-agent and ~/.ssh/config. Never asks for a password or key.
+                </p>
               </div>
-            )}
-          </div>
+            ) : null}
 
-          {showRemote && (
-            <div
-              style={{
-                padding: "1rem",
-                borderRadius: "10px",
-                border: "1px dashed rgba(255, 255, 255, 0.14)",
-                opacity: 0.7,
+            <UpdateCard updater={updater} />
+
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+              <button
+                type="button"
+                aria-label="Settings (⌘,)"
+                onClick={() => setSettingsOpen(true)}
+                className="c-sidebar-item"
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "8px",
+                  background: "transparent",
+                  border: "none",
+                  color: "var(--text-secondary)",
+                  padding: "5px 8px",
+                  borderRadius: "var(--radius-md)",
+                  cursor: "pointer",
+                  fontSize: "12.5px",
+                  width: "100%",
+                  textAlign: "left",
+                }}
+              >
+                <svg viewBox="0 0 16 16" width="13" height="13" fill="currentColor">
+                  <path d="M8 4.75a3.25 3.25 0 1 0 0 6.5 3.25 3.25 0 0 0 0-6.5zM6 8a2 2 0 1 1 4 0 2 2 0 0 1-4 0z" />
+                  <path d="M9.22 1.077a1.75 1.75 0 0 0-2.44 0l-.287.288a1.75 1.75 0 0 1-1.428.514l-.403-.048a1.75 1.75 0 0 0-1.724 1.724l.048.403a1.75 1.75 0 0 1-.514 1.428l-.288.287a1.75 1.75 0 0 0 0 2.44l.288.287a1.75 1.75 0 0 1 .514 1.428l-.048.403a1.75 1.75 0 0 0 1.724 1.724l.403-.048a1.75 1.75 0 0 1 1.428.514l.287.288a1.75 1.75 0 0 0 2.44 0l.287-.288a1.75 1.75 0 0 1 1.428-.514l.403.048a1.75 1.75 0 0 0 1.724-1.724l-.048-.403a1.75 1.75 0 0 1 .514-1.428l.288-.287a1.75 1.75 0 0 0 0-2.44l-.288-.287a1.75 1.75 0 0 1-.514-1.428l.048-.403a1.75 1.75 0 0 0-1.724-1.724l-.403.048a1.75 1.75 0 0 1-1.428-.514l-.287-.288z" />
+                </svg>
+                <span>Settings</span>
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontSize: "11px",
+                    color: "var(--text-subtle)",
+                    fontFamily: "'Geist Mono', monospace",
+                  }}
+                >
+                  ⌘,
+                </span>
+              </button>
+            </div>
+          </div>
+        }
+      >
+        {/* Local */}
+        <div className="c-sidebar-group">Local</div>
+        <nav
+          style={{ display: "flex", flexDirection: "column", gap: "1px" }}
+          role="tablist"
+          aria-label="Connect navigation"
+        >
+          {(
+            [
+              ["library", "Library"],
+              ["get_data", "Get Data"],
+              ["local", "Open Folder"],
+            ] as const
+          ).map(([tabKey, label]) => {
+            const selected = activeTab === tabKey;
+            return (
+              <NavCountButton
+                key={tabKey}
+                page={tabKey}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setActiveTab(tabKey)}
+                className={`c-sidebar-item c-nav-item ${selected ? "active" : ""}`}
+              >
+                {label}
+              </NavCountButton>
+            );
+          })}
+        </nav>
+
+        {/* HPC workspace. The group label is a button inside this nav whose text is
+            exactly "HPC Workspace": scripts/desktop/e2e_mac.sh (Step 5h) selects it so. */}
+        <nav style={{ display: "flex", flexDirection: "column", gap: "1px" }} aria-label="HPC workspace navigation">
+          <button
+            type="button"
+            className="c-sidebar-group c-sidebar-group-button"
+            style={{ marginTop: "12px" }}
+            onClick={() => navigateHpcSection("servers")}
+          >
+            HPC Workspace
+          </button>
+          {(
+            [
+              ["servers", "Servers", hpcServers.length > 0 ? String(hpcServers.length) : undefined],
+              ["evaluation", "New evaluation", undefined],
+              ["history", "Run history", undefined],
+            ] as const
+          ).map(([secKey, label, count]) => {
+            const isSelected = activeTab === "remote" && hpcSubTab === secKey;
+            return (
+              <NavCountButton
+                key={secKey}
+                page={secKey}
+                count={count}
+                liveClassName={secKey === "history" ? "is-live" : undefined}
+                type="button"
+                onClick={() => navigateHpcSection(secKey)}
+                className={`c-sidebar-item c-nav-item ${isSelected ? "active" : ""}`}
+                aria-current={isSelected ? "page" : undefined}
+              >
+                {label}
+              </NavCountButton>
+            );
+          })}
+        </nav>
+
+        {/* Servers tree: server, its dataset, the split's progress, browse */}
+        <div style={{ marginTop: "12px", display: "flex", flexDirection: "column", gap: "1px" }}>
+          <div className="c-sidebar-group" style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+            <span>Servers</span>
+            <button
+              type="button"
+              title="Add server"
+              aria-label="New server profile"
+              className="c-sidebar-add"
+              onClick={() => {
+                navigateHpcSection("servers");
+                setTimeout(() => {
+                  window.dispatchEvent(new CustomEvent("coperceive-hpc-add-server"));
+                }, 0);
               }}
             >
-              <h2 style={{ fontSize: "1rem", marginBottom: "0.25rem", color: "#f5f5f7", fontWeight: 500 }}>
-                HPC over SSH
-              </h2>
-              <p style={{ fontSize: "0.85rem", color: "#86868b" }}>
-                Slurm GPU & dataset tunnel (Phase 3).
-              </p>
+              +
+            </button>
+          </div>
+
+          {hpcServers.map((srv) => {
+            const srvName = srv.profile?.name || srv.id;
+            const hasDataset = activeHpcDataset && activeHpcDataset.profile.id === srv.id;
+            const dsDoc = hasDataset ? activeHpcDataset.dataset : null;
+            const isDatasetSelected = activeTab === "remote" && hpcSubTab === "dataset" && Boolean(hasDataset);
+            const jobs = dsDoc ? datasetJobs.find((entry) => entry.profileId === srv.id) : undefined;
+            const expanded = !collapsedDatasets.has(srv.id);
+            const adapter = (dsDoc?.adapter || "dataset").toUpperCase();
+            return (
+              <div key={srv.id} style={{ display: "flex", flexDirection: "column", gap: "1px" }}>
+                <div className="c-tree-server">
+                  <span className="c-dot" style={{ backgroundColor: "#3fb950" }} />
+                  <span className="c-tree-name">{srvName}</span>
+                </div>
+                {dsDoc ? (
+                  <>
+                    <button
+                      type="button"
+                      className="c-sidebar-item c-tree-dataset"
+                      aria-expanded={expanded}
+                      onClick={() =>
+                        setCollapsedDatasets((current) => {
+                          const next = new Set(current);
+                          if (next.has(srv.id)) next.delete(srv.id);
+                          else next.add(srv.id);
+                          return next;
+                        })
+                      }
+                    >
+                      <span aria-hidden="true" className="c-tree-caret">{expanded ? "▾" : "▸"}</span>
+                      {adapter}
+                    </button>
+                    {expanded ? (
+                      <button
+                        type="button"
+                        onClick={() => navigateHpcSection("dataset")}
+                        className={`c-sidebar-item c-tree-split ${isDatasetSelected ? "active" : ""}`}
+                        aria-current={isDatasetSelected ? "page" : undefined}
+                        title={jobs ? `${jobs.ready} of ${jobs.total} scenes ready` : `${dsDoc.scene_count} scenes`}
+                      >
+                        <span>{dsDoc.split || "all"}</span>
+                        {jobs && jobs.total > 0 ? (
+                          <>
+                            <MiniBar value={jobs.ready / jobs.total} tone="ok" />
+                            <span className="c-tree-count">
+                              {jobs.ready}/{jobs.total}
+                            </span>
+                          </>
+                        ) : (
+                          <span className="c-tree-count" style={{ marginLeft: "auto" }}>
+                            {dsDoc.scene_count}
+                          </span>
+                        )}
+                      </button>
+                    ) : null}
+                  </>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigateHpcSection("servers");
+                    setTimeout(() => {
+                      window.dispatchEvent(
+                        new CustomEvent("coperceive-hpc-browse-server", {
+                          detail: { profile: srv },
+                        }),
+                      );
+                    }, 0);
+                  }}
+                  className="c-sidebar-item c-tree-browse"
+                >
+                  Browse data…
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      </Sidebar>
+
+      <div
+        style={{
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          overflow: "hidden",
+        }}
+      >
+        {/* Top Header */}
+        <header
+          data-tauri-drag-region
+          style={{
+            height: "52px",
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: !sidebarOpen ? "0 20px 0 0" : "0 20px",
+            borderBottom: "1px solid var(--line, rgba(255, 255, 255, 0.08))",
+            backgroundColor: "var(--panel, #1a1a1c)",
+            zIndex: 10,
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", minWidth: 0 }}>
+            {!sidebarOpen && (
+              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
+                <div
+                  data-tauri-drag-region
+                  className="traffic-lights-spacer"
+                  style={{ width: "78px", flexShrink: 0, height: "100%" }}
+                  aria-hidden="true"
+                />
+                <span className="update-dot-host">
+                  <IconButton
+                    size="sm"
+                    label="Open sidebar (⌘\)"
+                    onClick={() => setSidebarOpen(true)}
+                  >
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                      <path d="M1.5 2.5A1 1 0 0 1 2.5 1.5h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11zm1 0v11h3.5v-11h-3.5zm4.5 0v11h6.5v-11H7z" />
+                    </svg>
+                  </IconButton>
+                  <UpdateDot updater={updater} onOpen={openSidebarOnUpdate} />
+                </span>
+                <BrandWordmark fontSize="13px" />
+              </div>
+            )}
+            <div className="c-header-title">
+              <h1>{pageTitle}</h1>
+              <PublishedMeta page={pageKey} />
+            </div>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: "12px", flexShrink: 0 }}>
+            {status && (
+              <div style={{ fontSize: "12px", color: "var(--primary, #1f6feb)", fontWeight: 500 }}>
+                {status}
+              </div>
+            )}
+            <JobsIndicator onOpenWorkspace={() => setActiveTab("remote")} />
+            <PublishedActions page={pageKey} />
+          </div>
+        </header>
+
+        <main style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative" }}>
+          {/* Every tab stays mounted (hidden when not shown): an open dataset,
+              scroll and filters survive switching tabs. */}
+          <div className="tab-panel" hidden={activeTab !== "library"}>
+            <LibraryScreen
+              key={libraryKey}
+              onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
+              onNavigateGetData={() => setActiveTab("get_data")}
+              onNavigateOpenFolder={() => setActiveTab("local")}
+              onNavigateServers={() => navigateHpcSection("servers")}
+            />
+          </div>
+
+          <div className="tab-panel" hidden={activeTab !== "get_data"}>
+            <GetDataScreen
+              onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
+              onOpenLibrary={() => setActiveTab("library")}
+              onOpenImportFolder={(folder) => {
+                if (folder) setImportSource(folder);
+                setImportOpen(true);
+                setActiveTab("local");
+              }}
+            />
+          </div>
+
+          {/* Open Folder Tab: Left-aligned full-width compact form + Dense Recent Datasets table */}
+          <div className="tab-panel" hidden={activeTab !== "local"}>
+            <OpenFolderHeader active={activeTab === "local"} />
+            <div style={{ display: "flex", flexDirection: "column", minHeight: "calc(100vh - 52px)", fontSize: "13px" }}>
+              <PageLayout
+                inspectorLabel="Folder check"
+                inspector={
+                  dataRoot ? (
+                    <FolderCheckPanel
+                      check={dataRoot in folderChecks ? folderChecks[dataRoot] : undefined}
+                      busy={busy}
+                      onOpen={() => handleConnectLocal()}
+                      onOpenFresh={() => handleConnectLocal(undefined, true)}
+                    />
+                  ) : null
+                }
+              >
+                <section className="c-open-form">
+                  {busy && (
+                    <PanelState
+                      compact
+                      kind="loading"
+                      title={PANEL_DEFINITIONS.connect.loading.title}
+                      description={PANEL_DEFINITIONS.connect.loading.description}
+                      actionLabel={PANEL_DEFINITIONS.connect.loading.actionLabel}
+                      onAction={() => {
+                        setBusy(false);
+                        setStatus("");
+                      }}
+                    />
+                  )}
+                  {!busy && !dataRoot && recentRoots.length === 0 && (
+                    <PanelState
+                      compact
+                      kind="empty"
+                      title={PANEL_DEFINITIONS.connect.empty.title}
+                      description={PANEL_DEFINITIONS.connect.empty.description}
+                      actionLabel={PANEL_DEFINITIONS.connect.empty.actionLabel}
+                      onAction={handlePickFolder}
+                    />
+                  )}
+                  <label className="c-inspector-label" htmlFor="open-folder-path">
+                    Folder path
+                  </label>
+                  <div style={{ display: "flex", gap: "8px", maxWidth: "760px" }}>
+                    <IdentifierInput
+                      id="open-folder-path"
+                      type="text"
+                      placeholder="/path/to/scenes"
+                      value={dataRoot}
+                      onChange={(event) => {
+                        setDataRoot(event.target.value);
+                        setError("");
+                      }}
+                      aria-label="Selected dataset folder"
+                      className="c-path-input"
+                    />
+                    <button
+                      type="button"
+                      onClick={handlePickFolder}
+                      disabled={busy}
+                      aria-label="Choose dataset folder"
+                      className="c-secondary"
+                    >
+                      Choose…
+                    </button>
+                  </div>
+                  <p className={`c-drop-note${dropHover ? " is-hover" : ""}`}>
+                    {dropHover ? "Drop the folder to check it." : "Or drop a folder anywhere on this window."}
+                  </p>
+                  {error ? (
+                    <p role="alert" className="dataset-error-msg" style={{ color: "var(--danger)", margin: 0, fontSize: "12.5px" }}>
+                      {error}
+                    </p>
+                  ) : null}
+                  <div className="c-open-import">
+                  {/* Import from folder section */}
+                  <div style={{ borderTop: "1px solid var(--line-subtle)", paddingTop: "10px" }}>
+                    <button
+                      type="button"
+                      onClick={() => setImportOpen((open) => !open)}
+                      disabled={busy}
+                      style={{
+                        background: "transparent",
+                        border: "1px solid var(--line-elevated)",
+                        borderRadius: "6px",
+                        padding: "5px 10px",
+                        color: "var(--text)",
+                        fontSize: "12.5px",
+                        cursor: "pointer",
+                        width: "100%",
+                      }}
+                    >
+                      {importOpen ? "Hide Import from folder" : "Import from folder…"}
+                    </button>
+                    {importOpen && (
+                      <div
+                        style={{
+                          marginTop: "10px",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "8px",
+                        }}
+                      >
+                        <p style={{ fontSize: "12px", color: "var(--text-tertiary)", margin: 0 }}>
+                          Copies and packages the scene directly into your library folder.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const folder = await pickDataRoot();
+                            if (folder) setImportSource(folder);
+                          }}
+                          style={{
+                            padding: "5px 8px",
+                            textAlign: "left",
+                            background: "var(--sunken)",
+                            border: "1px solid var(--line-elevated)",
+                            borderRadius: "5px",
+                            color: "var(--text)",
+                            fontSize: "12px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Scene source: {importSource || "Choose folder…"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const folder = await pickDataRoot();
+                            if (folder) setImportDest(folder);
+                          }}
+                          style={{
+                            padding: "5px 8px",
+                            textAlign: "left",
+                            background: "var(--sunken)",
+                            border: "1px solid var(--line-elevated)",
+                            borderRadius: "5px",
+                            color: "var(--text)",
+                            fontSize: "12px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Library dest: {importDest || "Default library"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const folder = await pickDataRoot();
+                            if (folder) setImportMedia(folder);
+                          }}
+                          style={{
+                            padding: "5px 8px",
+                            textAlign: "left",
+                            background: "var(--sunken)",
+                            border: "1px solid var(--line-elevated)",
+                            borderRadius: "5px",
+                            color: "var(--text)",
+                            fontSize: "12px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Media root: {importMedia || "optional"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            const folder = await pickDataRoot();
+                            if (folder) setImportGriffin(folder);
+                          }}
+                          style={{
+                            padding: "5px 8px",
+                            textAlign: "left",
+                            background: "var(--sunken)",
+                            border: "1px solid var(--line-elevated)",
+                            borderRadius: "5px",
+                            color: "var(--text)",
+                            fontSize: "12px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Griffin root: {importGriffin || "optional"}
+                        </button>
+                        <label
+                          style={{
+                            fontSize: "12px",
+                            color: "var(--text-secondary)",
+                            display: "flex",
+                            alignItems: "center",
+                          }}
+                        >
+                          Images:
+                          <select
+                            aria-label="Image copy mode"
+                            value={importImages}
+                            onChange={(event) =>
+                              setImportImages(event.target.value as ImportImages)
+                            }
+                            style={{
+                              marginLeft: "8px",
+                              background: "var(--sunken)",
+                              color: "var(--text)",
+                              border: "1px solid var(--line-elevated)",
+                              borderRadius: "4px",
+                              padding: "3px 6px",
+                              fontSize: "12px",
+                            }}
+                          >
+                            <option value="full">full</option>
+                            <option value="preview">preview</option>
+                            <option value="none">none</option>
+                          </select>
+                        </label>
+
+                        <div
+                          role="progressbar"
+                          aria-valuemin={0}
+                          aria-valuemax={100}
+                          aria-valuenow={importPercent}
+                          aria-label="Import progress"
+                          style={{
+                            height: "6px",
+                            background: "var(--sunken)",
+                            borderRadius: "3px",
+                          }}
+                        >
+                          <div
+                            style={{
+                              width: `${importPercent}%`,
+                              height: "100%",
+                              background: "var(--accent)",
+                              borderRadius: "3px",
+                            }}
+                          />
+                        </div>
+                        <p style={{ fontSize: "11.5px", color: "var(--text-tertiary)", margin: 0 }}>
+                          {importNote}
+                        </p>
+
+                        <div style={{ display: "flex", gap: "8px", marginTop: "2px" }}>
+                          <button
+                            type="button"
+                            onClick={() => void handleImport()}
+                            disabled={importing || !importSource}
+                            style={{
+                              flex: 1,
+                              padding: "5px 10px",
+                              borderRadius: "5px",
+                              border: "none",
+                              background:
+                                importing || !importSource ? "var(--sunken)" : "var(--accent)",
+                              color:
+                                importing || !importSource ? "var(--muted)" : "var(--accent-ink)",
+                              fontWeight: 500,
+                              cursor: importing || !importSource ? "not-allowed" : "pointer",
+                              fontSize: "12px",
+                            }}
+                          >
+                            {importing ? "Importing…" : "Start import"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void cancelImport()}
+                            disabled={!importing}
+                            style={{
+                              padding: "5px 10px",
+                              borderRadius: "5px",
+                              border: "1px solid var(--line-elevated)",
+                              background: "transparent",
+                              color: "var(--danger)",
+                              cursor: !importing ? "not-allowed" : "pointer",
+                              fontSize: "12px",
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  </div>
+                </section>
+
+                {recentRoots.length > 0 ? (
+                  <>
+                    <div className="c-inspector-label" style={{ padding: "16px 24px 8px" }}>
+                      Recent
+                    </div>
+                    <GridTable
+                      label="Recent folders"
+                      columns={recentColumns}
+                      rows={recentRoots}
+                      rowKey={(root) => root}
+                      selectedKey={dataRoot || null}
+                      onSelect={(root) => {
+                        setDataRoot(root);
+                        setError("");
+                      }}
+                      onActivate={(root) => void handleConnectLocal(root)}
+                      rowHeight={34}
+                    />
+                  </>
+                ) : null}
+              </PageLayout>
+            </div>
+          </div>
+
+          <div className="tab-panel" hidden={activeTab !== "remote"}>
+            {visitedTabs.has("remote") ? <HpcWorkspace /> : null}
+          </div>
+
+          {error && (
+            <div role="alert" style={{ padding: "16px 24px", maxWidth: "560px" }}>
+              <PanelState
+                kind="error"
+                title={PANEL_DEFINITIONS.connect.error.title}
+                description={PANEL_DEFINITIONS.connect.error.description}
+                actionLabel={PANEL_DEFINITIONS.connect.error.actionLabel}
+                onAction={() => void handlePickFolder()}
+              />
             </div>
           )}
-        </div>
-
-        {status && (
-          <div style={{ marginTop: "1rem", fontSize: "0.85rem", color: "#2878dc" }}>
-            {status}
-          </div>
-        )}
-
-        {error && (
-          <div
-            className="connect-error-banner"
-            role="alert"
-            style={{
-              marginTop: "1rem",
-              padding: "0.75rem 1rem",
-              borderRadius: "8px",
-              backgroundColor: "rgba(255, 98, 89, 0.12)",
-              border: "1px solid rgba(255, 98, 89, 0.35)",
-            }}
-          >
-            <div style={{ fontSize: "0.85rem", color: "#ff6259", marginBottom: "0.6rem", lineHeight: 1.4 }}>
-              {error}
-            </div>
-            <div style={{ display: "flex", gap: "0.5rem" }}>
-              <button
-                type="button"
-                onClick={handlePickFolder}
-                aria-label="Choose another dataset folder"
-                style={{
-                  padding: "0.35rem 0.75rem",
-                  fontSize: "0.8rem",
-                  borderRadius: "5px",
-                  border: "1px solid rgba(255, 255, 255, 0.14)",
-                  backgroundColor: "rgba(255, 255, 255, 0.1)",
-                  color: "#f5f5f7",
-                  cursor: "pointer",
-                  fontWeight: 500,
-                }}
-              >
-                Choose another folder
-              </button>
-              <button
-                type="button"
-                onClick={() => setError("")}
-                aria-label="Dismiss error"
-                style={{
-                  padding: "0.35rem 0.75rem",
-                  fontSize: "0.8rem",
-                  borderRadius: "5px",
-                  border: "none",
-                  backgroundColor: "transparent",
-                  color: "#86868b",
-                  cursor: "pointer",
-                }}
-              >
-                Dismiss
-              </button>
-            </div>
-          </div>
-        )}
+        </main>
       </div>
+
+      <SettingsModal open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>
+    </PageHeaderProvider>
   );
 }

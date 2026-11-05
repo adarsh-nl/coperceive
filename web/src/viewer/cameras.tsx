@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
+import PanelState from "../desktop/PanelState";
+import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import type { FrameCache } from "./cache";
 import { IconImage } from "./controls";
 import { cameraKey, type FrameBox, type FrameFrustum, type FrameSensor } from "./types";
 import { projectToImage, type Pinhole } from "./project";
+import { stripAgents } from "./sceneStats";
+import type { CameraStripMode } from "./cameraStripSetting";
 
 type Cloud = { agentId: string; xyz: Float32Array };
 
@@ -13,6 +17,8 @@ const INK: Record<string, string> = {
 };
 
 const STRIP_WIDTH = 640;
+/** Width of the previews a cluster dataset can prepare (docs/datasets/cluster-datasets.md). */
+const PREVIEW_WIDTH = 640;
 const DECODERS = 3;
 
 const workerSource = `
@@ -224,7 +230,10 @@ async function fetchImage(
   token: string,
   width: number,
 ): Promise<ImageBitmap | null> {
-  const url = `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}`;
+  // Wider than a cluster scene's 640 px preview (the split pane): ask for the
+  // original. A scene without previews ignores `full`.
+  const full = width > PREVIEW_WIDTH ? "&full=true" : "";
+  const url = `${apiBase()}/api/scenes/${encodeURIComponent(sceneId)}/image?time_us=${timeUs}&agent_id=${encodeURIComponent(agentId)}&sensor_id=${encodeURIComponent(sensorId)}&width=${width}${full}`;
   const entry = await fetchBytes(url, token);
   if (entry === null) {
     missing.add(key);
@@ -462,6 +471,10 @@ function Thumb({
   onOpen,
   imageOn,
   onToggleImage,
+  playing = false,
+  boxes = null,
+  showAgent = false,
+  selected = false,
 }: {
   camera: FrameFrustum;
   agentLabel: string;
@@ -474,12 +487,20 @@ function Thumb({
   onOpen: () => void;
   imageOn: boolean;
   onToggleImage: () => void;
+  playing?: boolean;
+  /** Boxes in this camera's image at this sample; null hides the count. */
+  boxes?: number | null;
+  /** The filmstrip labels each thumbnail with its agent (colour and name) as well. */
+  showAgent?: boolean;
+  /** The camera chosen elsewhere (split view, Camera view mode): highlighted. */
+  selected?: boolean;
 }) {
   const hostRef = useRef<HTMLButtonElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   // Without IntersectionObserver every thumbnail counts as visible.
   const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
   const [bitmap, setBitmap] = useState<ImageBitmap | null | undefined>(undefined);
+  const lastLoadRef = useRef(0);
   const key = cameraKey(camera.agent_id, camera.sensor_id);
   const picture = imagesAvailable ? bitmap : null;
 
@@ -501,6 +522,13 @@ function Thumb({
     if (!visible || !imagesAvailable) {
       return;
     }
+    // During playback a 10 Hz full strip would ask for six images every tick and
+    // queue the render thread behind decode/canvas work; refresh at most ~3 Hz.
+    const now = performance.now();
+    if (playing && now - lastLoadRef.current < 300) {
+      return;
+    }
+    lastLoadRef.current = now;
     let cancelled = false;
     void (async () => {
       try {
@@ -513,14 +541,11 @@ function Thumb({
           setBitmap(null);
         }
       }
-      if (nextTimeUs !== null) {
-        void loadImage(sceneId, nextTimeUs, camera.agent_id, camera.sensor_id, token, THUMB_WIDTH).catch(() => undefined);
-      }
     })();
     return () => {
       cancelled = true;
     };
-  }, [visible, imagesAvailable, sceneId, timeUs, nextTimeUs, token, camera.agent_id, camera.sensor_id]);
+  }, [visible, imagesAvailable, sceneId, timeUs, nextTimeUs, token, camera.agent_id, camera.sensor_id, playing]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -536,20 +561,41 @@ function Thumb({
     ctx.drawImage(picture, 0, 0);
   }, [picture]);
 
+  const width = camera.image_width_px ?? null;
+  const height = camera.image_height_px ?? null;
+  const ratio = width && height ? width / height : camera.aspect > 0 ? camera.aspect : 16 / 9;
   return (
-    <div className="cam-thumb-wrap">
+    <div
+      className={selected ? "cam-thumb-wrap is-selected" : "cam-thumb-wrap"}
+      style={{ ["--ratio" as string]: String(Math.min(4, Math.max(0.5, ratio))) }}
+    >
       <button
         ref={hostRef}
         type="button"
         className="cam-thumb"
         aria-pressed={open}
+        aria-current={selected ? "true" : undefined}
         aria-label={`${open ? "Close" : "Open"} ${agentLabel} ${camera.sensor_id}`}
         title={`${agentLabel} ${camera.sensor_id} (${camera.agent_id})`}
         data-camera={key}
         onClick={onOpen}
       >
         {picture ? <canvas ref={canvasRef} /> : <span className="cam-thumb-empty">{picture === null ? "no image" : "…"}</span>}
-        <span className="cam-thumb-name">{camera.sensor_id}</span>
+        <span className="cam-thumb-name">
+          {showAgent ? (
+            <>
+              <i className="cam-thumb-swatch" aria-hidden="true" />
+              <span className="cam-thumb-agent">{agentLabel}</span>
+              <span className="cam-thumb-sep" aria-hidden="true">·</span>
+            </>
+          ) : null}
+          <span className="cam-thumb-sensor">{camera.sensor_id}</span>
+        </span>
+        {typeof boxes === "number" ? (
+          <span className="cam-thumb-count num">
+            {boxes} {boxes === 1 ? "box" : "boxes"}
+          </span>
+        ) : null}
       </button>
       <button
         type="button"
@@ -581,6 +627,14 @@ export default function CameraStrip({
   onToggleImage,
   imagesAvailable = true,
   missingText = "No image file for this sample.",
+  playing = false,
+  heightPx,
+  focusAgent = null,
+  onSwitchAgent,
+  boxCount,
+  mode = "all",
+  onMode,
+  selectedKey = null,
 }: {
   token: string;
   sceneId: string;
@@ -601,8 +655,108 @@ export default function CameraStrip({
   /** False when the scene summary says no image file is staged: nothing is requested. */
   imagesAvailable?: boolean;
   missingText?: string;
+  /** While playing, refresh thumbnails at most a few times per second. */
+  playing?: boolean;
+  /** Optional custom open height in pixels when resized. */
+  heightPx?: number;
+  /** The agent whose cameras are shown; the first agent with cameras when null or gone. */
+  focusAgent?: string | null;
+  /** "Switch agent": show the next agent's cameras. */
+  onSwitchAgent?: (agentId: string) => void;
+  /** Boxes whose centre falls in this camera's image, or null when it cannot be told. */
+  boxCount?: (camera: FrameFrustum) => number | null;
+  /** "all": every camera in one horizontally scrolling filmstrip; "agent": one agent at a time. */
+  mode?: CameraStripMode;
+  /** The header's quick toggle; it writes the same setting as Settings → Viewer. */
+  onMode?: (mode: CameraStripMode) => void;
+  /** The camera chosen elsewhere (split view or Camera view mode): kept highlighted and in view. */
+  selectedKey?: string | null;
 }) {
   const sceneRef = useRef(sceneId);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const filmstrip = mode === "all";
+
+  // Shift-wheel (and a plain mouse wheel) steps the filmstrip one thumbnail at a
+  // time; trackpad swipes (deltaX) scroll it natively. Once a scroll comes to rest
+  // it settles on the nearest thumbnail. (Done here, not with CSS scroll-snap: the
+  // browser re-snaps a snap container when thumbnails come and go as agents enter
+  // and leave the scene, and the strip would jump to the newcomer.)
+  useEffect(() => {
+    const strip = scrollRef.current;
+    if (!strip || !filmstrip || !open) {
+      return;
+    }
+    let settle = 0;
+    const onScroll = () => {
+      window.clearTimeout(settle);
+      settle = window.setTimeout(() => {
+        const max = strip.scrollWidth - strip.clientWidth;
+        if (strip.scrollLeft <= 0 || strip.scrollLeft >= max - 1) {
+          return;
+        }
+        const origin = strip.getBoundingClientRect().left;
+        let best: number | null = null;
+        for (const wrap of strip.querySelectorAll<HTMLElement>(".cam-thumb-wrap")) {
+          const start = strip.scrollLeft + wrap.getBoundingClientRect().left - origin - 8;
+          if (best === null || Math.abs(start - strip.scrollLeft) < Math.abs(best - strip.scrollLeft)) {
+            best = start;
+          }
+        }
+        if (best !== null && Math.abs(best - strip.scrollLeft) >= 1) {
+          strip.scrollTo({ left: Math.max(0, Math.min(max, best)), behavior: "smooth" });
+        }
+      }, 160);
+    };
+    strip.addEventListener("scroll", onScroll, { passive: true });
+    let pending = 0;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.deltaX !== 0 || event.deltaY === 0) {
+        return;
+      }
+      if (strip.scrollWidth <= strip.clientWidth + 1) {
+        return;
+      }
+      event.preventDefault();
+      const unit = event.deltaMode === 1 ? 40 : event.deltaMode === 2 ? strip.clientWidth : 1;
+      pending += event.deltaY * unit;
+      const thumb = strip.querySelector<HTMLElement>(".cam-thumb-wrap");
+      const step = (thumb?.offsetWidth ?? 120) + 8;
+      if (Math.abs(pending) >= step / 2) {
+        const direction = Math.sign(pending);
+        pending = 0;
+        strip.scrollBy({ left: direction * step });
+      }
+    };
+    strip.addEventListener("wheel", onWheel, { passive: false });
+    return () => {
+      window.clearTimeout(settle);
+      strip.removeEventListener("scroll", onScroll);
+      strip.removeEventListener("wheel", onWheel);
+    };
+  }, [filmstrip, open]);
+
+  // The selected camera scrolls into view when it is chosen elsewhere.
+  useEffect(() => {
+    const strip = scrollRef.current;
+    if (!strip || !open || !selectedKey) {
+      return;
+    }
+    const thumb = Array.from(strip.querySelectorAll<HTMLElement>(".cam-thumb")).find(
+      (item) => item.dataset.camera === selectedKey,
+    );
+    const wrap = thumb?.closest<HTMLElement>(".cam-thumb-wrap");
+    if (!wrap) {
+      return;
+    }
+    const box = wrap.getBoundingClientRect();
+    const view = strip.getBoundingClientRect();
+    if (box.left < view.left) {
+      strip.scrollBy({ left: box.left - view.left - 8 });
+    } else if (box.right > view.right) {
+      strip.scrollBy({ left: box.right - view.right + 8 });
+    }
+  }, [selectedKey, open, filmstrip, frustums.length]);
+
   useEffect(() => {
     if (sceneRef.current === sceneId) {
       return;
@@ -614,32 +768,78 @@ export default function CameraStrip({
   if (frustums.length === 0) {
     return null;
   }
-  const groups = agentOrder(frustums);
+  const { current, next } = stripAgents(frustums, focusAgent);
+  const groups = filmstrip ? agentOrder(frustums) : agentOrder(frustums).filter((group) => group.agentId === current);
   return (
-    <section className="cam-strip" data-open={open ? "true" : "false"} aria-label="Cameras">
-      <button
-        type="button"
-        className="cam-strip-toggle"
-        aria-expanded={open}
-        aria-keyshortcuts="C"
-        onClick={onToggleOpen}
-        title="Cameras (C)"
-      >
-        <span>Cameras</span>
-        <span className="num">{frustums.length}</span>
-        <kbd>C</kbd>
-      </button>
+    <section
+      className="cam-strip"
+      data-open={open ? "true" : "false"}
+      data-mode={mode}
+      aria-label="Cameras"
+      style={{ height: open && typeof heightPx === "number" ? `${heightPx}px` : undefined }}
+    >
+      <div className="cam-strip-head">
+        <button
+          type="button"
+          className="cam-strip-toggle"
+          aria-expanded={open}
+          aria-keyshortcuts="C"
+          aria-label={open ? "Collapse camera strip" : "Expand camera strip"}
+          onClick={onToggleOpen}
+          title="Cameras (C)"
+        >
+          <span>Cameras</span>
+          <span className="num">{frustums.length}</span>
+          <kbd>C</kbd>
+        </button>
+        {open && onMode ? (
+          <div className="seg cam-mode" role="radiogroup" aria-label="Camera strip">
+            <button
+              type="button"
+              role="radio"
+              aria-checked={filmstrip}
+              title="All cameras (scroll)"
+              onClick={() => onMode("all")}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={!filmstrip}
+              title="One agent at a time"
+              onClick={() => onMode("agent")}
+            >
+              Agent
+            </button>
+          </div>
+        ) : null}
+      </div>
       {open ? (
-        <div className="cam-groups">
+        <div className={filmstrip ? "cam-groups cam-film" : "cam-groups"} ref={scrollRef}>
           {groups.map((group) => (
             <div
               key={group.agentId}
               className="cam-group"
               style={{ ["--agent" as string]: colorFor(types.get(group.agentId) ?? "") }}
             >
-              <span className="cam-group-name" title={group.agentId}>
-                {names.get(group.agentId) ?? group.agentId}
-              </span>
+              {filmstrip ? null : (
+              <div className="cam-group-head">
+                <span className="cam-group-name" title={group.agentId}>
+                  {names.get(group.agentId) ?? group.agentId}
+                </span>
+                {next && onSwitchAgent ? (
+                  <button
+                    type="button"
+                    className="link cam-switch"
+                    title={`Show ${names.get(next) ?? next}'s cameras`}
+                    onClick={() => onSwitchAgent(next)}
+                  >
+                    Switch agent
+                  </button>
+                ) : null}
+              </div>
+              )}
               <div className="cam-thumbs">
                 {group.cameras.map((camera) => {
                   const key = cameraKey(camera.agent_id, camera.sensor_id);
@@ -653,17 +853,43 @@ export default function CameraStrip({
                       nextTimeUs={nextTimeUs}
                       token={token}
                       imagesAvailable={imagesAvailable}
+                      playing={playing}
                       open={splitKey === key}
                       onOpen={() => onSplit(key)}
                       imageOn={imageOn(key)}
                       onToggleImage={() => onToggleImage(key)}
+                      boxes={boxCount ? boxCount(camera) : null}
+                      showAgent={filmstrip}
+                      selected={selectedKey === key}
                     />
                   );
                 })}
               </div>
             </div>
           ))}
-          {!imagesAvailable ? <p className="cam-strip-note muted">{missingText}</p> : null}
+          {frustums.length === 0 ? (
+            <PanelState
+              compact
+              kind="empty"
+              title={PANEL_DEFINITIONS.camera_strip.empty.title}
+              description={PANEL_DEFINITIONS.camera_strip.empty.description}
+              actionLabel={PANEL_DEFINITIONS.camera_strip.empty.actionLabel}
+              onAction={onToggleOpen}
+            />
+          ) : null}
+          {!imagesAvailable ? (
+            <>
+              <p className="cam-strip-note muted">{missingText}</p>
+              <PanelState
+                compact
+                kind="error"
+                title={PANEL_DEFINITIONS.camera_strip.error.title}
+                description={PANEL_DEFINITIONS.camera_strip.error.description}
+                actionLabel={PANEL_DEFINITIONS.camera_strip.error.actionLabel}
+                onAction={onToggleOpen}
+              />
+            </>
+          ) : null}
         </div>
       ) : null}
     </section>
@@ -735,9 +961,6 @@ export function CameraSplit({
       }
       setShown({ timeUs, bitmap, boxes: sampleBoxes });
       setNote("");
-      if (nextTimeUs !== null) {
-        void loadImage(sceneId, nextTimeUs, camera.agent_id, camera.sensor_id, token, SPLIT_WIDTH).catch(() => undefined);
-      }
     })();
     return () => {
       cancelled = true;

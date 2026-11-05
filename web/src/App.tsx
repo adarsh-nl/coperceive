@@ -2,37 +2,59 @@ import { Label } from "@radix-ui/react-label";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
+import { BrandWordmark } from "./desktop/Brand";
 import ConnectScreen from "./desktop/ConnectScreen";
-import { isTauriEnvironment } from "./desktop/local";
-import Landing, { readTheme, writeTheme } from "./landing/Landing";
+import { isTauriEnvironment, isViewerWindow, showLibrary } from "./desktop/local";
+import { DesktopPreferences } from "./desktop/SettingsView";
+import { ViewerUpdates } from "./desktop/UpdateBanner";
+import { CrashNotice } from "./desktop/CrashNotice";
+import { DiagnosticsDialog } from "./desktop/DiagnosticsDialog";
+import { startupCrash, type StartupCrash } from "./desktop/local";
+import { installGlobalErrorRecorders } from "./desktop/globalErrors";
+import Landing, { writeTheme } from "./landing/Landing";
 import { IconGear } from "./viewer/controls";
-import type { ThemeName } from "./viewer/appearance";
+import { systemTheme, type ThemeName } from "./viewer/appearance";
 import Viewer from "./viewer/Viewer";
 
 function useHashRoute(): "home" | "viewer" | "connect" {
-  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const isDesktop = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
+  const isConnect = (raw: string) => raw === "/connect" || raw.startsWith("/connect/") || raw.startsWith("/connect?");
   const [route, setRoute] = useState<"home" | "viewer" | "connect">(() => {
     const raw = typeof window !== "undefined" ? window.location.hash.replace(/^#/, "") : "";
-    if (raw === "/connect") return "connect";
+    // The viewer window has no IPC: it only ever shows the viewer.
+    if (isViewerWindow()) return "viewer";
+    if (isConnect(raw)) return "connect";
+    if (raw === "/viewer" || raw.startsWith("/viewer?")) return "viewer";
     if (isDesktop) return "viewer";
-    return raw === "/viewer" ? "viewer" : "home";
+    return "home";
   });
   useEffect(() => {
     const onHash = () => {
       const raw = window.location.hash.replace(/^#/, "");
-      if (raw === "/connect") {
-        setRoute("connect");
-        return;
-      }
-      const isDesktopNow = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
-      if (isDesktopNow) {
-        if (window.location.hash !== "#/viewer") {
-          window.location.hash = "#/viewer";
+      if (isViewerWindow()) {
+        // A Library link here means the main window's Library; stay on the viewer.
+        // `/viewer?scene=…` is the app choosing a scene in this viewer.
+        if (raw !== "/viewer" && !raw.startsWith("/viewer?")) {
+          void showLibrary().catch(() => {});
+          window.history.replaceState(null, "", "#/viewer");
         }
         setRoute("viewer");
         return;
       }
-      setRoute(raw === "/viewer" ? "viewer" : "home");
+      if (isConnect(raw)) {
+        setRoute("connect");
+        return;
+      }
+      if (raw === "/viewer" || raw.startsWith("/viewer?")) {
+        setRoute("viewer");
+        return;
+      }
+      const isDesktopNow = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
+      if (isDesktopNow) {
+        setRoute("connect");
+        return;
+      }
+      setRoute("home");
     };
     window.addEventListener("hashchange", onHash);
     return () => window.removeEventListener("hashchange", onHash);
@@ -50,61 +72,34 @@ function storedToken(): string {
   }
 }
 
-function DesktopPreferences() {
-  const [reopenLast, setReopenLast] = useState<boolean>(true);
-
+/**
+ * The unified toolbar (macOS): with the native title bar hidden, the top bar
+ * leaves room for the traffic lights, except in full screen where macOS hides
+ * them. Marks <html data-titlebar="overlay" data-fullscreen="…">.
+ */
+function useTitlebarOverlay() {
   useEffect(() => {
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-      const port = window.__COPERCEIVE_CTRL_PORT__;
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      fetch(`http://127.0.0.1:${port}/state`, {
-        headers: { Authorization: `Bearer ${secret}` },
-      })
-        .then((r) => r.json())
-        .then((data: { reopen_last_session?: boolean }) => {
-          if (data && typeof data.reopen_last_session === "boolean") {
-            setReopenLast(data.reopen_last_session);
-          }
-        })
-        .catch(() => {});
-    }
+    const root = document.documentElement;
+    const apply = () => {
+      if (window.__COPERCEIVE_TITLEBAR__ === "overlay") {
+        root.dataset.titlebar = "overlay";
+      }
+      const full = window.innerWidth >= window.screen.width && window.innerHeight >= window.screen.height;
+      root.dataset.fullscreen = full ? "true" : "false";
+    };
+    apply();
+    window.addEventListener("resize", apply);
+    window.addEventListener("coperceive-titlebar", apply);
+    return () => {
+      window.removeEventListener("resize", apply);
+      window.removeEventListener("coperceive-titlebar", apply);
+    };
   }, []);
-
-  const handleToggle = (checked: boolean) => {
-    setReopenLast(checked);
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-      const port = window.__COPERCEIVE_CTRL_PORT__;
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      fetch(`http://127.0.0.1:${port}/state`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${secret}`,
-        },
-        body: JSON.stringify({ reopen_last_session: checked }),
-      }).catch(() => {});
-    }
-  };
-
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem", minWidth: "220px" }}>
-      <label style={{ display: "flex", alignItems: "center", gap: "0.5rem", fontSize: "13px", cursor: "pointer" }}>
-        <input
-          type="checkbox"
-          checked={reopenLast}
-          onChange={(e) => handleToggle(e.target.checked)}
-        />
-        <span>Reopen last session on launch</span>
-      </label>
-      <p className="muted" style={{ fontSize: "11px", margin: 0 }}>
-        When unchecked, Coperceive starts at the Connect screen.
-      </p>
-    </div>
-  );
 }
 
 export default function App() {
-  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  useTitlebarOverlay();
+  const isDesktop = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
   const queryClient = useQueryClient();
   const route = useHashRoute();
   const [isTauri] = useState(isTauriEnvironment);
@@ -115,7 +110,32 @@ export default function App() {
     () => !isTauriEnvironment() || isRemoteOrHttp || Boolean(storedToken()),
   );
   const [token, setToken] = useState(storedToken);
-  const [theme, setTheme] = useState<ThemeName>(readTheme);
+  const [theme, setTheme] = useState<ThemeName>(() => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.theme_override) {
+      const saved = window.__COPERCEIVE_INITIAL_STATE__.theme_override;
+      if (saved === "dark" || saved === "light") {
+        return saved;
+      }
+    }
+    return systemTheme();
+  });
+  const [hasThemeOverride, setHasThemeOverride] = useState<boolean>(() => {
+    return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.theme_override);
+  });
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => {
+      if (!hasThemeOverride) {
+        const next = e.matches ? "dark" : "light";
+        setTheme(next);
+        document.documentElement.dataset.theme = next;
+      }
+    };
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, [hasThemeOverride]);
   const [argument, setArgument] = useState("hello from the data desk");
   const [filePath, setFilePath] = useState("");
   const [fileText, setFileText] = useState("");
@@ -124,12 +144,54 @@ export default function App() {
   const [tab, setTab] = useState<"viewer" | "desk">("viewer");
   const [slot, setSlot] = useState<HTMLDivElement | null>(null);
   const [actions, setActions] = useState<HTMLDivElement | null>(null);
+  const [updateSlot, setUpdateSlot] = useState<HTMLSpanElement | null>(null);
+  const [crash, setCrash] = useState<StartupCrash | null>(null);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
 
   useEffect(() => {
-    if (isDesktop && window.location.hash !== "#/viewer") {
-      window.location.hash = "#/viewer";
+    if (!isTauri) return;
+    // The notice belongs to the main window; the viewer window does not repeat it.
+    if (!isViewerWindow()) void startupCrash().then((record) => {
+      if (!record) return;
+      let dismissed = false;
+      try {
+        dismissed = localStorage.getItem(`coperceive-dismissed-crash-${record.timestamp_unix}`) === "1";
+      } catch {
+        dismissed = false;
+      }
+      if (!dismissed) setCrash(record);
+    });
+    const open = () => setDiagnosticsOpen(true);
+    window.addEventListener("coperceive-open-diagnostics", open);
+    return () => window.removeEventListener("coperceive-open-diagnostics", open);
+  }, [isTauri]);
+
+  useEffect(() => installGlobalErrorRecorders(), []);
+
+  useEffect(() => {
+    // Main window: the viewer window's wordmark asks for the Library.
+    if (!isTauri || isViewerWindow()) return;
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    void (async () => {
+      const { listen } = await import("@tauri-apps/api/event");
+      const stop = await listen("navigate-library", () => {
+        window.location.hash = "#/connect";
+      });
+      if (cancelled) stop();
+      else unlisten = stop;
+    })();
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [isTauri]);
+
+  useEffect(() => {
+    if (isDesktop && !window.location.hash) {
+      window.location.hash = connected ? "#/viewer" : "#/connect";
     }
-  }, [isDesktop]);
+  }, [isDesktop, connected]);
 
   useEffect(() => {
     if (token && typeof sessionStorage !== "undefined") {
@@ -266,25 +328,90 @@ export default function App() {
 
   const jobRows: Job[] = jobs.data ?? [];
 
+  // The crash notice and the diagnostics dialog sit above whichever screen the
+  // main window shows: the Library/HPC shell (ConnectScreen), the viewer or the
+  // landing page. They used to live in the viewer shell only, so a relaunch
+  // after a crash, which opens on the Library, never showed the notice.
+  const crashLayer = (
+    <>
+      {crash ? (
+        <CrashNotice
+          crash={crash}
+          onShare={() => setDiagnosticsOpen(true)}
+          onDismiss={() => {
+            try {
+              localStorage.setItem(`coperceive-dismissed-crash-${crash.timestamp_unix}`, "1");
+            } catch {
+              // The notice can still be dismissed for this session.
+            }
+            setCrash(null);
+          }}
+        />
+      ) : null}
+      {diagnosticsOpen ? (
+        <DiagnosticsDialog
+          context={{
+            active_route: typeof window !== "undefined" ? window.location.hash || "#/" : "#/",
+            quick_copy_diagnostics: true,
+            last_ui_error:
+              (window as unknown as { __COPERCEIVE_LAST_ERROR__?: unknown }).__COPERCEIVE_LAST_ERROR__ ?? null,
+          }}
+          onClose={() => setDiagnosticsOpen(false)}
+        />
+      ) : null}
+    </>
+  );
+
   if ((isTauri && !connected) || route === "connect") {
     return (
-      <ConnectScreen
-        onConnected={(session) => {
-          setToken(session.token);
-          setConnected(true);
-        }}
-      />
+      <>
+        {crashLayer}
+        <ConnectScreen
+          onConnected={(session) => {
+            setToken(session.token);
+            setConnected(true);
+            window.location.hash = "#/viewer";
+          }}
+        />
+      </>
     );
   }
 
-  if (route === "home" && !isDesktop) {
+  if (route === "home") {
+    if (isDesktop) {
+      return (
+        <>
+          {crashLayer}
+          <ConnectScreen
+            onConnected={(session) => {
+              setToken(session.token);
+              setConnected(true);
+              window.location.hash = "#/viewer";
+            }}
+          />
+        </>
+      );
+    }
     return (
       <Landing
         token={token}
         theme={theme}
         onTheme={(next) => {
+          setHasThemeOverride(true);
           writeTheme(next);
           setTheme(next);
+          if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+            const port = window.__COPERCEIVE_CTRL_PORT__;
+            const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+            void fetch(`http://127.0.0.1:${port}/state`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${secret}`,
+              },
+              body: JSON.stringify({ theme_override: next }),
+            }).catch(() => {});
+          }
         }}
         onOpen={() => {
           window.location.hash = "#/viewer";
@@ -295,13 +422,31 @@ export default function App() {
 
   return (
     <div className={tab === "viewer" || isDesktop ? "shell" : "shell shell-desk"}>
-      <header className="topbar">
-        <div className="top-cluster">
-          <a className="brand" href={isDesktop ? "#/viewer" : "#/"}>
-            <span className="brand-mark" aria-hidden="true" />
-            coperceive
+      {isDesktop ? <ViewerUpdates slot={updateSlot} /> : null}
+      {crashLayer}
+      {/* Empty toolbar space moves the window and double-click zooms it. */}
+      <header className="topbar" data-tauri-drag-region>
+        <div className="top-cluster" data-tauri-drag-region>
+          <a
+            className="brand"
+            href={isViewerWindow() ? "#/viewer" : isDesktop ? "#/connect" : "#/"}
+            onClick={(e) => {
+              if (isViewerWindow()) {
+                // No navigation here: the main window shows its Library instead.
+                e.preventDefault();
+                void showLibrary().catch((err: unknown) => {
+                  console.warn("show-library failed", err);
+                });
+              } else if (isDesktop) {
+                e.preventDefault();
+                window.location.hash = "#/connect";
+              }
+            }}
+            aria-label={isDesktop ? "Return to Library" : "coperceive"}
+          >
+            <BrandWordmark />
           </a>
-          <div className="top-slot" ref={setSlot} />
+          <div className="top-slot" ref={setSlot} data-tauri-drag-region />
         </div>
         {!isDesktop && (
           <div className="tabs" role="tablist" aria-label="Sections">
@@ -325,7 +470,8 @@ export default function App() {
             </button>
           </div>
         )}
-        <div className="top-cluster top-end">
+        <div className="top-cluster top-end" data-tauri-drag-region>
+          <span className="top-update" ref={setUpdateSlot} />
           <div className="top-actions" ref={setActions} />
           <details className="settings">
             <summary className="icon ghost" aria-label="Settings">
@@ -339,6 +485,9 @@ export default function App() {
                     <input
                       id="token-global"
                       type="password"
+                      autoCapitalize="off"
+                      autoCorrect="off"
+                      spellCheck={false}
                       autoComplete="off"
                       value={token}
                       onChange={(event) => setToken(event.target.value)}
@@ -371,6 +520,10 @@ export default function App() {
             <Label htmlFor="echo-arg">Text for echo</Label>
             <input
               id="echo-arg"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
+              autoComplete="off"
               value={argument}
               onChange={(event) => setArgument(event.target.value)}
             />
@@ -424,6 +577,9 @@ export default function App() {
             <input
               id="token"
               type="password"
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               autoComplete="off"
               value={token}
               onChange={(event) => setToken(event.target.value)}
@@ -440,6 +596,10 @@ export default function App() {
               <Label htmlFor="file-path">Relative path</Label>
               <input
                 id="file-path"
+                autoCapitalize="off"
+                autoCorrect="off"
+                spellCheck={false}
+                autoComplete="off"
                 value={filePath}
                 onChange={(event) => setFilePath(event.target.value)}
                 placeholder="note.txt"

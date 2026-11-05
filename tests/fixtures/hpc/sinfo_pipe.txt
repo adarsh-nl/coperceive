@@ -1,0 +1,2 @@
+compute*|4|idle|(null)|1-00:00:00|node[01-04]
+gpu-a100|2|mix|gpu:a100:4|2-00:00:00|node[05-06]

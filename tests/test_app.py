@@ -459,6 +459,22 @@ def test_plot_routes_require_the_csrf_header_and_write_svg(tmp_path: Path) -> No
     assert (tmp_path / saved["path"]).is_file()
 
 
+def test_missing_viewer_bundle_shows_a_build_hint(tmp_path: Path) -> None:
+    """A checkout without a built viewer explains how to build it instead of 404ing."""
+    root = tmp_path / "root"
+    root.mkdir()
+    static = tmp_path / "empty-static"
+    static.mkdir()
+    app = create_app(root=root, token=None, static=static)
+    client = TestClient(app)
+    page = client.get("/")
+    assert page.status_code == 200
+    text = page.text
+    assert "viewer isn’t built in this checkout" in text
+    assert "bash scripts/build_web_static.sh" in text
+    assert client.get("/api/health").status_code == 200
+
+
 def test_map_http_and_favicon(tmp_path: Path) -> None:
     xodr = tmp_path / "Town03.xodr"
     _straight(xodr)
@@ -472,7 +488,14 @@ def test_map_http_and_favicon(tmp_path: Path) -> None:
     scenes = tmp_path / "scenes"
     _scene_on_lane(scenes)
     (scenes / "Town03-000" / "COMPLETE.json").write_text("{}\n", encoding="utf-8")
-    app = create_app(root=scenes, token=None, maps=maps)
+    # The viewer bundle is built, not committed; this test needs the favicon the
+    # server serves from the static directory, so give it a minimal one.
+    static = tmp_path / "static"
+    static.mkdir()
+    (static / "favicon.svg").write_text(
+        '<svg xmlns="http://www.w3.org/2000/svg"></svg>\n', encoding="utf-8"
+    )
+    app = create_app(root=scenes, token=None, maps=maps, static=static)
     client = TestClient(app)
     summary = client.get("/api/scenes/Town03-000/map")
     assert summary.status_code == 200
@@ -696,6 +719,49 @@ def test_static_option_serves_another_bundle(tmp_path: Path) -> None:
     with pytest.raises(SystemExit) as exc:
         main(["serve", "--root", str(root), "--static", str(tmp_path / "missing")])
     assert exc.value.code == 2
+
+
+def test_image_route_serves_a_small_jpeg_for_a_display_width(tmp_path: Path) -> None:
+    """The camera strip asks for a display width; the server resizes instead of sending a
+    full-resolution photo over HTTP on every playback tick."""
+    pose = StampedPose(0, SE3.identity())
+    agent = Agent("vehicle", AgentType.VEHICLE, (pose,))
+    camera = Sensor(
+        "front",
+        "vehicle",
+        Modality.CAMERA,
+        SE3.identity(),
+        1,
+        1,
+        1.0,
+        1.0,
+        0.5,
+        0.5,
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="desk",
+        world_frame="ENU",
+        clock=Clock("us", "image fixture"),
+        agents=(agent,),
+        sensors=(camera,),
+        annotations=(),
+        objects=(),
+        images=(ImageRef("vehicle", "front", 0, "camera/front/000000.png"),),
+    )
+    image = tmp_path / "desk" / "camera" / "front" / "000000.png"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(_PNG)
+    stamp_scene(scene, tmp_path / "desk")
+    app = create_app(root=tmp_path, token=None)
+    client = TestClient(app)
+    thumb = client.get(
+        "/api/scenes/desk/image",
+        params={"time_us": 0, "agent_id": "vehicle", "sensor_id": "front", "width": 160},
+    )
+    assert thumb.status_code == 200
+    assert thumb.headers["content-type"] == "image/jpeg"
+    assert thumb.content.startswith(b"\xff\xd8")
 
 
 def test_image_route_follows_a_symlink_only_into_a_media_root(tmp_path: Path) -> None:

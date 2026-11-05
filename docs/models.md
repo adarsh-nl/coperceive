@@ -175,6 +175,73 @@ The Griffin plugin (`coperceive-griffin-model`) wraps the four released Griffin-
 
 Each model also accepts `--option det_json=<path>` and `--option nusc_root=<dir>` to index an existing `results_nusc_det.json` without a GPU, which is what `coperceive model check` and login-node verification use.
 
+## Reproducing the Griffin numbers
+
+The four Griffin-25m camera-only Agile models can be reproduced and evaluated on an HPC cluster with Slurm and NVIDIA A40 GPUs using the `coperceive model run --slurm` commands below. The val split contains 10 scenes (1,490 frames).
+
+### Slurm execution commands
+
+Staging requires the converted val scenes, the raw Griffin release, and an output directory for predictions:
+
+```bash
+# 1. Vehicle-side single model (job ~24m wall on A40)
+coperceive model run griffin --model vehicle-side \
+  --scenes /path/to/staged-scenes \
+  --raw-root /path/to/griffin-release \
+  --media-root /path/to/griffin-release \
+  --out /path/to/predictions \
+  --run-id griffin25m-vehicle-plugin \
+  --slurm --submit
+
+# 2. Drone-side single model (job ~20m wall on A40)
+coperceive model run griffin --model drone-side \
+  --scenes /path/to/staged-scenes \
+  --raw-root /path/to/griffin-release \
+  --media-root /path/to/griffin-release \
+  --out /path/to/predictions \
+  --run-id griffin25m-drone-plugin \
+  --slurm --submit
+
+# 3. Instance-fusion cooperative model (job ~40m wall on A40; auto-runs drone-side dependency)
+coperceive model run griffin --model instance-fusion \
+  --scenes /path/to/staged-scenes \
+  --raw-root /path/to/griffin-release \
+  --media-root /path/to/griffin-release \
+  --out /path/to/predictions \
+  --run-id griffin25m-instance-plugin \
+  --slurm --submit
+
+# 4. Early-fusion cooperative model (job ~32m wall on A40; num_cams=9)
+coperceive model run griffin --model early-fusion \
+  --scenes /path/to/staged-scenes \
+  --raw-root /path/to/griffin-release \
+  --media-root /path/to/griffin-release \
+  --out /path/to/predictions \
+  --run-id griffin25m-early-plugin \
+  --slurm --submit
+```
+
+### Reference paths
+
+On the HPC, canonical read-only acceptance runs are preserved under:
+`/home/nanjaiyalathaa/results/reference-stepb-20261020/predictions/`
+
+- `griffin25m-vehicle-plugin/` (Slurm job 629288, 7,930 boxes)
+- `griffin25m-instance-plugin-drone-side/` (Slurm job 630818, 12,093 boxes)
+- `griffin25m-instance-plugin/` (Slurm job 630818, 8,294 boxes)
+- `griffin25m-early-plugin/` (Slurm job 630821, 8,971 boxes)
+
+### Expected mAP per evaluation config
+
+All metrics are pooled across the 10 val scenes, within 50 m range, operating point score threshold 0.40, minimum prediction score 0.05.
+
+| Output | IoU unmapped (0.5 / 0.7) | IoU mapped (0.5 / 0.7) | Centre unmapped (4 / 2 / 1 / 0.5 m) | Centre mapped (4 / 2 / 1 / 0.5 m) |
+| --- | --- | --- | --- | --- |
+| `vehicle · single` | `0.088 / 0.074` (model: `0.175 / 0.149`) | `0.150 / 0.106` | `0.127 / 0.117 / 0.100 / 0.081` (model: `0.255 / 0.234 / 0.200 / 0.163`) | `0.345 / 0.296 / 0.228 / 0.148` |
+| `drone · single` | `0.010 / 0.001` (model: `0.020 / 0.002`) | `0.040 / 0.003` | `0.097 / 0.069 / 0.028 / 0.006` (model: `0.193 / 0.138 / 0.055 / 0.011`) | `0.252 / 0.176 / 0.068 / 0.012` |
+| `vehicle · fused` (instance) | `0.071 / 0.057` (model: `0.141 / 0.114`) | `0.132 / 0.088` | `0.114 / 0.102 / 0.081 / 0.062` (model: `0.229 / 0.203 / 0.162 / 0.123`) | `0.309 / 0.247 / 0.159 / 0.099` |
+| `vehicle · fused` (early) | `0.081 / 0.062` (model: `0.163 / 0.124`) | `0.180 / 0.108` | `0.118 / 0.113 / 0.101 / 0.077` (model: `0.236 / 0.226 / 0.203 / 0.153`) | `0.378 / 0.365 / 0.302 / 0.146` |
+
 ## Live mode (designed, deferred)
 
 Live mode (`coperceive serve --model <plugin>` streaming per-frame matches over SSE and freezing a live session into a stored run) is specified in [the model-plugin spec](spec/model-plugin.md#live-session) and [ADR 0011 decision 4](adr/0011-live-model-plugin.md#4-live-mode-a-session-started-by-post-results-pushed-over-sse) so that batch mode's protocol, cache and provenance fit it without changes. Its server routes and viewer controls are deferred to a later step after batch mode.
@@ -187,3 +254,26 @@ Live mode (`coperceive serve --model <plugin>` streaming per-frame matches over 
 - `tests/test_model_cache.py` and `tests/test_model_dependencies.py` test cache hits without starting a child, on-disk checkpoint re-hashing when bytes change, `depends_on` automatic `<run_id>-<model>` runs, `--artifacts`, and `transient_artifacts` exclusion.
 - `tests/test_model_check.py`, `tests/test_model_cli.py`, `tests/test_model_slurm.py` and `tests/test_model_end_to_end.py` test all ten conformance rules, CLI exit codes, Slurm script generation (`bash -n`, dependency closure, `rsync` filter), and the full chain from `model run` through `eval run`, `/api/scenes/{id}/predictions`, `eval compare` and `--slurm`.
 - On the HPC (NVIDIA A40), `griffin25m-vehicle-plugin` (job 629288) reproduced job 627093's `boxes.parquet` byte-for-byte across all 10 val scenes (7,930 boxes, `+0.000` across all four evaluation configs).
+
+## Custom pipelines on a cluster (the smoke example)
+
+A cluster without an installed model plugin still needs a way to exercise **plan → submit → watch → history**. `examples/pipelines/smoke/` is a dependency-free pipeline for that: one Python file and its `coperceive-pipeline.json`. It uses only the standard library, requests no GPU, declares a `path` argument (`--split`) and an `int` (`--sleep-seconds`, default 30), then writes:
+
+- `predictions.jsonl` with one valid progress line (no model, so no boxes), and
+- `metrics.json` with the `coperceive-pipeline-metrics` schema and version 1.
+
+The contract check passes `--max-frames 3`; the smoke pipeline caps its sleep at one second in that mode. The split file's first non-empty line is reported as the run's scene.
+
+Copy the directory under a code root the server profile already trusts (do not put cluster paths in the repository):
+
+```bash
+cp -R examples/pipelines/smoke /path/to/your/code-root/smoke
+```
+
+Then in **New evaluation**, choose **Custom pipeline script**, enter the registration path on the cluster, for example:
+
+```text
+/path/to/your/code-root/smoke/coperceive-pipeline.json
+```
+
+and press **Load**. Fill the smoke split argument with an existing scene/split path inside the profile's data roots, optionally change the sleep, build the plan, and submit it. The generic Checkpoint and Test split fields are not shown for this pipeline: it declares neither role, so they are neither required nor recorded. The pipeline only sleeps and writes the two contract files; replace its body with your model when you have one.

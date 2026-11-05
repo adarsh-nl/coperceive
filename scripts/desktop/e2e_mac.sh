@@ -11,8 +11,10 @@
 # 3. Quit app cleanly, relaunch without autoconnect env var -> asserts full session restored from DOM & scene-graph.
 # 4. Switch dataset via UI button to second valid root -> asserts new scene rendered, old scene cleared.
 # 5. Switch to invalid folder -> asserts persistent error banner ("Choose another folder" button, does NOT auto-dismiss).
-# 6. Close viewer window (Cmd+W) -> returns to Connect screen, asserts animated backdrop exists.
+# 6. Close viewer window (Cmd+W) -> returns to Connect screen.
 # 7. Quit application -> asserts ZERO orphan coperceive serve processes remain.
+# 8. Get data: start a dataset job, Pause, Resume, Cancel (step 5e; test-mode local job, no network).
+# 9. Library: Move library relocates a scene to a new root (step 5f; temp library from the fixture).
 
 set -euo pipefail
 
@@ -72,16 +74,38 @@ MOCK_DIALOG_FILE="${TMP_DIR}/mock_dialog.txt"
 APP_STDOUT="${TMP_DIR}/app_stdout.log"
 APP_STDERR="${TMP_DIR}/app_stderr.log"
 
+# Import source: a copy of synth_001 with one PNG that no images.parquet row
+# names, sitting beside a listed frame directory. Real camera trees (e.g.
+# drone-side/camera/right in the local Town03-000) hold frames from other
+# scenes; the import must copy only the frames the scene lists.
+IMPORT_SOURCE="${TMP_DIR}/import-src/synth_001"
+mkdir -p "$(dirname "${IMPORT_SOURCE}")"
+cp -R "${FIXTURE_2}" "${IMPORT_SOURCE}"
+STRAY_FRAME="${IMPORT_SOURCE}/vehicle/cam_front/0999999.png"
+mkdir -p "$(dirname "${STRAY_FRAME}")"
+printf 'a frame from another scene that images.parquet does not list\n' > "${STRAY_FRAME}"
+
 STATE_DIR="${HOME}/Library/Application Support/nl.adarsh.coperceive"
 STATE_FILE="${STATE_DIR}/state.json"
 mkdir -p "${STATE_DIR}"
 chmod 0700 "${STATE_DIR}"
 
 APP_PID=""
+UPDATE_SERVER_PID=""
+
+INITIAL_DARK_MODE="false"
+if [ "$(defaults read -g AppleInterfaceStyle 2>/dev/null)" = "Dark" ]; then
+    INITIAL_DARK_MODE="true"
+fi
 
 cleanup() {
     local status=$?
     echo "Cleaning up test harness (exit status: ${status})..."
+    if [ "${INITIAL_DARK_MODE:-}" = "true" ]; then
+        osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to true' 2>/dev/null || defaults write -g AppleInterfaceStyle "Dark" 2>/dev/null || true
+    elif [ -n "${INITIAL_DARK_MODE:-}" ]; then
+        osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to false' 2>/dev/null || defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+    fi
     if [ "${status}" -ne 0 ]; then
         echo "=== App STDOUT on failure ==="
         cat "${APP_STDOUT}" 2>/dev/null || true
@@ -95,6 +119,12 @@ cleanup() {
             echo "=== Relaunch STDERR ==="
             cat "${TMP_DIR}/relaunch_stderr.log" 2>/dev/null || true
         fi
+        # The geometry relaunches; step 5c drives the third one.
+        for log in "${TMP_DIR}"/geom_relaunch_*_stderr.log; do
+            [ -f "${log}" ] || continue
+            echo "=== $(basename "${log}") ==="
+            cat "${log}" 2>/dev/null || true
+        done
         if [ -d "${HOME}/Library/Logs/Coperceive" ]; then
             echo "=== Coperceive logs ==="
             cat "${HOME}/Library/Logs/Coperceive/"*.log 2>/dev/null || true
@@ -103,6 +133,18 @@ cleanup() {
     if [ -n "${APP_PID:-}" ] && kill -0 "${APP_PID}" 2>/dev/null; then
         echo "Killing app process ${APP_PID}..."
         kill -9 "${APP_PID}" 2>/dev/null || true
+    fi
+    if [ -n "${UPDATE_SERVER_PID:-}" ] && kill -0 "${UPDATE_SERVER_PID}" 2>/dev/null; then
+        kill "${UPDATE_SERVER_PID}" 2>/dev/null || true
+    fi
+    # Step 5e's fake dataset job child outlives the app if the harness dies mid-step.
+    if [ -s "${TMP_DIR:-}/fake-dataset-job.pid" ]; then
+        kill -9 "$(cat "${TMP_DIR}/fake-dataset-job.pid" 2>/dev/null)" 2>/dev/null || true
+    fi
+    # Step 5f edits state.json to point at a temp library; restore the copy even
+    # when an assertion failed so a failed run never leaves a dangling library root.
+    if [ -f "${TMP_DIR:-}/state-before-5f.json" ] && [ -f "${STATE_FILE}" ]; then
+        cp "${TMP_DIR}/state-before-5f.json" "${STATE_FILE}" 2>/dev/null || true
     fi
     pkill -f "coperceive serve" 2>/dev/null || true
     rm -rf "${TMP_DIR}"
@@ -114,9 +156,16 @@ pkill -f "coperceive serve" 2>/dev/null || true
 pkill -f "coperceive-desktop" 2>/dev/null || true
 pkill -f "Coperceive" 2>/dev/null || true
 
-# Clear previous state
+# Force macOS appearance to light to verify migration from legacy last_theme: "dark"
+osascript -e 'tell application "System Events" to tell appearance preferences to set dark mode to false' 2>/dev/null || defaults delete -g AppleInterfaceStyle 2>/dev/null || true
+
+# Clear previous state and seed state.json with old-style state containing legacy last_theme: "dark"
 rm -f "${STATE_FILE}"
 rm -f "${HOME}/Library/Application Support/coperceive/state.json"
+mkdir -p "${STATE_DIR}"
+cat << 'EOF' > "${STATE_FILE}"
+{"last_theme": "dark", "reopen_last_session": true}
+EOF
 
 echo ""
 echo "--- Step 1: Launch App with Fixture 1 (Multi-Scene Root) ---"
@@ -124,6 +173,12 @@ export COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_1}"
 export COPERCEIVE_TEST_ENV="1"
 export COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}"
 export COPERCEIVE_MOCK_DIALOG_FILE="${MOCK_DIALOG_FILE}"
+export COPERCEIVE_TEST_IMPORT_SOURCE="${IMPORT_SOURCE}"
+export COPERCEIVE_PACK_SLEEP_S="0.5"
+# Step 5e only: a local NDJSON progress child replaces the network download so
+# pause/resume/cancel can be driven without Hugging Face. Inert in production.
+export COPERCEIVE_TEST_FAKE_DATASET_JOB="1"
+export COPERCEIVE_TEST_FAKE_DATASET_PID_FILE="${TMP_DIR}/fake-dataset-job.pid"
 
 "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
 APP_PID=$!
@@ -192,10 +247,10 @@ secret = "'"${CTRL_SECRET}"'"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -222,6 +277,30 @@ print(f"Initial scene counts: {counts}")
 assert counts is not None, "window.__COPERCEIVE_SCENE_COUNTS__ must be defined"
 assert counts.get("points", 0) > 0, f"Expected points > 0, got {counts}"
 assert counts.get("boxes", 0) > 0, f"Expected boxes > 0, got {counts}"
+
+print("Asserting Inspector empty state in UI...")
+inspector_empty = eval_js("""(() => {
+    const el = document.querySelector(".side-card .panel-state-empty");
+    if (!el) return null;
+    return {
+        title: el.querySelector(".panel-state-title")?.textContent?.trim() || "",
+        desc: el.querySelector(".panel-state-description")?.textContent?.trim() || "",
+        action: el.querySelector(".panel-state-action")?.textContent?.trim() || ""
+    };
+})()""")
+assert inspector_empty, "Expected Inspector empty state in sidebar"
+empty_title = inspector_empty["title"]
+empty_desc = inspector_empty["desc"]
+empty_action = inspector_empty["action"]
+assert empty_title == "No object selected", f"Unexpected title: {empty_title}"
+assert empty_desc.endswith("."), f"Description must end with period: {empty_desc}"
+assert empty_action == "", f"Empty inspector should have no action button: {empty_action}"
+print(f"Verified: Inspector empty state rendered correctly ({empty_title})")
+
+print("Asserting legacy last_theme migration: system appearance is light, app must follow system...")
+theme_val = eval_js("document.documentElement.dataset.theme")
+print(f"Current document theme: {theme_val}")
+assert theme_val == "light", f"Expected theme to follow light system appearance despite legacy last_theme: 'dark', got '{theme_val}'"
 
 print("Driving real UI: clicking Drone viewpoint button...")
 eval_js("""(() => {
@@ -259,17 +338,55 @@ eval_js("""(() => {
     }
 })()""")
 
+print("Driving real UI: resizing left panel to 320px...")
+eval_js("""(() => {
+    if (window.__COPERCEIVE_RESIZE_PANEL__) {
+        window.__COPERCEIVE_RESIZE_PANEL__("left", 320);
+    }
+})()""")
+
 print("Asserting immediate scene-graph counts after UI interactions...")
 updated_counts = eval_js("window.__COPERCEIVE_SCENE_COUNTS__()")
 print(f"Updated scene counts: {updated_counts}")
 assert updated_counts["boxes"] == 0, f"Expected boxes == 0 after toggling Boxes off, got {updated_counts}"
 assert updated_counts["frustums"] == 4, f"Expected frustums == 4 (UAV hidden), got {updated_counts}"
 
+print("Flushing debounced state to controller...")
+eval_js("window.__COPERCEIVE_FLUSH_STATE__ ? window.__COPERCEIVE_FLUSH_STATE__() : null")
+
 print("Step 1 UI interactions verified successfully.")
 '
 
-# Wait 1.5s for debounced state persistence
-sleep 1.5
+# Wait up to 30s for debounced state persistence. Under a loaded macOS runner
+# the save can lag well past 10 s even though the UI already applied the change.
+python3 -c '
+import sys, json, time
+
+state_file = "'"${STATE_FILE}"'"
+print(f"Waiting for state.json to persist at {state_file}...", flush=True)
+deadline = time.monotonic() + 30.0
+saved = {}
+while time.monotonic() < deadline:
+    try:
+        with open(state_file, "r", encoding="utf-8") as f:
+            saved = json.load(f)
+        if (
+            saved.get("last_viewpoint") == "chase"
+            and saved.get("last_sample_index") == 148
+            and (saved.get("layout") or {}).get("left_px") == 320
+        ):
+            break
+    except Exception:
+        pass
+    time.sleep(0.1)
+
+print(f"Step 1 verified state.json content: {saved}", flush=True)
+assert saved.get("last_viewpoint") == "chase", f"Expected last_viewpoint chase in state.json, got {saved}"
+assert saved.get("last_sample_index") == 148, f"Expected last_sample_index 148 in state.json, got {saved}"
+assert (saved.get("layout") or {}).get("left_px") == 320, f"Expected layout.left_px 320 in state.json, got {saved}"
+assert saved.get("theme_override") is None, f"Expected theme_override to be None, got {saved.get('theme_override')}"
+assert "last_theme" not in saved, f"Expected legacy last_theme to be pruned from state.json, got {saved}"
+'
 
 # Test Help -> Copy Diagnostics menu item
 echo "Testing Help -> Copy Diagnostics via native menu..."
@@ -295,6 +412,147 @@ if echo "${CLIPBOARD_TEXT}" | grep -q "Coperceive Diagnostics"; then
         fi
     fi
 fi
+
+echo ""
+echo "--- Step 1b: Export Still and BEV in Real App and Assert Non-Empty PNGs ---"
+python3 -c '
+import sys, json, time, urllib.request, glob, os
+from pathlib import Path
+
+port = "'"${CTRL_PORT}"'"
+secret = "'"${CTRL_SECRET}"'"
+fixture_dir = "'"${FIXTURE_1}"'"
+tmp_dir = "'"${TMP_DIR}"'"
+mock_dialog_file = "'"${MOCK_DIALOG_FILE}"'"
+
+def eval_js(code, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
+        data = json.loads(r.read().decode("utf-8"))
+        err = data.get("error")
+        if err:
+            raise RuntimeError(f"JS error: {err}")
+        return data.get("result")
+
+print("Driving real UI: opening Export dialog...")
+eval_js("""(() => {
+    const exportBtn = Array.from(document.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.trim() === "Export");
+    if (!exportBtn) throw new Error("Export button not found");
+    exportBtn.click();
+})()""")
+
+time.sleep(0.5)
+
+# --- Substep 1: Export still via native save dialog ---
+still_dest = os.path.join(tmp_dir, f"e2e_still_{int(time.time())}.png")
+Path(mock_dialog_file).write_text(still_dest + "\n", encoding="utf-8")
+print(f"Seeded mock dialog for still export: {still_dest}")
+
+print("Driving real UI: clicking Save still button...")
+eval_js("""(() => {
+    const dialog = document.querySelector(\x27.dialog\x27);
+    if (!dialog) throw new Error("Export dialog not found in DOM");
+    const stillBtn = Array.from(dialog.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.includes("Save still"));
+    if (!stillBtn) throw new Error("Save still button not found in export dialog");
+    stillBtn.click();
+})()""")
+
+print("Waiting for still export to complete in real UI...")
+deadline = time.monotonic() + 30.0
+still_exported = False
+while time.monotonic() < deadline:
+    res = eval_js("""(() => {
+        const dialog = document.querySelector(\x27.dialog\x27);
+        const note = dialog ? dialog.querySelector(\x27p.muted\x27) : null;
+        const noteText = note ? note.textContent : "";
+        if (noteText.includes("Saved to ") && noteText.includes("still")) {
+            return { done: true, note: noteText };
+        }
+        if (noteText.includes("Failed") || noteText.includes("Error") || noteText.includes("error")) {
+            return { error: noteText };
+        }
+        return { done: false, note: noteText };
+    })()""")
+    err_text = res.get("error") if res else None
+    if err_text:
+        raise RuntimeError(f"Still export failed in UI: {err_text}")
+    if res and res.get("done"):
+        print(f"Still export completed in UI: {res}", flush=True)
+        still_exported = True
+        break
+    time.sleep(0.5)
+
+assert still_exported, "Still export timed out in UI"
+assert os.path.isfile(still_dest), f"Exported still file does not exist at {still_dest}"
+still_size = os.path.getsize(still_dest)
+print(f"Asserting non-empty still PNG: {still_dest} is {still_size} bytes")
+assert still_size > 0, f"Exported still PNG {still_dest} is empty (0 bytes)"
+assert "Saved to " in res["note"], "Expected Saved to in note: " + str(res.get("note"))
+assert os.path.basename(still_dest) in res["note"], "Expected filename in note: " + str(res.get("note"))
+print("Step 1b verified: Still exported successfully and non-empty PNG asserted.", flush=True)
+
+# --- Substep 2: Export BEV figure via native save dialog with preview ---
+bev_dest = os.path.join(tmp_dir, f"e2e_bev_{int(time.time())}.png")
+Path(mock_dialog_file).write_text(bev_dest + "\n", encoding="utf-8")
+print(f"Seeded mock dialog for BEV export: {bev_dest}")
+
+print("Driving real UI: clicking Bird\x27s-eye export button...")
+eval_js("""(() => {
+    const dialog = document.querySelector(\x27.dialog\x27);
+    if (!dialog) throw new Error("Export dialog not found in DOM");
+    const bevBtn = Array.from(dialog.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.includes("Bird\x27s-eye"));
+    if (!bevBtn) throw new Error("Bird\x27s-eye button not found in export dialog");
+    bevBtn.click();
+})()""")
+
+print("Waiting for BEV export to complete and render preview in real UI...")
+deadline = time.monotonic() + 30.0
+bev_exported = False
+while time.monotonic() < deadline:
+    res = eval_js("""(() => {
+        const dialog = document.querySelector(\x27.dialog\x27);
+        const img = dialog ? dialog.querySelector(\x27img.plot-preview\x27) : null;
+        const note = dialog ? dialog.querySelector(\x27p.muted\x27) : null;
+        const noteText = note ? note.textContent : "";
+        if (img && img.src && noteText.includes("Saved to ") && noteText.includes("bev")) {
+            return { done: true, src: img.src, note: noteText };
+        }
+        if (noteText.includes("Failed") || noteText.includes("Error") || noteText.includes("error")) {
+            return { error: noteText };
+        }
+        return { done: false, note: noteText };
+    })()""")
+    err_text = res.get("error") if res else None
+    if err_text:
+        raise RuntimeError(f"BEV export failed in UI: {err_text}")
+    if res and res.get("done"):
+        print(f"BEV export completed in UI: {res}", flush=True)
+        bev_exported = True
+        break
+    time.sleep(0.5)
+
+assert bev_exported, "BEV export timed out in UI"
+
+print("Closing Export dialog...")
+eval_js("""(() => {
+    const dialog = document.querySelector(\x27.dialog\x27);
+    const closeBtn = dialog ? Array.from(dialog.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.trim() === "Close") : null;
+    if (closeBtn) closeBtn.click();
+})()""")
+
+assert os.path.isfile(bev_dest), f"Exported BEV file does not exist at {bev_dest}"
+bev_size = os.path.getsize(bev_dest)
+print(f"Asserting non-empty BEV PNG: {bev_dest} is {bev_size} bytes")
+assert bev_size > 0, f"Exported BEV PNG {bev_dest} is empty (0 bytes)"
+assert "Saved to " in res["note"], "Expected Saved to in note: " + str(res.get("note"))
+assert os.path.basename(bev_dest) in res["note"], "Expected filename in note: " + str(res.get("note"))
+
+print("Step 1c verified: BEV figure exported successfully and non-empty PNG asserted.", flush=True)
+'
 
 screencapture -x "${SCREENSHOT_DIR}/02-before-quit.png" 2>/dev/null || true
 
@@ -380,10 +638,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -401,6 +659,15 @@ def eval_retry(step, code, tries=3):
             time.sleep(0.5)
     print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
     raise SystemExit(1)
+
+def eval_once_note(step, code, timeout=15):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    toggle can change the UI twice."""
+    try:
+        return eval_js(code, timeout=timeout)
+    except Exception as e:
+        print(f"E2E_NOTE step={step} {type(e).__name__}: {e}", flush=True)
+        return None
 
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
@@ -421,25 +688,33 @@ print("Waiting for relaunched viewer scene to restore...")
 wait_for_scene(30)
 
 print("Checking restored values from DOM...")
-drone_pressed = eval_js("document.querySelector('button[aria-keyshortcuts=\"3\"]')?.getAttribute('aria-pressed')")
+deadline = time.monotonic() + 15.0
+drone_pressed = None
+boxes_checked = None
+frustum_images_checked = None
+uav_checked = None
+
+while time.monotonic() < deadline:
+    drone_pressed = eval_js("document.querySelector('button[aria-keyshortcuts=\"3\"]')?.getAttribute('aria-pressed')")
+    boxes_checked = eval_js("""(() => {
+        const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Boxes"));
+        return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
+    })()""")
+    frustum_images_checked = eval_js("""(() => {
+        const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Frustum images"));
+        return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
+    })()""")
+    uav_checked = eval_js("""(() => {
+        const swatch = Array.from(document.querySelectorAll('.swatch')).find(b => b.textContent.includes("uav_01") || b.textContent.includes("Drone"));
+        return swatch ? (swatch.getAttribute("aria-checked") || swatch.getAttribute("aria-pressed")) : null;
+    })()""")
+    if drone_pressed == "true" and boxes_checked == "false" and frustum_images_checked == "false" and uav_checked == "false":
+        break
+    time.sleep(0.2)
+
 assert drone_pressed == "true", f"Expected Drone viewpoint aria-pressed==true, got {drone_pressed}"
-
-boxes_checked = eval_js("""(() => {
-    const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Boxes"));
-    return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
-})()""")
 assert boxes_checked == "false", f"Expected Boxes toggle aria-checked==false, got {boxes_checked}"
-
-frustum_images_checked = eval_js("""(() => {
-    const eye = Array.from(document.querySelectorAll('.eye')).find(b => b.textContent.includes("Frustum images"));
-    return eye ? (eye.getAttribute("aria-checked") || eye.getAttribute("aria-pressed")) : null;
-})()""")
 assert frustum_images_checked == "false", f"Expected Frustum images toggle aria-checked==false, got {frustum_images_checked}"
-
-uav_checked = eval_js("""(() => {
-    const swatch = Array.from(document.querySelectorAll('.swatch')).find(b => b.textContent.includes("uav_01") || b.textContent.includes("Drone"));
-    return swatch ? (swatch.getAttribute("aria-checked") || swatch.getAttribute("aria-pressed")) : null;
-})()""")
 assert uav_checked == "false", f"Expected uav_01 swatch aria-checked==false, got {uav_checked}"
 
 print("Checking restored values from scene-graph counts...")
@@ -448,6 +723,15 @@ print(f"Relaunched scene counts: {counts}")
 assert counts["boxes"] == 0, f"Expected restored boxes == 0, got {counts}"
 assert counts["frustums"] == 4, f"Expected restored frustums == 4 (UAV hidden), got {counts}"
 assert counts["points"] > 0, f"Expected restored points > 0, got {counts}"
+
+print("Checking restored layout sizes from state.json...")
+layout = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__ ? window.__COPERCEIVE_LAYOUT_SIZES__() : null")
+print(f"Relaunched layout: {layout}")
+assert layout is not None, "window.__COPERCEIVE_LAYOUT_SIZES__ must exist"
+assert layout.get("left_px") == 320, f"Expected restored left_px == 320, got {layout}"
+left_dom_w = eval_js("document.querySelector('aside.panel')?.getBoundingClientRect().width")
+print(f"Relaunched left panel DOM width: {left_dom_w}")
+assert abs(left_dom_w - 320) < 2, f"Expected DOM width ~320, got {left_dom_w}"
 
 print("Verifying resume never restores into the end zone (must restore 0)...")
 pb_restored = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null")
@@ -458,12 +742,26 @@ assert pb_restored["loop"] == True, f"Expected default loop == True for scenes u
 
 print("Testing playback requirement (a): restore at the second-to-last sample, click Play, assert still playing 3 s later with frameIndex advanced >= 25...")
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 148)")
+time.sleep(0.5)
+frustums_before = {f["key"]: f["position"] for f in eval_js("window.__COPERCEIVE_SCENE_GRAPH__().frustums")}
 eval_js("document.querySelector('button.icon.primary')?.click()")
 time.sleep(3.0)
 pb_a = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
 print(f"State 3s after Play click: {pb_a}")
 assert pb_a["playing"] == True, f"Expected still playing 3s later, got {pb_a}"
 assert pb_a["frameIndex"] >= 25, f"Expected frameIndex advanced >= 25, got {pb_a['frameIndex']}"
+# The camera frustums follow the vehicle (x = sample + 1.5 for cam_front in synth_001),
+# and any image plane shown sits on its frustum (v0.1.1: they used to lag behind).
+graph_a = eval_js("window.__COPERCEIVE_SCENE_GRAPH__()")
+front_before = frustums_before.get("vehicle/cam_front")
+front_now = {f["key"]: f["position"] for f in graph_a["frustums"]}.get("vehicle/cam_front")
+assert front_before and abs(front_before[0] - 149.5) < 1e-6, f"cam_front at seek 148: {front_before}"
+assert front_now and abs(front_now[0] - 1.5 - pb_a["frameIndex"]) <= 3, f"cam_front {front_now} at frame {pb_a['frameIndex']}"
+lines_now = {f["key"]: f["position"] for f in graph_a["frustums"]}
+for plane in graph_a["imagePlanes"]:
+    if plane["visible"]:
+        assert lines_now.get(plane["key"]) == plane["position"], f"image plane off its frustum: {plane}"
+print(f"Step 2 notices: cam_front frustum followed the vehicle from x={front_before[0]} to x={front_now[0]} during playback")
 eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (b): loop off, play to the end, assert Replay, click, assert it plays from 0...")
@@ -476,12 +774,21 @@ assert pb_b_loop["loop"] == False, f"Expected loop to be False, got {pb_b_loop}"
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 125)")
 eval_js("document.querySelector('button.icon.primary')?.click()")
 
-deadline = time.monotonic() + 6.0
-while time.monotonic() < deadline:
-    pb_cur = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
-    if not pb_cur["playing"] and pb_cur["frameIndex"] >= 149:
-        break
-    time.sleep(0.05)
+# Wait for playback to reach the end (stopped playing and reached sample >= 149) via in-page Promise
+pb_cur = eval_js("""
+new Promise((resolve) => {
+    const start = Date.now();
+    const check = () => {
+        const pb = window.__COPERCEIVE_PLAYBACK_STATE__ ? window.__COPERCEIVE_PLAYBACK_STATE__() : null;
+        if ((pb && !pb.playing && pb.frameIndex >= 149) || (Date.now() - start > 8000)) {
+            resolve(pb);
+        } else {
+            setTimeout(check, 50);
+        }
+    };
+    check();
+})
+""", timeout=15)
 
 btn_label = eval_js("document.querySelector('button.icon.primary')?.getAttribute('aria-label')")
 print(f"Play button aria-label at end of playback: {btn_label}")
@@ -496,10 +803,17 @@ assert pb_replayed["frameIndex"] < 25, f"Expected playback to restart from 0, go
 eval_js("window.__COPERCEIVE_PLAYBACK__('toggle')")
 
 print("Testing playback requirement (c): play 15 s across the loop wrap with no frame-change gap over 300 ms...")
-eval_js("window.__COPERCEIVE_PLAYBACK__('loop')")
-time.sleep(0.1)
-pb_c_loop = eval_js("window.__COPERCEIVE_PLAYBACK_STATE__()")
-assert pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
+pb_c_loop = None
+for _attempt in range(3):
+    pb_c_loop = eval_retry("2-loop-state", "window.__COPERCEIVE_PLAYBACK_STATE__()")
+    if pb_c_loop["loop"]:
+        break
+    eval_once_note("2-loop-on", "window.__COPERCEIVE_PLAYBACK__('loop')")
+    time.sleep(0.1)
+    pb_c_loop = eval_retry("2-loop-state", "window.__COPERCEIVE_PLAYBACK_STATE__()")
+    if pb_c_loop["loop"]:
+        break
+assert pb_c_loop is not None and pb_c_loop["loop"] == True, f"Expected loop to be True, got {pb_c_loop}"
 
 eval_js("window.__COPERCEIVE_PLAYBACK__('seek', 120)")
 
@@ -554,6 +868,53 @@ print(f"Playback requirement (c) verified: max frame gap = {report['maxGapMs']:.
 assert report["wraps"] >= 1, f"Expected at least 1 loop wrap over 15s, got {report['wraps']}"
 assert report["maxGapMs"] <= 300.0, f"Frame change gap exceeded 300ms: {report['maxGapMs']:.1f}ms"
 
+print("Testing double-click reset of left panel resizer...")
+eval_js("""(() => {
+    const resizer = document.querySelector('.panel-resizer-left');
+    if (!resizer) throw new Error("panel-resizer-left not found");
+    resizer.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+})()""")
+layout_after_reset = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+assert layout_after_reset.get("left_px") == 248, f"Expected left_px reset to 248, got {layout_after_reset}"
+
+print("Testing keyboard resize on focused handle...")
+eval_js("""(() => {
+    const resizer = document.querySelector('.panel-resizer-left');
+    if (!resizer) throw new Error("panel-resizer-left not found");
+    resizer.focus();
+    resizer.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+})()""")
+layout_after_kb = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+assert layout_after_kb.get("left_px") == 258, f"Expected left_px incremented by 10 to 258, got {layout_after_kb}"
+
+print("Testing full-screen 3D view toggle with F and Esc...")
+eval_js("""(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'F', bubbles: true }));
+})()""")
+time.sleep(0.3)
+is_fs = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
+ws_fs = eval_js("Boolean(document.querySelector('.workspace.is-fullscreen'))")
+left_panel_hidden = eval_js("(() => { const el = document.querySelector('aside.panel:not(.panel-right)'); return el === null || getComputedStyle(el).display === 'none'; })()")
+right_panel_hidden = eval_js("(() => { const el = document.querySelector('aside.panel-right'); return el === null || getComputedStyle(el).display === 'none'; })()")
+timeline_visible = eval_js("document.querySelector('.timeline') !== null")
+print(f"Full screen active: is_fs={is_fs}, ws_fs={ws_fs}, left_hidden={left_panel_hidden}, right_hidden={right_panel_hidden}, timeline_vis={timeline_visible}")
+assert is_fs and ws_fs and left_panel_hidden and right_panel_hidden and timeline_visible, "Full screen must hide panels and keep timeline"
+
+import subprocess
+screenshot_dir = "${SCREENSHOT_DIR}"
+subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03b-fullscreen.png"], check=False)
+
+eval_js("""(() => {
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+})()""")
+time.sleep(0.3)
+is_fs_after = eval_js("Boolean(window.__COPERCEIVE_IS_FULLSCREEN__ && window.__COPERCEIVE_IS_FULLSCREEN__())")
+layout_restored = eval_js("window.__COPERCEIVE_LAYOUT_SIZES__()")
+print(f"Exited full screen: is_fs_after={is_fs_after}, layout_restored={layout_restored}")
+assert not is_fs_after, "Escape must exit full screen"
+assert layout_restored.get("left_px") == 258, f"Previous sizes must be preserved, got {layout_restored}"
+subprocess.run(["screencapture", "-x", f"{screenshot_dir}/03c-resized-panels.png"], check=False)
+
 print("Step 2 verified: All restored values from DOM and scene-graph counts match perfectly.")
 EOF
 
@@ -570,10 +931,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -695,10 +1056,10 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -807,10 +1168,10 @@ launch = "${launch}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
@@ -860,6 +1221,29 @@ done
 echo "Step 2c verified: viewer window frame remained completely unchanged across 3 relaunches."
 
 echo ""
+echo "--- Step 2d: Relaunch opens one viewer window ---"
+OPENED_COUNT=$(grep -c "opened viewer window" "${TMP_DIR}/geom_relaunch_3_stderr.log" || true)
+REUSED_COUNT=$(grep -c "reusing existing viewer window" "${TMP_DIR}/geom_relaunch_3_stderr.log" || true)
+echo "Step 2d notices: opened viewer window=${OPENED_COUNT}, reusing existing viewer window=${REUSED_COUNT}"
+if [ "${OPENED_COUNT}" != "1" ]; then
+    echo "Error: expected exactly one 'opened viewer window' on the third relaunch, got ${OPENED_COUNT}" >&2
+    echo "=== stderr ===" >&2
+    cat "${TMP_DIR}/geom_relaunch_3_stderr.log" >&2 || true
+    exit 16
+fi
+WINDOW_NAMES=$(osascript -e 'tell application "System Events" to get name of every window of process "Coperceive"' 2>/dev/null || true)
+echo "Step 2d visible window names: ${WINDOW_NAMES:-unavailable}"
+if [ -n "${WINDOW_NAMES}" ]; then
+    VIEWER_WINDOWS=$(printf '%s\n' "${WINDOW_NAMES}" | tr ',' '\n' | grep -c "coperceive —" || true)
+    echo "Step 2d viewer titles: ${VIEWER_WINDOWS}"
+    if [ "${VIEWER_WINDOWS}" != "1" ]; then
+        echo "Error: expected one viewer window title, got ${VIEWER_WINDOWS} (${WINDOW_NAMES})" >&2
+        exit 16
+    fi
+fi
+echo "Step 2d verified: one viewer window after relaunch."
+
+echo ""
 echo "--- Step 3: Switch Dataset to Second Valid Root (Single Scene Root) ---"
 echo "${FIXTURE_2}" > "${MOCK_DIALOG_FILE}"
 
@@ -870,22 +1254,29 @@ import sys, json, urllib.request
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code):
+def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
+def eval_once_note(step, code, timeout=15):
+    try:
+        return eval_js(code, timeout=timeout)
+    except Exception as e:
+        print(f"E2E_NOTE step={step} {type(e).__name__}: {e}", flush=True)
+        return None
+
 print("Clicking UI dataset open button...")
 btn_res = eval_js("(() => { const b = document.querySelector('.btn-open-dataset'); return b ? 'found' : 'NOT_FOUND'; })()")
 print(f"Button presence: {btn_res}")
-eval_js("document.querySelector('.btn-open-dataset')?.click()")
+eval_once_note("3-open-btn", "document.querySelector('.btn-open-dataset')?.click()")
 EOF
 
 sleep 3.5
@@ -900,14 +1291,35 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
+
+def wait_for(description, script, seconds=40.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+# The dataset switch starts a new sidecar and only then repoints the viewer, so
+# the previous root keeps rendering for a variable time (the server alone has
+# been observed at 0.8-2.6 s on CI). A fixed sleep plus a "points > 0" check is
+# not enough: the old scene already has points, so this step used to assert
+# against the old badge ("synthetic_scene" instead of "synth_001"). Wait for
+# the new dataset identity and scene list before asserting anything.
+wait_for("dataset switch to the single-scene root", """
+    (document.querySelector('.dataset-name')?.textContent || '').includes('synth_001') &&
+    (window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : []).length === 1
+""")
 
 # Print initial diagnostics right after sleep 3.5
 dbg_initial = eval_js("""(() => ({
@@ -973,17 +1385,24 @@ import sys, json, urllib.request
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code):
+def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
+
+def eval_once_note(step, code, timeout=15):
+    try:
+        return eval_js(code, timeout=timeout)
+    except Exception as e:
+        print(f"E2E_NOTE step={step} {type(e).__name__}: {e}", flush=True)
+        return None
 
 print("Clicking UI dataset open button to switch back to multi-scene root...")
 before = eval_js("""(() => ({
@@ -995,7 +1414,7 @@ if not before or not before.get("settings") or not before.get("graph"):
     raise SystemExit("E2E_FAIL step=3b-before missing view settings or scene graph")
 with open("${TMP_DIR}/before-3b.json", "w", encoding="utf-8") as handle:
     json.dump(before, handle)
-eval_js("document.querySelector('.btn-open-dataset')?.click()")
+eval_once_note("3b-open-btn", "document.querySelector('.btn-open-dataset')?.click()")
 EOF
 
 sleep 3.5
@@ -1009,14 +1428,32 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
+
+def wait_for(description, script, seconds=40.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+# Same race as step 3, in the other direction. If this wait is skipped, the
+# single-scene fixture is still open and the scene-list/badge assertions below
+# run against the wrong root.
+wait_for("dataset switch back to the multi-scene root", """
+    (document.querySelector('.dataset-name')?.textContent || '').includes('synthetic_scene') &&
+    (window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : []).length === 2
+""")
 
 def wait_for_scene(timeout=30):
     deadline = time.monotonic() + timeout
@@ -1114,25 +1551,101 @@ EMPTY_DIR=$(mktemp -d /tmp/coperceive-empty-XXXXXX)
 echo "${EMPTY_DIR}" > "${MOCK_DIALOG_FILE}"
 
 python3 << EOF
-import sys, json, urllib.request
+import sys, json, time, urllib.request
 
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code):
+def _eval_js_once(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, code, timeout=10, tries=5):
+    """Run one controller eval, retrying transient failures with backoff.
+
+    Each retry is logged so a flaky runner is visible in the CI log; a page
+    error (RuntimeError from the webview) fails on the first attempt.
+    """
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(code, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_js(code, timeout=10):
+    return eval_retry("4-open", code, timeout=timeout)
+
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+from pathlib import Path
+
+mock_file = Path("${MOCK_DIALOG_FILE}")
+
+def open_dataset():
+    """Click the viewer's Open button once the button exists.
+
+    The viewer is still re-rendering after the previous dataset switch, so an
+    early click hits nothing (optional chaining is silent). The mock answer
+    file is consumed by the click; if it is still there after 5 s, the command
+    did not run and a second click is safe.
+    """
+    for attempt in range(1, 4):
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            if eval_js("!!document.querySelector('.btn-open-dataset')"):
+                break
+            time.sleep(0.25)
+        else:
+            return False
+        eval_once_note(f"4-open-picker-{attempt}", "document.querySelector('.btn-open-dataset')?.click()")
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if not mock_file.exists():
+                return True
+            time.sleep(0.1)
+        print(f"E2E_NOTE step=4-open-picker attempt={attempt}: the click did not consume the picker answer; retrying", flush=True)
+    return False
+
 print("Triggering Open Dataset to invalid empty directory...")
-eval_js("document.querySelector('.btn-open-dataset')?.click()")
+assert open_dataset(), "the viewer's Open button never appeared or never consumed the picker answer"
 EOF
 
 sleep 1.5
@@ -1147,20 +1660,82 @@ import sys, json, time, urllib.request
 port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 
-def eval_js(code):
+def _eval_js_once(code, timeout=10):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
     )
-    with urllib.request.urlopen(req, timeout=10) as r:
+    with urllib.request.urlopen(req, timeout=timeout + 5) as r:
         data = json.loads(r.read().decode("utf-8"))
         if data.get("error"):
             raise RuntimeError(f"JS error: {data['error']}")
         return data.get("result")
 
-err_msg = eval_js("document.querySelector('.dataset-error-msg')?.textContent")
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, code, timeout=10, tries=5):
+    """Run one controller eval, retrying transient failures with backoff.
+
+    Each retry is logged so a flaky runner is visible in the CI log; a page
+    error (RuntimeError from the webview) fails on the first attempt.
+    """
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(code, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_js(code, timeout=10):
+    return eval_retry("4-assert", code, timeout=timeout)
+
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+deadline = time.monotonic() + 20.0
+err_msg = None
+while time.monotonic() < deadline:
+    err_msg = eval_js("document.querySelector('.dataset-error-msg')?.textContent")
+    if err_msg and "No coperceive scenes in" in err_msg:
+        break
+    time.sleep(0.5)
 print(f"Error banner text: {err_msg}")
+if not err_msg:
+    dbg = eval_js("""(() => ({
+        badge: document.querySelector('.dataset-name')?.textContent,
+        scenes: window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null,
+        status: document.querySelector('.status')?.textContent,
+        open: !!document.querySelector('.btn-open-dataset'),
+        body: (document.body.innerText || '').slice(-300),
+    }))()""")
+    print(f"E2E_NOTE step=4-assert diagnostics: {dbg}", flush=True)
 assert err_msg and "No coperceive scenes in" in err_msg, f"Expected 'No coperceive scenes in', got {err_msg}"
 assert "manifest.json and COMPLETE.json" in err_msg, f"Expected manifest.json and COMPLETE.json notice, got {err_msg}"
 
@@ -1215,9 +1790,1736 @@ if ! kill -0 "${APP_PID}" 2>/dev/null; then
 fi
 echo "Verified: App process is still running after closing viewer window."
 
-echo "Connect backdrop is on screen. The 60 s 1280x800 CPU sample is scripts/desktop/measure_backdrop_cpu.sh."
+echo "Connect screen is on screen."
 
 screencapture -x "${SCREENSHOT_DIR}/05-connect-window.png" 2>/dev/null || true
+
+echo ""
+echo "--- Step 5b: Verify Library and Get Data Catalog on Connect Screen ---"
+python3 - <<EOF
+import time
+import urllib.request
+import json
+import sys
+
+# Read the controller of the app that is running now. CTRL_PORT belongs to the
+# first launch and is dead after the step 2 relaunch.
+port = ${RELAUNCH_PORT}
+secret = "${RELAUNCH_SECRET}"
+print(f"Querying Connect window DOM through loopback controller on port {port}...")
+
+req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/eval",
+    data=json.dumps({"script": """
+        (() => {
+            const buttons = Array.from(document.querySelectorAll('nav button')).map(b => b.textContent.trim());
+            const hasLibrary = buttons.includes('Library');
+            const hasGetData = buttons.includes('Get Data');
+            return JSON.stringify({ hasLibrary, hasGetData, buttons });
+        })()
+    """}).encode("utf-8"),
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+)
+
+last = None
+for attempt in range(1, 6):
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            eval_resp = json.loads(r.read().decode("utf-8"))
+        break
+    except Exception as exc:
+        last = exc
+        print(
+            f"E2E_RETRY step=5b attempt={attempt}/5 after {type(exc).__name__}: {exc}",
+            flush=True,
+        )
+        time.sleep(0.5)
+else:
+    print(f"E2E_FAIL step=5b could not read the Connect window: {last}", flush=True)
+    raise SystemExit(1)
+res_json = json.loads(eval_resp.get("result", "{}"))
+print(f"Connect screen nav tabs found: {res_json.get('buttons')}")
+if not res_json.get("hasLibrary") or not res_json.get("hasGetData"):
+    print(f"E2E_FAIL step=5b missing nav tabs: {res_json}", flush=True)
+    raise SystemExit(1)
+print("Step 5b verified: Connect window contains Library and Get Data catalog navigation.")
+
+# Verify bundled Geist and Geist Mono fonts are loaded in the packaged app
+font_eval_req = urllib.request.Request(
+    f"http://127.0.0.1:{port}/eval",
+    data=json.dumps({"script": """
+        (async () => {
+            await document.fonts.ready;
+            const geist = document.fonts.check('13px "Geist"');
+            const geistMono = document.fonts.check('13px "Geist Mono"');
+            const loaded = [...document.fonts]
+                .filter(f => f.status === 'loaded')
+                .map(f => f.family.replace(/['"]/g, ''));
+            const loadedGeist = loaded.some(f => f.includes('Geist') && !f.includes('Mono'));
+            const loadedGeistMono = loaded.some(f => f.includes('Geist Mono'));
+            return JSON.stringify({ geist, geistMono, loadedGeist, loadedGeistMono });
+        })()
+    """}).encode("utf-8"),
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"}
+)
+with urllib.request.urlopen(font_eval_req, timeout=10) as r:
+    font_resp = json.loads(r.read().decode("utf-8"))
+font_json = json.loads(font_resp.get("result", "{}"))
+assert font_json.get("geist") and font_json.get("loadedGeist"), f"Geist font not loaded in packaged app: {font_json}"
+assert font_json.get("geistMono") and font_json.get("loadedGeistMono"), f"Geist Mono font not loaded in packaged app: {font_json}"
+print(f"Step 5b verified: bundled Geist and Geist Mono loaded in packaged app: {font_json}")
+EOF
+
+echo ""
+echo "--- Step 5c: Import synthetic scene, cancel, resume, open ---"
+LIBRARY_DIR="${HOME}/coperceive-data"
+rm -rf "${LIBRARY_DIR}/synth_001" "${LIBRARY_DIR}/synth_001.partial"
+python3 - << EOF
+import json, time, urllib.request
+from pathlib import Path
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+library = Path("${LIBRARY_DIR}")
+
+def _eval_js_once(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, code, timeout=10, tries=5):
+    """Run one controller eval, retrying transient failures with backoff.
+
+    Each retry is logged so a flaky runner is visible in the CI log; a page
+    error (RuntimeError from the webview) fails on the first attempt.
+    """
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(code, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_js(script, timeout=15):
+    return eval_retry("5c", script, timeout=timeout)
+
+def eval_once_note(step, code, timeout=10):
+    """Run an action once. A lost callback is noted, not retried: repeating a
+    click or a toggle can change the UI twice."""
+    try:
+        return _eval_js_once(code, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+def click_button(label):
+    script = """
+        (() => {
+            const wanted = %s;
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').includes(wanted));
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label)
+    result = eval_once_note(f"5c-click-{label}", script)
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+def wait_text(label, seconds=20):
+    deadline = time.monotonic() + seconds
+    last = ""
+    while time.monotonic() < deadline:
+        last = eval_js("document.body.innerText") or ""
+        if label in last:
+            return
+        time.sleep(0.3)
+    raise RuntimeError(f"did not see {label}: {last[-400:]}")
+
+wait_text("Use default")
+click_button("Use default")
+time.sleep(0.5)
+state = json.loads(Path("${STATE_FILE}").read_text())
+assert state.get("library_root"), f"library_root was not saved: {state}"
+print(f"Step 5c library_root={state['library_root']}")
+
+click_button("Open Folder")
+time.sleep(0.3)
+click_button("Import from folder")
+time.sleep(0.3)
+source = eval_js("document.body.innerText.includes('synth_001') ? 'yes' : 'no'")
+assert source == "yes", "import source was not the synthetic scene"
+click_button("Start import")
+
+deadline = time.monotonic() + 30
+seen = ""
+while time.monotonic() < deadline:
+    seen = eval_js("document.body.innerText") or ""
+    if " / " in seen:
+        break
+    time.sleep(0.2)
+else:
+    raise RuntimeError(f"import did not copy a file: {seen[-400:]}")
+click_button("Cancel")
+time.sleep(0.8)
+partials = list(library.glob("*.partial"))
+finished = library / "synth_001"
+assert partials, f"cancel left no resumable partial in {library}"
+assert not finished.is_dir(), f"cancel published the scene: {finished}"
+print(f"Step 5c cancel left {[path.name for path in partials]}")
+
+click_button("Start import")
+deadline = time.monotonic() + 40
+started = False
+while time.monotonic() < deadline:
+    text = eval_js("document.body.innerText") or ""
+    if "Starting…" in text or "Importing…" in text:
+        started = True
+    if "Import finished." in text:
+        break
+    if started and "Import stopped" in text and "Importing" not in text and "Starting" not in text:
+        raise RuntimeError(text[-400:])
+    time.sleep(0.4)
+else:
+    raise RuntimeError("resume did not finish")
+assert (library / "synth_001" / "COMPLETE.json").is_file()
+assert not list(library.glob("*.partial")), "partial directory still listed after resume"
+print("Step 5c resume wrote synth_001/COMPLETE.json")
+
+stray = library / "synth_001" / "vehicle" / "cam_front" / "0999999.png"
+assert not stray.exists(), f"import copied an image the scene does not list: {stray}"
+import_record = json.loads((library / "synth_001" / "IMPORT.json").read_text())
+notes = import_record.get("notes") or []
+assert any("not listed in images.parquet" in note for note in notes), notes
+print(f"Step 5c skipped the unlisted frame ({notes})")
+
+def eval_in(window, script, timeout=15):
+    """One eval in the named window. After a scene opens, the main window also
+    renders a (hidden) viewer, so an unnamed eval can land in either."""
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout, "window": window}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+app_log = Path("${TMP_DIR}/geom_relaunch_3_stderr.log")
+log_mark = len(app_log.read_bytes())
+
+def new_log_lines():
+    return app_log.read_bytes()[log_mark:].decode("utf-8", "replace").splitlines()
+
+click_button("Open Local Viewer")
+deadline = time.monotonic() + 40
+scenes = None
+while time.monotonic() < deadline:
+    try:
+        scenes = eval_in("viewer", "window.__COPERCEIVE_VIEWER_WINDOW__ && window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null")
+    except Exception:
+        scenes = None
+    if scenes and "synth_001" in scenes:
+        print(f"Step 5c opened scenes={scenes}")
+        break
+    time.sleep(0.5)
+else:
+    raise RuntimeError(f"viewer did not open synth_001, last={scenes}")
+
+# Opening the scene replaces the viewer this app already had. The old window
+# must be gone before the new one is built, never "reused" while it closes
+# (that left no viewer and sent every later eval to the main window).
+lines = new_log_lines()
+opened = sum("[viewer] opened viewer window" in line for line in lines)
+reused = sum("[viewer] reusing existing viewer window" in line for line in lines)
+print(f"Step 5c viewer notices since Open Local Viewer: opened={opened}, reused={reused}")
+assert opened == 1 and reused == 0, (opened, reused)
+
+# The viewer window has no Tauri IPC. Its wordmark must bring the main
+# window forward on its Library (which lists the scene), never render the
+# Library shell inside the viewer window (where every backend call fails).
+print("Testing wordmark link in viewer brings the main window's Library forward...")
+clicked = json.loads(eval_in("viewer", """(() => {
+    const brand = document.querySelector('header.topbar a.brand');
+    if (!brand) return JSON.stringify({clicked: false});
+    const label = brand.getAttribute('aria-label');
+    const href = brand.getAttribute('href');
+    brand.click();
+    return JSON.stringify({clicked: true, viewerWindow: Boolean(window.__COPERCEIVE_VIEWER_WINDOW__), label, href});
+})()""") or "null")
+print(f"Step 5c wordmark click in the viewer window: {clicked}")
+assert clicked == {"clicked": True, "viewerWindow": True, "label": "Return to Library", "href": "#/viewer"}, clicked
+
+library = None
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    try:
+        library = json.loads(eval_in("main", """JSON.stringify({
+            ipc: Boolean(window.__TAURI_INTERNALS__),
+            tab: document.querySelector('nav[aria-label="Connect navigation"] button[aria-selected="true"]')?.innerText?.trim() ?? null,
+            listsScene: document.body.innerText.includes('synth_001'),
+            failed: /Failed to load|(^|[^0-9])0 scenes/.test(document.body.innerText),
+        })""") or "null")
+    except Exception as exc:  # noqa: BLE001 - retried until the deadline
+        library = {"error": str(exc)}
+    if library and library.get("tab") == "Library" and library.get("listsScene"):
+        break
+    time.sleep(0.5)
+print(f"Step 5c main window after the click: {library}")
+assert library and library.get("ipc") is True, library
+assert library.get("tab") == "Library" and library.get("listsScene") is True, library
+assert library.get("failed") is False, library
+
+viewer_state = json.loads(eval_in("viewer", """JSON.stringify({
+    hash: window.location.hash,
+    connectShell: Boolean(document.querySelector('nav[aria-label="Connect navigation"]')),
+    landing: Boolean(document.querySelector('.hero')),
+})"""))
+print(f"Step 5c viewer window after the click: {viewer_state}")
+assert viewer_state == {"hash": "#/viewer", "connectShell": False, "landing": False}, viewer_state
+
+shown_lines = []
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    shown_lines = [line for line in new_log_lines() if "[viewer] show-library -> " in line]
+    if shown_lines:
+        break
+    time.sleep(0.3)
+print(f"Step 5c controller log: {shown_lines}")
+assert len(shown_lines) == 1 and "shown=true" in shown_lines[0], shown_lines
+
+print("Step 5c verified: wordmark in the viewer brings the main window's Library forward and it lists synth_001.")
+print("Step 5c verified: import, cancel, resume, open.")
+EOF
+
+echo ""
+echo "--- Step 5d: Update banner from a mock latest.json ---"
+export UPDATE_PORT_FILE="${TMP_DIR}/update.port"
+export UPDATE_LOG_FILE="${TMP_DIR}/update-hits.log"
+rm -f "${UPDATE_PORT_FILE}" "${UPDATE_LOG_FILE}"
+python3 - << 'PY' &
+import json
+import os
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+port_file = os.environ["UPDATE_PORT_FILE"]
+log_file = os.environ["UPDATE_LOG_FILE"]
+body = json.dumps(
+    {
+        "version": "0.2.0",
+        "notes": "Mock release notes for the test.",
+        "pub_date": "2026-10-24T00:00:00Z",
+        "platforms": {
+            "darwin-aarch64": {
+                "signature": "",
+                "url": "http://127.0.0.1:9/Coperceive.app.tar.gz",
+            }
+        },
+    }
+).encode("utf-8")
+
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        with open(log_file, "a", encoding="utf-8") as handle:
+            handle.write(self.path + "\n")
+        if ".tar.gz" in self.path or ".app" in self.path:
+            pkg = b"mock update archive payload content for minisign verification failure"
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(pkg)))
+            self.end_headers()
+            self.wfile.write(pkg)
+            return
+        if "404" in self.path:
+            self.send_response(404)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.end_headers()
+            return
+        if "bad-sig" in self.path:
+            import base64
+            raw_minisign = (
+                "untrusted comment: signature from minisign secret key\n"
+                "RUTX5qZvdPSepPF2zsjvP/L/TQtBLRnWRvaq+4omK1UEugtQp/USrGiI1v762sDy3id3aor7bRC9ETyeot6lMHHrWoZ5hjUM1Qc=\n"
+                "trusted comment: timestamp:1791649051\tfile:payload\tversion:0.2.0\n"
+                "DDq2CLOEl5cQmC2eJRHlnZPVViOZsu1CjpPKQoei4A/XBfkDqGO0B+QMrcrHgEQ5qV3mne75tdFWhJpqUXh9AA=="
+            )
+            sig_b64 = base64.b64encode(raw_minisign.encode("utf-8")).decode("ascii")
+            my_port = self.server.server_address[1]
+            bad_body = json.dumps(
+                {
+                    "version": "0.2.0",
+                    "notes": "Bad signature notes.",
+                    "pub_date": "2026-10-24T00:00:00Z",
+                    "platforms": {
+                        "darwin-aarch64": {
+                            "signature": sig_b64,
+                            "url": f"http://127.0.0.1:{my_port}/bad-sig-package.tar.gz",
+                        }
+                    },
+                }
+            ).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Cache-Control", "no-store")
+            self.send_header("Content-Length", str(len(bad_body)))
+            self.end_headers()
+            self.wfile.write(bad_body)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, fmt, *args):
+        return
+
+
+server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+with open(port_file, "w", encoding="utf-8") as handle:
+    handle.write(str(server.server_address[1]))
+server.serve_forever()
+PY
+UPDATE_SERVER_PID=$!
+for i in {1..40}; do
+    if [ -s "${UPDATE_PORT_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${UPDATE_SERVER_PID}" 2>/dev/null; then
+        echo "Error: mock update server exited" >&2
+        exit 17
+    fi
+    sleep 0.1
+done
+if [ ! -s "${UPDATE_PORT_FILE}" ]; then
+    echo "Error: mock update server did not bind" >&2
+    exit 17
+fi
+UPDATE_PORT=$(cat "${UPDATE_PORT_FILE}")
+export COPERCEIVE_UPDATE_URL="http://127.0.0.1:${UPDATE_PORT}/latest.json"
+echo "Step 5d mock latest.json at ${COPERCEIVE_UPDATE_URL}"
+
+osascript <<EOF || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+EOF
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -f "${MARKER_FILE}"
+"${APP_EXE}" > "${TMP_DIR}/update_stdout.log" 2> "${TMP_DIR}/update_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: app died before the update banner check" >&2
+        cat "${TMP_DIR}/update_stderr.log" >&2 || true
+        exit 17
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "Error: app did not start for the update banner check" >&2
+    cat "${TMP_DIR}/update_stderr.log" >&2 || true
+    exit 17
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+sleep 2
+python3 - << EOF
+import json, time, urllib.request, urllib.error
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+update_port = "${UPDATE_PORT}"
+
+# The update notice is the main window's sidebar card (the viewer window, open
+# again after the relaunch, has only a small "Update ready"), so every eval here
+# goes to the main window.
+def eval_js(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout, "window": "main"}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def eval_when_ready(script, deadline):
+    last = "page not ready"
+    while time.monotonic() < deadline:
+        try:
+            return eval_js(script)
+        except urllib.error.HTTPError as exc:
+            last = f"HTTP {exc.code}"
+        except Exception as exc:
+            last = str(exc)
+        time.sleep(0.5)
+    raise RuntimeError(last)
+
+def click_button(label):
+    script = """
+        (() => {
+            const wanted = %s;
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').includes(wanted));
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label)
+    result = eval_js(script)
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+deadline = time.monotonic() + 40
+text = ""
+while time.monotonic() < deadline:
+    text = eval_when_ready("document.body ? document.body.innerText : ''", deadline) or ""
+    if "coperceive 0.2.0 is ready" in text:
+        break
+    time.sleep(0.4)
+else:
+    raise RuntimeError(f"update banner did not appear: {text[-500:]}")
+print("Step 5d notices: sidebar card coperceive 0.2.0 is ready")
+click_button("What's new")
+time.sleep(0.3)
+notes = eval_js("document.body.innerText") or ""
+assert "Mock release notes for the test." in notes, notes[-500:]
+print("Step 5d notices: What's new showed the mock notes")
+click_button("Install")
+time.sleep(0.4)
+restarted = eval_js("window.__COPERCEIVE_UPDATE_RESTART__ === true ? 'yes' : 'no'")
+assert restarted == "yes", "Install did not record the test-env flag"
+print("Step 5d notices: Install (restart into the update) stayed in the test app")
+click_button("Later")
+time.sleep(0.4)
+after = eval_js("document.body.innerText") or ""
+assert "is ready" not in after, after[-500:]
+print("Step 5d notices: Later hid the card")
+
+# Verify 404 is quiet on launch but shows 'You're up to date' on manual check
+eval_js("window.__COPERCEIVE_UPDATE_URL__ = 'http://127.0.0.1:%s/404.json'" % update_port)
+eval_js("window.__COPERCEIVE_CHECK_UPDATES__(false)")
+time.sleep(0.5)
+txt_404_quiet = eval_js("document.body ? document.body.innerText : ''") or ""
+assert "Could not check for updates" not in txt_404_quiet, f"404 background check must be quiet: {txt_404_quiet}"
+assert "You're up to date" not in txt_404_quiet, f"404 background check must not toast: {txt_404_quiet}"
+print("Step 5d notices: 404 background check is quiet")
+
+eval_js("window.__COPERCEIVE_CHECK_UPDATES__(true)")
+time.sleep(0.5)
+txt_404_manual = eval_js("document.body ? document.body.innerText : ''") or ""
+assert "You're up to date" in txt_404_manual, f"404 manual check must show You're up to date, got: {txt_404_manual}"
+print("Step 5d notices: 404 manual check showed You're up to date")
+
+# Verify manifest with bad signature is rejected with error, not installed
+eval_js("window.__COPERCEIVE_UPDATE_RESTART__ = false")
+eval_js("window.__COPERCEIVE_UPDATE_URL__ = 'http://127.0.0.1:%s/bad-sig.json'" % update_port)
+eval_js("window.__COPERCEIVE_CHECK_UPDATES__(true)")
+time.sleep(0.8)
+txt_bad_banner = eval_js("document.body ? document.body.innerText : ''") or ""
+assert "coperceive 0.2.0 is ready" in txt_bad_banner, f"Expected the update card before the Install click, got: {txt_bad_banner}"
+click_button("Install")
+time.sleep(1.0)
+txt_bad_err = eval_js("document.body ? document.body.innerText : ''") or ""
+assert "Retry" in txt_bad_err, f"Bad signature must show error with Retry button, got: {txt_bad_err}"
+assert any(term in txt_bad_err.lower() for term in ["different key than the one provided", "signature verification failed"]), f"Expected signature verification error, got: {txt_bad_err}"
+assert "could not check for updates" not in txt_bad_err.lower(), f"Must not be generic network failure: {txt_bad_err}"
+restarted_bad = eval_js("window.__COPERCEIVE_UPDATE_RESTART__ === true ? 'yes' : 'no'")
+assert restarted_bad == "no", "Manifest with bad signature must NOT be installed"
+print("Step 5d notices: manifest with bad signature is rejected with error and not installed")
+
+print("Step 5d verified: banner, Later, and Restart.")
+EOF
+if ! grep -q "latest.json" "${UPDATE_LOG_FILE}"; then
+    echo "Error: the app did not request latest.json from the mock server" >&2
+    cat "${UPDATE_LOG_FILE}" >&2 || true
+    exit 17
+fi
+echo "Step 5d verified: mock server received latest.json."
+if ! kill -0 "${APP_PID}" 2>/dev/null; then
+    echo "Error: Install quit the app" >&2
+    exit 17
+fi
+
+echo ""
+echo "--- Step 5e: Pause, Resume and Cancel a dataset download job (Get data) ---"
+# /eval dispatches to the viewer window when one is open and to the Connect
+# window otherwise. Get data lives on Connect, so close the viewer first.
+python3 - <<EOF
+import urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+try:
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+except Exception:
+    pass
+EOF
+sleep 1.5
+
+# Drive the real UI: Get Data -> Griffin "Dev tier" -> accept the licence ->
+# Start Download. COPERCEIVE_TEST_FAKE_DATASET_JOB keeps the dry-run and the
+# job local and deterministic, so this step never touches the network.
+python3 - << EOF
+import json, time, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=15):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def wait_for(description, script, seconds=30.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+def body_text():
+    return eval_js("document.body.innerText") or ""
+
+def click_exact(label):
+    result = eval_js("""
+        (() => {
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === %s);
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label))
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+def click_contains(label):
+    result = eval_js("""
+        (() => {
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').includes(%s));
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label))
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+def progress_percent():
+    value = eval_js("document.querySelector('[role=progressbar]') ? document.querySelector('[role=progressbar]').getAttribute('aria-valuenow') : null")
+    return int(value) if value not in (None, "") else None
+
+click_exact("Get Data")
+wait_for("Get data catalog", "document.body.innerText.includes('Dev tier') && document.body.innerText.includes('Griffin')", 45)
+catalog_text = body_text()
+assert "Could not load the dataset list" not in catalog_text, catalog_text[-500:]
+
+click_contains("Dev tier")
+wait_for("Griffin dry-run panel", "document.body.innerText.includes('Download Griffin (dev)') && document.body.innerText.includes('Start Download')", 30)
+
+checkbox = eval_js("""
+    (() => {
+        const box = document.querySelector('input[type=checkbox]');
+        if (!box) return 'missing';
+        if (!box.checked) box.click();
+        return box.checked ? 'checked' : 'not-checked';
+    })()
+""")
+assert checkbox == "checked", f"licence checkbox state: {checkbox}"
+
+start_state = eval_js("""
+    (() => {
+        const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === 'Start Download');
+        if (!button) return 'missing';
+        return button.disabled ? 'disabled' : 'enabled';
+    })()
+""")
+assert start_state == "enabled", f"Start Download is {start_state}"
+
+click_exact("Start Download")
+wait_for("download progress panel", """
+    !!document.querySelector('[role=progressbar]') &&
+    Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Pause')
+""", 20)
+assert "Stage: download" in body_text(), body_text()[-500:]
+
+wait_for("download progress to flow", """
+    parseInt(document.querySelector('[role=progressbar]')?.getAttribute('aria-valuenow') || '0', 10) >= 7
+""", 25)
+print(f"Step 5e notices: download progress started at {progress_percent()}%")
+
+pause_note = eval_js("""
+    (async () => {
+        const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === 'Pause');
+        if (!button) return 'missing-pause-button';
+        button.click();
+        const deadline = Date.now() + 4000;
+        while (Date.now() < deadline) {
+            if (document.body.innerText.includes('Download paused.')) return 'seen';
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        return 'not-seen';
+    })()
+""")
+assert pause_note == "seen", f"Pause did not show 'Download paused.': {pause_note}"
+wait_for("Resume button after Pause", "Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Resume')", 5)
+
+time.sleep(0.6)
+paused_percent = progress_percent()
+time.sleep(0.6)
+assert progress_percent() == paused_percent, f"progress moved while paused: {paused_percent} -> {progress_percent()}"
+with open("${TMP_DIR}/step5e-paused-percent.txt", "w", encoding="utf-8") as handle:
+    handle.write(str(paused_percent))
+print(f"Step 5e notices: Pause -> 'Download paused.', progress frozen at {paused_percent}%")
+EOF
+
+# The pause is a real SIGSTOP to the job child: assert the OS state itself.
+if [ ! -s "${COPERCEIVE_TEST_FAKE_DATASET_PID_FILE}" ]; then
+    echo "Error: the fake dataset job did not report its pid" >&2
+    exit 18
+fi
+FAKE_JOB_PID=$(cat "${COPERCEIVE_TEST_FAKE_DATASET_PID_FILE}")
+FAKE_JOB_STAT=$(ps -o stat= -p "${FAKE_JOB_PID}" 2>/dev/null | tr -d ' \n')
+echo "Step 5e notices: fake job pid ${FAKE_JOB_PID} state after Pause: ${FAKE_JOB_STAT:-gone}"
+case "${FAKE_JOB_STAT}" in
+    T*) : ;;
+    *)
+        echo "Error: paused dataset job is not stopped (ps stat '${FAKE_JOB_STAT}')" >&2
+        exit 18
+        ;;
+esac
+
+python3 - << EOF
+import json, time, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=15):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def wait_for(description, script, seconds=30.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+def click_exact(label):
+    result = eval_js("""
+        (() => {
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === %s);
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label))
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+def progress_percent():
+    value = eval_js("document.querySelector('[role=progressbar]') ? document.querySelector('[role=progressbar]').getAttribute('aria-valuenow') : null")
+    return int(value) if value not in (None, "") else None
+
+with open("${TMP_DIR}/step5e-paused-percent.txt", encoding="utf-8") as handle:
+    paused_percent = int(handle.read().strip())
+
+# "Download resumed." is a one-shot note: the next progress event replaces it.
+# Record every DOM mutation (which fires before paint) as well as a 10 ms text
+# poll so the note is caught even if it lives for less than one frame. If the
+# fake job happened to be between ticks when it was resumed, the note can be
+# overwritten in the same React commit and never reach the DOM; the substantive
+# assertions below (button back to "Pause", progress advances again) still run.
+resume_note = eval_js("""
+    (async () => {
+        const seen = [];
+        const capture = () => {
+            if (seen.length === 0 && (document.body.innerText || '').includes('Download resumed.')) {
+                seen.push('Download resumed.');
+            }
+        };
+        const observer = new MutationObserver(capture);
+        observer.observe(document.body, { childList: true, subtree: true, characterData: true });
+        const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').trim() === 'Resume');
+        if (!button) {
+            observer.disconnect();
+            return 'missing-resume-button';
+        }
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        button.click();
+        const deadline = Date.now() + 6000;
+        while (Date.now() < deadline && seen.length === 0) {
+            capture();
+            await new Promise((resolve) => setTimeout(resolve, 10));
+        }
+        observer.disconnect();
+        return seen.length > 0 ? 'seen' : 'not-seen';
+    })()
+""", timeout=20)
+if resume_note == "seen":
+    print("Step 5e notices: Resume -> 'Download resumed.'")
+else:
+    print(f"E2E_NOTE step=5e-resume-note {resume_note}: the resumed progress event replaced the note before it painted; asserting button and progress instead", flush=True)
+wait_for("Pause button after Resume", "Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Pause')", 10)
+
+deadline = time.monotonic() + 15
+resumed_percent = None
+while time.monotonic() < deadline:
+    resumed_percent = progress_percent()
+    if resumed_percent is not None and resumed_percent > paused_percent:
+        break
+    time.sleep(0.2)
+else:
+    raise RuntimeError(f"progress did not resume: still {resumed_percent}% after {paused_percent}%")
+print(f"Step 5e notices: resume restored the Pause button, progress advanced {paused_percent}% -> {resumed_percent}%")
+
+click_exact("Cancel")
+wait_for("progress panel to stop after Cancel", """
+    !document.querySelector('[role=progressbar]') &&
+    Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Start Download')
+""", 15)
+assert eval_js("Array.from(document.querySelectorAll('button')).some((item) => (item.textContent || '').trim() === 'Pause')") is False, "Pause button still visible after Cancel"
+print("Step 5e notices: Cancel removed the progress panel and returned to Start Download")
+EOF
+
+# Cancel is a real SIGTERM to the job child: assert it is gone.
+for i in {1..20}; do
+    if ! kill -0 "${FAKE_JOB_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${FAKE_JOB_PID}" 2>/dev/null; then
+    echo "Error: Cancel left the dataset job running (pid ${FAKE_JOB_PID})" >&2
+    exit 19
+fi
+echo "Step 5e verified: Pause, Resume and Cancel of a dataset download job in Get data."
+
+echo ""
+echo "--- Step 5f: Move library to a new folder (Settings -> Change location) ---"
+# Quit so this step can point state.json at a temp library seeded only with the
+# synthetic fixture. The move therefore can never touch a real
+# ~/coperceive-data library, and the previous state.json is restored after the
+# assertions (and from the cleanup trap on any failure).
+osascript <<EOF || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+EOF
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -f "${MARKER_FILE}"
+
+LIB_A="${TMP_DIR}/e2e-library-a"
+LIB_B="${TMP_DIR}/e2e-library-b"
+STATE_BACKUP="${TMP_DIR}/state-before-5f.json"
+rm -rf "${LIB_A}" "${LIB_B}"
+mkdir -p "${LIB_A}"
+cp -R "${FIXTURE_1}/synth_001" "${LIB_A}/synth_001"
+if [ ! -f "${LIB_A}/synth_001/manifest.json" ] || [ ! -f "${LIB_A}/synth_001/COMPLETE.json" ]; then
+    echo "Error: could not seed the temp library from ${FIXTURE_1}/synth_001" >&2
+    exit 20
+fi
+cp "${STATE_FILE}" "${STATE_BACKUP}"
+python3 - "${STATE_FILE}" "${LIB_A}" <<'PY'
+import json, sys
+state_path, library = sys.argv[1], sys.argv[2]
+with open(state_path, "r", encoding="utf-8") as handle:
+    state = json.load(handle)
+state["library_root"] = library
+with open(state_path, "w", encoding="utf-8") as handle:
+    json.dump(state, handle, indent=2)
+    handle.write("\n")
+PY
+echo "Step 5f notices: temp library seeded at ${LIB_A}; state.json will be restored from the pre-step copy."
+
+"${APP_EXE}" > "${TMP_DIR}/move_stdout.log" 2> "${TMP_DIR}/move_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: app died before the Move library check" >&2
+        cat "${TMP_DIR}/move_stderr.log" >&2 || true
+        exit 20
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "Error: app did not start for the Move library check" >&2
+    cat "${TMP_DIR}/move_stderr.log" >&2 || true
+    exit 20
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+sleep 1
+
+# Close the auto-reopened viewer so /eval targets the Connect window, where the
+# Library screen and its "Change location…" flow live.
+python3 - <<EOF
+import urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+try:
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+except Exception:
+    pass
+EOF
+sleep 1.5
+
+# The mocked folder picker answers "Select New Folder…" with the temp
+# destination, then the real move_library_root command relocates the scene.
+printf '%s\n' "${LIB_B}" > "${MOCK_DIALOG_FILE}"
+
+python3 - << EOF
+import json, time, urllib.request
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+library_a = "${LIB_A}"
+library_b = "${LIB_B}"
+
+def eval_js(script, timeout=15):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def wait_for(description, script, seconds=30.0):
+    deadline = time.monotonic() + seconds
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last:
+            return last
+        time.sleep(0.25)
+    raise RuntimeError(f"timed out waiting for {description}: {last}")
+
+def body_text():
+    return eval_js("document.body.innerText") or ""
+
+def click_contains(label):
+    result = eval_js("""
+        (() => {
+            const button = Array.from(document.querySelectorAll('button')).find((item) => (item.textContent || '').includes(%s));
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """ % json.dumps(label))
+    if result != "clicked":
+        raise RuntimeError(f"button not found: {label}")
+
+click_contains("Library")
+wait_for("Library screen with the seeded temp library", "document.body.innerText.includes(%s) && document.body.innerText.includes('synth_001')" % json.dumps(library_a), 30)
+library_text = body_text()
+assert "synth_001" in library_text, library_text[-500:]
+assert "1 scene" in library_text, library_text[-500:]
+
+click_contains("Change location")
+wait_for("Change Library Location dialog", "document.body.innerText.includes('Change Library Location')", 10)
+dialog_text = body_text()
+assert "Current: " + library_a in dialog_text, dialog_text[-500:]
+
+click_contains("Select New Folder")
+wait_for("library relocated to the new folder", "document.body.innerText.includes(%s) && !document.body.innerText.includes('Change Library Location')" % json.dumps(library_b), 30)
+moved_text = body_text()
+assert library_b in moved_text, moved_text[-500:]
+assert library_a not in moved_text, f"old library path still shown after the move: {moved_text[-500:]}"
+assert "synth_001" in moved_text, moved_text[-500:]
+assert "1 scene" in moved_text, moved_text[-500:]
+print(f"Step 5f notices: Library now lists synth_001 under {library_b}")
+EOF
+
+if [ ! -d "${LIB_B}/synth_001" ] || [ ! -f "${LIB_B}/synth_001/COMPLETE.json" ]; then
+    echo "Error: synth_001 was not moved to the new library ${LIB_B}" >&2
+    exit 21
+fi
+if [ -e "${LIB_A}/synth_001" ]; then
+    echo "Error: synth_001 is still in the old library ${LIB_A}" >&2
+    exit 21
+fi
+if [ -n "$(ls -A "${LIB_A}" 2>/dev/null)" ]; then
+    echo "Error: the old library was not left empty: $(ls -A "${LIB_A}")" >&2
+    exit 21
+fi
+if ls "${LIB_A}"/*.partial "${LIB_B}"/*.partial >/dev/null 2>&1; then
+    echo "Error: a .partial directory was left behind by the move" >&2
+    ls -la "${LIB_A}" "${LIB_B}" >&2
+    exit 21
+fi
+python3 - "${STATE_FILE}" "${LIB_B}" <<'PY'
+import json, sys, time
+state_path, expected = sys.argv[1], sys.argv[2]
+deadline = time.monotonic() + 5
+root = None
+while time.monotonic() < deadline:
+    try:
+        with open(state_path, "r", encoding="utf-8") as handle:
+            root = json.load(handle).get("library_root")
+    except Exception:
+        root = None
+    if root == expected:
+        break
+    time.sleep(0.1)
+assert root == expected, f"state.json library_root is {root!r}, expected {expected!r}"
+print(f"Step 5f notices: state.json library_root={root}")
+PY
+cp "${STATE_BACKUP}" "${STATE_FILE}"
+echo "Step 5f restored the pre-step state.json (real libraries were never moved)."
+echo "Step 5f verified: Move library relocated synth_001 to the new root, left the old root empty, and updated state.json."
+
+# The app that ran the move still has library_root=LIB_B in memory and was
+# launched with COPERCEIVE_UPDATE_URL from step 5d, so it shows the update
+# banner again. Both must be gone before step 5g reads the Library: quit the
+# move app and relaunch once from the restored state.json (no update URL), so
+# 5g sees the real library that step 5c seeded (~/coperceive-data) instead of
+# the temp library or the banner.
+unset COPERCEIVE_UPDATE_URL
+osascript <<EOF || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+EOF
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        break
+    fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -f "${MARKER_FILE}"
+
+"${APP_EXE}" > "${TMP_DIR}/settle_stdout.log" 2> "${TMP_DIR}/settle_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then
+        break
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: app died after the Move library step" >&2
+        cat "${TMP_DIR}/settle_stderr.log" >&2 || true
+        exit 22
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "Error: app did not restart for the Library badge check" >&2
+    cat "${TMP_DIR}/settle_stderr.log" >&2 || true
+    exit 22
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+
+# The relaunched app auto-resumes into the viewer. Close it so /eval reaches
+# the Connect window that hosts the Library tab.
+python3 - <<EOF
+import urllib.request
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+try:
+    with urllib.request.urlopen(request, timeout=5):
+        pass
+except Exception:
+    pass
+EOF
+sleep 1.5
+echo "Step 5f settle: relaunched from the restored state.json without COPERCEIVE_UPDATE_URL; /eval port=${RELAUNCH_PORT}."
+
+echo ""
+echo "--- Step 5g: Library validation badge runs in the background and is cached ---"
+python3 - << EOF
+import json, time, urllib.request
+from pathlib import Path
+
+port = "${RELAUNCH_PORT}"
+secret = "${RELAUNCH_SECRET}"
+
+def _eval_js_once(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+def _transient(exc):
+    # The controller answers 504 after 10 s when the webview misses an eval
+    # callback. A runner hiccup can also reset the loopback connection.
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in (500, 502, 503, 504)
+    return isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+def eval_retry(step, script, timeout=15, tries=5):
+    """Read-only eval with a bounded retry for transient controller failures."""
+    import time
+    import urllib.error
+
+    delay = 0.5
+    last = None
+    for attempt in range(1, tries + 1):
+        try:
+            return _eval_js_once(script, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - classified below
+            last = exc
+            if not _transient(exc) or attempt == tries:
+                break
+            print(
+                f"E2E_RETRY step={step} attempt={attempt}/{tries} after "
+                f"{type(exc).__name__}: {exc}",
+                flush=True,
+            )
+            time.sleep(delay)
+            delay = min(delay * 2, 4.0)
+    print(f"E2E_FAIL step={step} {type(last).__name__}: {last}", flush=True)
+    raise SystemExit(1)
+
+def eval_once_note(step, script, timeout=15):
+    """Run an action once. A lost callback is noted, not retried."""
+    try:
+        return _eval_js_once(script, timeout=timeout)
+    except Exception as exc:
+        print(f"E2E_NOTE step={step} {type(exc).__name__}: {exc}", flush=True)
+        return None
+
+def eval_js(script, timeout=15):
+    return eval_retry("5g", script, timeout=timeout)
+
+# The relaunched app auto-resumes into the viewer. Close it so /eval reaches
+# the Connect window that hosts the Library tab.
+close = urllib.request.Request(
+    f"http://127.0.0.1:{port}/close-window",
+    data=b"{}",
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+try:
+    with urllib.request.urlopen(close, timeout=5):
+        pass
+except Exception:
+    pass
+time.sleep(1.5)
+
+def click_library():
+    script = """
+        (() => {
+            const button = Array.from(document.querySelectorAll('nav button')).find((item) => (item.textContent || '').trim() === 'Library');
+            if (!button) return 'missing';
+            button.click();
+            return 'clicked';
+        })()
+    """
+    # Wait for the Connect nav (a read) before the one click that opens Library.
+    deadline = time.monotonic() + 20.0
+    while time.monotonic() < deadline:
+        if eval_js("!!Array.from(document.querySelectorAll('nav button')).find((item) => (item.textContent || '').trim() === 'Library')"):
+            break
+        time.sleep(0.25)
+    else:
+        raise RuntimeError("Library tab not found on the Connect window")
+    result = eval_once_note("5g-click-library", script)
+    if result != "clicked":
+        raise RuntimeError("Library tab could not be clicked")
+
+click_library()
+deadline = time.monotonic() + 60
+seen = ""
+while time.monotonic() < deadline:
+    seen = eval_js("document.body.innerText") or ""
+    if "Valid ✓" in seen:
+        break
+    time.sleep(0.5)
+else:
+    diag = eval_js("""(() => ({
+        body: (document.body.innerText || '').slice(-800),
+        nav: Array.from(document.querySelectorAll('nav button')).map((item) => (item.textContent || '').trim()),
+        libraryBadges: Array.from(document.querySelectorAll('.library-badge, .badge, [data-validate]')).map((item) => (item.textContent || '').trim()).slice(0, 8),
+        scenes: window.__COPERCEIVE_SCENES__ ? window.__COPERCEIVE_SCENES__() : null,
+        updateBanner: !!document.body.innerText.match(/is ready[.] Restart to update/),
+    }))()""")
+    raise RuntimeError(f"Library badge never became valid without clicking Validate now: {seen[-500:]} diag={diag}")
+
+state = json.loads(Path("${STATE_FILE}").read_text())
+cache = state.get("validation_cache") or {}
+synth = [key for key in cache if key.endswith("/synth_001")]
+assert synth, f"background validation did not cache synth_001: {cache}"
+assert cache[synth[0]].get("valid") is True, cache[synth[0]]
+print(f"Step 5g cache={cache[synth[0]]}")
+print("Step 5g verified: Library badge ran in the background and its answer is cached.")
+EOF
+
+echo ""
+echo "--- Step 5h: macOS Auto-capitalization Disabled in Real App ---"
+python3 - <<EOF
+import json
+import time
+import urllib.request
+import subprocess
+
+port = ${RELAUNCH_PORT}
+secret = "${RELAUNCH_SECRET}"
+
+def eval_js(script, timeout=15):
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": script}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=timeout + 5) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(data["error"])
+    return data.get("result")
+
+# 1. Click HPC Workspace tab
+res = eval_js("""(() => {
+    const tab = Array.from(document.querySelectorAll('nav button')).find(b => (b.textContent || '').trim() === 'HPC Workspace');
+    if (!tab) return 'missing_hpc_tab';
+    tab.click();
+    return 'clicked';
+})()""")
+print(f"Step 5h HPC tab navigation: {res}")
+time.sleep(0.5)
+
+# 2. Click Add server button if editor is not open
+res = eval_js("""(() => {
+    if (document.getElementById('hpc-user')) return 'already_open';
+    const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Add server');
+    if (!btn) return 'missing_add_server';
+    btn.click();
+    return 'clicked';
+})()""")
+print(f"Step 5h Add server button: {res}")
+time.sleep(0.5)
+
+# 3. Assert HTML attributes disable platform autocorrect and autocapitalize
+attrs = json.loads(eval_js("""(() => {
+    const ids = [
+        'hpc-name', 'hpc-host', 'hpc-user', 'hpc-data-root', 'hpc-scratch',
+        'hpc-results-root', 'hpc-code-roots', 'hpc-partition', 'hpc-time',
+        'hpc-cpus', 'hpc-mem', 'hpc-interpreter', 'hpc-wheelhouse'
+    ];
+    const out = {};
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (!el) {
+            out[id] = null;
+            continue;
+        }
+        out[id] = {
+            autocapitalize: el.getAttribute('autocapitalize'),
+            autocorrect: el.getAttribute('autocorrect'),
+            spellcheck: el.getAttribute('spellcheck'),
+            autocomplete: el.getAttribute('autocomplete'),
+        };
+    }
+    return JSON.stringify(out);
+})()"""))
+
+for field_id, field_attrs in attrs.items():
+    assert field_attrs is not None, f"Input #{field_id} not found in DOM"
+    assert field_attrs["autocapitalize"] == "off", f"#{field_id} autocapitalize != off: {field_attrs}"
+    assert field_attrs["autocorrect"] == "off", f"#{field_id} autocorrect != off: {field_attrs}"
+    assert field_attrs["spellcheck"] == "false", f"#{field_id} spellcheck != false: {field_attrs}"
+    assert field_attrs["autocomplete"] == "off", f"#{field_id} autocomplete != off: {field_attrs}"
+
+print("Step 5h verified: all HPC form inputs specify autocapitalize=off, autocorrect=off, spellcheck=false, autocomplete=off.")
+
+# 4. Type lowercase values via System Events and assert they remain unchanged (not auto-capitalized by macOS)
+# Select Slurm scheduler so partition field is enabled
+eval_js("""(() => {
+    const sel = document.getElementById('hpc-scheduler');
+    if (sel) {
+        sel.value = 'slurm';
+        sel.dispatchEvent(new Event('change', { bubbles: true }));
+    }
+})()""")
+time.sleep(0.2)
+
+cases = [
+    ("hpc-user", "nanjaiyalatha"),
+    ("hpc-partition", "ps"),
+    ("hpc-host", "hpc-head1"),
+]
+
+for field_id, text in cases:
+    # Focus field and clear it
+    eval_js(f"""(() => {{
+        const el = document.getElementById('{field_id}');
+        if (!el) return 'missing';
+        el.focus();
+        el.value = '';
+        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+        return 'focused';
+    }})()""")
+    time.sleep(0.2)
+
+    # Use AppleScript System Events to keystroke the text into the focused field
+    as_script = f'''
+    tell application "System Events"
+        tell process "Coperceive"
+            set frontmost to true
+            keystroke "{text}"
+        end tell
+    end tell
+    '''
+    subprocess.run(["osascript", "-e", as_script], check=True)
+    time.sleep(0.3)
+
+    val = eval_js(f"(() => (document.getElementById('{field_id}') || {{}}).value)()")
+    assert val == text, f"Expected typed value '{text}', got '{val}' (auto-capitalisation bug!)"
+    print(f"Step 5h typed #{field_id}: '{val}' (matched expected lowercase)")
+
+# 5. Test macOS Edit Menu Shortcuts (Cmd+A, Cmd+C, Cmd+V, Cmd+X)
+print("Testing macOS Edit menu shortcuts in real app...", flush=True)
+
+# Test Cmd+A + typing: type text into #hpc-user, Cmd+A, type replacement, assert field holds ONLY replacement
+eval_js("""(() => {
+    const el = document.getElementById('hpc-user');
+    if (!el) return 'missing';
+    el.focus();
+    el.value = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return 'focused';
+})()""")
+time.sleep(0.2)
+
+as_type_initial = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "original-text"
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_type_initial], check=True)
+time.sleep(0.3)
+
+val_orig = eval_js("(() => (document.getElementById('hpc-user') || {}).value)()")
+assert val_orig == "original-text", f"Setup failed: expected 'original-text', got '{val_orig}'"
+
+# Cmd+A (Select All) then type "replaced"
+as_select_all_and_replace = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "a" using command down
+        delay 0.1
+        keystroke "replaced"
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_select_all_and_replace], check=True)
+time.sleep(0.3)
+
+val_replaced = eval_js("(() => (document.getElementById('hpc-user') || {}).value)()")
+assert val_replaced == "replaced", f"Cmd+A failed! Expected 'replaced', got '{val_replaced}'"
+print(f"Step 5i Cmd+A select-all and replace verified: '{val_replaced}'")
+
+# Test Cmd+C / Cmd+V round trip:
+# Select all in #hpc-user with Cmd+A and copy with Cmd+C
+as_copy = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "a" using command down
+        delay 0.1
+        keystroke "c" using command down
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_copy], check=True)
+time.sleep(0.2)
+
+# Focus #hpc-host, clear it
+eval_js("""(() => {
+    const el = document.getElementById('hpc-host');
+    if (!el) return 'missing';
+    el.focus();
+    el.value = '';
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+    return 'focused';
+})()""")
+time.sleep(0.2)
+
+# Paste with Cmd+V into #hpc-host
+as_paste = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "v" using command down
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_paste], check=True)
+time.sleep(0.3)
+
+val_pasted = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
+assert val_pasted == "replaced", f"Cmd+C / Cmd+V round trip failed! Expected 'replaced', got '{val_pasted}'"
+print(f"Step 5i Cmd+C copy and Cmd+V paste verified: '{val_pasted}'")
+
+# Test Cmd+X (Cut) and Cmd+V (Paste):
+as_cut = '''
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "a" using command down
+        delay 0.1
+        keystroke "x" using command down
+    end tell
+end tell
+'''
+subprocess.run(["osascript", "-e", as_cut], check=True)
+time.sleep(0.3)
+
+val_cut = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
+assert val_cut == "", f"Cmd+X cut failed! Expected empty field, got '{val_cut}'"
+
+subprocess.run(["osascript", "-e", as_paste], check=True)
+time.sleep(0.3)
+
+val_recut_pasted = eval_js("(() => (document.getElementById('hpc-host') || {}).value)()")
+assert val_recut_pasted == "replaced", f"Cmd+V paste after cut failed! Expected 'replaced', got '{val_recut_pasted}'"
+print(f"Step 5i Cmd+X cut and Cmd+V paste verified: '{val_recut_pasted}'")
+
+# 6. Close server editor
+eval_js("""(() => {
+    const btn = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Close');
+    if (btn) btn.click();
+})()""")
+
+print("Step 5h verified: text inputs disable macOS auto-capitalisation, typed lowercase values stay unchanged.")
+EOF
+
+echo ""
+echo "--- Step 5i: Crash -> notice -> Share diagnostics -> saved zip has no secrets ---"
+DIAG_LOGS="${TMP_DIR}/diag-logs"
+DIAG_ZIP="${TMP_DIR}/diag.zip"
+rm -rf "${DIAG_LOGS}" "${DIAG_ZIP}"
+mkdir -p "${DIAG_LOGS}"
+cat > "${DIAG_LOGS}/desktop.log" <<'DIAGLOG'
+-----BEGIN OPENSSH PRIVATE KEY-----
+e2e-secret-key-body
+-----END OPENSSH PRIVATE KEY-----
+http://127.0.0.1:5000/viewer?token=e2e-secret-token
+{"password": "e2e secret pass"}
+Authorization: Bearer e2e-secret-bearer
+/Users/e2e-user/project
+ssh e2e-alias.example.org
+DIAGLOG
+
+# Quit the app the same way Step 5d does.
+osascript <<'OSA' || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+OSA
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+
+# Crash launch: a real panic through the real hook leaves crash JSON + marker.
+rm -f "${MARKER_FILE}"
+set +e
+COPERCEIVE_TEST_ENV=1 COPERCEIVE_TEST_CRASH=1 COPERCEIVE_TEST_LOG_DIR="${DIAG_LOGS}" \
+    "${APP_EXE}" > "${TMP_DIR}/diag_crash_stdout.log" 2> "${TMP_DIR}/diag_crash_stderr.log" &
+CRASH_PID=$!
+for i in {1..100}; do
+    if ! kill -0 "${CRASH_PID}" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if kill -0 "${CRASH_PID}" 2>/dev/null; then
+    kill -TERM "${CRASH_PID}" 2>/dev/null || true
+fi
+wait "${CRASH_PID}"
+CRASH_STATUS=$?
+set -e
+if [ "${CRASH_STATUS}" -eq 0 ]; then
+    echo "E2E_FAIL step=5i crash launch exited 0" >&2
+    exit 1
+fi
+CRASH_FILE=$(ls "${DIAG_LOGS}"/crash-*.json 2>/dev/null | head -n 1)
+if [ -z "${CRASH_FILE}" ]; then
+    echo "E2E_FAIL step=5i no crash-*.json written" >&2
+    cat "${TMP_DIR}/diag_crash_stderr.log" >&2 || true
+    exit 1
+fi
+
+# Relaunch normally; the marker from the crash launch produces the notice.
+rm -f "${MARKER_FILE}"
+COPERCEIVE_TEST_ENV=1 COPERCEIVE_TEST_LOG_DIR="${DIAG_LOGS}" \
+    COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH="${DIAG_ZIP}" \
+    "${APP_EXE}" > "${TMP_DIR}/diag_relaunch_stdout.log" 2> "${TMP_DIR}/diag_relaunch_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then break; fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "E2E_FAIL step=5i relaunch died before marker" >&2
+        cat "${TMP_DIR}/diag_relaunch_stderr.log" >&2 || true
+        exit 1
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "E2E_FAIL step=5i relaunch did not write the marker" >&2
+    exit 1
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+
+python3 - "${RELAUNCH_PORT}" "${RELAUNCH_SECRET}" "${DIAG_ZIP}" <<'PY'
+import json
+import os
+import sys
+import time
+import urllib.request
+import zipfile
+
+port, secret, zip_path = sys.argv[1], sys.argv[2], sys.argv[3]
+secrets = [
+    "e2e-secret-key-body", "e2e-secret-token", "e2e secret pass",
+    "e2e-secret-bearer", "e2e-user", "e2e-alias.example.org", "BEGIN OPENSSH",
+]
+
+def eval_js(code):
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/eval",
+        data=json.dumps({"script": code, "timeout": 10, "window": "main"}).encode("utf-8"),
+        headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(request, timeout=15) as response:
+        data = json.loads(response.read().decode("utf-8"))
+    if data.get("error"):
+        raise RuntimeError(f"JS error: {data['error']}")
+    return data.get("result")
+
+deadline = time.monotonic() + 15
+while time.monotonic() < deadline:
+    if eval_js("(() => { const n = document.querySelector('.crash-notice'); return n ? n.textContent : ''; })()"):
+        break
+    time.sleep(0.3)
+notice = eval_js("(() => (document.querySelector('.crash-notice') || {}).textContent || '')()")
+assert "closed unexpectedly" in notice, notice
+eval_js("""(() => {
+    const button = Array.from(document.querySelectorAll('.crash-notice button'))
+        .find(b => (b.textContent || '').includes('Share diagnostics'));
+    if (!button) throw new Error('no Share diagnostics button');
+    button.click();
+})()""")
+
+deadline = time.monotonic() + 15
+preview = ""
+while time.monotonic() < deadline:
+    preview = eval_js("(() => (document.querySelector('.diagnostics-preview') || {}).textContent || '')()")
+    if "Coperceive Diagnostics" in preview and "Collecting diagnostics" not in preview:
+        break
+    time.sleep(0.3)
+assert "Coperceive Diagnostics" in preview and "Collecting diagnostics" not in preview, preview[:500]
+assert "COPERCEIVE_TEST_CRASH" in preview or "crash-" in preview, preview[:500]
+for planted in secrets:
+    assert planted not in preview, f"{planted} leaked into preview:\n{preview[:2000]}"
+if os.path.exists(zip_path):
+    os.unlink(zip_path)
+eval_js("""(() => {
+    const button = Array.from(document.querySelectorAll('.diagnostics-actions button'))
+        .find(b => (b.textContent || '').includes('Save as file'));
+    if (!button) throw new Error('no Save as file button');
+    button.click();
+})()""")
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline and not os.path.exists(zip_path):
+    time.sleep(0.2)
+assert os.path.exists(zip_path), f"zip not written at {zip_path}"
+entries = 0
+with zipfile.ZipFile(zip_path) as archive:
+    names = archive.namelist()
+    assert "report.txt" in names, names
+    for name in names:
+        entries += 1
+        text = archive.read(name).decode("utf-8", errors="replace")
+        for planted in secrets:
+            assert planted not in text, f"{planted} leaked into zip entry {name}"
+print(f"Step 5i preview and {entries} zip entries contain no planted secrets")
+PY
+
+# Close the dialog, quit, clean up and restore a normal running app for Step 6.
+python3 - "${RELAUNCH_PORT}" "${RELAUNCH_SECRET}" <<'PY' || true
+import json, sys, urllib.request
+port, secret = sys.argv[1], sys.argv[2]
+request = urllib.request.Request(
+    f"http://127.0.0.1:{port}/eval",
+    data=json.dumps({"script": "(() => { const b = Array.from(document.querySelectorAll('button')).find(x => (x.textContent || '').trim() === 'Close'); if (b) b.click(); })()", "timeout": 10, "window": "main"}).encode(),
+    headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
+)
+urllib.request.urlopen(request, timeout=15).read()
+PY
+osascript <<'OSA' || true
+tell application "System Events"
+    tell process "Coperceive"
+        set frontmost to true
+        keystroke "q" using command down
+    end tell
+end tell
+OSA
+for i in {1..30}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then break; fi
+    sleep 0.2
+done
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -TERM "${APP_PID}" 2>/dev/null || true
+    wait "${APP_PID}" 2>/dev/null || true
+fi
+APP_PID=""
+rm -rf "${DIAG_LOGS}" "${DIAG_ZIP}"
+rm -f "${MARKER_FILE}"
+"${APP_EXE}" > "${TMP_DIR}/diag_clean_stdout.log" 2> "${TMP_DIR}/diag_clean_stderr.log" &
+APP_PID=$!
+for i in {1..120}; do
+    if [ -f "${MARKER_FILE}" ]; then break; fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "E2E_FAIL step=5i clean relaunch died" >&2
+        exit 1
+    fi
+    sleep 0.5
+done
+if [ ! -f "${MARKER_FILE}" ]; then
+    echo "E2E_FAIL step=5i clean relaunch did not write the marker" >&2
+    exit 1
+fi
+RELAUNCH_PORT=$(sed -n '4p' "${MARKER_FILE}")
+RELAUNCH_SECRET=$(sed -n '5p' "${MARKER_FILE}")
+echo "Step 5i verified: crash $(basename "${CRASH_FILE}") -> notice -> Share diagnostics -> saved zip scanned with no planted secrets."
 
 echo ""
 echo "--- Step 6: Quit Application and Verify Clean Process Exit ---"

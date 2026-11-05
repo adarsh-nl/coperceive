@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import functools
 import hmac
+import io
 import json
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -13,16 +15,18 @@ from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from PIL import Image
 from pydantic import BaseModel, Field
 
 from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
+from coperceive.camera_images import served_candidates
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import predictions_root
 from coperceive.evalview import EvalViewError, frame_rows, runs_for_scene, series
 from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
-from coperceive.model import Scene
+from coperceive.model import PointCloud, Scene
 from coperceive.plot import (
     PlotError,
     PlotNotFound,
@@ -31,6 +35,8 @@ from coperceive.plot import (
     render_bev,
     render_overlay,
 )
+from coperceive.remote_view.client import StreamRefused, StreamUnavailable
+from coperceive.remote_view.scenes import RemoteScenes
 from coperceive.rerun_export import RerunUnavailable, export_rerun
 from coperceive.sequence_export import (
     FORMATS,
@@ -49,6 +55,7 @@ from coperceive.viewdata import (
     pose_times,
     scene_directories,
     summarize,
+    world_points,
 )
 
 _IMAGE_TYPES = {
@@ -59,6 +66,33 @@ _IMAGE_TYPES = {
 }
 
 _STATIC = Path(__file__).resolve().parent / "static"
+_THUMBNAIL_WIDTH_MAX = 1280
+
+
+@functools.lru_cache(maxsize=256)
+def _thumbnail_bytes(path: str, mtime_ns: int, width: int) -> bytes:
+    """A small JPEG for the camera strip/split pane; full resolution stays on disk."""
+    with Image.open(path) as opened:
+        image = opened.convert("RGB")
+        image.thumbnail((width, width), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=80)
+        return buffer.getvalue()
+
+
+_MISSING_VIEWER_PAGE = """<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>coperceive — viewer not built</title></head>
+<body style="font-family: system-ui, sans-serif; max-width: 40rem;
+             margin: 4rem auto; padding: 0 1rem;">
+<h1>The viewer isn’t built in this checkout</h1>
+<p>This is a source checkout, so the web page was not built. The HTTP API keeps working.</p>
+<p>Build it once:</p>
+<pre><code>bash scripts/build_web_static.sh</code></pre>
+<p>or install a release wheel, which already contains the built viewer.</p>
+</body>
+</html>
+"""
 
 
 class JobRequest(BaseModel):
@@ -126,6 +160,7 @@ def create_app(
     static: str | Path | None = None,
     media_roots: Sequence[str | Path] = (),
     allow_origin: str | None = None,
+    remote: RemoteScenes | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -162,6 +197,9 @@ def create_app(
         root_path_obj, None if predictions is None else Path(predictions).resolve()
     )
     app.state.media_roots = tuple(Path(item).resolve() for item in media_roots)
+    # A cluster dataset viewed over SSH: `root` is the local mirror, the scenes
+    # and their point sweeps and images come from `remote` (docs/datasets/cluster-datasets.md).
+    app.state.remote = remote
     static_dir = _STATIC if static is None else Path(static).resolve()
 
     @app.middleware("http")
@@ -213,6 +251,10 @@ def create_app(
 
     @app.get("/api/scenes")
     def scenes() -> list[dict[str, str]]:
+        if app.state.remote is not None:
+            return [
+                {"scene_id": scene_id} for scene_id in sorted(_remote_call(app.state.remote.ready))
+            ]
         return [
             {"scene_id": path.name}
             for path in scene_directories(app.state.root, require_complete=True)
@@ -222,16 +264,33 @@ def create_app(
     def scene_summary(scene_id: str) -> dict[str, object]:
         scene = _cached_scene(app, scene_id)
         body = summarize(scene)
+        if app.state.remote is not None:
+            body["point_sweeps"] = len(_remote_call(lambda: app.state.remote.sweeps(scene_id)))
+            body["images_staged"] = _remote_images_staged(app, scene, scene_id)
+            return body
         body["images_staged"] = _images_staged(app, scene, _scene_dir(app.state.root, scene_id))
         return body
 
     @app.get("/api/scenes/{scene_id}/frame")
     def scene_frame(scene_id: str, time_us: int) -> dict[str, object]:
-        return frame_document(_cached_scene(app, scene_id), time_us)
+        document = frame_document(_cached_scene(app, scene_id), time_us)
+        if app.state.remote is not None:
+            document["point_sensors"] = [
+                {"agent_id": sweep.agent_id, "sensor_id": sweep.sensor_id, "count": sweep.count}
+                for sweep in _remote_call(lambda: app.state.remote.sweeps(scene_id)).values()
+                if sweep.time_us == time_us
+            ]
+        return document
 
     @app.get("/api/scenes/{scene_id}/map")
-    def scene_map(scene_id: str) -> dict[str, object]:
+    def scene_map(scene_id: str, refresh: bool = False) -> dict[str, object]:
         scene = _cached_scene(app, scene_id)
+        if refresh:
+            # A map can be installed while the app runs; drop the cached "missing"
+            # answer so the next request sees the new maps root.
+            name = scene_map_name(scene)
+            if name is not None and isinstance(app.state.map_cache, dict):
+                app.state.map_cache.pop(name, None)
         return _map_summary(app, scene)
 
     @app.get("/api/scenes/{scene_id}/map/lines")
@@ -272,29 +331,70 @@ def create_app(
         return FileResponse(svg, media_type="image/svg+xml")
 
     @app.get("/api/scenes/{scene_id}/image")
-    def scene_image(scene_id: str, time_us: int, agent_id: str, sensor_id: str) -> FileResponse:
+    def scene_image(
+        scene_id: str,
+        time_us: int,
+        agent_id: str,
+        sensor_id: str,
+        width: int | None = None,
+        full: bool = False,
+    ) -> Response:
         scene = _cached_scene(app, scene_id)
         relative = image_path(scene, time_us, agent_id, sensor_id)
         if relative is None:
             raise HTTPException(status_code=404, detail="image not found")
+        if app.state.remote is not None:
+            return _remote_image(app, scene_id, relative, width=width, full=full)
         scene_dir = _scene_dir(app.state.root, scene_id)
-        try:
-            target = confine_media(scene_dir, relative, app.state.media_roots)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        try:
-            present = target.is_file()
-        except OSError:
-            # An over-long component or an unsearchable parent: the file is not there.
-            present = False
-        if not present:
+        # A cluster scene's preview falls back to its original, and `full` asks
+        # for the original (docs/datasets/cluster-datasets.md, "Camera images").
+        target: Path | None = None
+        for index, candidate in enumerate(served_candidates(relative, full=full)):
+            try:
+                resolved = confine_media(scene_dir, candidate, app.state.media_roots)
+            except ValueError as exc:
+                if index == 0:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+                continue
+            try:
+                present = resolved.is_file()
+            except OSError:
+                # An over-long component or an unsearchable parent: the file is not there.
+                present = False
+            if present:
+                target = resolved
+                break
+        if target is None:
             raise HTTPException(status_code=404, detail="image not found")
+        if width is not None:
+            # The strip and split pane ask for a display width; resizing here keeps
+            # a 3 MB 1920x1080 PNG from crossing HTTP and the decoder on every tick.
+            clamped = max(16, min(int(width), _THUMBNAIL_WIDTH_MAX))
+            try:
+                payload = _thumbnail_bytes(str(target), target.stat().st_mtime_ns, clamped)
+            except (OSError, ValueError, Image.UnidentifiedImageError):
+                media = _IMAGE_TYPES.get(target.suffix.lower(), "application/octet-stream")
+                return FileResponse(target, media_type=media)
+            return Response(content=payload, media_type="image/jpeg")
         media = _IMAGE_TYPES.get(target.suffix.lower(), "application/octet-stream")
         return FileResponse(target, media_type=media)
 
     @app.get("/api/scenes/{scene_id}/points")
     def scene_points(scene_id: str, time_us: int, agent_id: str, sensor_id: str) -> Response:
-        blob = frame_points(_cached_scene(app, scene_id), time_us, agent_id, sensor_id)
+        scene = _cached_scene(app, scene_id)
+        if app.state.remote is not None:
+            remote = app.state.remote
+            sweep = _remote_call(lambda: remote.sweeps(scene_id)).get(
+                (agent_id, sensor_id, time_us)
+            )
+            if sweep is None:
+                return Response(content=b"", media_type="application/octet-stream")
+            data = _remote_call(lambda: remote.sweep_bytes(scene_id, sweep))
+            cloud = PointCloud(agent_id, sensor_id, time_us, sweep.count, data)
+            return Response(
+                content=world_points(scene, cloud), media_type="application/octet-stream"
+            )
+        blob = frame_points(scene, time_us, agent_id, sensor_id)
         return Response(content=blob, media_type="application/octet-stream")
 
     @app.post("/api/scenes/{scene_id}/export/rerun")
@@ -433,6 +533,18 @@ def create_app(
 
     if (static_dir / "index.html").is_file():
         app.mount("/", StaticFiles(directory=static_dir, html=True), name="static")
+    else:
+        # A source checkout has no built viewer (coperceive/app/static is built,
+        # not committed). Keep the API usable and say what to run instead of a
+        # bare 404 on the page.
+        @app.get("/", include_in_schema=False)
+        def missing_viewer() -> HTMLResponse:
+            return HTMLResponse(_MISSING_VIEWER_PAGE)
+
+        @app.get("/index.html", include_in_schema=False)
+        def missing_viewer_index() -> HTMLResponse:
+            return HTMLResponse(_MISSING_VIEWER_PAGE)
+
     return app
 
 
@@ -451,33 +563,54 @@ def _images_staged(app: FastAPI, scene: Scene, scene_dir: Path) -> bool | None:
     for indices in by_camera.values():
         picks.extend({indices[0], indices[len(indices) // 2], indices[-1]})
     for index in sorted(set(picks))[:48]:
-        try:
-            if confine_media(scene_dir, rows[index].path, app.state.media_roots).is_file():
-                return True
-        except (ValueError, OSError):
-            continue
+        for candidate in served_candidates(rows[index].path, full=False):
+            try:
+                if confine_media(scene_dir, candidate, app.state.media_roots).is_file():
+                    return True
+            except (ValueError, OSError):
+                continue
     return False
 
 
 class _SceneCache:
-    """One decoded scene. The viewer re-reads when the path changes."""
+    """One decoded scene. The viewer re-reads when the path or its tables change
+    (a camera-image mode switch rewrites images.parquet in place)."""
 
     def __init__(self) -> None:
         self.path: Path | None = None
+        self.signature: tuple[int, ...] = ()
         self.scene: Scene | None = None
 
-    def load(self, path: Path) -> Scene:
+    @staticmethod
+    def _signature(path: Path) -> tuple[int, ...]:
+        stamps: list[int] = []
+        for name in ("manifest.json", "COMPLETE.json", "images.parquet"):
+            try:
+                stamps.append((path / name).stat().st_mtime_ns)
+            except OSError:
+                stamps.append(0)
+        return tuple(stamps)
+
+    def load(self, path: Path, *, points: bool = True) -> Scene:
         resolved = path.resolve()
-        if self.scene is None or self.path != resolved:
-            self.scene = read_scene(resolved)
+        signature = self._signature(resolved)
+        if self.scene is None or self.path != resolved or self.signature != signature:
+            self.scene = read_scene(resolved, points=points)
             self.path = resolved
+            self.signature = signature
         if self.scene is None:
             raise FileNotFoundError(resolved)
         return self.scene
 
 
 def _scene_dir(root: Path, scene_id: str) -> Path:
-    if scene_id == "" or "/" in scene_id or "\\" in scene_id or ".." in scene_id:
+    if (
+        scene_id == ""
+        or "/" in scene_id
+        or "\\" in scene_id
+        or ".." in scene_id
+        or scene_id.endswith(".partial")
+    ):
         raise HTTPException(status_code=400, detail="bad scene id")
     if (root / "manifest.json").is_file() and (root / "COMPLETE.json").is_file():
         if scene_id in (root.name, ".", ""):
@@ -502,9 +635,94 @@ def _scene_dir(root: Path, scene_id: str) -> Path:
 
 
 def _cached_scene(app: FastAPI, scene_id: str) -> Scene:
+    remote = app.state.remote
+    if remote is not None:
+        if _scene_id_refused(scene_id):
+            raise HTTPException(status_code=400, detail="bad scene id")
+        local = _remote_call(lambda: remote.ensure(scene_id))
+        if local is None:
+            raise HTTPException(status_code=404, detail="scene not found")
+        return app.state.scene_cache.load(local, points=False)  # type: ignore[no-any-return]
     path = _scene_dir(app.state.root, scene_id)
     cache = app.state.scene_cache
     return cache.load(path)  # type: ignore[no-any-return]
+
+
+def _scene_id_refused(scene_id: str) -> bool:
+    return (
+        scene_id in {"", ".", ".."}
+        or "/" in scene_id
+        or "\\" in scene_id
+        or ".." in scene_id
+        or "\x00" in scene_id
+        or scene_id.endswith(".partial")
+    )
+
+
+def _remote_call(read):  # type: ignore[no-untyped-def]
+    """A read over the SSH stream: refused paths are 400, a lost connection 503."""
+    try:
+        return read()
+    except StreamRefused as exc:
+        raise HTTPException(status_code=404 if exc.missing else 400, detail=str(exc)) from exc
+    except StreamUnavailable as exc:
+        raise HTTPException(
+            status_code=503, detail=f"The cluster connection is not answering: {exc}"
+        ) from exc
+
+
+def _remote_images_staged(app: FastAPI, scene: Scene, scene_id: str) -> bool | None:
+    """Whether the first recorded image of the scene can be read over the stream."""
+    if not scene.images:
+        return None
+    first = scene.images[0].path
+    for candidate in served_candidates(first, full=False):
+        try:
+            header = app.state.remote.client.stat(f"{scene_id}/{candidate}")
+        except (StreamRefused, StreamUnavailable):
+            continue
+        if header.get("exists") and header.get("is_file"):
+            return True
+    return False
+
+
+def _remote_image(
+    app: FastAPI, scene_id: str, relative: str, *, width: int | None, full: bool
+) -> Response:
+    remote = app.state.remote
+    data: bytes | None = None
+    chosen = relative
+    for index, candidate in enumerate(served_candidates(relative, full=full)):
+        try:
+            data = remote.file_bytes(scene_id, candidate)
+        except StreamRefused as exc:
+            if index == 0:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+            continue
+        except StreamUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+        if data is not None:
+            chosen = candidate
+            break
+    if data is None:
+        raise HTTPException(status_code=404, detail="image not found")
+    suffix = Path(chosen).suffix.lower()
+    if width is not None:
+        clamped = max(16, min(int(width), _THUMBNAIL_WIDTH_MAX))
+        try:
+            with Image.open(io.BytesIO(data)) as image:
+                image.draft("RGB", (clamped, clamped))
+                frame = image.convert("RGB")
+                if frame.width > clamped:
+                    frame = frame.resize(
+                        (clamped, max(1, round(frame.height * clamped / frame.width)))
+                    )
+                out = io.BytesIO()
+                frame.save(out, "JPEG", quality=80)
+            return Response(content=out.getvalue(), media_type="image/jpeg")
+        except (OSError, ValueError, Image.UnidentifiedImageError):
+            pass
+    return Response(content=data, media_type=_IMAGE_TYPES.get(suffix, "application/octet-stream"))
 
 
 def _predictions_root(app: FastAPI) -> Path:

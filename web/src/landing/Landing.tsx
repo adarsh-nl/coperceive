@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { loadAppearance, saveAppearance, type ThemeName } from "../viewer/appearance";
+import { loadAppearance, saveAppearance, setThemeOverride, type ThemeName } from "../viewer/appearance";
 import Viewer from "../viewer/Viewer";
 import { DotGlobe, ImageCompare, Magnetic, Particles, Rise, Scrubber, Tilt } from "./motion";
 import "./landing.css";
@@ -136,6 +136,7 @@ export function readTheme(): ThemeName {
 }
 
 export function writeTheme(theme: ThemeName): void {
+  setThemeOverride(theme);
   const current = loadAppearance();
   saveAppearance({ ...current, theme });
   document.documentElement.dataset.theme = theme;

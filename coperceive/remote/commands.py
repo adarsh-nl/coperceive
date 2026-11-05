@@ -8,15 +8,22 @@ import json
 import sys
 
 from coperceive.remote.manager import (
-    DEFAULT_CPUS,
-    DEFAULT_MEM,
-    DEFAULT_PARTITION,
-    DEFAULT_WALLTIME,
+    get_session_token,
     get_status,
     list_sessions,
     record_heartbeat,
     start_session,
     stop_session,
+)
+from coperceive.remote.scan import (
+    DEFAULT_DEPTH,
+    DEFAULT_MAX_ENTRIES,
+    DEFAULT_MAX_TOTAL,
+    DEFAULT_TIMEOUT_S,
+    MAX_DEPTH,
+    MAX_TIMEOUT_S,
+    ScanError,
+    scan_tree,
 )
 
 
@@ -34,17 +41,37 @@ def add_parser(
     start_parser.add_argument("--root", required=True, help="Data directory root to serve.")
     start_parser.add_argument(
         "--partition",
-        default=DEFAULT_PARTITION,
-        help=f"Slurm partition (default: {DEFAULT_PARTITION}).",
+        required=True,
+        help="Slurm partition chosen in the server profile (there is no product default).",
     )
     start_parser.add_argument(
-        "--time", default=DEFAULT_WALLTIME, help=f"Slurm walltime (default: {DEFAULT_WALLTIME})."
+        "--time",
+        default=None,
+        help="Slurm walltime from the server profile; omitted means the partition default.",
     )
     start_parser.add_argument(
-        "--cpus", type=int, default=DEFAULT_CPUS, help=f"CPUs allocated (default: {DEFAULT_CPUS})."
+        "--cpus",
+        type=int,
+        default=None,
+        help="CPUs allocated, from the server profile; omitted means the cluster default.",
     )
     start_parser.add_argument(
-        "--mem", default=DEFAULT_MEM, help=f"Memory allocated (default: {DEFAULT_MEM})."
+        "--mem",
+        default=None,
+        help="Memory allocated, from the server profile; omitted means the cluster default.",
+    )
+    start_parser.add_argument(
+        "--python",
+        default=None,
+        help="Python interpreter on the compute node from the server profile.",
+    )
+    start_parser.add_argument(
+        "--static",
+        default=None,
+        help=(
+            "Viewer page directory on the server (the desktop app uploads its "
+            "built bundle to ~/.cache/coperceive/static/<app-version>)."
+        ),
     )
     start_parser.add_argument(
         "--uuid", default=None, help="Explicit session UUID (auto-generated if omitted)."
@@ -91,6 +118,13 @@ def add_parser(
     stop_parser.add_argument("--job-id", type=int, default=None, help="Slurm job ID.")
     stop_parser.set_defaults(func=_remote_stop)
 
+    # remote token (read-only; used by the desktop app to reattach)
+    token_parser = remote_sub.add_parser(
+        "token", help="Print the running session's bearer token (desktop reattach only)."
+    )
+    token_parser.add_argument("--uuid", required=True, help="Session UUID.")
+    token_parser.set_defaults(func=_remote_token)
+
     # remote list
     list_parser = remote_sub.add_parser(
         "list", help="List all active, pending, and orphan remote sessions."
@@ -105,22 +139,58 @@ def add_parser(
     heartbeat_parser.add_argument("--uuid", dest="opt_uuid", default=None, help="Session UUID.")
     heartbeat_parser.set_defaults(func=_remote_heartbeat)
 
+    # remote scan
+    scan_parser = remote_sub.add_parser(
+        "scan",
+        help="Describe the folders and coperceive scenes under a path (metadata only).",
+    )
+    scan_parser.add_argument(
+        "--root", required=True, help="Data directory root that limits the scan."
+    )
+    scan_parser.add_argument("--path", required=True, help="Directory inside --root to describe.")
+    scan_parser.add_argument(
+        "--depth",
+        type=int,
+        default=DEFAULT_DEPTH,
+        help=f"Folders below --path to inspect (default {DEFAULT_DEPTH}, max {MAX_DEPTH}).",
+    )
+    scan_parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_S,
+        help=(
+            f"Wall-clock seconds before returning partial results "
+            f"(default {DEFAULT_TIMEOUT_S:g}, max {MAX_TIMEOUT_S:g})."
+        ),
+    )
+    scan_parser.add_argument(
+        "--max-entries",
+        type=int,
+        default=DEFAULT_MAX_ENTRIES,
+        help=f"Entries read per directory (default {DEFAULT_MAX_ENTRIES}).",
+    )
+    scan_parser.add_argument(
+        "--max-total",
+        type=int,
+        default=DEFAULT_MAX_TOTAL,
+        help=f"Folders described in total (default {DEFAULT_MAX_TOTAL}).",
+    )
+    scan_parser.set_defaults(func=_remote_scan)
+
 
 def _remote_start(args: argparse.Namespace) -> None:
-    extra_args: list[str] = []
-    for mr in args.media_root:
-        extra_args.extend(["--media-root", mr])
-
     result = start_session(
         data_root=args.root,
         partition=args.partition,
         walltime=args.time,
         cpus=args.cpus,
         mem=args.mem,
+        python=args.python,
+        static_dir=args.static,
         session_uuid=args.uuid,
         sbatch_script=args.sbatch_script,
         wait_timeout=args.wait_timeout,
-        extra_args=extra_args if extra_args else None,
+        media_roots=list(args.media_root),
     )
     print(json.dumps(result, indent=2))
     if result.get("status") == "error":
@@ -150,6 +220,13 @@ def _remote_stop(args: argparse.Namespace) -> None:
         sys.exit(1)
 
 
+def _remote_token(args: argparse.Namespace) -> None:
+    result = get_session_token(session_uuid=args.uuid)
+    print(json.dumps(result, indent=2))
+    if result.get("status") == "error":
+        sys.exit(1)
+
+
 def _remote_list(args: argparse.Namespace) -> None:
     result = list_sessions()
     print(json.dumps(result, indent=2))
@@ -161,6 +238,24 @@ def _remote_heartbeat(args: argparse.Namespace) -> None:
         print(json.dumps({"status": "error", "error": "session uuid is required"}))
         sys.exit(1)
     result = record_heartbeat(uuid_val)
+    print(json.dumps(result, indent=2))
+    if result.get("status") == "error":
+        sys.exit(1)
+
+
+def _remote_scan(args: argparse.Namespace) -> None:
+    try:
+        result = scan_tree(
+            root=args.root,
+            path=args.path,
+            depth=args.depth,
+            timeout_s=args.timeout,
+            max_entries=args.max_entries,
+            max_total=args.max_total,
+        )
+    except ScanError as exc:
+        print(json.dumps({"status": "error", "error": str(exc)}, indent=2))
+        sys.exit(1)
     print(json.dumps(result, indent=2))
     if result.get("status") == "error":
         sys.exit(1)

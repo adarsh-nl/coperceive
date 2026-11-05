@@ -1,0 +1,205 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coperceive.dev/spec/cluster-profile.schema.json",
+  "title": "coperceive server profile",
+  "description": "A per-server profile created by the user. It never contains credentials: authentication comes from ssh-agent and ~/.ssh/config. Every host, partition, account, QoS, GRES name, time, memory and path is user-chosen or discovered from the scheduler read-only; there is no built-in default cluster, partition or path.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "data_roots",
+    "scratch_template",
+    "results_root",
+    "scheduler",
+    "defaults",
+    "environment"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Label the user recognises."
+    },
+    "ssh_alias": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "description": "Host from ~/.ssh/config the user already uses (ProxyJump, 2FA, agent)."
+    },
+    "host": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "description": "Host typed by the user when there is no ssh config alias."
+    },
+    "user": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1
+    },
+    "data_roots": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Directories on the server coperceive may read."
+    },
+    "scratch_template": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Per-user scratch for job work, e.g. /scratch/$USER/$SLURM_JOB_ID."
+    },
+    "results_root": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Shared filesystem readable from the login node. Every run --output-dir lives here, never under scratch; the app tails predictions.jsonl from it over SSH."
+    },
+    "code_roots": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Directories a registered pipeline script may live in, besides data_roots."
+    },
+    "scheduler": {
+      "type": "string",
+      "enum": [
+        "slurm",
+        "none"
+      ]
+    },
+    "defaults": {
+      "$ref": "#/$defs/job_defaults"
+    },
+    "environment": {
+      "$ref": "#/$defs/environment"
+    },
+    "notes": {
+      "type": [
+        "string",
+        "null"
+      ]
+    }
+  },
+  "$defs": {
+    "job_defaults": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Scheduler choices the user confirmed. All optional; a missing partition is asked for, never guessed.",
+      "properties": {
+        "partition": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "account": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "qos": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "gres": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Exactly as the scheduler shows it, e.g. gpu:a100:1."
+        },
+        "time_limit": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(?:[0-9]+-)?[0-9]{1,2}:[0-9]{2}:[0-9]{2}$"
+        },
+        "memory": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[0-9]+[KMGT]?$"
+        },
+        "cpus_per_task": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        }
+      }
+    },
+    "environment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "kind"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string",
+          "enum": [
+            "none",
+            "modules",
+            "conda",
+            "venv",
+            "container"
+          ]
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "interpreter": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "python path for conda/venv."
+        },
+        "container_image": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "coperceive_command": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "wheelhouse": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Offline wheels directory; only used when the user asks."
+        },
+        "compute_has_internet": {
+          "type": "boolean",
+          "default": false,
+          "description": "False unless the user says compute nodes have network; job scripts then install and download nothing."
+        }
+      }
+    }
+  }
+}

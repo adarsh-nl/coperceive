@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use std::fs::{File, OpenOptions};
-use std::io::{Read, Write};
+use std::fs::OpenOptions;
+use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
@@ -29,8 +30,7 @@ impl std::error::Error for TokenSecurityError {}
 /// Generates a cryptographically secure 128-bit hex token (32 lowercase hex characters).
 pub fn generate_secure_token() -> std::io::Result<String> {
     let mut bytes = [0u8; 16];
-    let mut file = File::open("/dev/urandom")?;
-    file.read_exact(&mut bytes)?;
+    getrandom::fill(&mut bytes).map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e.to_string()))?;
     let mut hex = String::with_capacity(32);
     for b in bytes {
         use std::fmt::Write as _;
@@ -43,6 +43,7 @@ pub fn generate_secure_token() -> std::io::Result<String> {
 pub fn write_token_file(path: &Path, token: &str) -> std::io::Result<()> {
     let mut options = OpenOptions::new();
     options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
     options.mode(0o600);
     let mut file = options.open(path)?;
     file.write_all(token.as_bytes())?;
@@ -56,11 +57,16 @@ pub fn verify_token_file_permissions(path: &Path) -> Result<(), TokenSecurityErr
     if !path.is_file() {
         return Err(TokenSecurityError::FileNotFound);
     }
-    let metadata = path.metadata().map_err(|e| TokenSecurityError::IoError(e.to_string()))?;
-    let mode = metadata.permissions().mode() & 0o777;
-    if (mode & 0o077) != 0 {
-        return Err(TokenSecurityError::LoosePermissions(mode));
+    #[cfg(unix)]
+    {
+        let metadata = path.metadata().map_err(|e| TokenSecurityError::IoError(e.to_string()))?;
+        let mode = metadata.permissions().mode() & 0o777;
+        if (mode & 0o077) != 0 {
+            return Err(TokenSecurityError::LoosePermissions(mode));
+        }
     }
+    // On non-Unix platforms (e.g. Windows), POSIX file permission modes do not apply.
+    // Windows relies on the per-user profile directory's ACLs; there is no mode check there.
     Ok(())
 }
 
@@ -79,6 +85,7 @@ mod tests {
         assert!(t1.chars().all(|c| c.is_ascii_hexdigit()));
     }
 
+    #[cfg(unix)]
     #[test]
     fn test_token_file_strict_permissions() {
         let unique = format!("test-coperceive-token-{}-{}", std::process::id(), generate_secure_token().unwrap());

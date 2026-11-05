@@ -1,5 +1,6 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
+import { downloadTownMap, onTownMapProgress, isTauriEnvironment } from "../desktop/local";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { CSS2DObject, CSS2DRenderer } from "three/addons/renderers/CSS2DRenderer.js";
@@ -14,18 +15,47 @@ import {
   showCameraImage,
   toggleFrustumImages,
   toggleOneFrustumImage,
+  systemTheme,
+  setThemeOverride,
   type Appearance,
 } from "./appearance";
 import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
 import CameraStrip, { CameraSplit, loadImage } from "./cameras";
-import { createFrameCache, type FrameCache } from "./cache";
+import { createFrameCache, isAbortError, type FrameCache } from "./cache";
 import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
 import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
 import { boxCenter, followPick, type PickRecord } from "./inspect";
 import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
 import { Inspector, Radar, SceneCard } from "./SidePanel";
 import ExportDialog from "./ExportDialog";
+import {
+  getDatasetScenes,
+  getViewerJob,
+  pickSavePath,
+  prepareSceneInMainWindow,
+  revealInFinder,
+  setViewerTitle,
+  saveExportedFile,
+  type ViewerJob,
+} from "../desktop/local";
 import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
+import {
+  clampLeft,
+  clampRight,
+  clampStrip,
+  DEFAULT_LEFT_PX,
+  DEFAULT_RIGHT_PX,
+  DEFAULT_STRIP_PX,
+  MIN_LEFT_PX,
+  MAX_LEFT_PX,
+  MIN_RIGHT_PX,
+  MAX_RIGHT_PX,
+  MIN_STRIP_PX,
+  MAX_STRIP_PX,
+  RESIZE_STEP_PX,
+  RESIZE_STEP_LARGE_PX,
+  type LayoutSizes,
+} from "./layout";
 import {
   buildPredictionObjects,
   disposePredictionGroup,
@@ -35,6 +65,9 @@ import {
   type StatusChip,
 } from "./predictionLayer";
 import PredictionsBlock, { LineSample } from "./predictions";
+import PanelState from "../desktop/PanelState";
+import { PANEL_DEFINITIONS } from "../desktop/panelStates";
+import { useCameraStripMode } from "./cameraStripSetting";
 import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
 import { SPLIT_MAX, SPLIT_MIN } from "./appearance";
 import {
@@ -57,6 +90,16 @@ import {
 } from "./predictionTypes";
 import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
 import Timeline, { type Marker } from "./timeline";
+import { neighbourScene } from "./sceneNav";
+import {
+  agentRole,
+  boxesInView,
+  compactCount,
+  formatDistance,
+  scaleBar,
+  sweepGaps as findSweepGaps,
+} from "./sceneStats";
+import { sceneCapabilities, viewpointFor } from "./capabilities";
 import {
   cameraKey,
   isPose,
@@ -108,12 +151,16 @@ type Stage = {
   images: THREE.Group;
   imagePlanes: Map<string, THREE.Mesh>;
   highlight: THREE.Mesh;
+  /** The selected object's name, drawn above its box. */
+  pickTag: CSS2DObject;
   /** Prediction wires per status (and per run in compare mode), ADR 0010. */
   predictions: THREE.Group;
   /** Invisible pick meshes for the drawn prediction rows. */
   predictionPicks: THREE.Group;
   /** Ground-truth wires a shown prediction matched, at 40% opacity. */
   dimmedBoxes: THREE.LineSegments;
+  /** The sample the drawn point cloud and boxes come from; they must always agree. */
+  shownTimes: { points: number | null; boxes: number | null };
 };
 
 type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: number } | null };
@@ -227,6 +274,11 @@ const VIEWPOINTS: { id: Viewpoint; label: string; shortcut: string }[] = [
 ];
 
 const PREFETCH_FRAMES = 4;
+/**
+ * A playback hold longer than this shows "Buffering…". It stays up until a sample
+ * advances on time again, so a slow link reads as one steady state, not a flicker.
+ */
+const BUFFERING_AFTER_MS = 60;
 
 function colorFor(agentType: string): number {
   return COLORS[agentType] ?? 0xb7b1a6;
@@ -442,22 +494,37 @@ function sceneGraphAudit(stage: Stage | null) {
   const points = stage.points.visible && pointAttr ? pointAttr.count : 0;
   const boxes =
     ((stage.boxes.visible && boxAttr ? boxAttr.count : 0) + (stage.dimmedBoxes.visible && dimAttr ? dimAttr.count : 0)) / 24;
-  return { token: sceneDrawToken, points, boxes, tagged };
+  // Where each camera's frustum and image plane are in the world, for the
+  // tests that check they follow their agent.
+  const worldPosition = (object: THREE.Object3D) => {
+    object.updateWorldMatrix(true, false);
+    const at = new THREE.Vector3().setFromMatrixPosition(object.matrixWorld);
+    return [at.x, at.y, at.z];
+  };
+  const frustums = stage.frustums.children.map((child) => ({
+    key: typeof child.userData.cameraKey === "string" ? child.userData.cameraKey : null,
+    position: worldPosition(child),
+  }));
+  const imagePlanes = [...stage.imagePlanes].map(([key, mesh]) => ({
+    key,
+    visible: mesh.visible && stage.images.visible,
+    position: worldPosition(mesh),
+    poseTimeUs: typeof mesh.userData.poseTimeUs === "number" ? mesh.userData.poseTimeUs : null,
+    imageTimeUs: typeof mesh.userData.imageTimeUs === "number" ? mesh.userData.imageTimeUs : null,
+  }));
+  return { token: sceneDrawToken, points, boxes, tagged, frustums, imagePlanes };
 }
 
 function clearGroup(group: THREE.Group) {
+  // These groups are rebuilt every frame (axes, frustums, solids). Disposing the
+  // materials here releases their compiled shader programs, so the next frame
+  // recompiles them; on a software/ANGLE WebGL backend that can stall playback for
+  // seconds mid-run. Keep the materials cached (the driver program stays warm);
+  // only the per-frame geometry is released.
   for (const child of [...group.children]) {
     group.remove(child);
     const object = child as THREE.LineSegments;
     object.geometry?.dispose();
-    const material = object.material;
-    if (Array.isArray(material)) {
-      for (const item of material) {
-        item.dispose();
-      }
-    } else {
-      material?.dispose();
-    }
   }
 }
 
@@ -580,6 +647,7 @@ function drawBoxes(
   appearance: Appearance,
   dimmed: Dimmed | null,
 ) {
+  stage.shownTimes.boxes = frame.time_us;
   const keys = dimmed && dimmed.timeUs === frame.time_us && dimmed.keys.size > 0 ? dimmed.keys : null;
   const shown = frame.boxes.filter((box) => boxShown(box, hidden, appearance) && Array.isArray(box.lines));
   const dims = shown.map((box) => keys !== null && keys.has(frameGtKey(box)));
@@ -636,6 +704,25 @@ function drawBoxes(
   }
 }
 
+/**
+ * Pose every camera's image plane for the sample just drawn, in the same draw
+ * as its frustum lines: agent pose(t) x camera mount, from the frame document.
+ * A plane whose camera has no pose or no image at this sample is hidden, never
+ * left where it was. Showing a plane and its texture is the image effect's job
+ * (the image may still be on its way); this keeps the pose in step meanwhile.
+ */
+function poseImagePlanes(stage: Stage, frame: FrameDocument, hidden: Record<string, boolean>) {
+  for (const [key, mesh] of stage.imagePlanes) {
+    const frustum = frame.frustums.find((item) => cameraKey(item.agent_id, item.sensor_id) === key);
+    if (!frustum || !isPose(frustum.pose) || frustum.has_image === false || hidden[frustum.agent_id]) {
+      mesh.visible = false;
+      continue;
+    }
+    applyPose(mesh, frustum.pose);
+    mesh.userData.poseTimeUs = frame.time_us;
+  }
+}
+
 async function drawFrame(
   stage: Stage,
   frame: FrameDocument,
@@ -646,9 +733,12 @@ async function drawFrame(
   cache: FrameCache,
   dimmed: () => Dimmed | null,
   stale: () => boolean,
+  onPoints?: (ms: number) => void,
+  onApplied?: () => void,
 ): Promise<Drawn | null> {
   let pointCount = 0;
   const sweeps: { xyz: Float32Array; color: THREE.Color }[] = [];
+  const pointsStarted = performance.now();
   for (const sensor of frame.point_sensors) {
     if (!appearance.points || hidden[sensor.agent_id] || sensor.count === 0) {
       continue;
@@ -672,6 +762,7 @@ async function drawFrame(
     (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "post-sensor" };
     return null;
   }
+  onPoints?.(performance.now() - pointsStarted);
   const positions = new Float32Array(pointCount * 3);
   const colors = new Float32Array(pointCount * 3);
   let cursor = 0;
@@ -686,6 +777,10 @@ async function drawFrame(
   }
   replaceColored(stage.points.geometry, positions, colors);
   stage.points.visible = positions.length > 0;
+  stage.shownTimes.points = frame.time_us;
+  // From here on this frame is the one on screen; anything that redraws boxes from
+  // the latest frame (a prediction layer arriving, a hidden agent) must use it.
+  onApplied?.();
   (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = {
     step: "drawn",
     pointCount,
@@ -705,6 +800,7 @@ async function drawFrame(
       continue;
     }
     const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(types.get(frustum.agent_id) ?? ""));
+    lines.userData.cameraKey = cameraKey(frustum.agent_id, frustum.sensor_id);
     applyPose(lines, frustum.pose);
     stage.frustums.add(lines);
     pickable.push({
@@ -715,6 +811,7 @@ async function drawFrame(
     });
   }
   syncFrustumPicks(stage.frustumPicks, pickable);
+  poseImagePlanes(stage, frame, hidden);
 
   clearGroup(stage.agents);
   for (const agent of frame.agents) {
@@ -739,17 +836,62 @@ function replaceMap(stage: Stage, buffer: ArrayBuffer) {
   stage.mapLines.geometry = next;
 }
 
+export type FrameRenderStat = {
+  at: number;
+  index: number;
+  /** Frame document (boxes, agents) fetch. */
+  load_ms: number;
+  /** Point-cloud fetches for the frame, when they finished. */
+  points_ms: number | null;
+  draw_ms: number;
+  render_ms: number;
+  frame_hits: number;
+  frame_misses: number;
+  /** "dropped": a newer sample was chosen before this one's points arrived. */
+  result: "applied" | "dropped";
+};
+
+/** The viewer log: per-frame timings, bounded. Read it as window.__COPERCEIVE_FRAME_STATS__. */
+function recordFrameStat(stat: FrameRenderStat) {
+  if (typeof window === "undefined") return;
+  const list = window.__COPERCEIVE_FRAME_STATS__ ?? (window.__COPERCEIVE_FRAME_STATS__ = []);
+  list.push(stat);
+  if (list.length > 1000) list.splice(0, list.length - 1000);
+}
+
+/** Test-only: the points/boxes sample of every rendered frame where either changed. */
+function recordShownTimes(times: { points: number | null; boxes: number | null }, pointsVisible: boolean) {
+  if (typeof window === "undefined" || !window.__COPERCEIVE_TEST_ENV__) return;
+  const list = window.__COPERCEIVE_RENDERED_TIMES__ ?? (window.__COPERCEIVE_RENDERED_TIMES__ = []);
+  const points = pointsVisible ? times.points : null;
+  const last = list[list.length - 1];
+  if (last && last.points === points && last.boxes === times.boxes) return;
+  list.push({ at: performance.now(), points, boxes: times.boxes });
+  if (list.length > 2000) list.splice(0, list.length - 2000);
+}
+
 function prefetchAhead(
   cache: FrameCache,
   summary: SceneSummary,
   frameIndex: number,
   token: string,
+  stillWanted: () => boolean,
 ) {
   const times = summary.times_us.slice(frameIndex + 1, frameIndex + 1 + PREFETCH_FRAMES);
   for (const time of times) {
+    // Choosing another scene stops the old scene's prefetch at once: the choice changes the
+    // scene id synchronously, while the old summary lives on until the new one arrives. Without
+    // this check every frame tick between the two keeps asking for old-scene frames, and their
+    // requests queue the new scene's summary behind them.
+    if (!stillWanted()) {
+      return;
+    }
     void cache
       .loadFrame(summary.scene_id, time, token)
       .then((frame) => {
+        if (!stillWanted()) {
+          return;
+        }
         for (const sensor of frame.point_sensors) {
           if (sensor.count === 0) {
             continue;
@@ -857,6 +999,9 @@ export type ClockMark = { ratio: number; label: string };
 declare global {
   interface Window {
     __COPERCEIVE_DESKTOP__?: boolean;
+    __COPERCEIVE_TEST_IMPORT_SOURCE__?: string;
+    __COPERCEIVE_UPDATE_URL__?: string;
+    __COPERCEIVE_UPDATE_RESTART__?: boolean;
     __COPERCEIVE_CTRL_PORT__?: number;
     __COPERCEIVE_CTRL_SECRET__?: string;
     __COPERCEIVE_DATA_ROOT__?: string;
@@ -867,6 +1012,7 @@ declare global {
       last_timestamp_us?: number;
       last_timestamp_ns?: number;
       last_viewpoint?: string;
+      theme_override?: string;
       last_theme?: string;
       reopen_last_session?: boolean;
       agent_visibility?: Record<string, boolean>;
@@ -885,12 +1031,21 @@ declare global {
       panel_collapse?: {
         camera_strip_open?: boolean;
       };
+      layout?: {
+        left_px?: number;
+        right_px?: number;
+        strip_px?: number;
+      };
       last_loop?: boolean;
     };
     __COPERCEIVE_VIEWER_STATE__?: unknown;
     __COPERCEIVE_SHOW_TOAST__?: (text: string, type?: "error" | "info") => void;
     __COPERCEIVE_SET_VIEWPOINT__?: (vp: string) => void;
     __COPERCEIVE_TOGGLE_THEME__?: () => void;
+    __COPERCEIVE_TOGGLE_FULLSCREEN__?: () => void;
+    __COPERCEIVE_IS_FULLSCREEN__?: () => boolean;
+    __COPERCEIVE_LAYOUT_SIZES__?: () => LayoutSizes;
+    __COPERCEIVE_RESIZE_PANEL__?: (panel: "left" | "right" | "strip", px: number) => void;
     __COPERCEIVE_PLAYBACK__?: (action: string, value?: number) => void;
     __COPERCEIVE_PLAYBACK_STATE__?: () => {
       playing: boolean;
@@ -908,6 +1063,14 @@ declare global {
     __COPERCEIVE_DATASET_ERROR__?: (error: string) => void;
     __COPERCEIVE_SCENES__?: () => string[];
     __COPERCEIVE_TEST_ENV__?: boolean;
+    __COPERCEIVE_FRAME_STATS__?: FrameRenderStat[];
+    __COPERCEIVE_RENDERED_TIMES__?: { at: number; points: number | null; boxes: number | null }[];
+    __COPERCEIVE_CACHE_STATS__?: {
+      frame_hits: number;
+      frame_misses: number;
+      point_hits: number;
+      point_misses: number;
+    };
     __COPERCEIVE_FORCE_MOTION__?: boolean;
     __COPERCEIVE_VIEW_SETTINGS__?: () => {
       sceneId: string;
@@ -928,8 +1091,29 @@ declare global {
       points: number;
       boxes: number;
       tagged: { kind: string; sceneId: string; loadId: number }[];
+      frustums: { key: string | null; position: number[] }[];
+      imagePlanes: { key: string; visible: boolean; position: number[]; poseTimeUs: number | null; imageTimeUs: number | null }[];
     } | null;
+    __COPERCEIVE_FLUSH_STATE__?: () => Promise<void>;
   }
+}
+
+/** `scene=` from `#/viewer?scene=…`: the scene the app asked this viewer to show. */
+function hashScene(): string {
+  try {
+    const hash = window.location.hash;
+    const queryAt = hash.indexOf("?");
+    return queryAt < 0 ? "" : (new URLSearchParams(hash.slice(queryAt + 1)).get("scene") ?? "");
+  } catch {
+    return "";
+  }
+}
+
+/** "3:59:10 left" from the scheduler's time left, for the cluster job badge. */
+function jobBadge(job: ViewerJob | null): string | null {
+  if (!job || job.job_id == null) return null;
+  const left = job.time_left && job.time_left !== "UNLIMITED" ? ` · ${job.time_left} left` : "";
+  return `Cluster job ${job.job_id}${left}`;
 }
 
 function clearStage(stage: Stage) {
@@ -1011,6 +1195,35 @@ function savedLoopChoice(): boolean | null {
   return readWebLoopChoice();
 }
 
+function initialSavedViewpoint(): Viewpoint {
+  if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_viewpoint) {
+    const vp = window.__COPERCEIVE_INITIAL_STATE__.last_viewpoint as Viewpoint;
+    if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
+      return vp;
+    }
+  }
+  return "orbit";
+}
+
+function initialSavedAppearance(): Appearance {
+  const base = loadAppearance();
+  if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.layer_toggles) {
+    const lt = window.__COPERCEIVE_INITIAL_STATE__.layer_toggles;
+    return {
+      ...base,
+      points: lt.points ?? base.points,
+      boxes: lt.boxes ?? base.boxes,
+      frustums: lt.frustums ?? base.frustums,
+      map: lt.map ?? base.map,
+      axes: lt.axes ?? base.axes,
+      frustumImages: lt.frustum_images !== undefined ? lt.frustum_images : base.frustumImages,
+      frustumOpacity: typeof lt.frustum_opacity === "number" ? lt.frustum_opacity : base.frustumOpacity,
+      frustumImageCameras: lt.frustum_image_cameras !== undefined ? lt.frustum_image_cameras : base.frustumImageCameras,
+    };
+  }
+  return base;
+}
+
 export default function Viewer({
   token,
   slot,
@@ -1046,16 +1259,87 @@ export default function Viewer({
   const effectiveToken = activeToken || token;
   const cacheRef = useRef<FrameCache>(createFrameCache());
   const [scenes, setScenes] = useState<string[]>([]);
-  const [sceneId, setSceneId] = useState("");
+  const [datasetSceneStatuses, setDatasetSceneStatuses] = useState<Record<string, string>>({});
+  // Every scene of the open cluster dataset (ready or not), in dataset order.
+  const [datasetScenes, setDatasetScenes] = useState<string[]>([]);
+  const [viewerJob, setViewerJob] = useState<ViewerJob | null>(null);
+  // The cluster dataset's name ("V2XSET train") and server, from the main window.
+  const [datasetAbout, setDatasetAbout] = useState<{ label: string; server: string } | null>(null);
+  // The agent whose cameras the strip shows and the radar centres on.
+  const [focusAgent, setFocusAgent] = useState<string | null>(null);
+  // Settings → Viewer → "Camera strip": the filmstrip of every camera, or one agent's.
+  const [stripMode, setStripMode] = useCameraStripMode();
+  // "Continue to the next scene automatically" (Settings); off by default.
+  const [autoNext, setAutoNext] = useState<boolean>(
+    () => Boolean((window.__COPERCEIVE_INITIAL_STATE__ as { auto_next_scene?: boolean } | undefined)?.auto_next_scene),
+  );
+  const [sceneNotice, setSceneNotice] = useState<{ text: string; next: string | null; prepare: string | null } | null>(null);
+  const autoPlayRef = useRef(false);
+  // Never trust a restored scene id before the live scene list: it may name a
+  // scene that is no longer in this library. The list effect below selects the
+  // saved scene only when it exists, otherwise the first current scene (and says
+  // so), so restore can never fetch a missing scene and show "not found".
+  const [sceneId, setSceneId] = useState<string>("");
   const sceneIdRef = useRef(sceneId);
   sceneIdRef.current = sceneId;
+  // Scene navigation over the whole dataset: its order, and which scenes the
+  // server can show (the ready ones). A scene asked for before it is listed
+  // (just prepared) is chosen once the list is read again.
+  const [sceneListRev, setSceneListRev] = useState(0);
+  const wantedSceneRef = useRef("");
+  const sceneOrder = datasetScenes.length > 0 ? datasetScenes : scenes;
+  const readyScenes = useMemo(() => new Set(scenes), [scenes]);
+  const navRef = useRef({ order: sceneOrder, ready: readyScenes, autoNext });
+  navRef.current = { order: sceneOrder, ready: readyScenes, autoNext };
+  const prevScene = neighbourScene(sceneOrder, readyScenes, sceneId, -1).scene;
+  const nextScene = neighbourScene(sceneOrder, readyScenes, sceneId, 1).scene;
+  const goScene = useCallback((direction: 1 | -1) => {
+    const { order, ready } = navRef.current;
+    const { scene } = neighbourScene(order, ready, sceneIdRef.current, direction);
+    if (scene) {
+      setPlaying(false);
+      setSceneNotice(null);
+      setSceneId(scene);
+    }
+  }, []);
+  const goSceneRef = useRef(goScene);
+  goSceneRef.current = goScene;
+  // At the end of a scene: a heads-up offering the next one, or (Settings) go on.
+  const sceneFinishedRef = useRef<() => void>(() => undefined);
+  sceneFinishedRef.current = () => {
+    const { order, ready, autoNext: continueOn } = navRef.current;
+    const { scene, skipped } = neighbourScene(order, ready, sceneIdRef.current, 1);
+    const skippedNote = skipped.length > 0 ? `Skipped ${skipped.join(", ")} (not prepared). ` : "";
+    if (continueOn && scene) {
+      autoPlayRef.current = true;
+      setSceneNotice(skipped.length > 0 ? { text: skippedNote.trim(), next: null, prepare: null } : null);
+      setSceneId(scene);
+      return;
+    }
+    setSceneNotice({
+      text: scene ? "Scene finished" : `Scene finished. ${skippedNote}${skipped.length > 0 ? "" : "This is the last scene."}`.trim(),
+      next: scene,
+      prepare: scene ? null : (skipped[0] ?? null),
+    });
+  };
   const [summary, setSummary] = useState<SceneSummary | null>(null);
   const [frameIndex, setFrameIndex] = useState(0);
-  const [hidden, setHidden] = useState<Record<string, boolean>>({});
+  const [hidden, setHidden] = useState<Record<string, boolean>>(() => {
+    if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.agent_visibility) {
+      return window.__COPERCEIVE_INITIAL_STATE__.agent_visibility;
+    }
+    return {};
+  });
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
   const [webglError, setWebglError] = useState("");
   const [mapInfoFor, setMapInfoFor] = useState<{ sceneId: string; info: MapInfo | null } | null>(null);
+  const [mapInstall, setMapInstall] = useState<{
+    busy: boolean;
+    percent: number;
+    message: string;
+    error: string;
+  } | null>(null);
   const [exportNote, setExportNote] = useState("");
   const [exportSource, setExportSource] = useState("view");
   const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | "png">("mp4");
@@ -1070,17 +1354,171 @@ export default function Viewer({
   const [plotAlt, setPlotAlt] = useState("Bird's-eye plot");
   const [plotting, setPlotting] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [lastSavedPath, setLastSavedPath] = useState<string | null>(null);
+
+  useEffect(() => {
+    const onSceneStatuses = (event: Event) => {
+      const custom = event as CustomEvent<{ statuses?: Record<string, string> }>;
+      if (custom.detail?.statuses) {
+        setDatasetSceneStatuses(custom.detail.statuses);
+      }
+    };
+    window.addEventListener("coperceive-dataset-scene-statuses", onSceneStatuses);
+    return () => window.removeEventListener("coperceive-dataset-scene-statuses", onSceneStatuses);
+  }, []);
+
+  // A cluster dataset's viewer: every scene with its state (from the main
+  // window's dataset view) and the Slurm job serving it, through the controller.
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+      return;
+    }
+    let stopped = false;
+    const pollScenes = async () => {
+      try {
+        const dataset = await getDatasetScenes();
+        if (stopped || !dataset) return;
+        setDatasetScenes(dataset.scenes.map((scene) => scene.scene_id));
+        setDatasetAbout(
+          dataset.label || dataset.server ? { label: dataset.label ?? "", server: dataset.server ?? "" } : null,
+        );
+        setDatasetSceneStatuses(Object.fromEntries(dataset.scenes.map((scene) => [scene.scene_id, scene.state])));
+      } catch {
+        // No controller answer: keep what we have.
+      }
+    };
+    const pollJob = async () => {
+      try {
+        const job = await getViewerJob();
+        if (!stopped) setViewerJob(job);
+      } catch {
+        // Keep the last answer.
+      }
+    };
+    void pollScenes();
+    void pollJob();
+    const scenesTimer = window.setInterval(() => void pollScenes(), 5000);
+    const jobTimer = window.setInterval(() => void pollJob(), 60_000);
+    return () => {
+      stopped = true;
+      window.clearInterval(scenesTimer);
+      window.clearInterval(jobTimer);
+    };
+  }, []);
+
+  // The app shows another scene of the same session by changing the hash
+  // (`#/viewer?scene=…`): no new window, no new viewer job.
+  useEffect(() => {
+    const onHash = () => {
+      const asked = hashScene();
+      if (!asked || asked === sceneIdRef.current) return;
+      if (navRef.current.ready.has(asked)) {
+        setPlaying(false);
+        setSceneNotice(null);
+        setSceneId(asked);
+      } else {
+        wantedSceneRef.current = asked;
+        setSceneListRev((rev) => rev + 1);
+      }
+    };
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+
+  // A scene the dataset view now reports ready but this list lacks: read the list again.
+  const missingReady = Object.entries(datasetSceneStatuses)
+    .filter(([id, state]) => state === "ready" && !readyScenes.has(id))
+    .map(([id]) => id)
+    .sort()
+    .join(",");
+  useEffect(() => {
+    if (missingReady) setSceneListRev((rev) => rev + 1);
+  }, [missingReady]);
+
+  // The window title follows the scene shown (it kept a previous dataset's name).
+  useEffect(() => {
+    if (sceneId) void setViewerTitle(sceneId).catch(() => undefined);
+  }, [sceneId]);
+
+  // "Continue to the next scene automatically": play the next scene from its start.
+  useEffect(() => {
+    if (autoPlayRef.current && summary && summary.scene_id === sceneId) {
+      autoPlayRef.current = false;
+      setFrameIndex(0);
+      setPlaying(true);
+    }
+  }, [summary, sceneId]);
+
+  useEffect(() => {
+    if (!sceneNotice) return;
+    const timer = window.setTimeout(() => setSceneNotice(null), 6000);
+    return () => window.clearTimeout(timer);
+  }, [sceneNotice]);
+
+  useEffect(() => {
+    const onAutoNext = (event: Event) => {
+      setAutoNext(Boolean((event as CustomEvent<boolean>).detail));
+    };
+    window.addEventListener("coperceive-auto-next-scene", onAutoNext);
+    return () => window.removeEventListener("coperceive-auto-next-scene", onAutoNext);
+  }, []);
   const [series, setSeries] = useState<{
     points: number[];
     speeds: number[];
     boxes: number[];
     agentSpeed: Record<string, number[]>;
     markers: Marker[];
-  }>({ points: [], speeds: [], boxes: [], agentSpeed: {}, markers: [] });
+    /** Lidar sensors with points at each sample, for the sweep-gap markers. */
+    sweeps: number[];
+  }>({ points: [], speeds: [], boxes: [], agentSpeed: {}, markers: [], sweeps: [] });
   const [liveSpeed, setLiveSpeed] = useState<Record<string, number>>({});
-  const [appearance, setAppearance] = useState<Appearance>(loadAppearance);
+  const [appearance, setAppearance] = useState<Appearance>(initialSavedAppearance);
   const appearanceRef = useRef(appearance);
   appearanceRef.current = appearance;
+
+  const [layout, setLayout] = useState<LayoutSizes>(() => {
+    const init = (window as unknown as { __COPERCEIVE_INITIAL_STATE__?: { layout?: Partial<LayoutSizes> } })
+      .__COPERCEIVE_INITIAL_STATE__?.layout;
+    return {
+      left_px: clampLeft(init?.left_px ?? DEFAULT_LEFT_PX),
+      right_px: clampRight(init?.right_px ?? DEFAULT_RIGHT_PX),
+      strip_px: clampStrip(init?.strip_px ?? DEFAULT_STRIP_PX),
+    };
+  });
+  const layoutRef = useRef(layout);
+  layoutRef.current = layout;
+
+  const [isFullScreen, setIsFullScreen] = useState(false);
+  const isFullScreenRef = useRef(false);
+  isFullScreenRef.current = isFullScreen;
+
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const stageDomRef = useRef<HTMLDivElement>(null);
+  const dragStartRef = useRef<{
+    panel: "left" | "right" | "strip";
+    startPos: number;
+    startSize: number;
+  } | null>(null);
+  const resizeRafRef = useRef<number | null>(null);
+  const pendingLayoutRef = useRef<Partial<LayoutSizes>>({});
+
+  const userThemeOverrideRef = useRef<boolean>(
+    typeof window !== "undefined" && Boolean(window.__COPERCEIVE_INITIAL_STATE__?.theme_override)
+  );
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    const mql = window.matchMedia("(prefers-color-scheme: dark)");
+    const handler = (e: MediaQueryListEvent) => {
+      if (!userThemeOverrideRef.current) {
+        const sys = e.matches ? "dark" : "light";
+        setAppearance((curr) => ({ ...curr, theme: sys }));
+        onTheme?.(sys);
+      }
+    };
+    mql.addEventListener("change", handler);
+    return () => mql.removeEventListener("change", handler);
+  }, [onTheme]);
   const [playing, setPlaying] = useState(false);
   const loopChoiceRef = useRef<boolean | null>(savedLoopChoice());
   const [loop, setLoop] = useState<boolean>(() => loopChoiceRef.current ?? true);
@@ -1098,7 +1536,7 @@ export default function Viewer({
   };
   const handleToggleLoopRef = useRef(handleToggleLoop);
   handleToggleLoopRef.current = handleToggleLoop;
-  const isDesktop = typeof window !== "undefined" && Boolean(window.__COPERCEIVE_DESKTOP__);
+  const isDesktop = typeof window !== "undefined" && (Boolean(window.__COPERCEIVE_DESKTOP__) || isTauriEnvironment());
   const [dataBasename, setDataBasename] = useState<string>(
     () => (typeof window !== "undefined" && window.__COPERCEIVE_DATA_BASENAME__) || "",
   );
@@ -1149,6 +1587,22 @@ export default function Viewer({
         onTheme?.(next);
         return { ...curr, theme: next };
       });
+    };
+    window.__COPERCEIVE_TOGGLE_FULLSCREEN__ = () => {
+      setIsFullScreen((prev) => !prev);
+    };
+    window.__COPERCEIVE_IS_FULLSCREEN__ = () => isFullScreenRef.current;
+    window.__COPERCEIVE_LAYOUT_SIZES__ = () => layoutRef.current;
+    window.__COPERCEIVE_RESIZE_PANEL__ = (panel: "left" | "right" | "strip", px: number) => {
+      setLayout((curr) => {
+        const next = { ...curr };
+        if (panel === "left") next.left_px = clampLeft(px);
+        else if (panel === "right") next.right_px = clampRight(px);
+        else if (panel === "strip") next.strip_px = clampStrip(px);
+        layoutRef.current = next;
+        return next;
+      });
+      void sendStateRef.current();
     };
     window.__COPERCEIVE_DATASET_CHANGED__ = async (
       newOrigin: string,
@@ -1279,9 +1733,17 @@ export default function Viewer({
     };
 
     return () => {
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+      }
       delete window.__COPERCEIVE_SHOW_TOAST__;
       delete window.__COPERCEIVE_SET_VIEWPOINT__;
       delete window.__COPERCEIVE_TOGGLE_THEME__;
+      delete window.__COPERCEIVE_TOGGLE_FULLSCREEN__;
+      delete window.__COPERCEIVE_IS_FULLSCREEN__;
+      delete window.__COPERCEIVE_LAYOUT_SIZES__;
+      delete window.__COPERCEIVE_RESIZE_PANEL__;
       delete window.__COPERCEIVE_DATASET_CHANGED__;
       delete window.__COPERCEIVE_DATASET_ERROR__;
     };
@@ -1293,7 +1755,7 @@ export default function Viewer({
     return () => clearTimeout(t);
   }, [toast]);
   const [speed, setSpeed] = useState<Speed>(1);
-  const [viewpoint, setViewpoint] = useState<Viewpoint>("orbit");
+  const [viewpoint, setViewpoint] = useState<Viewpoint>(initialSavedViewpoint);
   const [cameraId, setCameraId] = useState("");
   const [pick, setPick] = useState<PickRecord | null>(null);
   const [cameraFrame, setCameraFrame] = useState<FrameDocument | null>(null);
@@ -1313,6 +1775,20 @@ export default function Viewer({
   const [runList, setRunList] = useState<{ sceneId: string; runs: RunInfo[]; note: string } | null>(null);
   const [runId, setRunId] = useState("");
   const [compareId, setCompareId] = useState("");
+  // "Open predictions" links to #/viewer?predictions=<run_id>; keep the wanted run
+  // until the scene's run list contains it, then select it once.
+  const wantedPredictionRunRef = useRef<string>(
+    (() => {
+      try {
+        const hash = window.location.hash;
+        const queryAt = hash.indexOf("?");
+        if (queryAt < 0) return "";
+        return new URLSearchParams(hash.slice(queryAt + 1)).get("predictions") ?? "";
+      } catch {
+        return "";
+      }
+    })(),
+  );
   const [outputChoice, setOutputChoice] = useState("");
   const [hiddenSources, setHiddenSources] = useState<ReadonlySet<string>>(() => new Set());
   const [hiddenStatuses, setHiddenStatuses] = useState<ReadonlySet<StatusChip>>(() => new Set());
@@ -1332,11 +1808,34 @@ export default function Viewer({
   const dimmedRef = useRef<Dimmed | null>(null);
   const onEvalPickRef = useRef<(value: EvalPick | null) => void>(() => undefined);
   const framedScene = useRef("");
-  const modeRef = useRef<Viewpoint>("orbit");
+  const modeRef = useRef<Viewpoint>(initialSavedViewpoint());
+  // The stage's scale bar and extent chip, updated on each draw without a React render.
+  const scaleBarRef = useRef<HTMLDivElement>(null);
+  const extentRef = useRef<HTMLSpanElement>(null);
   const cameraKeyRef = useRef("");
   const latestRef = useRef<{ frame: FrameDocument; types: Map<string, string> } | null>(null);
+  // "scene|time" of the sample whose points and boxes are on screen. Playback waits
+  // for it before moving on, so the clock never runs ahead of what is drawn.
+  const drawnRef = useRef<string | null>(null);
+  const [buffering, setBuffering] = useState(false);
   const orbitHomeRef = useRef<CameraGoal | null>(null);
   const settleRef = useRef(false);
+  // What this scene can show, from its own data (5d): views it cannot use are
+  // not offered, and a view that vanishes with a scene change falls back to Orbit.
+  const capabilities = useMemo(() => sceneCapabilities(summary), [summary]);
+  const capabilitiesRef = useRef(capabilities);
+  capabilitiesRef.current = capabilities;
+  const shownViewpoints = VIEWPOINTS.filter((item) => capabilities.viewpoints.has(item.id));
+  useEffect(() => {
+    if (!summary) return;
+    const kept = viewpointFor(modeRef.current, capabilities);
+    if (kept !== modeRef.current) {
+      modeRef.current = kept;
+      settleRef.current = true;
+      setViewpoint(kept);
+    }
+  }, [summary, capabilities]);
+
   const reduceMotionRef = useRef(false);
   const lengthRef = useRef(0);
   const loopRef = useRef(loop);
@@ -1472,6 +1971,7 @@ export default function Viewer({
     controls.target.set(0, 0, 0);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
+    const shownTimes: Stage["shownTimes"] = { points: null, boxes: null };
     const points = new THREE.Points(
       new THREE.BufferGeometry(),
       new THREE.PointsMaterial({ size: 2, sizeAttenuation: false, vertexColors: true }),
@@ -1509,6 +2009,13 @@ export default function Viewer({
     );
     highlight.visible = false;
     highlight.frustumCulled = false;
+    const pickTagElement = document.createElement("div");
+    pickTagElement.className = "pick-tag num";
+    const pickTag = new CSS2DObject(pickTagElement);
+    pickTag.center.set(0.5, 1.4);
+    pickTag.position.set(0, 0, 0.5);
+    pickTag.visible = false;
+    highlight.add(pickTag);
     const agents = new THREE.Group();
     const solids = new THREE.Group();
     frustums.renderOrder = 3;
@@ -1539,6 +2046,7 @@ export default function Viewer({
     let damp = 0;
     const draw = () => {
       frameId = 0;
+      recordShownTimes(shownTimes, points.visible);
       const width = canvas.clientWidth || 1;
       const height = canvas.clientHeight || 1;
       const ratio = Math.min(window.devicePixelRatio || 1, 2);
@@ -1587,6 +2095,25 @@ export default function Viewer({
       }
       camera.updateProjectionMatrix();
       bloom.render();
+      {
+        // Metres per pixel at the view's centre (the orbit target); the camera view has none.
+        const reach = camera.position.distanceTo(controls.target);
+        const perPixel = (2 * reach * Math.tan((camera.fov * Math.PI) / 360)) / height;
+        const bar = mode === "camera" ? null : scaleBar(perPixel, 96);
+        const barHost = scaleBarRef.current;
+        if (barHost) {
+          barHost.hidden = bar === null;
+          if (bar) {
+            barHost.style.setProperty("--bar", `${bar.px.toFixed(1)}px`);
+            const text = barHost.querySelector("span");
+            if (text) text.textContent = formatDistance(bar.metres);
+          }
+        }
+        const extent = extentRef.current;
+        if (extent) {
+          extent.textContent = mode === "camera" || !Number.isFinite(perPixel) ? "" : formatDistance(Math.round(perPixel * width));
+        }
+      }
       labelRenderer.render(scene, camera);
       if (labelHost instanceof HTMLElement) {
         clampDroneTags(labelHost);
@@ -1716,6 +2243,7 @@ export default function Viewer({
       labelNodes.clear();
     };
     stageRef.current = {
+      shownTimes,
       points,
       boxes,
       mapLines,
@@ -1743,6 +2271,7 @@ export default function Viewer({
       images,
       imagePlanes,
       highlight,
+      pickTag,
       predictions,
       predictionPicks,
       dimmedBoxes,
@@ -1846,11 +2375,23 @@ export default function Viewer({
         handleToggleLoopRef.current();
       } else if (event.key === "c" || event.key === "C") {
         setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }));
+      } else if (event.key === "f" || event.key === "F") {
+        event.preventDefault();
+        setIsFullScreen((prev) => !prev);
       } else if (event.key === "Escape") {
-        setAppearance((current) => (current.splitCamera === null ? current : { ...current, splitCamera: null }));
+        if (isFullScreenRef.current) {
+          event.preventDefault();
+          setIsFullScreen(false);
+        } else {
+          setAppearance((current) => (current.splitCamera === null ? current : { ...current, splitCamera: null }));
+        }
       } else if (event.key === "[" || event.key === "]") {
         const direction = event.key === "]" ? 1 : -1;
         setSpeed((current) => neighborSpeed(current, direction));
+      } else if (event.key === "n" || event.key === "N") {
+        goSceneRef.current(1);
+      } else if (event.key === "p" || event.key === "P") {
+        goSceneRef.current(-1);
       } else if (event.key === "1") {
         chooseViewpoint("orbit");
       } else if (event.key === "2") {
@@ -1864,6 +2405,9 @@ export default function Viewer({
       }
     }
     function chooseViewpoint(next: Viewpoint) {
+      if (!capabilitiesRef.current.viewpoints.has(next)) {
+        return; // this scene has no such view (e.g. Drone without a UAV)
+      }
       const resolved = next === "chase" && modeRef.current === "chase" ? "orbit" : next;
       if (resolved === "orbit") {
         settleRef.current = true;
@@ -1888,6 +2432,8 @@ export default function Viewer({
     let origin = performance.now();
     let stopped = false;
     let timeoutId = 0;
+    let waitingSince: number | null = null;
+    const sceneKey = summary.scene_id;
 
     const tick = () => {
       if (stopped) {
@@ -1898,12 +2444,32 @@ export default function Viewer({
         cursor = originIndex;
         origin = performance.now();
       }
+      // Hold on a sample until its points and boxes are drawn: never show points
+      // from another time than the boxes. The clock restarts from here once it is.
+      if (drawnRef.current !== `${sceneKey}|${times[cursor]}`) {
+        const now = performance.now();
+        waitingSince ??= now;
+        if (now - waitingSince > BUFFERING_AFTER_MS) {
+          setBuffering(true);
+        }
+        originIndex = cursor;
+        origin = now;
+        timeoutId = window.setTimeout(tick, 16);
+        return;
+      }
+      if (waitingSince !== null) {
+        // Held, now drawn: keep the label until a sample comes in on time.
+        waitingSince = null;
+      } else {
+        setBuffering(false);
+      }
       let place = indexAfter(times, originIndex, performance.now() - origin, speed, loopRef.current);
       cursor = place.index;
       frameRef.current = place.index;
       setFrameIndex(place.index);
       if (place.done) {
         setPlaying(false);
+        sceneFinishedRef.current();
         return;
       }
       // Drawing may have used part of this gap. Land on the sample that
@@ -1917,6 +2483,7 @@ export default function Viewer({
       }
       if (place.done) {
         setPlaying(false);
+        sceneFinishedRef.current();
         return;
       }
       timeoutId = window.setTimeout(tick, place.remainMs > 0 ? place.remainMs : 16);
@@ -1927,6 +2494,7 @@ export default function Viewer({
     return () => {
       stopped = true;
       window.clearTimeout(timeoutId);
+      setBuffering(false);
     };
   }, [playing, summary, speed, loop]);
 
@@ -1953,16 +2521,31 @@ export default function Viewer({
         return [];
       });
       let initialScene = "";
-      if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id) {
-        const saved = window.__COPERCEIVE_INITIAL_STATE__.last_scene_id;
-        if (ids.includes(saved)) {
-          initialScene = saved;
-        }
+      const saved =
+        typeof window !== "undefined"
+          ? window.__COPERCEIVE_INITIAL_STATE__?.last_scene_id
+          : undefined;
+      const asked = hashScene();
+      if (asked && ids.includes(asked)) {
+        initialScene = asked;
+      } else if (saved && ids.includes(saved)) {
+        initialScene = saved;
       }
       setScenes(ids);
-      setSceneId((current) => current || initialScene || ids[0] || "");
+      const wanted = wantedSceneRef.current;
+      if (wanted && ids.includes(wanted)) {
+        wantedSceneRef.current = "";
+        setPlaying(false);
+        setSceneId(wanted);
+      } else {
+        setSceneId((current) => current || initialScene || ids[0] || "");
+      }
       if (ids.length === 0) {
         setStatus("No scene directories under the server root.");
+      } else if (saved && !ids.includes(saved)) {
+        setStatus(
+          `The last scene (${saved}) is no longer in this library; showing ${initialScene || ids[0]}.`,
+        );
       }
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) {
@@ -1970,7 +2553,7 @@ export default function Viewer({
       }
     });
     return () => controller.abort();
-  }, [effectiveToken]);
+  }, [effectiveToken, sceneListRev]);
 
   useEffect(() => {
     if (!sceneId) {
@@ -2010,13 +2593,18 @@ export default function Viewer({
         }
         if (init.last_viewpoint) {
           const vp = init.last_viewpoint as Viewpoint;
-          if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird") {
+          if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
+            modeRef.current = vp;
             setViewpoint(vp);
           }
         }
-        if (init.last_theme && (init.last_theme === "dark" || init.last_theme === "light")) {
-          onTheme?.(init.last_theme);
-          setAppearance((curr) => ({ ...curr, theme: init.last_theme as "dark" | "light" }));
+        if (init.theme_override && (init.theme_override === "dark" || init.theme_override === "light")) {
+          onTheme?.(init.theme_override);
+          setAppearance((curr) => ({ ...curr, theme: init.theme_override as "dark" | "light" }));
+        } else {
+          const sys = systemTheme();
+          onTheme?.(sys);
+          setAppearance((curr) => ({ ...curr, theme: sys }));
         }
         if (init.agent_visibility) {
           initialHidden = init.agent_visibility;
@@ -2042,6 +2630,13 @@ export default function Viewer({
         }
         if (init.selected_camera) {
           setCameraId(init.selected_camera);
+        }
+        if (init.layout) {
+          setLayout({
+            left_px: clampLeft(init.layout.left_px ?? DEFAULT_LEFT_PX),
+            right_px: clampRight(init.layout.right_px ?? DEFAULT_RIGHT_PX),
+            strip_px: clampStrip(init.layout.strip_px ?? DEFAULT_STRIP_PX),
+          });
         }
         if (init.split_view !== undefined) {
           setAppearance((curr) => ({
@@ -2158,13 +2753,13 @@ export default function Viewer({
     };
   }, [scenes]);
 
-  useEffect(() => {
-    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return;
-    const timer = setTimeout(() => {
-      const port = window.__COPERCEIVE_CTRL_PORT__;
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      const timeUs = summary?.times_us?.[frameIndex];
-      fetch(`http://127.0.0.1:${port}/state`, {
+  const sendState = useCallback(async () => {
+    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
+    const port = window.__COPERCEIVE_CTRL_PORT__;
+    const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+    const timeUs = summary?.times_us?.[frameIndex];
+    try {
+      await fetch(`http://127.0.0.1:${port}/state`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -2175,7 +2770,7 @@ export default function Viewer({
           sample_index: frameIndex,
           timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
           viewpoint,
-          theme: appearance.theme,
+          theme_override: userThemeOverrideRef.current ? appearance.theme : null,
           agent_visibility: hidden,
           layer_toggles: {
             points: appearance.points,
@@ -2192,15 +2787,55 @@ export default function Viewer({
           panel_collapse: {
             camera_strip_open: appearance.stripOpen,
           },
+          layout: {
+            left_px: layoutRef.current.left_px,
+            right_px: layoutRef.current.right_px,
+            strip_px: layoutRef.current.strip_px,
+          },
           ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
         }),
-      }).catch(() => {});
+      });
+    } catch {}
+  }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop, layout]);
+
+  const sendStateRef = useRef(sendState);
+  sendStateRef.current = sendState;
+  const stateDebounceTimerRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    window.__COPERCEIVE_FLUSH_STATE__ = async () => {
+      if (stateDebounceTimerRef.current !== null) {
+        window.clearTimeout(stateDebounceTimerRef.current);
+        stateDebounceTimerRef.current = null;
+      }
+      await sendStateRef.current();
+    };
+    return () => {
+      delete window.__COPERCEIVE_FLUSH_STATE__;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
+    stateDebounceTimerRef.current = window.setTimeout(() => {
+      stateDebounceTimerRef.current = null;
+      void sendStateRef.current();
     }, 500);
-    return () => clearTimeout(timer);
-  }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop]);
+    return () => {
+      if (stateDebounceTimerRef.current !== null) {
+        window.clearTimeout(stateDebounceTimerRef.current);
+        stateDebounceTimerRef.current = null;
+      }
+    };
+  }, [sendState]);
 
   useEffect(() => {
     if (!summary || !stageRef.current) {
+      return;
+    }
+    // A scene choice changes the scene id before the new summary arrives. The old summary must
+    // not draw, load or prefetch another frame from that moment on.
+    if (summary.scene_id !== sceneIdRef.current) {
       return;
     }
     const time = summary.times_us[frameIndex];
@@ -2210,11 +2845,12 @@ export default function Viewer({
     const stage = stageRef.current;
     const gen = ++drawGen.current;
     const types = new Map(summary.agents.map((agent) => [agent.agent_id, agent.agent_type]));
-    const stale = () => drawGen.current !== gen;
+    const stale = () => drawGen.current !== gen || summary.scene_id !== sceneIdRef.current;
 
-    // Update status line immediately on every frame tick during playback
+    // Update status line immediately on every frame tick during playback. Counts are
+    // only for the sample on screen: until this one is drawn, name its time alone.
     const latest = latestRef.current;
-    if (latest && latest.frame) {
+    if (latest && latest.frame && latest.frame.time_us === time && latest.frame.scene_id === summary.scene_id) {
       const shown = appearance.points
         ? latest.frame.point_sensors.reduce((sum, sensor) => (hidden[sensor.agent_id] ? sum : sum + sensor.count), 0)
         : 0;
@@ -2239,6 +2875,7 @@ export default function Viewer({
           continue;
         }
         const lines = frustumLines(frustum.fov_y_rad, frustum.aspect, colorFor(curTypes.get(frustum.agent_id) ?? ""));
+        lines.userData.cameraKey = cameraKey(frustum.agent_id, frustum.sensor_id);
         applyPose(lines, frustum.pose);
         stage.frustums.add(lines);
         pickable.push({
@@ -2249,6 +2886,7 @@ export default function Viewer({
         });
       }
       syncFrustumPicks(stage.frustumPicks, pickable);
+      poseImagePlanes(stage, curFrame, hidden);
 
       clearGroup(stage.agents);
       for (const agent of curFrame.agents) {
@@ -2261,7 +2899,7 @@ export default function Viewer({
       }
 
       for (const [key, mesh] of stage.imagePlanes) {
-        const agentId = key.split(":")[0];
+        const agentId = key.split("/")[0]; // cameraKey is "agent/sensor"
         if (hidden[agentId]) {
           mesh.visible = false;
         }
@@ -2279,19 +2917,73 @@ export default function Viewer({
       stage.renderNow();
     }
 
+    const frameStarted = performance.now();
+    let pointsMs: number | null = null;
+    const dropped = (loaded: number) => {
+      const cacheStats = cacheRef.current.stats;
+      recordFrameStat({
+        at: performance.now(),
+        index: frameIndex,
+        load_ms: loaded - frameStarted,
+        points_ms: pointsMs,
+        draw_ms: 0,
+        render_ms: 0,
+        frame_hits: cacheStats.frame_hits,
+        frame_misses: cacheStats.frame_misses,
+        result: "dropped",
+      });
+    };
     void (async () => {
       const body = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
+      const frameLoaded = performance.now();
       if (stale()) {
+        dropped(frameLoaded);
         return;
       }
-      latestRef.current = { frame: body, types };
-      const drawn = await drawFrame(stage, body, types, hidden, appearance, effectiveToken, cacheRef.current, () => dimmedRef.current, stale);
+      const drawn = await drawFrame(
+        stage,
+        body,
+        types,
+        hidden,
+        appearance,
+        effectiveToken,
+        cacheRef.current,
+        () => dimmedRef.current,
+        stale,
+        (ms) => {
+          pointsMs = ms;
+        },
+        () => {
+          latestRef.current = { frame: body, types };
+        },
+      );
+      const frameDrawn = performance.now();
       if (!drawn || stale()) {
+        dropped(frameLoaded);
         return;
       }
+      // latestRef moved to this frame inside drawFrame, as its points went on screen.
+      // The per-tick redraw above draws boxes from latestRef, so it must never hold a
+      // frame whose points have not arrived (over a slow tunnel the boxes ran ahead of
+      // frozen points).
+      drawnRef.current = `${summary.scene_id}|${time}`;
       syncMotion(stage, body, types, hidden);
       syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
       stage.renderNow();
+      const frameRendered = performance.now();
+      const cacheStats = cacheRef.current.stats;
+      window.__COPERCEIVE_CACHE_STATS__ = { ...cacheStats };
+      recordFrameStat({
+        at: frameRendered,
+        index: frameIndex,
+        load_ms: frameLoaded - frameStarted,
+        points_ms: pointsMs,
+        draw_ms: frameDrawn - frameLoaded,
+        render_ms: frameRendered - frameDrawn,
+        frame_hits: cacheStats.frame_hits,
+        frame_misses: cacheStats.frame_misses,
+        result: "applied",
+      });
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
         orbitHomeRef.current = home;
@@ -2312,18 +3004,29 @@ export default function Viewer({
       setStatus(
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
-      prefetchAhead(cacheRef.current, summary, frameIndex, effectiveToken);
+      prefetchAhead(cacheRef.current, summary, frameIndex, effectiveToken, () => summary.scene_id === sceneIdRef.current);
       paintWait.current?.(time);
     })().catch((error: unknown) => {
-      if (!stale()) {
+      if (!stale() && !isAbortError(error)) {
+        // Playback waits for each sample to be drawn; a sample that cannot be drawn
+        // must not hold it forever. The status line says what failed.
+        drawnRef.current = `${summary.scene_id}|${time}`;
         setStatus(error instanceof Error ? error.message : "Could not draw the frame.");
       }
     });
-  }, [summary, frameIndex, hidden, appearance, effectiveToken, mapNote]);
+  }, [summary, frameIndex, hidden, appearance, effectiveToken, mapNote, sceneId]);
 
   useEffect(() => {
     const latest = latestRef.current;
-    if (!summary || !latest || !summary.times_us.includes(latest.frame.time_us)) {
+    if (!summary || !latest || summary.scene_id !== sceneIdRef.current) {
+      return;
+    }
+    if (!summary.times_us.includes(latest.frame.time_us)) {
+      return;
+    }
+    // Only describe the sample the slider is on: while playback runs, the last drawn frame can
+    // lag one behind, and writing its older time would move the status line backwards.
+    if (summary.times_us[Math.min(frameIndex, summary.times_us.length - 1)] !== latest.frame.time_us) {
       return;
     }
     const shown = appearance.points
@@ -2334,7 +3037,7 @@ export default function Viewer({
     setStatus(
       `${summary.scene_id} at ${latest.frame.time_us} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(viewpoint, latest.frame, latest.types, cameraId)}`,
     );
-  }, [viewpoint, cameraId, summary, mapNote, hidden, appearance]);
+  }, [viewpoint, cameraId, summary, mapNote, hidden, appearance, frameIndex, sceneId]);
 
   useEffect(() => {
     const stage = stageRef.current;
@@ -2342,10 +3045,13 @@ export default function Viewer({
     if (!stage || !frame) {
       return;
     }
+    if (frame.scene_id !== sceneIdRef.current) {
+      return;
+    }
     let cancelled = false;
     const imageWanted = (key: string) => appearance.frustums && (poster || showCameraImage(appearance, key));
     const wanted = frame.frustums.filter((frustum) => {
-      if (hidden[frustum.agent_id] || !isPose(frustum.pose)) {
+      if (hidden[frustum.agent_id] || !isPose(frustum.pose) || frustum.has_image === false) {
         return false;
       }
       const key = cameraKey(frustum.agent_id, frustum.sensor_id);
@@ -2363,17 +3069,44 @@ export default function Viewer({
       return;
     }
     const opacity = appearance.frustumOpacity;
+    const wantedKeys = new Set(wanted.map((frustum) => cameraKey(frustum.agent_id, frustum.sensor_id)));
+    for (const [key, mesh] of stage.imagePlanes) {
+      if (!wantedKeys.has(key)) {
+        mesh.visible = false;
+      }
+    }
     void (async () => {
-      const seen = new Set<string>();
       await Promise.all(
         wanted.map(async (frustum) => {
           const key = cameraKey(frustum.agent_id, frustum.sensor_id);
           const bitmap = await loadImage(frame.scene_id, frame.time_us, frustum.agent_id, frustum.sensor_id, effectiveToken, FRUSTUM_TEXTURE);
-          if (cancelled || !bitmap) {
+          // Over a slow link the next sample is drawn before this image arrives.
+          // It is still shown (playback would otherwise never update the plane),
+          // unless a newer image is already up or the scene changed; the plane
+          // takes the pose of the sample drawn now, never this request's.
+          if (!bitmap || frame.scene_id !== sceneIdRef.current) {
             return;
           }
-          seen.add(key);
+          const drawnNow = latestRef.current?.frame;
+          if (!drawnNow || drawnNow.scene_id !== frame.scene_id) {
+            return;
+          }
+          const current = drawnNow.frustums.find((item) => cameraKey(item.agent_id, item.sensor_id) === key);
+          if (!current || !isPose(current.pose) || current.has_image === false || hidden[current.agent_id]) {
+            return;
+          }
           let mesh = stage.imagePlanes.get(key);
+          // Keep whichever image is closer to the sample drawn now: during
+          // playback a late image still replaces an older one; after scrubbing
+          // back, the image for the new sample wins.
+          const shownTime = mesh?.userData.imageSceneId === frame.scene_id ? mesh.userData.imageTimeUs : null;
+          if (
+            mesh?.visible &&
+            typeof shownTime === "number" &&
+            Math.abs(shownTime - drawnNow.time_us) < Math.abs(frame.time_us - drawnNow.time_us)
+          ) {
+            return;
+          }
           if (!mesh || mesh.userData.aspect !== frustum.aspect || mesh.userData.fov !== frustum.fov_y_rad) {
             if (mesh) {
               stage.images.remove(mesh);
@@ -2388,7 +3121,10 @@ export default function Viewer({
             stage.images.add(mesh);
             stage.imagePlanes.set(key, mesh);
           }
-          applyPose(mesh, frustum.pose);
+          applyPose(mesh, current.pose);
+          mesh.userData.poseTimeUs = drawnNow.time_us;
+          mesh.userData.imageTimeUs = frame.time_us;
+          mesh.userData.imageSceneId = frame.scene_id;
           const material = mesh.material;
           if (material instanceof THREE.MeshBasicMaterial) {
             material.opacity = opacity;
@@ -2401,11 +3137,6 @@ export default function Viewer({
       if (cancelled) {
         return;
       }
-      for (const [key, mesh] of stage.imagePlanes) {
-        if (!seen.has(key)) {
-          mesh.visible = false;
-        }
-      }
       const nextTime = summary?.times_us[frameIndex + 1];
       if (typeof nextTime === "number") {
         for (const frustum of wanted) {
@@ -2417,11 +3148,40 @@ export default function Viewer({
     return () => {
       cancelled = true;
     };
-  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, effectiveToken, viewpoint, cameraId, summary, frameIndex, poster]);
+  }, [cameraFrame, appearance.frustumImages, appearance.frustumImageCameras, appearance.frustumOpacity, appearance.frustums, hidden, effectiveToken, viewpoint, cameraId, summary, frameIndex, poster, sceneId]);
 
   const sceneKey = summary?.scene_id ?? "";
   // Keyed by scene like the run list, so a switch never shows the previous town's map note.
   const mapInfo = mapInfoFor && mapInfoFor.sceneId === sceneKey ? mapInfoFor.info : null;
+
+  const installTown03Map = async () => {
+    if (!summary || typeof window === "undefined" || !window.__COPERCEIVE_DESKTOP__) return;
+    const root = (window.__COPERCEIVE_DATA_ROOT__ ?? "").replace(/\/+$/, "");
+    if (!root) return;
+    setMapInstall({ busy: true, percent: 0, message: "Starting…", error: "" });
+    const unlisten = await onTownMapProgress((event) => {
+      setMapInstall((current) => ({
+        busy: true,
+        percent: typeof event.percent === "number" ? event.percent : current?.percent ?? 0,
+        message: typeof event.message === "string" ? event.message : current?.message ?? "",
+        error: "",
+      }));
+    });
+    try {
+      await downloadTownMap(`${root}/${summary.scene_id}`);
+      setMapInstall({ busy: true, percent: 100, message: "Map installed and aligned.", error: "" });
+      window.setTimeout(() => window.location.reload(), 700);
+    } catch (error) {
+      setMapInstall({
+        busy: false,
+        percent: 0,
+        message: "",
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      unlisten();
+    }
+  };
   const runs = runList && runList.sceneId === sceneKey ? runList.runs : null;
   const runNote = runList && runList.sceneId === sceneKey ? runList.note : "";
   const run = runs?.find((item) => item.run_id === runId) ?? null;
@@ -2502,11 +3262,16 @@ export default function Viewer({
         return;
       }
       setRunList({ sceneId, runs: body.runs, note: body.runs.length === 0 ? "no prediction runs for this scene." : "" });
-      setRunId((current) =>
-        body.runs.some((item) => item.run_id === current)
+      setRunId((current) => {
+        const wanted = wantedPredictionRunRef.current;
+        if (wanted && body.runs.some((item) => item.run_id === wanted)) {
+          wantedPredictionRunRef.current = "";
+          return wanted;
+        }
+        return body.runs.some((item) => item.run_id === current)
           ? current
-          : ((body.runs.find((item) => item.evaluated) ?? body.runs[0])?.run_id ?? ""),
-      );
+          : ((body.runs.find((item) => item.evaluated) ?? body.runs[0])?.run_id ?? "");
+      });
       setCompareId((current) => (body.runs.some((item) => item.run_id === current && item.evaluated) ? current : ""));
     })().catch((error: unknown) => {
       if (!controller.signal.aborted) {
@@ -2654,6 +3419,7 @@ export default function Viewer({
       mesh.quaternion.set(row.pose.qx, row.pose.qy, row.pose.qz, row.pose.qw);
       mesh.scale.set(row.size_lwh[0] ?? 1, row.size_lwh[1] ?? 1, row.size_lwh[2] ?? 1).multiplyScalar(1.04);
       mesh.visible = true;
+      stage.pickTag.visible = false;
       stage.requestRender();
       return;
     }
@@ -2671,6 +3437,7 @@ export default function Viewer({
       : undefined;
     if (!(match instanceof THREE.Mesh)) {
       mesh.visible = false;
+      stage.pickTag.visible = false;
       stage.requestRender();
       return;
     }
@@ -2678,6 +3445,8 @@ export default function Viewer({
     mesh.quaternion.copy(match.quaternion);
     mesh.scale.copy(match.scale).multiplyScalar(1.04);
     mesh.visible = true;
+    stage.pickTag.element.textContent = pick?.trackId ?? pick?.category ?? "";
+    stage.pickTag.visible = Boolean(pick);
     stage.requestRender();
   }, [pick, cameraFrame, liveEvalPick]);
 
@@ -2685,15 +3454,25 @@ export default function Viewer({
     if (!summary || !stageRef.current) {
       return;
     }
+    const stillWanted = () => summary.scene_id === sceneIdRef.current;
+    if (!stillWanted()) {
+      return;
+    }
     const stage = stageRef.current;
     const controller = new AbortController();
     void (async () => {
       const base = `${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}`;
-      const which = await fetch(`${base}/map`, { headers: authHeaders(effectiveToken), signal: controller.signal });
+      const which = await fetch(`${base}/map?refresh=1`, { headers: authHeaders(effectiveToken), signal: controller.signal });
+      if (!stillWanted()) {
+        return;
+      }
       let info: MapInfo | null = null;
       if (which.ok) {
         const body = (await which.json()) as unknown;
         info = isMapInfo(body) ? body : null;
+        if (!stillWanted()) {
+          return;
+        }
         setMapInfoFor({ sceneId: summary.scene_id, info });
       }
       if (info && !info.available) {
@@ -2706,6 +3485,9 @@ export default function Viewer({
         headers: authHeaders(effectiveToken),
         signal: controller.signal,
       });
+      if (!stillWanted()) {
+        return;
+      }
       if (response.status === 404) {
         replaceMap(stage, new ArrayBuffer(0));
         stage.requestRender();
@@ -2716,16 +3498,20 @@ export default function Viewer({
         setMapNote(await errorDetail(response));
         return;
       }
-      replaceMap(stage, await response.arrayBuffer());
+      const lines = await response.arrayBuffer();
+      if (!stillWanted()) {
+        return;
+      }
+      replaceMap(stage, lines);
       stage.requestRender();
       setMapNote("map drawn.");
     })().catch((error: unknown) => {
-      if (!controller.signal.aborted) {
+      if (!controller.signal.aborted && stillWanted()) {
         setMapNote(error instanceof Error ? error.message : "Could not draw the map.");
       }
     });
     return () => controller.abort();
-  }, [summary, effectiveToken]);
+  }, [summary, effectiveToken, sceneId]);
 
 
   function chooseViewpoint(next: Viewpoint) {
@@ -2833,8 +3619,22 @@ export default function Viewer({
     }
     const size = exportSizeChoice();
     const format = still ? "png" : exportFormat;
+
+    let targetPath: string | null = null;
+    if (isDesktop) {
+      const defaultName = still
+        ? `${summary.scene_id}_still_sample${frameIndex + 1}.png`
+        : `${summary.scene_id}_clip_${exportSource.replace('/', '_')}_${exportStart}_to_${exportEnd}.${format}`;
+      targetPath = await pickSavePath(defaultName, format);
+      if (targetPath === null) {
+        setExportNote("Export cancelled.");
+        return;
+      }
+    }
+
     setExporting(true);
     setPlaying(false);
+    setPlotNote("");
     setExportNote(still ? "Writing the still…" : "Writing the sequence…");
     try {
       const startUs = summary.times_us[start];
@@ -2877,10 +3677,19 @@ export default function Viewer({
         });
       }
       const path = typeof saved.path === "string" ? saved.path : "";
-      setExportNote(
-        `Wrote ${path} (${String(saved.frames)} frames, ${String(saved.width)}×${String(saved.height)} at ${String(saved.fps)} fps).`,
-      );
-      await downloadExported(path);
+      if (isDesktop && targetPath) {
+        await saveExportedFile(path);
+        setLastSavedPath(targetPath);
+        const fileName = targetPath.split("/").pop() ?? targetPath;
+        setExportNote(
+          `Wrote ${path} (${String(saved.frames)} frames, ${String(saved.width)}×${String(saved.height)} at ${String(saved.fps)} fps). Saved to ${fileName}.`,
+        );
+      } else {
+        setExportNote(
+          `Wrote ${path} (${String(saved.frames)} frames, ${String(saved.width)}×${String(saved.height)} at ${String(saved.fps)} fps).`,
+        );
+        await downloadExported(path);
+      }
     } catch (error) {
       setExportNote(error instanceof Error ? error.message : "Export failed.");
     } finally {
@@ -2889,20 +3698,45 @@ export default function Viewer({
   }
 
   async function exportRerun() {
-    if (!summary) {
+    if (!summary || exporting) {
       return;
     }
+    let targetPath: string | null = null;
+    if (isDesktop) {
+      const defaultName = `${summary.scene_id}.rrd`;
+      targetPath = await pickSavePath(defaultName, "rrd");
+      if (targetPath === null) {
+        setExportNote("Export cancelled.");
+        return;
+      }
+    }
+    setExporting(true);
+    setPlotNote("");
     setExportNote("Writing the .rrd…");
-    const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/export/rerun`, {
-      method: "POST",
-      headers: { ...authHeaders(effectiveToken), "X-Coperceive-Request": "1" },
-    });
-    if (!response.ok) {
-      setExportNote(await errorDetail(response));
-      return;
+    try {
+      const response = await fetch(`${apiBase()}/api/scenes/${encodeURIComponent(summary.scene_id)}/export/rerun`, {
+        method: "POST",
+        headers: { ...authHeaders(effectiveToken), "X-Coperceive-Request": "1" },
+      });
+      if (!response.ok) {
+        setExportNote(await errorDetail(response));
+        return;
+      }
+      const body = (await response.json()) as { path?: unknown; samples?: unknown };
+      const path = typeof body.path === "string" ? body.path : "";
+      if (isDesktop && targetPath && path) {
+        await saveExportedFile(path);
+        setLastSavedPath(targetPath);
+        const fileName = targetPath.split("/").pop() ?? targetPath;
+        setExportNote(`Wrote ${path} (${String(body.samples)} samples). Saved to ${fileName}.`);
+      } else {
+        setExportNote(`Wrote ${String(body.path)} (${String(body.samples)} samples).`);
+      }
+    } catch (error) {
+      setExportNote(error instanceof Error ? error.message : "Rerun export failed.");
+    } finally {
+      setExporting(false);
     }
-    const body = (await response.json()) as { path?: unknown; samples?: unknown };
-    setExportNote(`Wrote ${String(body.path)} (${String(body.samples)} samples).`);
   }
 
   async function savePlot(kind: "bev" | "overlay") {
@@ -2929,7 +3763,19 @@ export default function Viewer({
       agentId = cameraId.slice(0, slash);
       sensorId = cameraId.slice(slash + 1);
     }
+
+    let targetPath: string | null = null;
+    if (isDesktop) {
+      const defaultName = `${summary.scene_id}_${kind}_sample${frameIndex + 1}.${plotFormat}`;
+      targetPath = await pickSavePath(defaultName, plotFormat);
+      if (targetPath === null) {
+        setPlotNote("Export cancelled.");
+        return;
+      }
+    }
+
     setPlotting(true);
+    setExportNote("");
     setPlotNote(kind === "bev" ? "Drawing the bird's-eye plot…" : "Drawing the camera overlay…");
     try {
       const saved = await postExport(summary.scene_id, kind === "bev" ? "/export/bev" : "/export/overlay", {
@@ -2948,9 +3794,6 @@ export default function Viewer({
       });
       const path = typeof saved.path === "string" ? saved.path : "";
       const mapNote = saved.map_drawn === true ? ", map drawn" : "";
-      setPlotNote(
-        `Wrote ${path} (${String(saved.points)} points, ${String(saved.boxes)} boxes${mapNote}).`,
-      );
       setPlotAlt(kind === "bev" ? "Bird's-eye plot of the current sample" : "Camera overlay of the current sample");
       const response = await fetch(`${apiBase()}/api/files?path=${encodeURIComponent(path)}`, {
         headers: authHeaders(effectiveToken),
@@ -2966,10 +3809,24 @@ export default function Viewer({
         }
         return url;
       });
-      const link = document.createElement("a");
-      link.href = url;
-      link.download = path.split("/").pop() ?? `plot.${plotFormat}`;
-      link.click();
+      if (isDesktop && targetPath) {
+        await saveExportedFile(path);
+        setLastSavedPath(targetPath);
+        const fileName = targetPath.split("/").pop() ?? targetPath;
+        setPlotNote(
+          `Wrote ${path} (${String(saved.points)} points, ${String(saved.boxes)} boxes${mapNote}). Saved to ${fileName}.`,
+        );
+      } else {
+        setPlotNote(
+          `Wrote ${path} (${String(saved.points)} points, ${String(saved.boxes)} boxes${mapNote}).`,
+        );
+        if (!isDesktop) {
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = path.split("/").pop() ?? `plot.${plotFormat}`;
+          link.click();
+        }
+      }
     } catch (error) {
       setPlotNote(error instanceof Error ? error.message : "Plot failed.");
     } finally {
@@ -2982,6 +3839,13 @@ export default function Viewer({
       return;
     }
     let cancelled = false;
+    // The telemetry series reads every sample of the scene. It must stop at the scene choice, not
+    // when the new summary lands: until then each loop iteration would ask for another old-scene
+    // frame (the cache was already cleared), and those requests queue the new scene behind them.
+    const stillWanted = () => summary.scene_id === sceneIdRef.current;
+    if (!stillWanted()) {
+      return;
+    }
     const times = summary.times_us;
     const vehicleId = summary.agents.find((agent) => agent.agent_type === "vehicle")?.agent_id ?? "";
     void (async () => {
@@ -2993,10 +3857,11 @@ export default function Viewer({
         agentSpeed[agent.agent_id] = [];
       }
       const markers: Marker[] = [];
+      const sweeps: number[] = [];
       let previous: FrameDocument | null = null;
       let previousTime = 0;
       for (let index = 0; index < times.length; index += 1) {
-        if (cancelled) {
+        if (cancelled || !stillWanted()) {
           return;
         }
         const time = times[index];
@@ -3004,7 +3869,7 @@ export default function Viewer({
           continue;
         }
         const frame = await cacheRef.current.loadFrame(summary.scene_id, time, effectiveToken);
-        if (cancelled) {
+        if (cancelled || !stillWanted()) {
           return;
         }
         let pointCount = 0;
@@ -3014,6 +3879,7 @@ export default function Viewer({
           }
         }
         points.push(pointCount);
+        sweeps.push(frame.point_sensors.filter((sensor) => sensor.count > 0).length);
         boxes.push(frame.boxes.filter((box) => boxShown(box, hidden, appearance)).length);
         for (const agent of summary.agents) {
           const current = frame.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
@@ -3024,7 +3890,7 @@ export default function Viewer({
         const lead = vehicleId ? agentSpeed[vehicleId] : undefined;
         speeds.push(lead && lead.length > 0 ? (lead[lead.length - 1] ?? 0) : 0);
         if (previous && time - previousTime > 150_000 && markers.length < 24) {
-          markers.push({ index, label: "Sweep gap" });
+          markers.push({ index, label: "Time gap over 0.15 s" });
         }
         const vehicleNow = frame.agents.find((item) => item.agent_id === vehicleId)?.pose;
         const vehicleThen = previous?.agents.find((item) => item.agent_id === vehicleId)?.pose;
@@ -3077,6 +3943,7 @@ export default function Viewer({
             boxes: [...boxes],
             agentSpeed: Object.fromEntries(Object.entries(agentSpeed).map(([id, values]) => [id, [...values]])),
             markers: [...markers],
+            sweeps: [...sweeps],
           });
         }
       }
@@ -3088,6 +3955,9 @@ export default function Viewer({
 
   useEffect(() => {
     if (!summary || !cameraFrame) {
+      return;
+    }
+    if (summary.scene_id !== sceneIdRef.current) {
       return;
     }
     const times = summary.times_us;
@@ -3102,7 +3972,7 @@ export default function Viewer({
     const frame = cameraFrame;
     void (async () => {
       const other = await cacheRef.current.loadFrame(summary.scene_id, neighborTime, effectiveToken);
-      if (cancelled) {
+      if (cancelled || summary.scene_id !== sceneIdRef.current) {
         return;
       }
       const next: Record<string, number> = {};
@@ -3197,14 +4067,229 @@ export default function Viewer({
     return rows;
   }, [cameraFrame]);
   cameraKeysRef.current = cameraChoices.map((row) => row.key);
+  // What the Layers rows count at this sample, after the agent and class filters.
+  const pointsNow =
+    cameraFrame?.point_sensors
+      .filter((sensor) => !hidden[sensor.agent_id])
+      .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
+  const boxesNow = cameraFrame?.boxes.filter((box) => boxShown(box, hidden, appearance)).length ?? 0;
+  const frustumsNow = cameraFrame?.frustums.filter((item) => !hidden[item.agent_id]).length ?? 0;
+  const imagesOn = cameraChoices.filter((row) => showCameraImage(appearance, row.key)).length;
   onFrustumRef.current = (key) => {
     setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current));
   };
 
+  const scheduleLayout = (update: Partial<LayoutSizes>) => {
+    pendingLayoutRef.current = { ...pendingLayoutRef.current, ...update };
+    if (resizeRafRef.current === null) {
+      resizeRafRef.current = window.requestAnimationFrame(() => {
+        resizeRafRef.current = null;
+        const pending = pendingLayoutRef.current;
+        pendingLayoutRef.current = {};
+        setLayout((curr) => ({ ...curr, ...pending }));
+      });
+    }
+  };
+
+  const onLeftResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      panel: "left",
+      startPos: e.clientX,
+      startSize: layout.left_px,
+    };
+  };
+
+  const onLeftResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || dragStartRef.current.panel !== "left") return;
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const delta = e.clientX - dragStartRef.current.startPos;
+    const containerW = workspaceRef.current?.clientWidth;
+    const next = clampLeft(dragStartRef.current.startSize + delta, containerW, layout.right_px);
+    scheduleLayout({ left_px: next });
+  };
+
+  const onRightResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      panel: "right",
+      startPos: e.clientX,
+      startSize: layout.right_px,
+    };
+  };
+
+  const onRightResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || dragStartRef.current.panel !== "right") return;
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const delta = dragStartRef.current.startPos - e.clientX;
+    const containerW = workspaceRef.current?.clientWidth;
+    const next = clampRight(dragStartRef.current.startSize + delta, containerW, layout.left_px);
+    scheduleLayout({ right_px: next });
+  };
+
+  const onStripResizeDown = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    e.currentTarget.setPointerCapture(e.pointerId);
+    dragStartRef.current = {
+      panel: "strip",
+      startPos: e.clientY,
+      startSize: layout.strip_px,
+    };
+  };
+
+  const onStripResizeMove = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (!dragStartRef.current || dragStartRef.current.panel !== "strip") return;
+    if (!e.currentTarget.hasPointerCapture(e.pointerId)) return;
+    const delta = dragStartRef.current.startPos - e.clientY;
+    const containerH = stageDomRef.current?.clientHeight;
+    const next = clampStrip(dragStartRef.current.startSize + delta, containerH);
+    scheduleLayout({ strip_px: next });
+  };
+
+  const onResizeUp = (e: ReactPointerEvent<HTMLDivElement>) => {
+    if (dragStartRef.current) {
+      dragStartRef.current = null;
+      if (resizeRafRef.current !== null) {
+        window.cancelAnimationFrame(resizeRafRef.current);
+        resizeRafRef.current = null;
+        const pending = pendingLayoutRef.current;
+        pendingLayoutRef.current = {};
+        setLayout((curr) => ({ ...curr, ...pending }));
+      }
+      try {
+        e.currentTarget.releasePointerCapture(e.pointerId);
+      } catch {}
+      void sendStateRef.current();
+    }
+  };
+
+  const onLeftReset = () => {
+    setLayout((curr) => ({ ...curr, left_px: DEFAULT_LEFT_PX }));
+    void sendStateRef.current();
+  };
+
+  const onRightReset = () => {
+    setLayout((curr) => ({ ...curr, right_px: DEFAULT_RIGHT_PX }));
+    void sendStateRef.current();
+  };
+
+  const onStripReset = () => {
+    setLayout((curr) => ({ ...curr, strip_px: DEFAULT_STRIP_PX }));
+    void sendStateRef.current();
+  };
+
+  const onLeftKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, left_px: clampLeft(curr.left_px - step) }));
+      void sendStateRef.current();
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      const containerW = workspaceRef.current?.clientWidth;
+      setLayout((curr) => ({ ...curr, left_px: clampLeft(curr.left_px + step, containerW, layout.right_px) }));
+      void sendStateRef.current();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, left_px: MIN_LEFT_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, left_px: MAX_LEFT_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      onLeftReset();
+    }
+  };
+
+  const onRightKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
+    if (e.key === "ArrowLeft") {
+      e.preventDefault();
+      const containerW = workspaceRef.current?.clientWidth;
+      setLayout((curr) => ({ ...curr, right_px: clampRight(curr.right_px + step, containerW, layout.left_px) }));
+      void sendStateRef.current();
+    } else if (e.key === "ArrowRight") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, right_px: clampRight(curr.right_px - step) }));
+      void sendStateRef.current();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, right_px: MIN_RIGHT_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, right_px: MAX_RIGHT_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      onRightReset();
+    }
+  };
+
+  const onStripKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
+    e.stopPropagation();
+    const step = e.shiftKey ? RESIZE_STEP_LARGE_PX : RESIZE_STEP_PX;
+    if (e.key === "ArrowUp") {
+      e.preventDefault();
+      const containerH = stageDomRef.current?.clientHeight;
+      setLayout((curr) => ({ ...curr, strip_px: clampStrip(curr.strip_px + step, containerH) }));
+      void sendStateRef.current();
+    } else if (e.key === "ArrowDown") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, strip_px: clampStrip(curr.strip_px - step) }));
+      void sendStateRef.current();
+    } else if (e.key === "Home") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, strip_px: MIN_STRIP_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "End") {
+      e.preventDefault();
+      setLayout((curr) => ({ ...curr, strip_px: MAX_STRIP_PX }));
+      void sendStateRef.current();
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      onStripReset();
+    }
+  };
+
+  const jobText = jobBadge(viewerJob);
+  // Where the scene comes from, as the app knows it: the cluster over SSH, this
+  // Mac's folder, or the server this page was loaded from.
+  const connectionText = datasetAbout?.server
+    ? `Streaming over SSH from ${datasetAbout.server}`
+    : viewerJob
+      ? "Streaming over SSH"
+      : isDesktop
+        ? `Local folder${dataBasename ? ` · ${dataBasename}` : ""}`
+        : `Server · ${typeof window !== "undefined" ? window.location.host : ""}`;
+  // In the crumb row, after the scene counter: the one part of the top bar that
+  // gives way (ellipsis, full text in the tooltip) before anything overlaps.
+  const connectionState = (
+    <>
+      <span className={`conn-state ${tone}`} title={status ? `${connectionText}\n${status}` : connectionText}>
+        <i aria-hidden="true" />
+        <span className="conn-text">{connectionText}</span>
+      </span>
+      {jobText ? (
+        <span
+          className="job-badge"
+          title={`${jobText}. This viewer runs as a small CPU job on the cluster; it is reused while it runs.`}
+        >
+          {jobText}
+        </span>
+      ) : null}
+    </>
+  );
   const sceneStem = sceneId.includes("-") ? sceneId.slice(0, sceneId.lastIndexOf("-")) : sceneId || "Scene";
   const crumb = (
     <div className="crumb">
-      {isDesktop && (
+      {isDesktop && !datasetAbout && (
         <div className="dataset-badge" title={dataRoot || undefined}>
           <span className="dataset-folder-icon" aria-hidden="true">📁</span>
           <span className="dataset-name">{dataBasename || "Dataset"}</span>
@@ -3219,19 +4304,56 @@ export default function Viewer({
           </button>
         </div>
       )}
-      <span className="crumb-dataset">{sceneId ? sceneStem : "Scenes"}</span>
+      <span
+        className="crumb-dataset"
+        title={datasetAbout?.server ? `${datasetAbout.label} on ${datasetAbout.server}` : undefined}
+      >
+        {datasetAbout?.label || (sceneId && sceneStem !== sceneId ? sceneStem : "Scenes")}
+      </span>
       <span className="crumb-sep" aria-hidden="true">/</span>
+      <span className="scene-nav">
+      {sceneOrder.length > 1 ? (
+        <button
+          type="button"
+          className="icon ghost scene-step"
+          disabled={!prevScene}
+          aria-label="Previous scene (P)"
+          title="Previous scene (P)"
+          onClick={() => goScene(-1)}
+        >
+          ‹
+        </button>
+      ) : null}
       <Menu
         id="scene-id"
         ariaLabel="Scene"
         value={sceneId}
         options={
-          scenes.length === 0
+          sceneOrder.length === 0
             ? [{ value: "", label: "No scenes" }]
-            : scenes.map((id) => ({ value: id, label: id }))
+            : sceneOrder.map((id) => {
+                if (readyScenes.has(id)) {
+                  return { value: id, label: id };
+                }
+                // A scene of this dataset that the viewer cannot show yet.
+                const state = datasetSceneStatuses[id];
+                const note = state === "preparing" ? "preparing…" : state === "failed" ? "failed" : "not prepared";
+                return { value: id, label: `${id} · ${note}` };
+              })
         }
         onChange={(id) => {
           if (id === sceneId) {
+            return;
+          }
+          if (!readyScenes.has(id)) {
+            setSceneNotice({
+              text:
+                datasetSceneStatuses[id] === "preparing"
+                  ? `${id} is being prepared. It opens here when it is ready.`
+                  : `${id} is not prepared yet.`,
+              next: null,
+              prepare: datasetSceneStatuses[id] === "preparing" ? null : id,
+            });
             return;
           }
           // Pause now, not when the new summary arrives: a playing scene keeps
@@ -3241,10 +4363,38 @@ export default function Viewer({
           setSceneId(id);
         }}
       />
+      {sceneOrder.length > 1 ? (
+        <button
+          type="button"
+          className="icon ghost scene-step"
+          disabled={!nextScene}
+          aria-label="Next scene (N)"
+          title="Next scene (N)"
+          onClick={() => goScene(1)}
+        >
+          ›
+        </button>
+      ) : null}
+      </span>
+      {sceneOrder.length > 1 && sceneOrder.indexOf(sceneId) >= 0 ? (
+        <span className="crumb-count num">
+          {sceneOrder.indexOf(sceneId) + 1} of {sceneOrder.length}
+        </span>
+      ) : null}
+      {connectionState}
     </div>
   );
   const actionTools = (
     <div className="top-actions">
+      <button
+        type="button"
+        className="ghost"
+        aria-label={isFullScreen ? "Exit full screen (Esc or F)" : "Enter full screen (F)"}
+        title={isFullScreen ? "Exit full screen (Esc or F)" : "Enter full screen (F)"}
+        onClick={() => setIsFullScreen((prev) => !prev)}
+      >
+        {isFullScreen ? "Exit Full Screen" : "Full Screen"}
+      </button>
       <button type="button" className="ghost" onClick={() => setExportOpen(true)} disabled={!summary}>
         Export
       </button>
@@ -3253,9 +4403,14 @@ export default function Viewer({
         className="icon ghost"
         aria-label={appearance.theme === "dark" ? "Use light theme" : "Use dark theme"}
         aria-pressed={appearance.theme === "dark"}
-        onClick={() =>
-          setAppearance((current) => ({ ...current, theme: current.theme === "dark" ? "light" : "dark" }))
-        }
+        onClick={() => {
+          userThemeOverrideRef.current = true;
+          const next = appearance.theme === "dark" ? "light" : "dark";
+          setThemeOverride(next);
+          setAppearance((current) => ({ ...current, theme: next }));
+          onTheme?.(next);
+          postControllerState({ theme_override: next });
+        }}
       >
         {appearance.theme === "dark" ? <IconMoon /> : <IconSun />}
       </button>
@@ -3307,35 +4462,56 @@ export default function Viewer({
       )}
       {slot ? createPortal(crumb, slot) : null}
       {actions ? createPortal(actionTools, actions) : null}
-      <div className="workspace">
-        <aside className="panel" aria-label="Layers and agents">
+      <div ref={workspaceRef} className={isFullScreen ? "workspace is-fullscreen" : "workspace"}>
+        <aside className="panel" aria-label="Layers and agents" style={{ width: `${layout.left_px}px` }}>
           <details open>
-            <summary>Layers</summary>
+            <summary>
+              Layers
+              {pointsNow > 0 ? <span className="summary-meta num">{compactCount(pointsNow)} pts</span> : null}
+            </summary>
             <div className="checks">
-              {(
-                [
-                  ["points", "Points"],
-                  ["boxes", "Boxes"],
-                  ["frustums", "Frustums"],
-                  ["map", "Map"],
-                  ["axes", "Axes"],
-                ] as const
-              ).map(([key, label]) => (
-                <EyeToggle
-                  key={key}
-                  on={appearance[key]}
-                  label={label}
-                  onChange={() => setAppearance((current) => ({ ...current, [key]: !current[key] }))}
-                />
-              ))}
-              {lidarNote(summary) ? <p className="muted empty-state">Points: {lidarNote(summary)}</p> : null}
-              {mapInfo && !mapInfo.available ? <p className="muted empty-state">Map: {mapNoteFor(mapInfo)}</p> : null}
               <EyeToggle
-                on={appearance.frustumImages}
-                label="Frustum images"
-                onChange={() => setAppearance((current) => toggleFrustumImages(current))}
+                on={appearance.points}
+                label="Points"
+                meta={lidarNote(summary) ? null : compactCount(pointsNow)}
+                onChange={() => setAppearance((current) => ({ ...current, points: !current.points }))}
               />
-              {appearance.frustumImages ? (
+              <EyeToggle
+                on={appearance.boxes}
+                label="Boxes"
+                meta={boxesNow}
+                onChange={() => setAppearance((current) => ({ ...current, boxes: !current.boxes }))}
+              />
+              {capabilities.cameras ? (
+                <EyeToggle
+                  on={appearance.frustums}
+                  label="Camera frustums"
+                  meta={frustumsNow}
+                  onChange={() => setAppearance((current) => ({ ...current, frustums: !current.frustums }))}
+                />
+              ) : null}
+              {capabilities.cameras ? (
+                <EyeToggle
+                  on={appearance.frustumImages}
+                  label="Frustum images"
+                  meta={appearance.frustumImages && cameraChoices.length > 0 ? `${imagesOn} of ${cameraChoices.length}` : null}
+                  onChange={() => setAppearance((current) => toggleFrustumImages(current))}
+                />
+              ) : null}
+              {mapInfo?.available ? (
+                <EyeToggle
+                  on={appearance.map}
+                  label="Road map"
+                  meta={mapInfo?.map_name ? mapInfo.map_name.split("/").pop() : null}
+                  onChange={() => setAppearance((current) => ({ ...current, map: !current.map }))}
+                />
+              ) : null}
+              <EyeToggle
+                on={appearance.axes}
+                label="Axes"
+                onChange={() => setAppearance((current) => ({ ...current, axes: !current.axes }))}
+              />
+              {appearance.frustumImages && capabilities.cameras ? (
                 <Slider
                   label="Image opacity"
                   value={appearance.frustumOpacity}
@@ -3345,6 +4521,45 @@ export default function Viewer({
                   onChange={(value) => setAppearance((current) => ({ ...current, frustumOpacity: value }))}
                 />
               ) : null}
+              {lidarNote(summary) ? <p className="muted empty-state">Points: {lidarNote(summary)}</p> : null}
+              {mapInfo && !mapInfo.available ? (
+                <div className="muted empty-state">
+                  <p style={{ margin: 0 }}>Map: {mapNoteFor(mapInfo)}</p>
+                  {typeof window !== "undefined" &&
+                  window.__COPERCEIVE_DESKTOP__ &&
+                  mapInfo.map_name === "Carla/Maps/Town03" ? (
+                    <div style={{ marginTop: "0.35rem" }}>
+                      <button
+                        type="button"
+                        onClick={() => void installTown03Map()}
+                        disabled={mapInstall?.busy === true}
+                        title="Downloads the official CARLA 0.9.15 Town03 OpenDRIVE (pinned SHA-256), ingests it and aligns it to this scene. Licence: CARLA 0.9.15 README says the town assets are CC-BY (no version stated)."
+                        style={{ marginTop: "0.2rem" }}
+                      >
+                        Download map for Town03 (CARLA 0.9.15, CC-BY)
+                      </button>
+                      <div style={{ fontSize: "0.68rem", marginTop: "0.2rem" }}>
+                        <a
+                          href="https://github.com/carla-simulator/carla/blob/0.9.15/README.md"
+                          target="_blank"
+                          rel="noreferrer"
+                          style={{ color: "inherit" }}
+                        >
+                          Licence: CC-BY (CARLA 0.9.15 README; version not stated)
+                        </a>
+                        {mapInstall ? (
+                          <div style={{ marginTop: "0.2rem" }}>
+                            {mapInstall.error
+                              ? `Could not install the map: ${mapInstall.error}`
+                              : `${mapInstall.percent}% · ${mapInstall.message}`}
+                          </div>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+              {capabilities.cameras ? (
               <details className="cam-fold">
                 <summary>
                   Cameras
@@ -3374,17 +4589,24 @@ export default function Viewer({
                   ))}
                 </div>
               </details>
+              ) : null}
             </div>
           </details>
           <details open>
-            <summary>Agents</summary>
+            <summary>
+              Agents
+              {(summary?.agents.length ?? 0) > 0 ? (
+                <span className="summary-meta num">
+                  {(summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).length} of {summary?.agents.length} shown
+                </span>
+              ) : null}
+            </summary>
             <ul className="agent-list">
               {(summary?.agents ?? []).map((agent) => {
                 const points =
                   cameraFrame?.point_sensors
                     .filter((sensor) => sensor.agent_id === agent.agent_id)
                     .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
-                const boxes = cameraFrame?.boxes.filter((box) => box.agent_id === agent.agent_id).length ?? 0;
                 return (
                   <li key={agent.agent_id}>
                     <SwatchToggle
@@ -3394,8 +4616,10 @@ export default function Viewer({
                       color={AGENT_INK[agent.agent_type] ?? "#b7b1a6"}
                       meta={
                         <>
-                          <span className="num">{points}</span>
-                          <span className="num">{boxes}</span>
+                          <span className="agent-role">{agentRole(agent.agent_type)}</span>
+                          <span className="num agent-points" title={`${points} points at this sample`}>
+                            {compactCount(points)}
+                          </span>
                         </>
                       }
                       onChange={() =>
@@ -3411,28 +4635,42 @@ export default function Viewer({
             </ul>
           </details>
           <details open>
-            <summary>Classes</summary>
-            {categories.length === 0 ? <p className="muted">No classes in this sample.</p> : null}
-            <div className="checks">
-              {categories.map((category) => (
-                <SwatchToggle
-                  key={category}
-                  on={!appearance.hiddenClasses.includes(category)}
-                  label={category}
-                  color={cssColor(classColor(category))}
-                  onChange={() =>
-                    setAppearance((current) => {
-                      const next = new Set(current.hiddenClasses);
-                      if (next.has(category)) {
-                        next.delete(category);
-                      } else {
-                        next.add(category);
-                      }
-                      return { ...current, hiddenClasses: [...next] };
-                    })
-                  }
-                />
-              ))}
+            <summary>Appearance</summary>
+            <div className="stack">
+              <Segmented
+                label="Colour by"
+                value={appearance.colorBy}
+                options={[
+                  { value: "agent", label: "Agent" },
+                  { value: "class", label: "Class" },
+                ]}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, colorBy: value === "class" ? "class" : "agent" }))
+                }
+              />
+              <Segmented
+                label="Boxes"
+                value={appearance.boxStyle}
+                options={[
+                  { value: "wire", label: "Wire" },
+                  { value: "solid", label: "Solid" },
+                ]}
+                onChange={(value) =>
+                  setAppearance((current) => ({ ...current, boxStyle: value === "solid" ? "solid" : "wire" }))
+                }
+              />
+              <Slider
+                label="Point size"
+                value={appearance.pointSize}
+                min={1}
+                max={4}
+                step={1}
+                valueText={`${appearance.pointSize} px`}
+                onChange={(value) => setAppearance((current) => ({ ...current, pointSize: Math.round(value) }))}
+              />
+              <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
+                Reset view
+              </button>
             </div>
           </details>
           <PredictionsBlock
@@ -3463,69 +4701,132 @@ export default function Viewer({
             onScore={(value) => setAppearance((current) => ({ ...current, predictionScore: value }))}
           />
           <details>
-            <summary>Display</summary>
-            <div className="stack">
-              <Segmented
-                label="Color"
-                value={appearance.colorBy}
-                options={[
-                  { value: "agent", label: "Agent" },
-                  { value: "class", label: "Class" },
-                ]}
-                onChange={(value) =>
-                  setAppearance((current) => ({ ...current, colorBy: value === "class" ? "class" : "agent" }))
-                }
-              />
-              <Segmented
-                label="Point size"
-                value={String(appearance.pointSize)}
-                options={[1, 2, 3, 4].map((size) => ({ value: String(size), label: String(size) }))}
-                onChange={(value) => setAppearance((current) => ({ ...current, pointSize: Number(value) }))}
-              />
-              <Segmented
-                label="Boxes"
-                value={appearance.boxStyle}
-                options={[
-                  { value: "wire", label: "Wire" },
-                  { value: "solid", label: "Solid" },
-                ]}
-                onChange={(value) =>
-                  setAppearance((current) => ({ ...current, boxStyle: value === "solid" ? "solid" : "wire" }))
-                }
-              />
-              <button type="button" className="ghost" onClick={() => setAppearance(defaultAppearance())}>
-                Reset view
-              </button>
+            <summary>Classes</summary>
+            {categories.length === 0 ? <p className="muted">No classes in this sample.</p> : null}
+            <div className="checks">
+              {categories.map((category) => (
+                <SwatchToggle
+                  key={category}
+                  on={!appearance.hiddenClasses.includes(category)}
+                  label={category}
+                  color={cssColor(classColor(category))}
+                  onChange={() =>
+                    setAppearance((current) => {
+                      const next = new Set(current.hiddenClasses);
+                      if (next.has(category)) {
+                        next.delete(category);
+                      } else {
+                        next.add(category);
+                      }
+                      return { ...current, hiddenClasses: [...next] };
+                    })
+                  }
+                />
+              ))}
             </div>
           </details>
         </aside>
-        <div className="stage">
-          <div className={splitCamera ? "stage-row split" : "stage-row"} style={{ ["--split" as string]: appearance.splitRatio }}>
-          <div className="viewport">
-            <canvas
-              ref={canvasRef}
-              className="viewer-canvas"
-              tabIndex={0}
-              aria-label="Scene view. Click here, then use Space to play and 1 through 5 for viewpoints."
-              onPointerDown={() => canvasRef.current?.focus()}
-            />
-            <div className="label-host" />
-            <div className="vignette" aria-hidden="true" />
-            {webglError ? (
-              <div className="webgl-missing" role="alert">
-                <strong>The 3D view needs WebGL, which this browser did not provide.</strong>
-                <p>
-                  Boxes, points and the map cannot be drawn. The scene list, the timeline and the tables still
-                  work. Turn on hardware acceleration or open the page in another browser.
-                </p>
-                <p className="mono">{webglError}</p>
+        <div
+          className="panel-resizer panel-resizer-vertical panel-resizer-left"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize layers panel"
+          aria-valuenow={Math.round(layout.left_px)}
+          aria-valuemin={MIN_LEFT_PX}
+          aria-valuemax={MAX_LEFT_PX}
+          tabIndex={0}
+          onPointerDown={onLeftResizeDown}
+          onPointerMove={onLeftResizeMove}
+          onPointerUp={onResizeUp}
+          onDoubleClick={onLeftReset}
+          onKeyDown={onLeftKeyDown}
+        />
+        <div ref={stageDomRef} className="stage">
+      <div className={splitCamera ? "stage-row split" : "stage-row"} style={{ ["--split" as string]: appearance.splitRatio }}>
+      <div className="viewport">
+        <canvas
+          ref={canvasRef}
+          className="viewer-canvas"
+          tabIndex={0}
+          aria-label="Scene view. Click here, then use Space to play and 1 through 5 for viewpoints."
+          onPointerDown={() => canvasRef.current?.focus()}
+        />
+        <div className="label-host" />
+        <div className="vignette" aria-hidden="true" />
+        {webglError ? (
+          <div className="webgl-missing" role="alert">
+            <strong>The 3D view needs WebGL, which this browser did not provide.</strong>
+            <p>
+              Boxes, points and the map cannot be drawn. The scene list, the timeline and the tables still
+              work. Turn on hardware acceleration or open the page in another browser.
+            </p>
+            <p className="mono">{webglError}</p>
+          </div>
+        ) : null}
+            {summary ? (
+              <div className="scale-bar" ref={scaleBarRef} hidden aria-hidden="true">
+                <b />
+                <span />
               </div>
             ) : null}
-            <div className="glass status-pill">
+            <div className="stage-chips">
+            <div
+              className="glass status-pill"
+              title={summary ? `${summary.scene_id} · ${viewpointLabel} · t = ${typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s"}` : undefined}
+            >
               <i className={tone} aria-hidden="true" />
-              <span>
-                {summary ? summary.scene_id : "No scene"} · {viewpointLabel}
-              </span>
+              {summary ? (
+                <span className="chip-text">
+                  <span className="chip-long">{viewpointLabel} · </span>t = {typeof timeUs === "number" ? formatClock(timeUs) : "0.0 s"}
+                </span>
+              ) : (
+                <span className="chip-text">No scene</span>
+              )}
+            </div>
+            <div className="view-row">
+            <div
+              className="glass view-pill"
+              role="group"
+              aria-label="Viewpoint"
+              style={{ ["--count" as string]: shownViewpoints.length, ["--index" as string]: Math.max(0, shownViewpoints.findIndex((item) => item.id === viewpoint)) }}
+            >
+              <span className="view-slide" aria-hidden="true" />
+              {shownViewpoints.map((item) => (
+                <button
+                  key={item.id}
+                  type="button"
+                  aria-pressed={viewpoint === item.id}
+                  aria-checked={viewpoint === item.id}
+                  aria-label={`${item.label} viewpoint (${item.shortcut})`}
+                  aria-keyshortcuts={item.shortcut}
+                  data-key={item.shortcut}
+                  onClick={() => chooseViewpoint(item.id)}
+                >
+                  {item.id === "chase" ? "Chase" : item.label}
+                </button>
+              ))}
+            </div>
+            </div>
+            <div className="chip-end">
+            {isFullScreen ? (
+              <div className="glass exit-pill">
+                <button
+                  type="button"
+                  className="fullscreen-exit-btn"
+                  onClick={() => setIsFullScreen(false)}
+                  aria-label="Exit full screen (Esc or F)"
+                >
+                  Exit full screen <kbd>Esc</kbd>
+                </button>
+              </div>
+            ) : null}
+            {summary ? (
+              <div className="glass frame-pill" title="The scene's world frame, and the width the view shows at its centre">
+                <span className="chip-long">{summary.world_frame || "world"} frame</span>
+                <span className="chip-long frame-sep"> · </span>
+                <span className="frame-extent" ref={extentRef} />
+              </div>
+            ) : null}
             </div>
             {missing.length > 0 ? (
               <ul className="glass empty-pill" aria-label="Missing data">
@@ -3534,26 +4835,6 @@ export default function Viewer({
                 ))}
               </ul>
             ) : null}
-            <div
-              className="glass view-pill"
-              role="group"
-              aria-label="Viewpoint"
-              style={{ ["--count" as string]: VIEWPOINTS.length, ["--index" as string]: Math.max(0, VIEWPOINTS.findIndex((item) => item.id === viewpoint)) }}
-            >
-              <span className="view-slide" aria-hidden="true" />
-              {VIEWPOINTS.map((item) => (
-                <button
-                  key={item.id}
-                  type="button"
-                  aria-pressed={viewpoint === item.id}
-                  aria-checked={viewpoint === item.id}
-                  aria-label={`${item.label} viewpoint (${item.shortcut})`}
-                  aria-keyshortcuts={item.shortcut}
-                  onClick={() => chooseViewpoint(item.id)}
-                >
-                  {item.id === "chase" ? "Chase" : item.label}
-                </button>
-              ))}
             </div>
             <div className="glass legend" aria-label="Legend">
               {legendTypes.map((kind) => (
@@ -3604,6 +4885,23 @@ export default function Viewer({
             </>
           ) : null}
           </div>
+          {cameraFrame && summary && appearance.stripOpen ? (
+            <div
+              className="panel-resizer panel-resizer-horizontal panel-resizer-strip"
+              role="separator"
+              aria-orientation="horizontal"
+              aria-label="Resize camera strip"
+              aria-valuenow={Math.round(layout.strip_px)}
+              aria-valuemin={MIN_STRIP_PX}
+              aria-valuemax={MAX_STRIP_PX}
+              tabIndex={0}
+              onPointerDown={onStripResizeDown}
+              onPointerMove={onStripResizeMove}
+              onPointerUp={onResizeUp}
+              onDoubleClick={onStripReset}
+              onKeyDown={onStripKeyDown}
+            />
+          ) : null}
           {cameraFrame && summary ? (
             <CameraStrip
               token={effectiveToken}
@@ -3614,6 +4912,7 @@ export default function Viewer({
               types={agentTypes}
               names={agentNames}
               open={appearance.stripOpen}
+              playing={playing}
               onToggleOpen={() => setAppearance((current) => ({ ...current, stripOpen: !current.stripOpen }))}
               splitKey={appearance.splitCamera}
               onSplit={toggleSplit}
@@ -3623,93 +4922,173 @@ export default function Viewer({
               onToggleImage={(key) =>
                 setAppearance((current) => toggleOneFrustumImage(current, key, cameraKeysRef.current))
               }
+              heightPx={layout.strip_px}
+              focusAgent={focusAgent}
+              onSwitchAgent={setFocusAgent}
+              mode={stripMode}
+              onMode={setStripMode}
+              selectedKey={appearance.splitCamera ?? (viewpoint === "camera" ? cameraId || null : null)}
+              boxCount={(camera) => boxesInView(camera, cameraFrame.boxes.filter((box) => boxShown(box, hidden, appearance)))}
             />
           ) : null}
+          {sceneNotice ? (
+            <div className="scene-notice" role="status">
+              <span>{sceneNotice.text}</span>
+              {sceneNotice.next ? (
+                <button type="button" className="ghost" onClick={() => goScene(1)}>
+                  View next scene (N)
+                </button>
+              ) : null}
+              {sceneNotice.prepare ? (
+                <button
+                  type="button"
+                  className="ghost"
+                  onClick={() => {
+                    const target = sceneNotice.prepare;
+                    if (!target) return;
+                    void prepareSceneInMainWindow(target).then((shown) =>
+                      setSceneNotice({
+                        text: shown
+                          ? `Confirm the preparation of ${target} in the main window. It opens here when it is ready.`
+                          : `Open the dataset in the main window to prepare ${target}.`,
+                        next: null,
+                        prepare: null,
+                      }),
+                    );
+                  }}
+                >
+                  Prepare &amp; open {sceneNotice.prepare}
+                </button>
+              ) : null}
+              <button type="button" className="icon ghost" aria-label="Dismiss" onClick={() => setSceneNotice(null)}>
+                ×
+              </button>
+            </div>
+          ) : null}
           <p className="status-line">{status}</p>
-        </div>
-        <aside className="panel panel-right" aria-label="Agent telemetry">
-          <h2>Telemetry</h2>
-          {(summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).map((agent) => {
-            const pose = cameraFrame?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
-            const sampleSpeed = agentSpeed(agent.agent_id);
-            const history = series.agentSpeed[agent.agent_id] ?? [];
-            const paths = sparkPaths(history, 22);
-            const points =
-              cameraFrame?.point_sensors
-                .filter((sensor) => sensor.agent_id === agent.agent_id)
-                .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
-            const ink = AGENT_INK[agent.agent_type] ?? "#b7b1a6";
-            return (
-              <article key={agent.agent_id} className="tele">
-                <header>
-                  <i style={{ background: ink }} aria-hidden="true" />
-                  <strong title={agent.agent_id}>{agentNames.get(agent.agent_id) ?? agent.agent_id}</strong>
-                  <span>{agent.agent_type}</span>
-                </header>
-                <dl>
-                  <div className="span-2">
-                    <dt>Speed</dt>
-                    <dd className="num">{formatSpeed(sampleSpeed)}</dd>
-                  </div>
-                  <div>
-                    <dt>Heading</dt>
-                    <dd className="num">{formatHeading(isPose(pose) ? headingDeg(pose) : null)}</dd>
-                  </div>
-                  {agent.agent_type === "uav" && isPose(pose) ? (
-                    <div>
-                      <dt>Altitude</dt>
-                      <dd className="num">{pose.tz.toFixed(1)} m</dd>
-                    </div>
-                  ) : null}
-                  <div>
-                    <dt>Points</dt>
-                    <dd className="num">{points}</dd>
-                  </div>
-                </dl>
-                <svg className="tele-spark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
-                  <path d={paths.area} fill={ink} opacity="0.18" />
-                  <path d={paths.line} stroke={ink} />
-                </svg>
-              </article>
-            );
-          })}
-          <SceneCard summary={summary} frame={cameraFrame} evalSummary={evalSummary} />
-          <Inspector
-            pick={pick}
-            frame={cameraFrame}
-            summary={summary}
-            token={effectiveToken}
-            cache={cacheRef.current}
-            evalPick={liveEvalPick}
-            gtDetail={gtDetail}
+          <Timeline
+            length={summary?.times_us.length ?? 0}
+            index={Math.min(frameIndex, last)}
+            timeUs={typeof timeUs === "number" ? timeUs : null}
+            times={summary?.times_us ?? []}
+            playing={playing}
+            buffering={buffering}
+            speed={speed}
+            loop={loop}
+            disabled={!summary || (summary.times_us.length < 2)}
+            boxes={series.boxes}
+            markers={series.markers}
+            sweepGaps={findSweepGaps(series.sweeps, (summary?.point_sweeps ?? 0) > 0 || series.sweeps.some((count) => count > 0))}
+            evalSeries={evalSeries}
+            evalCompare={evalCompare}
+            onIndex={(index) => setFrameIndex(index)}
+            onStep={(delta) => {
+              setPlaying(false);
+              setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loop));
+            }}
+            onToggle={handleTogglePlay}
+            onSpeed={setSpeed}
+            onLoop={handleToggleLoop}
           />
-          <Radar frame={cameraFrame} pick={pick} types={agentTypes} />
-        </aside>
+        </div>
+        <div
+          className="panel-resizer panel-resizer-vertical panel-resizer-right"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize telemetry panel"
+          aria-valuenow={Math.round(layout.right_px)}
+          aria-valuemin={MIN_RIGHT_PX}
+          aria-valuemax={MAX_RIGHT_PX}
+          tabIndex={0}
+          onPointerDown={onRightResizeDown}
+          onPointerMove={onRightResizeMove}
+          onPointerUp={onResizeUp}
+          onDoubleClick={onRightReset}
+          onKeyDown={onRightKeyDown}
+        />
+        <aside className="panel panel-right" aria-label="Agent telemetry" style={{ width: `${layout.right_px}px` }}>
+              <SceneCard summary={summary} frame={cameraFrame} evalSummary={evalSummary} />
+              <Inspector
+                pick={pick}
+                frame={cameraFrame}
+                summary={summary}
+                token={effectiveToken}
+                cache={cacheRef.current}
+                evalPick={liveEvalPick}
+                gtDetail={gtDetail}
+                onClear={() => {
+                  setPick(null);
+                  setEvalPick(null);
+                }}
+              />
+              <Radar
+                frame={cameraFrame}
+                pick={pick}
+                types={agentTypes}
+                names={agentNames}
+                focus={focusAgent}
+                open={appearance.radarOpen}
+                onToggle={() => setAppearance((current) => ({ ...current, radarOpen: !current.radarOpen }))}
+              />
+              <details className="side-fold">
+                <summary>Telemetry</summary>
+              {(!summary || (summary.agents ?? []).filter((agent) => !hidden[agent.agent_id]).length === 0) ? (
+                <PanelState
+                  compact
+                  kind="empty"
+                  title={PANEL_DEFINITIONS.telemetry.empty.title}
+                  description={PANEL_DEFINITIONS.telemetry.empty.description}
+                  actionLabel={PANEL_DEFINITIONS.telemetry.empty.actionLabel}
+                  onAction={() => setHidden({})}
+                />
+              ) : (
+                (summary?.agents ?? []).filter((agent) => !hidden[agent.agent_id]).map((agent) => {
+                const pose = cameraFrame?.agents.find((item) => item.agent_id === agent.agent_id)?.pose;
+                const sampleSpeed = agentSpeed(agent.agent_id);
+                const history = series.agentSpeed[agent.agent_id] ?? [];
+                const paths = sparkPaths(history, 22);
+                const points =
+                  cameraFrame?.point_sensors
+                    .filter((sensor) => sensor.agent_id === agent.agent_id)
+                    .reduce((sum, sensor) => sum + sensor.count, 0) ?? 0;
+                const ink = AGENT_INK[agent.agent_type] ?? "#b7b1a6";
+                return (
+                  <article key={agent.agent_id} className="tele">
+                    <header>
+                      <i style={{ background: ink }} aria-hidden="true" />
+                      <strong title={agent.agent_id}>{agentNames.get(agent.agent_id) ?? agent.agent_id}</strong>
+                      <span>{agent.agent_type}</span>
+                    </header>
+                    <dl>
+                      <div className="span-2">
+                        <dt>Speed</dt>
+                        <dd className="num">{formatSpeed(sampleSpeed)}</dd>
+                      </div>
+                      <div>
+                        <dt>Heading</dt>
+                        <dd className="num">{formatHeading(isPose(pose) ? headingDeg(pose) : null)}</dd>
+                      </div>
+                      {agent.agent_type === "uav" && isPose(pose) ? (
+                        <div>
+                          <dt>Altitude</dt>
+                          <dd className="num">{pose.tz.toFixed(1)} m</dd>
+                        </div>
+                      ) : null}
+                      <div>
+                        <dt>Points</dt>
+                        <dd className="num">{points}</dd>
+                      </div>
+                    </dl>
+                    <svg className="tele-spark" viewBox="0 0 100 22" preserveAspectRatio="none" aria-hidden="true">
+                      <path d={paths.area} fill={ink} opacity="0.18" />
+                      <path d={paths.line} stroke={ink} />
+                    </svg>
+                  </article>
+                );
+              }))}
+              </details>
+            </aside>
       </div>
-      <Timeline
-        length={summary?.times_us.length ?? 0}
-        index={Math.min(frameIndex, last)}
-        timeUs={typeof timeUs === "number" ? timeUs : null}
-        times={summary?.times_us ?? []}
-        playing={playing}
-        speed={speed}
-        loop={loop}
-        disabled={!summary || (summary.times_us.length < 2)}
-        points={series.points}
-        speeds={series.speeds}
-        boxes={series.boxes}
-        markers={series.markers}
-        evalSeries={evalSeries}
-        evalCompare={evalCompare}
-        onIndex={(index) => setFrameIndex(index)}
-        onStep={(delta) => {
-          setPlaying(false);
-          setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loop));
-        }}
-        onToggle={handleTogglePlay}
-        onSpeed={setSpeed}
-        onLoop={handleToggleLoop}
-      />
       <ExportDialog
         open={exportOpen}
         onClose={() => setExportOpen(false)}
@@ -3827,7 +5206,22 @@ export default function Viewer({
             Export Rerun
           </button>
         </div>
-        <p className="muted">{exportNote || plotNote || "Sequence, still, bird's-eye, camera overlay, and Rerun use the current sample and layers."}</p>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: "1rem", marginTop: "0.8rem" }}>
+          <p className="muted" style={{ margin: 0 }}>
+            {exportNote || plotNote || "Sequence, still, bird's-eye, camera overlay, and Rerun use the current sample and layers."}
+          </p>
+          {lastSavedPath && isDesktop && (
+            <button
+              type="button"
+              className="ghost"
+              onClick={() => void revealInFinder(lastSavedPath)}
+              style={{ whiteSpace: "nowrap", flexShrink: 0 }}
+              aria-label="Show exported file in Finder"
+            >
+              Show in Finder
+            </button>
+          )}
+        </div>
         {plotUrl ? <img className="plot-preview" src={plotUrl} alt={plotAlt} /> : null}
       </ExportDialog>
     </div>

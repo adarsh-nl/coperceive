@@ -7,6 +7,7 @@ The maintainer is Adarsh (github.com/adarsh-nl). The scene contract is `docs/spe
 ```bash
 python3 -m venv .venv
 .venv/bin/pip install -e ".[app,griffin,dev]"
+bash scripts/dev/install-hooks.sh
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
 .venv/bin/pyright
