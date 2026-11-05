@@ -779,11 +779,10 @@ impl RemoteSessionManager {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
     use std::fs;
-    use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
 
     struct FakeSshScript {
@@ -900,9 +899,13 @@ echo "unknown command: $args" >&2
 exit 1
 "#;
             fs::write(&tmp, script).expect("write fake_ssh");
-            let mut perms = fs::metadata(&tmp).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&tmp, perms).expect("set_permissions");
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mut perms = fs::metadata(&tmp).expect("metadata").permissions();
+                perms.set_mode(0o755);
+                fs::set_permissions(&tmp, perms).expect("set_permissions");
+            }
             Self { path: tmp }
         }
     }
@@ -1204,11 +1207,15 @@ exit 1
             "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$FAKE_COPER_LOG\"\n",
         )
         .expect("write fake coperceive");
-        let mut perms = fs::metadata(&fake_coperceive)
-            .expect("metadata")
-            .permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&fake_coperceive, perms).expect("chmod");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(&fake_coperceive)
+                .expect("metadata")
+                .permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(&fake_coperceive, perms).expect("chmod");
+        }
 
         let marker = dir.join("pwned");
         let log = dir.join("argv.log");

@@ -306,16 +306,19 @@ fn prepare_remote_static_with(
     Ok(remote_display)
 }
 
-#[cfg(test)]
+#[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     fn write_script(path: &Path, body: &str) {
         fs::write(path, body).expect("write script");
-        let mut perms = fs::metadata(path).expect("metadata").permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(path, perms).expect("permissions");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = fs::metadata(path).expect("metadata").permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(path, perms).expect("permissions");
+        }
     }
 
     fn write_static(root: &Path) {

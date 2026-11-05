@@ -130,7 +130,20 @@ jobs:
       - name: Prepare Release Assets
         run: |
           mkdir -p release-assets
-          find src-tauri/target/aarch64-apple-darwin/release/bundle -type f \( -name "*.dmg" -o -name "*.tar.gz" -o -name "*.sig" \) -exec cp {} release-assets/ \;
+          BUNDLE_DIR="src-tauri/target/aarch64-apple-darwin/release/bundle"
+          cp "${BUNDLE_DIR}/macos/Coperceive.app.tar.gz" release-assets/
+          cp "${BUNDLE_DIR}/macos/Coperceive.app.tar.gz.sig" release-assets/
+          cp "${BUNDLE_DIR}"/dmg/*.dmg release-assets/
+          test -f release-assets/Coperceive.app.tar.gz || { echo "Missing Coperceive.app.tar.gz" >&2; exit 1; }
+          test -f release-assets/Coperceive.app.tar.gz.sig || { echo "Missing Coperceive.app.tar.gz.sig" >&2; exit 1; }
+          test $(find release-assets -maxdepth 1 -name "*.dmg" | wc -l) -eq 1 || { echo "Expected exactly 1 DMG" >&2; exit 1; }
+          for f in release-assets/*; do
+            base="$(basename "$f")"
+            case "$base" in
+              Coperceive.app.tar.gz|Coperceive.app.tar.gz.sig|*.dmg) ;;
+              *) echo "Unexpected file: $base" >&2; exit 1 ;;
+            esac
+          done
           ls -la release-assets/
       # The Tauri bundler writes the .tar.gz and .sig but not latest.json (that file
       # normally comes from tauri-action). Write it here from the signature and the

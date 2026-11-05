@@ -17,6 +17,7 @@ pub mod job_report;
 pub mod job_watch;
 pub mod library;
 pub mod pack;
+pub mod platform;
 pub mod port;
 pub mod remote;
 pub mod remote_scan;

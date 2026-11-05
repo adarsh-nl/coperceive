@@ -256,33 +256,7 @@ fn reject_control_chars(value: &str, what: &str) -> Result<(), String> {
 /// `~/.local/share/nl.adarsh.coperceive` fallback. `COPERCEIVE_STATE_DIR`
 /// overrides the directory (used by tests and the e2e harness).
 pub fn servers_file_path() -> PathBuf {
-    if let Some(dir) = std::env::var_os("COPERCEIVE_STATE_DIR") {
-        return PathBuf::from(dir).join("servers.json");
-    }
-    if let Some(home) = std::env::var_os("HOME") {
-        #[cfg(target_os = "macos")]
-        {
-            return PathBuf::from(home)
-                .join("Library")
-                .join("Application Support")
-                .join("nl.adarsh.coperceive")
-                .join("servers.json");
-        }
-        #[cfg(not(target_os = "macos"))]
-        {
-            if let Some(xdg) = std::env::var_os("XDG_DATA_HOME") {
-                return PathBuf::from(xdg)
-                    .join("nl.adarsh.coperceive")
-                    .join("servers.json");
-            }
-            return PathBuf::from(home)
-                .join(".local")
-                .join("share")
-                .join("nl.adarsh.coperceive")
-                .join("servers.json");
-        }
-    }
-    PathBuf::from(".coperceive-servers.json")
+    crate::platform::get_servers_file_path()
 }
 
 pub fn load_servers() -> Vec<ServerEntry> {

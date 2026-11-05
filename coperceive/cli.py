@@ -880,14 +880,15 @@ def _resolve_token(args: argparse.Namespace) -> str | None:
         if not token_path.is_file():
             print(f"--token-file {args.token_file} is not a file", file=sys.stderr)
             raise SystemExit(2)
-        mode = token_path.stat().st_mode & 0o777
-        if (mode & 0o077) != 0:
-            print(
-                f"--token-file {args.token_file} has loose permissions {oct(mode)} "
-                "(must be mode 0600 or 0400)",
-                file=sys.stderr,
-            )
-            raise SystemExit(2)
+        if os.name != "nt":
+            mode = token_path.stat().st_mode & 0o777
+            if (mode & 0o077) != 0:
+                print(
+                    f"--token-file {args.token_file} has loose permissions {oct(mode)} "
+                    "(must be mode 0600 or 0400)",
+                    file=sys.stderr,
+                )
+                raise SystemExit(2)
         token = token_path.read_text(encoding="utf-8").strip() or None
     elif "COPERCEIVE_TOKEN" in os.environ and os.environ["COPERCEIVE_TOKEN"].strip():
         token = os.environ["COPERCEIVE_TOKEN"].strip()

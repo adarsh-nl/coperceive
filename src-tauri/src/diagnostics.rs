@@ -6,7 +6,6 @@
 //! action (copy, save, GitHub) moves it off the Mac.
 
 use std::fs;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -39,11 +38,7 @@ pub fn log_dir() -> PathBuf {
             }
         }
     }
-    let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
-    PathBuf::from(home)
-        .join("Library")
-        .join("Logs")
-        .join("Coperceive")
+    crate::platform::get_log_dir()
 }
 
 /// Test-only destination for the save command; `None` means show the native
@@ -410,18 +405,14 @@ pub fn copy_text(context: &Value, note: &str) -> String {
     }
 }
 
-/// Copy that Rust-built text through pbcopy.
+/// Copy that Rust-built text through platform clipboard.
 pub fn copy(context: &Value, note: &str) -> Result<(), String> {
     let text = copy_text(context, note);
-    let mut child = std::process::Command::new("pbcopy")
-        .stdin(std::process::Stdio::piped())
-        .spawn()
-        .map_err(|error| format!("Could not copy diagnostics: {error}"))?;
-    if let Some(stdin) = child.stdin.as_mut() {
-        stdin.write_all(text.as_bytes()).map_err(|error| error.to_string())?;
+    if crate::platform::copy_to_clipboard(&text) {
+        Ok(())
+    } else {
+        Err("Could not copy diagnostics: clipboard command failed".into())
     }
-    let status = child.wait().map_err(|error| error.to_string())?;
-    if status.success() { Ok(()) } else { Err("pbcopy failed".into()) }
 }
 
 /// Save the exact redacted bundle as a zip: report.txt plus one file per
@@ -442,13 +433,22 @@ pub fn save_zip(destination: &Path, context: &Value, note: &str) -> Result<PathB
     if zip_path.extension().and_then(|ext| ext.to_str()) != Some("zip") {
         zip_path.set_extension("zip");
     }
-    let status = std::process::Command::new("zip")
+    let status = match std::process::Command::new("zip")
         .current_dir(&staging)
         .arg("-qr")
         .arg(&zip_path)
         .arg(".")
         .status()
-        .map_err(|error| format!("Could not create the zip: {error}"))?;
+    {
+        Ok(status) => status,
+        Err(error) => {
+            let _ = fs::remove_dir_all(&staging);
+            if error.kind() == std::io::ErrorKind::NotFound {
+                return Err("Creating a diagnostics zip is not supported on this OS yet (zip command not found).".into());
+            }
+            return Err(format!("Could not create the zip: {error}"));
+        }
+    };
     let _ = fs::remove_dir_all(&staging);
     if !status.success() { return Err("zip failed".into()); }
     Ok(zip_path)
@@ -461,10 +461,48 @@ mod tests {
 
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
+    struct TestEnvGuard {
+        old_home: Option<String>,
+        old_localappdata: Option<String>,
+        old_userprofile: Option<String>,
+    }
+
+    impl Drop for TestEnvGuard {
+        fn drop(&mut self) {
+            match &self.old_home {
+                Some(val) => std::env::set_var("HOME", val),
+                None => std::env::remove_var("HOME"),
+            }
+            match &self.old_localappdata {
+                Some(val) => std::env::set_var("LOCALAPPDATA", val),
+                None => std::env::remove_var("LOCALAPPDATA"),
+            }
+            match &self.old_userprofile {
+                Some(val) => std::env::set_var("USERPROFILE", val),
+                None => std::env::remove_var("USERPROFILE"),
+            }
+        }
+    }
+
+    fn isolate_test_home(home: &Path) -> TestEnvGuard {
+        let guard = TestEnvGuard {
+            old_home: std::env::var("HOME").ok(),
+            old_localappdata: std::env::var("LOCALAPPDATA").ok(),
+            old_userprofile: std::env::var("USERPROFILE").ok(),
+        };
+        std::env::set_var("HOME", home);
+        std::env::set_var("LOCALAPPDATA", home.join("AppData").join("Local"));
+        std::env::set_var("USERPROFILE", home);
+        guard
+    }
+
     fn temp_home() -> PathBuf {
         let path = std::env::temp_dir().join(format!("coperceive-diag-{}", std::process::id()));
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(path.join("Library/Logs/Coperceive")).unwrap();
+        fs::create_dir_all(path.join(".local/state/coperceive")).unwrap();
+        fs::create_dir_all(path.join("AppData/Local/Coperceive/logs")).unwrap();
+        fs::create_dir_all(path.join(".coperceive/logs")).unwrap();
         path
     }
 
@@ -484,8 +522,7 @@ mod tests {
     fn crash_file_is_written_and_read_back() {
         let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let old_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &home);
+        let _env = isolate_test_home(&home);
         let record = CrashRecord {
             schema: CRASH_SCHEMA.into(),
             kind: "panic".into(),
@@ -501,17 +538,16 @@ mod tests {
         let path = write_crash(&record).expect("crash file");
         assert!(path.exists());
         assert!(crash_records().iter().any(|item| item.message == "boom"));
-        if let Some(old) = old_home { std::env::set_var("HOME", old); }
     }
 
     #[test]
+    #[cfg(unix)]
     fn every_shared_file_is_redacted_and_the_zip_matches_the_preview() {
         use std::io::Read;
 
         let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let old_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &home);
+        let _env = isolate_test_home(&home);
         let logs = log_dir();
         let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nbody-secret-base64\n-----END OPENSSH PRIVATE KEY-----";
         let log = format!(
@@ -572,15 +608,29 @@ mod tests {
         assert!(names.contains("report.txt"), "{names}");
         assert!(names.contains("crash-"), "{names}");
         assert!(names.contains("desktop.log"), "{names}");
-        if let Some(old) = old_home { std::env::set_var("HOME", old); }
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn zip_not_supported_on_windows_returns_clear_error() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let home = temp_home();
+        let _env = isolate_test_home(&home);
+        let context = serde_json::json!({"servers": []});
+        let result = save_zip(&home.join("report.zip"), &context, "");
+        if let Err(e) = result {
+            assert!(
+                e.contains("Creating a diagnostics zip is not supported on this OS yet (zip command not found)."),
+                "unexpected error: {e}"
+            );
+        }
     }
 
     #[test]
     fn sidecar_exit_record_keeps_code_and_redacts_stderr() {
         let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let old_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &home);
+        let _env = isolate_test_home(&home);
         let log = log_dir().join("serve-9.log");
         fs::write(&log, "Authorization: Bearer sidecar-auth\nuri /Users/alice/x\n").unwrap();
         record_sidecar_exit(42, &log);
@@ -589,7 +639,6 @@ mod tests {
         let backtrace = record.backtrace.unwrap_or_default();
         assert!(!backtrace.contains("sidecar-auth"), "{backtrace}");
         assert!(!backtrace.contains("/Users/alice"), "{backtrace}");
-        if let Some(old) = old_home { std::env::set_var("HOME", old); }
     }
 
     #[test]
@@ -618,15 +667,13 @@ mod tests {
     fn copied_text_is_the_preview_plus_a_redacted_note() {
         let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let old_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &home);
+        let _env = isolate_test_home(&home);
         let context = serde_json::json!({"servers": ["hpc"]});
         let text = copy_text(&context, "token=note-secret /Users/alice/x password=pass-secret");
         assert!(text.starts_with("Coperceive Diagnostics"));
         assert!(!text.contains("note-secret"), "{text}");
         assert!(!text.contains("pass-secret"), "{text}");
         assert!(!text.contains("/Users/alice"), "{text}");
-        if let Some(old) = old_home { std::env::set_var("HOME", old); }
     }
 
     #[test]
@@ -645,6 +692,7 @@ mod tests {
         std::env::remove_var("COPERCEIVE_TEST_LOG_DIR");
         std::env::remove_var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH");
     }
+
     #[test]
     fn start_run_reads_and_writes_the_overridden_log_dir() {
         // The e2e crash launch and relaunch both use COPERCEIVE_TEST_LOG_DIR:
@@ -652,8 +700,7 @@ mod tests {
         // live there, and nothing may be written under HOME.
         let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let old_home = std::env::var("HOME").ok();
-        std::env::set_var("HOME", &home);
+        let _env = isolate_test_home(&home);
         let log = home.join("override-logs");
         std::env::set_var("COPERCEIVE_TEST_ENV", "1");
         std::env::set_var("COPERCEIVE_TEST_LOG_DIR", &log);
@@ -672,11 +719,11 @@ mod tests {
             .collect();
         assert_eq!(crashes.len(), 1);
         assert!(log.join("run-marker.json").is_file(), "a fresh marker for this run");
-        let default_dir = home.join("Library/Logs/Coperceive");
+        let default_dir = crate::platform::get_log_dir();
         assert_eq!(
             fs::read_dir(&default_dir).map(|dir| dir.count()).unwrap_or(0),
             0,
-            "nothing in HOME's Library/Logs/Coperceive"
+            "nothing in default log dir"
         );
 
         clean_exit();
@@ -684,9 +731,5 @@ mod tests {
 
         std::env::remove_var("COPERCEIVE_TEST_LOG_DIR");
         std::env::remove_var("COPERCEIVE_TEST_ENV");
-        match old_home {
-            Some(old) => std::env::set_var("HOME", old),
-            None => std::env::remove_var("HOME"),
-        }
     }
 }
