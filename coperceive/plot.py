@@ -26,7 +26,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, cast
 
 import numpy as np
-from PIL import Image
 
 if TYPE_CHECKING:
     from matplotlib.axes import Axes
@@ -37,6 +36,7 @@ from coperceive.errors import CoperceiveError
 from coperceive.evaluation.geometry import WorldBox, footprint
 from coperceive.hdmap.opendrive import LAYER_LANE_CENTRE, LAYER_ROAD_EDGE, MapPolyline
 from coperceive.hdmap.store import HdMap
+from coperceive.images import open_image
 from coperceive.model import Agent, Annotation, Modality, Scene, Sensor
 from coperceive.project import (
     ProjectionStatus,
@@ -406,7 +406,7 @@ def render_overlay(
     if relative is None:
         raise PlotNotFound("image not found")
     image_file = _confine_file(scene_dir, relative)
-    opened = cast(Image.Image, Image.open(image_file))
+    opened = open_image(image_file)
     try:
         rgb = opened.convert("RGB")
         # Copy before the file closes. asarray can be a view of the Pillow buffer.

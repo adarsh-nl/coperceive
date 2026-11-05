@@ -28,6 +28,7 @@ import pyarrow.parquet as pq
 from PIL import Image
 
 from coperceive.adapters.prefetch import io_threads
+from coperceive.images import open_image
 from coperceive.store import IMAGE_SCHEMA
 
 ImageMode = Literal["originals", "previews"]
@@ -94,7 +95,7 @@ def _write_preview(source: Path, target: Path) -> bool:
         return False
     target.parent.mkdir(parents=True, exist_ok=True)
     temporary = target.with_name(f".{target.name}.tmp")
-    with Image.open(source) as image:
+    with open_image(source) as image:
         image.draft("RGB", (PREVIEW_WIDTH, PREVIEW_WIDTH))
         frame = image.convert("RGB")
         if frame.width > PREVIEW_WIDTH:

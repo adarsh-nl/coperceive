@@ -16,12 +16,14 @@ import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import TextIO, cast
+from typing import TextIO
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from PIL import Image
 
 from coperceive import __version__
+from coperceive.images import open_image
 
 IMAGE_TABLE = "images.parquet"
 IMPORT_NAME = "IMPORT.json"
@@ -159,9 +161,7 @@ def _resolve(
 
 
 def _preview_jpeg(source: Path) -> bytes:
-    from PIL import Image
-
-    opened = cast(Image.Image, Image.open(source))
+    opened = open_image(source)
     try:
         converted = opened.convert("RGB")
         converted.thumbnail((PREVIEW_EDGE, PREVIEW_EDGE), Image.Resampling.LANCZOS)
