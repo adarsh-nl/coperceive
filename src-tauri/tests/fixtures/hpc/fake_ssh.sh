@@ -267,7 +267,10 @@ case "${remote}" in
         fi
         sha=""
         if [ -f "${local_path}" ]; then
-            sha=$(shasum -a 256 "${local_path}" | cut -d" " -f1)
+            sha=$(sha256sum "${local_path}" 2>/dev/null | cut -d" " -f1)
+            if [ -z "${sha}" ]; then
+                sha=$(shasum -a 256 "${local_path}" 2>/dev/null | cut -d" " -f1)
+            fi
         fi
         exec_flag=0
         if [ -x "${local_path}" ]; then exec_flag=1; fi

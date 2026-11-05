@@ -1159,15 +1159,21 @@ def test_export_dialog_native_flow(session: _Session, tmp_path: Path) -> None:
     # Click 'Save still'
     session.page.click("div[role='dialog'] button:has-text('Save still')")
 
-    # Verify status updates and reveal button appears (Finder on macOS, folder on Linux, Explorer on Windows)
-    session.page.wait_for_selector("button:has-text('Show in Finder'), button:has-text('Show in folder'), button:has-text('Show in Explorer')", timeout=10000)
+    # Verify status updates and reveal button appears
+    # (Finder on macOS, folder on Linux, Explorer on Windows)
+    reveal_sel = (
+        "button:has-text('Show in Finder'), "
+        "button:has-text('Show in folder'), "
+        "button:has-text('Show in Explorer')"
+    )
+    session.page.wait_for_selector(reveal_sel, timeout=10000)
     note_locator = session.page.locator("div[role='dialog'] p.muted:not(#export-detail)")
     note_text = note_locator.text_content() or ""
     assert "saved_still.png" in note_text
     assert "Saved to" in note_text
 
     # Click reveal button and verify IPC was invoked
-    session.page.click("button:has-text('Show in Finder'), button:has-text('Show in folder'), button:has-text('Show in Explorer')")
+    session.page.click(reveal_sel)
     session.page.wait_for_function(
         "() => window.__TAURI_INTERNALS__.invocations.some(i => i.cmd === 'reveal_in_finder')"
     )

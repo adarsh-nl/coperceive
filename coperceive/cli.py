@@ -905,11 +905,16 @@ def _resolve_token(args: argparse.Namespace) -> str | None:
                 )
                 if proc.returncode == 0:
                     out_lower = proc.stdout.lower()
-                    forbidden = ["everyone", "builtin\\users", "nt authority\\authenticated users"]
+                    forbidden = [
+                        "everyone",
+                        "builtin\\users",
+                        "nt authority\\authenticated users",
+                    ]
                     for f in forbidden:
                         if f in out_lower:
+                            tf = args.token_file
                             print(
-                                f"--token-file {args.token_file} has loose permissions allowing {f}",
+                                f"--token-file {tf} has loose permissions allowing {f}",
                                 file=sys.stderr,
                             )
                             raise SystemExit(2)
