@@ -2500,7 +2500,6 @@ async fn open_predictions(
 
 /// Build a repro card for one finished run. The card is the same JSON
 /// `coperceive repro export` writes.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn preview_repro_card(
     app: tauri::AppHandle,

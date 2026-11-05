@@ -2351,7 +2351,7 @@ update_port = "${UPDATE_PORT}"
 def eval_js(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script, "timeout": timeout, "window": "main"}).encode("utf-8"),
+        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout + 5) as response:
@@ -3145,7 +3145,7 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script, "window": "main"}).encode("utf-8"),
+        data=json.dumps({"script": script}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout + 5) as response:
@@ -3476,7 +3476,7 @@ secrets = [
 def eval_js(code):
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": code, "timeout": 10, "window": "main"}).encode("utf-8"),
+        data=json.dumps({"script": code, "timeout": 10}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(request, timeout=15) as response:
@@ -3540,7 +3540,7 @@ import json, sys, urllib.request
 port, secret = sys.argv[1], sys.argv[2]
 request = urllib.request.Request(
     f"http://127.0.0.1:{port}/eval",
-    data=json.dumps({"script": "(() => { const b = Array.from(document.querySelectorAll('button')).find(x => (x.textContent || '').trim() === 'Close'); if (b) b.click(); })()", "timeout": 10, "window": "main"}).encode(),
+    data=json.dumps({"script": "(() => { const b = Array.from(document.querySelectorAll('button')).find(x => (x.textContent || '').trim() === 'Close'); if (b) b.click(); })()", "timeout": 10}).encode(),
     headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
 )
 urllib.request.urlopen(request, timeout=15).read()
@@ -3597,7 +3597,7 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(script, timeout=20):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script}).encode("utf-8"),
+        data=json.dumps({"script": script, "window": "main"}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout + 5) as response:
