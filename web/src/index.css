@@ -2868,3 +2868,579 @@ main > .tab-panel:not([hidden]) {
 .dv-insp-button.is-ok { background: var(--dv-ready); border-color: var(--dv-ready); color: #fff; }
 .dv-insp-button.is-danger { border-color: var(--dv-failed); color: var(--dv-failed); }
 .dv-insp-button.is-warn { border-color: var(--dv-stale); color: var(--dv-stale); }
+
+/* ------------------------------------------------------------------ */
+/* Scene viewer, v0.1.1 layout (docs/design/v0.1.1/Scene Viewer.dc.html):
+   flush side panels, the stage with its chips, the camera strip and the
+   timeline under it, scene stats / selection / radar on the right. */
+
+.viewer .workspace { padding: 0; }
+.viewer .workspace > .panel {
+  border-radius: 0;
+  box-shadow: none;
+  border: 0;
+  padding: 12px 16px;
+  background: var(--panel);
+}
+.viewer .workspace > .panel:not(.panel-right) { border-right: 1px solid var(--line); }
+.viewer .workspace > .panel-right { border-left: 1px solid var(--line); }
+.viewer .workspace > .stage { gap: 0; background: var(--viewport); }
+.viewer .viewport { border-radius: 0; box-shadow: none; }
+.viewer .panel-resizer-vertical::after { opacity: 0; }
+
+/* Section heads: sentence case, a muted count on the right. */
+.viewer .panel h2,
+.viewer .panel summary,
+.viewer .side-card h3 {
+  font-size: 11.5px;
+  letter-spacing: 0;
+  text-transform: none;
+  font-weight: 500;
+  color: var(--muted);
+}
+.viewer .panel summary { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; cursor: pointer; }
+.viewer .panel summary::marker { content: ""; }
+.viewer .panel summary::-webkit-details-marker { display: none; }
+.summary-meta { margin-left: auto; font-size: 11.5px; color: var(--muted); }
+.viewer .panel details { padding: 12px 0; margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+.viewer .panel details.cam-fold { margin: 0; padding: 2px 0 0; }
+.viewer .checks { gap: 2px; }
+
+/* Layer and agent rows. */
+.eye-meta { margin-left: auto; color: var(--muted); font-size: 11.5px; font-weight: 400; }
+.viewer .eye { grid-template-columns: 16px 1fr auto; padding: 6px 0; font-weight: 450; }
+.viewer .agent-list { gap: 4px; }
+.viewer .agent-list .swatch {
+  grid-template-columns: 10px minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  column-gap: 12px;
+  row-gap: 1px;
+  padding: 5px 0;
+}
+.viewer .agent-list .swatch i { grid-row: 1 / span 2; width: 10px; height: 10px; border-radius: 2px; }
+.viewer .agent-list .swatch > span:first-of-type { grid-column: 2; grid-row: 1; font-weight: 500; }
+.viewer .agent-list .agent-role { grid-column: 2; grid-row: 2; font-size: 11px; color: var(--muted); font-weight: 400; }
+.viewer .agent-list .agent-points { grid-column: 3; grid-row: 1 / span 2; font-size: 11.5px; }
+
+/* Appearance: label left, control right. */
+.viewer .panel .stack > .seg-field,
+.viewer .panel .stack > .slider-field { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 10px; }
+.viewer .panel .stack > .seg-field .field-label,
+.viewer .panel .stack > .slider-field .field-label { text-transform: none; letter-spacing: 0; font-size: 12.5px; color: var(--text); font-weight: 400; }
+.viewer .panel .stack > .seg-field .seg { grid-column: 2 / span 2; }
+.viewer .checks > .slider-field { display: grid; grid-template-columns: 76px minmax(0, 1fr) auto; align-items: center; gap: 10px; padding: 4px 0; }
+.viewer .checks > .slider-field .field-label { text-transform: none; letter-spacing: 0; font-size: 12px; }
+.slider-value { font-size: 11.5px; color: var(--muted); min-width: 30px; text-align: right; }
+.viewer .seg button { padding: 5px 8px; font-size: 12.5px; }
+
+/* Predictions with no run. */
+.pred-empty-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 12.5px; }
+.pred-empty-row button { height: 28px; padding: 0 12px; border: 1px solid var(--line-elevated); border-radius: 6px; font-size: 12.5px; }
+.pred-empty p { margin: 10px 0 0; font-size: 11.5px; line-height: 1.5; }
+
+/* Top bar: dataset / ‹ scene › · k of n, and where the scene comes from. */
+.scene-nav { display: inline-flex; align-items: center; gap: 2px; padding: 2px; border-radius: 8px; background: var(--sunken); }
+.scene-nav .scene-step { width: 24px; height: 26px; font-size: 15px; letter-spacing: 0; padding: 0; }
+.scene-nav .menu-button { font-family: "Geist Mono Variable", ui-monospace, monospace; font-size: 12.5px; }
+.crumb-count { font-size: 12px; color: var(--muted); white-space: nowrap; }
+.conn-state { display: inline-flex; align-items: center; gap: 7px; font-size: 12px; color: var(--muted); white-space: nowrap; max-width: 34ch; overflow: hidden; text-overflow: ellipsis; }
+.conn-state i { flex: none; width: 6px; height: 6px; border-radius: 99px; background: #3fb950; }
+.conn-state.wait i { background: #f58a1f; }
+.conn-state.bad i { background: var(--danger); }
+
+/* Stage chips: square-ish glass, pointer-transparent except the mode switch. */
+.viewer .glass { border-radius: 7px; background: rgba(14, 14, 14, 0.72); }
+.viewer .status-pill { top: 12px; left: 12px; font-size: 12px; }
+.frame-pill { top: 12px; right: 12px; padding: 6px 10px; font-size: 12px; pointer-events: none; white-space: nowrap; }
+.viewer .view-pill { top: 12px; right: auto; left: 50%; transform: translateX(-50%); padding: 3px; border-radius: 8px; }
+.viewer .view-slide { border-radius: 6px; }
+.viewer .view-pill button { border-radius: 6px; padding: 6px 12px; font-size: 12.5px; }
+.viewer .view-pill button::after {
+  content: attr(data-key);
+  margin-left: 6px;
+  font-family: "Geist Mono Variable", ui-monospace, monospace;
+  font-size: 10px;
+  opacity: 0.5;
+}
+.viewer .legend { left: 12px; bottom: 12px; font-size: 11.5px; padding: 7px 12px; border-radius: 7px; }
+.scale-bar {
+  position: absolute;
+  z-index: 2;
+  right: 14px;
+  bottom: 14px;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  pointer-events: none;
+  color: #c9c9c0;
+  font-size: 11px;
+  font-family: "Geist Mono Variable", ui-monospace, monospace;
+}
+.scale-bar[hidden] { display: none; }
+.scale-bar b {
+  display: block;
+  width: var(--bar, 60px);
+  height: 5px;
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-top: 0;
+}
+.pick-tag {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(10, 10, 10, 0.72);
+  color: #f4f4ed;
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+/* Camera strip: one agent's cameras, a label column on the left. */
+.viewer .cam-strip { border-radius: 0; border: 0; border-top: 1px solid var(--line); background: var(--panel); box-shadow: none; }
+.viewer .cam-group { border-left: 0; padding-left: 0; }
+.cam-group-head { display: flex; flex-direction: column; gap: 2px; min-width: 96px; }
+.viewer .cam-group-name { font-size: 12.5px; color: var(--text); text-transform: none; letter-spacing: 0; display: inline-flex; align-items: center; gap: 6px; }
+.viewer .cam-group-name::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--agent, var(--vehicle)); }
+.cam-switch { align-self: flex-start; padding: 0; border: 0; background: none; color: var(--accent); font-size: 12px; cursor: pointer; }
+.cam-switch:hover { text-decoration: underline; }
+.cam-thumb-count {
+  position: absolute;
+  right: 6px;
+  bottom: 4px;
+  font-size: 10.5px;
+  color: #c9c9c0;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.8);
+  pointer-events: none;
+}
+.viewer .status-line { padding: 4px 16px; background: var(--panel); font-size: 11.5px; }
+
+/* Timeline under the stage. */
+.viewer .stage > .timeline { margin: 0; border-radius: 0; border: 0; border-top: 1px solid var(--line); box-shadow: none; padding: 10px 16px 12px; }
+.viewer .timeline-tools { flex-wrap: nowrap; gap: 6px; }
+.viewer .timeline-tools .clock { margin: 0 0 0 10px; display: inline-flex; align-items: baseline; gap: 0; white-space: nowrap; }
+.viewer .clock strong { font-weight: 500; color: var(--text); font-size: 14px; }
+.viewer .clock .clock-total { color: var(--muted); margin-left: 4px; }
+.viewer .clock .clock-sample { margin-left: 10px; }
+.timeline-spacer { flex: 1; }
+.speed-seg { flex: none; }
+.speed-seg button { min-width: 38px; font-size: 12px; }
+.loop-btn { height: 28px; padding: 0 12px; border: 1px solid var(--line-elevated); border-radius: 6px; font-size: 12.5px; }
+.loop-btn[aria-pressed="true"] { background: var(--sunken); border-color: var(--text); }
+.timeline-body { display: grid; grid-template-columns: 68px minmax(0, 1fr) auto; align-items: end; column-gap: 12px; margin-top: 8px; }
+.hist-label { font-size: 10.5px; color: var(--muted); text-align: right; line-height: 1.2; padding-bottom: 8px; }
+.viewer .timeline-chart { margin-top: 0; }
+.viewer .ticks { position: relative; top: auto; height: 14px; margin-bottom: 2px; }
+.hist { display: flex; align-items: flex-end; gap: 1px; height: 22px; }
+.hist i { flex: 1; min-width: 1px; background: var(--line-elevated); border-radius: 1px 1px 0 0; }
+.hist i.past { background: color-mix(in srgb, var(--text) 38%, transparent); }
+.viewer .track { height: 14px; margin-top: 2px; }
+.viewer .track::before { top: 6px; height: 2px; border-radius: 1px; background: var(--line-elevated); }
+.track-fill { position: absolute; left: 0; top: 6px; height: 2px; border-radius: 1px; background: var(--text); pointer-events: none; }
+.track-thumb {
+  position: absolute;
+  top: 1px;
+  width: 12px;
+  height: 12px;
+  margin-left: -6px;
+  border-radius: 99px;
+  background: var(--text);
+  border: 2px solid var(--panel);
+  pointer-events: none;
+  z-index: 3;
+}
+.viewer .marker { top: 4px; width: 6px; height: 6px; margin-left: -3px; background: var(--muted); }
+.viewer .marker.marker-gap { top: 2px; width: 2px; height: 10px; margin-left: -1px; transform: none; border-radius: 1px; background: var(--eval-fp); }
+.viewer .playhead { top: 14px; bottom: 14px; width: 1px; background: color-mix(in srgb, var(--text) 70%, transparent); }
+.viewer .flag { display: none; }
+.gap-legend { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); white-space: nowrap; padding-bottom: 2px; min-width: 0; }
+.gap-legend i { width: 2px; height: 10px; border-radius: 1px; background: var(--eval-fp); }
+
+/* Right panel. */
+.viewer .side-card { padding: 12px 0; border-top: 1px solid var(--line); margin: 0 -16px; padding-left: 16px; padding-right: 16px; }
+.viewer .panel-right > .side-card:first-child { border-top: 0; padding-top: 0; }
+.viewer .side-card h3 { display: flex; align-items: center; margin-bottom: 12px; }
+.side-card-action { margin-left: auto; padding: 0; border: 0; background: none; color: var(--muted); font-size: 11.5px; cursor: pointer; }
+.side-card-action:hover { color: var(--text); }
+.viewer .stat-grid { row-gap: 12px; }
+.viewer .stat-grid dt { text-transform: none; letter-spacing: 0; font-size: 11.5px; }
+.viewer .side-card[aria-label="Scene summary"] .stat-grid dd { font-size: 16px; font-weight: 500; }
+.sel-title { display: flex; align-items: baseline; gap: 8px; margin: 0 0 12px; }
+.sel-title strong { font-size: 15px; font-weight: 600; }
+.sel-title .num { color: var(--muted); font-size: 12px; }
+.dist-head { margin: 14px 0 6px; font-size: 11.5px; color: var(--muted); }
+.viewer .distance-list { margin: 0; display: flex; flex-direction: column; gap: 3px; }
+.viewer .distance-list li { display: grid; grid-template-columns: minmax(0, 1fr) 72px 52px; align-items: center; font-size: 12px; }
+.viewer .distance-list li > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer .distance-list li .num { text-align: right; }
+.viewer .distance-list li.unseen { opacity: 0.45; }
+.dist-bar { height: 3px; border-radius: 2px; background: var(--line-elevated); overflow: hidden; }
+.dist-bar i { display: block; height: 100%; background: var(--text); opacity: 0.7; }
+.dist-note { margin: 6px 0 0; font-size: 11px; }
+.viewer .radar-card { flex: none; min-height: 0; }
+.radar-body { display: grid; grid-template-columns: minmax(0, 120px) minmax(0, 1fr); gap: 12px; align-items: center; }
+.radar-body p { margin: 0; font-size: 11.5px; line-height: 1.5; }
+.radar-bg { fill: #141414; }
+.radar-ring { stroke: #2e2e2e; }
+.radar-text { fill: #a3a3a3; }
+.radar-box { fill: #8a8a8a; }
+.radar-picked { fill: #f4f4ed; }
+.side-fold { border-top: 1px solid var(--line); margin: 0 -16px; padding: 12px 16px 0; }
+.side-fold summary { cursor: pointer; font-size: 11.5px; color: var(--muted); margin-bottom: 4px; }
+.side-fold[open] summary { margin-bottom: 8px; }
+.side-fold .tele:first-of-type { border-top: 0; padding-top: 0; }
+.viewer .cam-strip[data-open="true"] { padding: 8px 16px; gap: 14px; }
+.viewer .cam-groups { flex: 1; }
+.viewer .cam-group { flex: 1; min-width: 0; flex-direction: row; gap: 14px; }
+.viewer .cam-thumbs { flex: 1; min-width: 0; gap: 8px; }
+.viewer .cam-thumb-wrap { flex: 1 1 0; min-width: 112px; max-width: 300px; }
+.viewer .cam-thumb { width: 100%; height: 100%; min-height: 56px; border-radius: 6px; }
+.viewer .cam-thumb-name {
+  top: 0;
+  bottom: auto;
+  padding: 4px 7px;
+  font-family: "Geist Mono Variable", ui-monospace, monospace;
+  font-size: 10.5px;
+  background: linear-gradient(rgba(0, 0, 0, 0.55), transparent);
+}
+.viewer .timeline-body { align-items: start; }
+.viewer .hist-label { padding: 18px 0 0; }
+.viewer .gap-legend { padding-top: 40px; }
+.viewer .glass, .viewer .scale-bar { z-index: 3; }
+.viewer .view-pill button { white-space: nowrap; }
+.viewer .empty-pill { top: 56px; left: 12px; border-radius: 7px; }
+.viewer .side-card p.muted { font-size: 11.5px; margin: 8px 0 0; }
+
+/* Crash notice and diagnostics: calm, non-blocking, review-before-share. */
+/* Above whichever screen the main window shows (Library/HPC shell or viewer),
+   below the top bar, without moving the layout. */
+.crash-notice {
+  position: fixed;
+  top: 60px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  max-width: calc(100vw - 32px);
+  padding: 0.4rem 0.85rem;
+  font-size: 0.8rem;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid var(--line-elevated);
+  border-radius: 8px;
+  box-shadow: var(--shadow);
+}
+.link-button {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent, #7dd3fc);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.diagnostics-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+.diagnostics-dialog,
+.error-panel {
+  width: min(760px, calc(100vw - 2rem));
+  max-height: calc(100vh - 3rem);
+  overflow: auto;
+  padding: 1rem 1.1rem;
+  border: 1px solid var(--border, #2d3748);
+  border-radius: 10px;
+  background: var(--surface, #151b26);
+  color: inherit;
+}
+.error-panel h1 { font-size: 1.05rem; margin: 0 0 0.35rem; }
+.diagnostics-note { display: grid; gap: 0.3rem; font-size: 0.8rem; }
+.diagnostics-note textarea { width: 100%; resize: vertical; }
+.diagnostics-preview {
+  max-height: 42vh;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.72rem;
+  background: var(--surface-2, #1b2230);
+  border: 1px solid var(--border, #2d3748);
+  border-radius: 6px;
+  padding: 0.6rem;
+}
+.diagnostics-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.6rem;
+}
+
+/* Viewer layout fixes (v0.1.0): nothing in the top bar, the stage chip row or
+   the left panel may overlap or clip, at any window size down to the minimum. */
+
+/* Top bar: one flex row. Brand and crumb first; the crumb's connection text is
+   the part that gives way (ellipsis, full text in its tooltip), then the dataset
+   label; the scene menu, ‹ ›, "k of n" and the buttons on the right never shrink. */
+.topbar { display: flex; justify-content: space-between; }
+.topbar > .top-cluster:first-child { flex: 1 1 auto; min-width: 0; }
+.topbar > .tabs, .topbar > .top-end { flex: none; }
+.topbar .top-slot { flex: 1 1 auto; min-width: 0; }
+.topbar .crumb { flex: 1 1 auto; min-width: 0; }
+.topbar .crumb > * { flex: none; }
+/* Shrink factors: the connection text gives way first; the others only once it is
+   down to its dot (their share before that rounds to nothing, so no early ellipsis;
+   factors of 1 so they then take the whole overflow, not a fraction of it). */
+.topbar .crumb > .crumb-dataset { flex: 0 1 auto; min-width: 3ch; overflow: hidden; text-overflow: ellipsis; }
+.topbar .crumb > .dataset-badge { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+/* At its narrowest only the status dot stays (the text is in its tooltip). */
+.topbar .crumb > .conn-state { flex: 0 100000 auto; min-width: 6px; max-width: none; margin-left: 4px; }
+.conn-state .conn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar .crumb > .job-badge { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.topbar .top-actions { flex-wrap: nowrap; }
+.topbar .top-actions > * { flex: none; }
+
+/* Stage chips: title left, mode switch centred, frame right, in a grid whose side
+   columns truncate before they reach the switch. Narrow stages put the switch on
+   its own row, then shorten the chips ("t = 7.5 s", "99 m"). */
+.viewer .viewport { container: stage / inline-size; }
+.stage-chips {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  pointer-events: none;
+}
+.viewer .stage-chips .glass { position: relative; top: auto; right: auto; bottom: auto; left: auto; transform: none; }
+.viewer .stage-chips .status-pill { grid-column: 1; grid-row: 1; justify-self: start; max-width: 100%; min-width: 0; }
+.stage-chips .chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-chips .view-row { grid-column: 2; grid-row: 1; display: flex; justify-content: center; min-width: 0; max-width: 100%; }
+.viewer .stage-chips .view-pill { pointer-events: auto; flex: none; }
+.stage-chips .chip-end { grid-column: 3; grid-row: 1; justify-self: end; display: flex; gap: 8px; min-width: 0; max-width: 100%; }
+.viewer .stage-chips .frame-pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.stage-chips .frame-sep { white-space: pre; }
+.stage-chips .frame-sep:has(+ .frame-extent:empty) { display: none; }
+.viewer .stage-chips .exit-pill { pointer-events: auto; padding: 3px; border-radius: 7px; flex: none; }
+.viewer .stage-chips .empty-pill { grid-column: 1 / -1; grid-row: 2; justify-self: start; max-width: 100%; }
+@container stage (max-width: 900px) {
+  .stage-chips { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
+  .stage-chips .view-row { grid-column: 1 / -1; grid-row: 2; }
+  .stage-chips .chip-end { grid-column: 2; }
+  .viewer .stage-chips .empty-pill { grid-row: 3; }
+}
+@container stage (max-width: 560px) {
+  .stage-chips .chip-long { display: none; }
+  .viewer .stage-chips .view-pill button { padding: 5px 8px; }
+  .viewer .stage-chips .view-pill button::after { display: none; }
+}
+@container stage (max-width: 400px) {
+  .stage-chips .view-row { justify-content: flex-start; overflow-x: auto; scrollbar-width: none; pointer-events: auto; }
+}
+/* The legend and the scale bar share the bottom edge: the legend wraps first
+   (the bar is at most 96 px plus its label); a very narrow stage drops the bar. */
+.viewer .viewport .legend { max-width: calc(100% - 196px); }
+@container stage (max-width: 420px) {
+  .viewer .viewport .legend { max-width: calc(100% - 24px); }
+  .viewer .viewport .scale-bar { display: none; }
+}
+
+/* Left panel: never wider than itself, so a sideways trackpad swipe cannot scroll
+   it and clip the start of every row. Labels wrap, counts stay right-aligned, and
+   long notes wrap inside the panel. */
+.viewer .workspace > .panel { overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: none; }
+.viewer .panel .eye { grid-template-columns: 16px minmax(0, 1fr) minmax(0, max-content); white-space: normal; }
+.viewer .panel .eye > span:not(.eye-meta) { min-width: 0; overflow-wrap: anywhere; }
+.viewer .panel .eye-meta { min-width: 0; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.viewer .panel .empty-state,
+.viewer .panel .empty-state p,
+.viewer .panel .empty-state button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.viewer .panel .agent-list .swatch > span:first-of-type,
+.viewer .panel .agent-list .agent-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer .panel summary > :first-child { min-width: 0; }
+
+/* Camera strip head: the C toggle, and the All | Agent quick toggle under it
+   (it writes Settings → Viewer → "Camera strip"). */
+.cam-strip-head { flex: none; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 6px; min-width: 0; }
+.cam-strip[data-open="false"] .cam-strip-head { flex-direction: row; align-items: center; }
+.viewer .cam-mode { padding: 2px; border-radius: 6px; }
+.viewer .cam-mode button { padding: 2px 8px; font-size: 11.5px; border-radius: 4px; color: var(--muted); }
+.viewer .cam-mode button[aria-checked="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(28, 28, 28, 0.06); }
+.viewer .cam-strip .cam-group-head { flex: none; min-width: 0; max-width: 140px; }
+.viewer .cam-strip .cam-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Filmstrip: every agent's cameras in one row, scrolled sideways (trackpad,
+   Shift and the wheel) and settling per thumbnail (cameras.tsx); thumbnails keep
+   the camera's aspect ratio and never scroll vertically. */
+.viewer .cam-groups.cam-film {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+}
+.viewer .cam-film .cam-group { flex: none; min-width: auto; }
+.viewer .cam-film .cam-thumbs { flex: none; min-width: auto; }
+.viewer .cam-film .cam-thumb-wrap {
+  flex: none;
+  height: 100%;
+  width: auto;
+  aspect-ratio: var(--ratio, 1.7778);
+  min-width: 0;
+  max-width: none;
+}
+.viewer .cam-thumb-name { display: flex; align-items: center; gap: 5px; min-width: 0; padding-right: 30px; white-space: nowrap; overflow: hidden; }
+.viewer .cam-thumb-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.viewer .cam-thumb-name > .cam-thumb-sensor { flex: none; max-width: 60%; }
+.cam-thumb-swatch { flex: none; width: 7px; height: 7px; border-radius: 2px; background: var(--agent, var(--vehicle)); }
+.cam-thumb-agent { font-family: "Geist Variable", system-ui, sans-serif; font-weight: 500; }
+.cam-thumb-sep { flex: none; opacity: 0.6; }
+.viewer .cam-thumb-wrap.is-selected .cam-thumb { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* In the filmstrip a thumbnail names its agent on the first line, the camera under it. */
+.viewer .cam-film .cam-thumb-name { flex-wrap: wrap; row-gap: 0; }
+.viewer .cam-film .cam-thumb-agent { flex: 1 1 0; }
+.viewer .cam-film .cam-thumb-sep { display: none; }
+.viewer .cam-film .cam-thumb-name > .cam-thumb-sensor { flex: 0 0 100%; max-width: none; padding-left: 12px; opacity: 0.85; }
+
+/* Saved panel widths can outgrow a smaller window: the panels give way down to
+   their minimums (layout.ts MIN_LEFT_PX / MIN_RIGHT_PX) before the 3D view goes
+   under MIN_STAGE_WIDTH. */
+.viewer .workspace > .panel { flex: 0 1 auto; min-width: 180px; }
+.viewer .workspace > .panel-right { min-width: 200px; }
+.viewer .workspace > .stage { min-width: 250px; }
+.viewer .workspace.is-fullscreen > .stage { min-width: 0; }
+
+/* Update notice: a compact card at the bottom of the sidebar, above Settings
+   (the main window's; the viewer only has a small "Update ready" in its top bar). */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.update-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 11%, var(--panel));
+  font-size: 12px;
+  outline: none;
+}
+.update-card:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.update-card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.update-card-title { color: var(--primary-hover); font-weight: 560; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-card-version { color: var(--text-secondary, var(--muted)); font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-card-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-subtle, var(--muted));
+  font-size: 10px;
+  cursor: pointer;
+}
+.update-card-close:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); }
+.update-card-notes {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary-hover);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.update-card-notes:hover { text-decoration: underline; }
+.update-pill {
+  flex: none;
+  height: 22px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11.5px;
+  font-weight: 560;
+  cursor: pointer;
+}
+.update-pill:hover { background: var(--primary-hover); }
+.update-card-error { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
+.update-card-message { min-width: 0; color: var(--text); font-size: 11.5px; line-height: 1.4; }
+.update-notes {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  padding: 10px 12px;
+  border: 1px solid var(--line-elevated, var(--line));
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  color: var(--text);
+}
+.update-notes p { margin: 6px 0 0; line-height: 1.45; color: var(--text-secondary, var(--muted)); white-space: pre-wrap; }
+.update-toast {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--line-elevated, var(--line));
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.85rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.update-dot-host { position: relative; display: inline-flex; }
+.update-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.update-dot span {
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.top-update { display: inline-flex; flex: none; }
+.top-update:empty { display: none; }
+.topbar .viewer-update-dot { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; color: var(--primary-hover); font-size: 12px; }
+.viewer-update-dot i { width: 7px; height: 7px; border-radius: 999px; background: var(--accent); }

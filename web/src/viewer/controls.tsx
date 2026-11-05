@@ -93,10 +93,13 @@ export function EyeToggle({
   on,
   label,
   onChange,
+  meta,
 }: {
   on: boolean;
   label: string;
   onChange: () => void;
+  /** A count or note at the row's end ("70.1k", "Town05"); the switch's name stays `label`. */
+  meta?: ReactNode;
 }) {
   return (
     <button
@@ -110,6 +113,7 @@ export function EyeToggle({
     >
       <EyeIcon open={on} />
       <span>{label}</span>
+      {meta !== undefined && meta !== null ? <span className="eye-meta num">{meta}</span> : null}
     </button>
   );
 }
@@ -230,6 +234,7 @@ export function Slider({
   max,
   step,
   onChange,
+  valueText,
 }: {
   label: string;
   value: number;
@@ -237,6 +242,8 @@ export function Slider({
   max: number;
   step: number;
   onChange: (value: number) => void;
+  /** What the value reads as, e.g. "2 px"; a share ("60%") by default. */
+  valueText?: string;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const ratio = max <= min ? 0 : (value - min) / (max - min);
@@ -260,7 +267,7 @@ export function Slider({
         aria-valuemin={min}
         aria-valuemax={max}
         aria-valuenow={value}
-        aria-valuetext={`${Math.round(value * 100)}%`}
+        aria-valuetext={valueText ?? `${Math.round(value * 100)}%`}
         aria-label={label}
         style={{ ["--at" as string]: `${ratio * 100}%` }}
         onPointerDown={(event) => {
@@ -284,6 +291,9 @@ export function Slider({
       >
         <i style={{ width: `${ratio * 100}%` }} />
       </div>
+      <span className="slider-value num" aria-hidden="true">
+        {valueText ?? `${Math.round(value * 100)}%`}
+      </span>
     </div>
   );
 }

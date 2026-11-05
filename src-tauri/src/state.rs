@@ -449,10 +449,29 @@ pub struct AppPersistentState {
     /// recording day read from the scene name). "none" by default.
     #[serde(default = "default_dataset_grouping")]
     pub dataset_grouping: String,
+
+    /// The viewer's camera strip (Settings → Viewer → "Camera strip", and the
+    /// strip's own toggle): "all" (every camera in one horizontally scrolling
+    /// filmstrip) or "agent" (one agent's cameras with Switch agent). "all" by default.
+    #[serde(default = "default_camera_strip")]
+    pub camera_strip: String,
 }
 
 /// The values "Group scenes" may hold; anything else is ignored.
 pub const DATASET_GROUPINGS: [&str; 3] = ["none", "state", "day"];
+
+/// The values "Camera strip" may hold; anything else is ignored.
+pub const CAMERA_STRIP_MODES: [&str; 2] = ["all", "agent"];
+
+fn default_camera_strip() -> String {
+    "all".to_string()
+}
+
+/// A camera strip mode from a settings update, when it is one of [`CAMERA_STRIP_MODES`].
+pub fn camera_strip_from(value: &serde_json::Value) -> Option<String> {
+    let text = value.as_str()?;
+    CAMERA_STRIP_MODES.contains(&text).then(|| text.to_string())
+}
 
 fn default_dataset_grouping() -> String {
     "none".to_string()
@@ -569,6 +588,7 @@ impl Default for AppPersistentState {
             open_first_ready_scene: true,
             remote_view_cache_bytes: DEFAULT_REMOTE_VIEW_CACHE_BYTES,
             dataset_grouping: default_dataset_grouping(),
+            camera_strip: default_camera_strip(),
         }
     }
 }
@@ -780,6 +800,20 @@ mod camera_images_tests {
 #[cfg(test)]
 pub mod tests {
     #[test]
+    fn camera_strip_defaults_to_all_and_accepts_only_known_values() {
+        assert_eq!(AppPersistentState::default().camera_strip, "all");
+        // A state.json written before the setting existed reads as the filmstrip.
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert_eq!(old.camera_strip, "all");
+        for value in CAMERA_STRIP_MODES {
+            assert_eq!(camera_strip_from(&serde_json::json!(value)).as_deref(), Some(value));
+        }
+        for value in [serde_json::json!("one"), serde_json::json!(""), serde_json::json!(2), serde_json::Value::Null] {
+            assert_eq!(camera_strip_from(&value), None, "{value}");
+        }
+    }
+
+    #[test]
     fn dataset_grouping_defaults_to_none_and_accepts_only_known_values() {
         assert_eq!(AppPersistentState::default().dataset_grouping, "none");
         // A state.json written before the setting existed reads as "none".
@@ -891,6 +925,7 @@ pub mod tests {
             open_first_ready_scene: false,
             remote_view_cache_bytes: 512 * 1024 * 1024,
             dataset_grouping: "day".into(),
+            camera_strip: "agent".into(),
         };
 
         let json = serde_json::to_string(&state).expect("serialize");

@@ -12,6 +12,7 @@ import { SettingRow } from "./components/SettingRow";
 import { Button } from "./components/Button";
 import { IconButton } from "./components/IconButton";
 import { useDatasetGrouping } from "./hpc/groupingSetting";
+import { useCameraStripMode, type CameraStripMode } from "../viewer/cameraStripSetting";
 import type { DatasetGrouping } from "./hpc/grouping";
 
 function SettingsGroup({
@@ -58,8 +59,14 @@ const GROUPING_CHOICES: ReadonlyArray<readonly [DatasetGrouping, string, string]
   ["day", "By recording day", "From scene names that hold a date (YYYY_MM_DD_HH_MM_SS): the day the data was recorded."],
 ];
 
+const CAMERA_STRIP_CHOICES: ReadonlyArray<readonly [CameraStripMode, string, string]> = [
+  ["all", "All cameras (scroll)", "Every agent's cameras in one filmstrip under the 3D view; scroll it sideways with the trackpad or Shift and the wheel."],
+  ["agent", "One agent at a time", "One agent's cameras, larger, with Switch agent to move to the next."],
+];
+
 export function DesktopPreferences() {
   const [grouping, setGrouping] = useDatasetGrouping();
+  const [cameraStrip, setCameraStrip] = useCameraStripMode();
   const [reopenLast, setReopenLast] = useState<boolean>(true);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(true);
   const [autoNextScene, setAutoNextScene] = useState<boolean>(false);
@@ -218,6 +225,27 @@ export function DesktopPreferences() {
             description="When a scene ends, play the next prepared one. Off: a note offers it instead."
             onChange={handleAutoNextToggle}
           />
+        </div>
+        <div
+          role="radiogroup"
+          aria-label="Camera strip"
+          style={{ borderTop: "1px solid var(--line-subtle)", display: "flex", flexDirection: "column" }}
+        >
+          <div style={{ padding: "8px 0 2px", fontSize: "13px", fontWeight: 500, color: "var(--text)" }}>
+            Camera strip
+          </div>
+          {CAMERA_STRIP_CHOICES.map(([value, title, description]) => (
+            <SettingRow
+              key={value}
+              type="radio"
+              name="camera-strip"
+              value={value}
+              checked={cameraStrip === value}
+              title={title}
+              description={description}
+              onChange={() => setCameraStrip(value)}
+            />
+          ))}
         </div>
       </SettingsGroup>
 

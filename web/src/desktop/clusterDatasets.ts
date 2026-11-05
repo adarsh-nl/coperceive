@@ -705,10 +705,16 @@ export async function remoteViewCache(change: { capBytes?: number; clear?: boole
 /** Cap choices for the viewing cache, in bytes (2 GB is the default). */
 export const VIEWING_CACHE_CAPS = [1, 2, 5, 10, 20].map((gb) => gb * 1024 ** 3);
 
-/** Tell the viewer every scene of this dataset and its state, for its scene list. */
-export async function shareDatasetScenesWithViewer(scenes: { scene_id: string; state: string }[]): Promise<void> {
+/**
+ * Tell the viewer every scene of this dataset and its state, for its scene list,
+ * with the dataset's name ("V2XSET train") and the server it streams from.
+ */
+export async function shareDatasetScenesWithViewer(
+  scenes: { scene_id: string; state: string }[],
+  about: { label?: string; server?: string } = {},
+): Promise<void> {
   if (isTauriEnvironment()) {
-    await tauriInvoke<void>("set_viewer_dataset_scenes", { dataset: { scenes } });
+    await tauriInvoke<void>("set_viewer_dataset_scenes", { dataset: { scenes, ...about } });
   }
 }
 

@@ -25,6 +25,8 @@ export type Appearance = {
   splitCamera: string | null;
   /** Share of the row the 3D view keeps in the split view. */
   splitRatio: number;
+  /** The radar card in the right panel is shown (its Hide button turns it off). */
+  radarOpen: boolean;
 };
 
 export const VIEW_KEY = "coperceive-view";
@@ -95,6 +97,7 @@ export function defaultAppearance(): Appearance {
     stripOpen: true,
     splitCamera: null,
     splitRatio: 0.58,
+    radarOpen: true,
   };
 }
 
@@ -185,6 +188,7 @@ export function loadAppearance(): Appearance {
       stripOpen: bool(row.stripOpen, base.stripOpen),
       splitCamera: typeof row.splitCamera === "string" && row.splitCamera.length < 160 ? row.splitCamera : null,
       splitRatio: ratio(row.splitRatio, base.splitRatio),
+      radarOpen: bool(row.radarOpen, base.radarOpen),
     };
   } catch {
     return base;
@@ -218,6 +222,7 @@ function writeAppearance(value: Appearance): void {
     stripOpen: value.stripOpen,
     splitCamera: value.splitCamera,
     splitRatio: value.splitRatio,
+    radarOpen: value.radarOpen,
   };
   localStorage.setItem(VIEW_KEY, JSON.stringify(stored));
 }

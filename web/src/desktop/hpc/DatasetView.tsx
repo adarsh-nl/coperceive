@@ -534,8 +534,14 @@ export default function DatasetView({
         scene_id: scene.scene_id,
         state: statuses.get(scene.scene_id)?.state ?? "not_prepared",
       })),
+      {
+        label: [(indexDoc.adapter || dataset.adapter || "dataset").toUpperCase(), indexDoc.split ?? dataset.split ?? ""]
+          .filter(Boolean)
+          .join(" "),
+        server: profile.profile.name,
+      },
     ).catch(() => undefined);
-  }, [indexDoc, statuses, initialStatuses]);
+  }, [indexDoc, statuses, initialStatuses, dataset.adapter, dataset.split, profile.profile.name]);
 
   const handleOpenScene = async (sceneId: string) => {
     const currentStatus = statuses.get(sceneId)?.state ?? "not_prepared";
