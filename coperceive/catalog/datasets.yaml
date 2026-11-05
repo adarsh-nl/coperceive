@@ -98,6 +98,6 @@ datasets:
     licence: "unknown"
     source_url: "https://github.com/ucla-mobility/V2V4Real"
     paper_url: "https://arxiv.org/abs/2303.07601"
-    status: "planned"
+    status: "local-import"
     requires_terms: false
-    notice: "Not available yet. The data licence was not stated in the repository README checked on 2026-10-24."
+    notice: "The adapter accepts an extracted OpenCOOD-style V2V4Real tree. The data licence was not stated in the repository README checked on 2026-10-24."

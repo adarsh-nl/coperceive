@@ -36,6 +36,7 @@ from coperceive.remote.recognise import (
     DETECT_PROBE_SCENES,
     GRIFFIN_SUBSETS,
     SPLITS,
+    is_v2v4real,
     is_v2xset,
     scene_dirs,
 )
@@ -49,7 +50,7 @@ CACHE_DIR = "coperceive-cache"
 DEFAULT_MAX_ENTRIES = 200_000
 DEFAULT_MAX_SCENES = 5_000
 DEFAULT_TIMEOUT_S = 30.0
-_BUILTIN = ("griffin", "opv2v", "v2xset")
+_BUILTIN = ("griffin", "opv2v", "v2xset", "v2v4real")
 # Shared with the folder scan's "Recognised as" (coperceive/remote/recognise.py).
 _SPLITS = SPLITS
 _GRIFFIN_SUBSETS = GRIFFIN_SUBSETS
@@ -787,7 +788,7 @@ def detect_cluster_dataset(
         split = None
         scene_names: list[str] = []
     else:
-        accepted = (*_SPLITS["opv2v"], *_SPLITS["v2xset"])
+        accepted = (*_SPLITS["opv2v"], *_SPLITS["v2xset"], *_SPLITS["v2v4real"])
         if candidate.name in accepted and candidate.is_dir():
             raw_root = candidate.parent
             split = candidate.name
@@ -802,7 +803,12 @@ def detect_cluster_dataset(
         except OSError as exc:
             result["reason"] = f"cannot list {raw_root / split}: {exc.strerror or exc}"
             return result
-        adapter_name = "v2xset" if _is_v2xset(raw_root, scene_names, split) else "opv2v"
+        if _is_v2xset(raw_root, scene_names, split):
+            adapter_name = "v2xset"
+        elif is_v2v4real(raw_root, scene_names, split):
+            adapter_name = "v2v4real"
+        else:
+            adapter_name = "opv2v"
         if split not in _SPLITS[adapter_name]:
             adapter_name = "opv2v"
     params = _params_for(adapter_name, raw_root, split)

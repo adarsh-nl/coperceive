@@ -325,7 +325,9 @@ def build_parser() -> argparse.ArgumentParser:
     prepare_parser = dataset_sub.add_parser(
         "prepare", help="Prepare selected scenes into the cluster cache (CPU-only)."
     )
-    prepare_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
+    prepare_parser.add_argument(
+        "--adapter", required=True, choices=("griffin", "opv2v", "v2xset", "v2v4real")
+    )
     prepare_parser.add_argument("--raw-root", required=True)
     prepare_parser.add_argument(
         "--split", default=None, help="The split to prepare (OPV2V/V2XSet)."
@@ -393,7 +395,9 @@ def build_parser() -> argparse.ArgumentParser:
     index_parser = dataset_sub.add_parser(
         "index", help="List every scene of a raw cluster dataset (metadata only)."
     )
-    index_parser.add_argument("--adapter", required=True, choices=("griffin", "opv2v", "v2xset"))
+    index_parser.add_argument(
+        "--adapter", required=True, choices=("griffin", "opv2v", "v2xset", "v2v4real")
+    )
     index_parser.add_argument("--raw-root", required=True)
     index_parser.add_argument(
         "--split",
