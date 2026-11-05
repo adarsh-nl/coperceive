@@ -22,7 +22,7 @@ import IdentifierInput from "./IdentifierInput";
 import HpcWorkspace, { type ActiveDatasetPayload, type WorkspaceTab } from "./HpcWorkspace";
 import LibraryScreen from "./LibraryScreen";
 import GetDataScreen from "./GetDataScreen";
-import UpdateBanner from "./UpdateBanner";
+import { UpdateCard, UpdateDot, useUpdater } from "./UpdateBanner";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import { errorText } from "./errors";
@@ -73,6 +73,13 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   // Bumped when the Library is asked for again, so it re-reads the scenes.
   const [libraryKey, setLibraryKey] = useState(0);
   const [sidebarOpen, setSidebarOpen] = useState(true);
+  // "Update available" lives in the sidebar (a card above Settings, or a dot on
+  // the collapsed sidebar's toggle).
+  const updater = useUpdater();
+  const openSidebarOnUpdate = () => {
+    setSidebarOpen(true);
+    window.setTimeout(() => document.getElementById("update-card")?.focus(), 250);
+  };
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [dataRoot, setDataRoot] = useState<string>("");
   const [recentRoots, setRecentRoots] = useState<string[]>([]);
@@ -506,6 +513,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
               </div>
             ) : null}
 
+            <UpdateCard updater={updater} />
+
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <button
                 type="button"
@@ -747,15 +756,18 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                   style={{ width: "78px", flexShrink: 0, height: "100%" }}
                   aria-hidden="true"
                 />
-                <IconButton
-                  size="sm"
-                  label="Open sidebar (⌘\)"
-                  onClick={() => setSidebarOpen(true)}
-                >
-                  <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
-                    <path d="M1.5 2.5A1 1 0 0 1 2.5 1.5h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11zm1 0v11h3.5v-11h-3.5zm4.5 0v11h6.5v-11H7z" />
-                  </svg>
-                </IconButton>
+                <span className="update-dot-host">
+                  <IconButton
+                    size="sm"
+                    label="Open sidebar (⌘\)"
+                    onClick={() => setSidebarOpen(true)}
+                  >
+                    <svg viewBox="0 0 16 16" width="14" height="14" fill="currentColor">
+                      <path d="M1.5 2.5A1 1 0 0 1 2.5 1.5h11a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1v-11zm1 0v11h3.5v-11h-3.5zm4.5 0v11h6.5v-11H7z" />
+                    </svg>
+                  </IconButton>
+                  <UpdateDot updater={updater} onOpen={openSidebarOnUpdate} />
+                </span>
                 <BrandWordmark fontSize="13px" />
               </div>
             )}
@@ -777,8 +789,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         </header>
 
         <main style={{ flex: 1, minHeight: 0, overflowY: "auto", position: "relative" }}>
-          <UpdateBanner />
-
           {/* Every tab stays mounted (hidden when not shown): an open dataset,
               scroll and filters survive switching tabs. */}
           <div className="tab-panel" hidden={activeTab !== "library"}>

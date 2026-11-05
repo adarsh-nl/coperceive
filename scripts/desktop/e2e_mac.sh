@@ -2284,10 +2284,13 @@ port = "${RELAUNCH_PORT}"
 secret = "${RELAUNCH_SECRET}"
 update_port = "${UPDATE_PORT}"
 
+# The update notice is the main window's sidebar card (the viewer window, open
+# again after the relaunch, has only a small "Update ready"), so every eval here
+# goes to the main window.
 def eval_js(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script, "timeout": timeout}).encode("utf-8"),
+        data=json.dumps({"script": script, "timeout": timeout, "window": "main"}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout + 5) as response:
@@ -2331,22 +2334,22 @@ while time.monotonic() < deadline:
     time.sleep(0.4)
 else:
     raise RuntimeError(f"update banner did not appear: {text[-500:]}")
-print("Step 5d notices: banner coperceive 0.2.0 is ready")
+print("Step 5d notices: sidebar card coperceive 0.2.0 is ready")
 click_button("What's new")
 time.sleep(0.3)
 notes = eval_js("document.body.innerText") or ""
 assert "Mock release notes for the test." in notes, notes[-500:]
 print("Step 5d notices: What's new showed the mock notes")
-click_button("Restart now")
+click_button("Install")
 time.sleep(0.4)
 restarted = eval_js("window.__COPERCEIVE_UPDATE_RESTART__ === true ? 'yes' : 'no'")
-assert restarted == "yes", "Restart now did not record the test-env flag"
-print("Step 5d notices: Restart now stayed in the test app")
+assert restarted == "yes", "Install did not record the test-env flag"
+print("Step 5d notices: Install (restart into the update) stayed in the test app")
 click_button("Later")
 time.sleep(0.4)
 after = eval_js("document.body.innerText") or ""
 assert "is ready" not in after, after[-500:]
-print("Step 5d notices: Later hid the banner")
+print("Step 5d notices: Later hid the card")
 
 # Verify 404 is quiet on launch but shows 'You're up to date' on manual check
 eval_js("window.__COPERCEIVE_UPDATE_URL__ = 'http://127.0.0.1:%s/404.json'" % update_port)
@@ -2369,8 +2372,8 @@ eval_js("window.__COPERCEIVE_UPDATE_URL__ = 'http://127.0.0.1:%s/bad-sig.json'" 
 eval_js("window.__COPERCEIVE_CHECK_UPDATES__(true)")
 time.sleep(0.8)
 txt_bad_banner = eval_js("document.body ? document.body.innerText : ''") or ""
-assert "coperceive 0.2.0 is ready" in txt_bad_banner, f"Expected banner before restart click, got: {txt_bad_banner}"
-click_button("Restart now")
+assert "coperceive 0.2.0 is ready" in txt_bad_banner, f"Expected the update card before the Install click, got: {txt_bad_banner}"
+click_button("Install")
 time.sleep(1.0)
 txt_bad_err = eval_js("document.body ? document.body.innerText : ''") or ""
 assert "Retry" in txt_bad_err, f"Bad signature must show error with Retry button, got: {txt_bad_err}"
@@ -2389,7 +2392,7 @@ if ! grep -q "latest.json" "${UPDATE_LOG_FILE}"; then
 fi
 echo "Step 5d verified: mock server received latest.json."
 if ! kill -0 "${APP_PID}" 2>/dev/null; then
-    echo "Error: Restart now quit the app" >&2
+    echo "Error: Install quit the app" >&2
     exit 17
 fi
 

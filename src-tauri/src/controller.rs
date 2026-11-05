@@ -552,6 +552,9 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             if let Some(grouping) = val.get("dataset_grouping").and_then(state::dataset_grouping_from) {
                 persistent.dataset_grouping = grouping;
             }
+            if let Some(strip) = val.get("camera_strip").and_then(state::camera_strip_from) {
+                persistent.camera_strip = strip;
+            }
             if let Some(vis) = val.get("agent_visibility") {
                 if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
                     persistent.agent_visibility = Some(map);

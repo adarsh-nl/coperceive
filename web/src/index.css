@@ -3180,3 +3180,267 @@ main > .tab-panel:not([hidden]) {
   flex-wrap: wrap;
   margin-top: 0.6rem;
 }
+
+/* Viewer layout fixes (v0.1.0): nothing in the top bar, the stage chip row or
+   the left panel may overlap or clip, at any window size down to the minimum. */
+
+/* Top bar: one flex row. Brand and crumb first; the crumb's connection text is
+   the part that gives way (ellipsis, full text in its tooltip), then the dataset
+   label; the scene menu, ‹ ›, "k of n" and the buttons on the right never shrink. */
+.topbar { display: flex; justify-content: space-between; }
+.topbar > .top-cluster:first-child { flex: 1 1 auto; min-width: 0; }
+.topbar > .tabs, .topbar > .top-end { flex: none; }
+.topbar .top-slot { flex: 1 1 auto; min-width: 0; }
+.topbar .crumb { flex: 1 1 auto; min-width: 0; }
+.topbar .crumb > * { flex: none; }
+/* Shrink factors: the connection text gives way first; the others only once it is
+   down to its dot (their share before that rounds to nothing, so no early ellipsis;
+   factors of 1 so they then take the whole overflow, not a fraction of it). */
+.topbar .crumb > .crumb-dataset { flex: 0 1 auto; min-width: 3ch; overflow: hidden; text-overflow: ellipsis; }
+.topbar .crumb > .dataset-badge { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+/* At its narrowest only the status dot stays (the text is in its tooltip). */
+.topbar .crumb > .conn-state { flex: 0 100000 auto; min-width: 6px; max-width: none; margin-left: 4px; }
+.conn-state .conn-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.topbar .crumb > .job-badge { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.topbar .top-actions { flex-wrap: nowrap; }
+.topbar .top-actions > * { flex: none; }
+
+/* Stage chips: title left, mode switch centred, frame right, in a grid whose side
+   columns truncate before they reach the switch. Narrow stages put the switch on
+   its own row, then shorten the chips ("t = 7.5 s", "99 m"). */
+.viewer .viewport { container: stage / inline-size; }
+.stage-chips {
+  position: absolute;
+  z-index: 3;
+  top: 12px;
+  left: 12px;
+  right: 12px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  pointer-events: none;
+}
+.viewer .stage-chips .glass { position: relative; top: auto; right: auto; bottom: auto; left: auto; transform: none; }
+.viewer .stage-chips .status-pill { grid-column: 1; grid-row: 1; justify-self: start; max-width: 100%; min-width: 0; }
+.stage-chips .chip-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.stage-chips .view-row { grid-column: 2; grid-row: 1; display: flex; justify-content: center; min-width: 0; max-width: 100%; }
+.viewer .stage-chips .view-pill { pointer-events: auto; flex: none; }
+.stage-chips .chip-end { grid-column: 3; grid-row: 1; justify-self: end; display: flex; gap: 8px; min-width: 0; max-width: 100%; }
+.viewer .stage-chips .frame-pill { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.stage-chips .frame-sep { white-space: pre; }
+.stage-chips .frame-sep:has(+ .frame-extent:empty) { display: none; }
+.viewer .stage-chips .exit-pill { pointer-events: auto; padding: 3px; border-radius: 7px; flex: none; }
+.viewer .stage-chips .empty-pill { grid-column: 1 / -1; grid-row: 2; justify-self: start; max-width: 100%; }
+@container stage (max-width: 900px) {
+  .stage-chips { grid-template-columns: minmax(0, 1fr) minmax(0, auto); }
+  .stage-chips .view-row { grid-column: 1 / -1; grid-row: 2; }
+  .stage-chips .chip-end { grid-column: 2; }
+  .viewer .stage-chips .empty-pill { grid-row: 3; }
+}
+@container stage (max-width: 560px) {
+  .stage-chips .chip-long { display: none; }
+  .viewer .stage-chips .view-pill button { padding: 5px 8px; }
+  .viewer .stage-chips .view-pill button::after { display: none; }
+}
+@container stage (max-width: 400px) {
+  .stage-chips .view-row { justify-content: flex-start; overflow-x: auto; scrollbar-width: none; pointer-events: auto; }
+}
+/* The legend and the scale bar share the bottom edge: the legend wraps first
+   (the bar is at most 96 px plus its label); a very narrow stage drops the bar. */
+.viewer .viewport .legend { max-width: calc(100% - 196px); }
+@container stage (max-width: 420px) {
+  .viewer .viewport .legend { max-width: calc(100% - 24px); }
+  .viewer .viewport .scale-bar { display: none; }
+}
+
+/* Left panel: never wider than itself, so a sideways trackpad swipe cannot scroll
+   it and clip the start of every row. Labels wrap, counts stay right-aligned, and
+   long notes wrap inside the panel. */
+.viewer .workspace > .panel { overflow-x: hidden; overflow-y: auto; overscroll-behavior-x: none; }
+.viewer .panel .eye { grid-template-columns: 16px minmax(0, 1fr) minmax(0, max-content); white-space: normal; }
+.viewer .panel .eye > span:not(.eye-meta) { min-width: 0; overflow-wrap: anywhere; }
+.viewer .panel .eye-meta { min-width: 0; max-width: 14ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
+.viewer .panel .empty-state,
+.viewer .panel .empty-state p,
+.viewer .panel .empty-state button { max-width: 100%; white-space: normal; overflow-wrap: anywhere; text-align: left; }
+.viewer .panel .agent-list .swatch > span:first-of-type,
+.viewer .panel .agent-list .agent-role { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.viewer .panel summary > :first-child { min-width: 0; }
+
+/* Camera strip head: the C toggle, and the All | Agent quick toggle under it
+   (it writes Settings → Viewer → "Camera strip"). */
+.cam-strip-head { flex: none; display: flex; flex-direction: column; justify-content: center; align-items: flex-start; gap: 6px; min-width: 0; }
+.cam-strip[data-open="false"] .cam-strip-head { flex-direction: row; align-items: center; }
+.viewer .cam-mode { padding: 2px; border-radius: 6px; }
+.viewer .cam-mode button { padding: 2px 8px; font-size: 11.5px; border-radius: 4px; color: var(--muted); }
+.viewer .cam-mode button[aria-checked="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(28, 28, 28, 0.06); }
+.viewer .cam-strip .cam-group-head { flex: none; min-width: 0; max-width: 140px; }
+.viewer .cam-strip .cam-group-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Filmstrip: every agent's cameras in one row, scrolled sideways (trackpad,
+   Shift and the wheel) and settling per thumbnail (cameras.tsx); thumbnails keep
+   the camera's aspect ratio and never scroll vertically. */
+.viewer .cam-groups.cam-film {
+  flex: 1 1 auto;
+  min-width: 0;
+  gap: 14px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+}
+.viewer .cam-film .cam-group { flex: none; min-width: auto; }
+.viewer .cam-film .cam-thumbs { flex: none; min-width: auto; }
+.viewer .cam-film .cam-thumb-wrap {
+  flex: none;
+  height: 100%;
+  width: auto;
+  aspect-ratio: var(--ratio, 1.7778);
+  min-width: 0;
+  max-width: none;
+}
+.viewer .cam-thumb-name { display: flex; align-items: center; gap: 5px; min-width: 0; padding-right: 30px; white-space: nowrap; overflow: hidden; }
+.viewer .cam-thumb-name > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.viewer .cam-thumb-name > .cam-thumb-sensor { flex: none; max-width: 60%; }
+.cam-thumb-swatch { flex: none; width: 7px; height: 7px; border-radius: 2px; background: var(--agent, var(--vehicle)); }
+.cam-thumb-agent { font-family: "Geist Variable", system-ui, sans-serif; font-weight: 500; }
+.cam-thumb-sep { flex: none; opacity: 0.6; }
+.viewer .cam-thumb-wrap.is-selected .cam-thumb { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* In the filmstrip a thumbnail names its agent on the first line, the camera under it. */
+.viewer .cam-film .cam-thumb-name { flex-wrap: wrap; row-gap: 0; }
+.viewer .cam-film .cam-thumb-agent { flex: 1 1 0; }
+.viewer .cam-film .cam-thumb-sep { display: none; }
+.viewer .cam-film .cam-thumb-name > .cam-thumb-sensor { flex: 0 0 100%; max-width: none; padding-left: 12px; opacity: 0.85; }
+
+/* Saved panel widths can outgrow a smaller window: the panels give way down to
+   their minimums (layout.ts MIN_LEFT_PX / MIN_RIGHT_PX) before the 3D view goes
+   under MIN_STAGE_WIDTH. */
+.viewer .workspace > .panel { flex: 0 1 auto; min-width: 180px; }
+.viewer .workspace > .panel-right { min-width: 200px; }
+.viewer .workspace > .stage { min-width: 250px; }
+.viewer .workspace.is-fullscreen > .stage { min-width: 0; }
+
+/* Update notice: a compact card at the bottom of the sidebar, above Settings
+   (the main window's; the viewer only has a small "Update ready" in its top bar). */
+.visually-hidden {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+.update-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 9px 10px 9px 11px;
+  border: 1px solid color-mix(in srgb, var(--accent) 28%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 11%, var(--panel));
+  font-size: 12px;
+  outline: none;
+}
+.update-card:focus-visible { box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 45%, transparent); }
+.update-card-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-width: 0; }
+.update-card-title { color: var(--primary-hover); font-weight: 560; font-size: 12.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-card-version { color: var(--text-secondary, var(--muted)); font-size: 11.5px; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.update-card-close {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-subtle, var(--muted));
+  font-size: 10px;
+  cursor: pointer;
+}
+.update-card-close:hover { background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--text); }
+.update-card-notes {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--primary-hover);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.update-card-notes:hover { text-decoration: underline; }
+.update-pill {
+  flex: none;
+  height: 22px;
+  padding: 0 11px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--accent);
+  color: var(--accent-ink);
+  font-size: 11.5px;
+  font-weight: 560;
+  cursor: pointer;
+}
+.update-pill:hover { background: var(--primary-hover); }
+.update-card-error { flex-direction: row; align-items: center; justify-content: space-between; gap: 8px; }
+.update-card-message { min-width: 0; color: var(--text); font-size: 11.5px; line-height: 1.4; }
+.update-notes {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: calc(100% + 6px);
+  z-index: 40;
+  padding: 10px 12px;
+  border: 1px solid var(--line-elevated, var(--line));
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.25);
+  font-size: 12px;
+  color: var(--text);
+}
+.update-notes p { margin: 6px 0 0; line-height: 1.45; color: var(--text-secondary, var(--muted)); white-space: pre-wrap; }
+.update-toast {
+  position: fixed;
+  right: 1.5rem;
+  bottom: 1.5rem;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0.6rem 1rem;
+  border: 1px solid var(--line-elevated, var(--line));
+  border-radius: var(--radius-lg);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 0.85rem;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+.update-dot-host { position: relative; display: inline-flex; }
+.update-dot {
+  position: absolute;
+  top: -3px;
+  right: -3px;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.update-dot span {
+  display: block;
+  width: 8px;
+  height: 8px;
+  margin: 3px;
+  border-radius: 999px;
+  background: var(--accent);
+  box-shadow: 0 0 0 2px var(--panel);
+}
+.top-update { display: inline-flex; flex: none; }
+.top-update:empty { display: none; }
+.topbar .viewer-update-dot { display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 10px; color: var(--primary-hover); font-size: 12px; }
+.viewer-update-dot i { width: 7px; height: 7px; border-radius: 999px; background: var(--accent); }
