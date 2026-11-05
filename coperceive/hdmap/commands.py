@@ -251,7 +251,7 @@ def install_command(args: argparse.Namespace) -> None:
 
 def install_town_command(args: argparse.Namespace) -> None:
     import json
-    from coperceive.hdmap.install import install_verified_town
+
 
     progress: Progress | None = None
     if args.progress_json:
@@ -277,6 +277,7 @@ def install_town_command(args: argparse.Namespace) -> None:
 
 def list_command(args: argparse.Namespace) -> None:
     import json
+
     from coperceive.hdmap.store import load_map
 
     maps_root = Path(args.maps)
@@ -314,6 +315,7 @@ def list_command(args: argparse.Namespace) -> None:
 
 def remove_command(args: argparse.Namespace) -> None:
     import shutil
+
     from coperceive.hdmap.store import map_slug
 
     slug = map_slug(f"Carla/Maps/{args.town}")
