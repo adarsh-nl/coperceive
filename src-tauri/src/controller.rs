@@ -60,7 +60,7 @@ pub struct ControllerConfig {
     pub scene_preparer: Option<Arc<dyn Fn(String) -> bool + Send + Sync>>,
     /// Names the viewer window after the scene it shows.
     pub viewer_titler: Option<Arc<dyn Fn(String) + Send + Sync>>,
-    /// Custom path for state.json, used in tests to avoid mutating shared state directories.
+    /// Custom state file path override (useful for testing state persistence in isolation).
     pub state_path: Option<PathBuf>,
 }
 
@@ -595,10 +595,14 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                 }
             }
 
-            let _ = match &config.state_path {
-                Some(p) => state::save_state_to_path(&persistent, p),
-                None => state::save_state(&persistent),
-            };
+            match &config.state_path {
+                Some(p) => {
+                    let _ = state::save_state_to_path(&persistent, p);
+                }
+                None => {
+                    let _ = state::save_state(&persistent);
+                }
+            }
         }
 
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
@@ -972,7 +976,6 @@ pub mod tests {
         let temp_dir = std::env::temp_dir().join(format!("cp-state-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let state_file = temp_dir.join("state.json");
-
         let mut config = make_test_config();
         config.state_path = Some(state_file.clone());
         let payload = r#"{"scene_id":"synth_001","sample_index":3,"timestamp_us":300000}"#;

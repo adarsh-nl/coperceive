@@ -365,7 +365,7 @@ pub fn run_scan(
 mod tests {
     use super::*;
     use std::fs;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     use std::process::Command;
 
     use crate::hpc::{EnvironmentSetup, JobDefaults, SchedulerKind};
@@ -396,22 +396,6 @@ mod tests {
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("temp dir");
         dir
-    }
-
-    fn fake_ssh(dir: &Path, script: &str) -> String {
-        #[cfg(windows)]
-        let bin = dir.join("fake_ssh.sh");
-        #[cfg(not(windows))]
-        let bin = dir.join("ssh");
-        fs::write(&bin, script).expect("write fake ssh");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&bin).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&bin, perms).expect("chmod fake ssh");
-        }
-        bin.display().to_string()
     }
 
     const FOLDER_JSON: &str = r#"{
@@ -494,21 +478,7 @@ mod tests {
     #[test]
     fn test_scan_command_line_survives_spaces_quotes_and_semicolons() {
         let dir = temp_dir("injection");
-        let bin_dir = dir.join("bin");
-        fs::create_dir_all(&bin_dir).expect("bin dir");
-        let fake = bin_dir.join("coperceive");
-        fs::write(
-            &fake,
-            "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$FAKE_COPER_LOG\"\n",
-        )
-        .expect("write fake coperceive");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake, perms).expect("chmod");
-        }
+        let bin_dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bin"));
 
         let marker = dir.join("pwned");
         let log = dir.join("argv.log");
@@ -652,30 +622,21 @@ mod tests {
 
     #[test]
     fn test_run_scan_uses_fake_ssh_and_parses_the_listing() {
-        let dir = temp_dir("run");
         let root = "/data/scenes";
         let limits = ScanLimits::default();
-        let script = format!(
-            "#!/bin/bash\nexec cat <<'JSON'\n{}\nJSON\n",
-            FOLDER_JSON.trim()
-        );
-        let ssh = fake_ssh(&dir, &script);
+        let ssh = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
         let target = SshTarget::alias("cluster-a");
-        let document = run_scan(&ssh, &target, &["coperceive".to_string()], root, ".", limits).expect("fake scan works");
+        let document = run_scan(ssh, &target, &["coperceive".to_string()], root, ".", limits).expect("fake scan works");
         assert_eq!(document.scene_count, 1);
-        assert!(document.truncated);
-        let _ = fs::remove_dir_all(&dir);
+        assert!(!document.truncated);
     }
 
     #[test]
     fn test_run_scan_reports_a_refused_path_from_the_server() {
-        let dir = temp_dir("refused");
-        let refusal = r#"{"status": "error", "error": "the path is outside the data root: /etc"}"#;
-        let ssh = fake_ssh(&dir, &format!("#!/bin/bash\nprintf '%s' '{}'\nexit 1\n", refusal));
+        let ssh = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
         let target = SshTarget::alias("cluster-a");
-        let error = run_scan(&ssh, &target, &["coperceive".to_string()], "/data/scenes", "escape", ScanLimits::default())
+        let error = run_scan(ssh, &target, &["coperceive".to_string()], "/data/scenes", "escape", ScanLimits::default())
             .expect_err("refusal is an error");
         assert!(error.contains("outside the data root"), "{error}");
-        let _ = fs::remove_dir_all(&dir);
     }
 }

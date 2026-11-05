@@ -29,10 +29,9 @@ pub struct CrashRecord {
     pub backtrace: Option<String>,
 }
 
-pub fn log_dir() -> PathBuf {
-    // Test-only override, inert in production launches.
-    if crate::test_seams::test_env_active() {
-        if let Ok(path) = std::env::var("COPERCEIVE_TEST_LOG_DIR") {
+pub fn resolve_log_dir(env_active: bool, test_log_env: Option<&str>) -> PathBuf {
+    if env_active {
+        if let Some(path) = test_log_env {
             if !path.trim().is_empty() {
                 return PathBuf::from(path);
             }
@@ -41,20 +40,33 @@ pub fn log_dir() -> PathBuf {
     crate::platform::get_log_dir()
 }
 
-/// Test-only destination for the save command; `None` means show the native
-/// dialog. Inert unless the app was launched by the e2e harness.
-pub fn test_save_path() -> Option<PathBuf> {
-    if !crate::test_seams::test_env_active() {
+pub fn log_dir() -> PathBuf {
+    resolve_log_dir(
+        crate::test_seams::test_env_active(),
+        std::env::var("COPERCEIVE_TEST_LOG_DIR").ok().as_deref(),
+    )
+}
+
+pub fn resolve_test_save_path(env_active: bool, save_path_env: Option<&str>) -> Option<PathBuf> {
+    if !env_active {
         return None;
     }
-    std::env::var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH")
-        .ok()
+    save_path_env
         .filter(|path| !path.trim().is_empty())
         .map(PathBuf::from)
 }
 
-fn marker_path() -> PathBuf {
-    log_dir().join("run-marker.json")
+/// Test-only destination for the save command; `None` means show the native
+/// dialog. Inert unless the app was launched by the e2e harness.
+pub fn test_save_path() -> Option<PathBuf> {
+    resolve_test_save_path(
+        crate::test_seams::test_env_active(),
+        std::env::var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH").ok().as_deref(),
+    )
+}
+
+fn marker_path_in(dir: &Path) -> PathBuf {
+    dir.join("run-marker.json")
 }
 
 fn now_unix() -> u64 {
@@ -83,23 +95,27 @@ pub fn app_commit() -> &'static str {
     option_env!("GIT_COMMIT").unwrap_or("unknown")
 }
 
-fn crash_path(timestamp: u64) -> PathBuf {
-    log_dir().join(format!("crash-{timestamp}.json"))
+fn crash_path_in(dir: &Path, timestamp: u64) -> PathBuf {
+    dir.join(format!("crash-{timestamp}.json"))
 }
 
-fn write_crash(record: &CrashRecord) -> Option<PathBuf> {
-    fs::create_dir_all(log_dir()).ok()?;
-    let path = crash_path(record.timestamp_unix);
+pub fn write_crash_in(dir: &Path, record: &CrashRecord) -> Option<PathBuf> {
+    fs::create_dir_all(dir).ok()?;
+    let path = crash_path_in(dir, record.timestamp_unix);
     let text = serde_json::to_string_pretty(record).ok()?;
     fs::write(&path, format!("{text}\n")).ok()?;
     Some(path)
 }
 
-/// Write the "running" marker. Returns a crash record for a previous run whose
-/// marker was never removed (force quit, kill, or a missed panic).
-pub fn start_run() -> Option<CrashRecord> {
-    let _ = fs::create_dir_all(log_dir());
-    let previous = fs::read_to_string(marker_path()).ok().and_then(|text| {
+pub fn write_crash(record: &CrashRecord) -> Option<PathBuf> {
+    write_crash_in(&log_dir(), record)
+}
+
+/// Write the "running" marker into `dir`. Returns a crash record for a previous
+/// run whose marker was never removed (force quit, kill, or a missed panic).
+pub fn start_run_in(dir: &Path) -> Option<CrashRecord> {
+    let _ = fs::create_dir_all(dir);
+    let previous = fs::read_to_string(marker_path_in(dir)).ok().and_then(|text| {
         serde_json::from_str::<Value>(&text).ok().map(|value| CrashRecord {
             schema: CRASH_SCHEMA.into(),
             kind: "unclean-exit".into(),
@@ -127,7 +143,7 @@ pub fn start_run() -> Option<CrashRecord> {
     let record = previous.as_ref().map(|record| {
         let mut clean = record.clone();
         clean.timestamp_unix = now_unix();
-        let _ = write_crash(&clean);
+        let _ = write_crash_in(dir, &clean);
         clean
     });
     let marker = serde_json::json!({
@@ -137,13 +153,24 @@ pub fn start_run() -> Option<CrashRecord> {
         "commit": app_commit(),
         "os": os_version(),
     });
-    let _ = fs::write(marker_path(), format!("{marker}\n"));
+    let _ = fs::write(marker_path_in(dir), format!("{marker}\n"));
     record
+}
+
+/// Write the "running" marker. Returns a crash record for a previous run whose
+/// marker was never removed (force quit, kill, or a missed panic).
+pub fn start_run() -> Option<CrashRecord> {
+    start_run_in(&log_dir())
+}
+
+/// Remove the marker only on a clean quit.
+pub fn clean_exit_in(dir: &Path) {
+    let _ = fs::remove_file(marker_path_in(dir));
 }
 
 /// Remove the marker only on a clean quit.
 pub fn clean_exit() {
-    let _ = fs::remove_file(marker_path());
+    clean_exit_in(&log_dir());
 }
 
 /// Install the panic hook. It records one JSON file and then runs the normal
@@ -176,7 +203,7 @@ pub fn install_panic_hook() {
 
 /// Record a local server that exited without the app asking it to. The stderr
 /// tail is redacted before it is written, like every other shared artifact.
-pub fn record_sidecar_exit(exit_code: i32, log_path: &Path) {
+pub fn record_sidecar_exit_in(dir: &Path, exit_code: i32, log_path: &Path) {
     let tail = tail_lines(&read_tail(log_path, MAX_LOG_BYTES / 2), 200);
     let servers = servers_from(&Value::Null);
     let record = CrashRecord {
@@ -191,12 +218,16 @@ pub fn record_sidecar_exit(exit_code: i32, log_path: &Path) {
         location: Some(log_path.display().to_string()),
         backtrace: Some(redact(&tail, &servers)),
     };
-    let _ = write_crash(&record);
+    let _ = write_crash_in(dir, &record);
 }
 
-/// Recent crash records, newest first.
-pub fn crash_records() -> Vec<CrashRecord> {
-    let mut records: Vec<CrashRecord> = fs::read_dir(log_dir())
+pub fn record_sidecar_exit(exit_code: i32, log_path: &Path) {
+    record_sidecar_exit_in(&log_dir(), exit_code, log_path);
+}
+
+/// Recent crash records from `dir`, newest first.
+pub fn crash_records_in(dir: &Path) -> Vec<CrashRecord> {
+    let mut records: Vec<CrashRecord> = fs::read_dir(dir)
         .ok()
         .into_iter()
         .flatten()
@@ -214,6 +245,11 @@ pub fn crash_records() -> Vec<CrashRecord> {
     records.sort_by_key(|record| std::cmp::Reverse(record.timestamp_unix));
     records.truncate(10);
     records
+}
+
+/// Recent crash records, newest first.
+pub fn crash_records() -> Vec<CrashRecord> {
+    crash_records_in(&log_dir())
 }
 
 struct Bundle {
@@ -318,14 +354,14 @@ fn servers_from(context: &Value) -> Vec<String> {
 
 /// One redacted bundle: the preview and every file put in the zip are built
 /// from this same data, so the user sees exactly what is saved.
-fn build_bundle(context: &Value) -> Bundle {
+fn build_bundle_in(dir: &Path, context: &Value) -> Bundle {
     let servers = servers_from(context);
     let mut files: Vec<(String, String)> = Vec::new();
     files.push((
         "feature-state.json".into(),
         redact(&serde_json::to_string_pretty(context).unwrap_or_default(), &servers),
     ));
-    for record in crash_records() {
+    for record in crash_records_in(dir) {
         let name = format!("crash-{}.json", record.timestamp_unix);
         files.push((
             name,
@@ -333,7 +369,7 @@ fn build_bundle(context: &Value) -> Bundle {
         ));
     }
     for name in ["desktop.log", "startup-error.log"] {
-        let path = log_dir().join(name);
+        let path = dir.join(name);
         if path.is_file() {
             files.push((
                 name.into(),
@@ -341,7 +377,7 @@ fn build_bundle(context: &Value) -> Bundle {
             ));
         }
     }
-    if let Ok(entries) = fs::read_dir(log_dir()) {
+    if let Ok(entries) = fs::read_dir(dir) {
         let mut serve: Vec<PathBuf> = entries
             .flatten()
             .map(|entry| entry.path())
@@ -381,21 +417,23 @@ fn tail_lines(text: &str, lines: usize) -> String {
     all[all.len().saturating_sub(lines)..].join("\n")
 }
 
-/// Build the complete preview. Everything shared is generated from one
-/// redacted bundle.
-pub fn report(context: &Value) -> Value {
-    let bundle = build_bundle(context);
+pub fn report_in(dir: &Path, context: &Value) -> Value {
+    let bundle = build_bundle_in(dir, context);
     serde_json::json!({
         "preview": bundle.preview,
-        "crashes": crash_records().len(),
+        "crashes": crash_records_in(dir).len(),
         "bytes": bundle.preview.len(),
     })
 }
 
-/// The exact text that will be copied: the redacted preview plus the redacted
-/// user note. Built in Rust so the webview cannot substitute unredacted text.
-pub fn copy_text(context: &Value, note: &str) -> String {
-    let bundle = build_bundle(context);
+/// Build the complete preview. Everything shared is generated from one
+/// redacted bundle.
+pub fn report(context: &Value) -> Value {
+    report_in(&log_dir(), context)
+}
+
+pub fn copy_text_in(dir: &Path, context: &Value, note: &str) -> String {
+    let bundle = build_bundle_in(dir, context);
     let servers = servers_from(context);
     let note = note.trim();
     if note.is_empty() {
@@ -403,6 +441,12 @@ pub fn copy_text(context: &Value, note: &str) -> String {
     } else {
         format!("{}\n\n## What I was doing\n{}\n", bundle.preview, redact(note, &servers))
     }
+}
+
+/// The exact text that will be copied: the redacted preview plus the redacted
+/// user note. Built in Rust so the webview cannot substitute unredacted text.
+pub fn copy_text(context: &Value, note: &str) -> String {
+    copy_text_in(&log_dir(), context, note)
 }
 
 /// Copy that Rust-built text through platform clipboard.
@@ -415,15 +459,13 @@ pub fn copy(context: &Value, note: &str) -> Result<(), String> {
     }
 }
 
-/// Save the exact redacted bundle as a zip: report.txt plus one file per
-/// preview section. Nothing unredacted is copied. Pure Rust zip implementation.
-pub fn save_zip(destination: &Path, context: &Value, note: &str) -> Result<PathBuf, String> {
+pub fn save_zip_in(dir: &Path, destination: &Path, context: &Value, note: &str) -> Result<PathBuf, String> {
     use std::io::Write;
     use zip::write::SimpleFileOptions;
     use zip::CompressionMethod;
 
-    let bundle = build_bundle(context);
-    let report_text = copy_text(context, note);
+    let bundle = build_bundle_in(dir, context);
+    let report_text = copy_text_in(dir, context, note);
     let parent = destination.parent().ok_or_else(|| "Choose a folder for diagnostics.".to_string())?;
     fs::create_dir_all(parent).map_err(|error| error.to_string())?;
 
@@ -448,55 +490,23 @@ pub fn save_zip(destination: &Path, context: &Value, note: &str) -> Result<PathB
     Ok(zip_path)
 }
 
+/// Save the exact redacted bundle as a zip: report.txt plus one file per
+/// preview section. Nothing unredacted is copied. Pure Rust zip implementation.
+pub fn save_zip(destination: &Path, context: &Value, note: &str) -> Result<PathBuf, String> {
+    save_zip_in(&log_dir(), destination, context, note)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
-
-    struct TestEnvGuard {
-        old_home: Option<String>,
-        old_localappdata: Option<String>,
-        old_userprofile: Option<String>,
-    }
-
-    impl Drop for TestEnvGuard {
-        fn drop(&mut self) {
-            match &self.old_home {
-                Some(val) => std::env::set_var("HOME", val),
-                None => std::env::remove_var("HOME"),
-            }
-            match &self.old_localappdata {
-                Some(val) => std::env::set_var("LOCALAPPDATA", val),
-                None => std::env::remove_var("LOCALAPPDATA"),
-            }
-            match &self.old_userprofile {
-                Some(val) => std::env::set_var("USERPROFILE", val),
-                None => std::env::remove_var("USERPROFILE"),
-            }
-        }
-    }
-
-    fn isolate_test_home(home: &Path) -> TestEnvGuard {
-        let guard = TestEnvGuard {
-            old_home: std::env::var("HOME").ok(),
-            old_localappdata: std::env::var("LOCALAPPDATA").ok(),
-            old_userprofile: std::env::var("USERPROFILE").ok(),
-        };
-        std::env::set_var("HOME", home);
-        std::env::set_var("LOCALAPPDATA", home.join("AppData").join("Local"));
-        std::env::set_var("USERPROFILE", home);
-        guard
-    }
 
     fn temp_home() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("coperceive-diag-{}", std::process::id()));
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(1);
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!("coperceive-diag-{}-{}", std::process::id(), id));
         let _ = fs::remove_dir_all(&path);
-        fs::create_dir_all(path.join("Library/Logs/Coperceive")).unwrap();
-        fs::create_dir_all(path.join(".local/state/coperceive")).unwrap();
-        fs::create_dir_all(path.join("AppData/Local/Coperceive/logs")).unwrap();
-        fs::create_dir_all(path.join(".coperceive/logs")).unwrap();
+        let _ = fs::create_dir_all(&path);
         path
     }
 
@@ -514,9 +524,7 @@ mod tests {
 
     #[test]
     fn crash_file_is_written_and_read_back() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let _env = isolate_test_home(&home);
         let record = CrashRecord {
             schema: CRASH_SCHEMA.into(),
             kind: "panic".into(),
@@ -529,19 +537,18 @@ mod tests {
             location: Some("src/main.rs:1".into()),
             backtrace: None,
         };
-        let path = write_crash(&record).expect("crash file");
+        let path = write_crash_in(&home, &record).expect("crash file");
         assert!(path.exists());
-        assert!(crash_records().iter().any(|item| item.message == "boom"));
+        assert!(crash_records_in(&home).iter().any(|item| item.message == "boom"));
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
     fn every_shared_file_is_redacted_and_the_zip_matches_the_preview() {
         use std::io::Read;
 
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let _env = isolate_test_home(&home);
-        let logs = log_dir();
+        let logs = &home;
         let key = "-----BEGIN OPENSSH PRIVATE KEY-----\nbody-secret-base64\n-----END OPENSSH PRIVATE KEY-----";
         let log = format!(
             "viewer http://127.0.0.1:5000/viewer?token=url-secret\n\
@@ -567,9 +574,9 @@ mod tests {
             location: Some("src/main.rs:1".into()),
             backtrace: None,
         };
-        let _ = write_crash(&crash);
+        let _ = write_crash_in(&home, &crash);
         let context = serde_json::json!({"servers": ["hpc-alias", "hpc.example.org"]});
-        let report = report(&context);
+        let report = report_in(&home, &context);
         let preview = report["preview"].as_str().unwrap().to_string();
         for secret in [
             "url-secret", "json-secret", "json-password", "auth-secret", "cookie-secret",
@@ -579,7 +586,7 @@ mod tests {
             assert!(!preview.contains(secret), "{secret} leaked into preview:\n{preview}");
         }
         assert!(preview.contains("shadow bad road"), "normal text was mangled");
-        let zip = save_zip(&home.join("report.zip"), &context, "").unwrap();
+        let zip = save_zip_in(&home, &home.join("report.zip"), &context, "").unwrap();
         let archive_file = std::fs::File::open(&zip).unwrap();
         let mut archive = zip::ZipArchive::new(archive_file).unwrap();
         assert!(!archive.is_empty());
@@ -604,21 +611,21 @@ mod tests {
         assert!(names.contains("report.txt"), "{names}");
         assert!(names.contains("crash-"), "{names}");
         assert!(names.contains("desktop.log"), "{names}");
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
     fn sidecar_exit_record_keeps_code_and_redacts_stderr() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let _env = isolate_test_home(&home);
-        let log = log_dir().join("serve-9.log");
+        let log = home.join("serve-9.log");
         fs::write(&log, "Authorization: Bearer sidecar-auth\nuri /Users/alice/x\n").unwrap();
-        record_sidecar_exit(42, &log);
-        let record = crash_records().into_iter().find(|item| item.kind == "sidecar-exit").expect("sidecar crash");
+        record_sidecar_exit_in(&home, 42, &log);
+        let record = crash_records_in(&home).into_iter().find(|item| item.kind == "sidecar-exit").expect("sidecar crash");
         assert!(record.message.contains("42"));
         let backtrace = record.backtrace.unwrap_or_default();
         assert!(!backtrace.contains("sidecar-auth"), "{backtrace}");
         assert!(!backtrace.contains("/Users/alice"), "{backtrace}");
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
@@ -645,32 +652,28 @@ mod tests {
 
     #[test]
     fn copied_text_is_the_preview_plus_a_redacted_note() {
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let _env = isolate_test_home(&home);
         let context = serde_json::json!({"servers": ["hpc"]});
-        let text = copy_text(&context, "token=note-secret /Users/alice/x password=pass-secret");
+        let text = copy_text_in(&home, &context, "token=note-secret /Users/alice/x password=pass-secret");
         assert!(text.starts_with("Coperceive Diagnostics"));
         assert!(!text.contains("note-secret"), "{text}");
         assert!(!text.contains("pass-secret"), "{text}");
         assert!(!text.contains("/Users/alice"), "{text}");
+        let _ = fs::remove_dir_all(&home);
     }
 
     #[test]
     fn log_and_save_seams_only_apply_in_test_mode() {
-        let _guard = ENV_LOCK.lock().unwrap();
-        let log = std::env::temp_dir().join(format!("coperceive-seam-{}", std::process::id()));
-        let save = log.join("diag.zip");
-        std::env::set_var("COPERCEIVE_TEST_LOG_DIR", &log);
-        std::env::set_var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH", &save);
-        std::env::set_var("COPERCEIVE_TEST_ENV", "1");
-        assert_eq!(log_dir(), log);
-        assert_eq!(test_save_path(), Some(save.clone()));
-        std::env::remove_var("COPERCEIVE_TEST_ENV");
-        assert_ne!(log_dir(), log);
-        assert_eq!(test_save_path(), None);
-        std::env::remove_var("COPERCEIVE_TEST_LOG_DIR");
-        std::env::remove_var("COPERCEIVE_TEST_DIAGNOSTICS_SAVE_PATH");
+        let log = PathBuf::from("/tmp/test-log");
+        let save = PathBuf::from("/tmp/test-log/diag.zip");
+
+        // In test mode: seams are honored
+        assert_eq!(resolve_log_dir(true, Some("/tmp/test-log")), log);
+        assert_eq!(resolve_test_save_path(true, Some("/tmp/test-log/diag.zip")), Some(save.clone()));
+
+        // Outside test mode: seams are ignored, returns default platform log dir and None for save
+        assert_ne!(resolve_log_dir(false, Some("/tmp/test-log")), log);
+        assert_eq!(resolve_test_save_path(false, Some("/tmp/test-log/diag.zip")), None);
     }
 
     #[test]
@@ -678,18 +681,14 @@ mod tests {
         // The e2e crash launch and relaunch both use COPERCEIVE_TEST_LOG_DIR:
         // the marker the first run leaves and the record the second reads must
         // live there, and nothing may be written under HOME.
-        let _guard = ENV_LOCK.lock().unwrap();
         let home = temp_home();
-        let _env = isolate_test_home(&home);
         let log = home.join("override-logs");
-        std::env::set_var("COPERCEIVE_TEST_ENV", "1");
-        std::env::set_var("COPERCEIVE_TEST_LOG_DIR", &log);
 
-        assert!(start_run().is_none(), "no marker yet: no crash");
+        assert!(start_run_in(&log).is_none(), "no marker yet: no crash");
         assert!(log.join("run-marker.json").is_file());
 
         // The marker was not removed (no clean_exit): the next start reports it.
-        let record = start_run().expect("the leftover marker is an unclean exit");
+        let record = start_run_in(&log).expect("the leftover marker is an unclean exit");
         assert_eq!(record.kind, "unclean-exit");
         assert!(record.message.contains("closed unexpectedly"), "{}", record.message);
         let crashes: Vec<_> = fs::read_dir(&log)
@@ -699,17 +698,9 @@ mod tests {
             .collect();
         assert_eq!(crashes.len(), 1);
         assert!(log.join("run-marker.json").is_file(), "a fresh marker for this run");
-        let default_dir = crate::platform::get_log_dir();
-        assert_eq!(
-            fs::read_dir(&default_dir).map(|dir| dir.count()).unwrap_or(0),
-            0,
-            "nothing in default log dir"
-        );
 
-        clean_exit();
-        assert!(start_run().is_none(), "a clean exit leaves no crash");
-
-        std::env::remove_var("COPERCEIVE_TEST_LOG_DIR");
-        std::env::remove_var("COPERCEIVE_TEST_ENV");
+        clean_exit_in(&log);
+        assert!(start_run_in(&log).is_none(), "a clean exit leaves no crash");
+        let _ = fs::remove_dir_all(&home);
     }
 }

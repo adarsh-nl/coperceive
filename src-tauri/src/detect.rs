@@ -1054,12 +1054,7 @@ fn now_unix() -> u64 {
 #[cfg(all(test, unix))]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
-    const FAKE_SSH: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/hpc/fake_ssh.sh"
-    ));
     const CLUSTER_A: &str = include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/hpc/cluster-a.json"
@@ -1078,39 +1073,15 @@ mod tests {
     ));
 
     struct FakeSsh {
-        dir: PathBuf,
         bin: String,
     }
 
     impl FakeSsh {
         fn create() -> Self {
-            let dir = std::env::temp_dir().join(format!(
-                "coperceive-fake-ssh-{}-{}",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_nanos())
-                    .unwrap_or(0)
-            ));
-            std::fs::create_dir_all(&dir).expect("temp dir");
-            let path = dir.join("fake_ssh.sh");
-            std::fs::write(&path, FAKE_SSH).expect("write fake ssh");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755))
-                    .expect("chmod fake ssh");
-            }
+            let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
             Self {
-                bin: path.to_string_lossy().to_string(),
-                dir,
+                bin: path.to_string(),
             }
-        }
-    }
-
-    impl Drop for FakeSsh {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.dir);
         }
     }
 

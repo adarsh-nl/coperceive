@@ -3059,23 +3059,9 @@ mod tests {
         }
         let root = std::env::temp_dir().join(format!("cp-tilde-{}", std::process::id()));
         let home = root.join("home");
-        let bin = root.join("bin");
+        let bin = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bin"));
         std::fs::create_dir_all(home.join("sub")).unwrap();
-        std::fs::create_dir_all(&bin).unwrap();
         std::fs::write(home.join("sub/file.txt"), b"x").unwrap();
-        // A stand-in realpath: enough to prove the shell expanded ~ and passed the
-        // right absolute path; the real tool's availability is tested separately.
-        let fake_realpath = bin.join("realpath");
-        std::fs::write(
-            &fake_realpath,
-            "#!/bin/sh\nfor last; do :; done\nprintf '%s\\n' \"$last\"\n",
-        )
-        .unwrap();
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake_realpath, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
         let output = std::process::Command::new("/bin/sh")
             .args(["-c", PATH_CHECK_BODY, "sh", "~/sub/file.txt"])
             .env("HOME", &home)
@@ -3332,11 +3318,6 @@ mod tests {
             "{}/tests/fixtures/hpc/fake_ssh.sh",
             env!("CARGO_MANIFEST_DIR")
         );
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
         let runner = crate::slurm_adapter::SshRunner::new(fake, SshTarget::alias("cluster-b"));
         let entry = self::entry();
         let plan = build_run_plan(&runner, &entry, &request()).expect("build plan");
