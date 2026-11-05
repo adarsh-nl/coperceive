@@ -266,6 +266,7 @@ test("slurmSeconds reads sacct durations and refuses anything else", () => {
   assert.strictEqual(slurmSeconds(null), null);
   assert.strictEqual(slurmSeconds("UNLIMITED"), null);
   assert.strictEqual(slurmSeconds(""), null);
+});
 
 test("repro card preview names what is included and what is missing", () => {
   const lines = reproPreviewLines({

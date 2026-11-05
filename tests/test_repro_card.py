@@ -472,7 +472,7 @@ def _remote_run(root: Path, *, token: str, hostname: str) -> None:
     (plans / f"{PLAN_ID}.json").write_text(json.dumps(plan) + "\n", encoding="utf-8")
 
 def test_scrubber_removes_personal_identifiers_hosts_homes_tokens_and_emails() -> None:
-    card = {
+    card: dict[str, object] = {
         "environment": {
             "user": "nanjaiyalathaa",
             "host": "ewi.utwente.nl",
