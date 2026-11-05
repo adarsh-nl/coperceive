@@ -34,15 +34,17 @@ Get the latest release for your platform from [GitHub Releases](https://github.c
 | **OPV2V** | LiDAR, Camera, Poses, Boxes | Multi-Vehicle | See [dataset terms](https://mobility-lab.seas.ucla.edu/opv2v/) | Supported |
 | **V2XSet** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure (RSU) | See [dataset terms](https://github.com/DerrickXuNu/v2x-vit) | Supported |
 | **V2V4Real** | LiDAR, Poses, Boxes (LiDAR only) | Multi-Vehicle | See [dataset terms](https://github.com/ucla-mobility/V2V4Real) | Supported (LiDAR); visual orientation check pending |
-| **DAIR-V2X-C** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure | See [dataset terms](https://github.com/yujmo/DAIR-V2X/blob/main/data/README.md) | Adapter merged; not yet tested on real sensor data |
+| **DAIR-V2X-C** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure | See [dataset terms](https://github.com/AIR-THU/DAIR-V2X) | Adapter merged; not yet tested on real sensor data |
 
 ---
 
 ## Release Notes
 
 ### v0.1.1 (in development)
-- **Dataset adapters for V2V4Real and DAIR-V2X-C**: Built-in adapters and directory detection for V2V4Real (LiDAR-only test split) and DAIR-V2X-C cooperative formats (#126).
-- **CARLA town road maps**: One-click download and alignment for CARLA OpenDRIVE HD road maps with package-verified (Town03, Town06, Town07, Town10HD) and mirror-verified (Town01, Town02, Town04, Town05) classes (#128).
+- **Windows & Linux platform behaviour**: Native window decorations on Windows and Linux, application menu with `Ctrl` shortcuts, dynamic reveal in file manager ("Show in Explorer", "Show in folder", "Show in Finder"), Windows OpenSSH support (`ControlMaster=no`), pause/resume for download jobs on Windows, strict ACL checks on credentials and state files, and pure Rust zip diagnostics export (#129).
+- **Security & dependency updates**: Upgraded to Pillow 13.0.0 in `uv.lock` and tokio 1.54.1, restricted image decoding to PNG/JPEG, and dropped Python 3.10 support (minimum Python is 3.11) following Pillow 13's deprecation (#130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
+- **Dataset adapters & detection**: Built-in adapters and directory detection for real-world V2V4Real (LiDAR-only test split, box angles in degrees `[roll, yaw, pitch]`, #126, #131) and DAIR-V2X-C cooperative formats (#126).
+- **CARLA town road maps**: One-click download and alignment for CARLA OpenDRIVE HD road maps with package-verified (Town03, Town06, Town07, Town10HD) and matching public mirrors (not checked against the CARLA package: Town01, Town02, Town04, Town05) (#128).
 - **Cross-platform desktop foundation**: Windows and Linux build configurations and headless smoke test pipelines in CI (#122).
 - **Cross-platform diagnostics**: System log directories, app data paths, and clipboard integration abstracted across macOS, Windows, and Linux.
 - **Hardened release packaging**: Strict asset packaging in release workflows and automated push CI triggers for `release/**` branches.
@@ -78,7 +80,7 @@ Open `http://127.0.0.1:8731` in your browser, or open the Coperceive desktop app
 ## Build from Source
 
 ### Prerequisites
-- Python 3.10 to 3.13
+- Python 3.11 to 3.13
 - Node.js 20+ and npm
 - Rust 1.80+ with Cargo
 

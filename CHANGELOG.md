@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Windows and Linux platform behaviour (PR #129): native window decorations, Ctrl shortcut accelerator menu, dynamic reveal labels ("Show in Explorer", "Show in folder", "Show in Finder"), Windows OpenSSH support with `%USERPROFILE%\.ssh\config` and `ControlMaster=no`, process pause and resume via `ntdll.dll` on Windows, strict Windows ACL checks for token and state files, and pure Rust `zip` crate for diagnostics export.
+- V2V4Real LiDAR-only release confirmation and box angle keys in degrees `[roll, yaw, pitch]` (PR #131).
 - Dataset adapters for V2V4Real and DAIR-V2X-C with automated detection (PR #126). V2V4Real supports LiDAR point clouds and poses in OpenCOOD layout with unverified coordinate convention warnings; DAIR-V2X-C adds support for cooperative infrastructure-vehicle setups.
 - CARLA town road maps one-click download and verification in viewer and settings (PR #128), covering two verification classes: towns verified against the official CARLA 0.9.15 package (Town03, Town06, Town07, Town10HD) and towns matching public mirrors without package verification (Town01, Town02, Town04, Town05).
 - Cross-platform desktop foundation for Windows and Linux targets (PR #122).
@@ -15,12 +17,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Push CI trigger support on `release/**` branches for integration testing.
 
 ### Changed
+- Python 3.10 is no longer supported; the minimum version is 3.11 because Pillow 13 dropped 3.10 (PR #130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
 - Tauri desktop dependencies and build configuration are no longer macOS-only.
 - System log directories, application data directories, and clipboard interactions abstracted into platform-specific implementations.
 
 ### Fixed
 - Diagnostics reporting and zip bundle export made cross-platform with clipboard fallback and clear missing-tool errors.
 - Release asset packaging tightened to copy only exact application bundle and DMG assets, excluding stray dependencies.
+
+### Security
+- Upgraded Pillow to 13.0.0 in `uv.lock` and tokio to 1.54.1 (PR #130).
+- Restricted Pillow image decoders strictly to PNG and JPEG to reduce parser attack surface (PR #130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
 
 ## [0.1.0] - 2026-11-05
 
