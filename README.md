@@ -6,7 +6,7 @@ Phase 1 is the scene model and the hybrid on-disk format. Phase 3 adds `Scene.at
 
 ## Install
 
-Python 3.10–3.13.
+Python 3.11–3.13.
 
 ```bash
 python3 -m venv .venv

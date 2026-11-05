@@ -26,6 +26,7 @@ from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import predictions_root
 from coperceive.evalview import EvalViewError, frame_rows, runs_for_scene, series
 from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
+from coperceive.images import open_image
 from coperceive.model import PointCloud, Scene
 from coperceive.plot import (
     PlotError,
@@ -72,7 +73,7 @@ _THUMBNAIL_WIDTH_MAX = 1280
 @functools.lru_cache(maxsize=256)
 def _thumbnail_bytes(path: str, mtime_ns: int, width: int) -> bytes:
     """A small JPEG for the camera strip/split pane; full resolution stays on disk."""
-    with Image.open(path) as opened:
+    with open_image(path) as opened:
         image = opened.convert("RGB")
         image.thumbnail((width, width), Image.Resampling.LANCZOS)
         buffer = io.BytesIO()
@@ -710,7 +711,7 @@ def _remote_image(
     if width is not None:
         clamped = max(16, min(int(width), _THUMBNAIL_WIDTH_MAX))
         try:
-            with Image.open(io.BytesIO(data)) as image:
+            with open_image(io.BytesIO(data)) as image:
                 image.draft("RGB", (clamped, clamped))
                 frame = image.convert("RGB")
                 if frame.width > clamped:
