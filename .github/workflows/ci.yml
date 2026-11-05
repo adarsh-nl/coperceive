@@ -337,13 +337,15 @@ jobs:
         run: |
           DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
           test -n "${DEB_FILE}" || { echo "No .deb package found" >&2; exit 1; }
-          echo "Installing ${DEB_FILE} via apt-get..."
-          sudo apt-get install -y "${DEB_FILE}"
+          DEB_ABS="$(readlink -f "${DEB_FILE}")"
+          echo "Installing ${DEB_ABS} via apt-get..."
+          sudo apt-get install -y "${DEB_ABS}"
           INSTALLED_BIN="/usr/bin/coperceive-desktop"
           test -x "${INSTALLED_BIN}" || { echo "Installed binary not found at ${INSTALLED_BIN}" >&2; exit 1; }
           xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/desktop/smoke_test_linux.sh "${INSTALLED_BIN}"
           echo "Removing installed Debian package..."
-          sudo apt-get remove -y coperceive-desktop || sudo apt-get remove -y coperceive
+          PKG_NAME="$(dpkg-deb -f "${DEB_ABS}" Package 2>/dev/null || echo coperceive)"
+          sudo dpkg -r "${PKG_NAME}" || sudo apt-get remove -y "${PKG_NAME}"
       - name: Run Linux Smoke Test on AppImage
         run: |
           APPIMAGE_FILE=$(find src-tauri/target -iname "*.AppImage" -type f | head -n 1)
