@@ -78,7 +78,9 @@ export function CarlaMapsSettings() {
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: "13px", fontWeight: 500 }}>{item.town}</div>
             <div className="muted" style={{ fontSize: "11px" }}>
-              {item.installed ? `Installed · ${size(item.installed_info?.bytes ?? 0)}` : `${size(item.download_bytes)} download · CC-BY · hash verified`}
+              {item.installed
+                ? `Installed · ${size(item.installed_info?.bytes ?? 0)}`
+                : `${size(item.download_bytes)} download · CC-BY · ${item.verification_label}`}
             </div>
           </div>
           {item.installed ? (

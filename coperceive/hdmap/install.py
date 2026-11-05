@@ -187,6 +187,22 @@ TOWN_BYTES = {
     "Town10HD": 1_857_682,
 }
 VERIFIED_TOWNS = tuple(TOWN_SHA256)
+# ADR 0008 has two strengths of evidence: four hashes measured from the CARLA
+# 0.9.15 package, four pinned to byte-identical public mirrors only.
+TOWN_VERIFICATION = {
+    "Town01": "public-mirrors-not-package",
+    "Town02": "public-mirrors-not-package",
+    "Town03": "carla-0.9.15-package",
+    "Town04": "public-mirrors-not-package",
+    "Town05": "public-mirrors-not-package",
+    "Town06": "carla-0.9.15-package",
+    "Town07": "carla-0.9.15-package",
+    "Town10HD": "carla-0.9.15-package",
+}
+VERIFICATION_LABEL = {
+    "carla-0.9.15-package": "Verified against CARLA 0.9.15",
+    "public-mirrors-not-package": "Matches public mirrors (not checked against the CARLA package)",
+}
 
 
 def town_map_name(town: str) -> str:
@@ -209,7 +225,8 @@ def _town_source(town: str, url: str, sha256: str) -> dict[str, Any]:
         "licence_url": LICENCE_URL,
         "licence_note": LICENCE_NOTE,
         "attribution": "CARLA 0.9.15 assets, Computer Vision Center (CVC), UAB",
-        "verified_against": "CARLA 0.9.15 package SHA-256 (ADR 0008)",
+        "verification": TOWN_VERIFICATION[town],
+        "verified_against": VERIFICATION_LABEL[TOWN_VERIFICATION[town]],
     }
 
 

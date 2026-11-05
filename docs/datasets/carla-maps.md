@@ -28,16 +28,16 @@ Source: `hihuaweizhu/scenic-carla`, pinned commit
 `13d68ba8e9ea7c45f13250c37f6c2350829146f6`, path `maps/CARLA/<Town>.xodr`.
 Every SHA-256 below was downloaded and re-checked against ADR 0008 on 2026-11-05.
 
-| Town | SHA-256 (ADR 0008) | Bytes | Source | Licence |
-| --- | --- | ---: | --- | --- |
-| Town01 | `97a7f6ac…b709` | 973,108 | pinned mirror | CC-BY |
-| Town02 | `953c05f1…dd7d` | 915,949 | pinned mirror | CC-BY |
-| Town03 | `abf177bc…13c9` | 4,589,872 | pinned mirror | CC-BY |
-| Town04 | `4dddd156…6c85` | 3,403,393 | pinned mirror | CC-BY |
-| Town05 | `7edc53b0…48851` | 4,651,162 | pinned mirror | CC-BY |
-| Town06 | `a90b6131…496e` | 3,004,885 | pinned mirror | CC-BY |
-| Town07 | `be730652…77bf` | 2,229,151 | pinned mirror | CC-BY |
-| Town10HD | `5d883b79…7be7` | 1,857,682 | pinned mirror | CC-BY |
+| Town | SHA-256 (ADR 0008) | Bytes | Source | Verification | Licence |
+| --- | --- | ---: | --- | --- | --- |
+| Town01 | `97a7f6ac…b709` | 973,108 | pinned mirror | **matches public mirrors, not checked against the CARLA package** | CC-BY |
+| Town02 | `953c05f1…dd7d` | 915,949 | pinned mirror | **matches public mirrors, not checked against the CARLA package** | CC-BY |
+| Town03 | `abf177bc…13c9` | 4,589,872 | pinned mirror | **verified against CARLA 0.9.15 package** | CC-BY |
+| Town04 | `4dddd156…6c85` | 3,403,393 | pinned mirror | **matches public mirrors, not checked against the CARLA package** | CC-BY |
+| Town05 | `7edc53b0…48851` | 4,651,162 | pinned mirror | **matches public mirrors, not checked against the CARLA package** | CC-BY |
+| Town06 | `a90b6131…496e` | 3,004,885 | pinned mirror | **verified against CARLA 0.9.15 package** | CC-BY |
+| Town07 | `be730652…77bf` | 2,229,151 | pinned mirror | **verified against CARLA 0.9.15 package** | CC-BY |
+| Town10HD | `5d883b79…7be7` | 1,857,682 | pinned mirror | **verified against CARLA 0.9.15 package** | CC-BY |
 
 The full hashes are in `coperceive/hdmap/install.py` and ADR 0008. Town03 used
 the original one-click installer; the others use the same verified path. If the

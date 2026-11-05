@@ -23,6 +23,8 @@ from coperceive.hdmap.identify import (
 from coperceive.hdmap.install import (
     TOWN_BYTES,
     TOWN_SHA256,
+    TOWN_VERIFICATION,
+    VERIFICATION_LABEL,
     VERIFIED_TOWNS,
     Progress,
     install_town03,
@@ -309,7 +311,9 @@ def list_command(args: argparse.Namespace) -> None:
                 "sha256": TOWN_SHA256[town],
                 "source_url": town_url(town),
                 "licence": "CC-BY",
-                "verified": True,
+                "verified": TOWN_VERIFICATION[town] == "carla-0.9.15-package",
+                "verification": TOWN_VERIFICATION[town],
+                "verification_label": VERIFICATION_LABEL[TOWN_VERIFICATION[town]],
                 "installed": name in installed,
                 "installed_info": installed.get(name),
             }

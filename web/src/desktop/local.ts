@@ -1058,6 +1058,8 @@ export interface CarlaMapTown {
   source_url: string;
   licence: string;
   verified: boolean;
+  verification: "carla-0.9.15-package" | "public-mirrors-not-package";
+  verification_label: string;
   installed: boolean;
   installed_info: { directory: string; bytes: number; source?: { licence?: string; retrieved_from?: string } } | null;
 }
