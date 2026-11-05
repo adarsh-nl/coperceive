@@ -68,10 +68,22 @@ agents:
   `extrinsic` matrix (row-major, sensor→body). Default identity. The rpy order
   is `[roll, pitch, yaw]` degrees. **Camera frame:** depth is **+Z**, `x` right
   and `y` down, with `u = fx·x/z + cx`, `v = fy·y/z + cy` (see
-  [format.md](format.md) §camera). A camera looking along the agent body +x
-  therefore has `body_from_sensor` rotation `[0, 90, 0]` (pitch 90°), not yaw
-  90°.
-- **Cameras:** `intrinsic: [fx, fy, cx, cy]`; files PNG/JPEG. **LiDAR:** PCD
+  [format.md](format.md) §camera). A camera looking along the agent body +x,
+  with image right along body −y and image down along body −z, has
+
+  ```text
+  R(body ← camera) = [[0, 0, 1],
+                      [-1, 0, 0],
+                      [0, -1, 0]]
+  ```
+
+  which is `rotation_rpy_deg: [-90, 0, -90]` in the
+  `Rz(yaw)·Ry(pitch)·Rx(roll)` convention. The equivalent 4×4 `extrinsic` is
+  `[[0,0,1,0], [-1,0,0,0], [0,-1,0,0], [0,0,0,1]]`. This is the convention the
+  examples use; `[0, 90, 0]` would send image right to body −z (down) and is
+  wrong.
+- **Cameras:** `intrinsic: [fx, fy, cx, cy]` and optional
+  `image_size: [width, height]`; files PNG/JPEG. **LiDAR:** PCD
   ASCII/binary with `x y z`, or a binary `.bin` of float32 `x y z i` records.
 - **Missing frames:** the validator reports a warning per sensor, e.g.
   `sensor cam_north/camera: 3 of 120 frames missing (first: 000041)`, and load

@@ -16,6 +16,9 @@ agents:
         modality: camera
         files: "agents/ego/camera/{frame:06d}.png"
         intrinsic: [300.0, 300.0, 320.0, 240.0]
+        image_size: [640, 480]
+        body_from_sensor:
+          rotation_rpy_deg: [-90.0, 0.0, -90.0]  # camera +Z along body +x, right=body -y, down=body -z
   - id: cav
     role: vehicle
     poses: agents/cav/poses.csv

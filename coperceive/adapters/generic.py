@@ -277,6 +277,17 @@ class GenericAdapter:
                             f"agent {agent_id}: sensor {sensor_id}: "
                             "intrinsic must be [fx, fy, cx, cy]",
                         )
+                    image_size = sensor.get("image_size")
+                    if image_size is not None and (
+                        not isinstance(image_size, list)
+                        or len(image_size) != 2
+                        or not all(isinstance(v, int) and v > 0 for v in image_size)
+                    ):
+                        _fail(
+                            path.name,
+                            f"agent {agent_id}: sensor {sensor_id}: "
+                            "image_size must be [width, height]",
+                        )
                 missing = []
                 for frame_index in range(len(timestamps)):
                     relative = template.format(frame=frame_index)
@@ -385,6 +396,10 @@ class GenericAdapter:
                         "cx": intrinsic[2],
                         "cy": intrinsic[3],
                     }
+                    image_size = sensor.get("image_size")
+                    if isinstance(image_size, list):
+                        kwargs["image_width_px"] = int(image_size[0])
+                        kwargs["image_height_px"] = int(image_size[1])
                 s = Sensor(
                     sensor_id=sensor_id,
                     agent_id=agent_id,

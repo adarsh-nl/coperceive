@@ -234,3 +234,52 @@ def test_pose_timestamps_must_match_scene_timestamps(tmp_path: Path) -> None:
     )
     with pytest.raises(GenericError, match="pose timestamps must match scene timestamps exactly"):
         _load(root)
+
+
+def _project(scene, agent_id: str, sensor_id: str, body_point: tuple[float, float, float]):
+    agent = scene.agent(agent_id)
+    sensor = next(
+        s for s in scene.sensors if s.agent_id == agent_id and s.sensor_id == sensor_id
+    )
+    world_from_camera = agent.poses[0].world_from_body.compose(sensor.body_from_sensor)
+    cam = world_from_camera.inverse().apply(
+        agent.poses[0].world_from_body.apply(body_point)
+    )
+    assert sensor.fx is not None and sensor.fy is not None
+    assert sensor.cx is not None and sensor.cy is not None
+    return (
+        sensor.fx * cam[0] / cam[2] + sensor.cx,
+        sensor.fy * cam[1] / cam[2] + sensor.cy,
+    )
+
+
+def test_front_camera_orients_right_and_up_like_a_camera(tmp_path: Path) -> None:
+    root = _copy_example(tmp_path, "driving")
+    _adapter, scene = _load(root)
+    camera = next(
+        s for s in scene.sensors if s.agent_id == "ego" and s.sensor_id == "front"
+    )
+    assert camera.cx is not None and camera.cy is not None
+    ahead_right = _project(scene, "ego", "front", (5.0, -1.0, 0.0))
+    ahead_up = _project(scene, "ego", "front", (5.0, 0.0, 1.0))
+    assert ahead_right[0] > camera.cx  # body -y (right) moves right in the image
+    assert ahead_up[1] < camera.cy  # body +z (up) moves up in the image
+
+
+def test_inspection_cameras_see_the_lidar_scope(tmp_path: Path) -> None:
+    root = _copy_example(tmp_path, "inspection")
+    _adapter, scene = _load(root)
+    scope = scene.agent("lidar_scope").poses[0].world_from_body.apply((0.0, 0.0, 0.0))
+    for camera in scene.sensors:
+        if camera.modality.value != "camera":
+            continue
+        agent = scene.agent(camera.agent_id)
+        body_from_camera = agent.poses[0].world_from_body.compose(camera.body_from_sensor)
+        cam = body_from_camera.inverse().apply(scope)
+        assert camera.fx is not None and camera.fy is not None
+        assert camera.cx is not None and camera.cy is not None
+        u = camera.fx * cam[0] / cam[2] + camera.cx
+        v = camera.fy * cam[1] / cam[2] + camera.cy
+        assert camera.image_width_px is not None and camera.image_height_px is not None
+        assert 0 <= u < camera.image_width_px
+        assert 0 <= v < camera.image_height_px
