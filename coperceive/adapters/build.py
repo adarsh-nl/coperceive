@@ -96,6 +96,8 @@ class CheckReport:
     errors: tuple[str, ...]
     counts: Mapping[str, tuple[tuple[str, int], ...]]
     variant_counts: tuple[tuple[int, int], ...] = ()
+    warnings: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -466,7 +468,7 @@ class ManifestAdapter:
                     if not isinstance(sub, dict):
                         raise BuildError(f"{where}: {key} is not a sensor record")
                     records.append((key, cast(dict[str, object], sub), f"{where} {key}"))
-            if not records and not spec.fixed:
+            if not records and not spec.records_optional:
                 raise BuildError(f"{where}: no key starts with {spec.records_prefix!r}")
         elif table is not None:
             for key, record in table.items():

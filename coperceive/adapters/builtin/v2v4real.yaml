@@ -33,12 +33,12 @@ world_frame: v2v4real-world  # unverified: see docs/datasets/v2v4real.md
 clock:
   from: frame
   unit: frame
-  scale_us: 50000
+  scale_us: 100000
   scale_note: >-
-    time_us = stem * 50000. Every data_protocol.yaml sets world.fixed_delta_seconds: 0.05
-    and sync_mode: true; stems advance by 2 per saved frame, which matches the OPV2V
-    paper's 'streamed at 20 Hz and recorded at 10 Hz' (arXiv 2109.07644). That the file
-    stem is the simulator tick count is an assumption; the files hold no wall clock.
+    time_us = stem * 100000. The real extracted test stems increase by 1
+    (000000, 000001, ...) and the V2V4Real paper (CVPR 2023, Section 3) says
+    "We sample the frames at 10Hz", so the step is 0.1 s. A 147-frame scenario
+    is 14.7 s (10-20 s per the paper), not the 7.35 s a 0.05 s assumption gives.
 
 scenes:
   glob:
@@ -74,7 +74,7 @@ streams:
     reader: yaml_record
     path: "{agent_root}/{frame:06d}.yaml"
     sample: first
-    records: {prefix: camera}
+    records: {prefix: camera, optional: true}  # LiDAR-only release: no camera keys
     extrinsic:
       # "extrinsic matrix from camera to LiDAR" (OpenCOOD data-annotation page); the pose
       # stream is the lidar pose, so the lidar frame is the body frame.

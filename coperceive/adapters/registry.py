@@ -50,6 +50,9 @@ def list_adapters() -> tuple[AdapterInfo, ...]:
         AdapterInfo(name, "builtin", str(builtin_manifest_path(name)))
         for name in builtin_manifest_names()
     ]
+    from coperceive.adapters.generic import GenericAdapter
+
+    rows.append(AdapterInfo(GenericAdapter.name, "builtin", "scene.yaml"))
     for name, entry in sorted(_entry_points().items()):
         rows.append(AdapterInfo(name, "entry-point", str(getattr(entry, "value", ""))))
     return tuple(rows)
@@ -61,6 +64,10 @@ def resolve_adapter(spec: str) -> Adapter:
         from coperceive.adapters.dair_v2x_c import DairV2XCAdapter
 
         return DairV2XCAdapter(Path("."))
+    if spec == "generic":
+        from coperceive.adapters.generic import GenericAdapter
+
+        return GenericAdapter()
     path = Path(spec)
     if spec.endswith((".yaml", ".yml")) or path.is_file():
         if not path.is_file():
