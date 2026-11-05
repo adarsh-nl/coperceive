@@ -19,6 +19,7 @@ def test_community_standards_files_exist() -> None:
         root / "CONTRIBUTING.md",
         root / "CODE_OF_CONDUCT.md",
         root / "SECURITY.md",
+        root / "SUPPORT.md",
         root / "ACCESSIBILITY.md",
         root / ".github" / "pull_request_template.md",
         root / ".github" / "ISSUE_TEMPLATE" / "bug_report.yml",
@@ -39,6 +40,7 @@ def test_documentation_relative_links_resolve() -> None:
         root / "CONTRIBUTING.md",
         root / "CODE_OF_CONDUCT.md",
         root / "SECURITY.md",
+        root / "SUPPORT.md",
         root / "ACCESSIBILITY.md",
         root / ".github" / "pull_request_template.md",
     ]
@@ -82,6 +84,7 @@ def test_no_personal_identifiers_in_docs() -> None:
         root / "CONTRIBUTING.md",
         root / "CODE_OF_CONDUCT.md",
         root / "SECURITY.md",
+        root / "SUPPORT.md",
         root / "ACCESSIBILITY.md",
         root / ".github" / "pull_request_template.md",
     ] + list((root / ".github" / "ISSUE_TEMPLATE").glob("*.yml"))

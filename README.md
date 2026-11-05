@@ -17,7 +17,7 @@ Get the latest release for your platform from [GitHub Releases](https://github.c
 
 ## What It Does
 
-- **Interactive 3D Scene Viewer**: Inspect multi-agent LiDAR point clouds, 3D bounding boxes, camera frustums, and agent trajectories with microsecond-accurate time synchronisation.
+- **Interactive 3D Scene Viewer**: Inspect multi-agent LiDAR point clouds, 3D bounding boxes, camera frustums, and agent trajectories with timestamped multi-agent playback.
 - **Cluster Datasets over SSH**: Browse remote cluster directories, index dataset splits, and stream scenes directly over an SSH pipe with zero Slurm compute jobs required for viewing.
 - **Parallel Slurm Array Preparation**: Prepare large cluster datasets into schema 1 formats using Slurm job arrays with IO-threaded cold reads and configurable filesystem budgets.
 - **Camera Filmstrip & Projections**: Browse multi-agent camera feeds in a scrolling filmstrip, project LiDAR points onto camera images with depth coloring, and align CARLA OpenDRIVE HD road maps.
@@ -30,24 +30,26 @@ Get the latest release for your platform from [GitHub Releases](https://github.c
 
 | Dataset | Modalities | Agents | Licence Status | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **Griffin** | LiDAR, Camera, Poses | Drone + Vehicle | MIT (toolkit & dataset) | Supported |
-| **OPV2V** | LiDAR, Camera, Poses, Boxes | Multi-Vehicle | Research only (OpenCOOD layout) | Supported |
-| **V2XSet** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure (RSU) | Research only (OpenCOOD layout) | Supported |
-| **V2V4Real** | LiDAR, Camera, Poses, Boxes | Multi-Vehicle | CC BY-NC-SA 4.0 | In progress |
-| **DAIR-V2X-C** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure | Academic / Research only | In progress |
+| **Griffin** | LiDAR, Camera, Poses | Drone + Vehicle | [MIT](https://github.com/wang-jh18-SVM/Griffin/blob/main/LICENSE.txt) | Supported |
+| **OPV2V** | LiDAR, Camera, Poses, Boxes | Multi-Vehicle | See [dataset terms](https://mobility-lab.seas.ucla.edu/opv2v/) | Supported |
+| **V2XSet** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure (RSU) | See [dataset terms](https://github.com/DerrickXuNu/v2x-vit) | Supported |
+| **V2V4Real** | LiDAR, Poses, Boxes (LiDAR only) | Multi-Vehicle | See [dataset terms](https://github.com/ucla-mobility/V2V4Real) | Supported (LiDAR); visual orientation check pending |
+| **DAIR-V2X-C** | LiDAR, Camera, Poses, Boxes | Vehicle + Infrastructure | See [dataset terms](https://github.com/yujmo/DAIR-V2X/blob/main/data/README.md) | Adapter merged; not yet tested on real sensor data |
 
 ---
 
 ## Release Notes
 
 ### v0.1.1 (in development)
-- **Cross-platform desktop foundation**: Windows and Linux build configurations and headless smoke test pipelines in CI.
+- **Dataset adapters for V2V4Real and DAIR-V2X-C**: Built-in adapters and directory detection for V2V4Real (LiDAR-only test split) and DAIR-V2X-C cooperative formats (#126).
+- **CARLA town road maps**: One-click download and alignment for CARLA OpenDRIVE HD road maps with package-verified (Town03, Town06, Town07, Town10HD) and mirror-verified (Town01, Town02, Town04, Town05) classes (#128).
+- **Cross-platform desktop foundation**: Windows and Linux build configurations and headless smoke test pipelines in CI (#122).
 - **Cross-platform diagnostics**: System log directories, app data paths, and clipboard integration abstracted across macOS, Windows, and Linux.
 - **Hardened release packaging**: Strict asset packaging in release workflows and automated push CI triggers for `release/**` branches.
 - *Full details: [CHANGELOG.md](CHANGELOG.md)*
 
 ### v0.1.0 (2026-11-05)
-- **Native macOS desktop app**: Tauri-based desktop application with unified toolbar and Claude Design system layout.
+- **Native macOS desktop app**: Tauri-based desktop application with unified toolbar and redesigned layout.
 - **Zero-Slurm-job viewing**: Read and stream prepared remote cluster scenes over a single SSH connection without running compute jobs.
 - **Dense, calm UI overhaul**: Redesigned Library, Get Data, Servers, and Dataset View matching the design specification.
 - **Camera filmstrip**: Multi-agent scrolling camera filmstrip with active-camera split view and depth-colored LiDAR point overlay.
@@ -109,7 +111,7 @@ The compiled application binary will be located in `src-tauri/target/release/`.
 
 We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for setup guidelines and code standards, and review our [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) before participating.
 
-To report security concerns, please see [SECURITY.md](SECURITY.md). For accessibility information, see [ACCESSIBILITY.md](ACCESSIBILITY.md).
+To report security concerns, please see [SECURITY.md](SECURITY.md). For support channels and questions, see [SUPPORT.md](SUPPORT.md). For accessibility information, see [ACCESSIBILITY.md](ACCESSIBILITY.md).
 
 ---
 
