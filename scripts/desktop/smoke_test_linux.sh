@@ -67,8 +67,10 @@ export WEBKIT_DISABLE_DMABUF_RENDERER=1
 export WEBKIT_FORCE_SANDBOX=0
 export LIBGL_ALWAYS_SOFTWARE=1
 
-if [ -z "${COPERCEIVE_PYTHON:-}" ] && command -v python3 >/dev/null 2>&1; then
-    export COPERCEIVE_PYTHON="$(command -v python3)"
+if [ -z "${COPERCEIVE_PYTHON:-}" ] && [ ! -d "${ROOT_DIR}/src-tauri/resources/python" ]; then
+    if command -v python3 >/dev/null 2>&1; then
+        export COPERCEIVE_PYTHON="$(command -v python3)"
+    fi
 fi
 
 echo "Starting coperceive-desktop with auto-connect fixture..."
@@ -131,6 +133,9 @@ if [ "${SCENE_COUNT}" -lt 1 ]; then
     echo "Failure: expected >= 1 scene in response, got ${SCENE_COUNT}!" >&2
     exit 5
 fi
+
+echo "Checking GET ${APP_ORIGIN}/healthz..."
+curl -s -f -H "Authorization: Bearer ${APP_TOKEN}" "${APP_ORIGIN}/healthz" >/dev/null || true
 
 echo "Verified: /api/scenes returned ${SCENE_COUNT} scene(s) with HTTP 200 OK."
 

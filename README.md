@@ -11,7 +11,9 @@ A fast, native desktop application and multi-agent perception data library for c
 Get the latest release for your platform from [GitHub Releases](https://github.com/adarsh-nl/coperceive/releases/latest):
 
 - **macOS Apple Silicon (arm64 `.dmg`)**: Available now in [v0.1.0](https://github.com/adarsh-nl/coperceive/releases/tag/v0.1.0).
-- **Windows & Linux**: Coming in **v0.1.1** (build foundation merged).
+- **Windows, Linux & Intel Mac**: Coming in **v0.1.1** (packaged installers and bundled Python runtimes merged).
+
+*Note for Windows users:* Unsigned release builds trigger Windows SmartScreen on first run. Click **More info** → **Run anyway** to launch the installer.
 
 ---
 

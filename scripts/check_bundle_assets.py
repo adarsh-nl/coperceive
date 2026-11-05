@@ -111,7 +111,39 @@ def check_wheel(wheel: Path) -> list[str]:
     return problems
 
 
+def check_deb(deb_path: Path) -> list[str]:
+    import io
+    import tarfile
+    import tempfile
+
+    try:
+        with deb_path.open("rb") as f:
+            magic = f.read(8)
+            if magic != b"!<arch>\n":
+                return [f"{deb_path.name}: not a valid deb/ar archive"]
+            while True:
+                header = f.read(60)
+                if len(header) < 60:
+                    break
+                name = header[:16].decode("ascii", errors="replace").strip()
+                size = int(header[48:58].decode("ascii", errors="replace").strip())
+                data = f.read(size)
+                if size % 2 == 1:
+                    f.read(1)
+                if name.startswith("data.tar"):
+                    with tempfile.TemporaryDirectory() as tmp:
+                        tar_bytes = io.BytesIO(data)
+                        with tarfile.open(fileobj=tar_bytes) as tf:
+                            tf.extractall(tmp)
+                        return check_app(Path(tmp))
+        return [f"{deb_path.name}: no data.tar found in deb"]
+    except Exception as exc:
+        return [f"{deb_path.name}: cannot read deb: {exc}"]
+
+
 def check_app(app: Path) -> list[str]:
+    if app.is_file() and app.name.endswith(".deb"):
+        return check_deb(app)
     if not app.is_dir():
         return [f"app bundle not found: {app}"]
     indices = sorted(app.rglob(f"coperceive/app/static/{INDEX}"))

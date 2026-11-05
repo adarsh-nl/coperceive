@@ -59,17 +59,51 @@ pub fn static_bundle_dir() -> Result<PathBuf, String> {
     )
 }
 
-/// `<App>.app/Contents/Resources/resources/python/lib/python*/site-packages/coperceive/app/static`
+/// Finds the packaged viewer bundle inside the application resources across macOS, Windows, and Linux.
 fn find_packaged_static(exe: &Path) -> Option<PathBuf> {
-    let contents = exe.parent()?.parent()?;
-    let lib = contents.join("Resources/resources/python/lib");
-    for entry in fs::read_dir(lib).ok()? {
-        let entry = entry.ok()?;
-        let candidate = entry
-            .path()
-            .join("site-packages/coperceive/app/static/index.html");
-        if candidate.is_file() {
-            return candidate.parent().map(Path::to_path_buf);
+    let mut candidate_python_dirs = Vec::new();
+    if let Some(parent) = exe.parent() {
+        candidate_python_dirs.push(parent.join("resources").join("python"));
+        candidate_python_dirs.push(parent.join("python"));
+        if let Some(grandparent) = parent.parent() {
+            // macOS bundle: <App>.app/Contents/MacOS/.. -> <App>.app/Contents/Resources/...
+            candidate_python_dirs.push(grandparent.join("Resources").join("resources").join("python"));
+            candidate_python_dirs.push(grandparent.join("Resources").join("python"));
+            candidate_python_dirs.push(grandparent.join("resources").join("python"));
+            // Linux package: /usr/bin/.. -> /usr/lib/coperceive-desktop/resources/python
+            candidate_python_dirs.push(grandparent.join("lib").join("coperceive-desktop").join("resources").join("python"));
+            candidate_python_dirs.push(grandparent.join("lib").join("coperceive").join("resources").join("python"));
+            if let Some(great) = grandparent.parent() {
+                candidate_python_dirs.push(great.join("lib").join("coperceive-desktop").join("resources").join("python"));
+            }
+        }
+    }
+
+    for py_dir in candidate_python_dirs {
+        // Windows layout: python/Lib/site-packages/...
+        let win_candidate = py_dir.join("Lib").join("site-packages").join("coperceive").join("app").join("static").join("index.html");
+        if win_candidate.is_file() {
+            return win_candidate.parent().map(Path::to_path_buf);
+        }
+        let win_candidate_lower = py_dir.join("lib").join("site-packages").join("coperceive").join("app").join("static").join("index.html");
+        if win_candidate_lower.is_file() {
+            return win_candidate_lower.parent().map(Path::to_path_buf);
+        }
+        // Unix layout: python/lib/python3.*/site-packages/...
+        let lib_dir = py_dir.join("lib");
+        if let Ok(entries) = fs::read_dir(lib_dir) {
+            for entry in entries.flatten() {
+                let candidate = entry
+                    .path()
+                    .join("site-packages")
+                    .join("coperceive")
+                    .join("app")
+                    .join("static")
+                    .join("index.html");
+                if candidate.is_file() {
+                    return candidate.parent().map(Path::to_path_buf);
+                }
+            }
         }
     }
     None
