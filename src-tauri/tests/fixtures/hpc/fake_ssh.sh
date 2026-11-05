@@ -12,10 +12,12 @@ set -u
 all_args="$*"
 remote="${!#:-}"
 
-# Record remote command if asked
-if [ -n "${FAKE_SSH_LOG:-}" ]; then
-    printf '%s\n' "${remote}" >> "${FAKE_SSH_LOG}"
-fi
+log_command() {
+    if [ -n "${FAKE_SSH_LOG:-}" ]; then
+        printf '%s\n' "$1" >> "${FAKE_SSH_LOG}"
+    fi
+}
+
 
 # Invalid JSON injection (the output looks like it may hold a token).
 if [[ "${all_args}" == *"--fail-json"* ]]; then
@@ -45,6 +47,7 @@ fi
 # Remote session management
 case "${all_args}" in
     *"coperceive remote start"*)
+        log_command "${remote}"
         if [[ "${all_args}" == *"--root /queued"* ]]; then
             echo '{"status": "pending", "state": "PENDING", "reason": "Priority", "uuid": "test-queued", "job_id": 5560, "token": "tokq"}'
         elif [[ "${all_args}" == *"--root /slow-session"* ]]; then
@@ -71,6 +74,7 @@ case "${all_args}" in
         exit 0
         ;;
     *"coperceive remote stop"*)
+        log_command "${remote}"
         echo '{"status": "stopped", "uuid": "test-uuid-99", "job_id": 5555, "cancelled": true}'
         exit 0
         ;;
@@ -121,11 +125,6 @@ quoted_pair() {
     printf '%s' "${rest}" | sed -E "s/^'?([^' ]+)'? '?([^' ]+)'?\$/\1|\2/"
 }
 
-log_command() {
-    if [ -n "${FAKE_SSH_LOG:-}" ]; then
-        printf '%s\n' "$1" >> "${FAKE_SSH_LOG}"
-    fi
-}
 
 case "${all_args}" in
     *"-G cluster-a"*)
