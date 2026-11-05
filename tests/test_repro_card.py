@@ -503,3 +503,26 @@ def test_scrubber_removes_personal_identifiers_hosts_homes_tokens_and_emails() -
     assert "environment.token" in cleaned["unknown"]  # type: ignore[operator]
     for forbidden_key in ("updater", "ssh_key", "app_token", "token"):
         assert forbidden_key not in {key for key in cleaned if key != "unknown"}
+
+
+def test_scrubber_removes_runtime_user_host_and_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import getpass
+    import socket
+
+    monkeypatch.setattr(getpass, "getuser", lambda: "zoe")
+    monkeypatch.setattr(socket, "gethostname", lambda: "node17.lab.example")
+    monkeypatch.setattr(socket, "getfqdn", lambda: "node17.lab.example")
+    monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/zoe")))
+    card = {
+        "owner": "zoe",
+        "machine": "node17.lab.example",
+        "home": "/home/zoe/data",
+        "note": "run by zoe on node17.lab.example",
+    }
+    cleaned = scrub_card(card)
+    text = json.dumps(cleaned)
+    assert leaks(cleaned) == []
+    for forbidden in ("zoe", "node17.lab.example", "/home/zoe"):
+        assert forbidden not in text

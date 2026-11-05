@@ -10,8 +10,11 @@ to ``unknown``.
 
 from __future__ import annotations
 
+import getpass
 import re
+import socket
 from collections.abc import Mapping
+from pathlib import Path
 from typing import cast
 
 _SECRET_KEY = re.compile(
@@ -31,8 +34,23 @@ _USER_AT = re.compile(r"\b[A-Za-z0-9._-]{1,32}@[A-Za-z0-9.-]+\b")
 _HOME_PATH = re.compile(r"(?:^|[\s\"'])(?:/(?:home|Users)/[A-Za-z0-9._-]+)(?:/|\b)")
 _ABS_PATH = re.compile(r"(?:^|[\s\"'])(?:~|/|/[A-Za-z0-9._-]+)(?:/[^\s\"']+)+")
 # The repository's personal-identifier list (tests/test_docs_links.py and
-# tests/test_design_system_visual.py) must never survive in a card.
+# tests/test_design_system_visual.py) must never survive in a card. Runtime
+# markers are added per call, so any user's own names are covered too.
 _PERSONAL_IDENTIFIER = re.compile(r"(?i)(nanjaiyalathaa|ewi\.utwente\.nl)")
+
+
+def _runtime_markers() -> tuple[str, ...]:
+    """The exporting machine's user, host names and home, resolved at run time."""
+    import os
+
+    values = [getpass.getuser(), socket.gethostname(), socket.getfqdn(), str(Path.home())]
+    # getpass can fall back to USER/LOGNAME names that differ from Path.home().
+    for name in ("USER", "LOGNAME"):
+        value = os.environ.get(name)
+        if value:
+            values.append(value)
+    return tuple(value for value in dict.fromkeys(values) if len(value) >= 2)
+
 
 # sha256 and git commits are hex, not hostnames. Package versions like 1.26.4
 # have no letter suffix, so the hostname expression does not match them.
@@ -44,7 +62,8 @@ def scrub_card(card: dict[str, object]) -> dict[str, object]:
     ``unknown`` lists every dotted path whose value was cleared.
     """
     unknown = _string_list(card.get("unknown"))
-    cleaned, dropped = _scrub(card, "")
+    markers = _runtime_markers()
+    cleaned, dropped = _scrub(card, "", markers)
     if not isinstance(cleaned, dict):
         cleaned = {}
     for path in dropped:
@@ -57,12 +76,14 @@ def scrub_card(card: dict[str, object]) -> dict[str, object]:
 def leaks(document: object) -> list[str]:
     """Human-readable leaks still present in a JSON value. Empty means clean."""
     found: list[str] = []
-    _scan(document, "$", found)
+    _scan(document, "$", found, _runtime_markers())
     return found
 
 
-def _scan(value: object, path: str, found: list[str]) -> None:
+def _scan(value: object, path: str, found: list[str], markers: tuple[str, ...]) -> None:
     if isinstance(value, str):
+        if any(marker in value for marker in markers):
+            found.append(f"{path} contains a runtime identifier")
         if _TOKEN_VALUE.search(value):
             found.append(f"{path} looks like a credential")
         if _PERSONAL_IDENTIFIER.search(value):
@@ -77,32 +98,34 @@ def _scan(value: object, path: str, found: list[str]) -> None:
             name = str(key)
             if _SECRET_KEY.search(name):
                 found.append(f"{path}.{name} is a credential field")
-            _scan(item, f"{path}.{name}", found)
+            _scan(item, f"{path}.{name}", found, markers)
         return
     if isinstance(value, list):
         for index, item in enumerate(value):
-            _scan(item, f"{path}[{index}]", found)
+            _scan(item, f"{path}[{index}]", found, markers)
 
 
-def _scrub(value: object, path: str) -> tuple[object, list[str]]:
+def _scrub(value: object, path: str, markers: tuple[str, ...]) -> tuple[object, list[str]]:
     if isinstance(value, str):
-        return _scrub_string(value, path)
+        return _scrub_string(value, path, markers)
     if isinstance(value, list):
         items: list[object] = []
         dropped: list[str] = []
         for index, item in enumerate(value):
-            cleaned, extra = _scrub(item, f"{path}[{index}]")
+            cleaned, extra = _scrub(item, f"{path}[{index}]", markers)
             items.append(cleaned)
             dropped.extend(extra)
         return items, dropped
     if isinstance(value, dict):
-        return _scrub_object(value, path)
+        return _scrub_object(value, path, markers)
     if type(value) in (int, float, bool) or value is None:
         return value, []
     return None, [path] if path else []
 
 
-def _scrub_object(value: dict[object, object], path: str) -> tuple[dict[str, object], list[str]]:
+def _scrub_object(
+    value: dict[object, object], path: str, markers: tuple[str, ...]
+) -> tuple[dict[str, object], list[str]]:
     cleaned: dict[str, object] = {}
     dropped: list[str] = []
     for key, item in value.items():
@@ -112,13 +135,17 @@ def _scrub_object(value: dict[object, object], path: str) -> tuple[dict[str, obj
         if _SECRET_KEY.search(key):
             dropped.append(child)
             continue
-        new_item, extra = _scrub(item, child)
+        new_item, extra = _scrub(item, child, markers)
         cleaned[key] = new_item
         dropped.extend(extra)
     return cleaned, dropped
 
 
-def _scrub_string(value: str, path: str) -> tuple[object, list[str]]:
+def _scrub_string(
+    value: str, path: str, markers: tuple[str, ...]
+) -> tuple[object, list[str]]:
+    if any(marker in value for marker in markers):
+        return None, [path]
     if _TOKEN_VALUE.search(value) or _USER_AT.search(value) or _PERSONAL_IDENTIFIER.search(value):
         return None, [path]
     if _looks_absolute(value):
