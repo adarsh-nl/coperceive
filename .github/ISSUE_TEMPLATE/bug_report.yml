@@ -1,0 +1,75 @@
+name: Bug Report
+description: Report an issue or unexpected behavior in Coperceive
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you for reporting an issue! Please check existing issues before submitting.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      description: What operating system are you running Coperceive on?
+      options:
+        - macOS (Apple Silicon / arm64)
+        - macOS (Intel / x86_64)
+        - Windows 11
+        - Windows 10
+        - Ubuntu / Debian Linux
+        - Other Linux distribution
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Coperceive Version
+      description: The app version (e.g. v0.1.0, or git commit sha if built from source).
+      placeholder: v0.1.0
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the Bug
+      description: A clear and concise description of what the bug is.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce this issue?
+      placeholder: |
+        1. Open Coperceive desktop
+        2. Go to '...'
+        3. Click on '....'
+        4. See error
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: A clear and concise description of what you expected to happen.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Diagnostics Output
+      description: |
+        In the desktop app, select **Help → Share Diagnostics…** from the application menu or top bar.
+        Click **Copy Report** and paste it here, or attach the exported `.zip` bundle.
+        All authentication tokens, SSH private keys, server hostnames, and user home paths are automatically redacted.
+      render: shell
+    validations:
+      required: false
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context / Screenshots
+      description: Add any other context or screenshots about the problem here (please ensure no proprietary dataset frames are included).
+    validations:
+      required: false

@@ -1,0 +1,55 @@
+name: Dataset Adapter Request
+description: Request built-in adapter support for a multi-agent or cooperative perception dataset
+title: "[Dataset]: "
+labels: ["dataset", "enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Suggesting support for a new dataset format or benchmark layout.
+  - type: input
+    id: dataset_name
+    attributes:
+      label: Dataset Name
+      description: What is the official name of the dataset?
+      placeholder: "e.g., DAIR-V2X, V2V4Real, TUM Trafx"
+    validations:
+      required: true
+  - type: input
+    id: dataset_link
+    attributes:
+      label: Dataset Link / Paper URL
+      description: Where is the dataset hosted, documented, or published?
+      placeholder: "https://..."
+    validations:
+      required: true
+  - type: input
+    id: licence
+    attributes:
+      label: Dataset Licence
+      description: What licence is the dataset distributed under? (e.g. MIT, CC BY-NC-SA 4.0, Research Only)
+      placeholder: "e.g., CC BY-NC 4.0"
+    validations:
+      required: true
+  - type: textarea
+    id: layout
+    attributes:
+      label: Data Layout & Modalities
+      description: |
+        Describe the directory structure, file formats, and modalities:
+        - Sensor modalities (LiDAR sweeps, cameras, radar, GNSS/IMU)
+        - Agent types (connected vehicles, roadside units, drones)
+        - Coordinate frame conventions and calibration structure (extrinsic/intrinsic formats)
+      placeholder: |
+        - Modalities: 64-channel LiDAR (.pcd), 4x RGB cameras (.png), 3D bounding boxes (.json)
+        - Agents: Vehicle-to-Infrastructure (1 CAV + 1 RSU)
+        - Layout: /raw/{scene_id}/vehicle/...
+    validations:
+      required: true
+  - type: textarea
+    id: samples
+    attributes:
+      label: Sample Data / Open Access Status
+      description: Is there a public mini split or sample sequence available for testing adapter schemas?
+    validations:
+      required: false

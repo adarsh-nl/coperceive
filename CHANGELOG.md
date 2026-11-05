@@ -1,6 +1,58 @@
 # Changelog
 
-## 0.0.0
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+## [Unreleased]
+
+### Added
+- Windows and Linux platform behaviour (PR #129): native window decorations, Ctrl shortcut accelerator menu, dynamic reveal labels ("Show in Explorer", "Show in folder", "Show in Finder"), Windows OpenSSH support with `%USERPROFILE%\.ssh\config` and `ControlMaster=no`, process pause and resume via `ntdll.dll` on Windows, strict Windows ACL checks for token and state files, and pure Rust `zip` crate for diagnostics export.
+- V2V4Real LiDAR-only release confirmation and box angle keys in degrees `[roll, yaw, pitch]` (PR #131).
+- Dataset adapters for V2V4Real and DAIR-V2X-C with automated detection (PR #126). V2V4Real supports LiDAR point clouds and poses in OpenCOOD layout with unverified coordinate convention warnings; DAIR-V2X-C adds support for cooperative infrastructure-vehicle setups.
+- CARLA town road maps one-click download and verification in viewer and settings (PR #128), covering two verification classes: towns verified against the official CARLA 0.9.15 package (Town03, Town06, Town07, Town10HD) and towns matching public mirrors without package verification (Town01, Town02, Town04, Town05).
+- Cross-platform desktop foundation for Windows and Linux targets (PR #122).
+- Automated CI test matrix and headless smoke test pipelines for `ubuntu-latest` and `windows-latest`.
+- Push CI trigger support on `release/**` branches for integration testing.
+
+### Changed
+- Python 3.10 is no longer supported; the minimum version is 3.11 because Pillow 13 dropped 3.10 (PR #130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
+- Tauri desktop dependencies and build configuration are no longer macOS-only.
+- System log directories, application data directories, and clipboard interactions abstracted into platform-specific implementations.
+
+### Fixed
+- Diagnostics reporting and zip bundle export made cross-platform with clipboard fallback and clear missing-tool errors.
+- Release asset packaging tightened to copy only exact application bundle and DMG assets, excluding stray dependencies.
+
+### Security
+- Upgraded Pillow to 13.0.0 in `uv.lock` and tokio to 1.54.1 (PR #130).
+- Restricted Pillow image decoders strictly to PNG and JPEG to reduce parser attack surface (PR #130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
+
+## [0.1.0] - 2026-11-05
+
+### Added
+- Native desktop application for macOS (Apple Silicon) built with Tauri and React.
+- Dense, calm user interface matching the redesigned layout across Library, Get Data, Servers, and Dataset View.
+- HPC Cluster Workspace: SSH remote directory browser, Slurm batch job array preparation, and live cluster job monitoring.
+- Zero-Slurm-job cluster dataset viewing over long-lived SSH streaming pipe (`coperceive dataset stream`).
+- Interactive 3D scene viewer with lidar point cloud playback, 3D bounding boxes, camera frustums, and multi-agent tracking.
+- Multi-agent camera filmstrip with scrolling thumbnails, active-camera split view, and depth-colored lidar point projection.
+- Offline and local dataset inspection, validation, and conversion for OPV2V, V2XSet, and Griffin datasets.
+- Privacy-preserving crash capture and user-initiated diagnostics dialog with automated secret redaction (preview, clipboard copy, zip bundle export).
+- In-app update notifications via sidebar card with release notes popover and restart-to-install workflow.
+
+### Changed
+- Redesigned scene viewer and dataset view layout to eliminate element overlap at all window sizes down to 900 × 600.
+- Unified window toolbar on macOS with inline traffic light controls.
+- Optimized cold raw file reads and YAML parsing during Slurm dataset preparation.
+
+### Fixed
+- Prevented point cloud and bounding box desynchronization during playback over high-latency SSH connections.
+- Fixed camera frustum image plane poses to stay synchronized with moving agent poses.
+- Fixed concurrent remote viewer start conflicts when sharing remote manifests.
+
+### Details
 
 Viewer layout fixes, the camera filmstrip back as a setting, and the update notice as a sidebar card. Nothing in the viewer overlaps any more at the window sizes people use, down to the 900 × 600 minimum. The top bar is one row: the connection text ("Streaming over SSH from <server>") sits after "k of n" and is the part that gives way, with an ellipsis and the full text in its tooltip, down to its status dot; it used to be drawn over "31 of 33" and the ‹ › buttons. The stage's view chip, mode switch and frame chip share a grid: on a narrow stage (the camera viewer open) the switch moves to its own row, then the chips shorten to "t = 7.5 s" and "99 m"; the legend wraps before it reaches the scale bar. The left panel cannot scroll sideways any more (a trackpad swipe moved it and clipped the start of every row: "a frustums", "ap name in this scene."); labels and notes wrap inside it and counts stay right-aligned. Saved panel widths give way before the 3D view gets narrower than 250 px. Settings → Viewer → "Camera strip" chooses "All cameras (scroll)", the filmstrip of every agent's cameras from before the v0.1.1 layout and now the default, or "One agent at a time" with Switch agent; the strip's All | Agent toggle sets the same `camera_strip` in state.json, applied at once. The filmstrip scrolls with the trackpad, Shift and the wheel, or the wheel alone, settles on a thumbnail, never scrolls vertically, keeps each camera's aspect ratio, labels each thumbnail with its agent's colour and name, its camera and its box count, and keeps the selected camera (split view or Camera view) highlighted and in view; thumbnails still load only while on screen. "Update available" is a card at the bottom of the main window's sidebar, above Settings: "New update available" and "coperceive X is ready" in the theme's blue on a tinted panel, What's new (the notes in a popover), an Install pill (restart into the update, the old "Restart now") and ✕ ("Later", now for the whole session: the background check no longer brings the same version back; Help → Check for Updates does). A collapsed sidebar shows a blue dot on its toggle; the viewer has no banner, only "Update ready" in its top bar, which brings the main window forward. Download and signature errors show in the card with Retry; manual checks keep their toast. A browser test asserts that no two siblings in the top bar, the stage chips, the left-panel rows, the strip header and the timeline row intersect at 1280 × 800, 1440 × 900, 1600 × 1000, 2560 × 1440 and 900 × 600, with the camera viewer open and closed and the side panels shown, at their narrowest and widest, and hidden.
 
