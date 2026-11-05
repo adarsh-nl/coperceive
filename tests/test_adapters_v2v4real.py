@@ -10,6 +10,7 @@ import pytest
 from coperceive.adapters.registry import resolve_adapter
 from coperceive.cluster_datasets import detect_cluster_dataset, index_cluster_dataset
 
+from tests.griffin_release import write_release as write_griffin
 from tests.opencood_release import AgentTrack, Box, SceneSpec, two_cav_scene, write_release
 
 SCENE = "testoutput_CAV_data_2022-06-01-10-00-00_1"
@@ -124,3 +125,51 @@ def _points(scene: object, agent_id: str, time_us: int) -> list[tuple[float, flo
         for index in range(cloud.count)
         for values in [struct.unpack_from("<4f", cloud.xyz_i_f32, index * 16)]
     ]
+
+
+def test_mirror_would_be_caught_if_the_provisional_reflection_is_removed(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "v2v4real"
+    write_release(
+        root,
+        "train",
+        [
+            SceneSpec(
+                SCENE,
+                [
+                    AgentTrack(
+                        "0",
+                        poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))],
+                        boxes=[Box(650, location=(16.0, -6.0, 0.0), angle=(0.0, 0.0, 0.0))],
+                    ),
+                    AgentTrack("1", poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))]),
+                ],
+                stems=(69,),
+            )
+        ],
+    )
+    # Asymmetric source point on the source -y side. The provisional ADR 0012
+    # reflection must put it on schema +y; a missing mirror would leave it at -y
+    # and this test would fail.
+    from coperceive.adapters.registry import resolve_adapter
+
+    adapter = resolve_adapter("v2v4real")
+    ref = adapter.scenes(root, {"split": "train"})[0]
+    scene = adapter.load(root, ref)
+    ann = scene.annotations[0]
+    assert ann.center == pytest.approx((16.0, 6.0, 0.75))
+
+
+def test_existing_dataset_detection_is_unchanged(tmp_path: Path) -> None:
+    from coperceive.remote.recognise import recognise
+
+    opv2v = tmp_path / "opv2v"
+    write_release(opv2v, "test", [two_cav_scene("scene-1")])
+    assert recognise(opv2v) == "OPV2V · test"
+    v2xset = tmp_path / "v2xset"
+    write_release(v2xset, "test", [two_cav_scene("scene-1", rsu=True)])
+    assert recognise(v2xset) == "V2XSet · test"
+    griffin = tmp_path / "griffin"
+    write_griffin(griffin, {"scene-a": [0]})
+    assert recognise(griffin) == "Griffin"

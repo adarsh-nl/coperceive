@@ -43,22 +43,35 @@ commit frames, crops, screenshots or derived scene files to this repository.
   may be parts of a split download, not separate splits.
 
 **To verify against the cluster copy:** exact per-frame file names, camera count
-and component names, scenario-name pattern, and whether `Day20_test/` is an
-extra scenario root rather than a split. The adapter is written against the
-published OpenCOOD layout and will be corrected from the listing.
+and component names, scenario-name pattern, whether `Day20_test/` is an extra
+scenario root rather than a split, and **the coordinate handedness/axis
+convention** (see below). The adapter is written against the published
+OpenCOOD layout and will be corrected from the listing.
 
 ## Agent roles, frames and sensors
 
 - **Agents:** two connected **vehicles** (`0`, `1`). No roadside unit, drone or
   fixed infrastructure in V2V4Real.
-- **World frame:** CARLA map frame, left-handed UE axes. ADR 0012 applies one
-  y-reflection before the schema, exactly as for OPV2V/V2XSet. A source pose
-  `(10, 20, 1.9)` becomes schema `(10, -20, 1.9)`; the vehicle moving towards
-  source +y moves towards schema −y.
-- **Poses:** `lidar_pose = [x, y, z, roll, yaw, pitch]` in the source frame for
-  each agent; the pose stream is the agent's LiDAR frame. There is no global
-  infrastructure→vehicle calibration as in DAIR-V2X-C: each agent's own
-  `lidar_pose` is the calibration.
+- **World frame: unverified against real data.** The official V2V4Real loader
+  reads `lidar_pose` as `[x, y, z, roll, yaw, pitch]` with angles in degrees
+  (`opencood/data_utils/datasets/basedataset.py`) and builds the source-to-world
+  transform with `x_to_world` in
+  [`opencood/utils/transformation_utils.py`](https://github.com/ucla-mobility/V2V4Real/blob/main/opencood/utils/transformation_utils.py).
+  It applies **no reflection** and does not state whether the released
+  coordinates were converted to CARLA's left-handed frame; the repository says
+  only that the data is in "OPV2V format". Coperceive therefore keeps the
+  OPV2V/ADR 0012 y-reflection as a **provisional** choice, matching the
+  OPV2V-style layout, and marks the convention **unverified** until Adarsh
+  checks one real extracted scene in the viewer. If that scene is mirrored, the
+  reflection must be removed from `v2v4real.yaml`.
+  Under the provisional rule, source pose `(10, 20, 1.9)` becomes schema
+  `(10, -20, 1.9)`; the mirror test below encodes that. The manifest's
+  `world_frame` is therefore `v2v4real-world`, not `carla-map`.
+- **Poses:** `lidar_pose = [x, y, z, roll, yaw, pitch]` (degrees) in the source
+  frame for each agent; the pose stream is the agent's LiDAR frame. There is no
+  global infrastructure→vehicle calibration as in DAIR-V2X-C: each agent's own
+  `lidar_pose` is the calibration. The official loader's `x_to_world` is the
+  transform used by OpenCOOD; no reflection is applied there.
 - **Cameras:** `camera0`…`camera3` records with `extrinsic` (camera→LiDAR) and
   `intrinsic`; 800×600 PNGs. The manifest derives image size as
   `2 × principal point`, as for OPV2V.

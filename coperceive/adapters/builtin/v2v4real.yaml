@@ -2,7 +2,11 @@
 # V2V4Real (Xu et al., CVPR 2023, arXiv:2303.07601), the OpenCOOD release layout.
 # The released tree is OpenCOOD-style: <split>/<scenario>/<agent>/, with scenario
 # names starting "testoutput_CAV_data_" and two vehicle agents (0 and 1).
-# Conventions follow the same CARLA left-handed source as OPV2V (ADR 0012).
+# The official loader reads lidar_pose [x,y,z,roll,yaw,pitch] and applies no
+# reflection (x_to_world in opencood/utils/transformation_utils.py). Whether the
+# released coordinates are CARLA-left-handed is UNVERIFIED; the provisional
+# reflection here matches the OPV2V-style layout and must be checked against a
+# real extracted scene (docs/datasets/v2v4real.md).
 adapter: v2v4real
 spec_version: 1
 
@@ -24,7 +28,7 @@ params:
   split:
     allowed: [train, test]
 
-world_frame: carla-map
+world_frame: v2v4real-world  # unverified: see docs/datasets/v2v4real.md
 
 clock:
   from: frame
@@ -52,7 +56,7 @@ conventions:
   source_handedness: left
   reflect_axis: y
   body_axes: FLU
-  camera_axes: FLU   # CARLA camera actor axes after the reflection: x forward (depth), y left, z up
+  camera_axes: FLU   # provisional: OPV2V-style conversion; unverified for real V2V4Real
 
 streams:
   poses:
