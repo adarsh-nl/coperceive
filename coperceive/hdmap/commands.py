@@ -19,7 +19,15 @@ from coperceive.hdmap.identify import (
     identify_towns,
     write_town_table,
 )
-from coperceive.hdmap.install import Progress, install_town03
+from coperceive.hdmap.install import (
+    TOWN_BYTES,
+    TOWN_SHA256,
+    VERIFIED_TOWNS,
+    Progress,
+    install_town03,
+    install_verified_town,
+    town_url,
+)
 from coperceive.hdmap.opendrive import parse_opendrive
 from coperceive.hdmap.store import map_slug, write_map
 
@@ -71,6 +79,25 @@ def add_parser(sub: Any) -> None:
     align.add_argument("--maps", required=True, help="Maps root written by ingest.")
     align.add_argument("--scenes", required=True, help="Directory of schema 1 scenes.")
     align.set_defaults(func=align_command)
+
+    install_town = maps_sub.add_parser(
+        "install", help="Download, verify, ingest and align one CARLA town."
+    )
+    install_town.add_argument("--town", required=True, choices=VERIFIED_TOWNS)
+    install_town.add_argument("--maps", required=True)
+    install_town.add_argument("--scenes", required=True)
+    install_town.add_argument("--url", default=None)
+    install_town.add_argument("--progress-json", action="store_true")
+    install_town.set_defaults(func=install_town_command)
+
+    list_towns = maps_sub.add_parser("list", help="List verified towns and installed maps.")
+    list_towns.add_argument("--maps", required=True)
+    list_towns.set_defaults(func=list_command)
+
+    remove = maps_sub.add_parser("remove", help="Remove one installed town map.")
+    remove.add_argument("--town", required=True, choices=VERIFIED_TOWNS)
+    remove.add_argument("--maps", required=True)
+    remove.set_defaults(func=remove_command)
 
     install = maps_sub.add_parser(
         "install-town03",
@@ -220,6 +247,82 @@ def install_command(args: argparse.Namespace) -> None:
         print(json.dumps({"event": "result", "report": report}), flush=True)
     else:
         print(json.dumps(report, indent=2))
+
+
+def install_town_command(args: argparse.Namespace) -> None:
+    import json
+    from coperceive.hdmap.install import install_verified_town
+
+    progress: Progress | None = None
+    if args.progress_json:
+        def emit(stage: str, percent: int, message: str) -> None:
+            print(json.dumps({"stage": stage, "percent": percent, "message": message}), flush=True)
+        progress = emit
+    try:
+        report = install_verified_town(
+            args.town,
+            Path(args.maps),
+            Path(args.scenes),
+            url=args.url,
+            progress=progress,
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    if args.progress_json:
+        print(json.dumps({"event": "result", "report": report}), flush=True)
+    else:
+        print(json.dumps(report, indent=2))
+
+
+def list_command(args: argparse.Namespace) -> None:
+    import json
+    from coperceive.hdmap.store import load_map
+
+    maps_root = Path(args.maps)
+    installed: dict[str, dict[str, object]] = {}
+    if maps_root.is_dir():
+        for path in maps_root.iterdir():
+            if path.is_dir() and (path / "manifest.json").is_file():
+                try:
+                    hdmap = load_map(path)
+                except ValueError:
+                    continue
+                size = sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+                installed[hdmap.map_name] = {
+                    "map_name": hdmap.map_name,
+                    "directory": str(path),
+                    "bytes": size,
+                    "source": hdmap.source,
+                }
+    table = []
+    for town in VERIFIED_TOWNS:
+        name = f"Carla/Maps/{town}"
+        table.append({
+            "town": town,
+            "map_name": name,
+            "download_bytes": TOWN_BYTES[town],
+            "sha256": TOWN_SHA256[town],
+            "source_url": town_url(town),
+            "licence": "CC-BY",
+            "verified": True,
+            "installed": name in installed,
+            "installed_info": installed.get(name),
+        })
+    print(json.dumps({"schema": "coperceive-carla-maps-1", "towns": table}, indent=2))
+
+
+def remove_command(args: argparse.Namespace) -> None:
+    import shutil
+    from coperceive.hdmap.store import map_slug
+
+    slug = map_slug(f"Carla/Maps/{args.town}")
+    target = Path(args.maps) / slug
+    if not target.is_dir():
+        print(f"not installed: {slug}", file=sys.stderr)
+        raise SystemExit(2)
+    shutil.rmtree(target)
+    print(f"removed {target}")
 
 
 def identify_command(args: argparse.Namespace) -> None:

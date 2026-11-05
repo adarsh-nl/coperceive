@@ -154,3 +154,68 @@ def test_install_requires_a_scene_that_names_the_map(tmp_path: Path) -> None:
             )
     # Ingest and alignment were staged; failure leaves no unaligned maps/Town03.
     assert not (scenes / "maps" / "Town03").exists()
+
+
+def test_the_verified_town_table_matches_adr_0008_and_is_pinned() -> None:
+    from coperceive.hdmap.install import TOWN_SHA256, town_url
+
+    expected = {
+        "Town01": "97a7f6ac67812567e5c8ee0599cd823b23f80f30f3f97c502212e38b72e2b709",
+        "Town02": "953c05f17def231239ffcadba3307628a82d0d335b67b4e29c3098f7aed1dd7d",
+        "Town03": "abf177bcd9b66cfefb7ac4919f6456815f1384f4229f1343c8a6a90bbb7713c9",
+        "Town04": "4dddd1560ab7812b0e89cd4a523d8b6f2b93947eafb496d9eeb83cc772116c85",
+        "Town05": "7edc53b0be840e177598da7a4ed9571146d7b2595ce280d154c90f92e8a48851",
+        "Town06": "a90b613175fa837fdc128ddfaf5ddad25797b128fdbd8cd945974bc21a60496e",
+        "Town07": "be730652769e993e27f748ba5793dba9e49d299205146a7a8db0bcd17af877bf",
+        "Town10HD": "5d883b799f634030af92be1e9d79d107845540ba04338e8c60e095be1aef7be7",
+    }
+    assert TOWN_SHA256 == expected
+    for town in TOWN_SHA256:
+        url = town_url(town)
+        assert TOWN03_MIRROR_COMMIT in url
+        assert "/master/" not in url
+        assert url.endswith(f"/{town}.xodr")
+
+
+def test_generic_install_of_town10hd_from_a_mock_source(tmp_path: Path) -> None:
+    from coperceive.hdmap.install import install_verified_town
+
+    payload = _fixture_xodr(tmp_path)
+    digest = hashlib.sha256(payload).hexdigest()
+    maps = tmp_path / "library" / "maps"
+    scenes = tmp_path / "library"
+    scenes.mkdir(parents=True)
+    from coperceive.model import Agent, AgentType, Clock, Scene, StampedPose
+    from coperceive.se3 import SE3
+    from coperceive.store import SCHEMA_VERSION, write_scene
+
+    pose = StampedPose(0, SE3.identity().translation(40.0, -1.75, 0.4))
+    agent = Agent(
+        "vehicle",
+        AgentType.VEHICLE,
+        (pose,),
+        platform=(("map_name", "Carla/Maps/Town10HD"),),
+    )
+    scene = Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id="Town10HD-000",
+        world_frame="ENU",
+        clock=Clock("us", "install fixture"),
+        agents=(agent,),
+        sensors=(),
+        annotations=(),
+        objects=(),
+    )
+    write_scene(scene, scenes / "Town10HD-000")
+    with _MockMapServer(payload) as server:
+        report = install_verified_town(
+            "Town10HD",
+            maps,
+            scenes,
+            url=server.url,
+            expected_sha256=digest,
+        )
+    assert report["map_name"] == "Carla/Maps/Town10HD"
+    assert report["town"] == "Town10HD"
+    assert report["alignment"]["measured"] is True
+    assert (maps / "Town10HD" / "manifest.json").is_file()
