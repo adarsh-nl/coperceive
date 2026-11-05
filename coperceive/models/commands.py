@@ -30,6 +30,8 @@ from coperceive.models.slurm import (
     write_plan,
 )
 from coperceive.models.spec import Manifest, ModelSpecError, select_model
+from coperceive.robustness.apply import export_perturbed_inputs
+from coperceive.robustness.spec import PerturbationError, load_perturbation
 from coperceive.store import read_scene
 from coperceive.viewdata import scene_directories
 
@@ -38,6 +40,7 @@ _USER_ERRORS = (
     RegistryError,
     BatchError,
     PredictionError,
+    PerturbationError,
     InputError,
     CacheError,
     SlurmError,
@@ -87,6 +90,11 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     run.add_argument("--work", default=None)
     run.add_argument("--force", action="store_true")
     run.add_argument(
+        "--perturb",
+        default=None,
+        help="Perturbation spec, for example latency_frames=2,pose_noise_xy=0.2,seed=7.",
+    )
+    run.add_argument(
         "--staging-seconds",
         type=float,
         default=None,
@@ -120,6 +128,19 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
         ),
     )
     run.set_defaults(func=run_command)
+
+    perturb = commands.add_parser(
+        "perturb-inputs",
+        help="Write perturbed poses and the unchanged ground truth for an external script.",
+    )
+    perturb.add_argument("--scenes", required=True, help="Directory of schema 1 scenes.")
+    perturb.add_argument("--scene", required=True, help="Scene id.")
+    perturb.add_argument("--perturb", required=True, help="Perturbation spec.")
+    perturb.add_argument(
+        "--out", required=True, help="Directory for perturbation.json and frames.json."
+    )
+    perturb.add_argument("--ego", default=None, help="Ego agent id. Default: the first agent.")
+    perturb.set_defaults(func=perturb_command)
 
     cache = commands.add_parser("cache", help="The per-scene result cache of runs.")
     cache_commands = cache.add_subparsers(dest="cache_command", required=True)
@@ -261,6 +282,8 @@ def _run(args: argparse.Namespace) -> None:
         created_utc=utc_now(),
     )
     _print_report(report, out, str(args.run_id))
+    if options.perturbation is not None:
+        print(f"perturbation {options.perturbation.canonical()}")
     if report.completed == () and report.skipped and not options.force:
         print(
             f"run {args.run_id!r} already has every selected scene; use --force to redo it",
@@ -345,6 +368,7 @@ def _run_options(args: argparse.Namespace) -> RunOptions:
         work_dir=Path(args.work) if args.work else None,
         force=bool(args.force),
         staging_seconds=args.staging_seconds,
+        perturbation=load_perturbation(args.perturb) if isinstance(args.perturb, str) else None,
     )
 
 
@@ -365,6 +389,23 @@ def _print_report(report: BatchReport, out: Path, run_id: str) -> None:
         f"scenes {len(report.completed)} frames {report.frames_run} "
         f"cached {report.cache_hits} boxes {report.boxes}"
     )
+
+
+def perturb_command(args: argparse.Namespace) -> None:
+    _guarded(_perturb, args)
+
+
+def _perturb(args: argparse.Namespace) -> None:
+    spec = load_perturbation(str(args.perturb))
+    root = Path(args.scenes)
+    scene_id = str(args.scene)
+    scene_dir = root / scene_id
+    if not (scene_dir / "manifest.json").is_file():
+        raise BatchError(f"scene {scene_id!r} is not under {root}")
+    scene = read_scene(scene_dir)
+    ego = str(args.ego) if isinstance(args.ego, str) else None
+    export_perturbed_inputs(scene, spec, Path(args.out), ego_agent_id=ego)
+    print(f"wrote {args.out}")
 
 
 def prune_command(args: argparse.Namespace) -> None:
