@@ -2164,7 +2164,6 @@ async fn delete_server_profile(id: String) -> Result<(), String> {
 
 /// Exports a server profile as a secret-free lab file. The returned text is the
 /// JSON to save; placeholders stand in for one person's home, user and scratch.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn export_lab_profile(
     entry: ServerEntry,
@@ -2175,7 +2174,6 @@ async fn export_lab_profile(
 
 /// Fills a lab profile with this person's SSH alias and paths. Nothing is saved
 /// until the user saves the returned entry.
-#[cfg(target_os = "macos")]
 #[tauri::command]
 async fn prepare_lab_import(
     document: String,
