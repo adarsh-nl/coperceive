@@ -119,11 +119,7 @@ def _scrub_object(value: dict[object, object], path: str) -> tuple[dict[str, obj
 
 
 def _scrub_string(value: str, path: str) -> tuple[object, list[str]]:
-    if (
-        _TOKEN_VALUE.search(value)
-        or _USER_AT.search(value)
-        or _PERSONAL_IDENTIFIER.search(value)
-    ):
+    if _TOKEN_VALUE.search(value) or _USER_AT.search(value) or _PERSONAL_IDENTIFIER.search(value):
         return None, [path]
     if _looks_absolute(value):
         return None, [path]

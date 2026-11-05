@@ -273,7 +273,7 @@ export default function RunHistory() {
     }
   };
 
-  const source = testRepro && entries ? [TEST_REPRO_ENTRY, ...entries] : (entries ?? []);
+  const source = testRepro ? [TEST_REPRO_ENTRY, ...(entries ?? [])] : (entries ?? []);
   const shown = source.filter((entry) => (FILTERS.find((item) => item.key === filter) ?? FILTERS[0]).match(entry));
   const selected = shown.find((entry) => entry.job_id === selectedJob) ?? null;
   useDefaultSelection(shown, rowKey, selectedJob, setSelectedJob);
@@ -508,9 +508,9 @@ export default function RunHistory() {
           {opened}
         </p>
       ) : null}
-      {profiles.length === 0 && !error ? (
+      {profiles.length === 0 && !error && !testRepro ? (
         <p className="c-page-note">Add a server in Servers; runs you submit there are listed here.</p>
-      ) : entries === null ? (
+      ) : entries === null && !testRepro ? (
         <p className="c-page-note">Loading submitted runs…</p>
       ) : (
         <GridTable

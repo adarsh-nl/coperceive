@@ -3607,6 +3607,10 @@ def eval_js(script, timeout=20):
     return data.get("result")
 
 clicked = eval_js("""(() => {
+    const back = Array.from(document.querySelectorAll('a, button')).find(
+        (item) => (item.textContent || '').trim() === 'Return to Library'
+    );
+    if (back) back.click();
     const tab = Array.from(document.querySelectorAll('nav button, [role="tab"]')).find(
         (button) => (button.textContent || '').trim() === 'HPC Workspace'
     );
