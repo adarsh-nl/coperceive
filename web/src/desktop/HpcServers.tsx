@@ -122,7 +122,6 @@ export default function HpcServers() {
   const [note, setNote] = useState("");
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
-  const [browseProfile, setBrowseProfile] = useState<ServerEntry | null>(null);
   const [shareEntry, setShareEntry] = useState<ServerEntry | null>(null);
   const [importing, setImporting] = useState(false);
   const formErrorRef = useRef<HTMLDivElement | null>(null);

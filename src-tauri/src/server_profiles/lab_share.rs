@@ -152,6 +152,17 @@ pub fn prepare_lab_import(
     }
     let parsed: LabProfileDocument = serde_json::from_value(raw)
         .map_err(|error| format!("This file is not a coperceive lab profile: {error}"))?;
+    reject_unsafe("server name", &parsed.profile.name, false, false)?;
+    if let Some(user) = parsed.profile.user.as_deref() {
+        reject_unsafe("user name", user, false, false)?;
+    }
+    if let Some(host) = parsed.profile.host.as_deref() {
+        reject_unsafe("host", host, false, false)?;
+    }
+    if let Some(notes) = parsed.profile.notes.as_deref() {
+        reject_unsafe("notes", notes, true, true)?;
+    }
+    reject_unsafe("scratch template", &parsed.profile.scratch_template, true, true)?;
     if parsed.schema != LAB_PROFILE_SCHEMA || parsed.schema_version != LAB_PROFILE_VERSION {
         return Err(
             "This file is not a coperceive lab profile (schema coperceive-lab-profile version 1)."
@@ -494,9 +505,7 @@ fn clean_alias(alias: &str) -> Result<String, String> {
     {
         return Err("The SSH alias cannot contain spaces or control characters.".to_string());
     }
-    if alias.split('/').any(|segment| segment == "..") {
-        return Err("The SSH alias may not contain '..'.".to_string());
-    }
+    reject_unsafe("SSH alias", alias, false, false)?;
     Ok(alias.to_string())
 }
 
@@ -506,6 +515,33 @@ fn reject_identity_value(label: &str, value: &str) -> Result<(), String> {
         return Err(format!(
             "The {label} cannot contain a placeholder or a line break."
         ));
+    }
+    reject_unsafe(label, value, true, true)
+}
+
+/// Reject command-shaped text and path escapes in imported identity fields.
+fn reject_unsafe(
+    label: &str,
+    value: &str,
+    allow_slashes: bool,
+    allow_dollar: bool,
+) -> Result<(), String> {
+    let lower = value.to_ascii_lowercase();
+    if lower.contains("proxycommand") {
+        return Err(format!("The {label} may not contain a ProxyCommand."));
+    }
+    if value.split(['/', '\\']).any(|part| part == "..") {
+        return Err(format!("The {label} may not contain '..'."));
+    }
+    if !allow_slashes && (value.contains('/') || value.contains('\\')) {
+        return Err(format!("The {label} may not contain a path separator."));
+    }
+    let hostile = [';', '|', '&', '`', '<', '>'];
+    if value.chars().any(|ch| hostile.contains(&ch)) {
+        return Err(format!("The {label} contains shell metacharacters."));
+    }
+    if !allow_dollar && value.contains('$') {
+        return Err(format!("The {label} may not contain a shell variable."));
     }
     Ok(())
 }
@@ -673,4 +709,65 @@ mod tests {
         let error = prepare_lab_import(&exported, &missing_home).expect_err("home");
         assert!(error.contains("home directory"), "{error}");
     }
+
+    #[test]
+    fn hostile_imports_are_refused() {
+        let clean = export_lab_profile(&cluster_b(), &[]).expect("export");
+        let value: serde_json::Value = serde_json::from_str(&clean).unwrap();
+
+        let mut traversal = value.clone();
+        traversal["profile"]["name"] = serde_json::json!("../../escape");
+        assert!(prepare_lab_import(&traversal.to_string(), &student()).is_err());
+
+        let mut proxy = value.clone();
+        proxy["profile"]["notes"] = serde_json::json!("ProxyCommand nc evil 22");
+        assert!(prepare_lab_import(&proxy.to_string(), &student())
+            .unwrap_err()
+            .contains("ProxyCommand"));
+
+        let mut shell_user = student();
+        shell_user.user = "sam; rm -rf /".to_string();
+        assert!(prepare_lab_import(&clean, &shell_user)
+            .unwrap_err()
+            .contains("shell metacharacters"));
+
+        let mut shell_alias = student();
+        shell_alias.ssh_alias = "alias|cat /etc/passwd".to_string();
+        assert!(prepare_lab_import(&clean, &shell_alias).is_err());
+
+        let mut shell_host = value.clone();
+        shell_host["profile"]["host"] = serde_json::json!("host; rm -rf /");
+        assert!(prepare_lab_import(&shell_host.to_string(), &student()).is_err());
+
+        let oversized = "x".repeat(MAX_DOCUMENT_BYTES + 1);
+        assert!(prepare_lab_import(&oversized, &student())
+            .unwrap_err()
+            .contains("too large"));
+    }
+
+    #[test]
+    fn every_secret_shaped_file_key_is_refused() {
+        let clean = export_lab_profile(&cluster_b(), &[]).expect("export");
+        for key in [
+            "password",
+            "token",
+            "private_key",
+            "api_key",
+            "secret",
+            "authorization",
+            "credentials",
+        ] {
+            let mut value: serde_json::Value = serde_json::from_str(&clean).unwrap();
+            value[key] = serde_json::json!("planted-value");
+            let error = prepare_lab_import(&value.to_string(), &student()).expect_err(key);
+            assert!(
+                error.to_lowercase().contains("password")
+                    || error.to_lowercase().contains("token")
+                    || error.to_lowercase().contains("credential")
+                    || error.to_lowercase().contains("secret"),
+                "{key}: {error}"
+            );
+        }
+    }
+
 }
