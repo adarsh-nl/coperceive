@@ -411,24 +411,13 @@ mod tests {
     #[test]
     #[cfg(unix)]
     fn test_run_local_command_returns_timed_out_error() {
-        let dir = std::env::temp_dir().join(format!("ssh-timeout-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("temp dir");
-        let script = dir.join("slow.sh");
-        std::fs::write(&script, "#!/bin/bash\nsleep 30\n").expect("write");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755))
-                .expect("chmod");
-        }
         let err = run_local_command(
-            script.to_str().unwrap(),
-            &[],
+            "sleep",
+            &["30".to_string()],
             Duration::from_millis(150),
             None,
         )
         .expect_err("must time out");
         assert_eq!(err.kind(), std::io::ErrorKind::TimedOut);
-        let _ = std::fs::remove_dir_all(&dir);
     }
 }
