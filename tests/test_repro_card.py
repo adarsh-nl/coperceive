@@ -515,7 +515,7 @@ def test_scrubber_removes_runtime_user_host_and_home(
     monkeypatch.setattr(socket, "gethostname", lambda: "node17.lab.example")
     monkeypatch.setattr(socket, "getfqdn", lambda: "node17.lab.example")
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("/home/zoe")))
-    card = {
+    card: dict[str, object] = {
         "owner": "zoe",
         "machine": "node17.lab.example",
         "home": "/home/zoe/data",
