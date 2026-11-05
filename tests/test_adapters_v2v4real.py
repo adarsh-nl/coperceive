@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 """Synthetic V2V4Real OpenCOOD tree: check, detect, index, transforms. No dataset bytes."""
 
 from __future__ import annotations
@@ -19,14 +20,25 @@ SCENE = "testoutput_CAV_data_2022-06-01-10-00-00_1"
 def _scene() -> SceneSpec:
     base = two_cav_scene(SCENE)
     agents = [
-        AgentTrack("0", base.agents[0].poses, base.agents[0].boxes),
-        AgentTrack("1", base.agents[1].poses, base.agents[1].boxes),
+        AgentTrack("0", base.agents[0].poses, base.agents[0].boxes, cameras=False),
+        AgentTrack("1", base.agents[1].poses, base.agents[1].boxes, cameras=False),
     ]
     return SceneSpec(SCENE, agents)
 
 
 def _write(root: Path, split: str = "train") -> Path:
     write_release(root, split, [_scene()])
+    import yaml
+
+    for path in (root / split / SCENE).rglob("*.yaml"):
+        record = yaml.safe_load(path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or "lidar_pose" not in record:
+            continue
+        record["gps"] = [39.976794, -83.019263, 226.195, 2.6243, -0.000349, 0.004712]
+        record["true_ego_pos"] = record["lidar_pose"]
+        for vehicle in record.get("vehicles", {}).values():
+            vehicle["ass_id"] = -1
+        path.write_text(yaml.safe_dump(record, sort_keys=True), encoding="utf-8")
     return root
 
 
@@ -83,6 +95,7 @@ def test_hand_computed_v2v4real_pose_box_and_point_transforms(tmp_path: Path) ->
                 "0",
                 poses=[((10.0, 20.0, 1.9), (0.0, 90.0, 0.0))],
                 boxes=[Box(650, location=(16.0, 30.0, 0.0), angle=(0.0, 90.0, 0.0))],
+                cameras=False,
             ),
             AgentTrack("1", poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))]),
         ],
@@ -142,6 +155,7 @@ def test_mirror_would_be_caught_if_the_provisional_reflection_is_removed(
                         "0",
                         poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))],
                         boxes=[Box(650, location=(16.0, -6.0, 0.0), angle=(0.0, 0.0, 0.0))],
+                        cameras=False,
                     ),
                     AgentTrack("1", poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))]),
                 ],
@@ -173,3 +187,39 @@ def test_existing_dataset_detection_is_unchanged(tmp_path: Path) -> None:
     griffin = tmp_path / "griffin"
     write_griffin(griffin, {"scene-a": [0]})
     assert recognise(griffin) == "Griffin"
+
+
+def test_real_field_shapes_and_angle_units_are_accepted(tmp_path: Path) -> None:
+    """A real-shape YAML: gps/true_ego_pos/ass_id present, angle in degrees."""
+    root = tmp_path / "v2v4real"
+    scene = SceneSpec(
+        SCENE,
+        [
+            AgentTrack(
+                "0",
+                poses=[((10.0, 20.0, 1.9), (0.0, 90.0, 0.0))],
+                boxes=[
+                    Box(
+                        650,
+                        location=(16.0, 30.0, 0.0),
+                        angle=(0.0, 1.5, 0.0),
+                    )
+                ],
+                cameras=False,
+            ),
+            AgentTrack("1", poses=[((0.0, 0.0, 1.9), (0.0, 0.0, 0.0))], cameras=False),
+        ],
+        stems=(69,),
+    )
+    write_release(root, "train", [scene])
+    adapter = resolve_adapter("v2v4real")
+    ref = adapter.scenes(root, {"split": "train"})[0]
+    loaded = adapter.load(root, ref)
+    # 1.5 degrees, not radians (the official loader feeds angle through x1_to_x2,
+    # which applies np.radians). A 1.5 rad yaw would point nearly 90 degrees.
+    ann = next(a for a in loaded.annotations if a.track_id == "650")
+    rotated = ann.box_from_rpy.apply((1.0, 0.0, 0.0))
+    assert rotated[1] == pytest.approx(math.sin(math.radians(1.5)) * -1.0, abs=1e-9)
+    # No camera records in the real tree: only the fixed lidar sensor.
+    assert {sensor.modality.value for sensor in loaded.sensors} == {"lidar"}
+    assert loaded.images == ()

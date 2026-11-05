@@ -56,7 +56,7 @@ conventions:
   source_handedness: left
   reflect_axis: y
   body_axes: FLU
-  camera_axes: FLU   # provisional: OPV2V-style conversion; unverified for real V2V4Real
+  camera_axes: FLU  # unused: the extracted V2V4Real release is LiDAR-only
 
 streams:
   poses:
@@ -69,6 +69,8 @@ streams:
       euler: {fields: [lidar_pose.3, lidar_pose.5, lidar_pose.4], order: zyx, frame: intrinsic}
 
   sensors:
+    # The extracted release has no camera records (LiDAR-only). The camera block
+    # is kept for the published format, but no records means only the fixed lidar.
     reader: yaml_record
     path: "{agent_root}/{frame:06d}.yaml"
     sample: first
@@ -108,11 +110,6 @@ streams:
     fill:
       category: vehicle
       reason: "The format has no class field; the OPV2V paper annotates vehicles only."
-
-  images:
-    for_each: camera
-    path: "{agent_root}/{frame:06d}_{sensor}.png"
-    require_file: false
 
   lidar:
     reader: pcd
