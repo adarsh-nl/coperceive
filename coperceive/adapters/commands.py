@@ -26,7 +26,9 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     check = commands.add_parser(
         "check", help="Validate a manifest or generic dataset against a raw tree. Writes nothing."
     )
-    check.add_argument("adapter", nargs="?", help="A built-in name, installed adapter, or manifest file.")
+    check.add_argument(
+        "adapter", nargs="?", help="A built-in name, installed adapter, or manifest file."
+    )
     check.add_argument("--raw-root", default=None, help="The extracted dataset directory.")
     check.add_argument("--param", action="append", default=[], metavar="NAME=VALUE")
     check.add_argument("--scenes", default=None)

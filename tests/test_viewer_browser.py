@@ -216,7 +216,7 @@ def _write_roots(base: Path) -> tuple[Path, Path, Path]:
     # A generic multi-view example: two fixed cameras and one fixed lidar, no boxes,
     # no vehicle. It must open with Orbit only.
     examples = Path(__file__).resolve().parents[1] / "examples" / "generic" / "inspection"
-    ingest(GenericAdapter(), examples, scenes, workers=1)
+    ingest(GenericAdapter(), examples, scenes, params={}, workers=1)
     for scene_id in FILLER_SCENES:
         write_scene(_filler_scene(scene_id), scenes / scene_id)
     for child in scenes.iterdir():
