@@ -199,6 +199,25 @@ def strip_bundle(python_dest: Path, is_windows: bool) -> None:
             if f.endswith(".pyc") or f.endswith(".pyo"):
                 (Path(root) / f).unlink(missing_ok=True)
 
+    # Strip unneeded debug symbols from ELF binaries and shared libraries on Linux
+    if not is_windows and sys.platform.startswith("linux"):
+        for root, _dirs, files in os.walk(python_dest):
+            for f in files:
+                p = Path(root) / f
+                if p.is_symlink() or not p.is_file():
+                    continue
+                is_so = f.endswith(".so") or ".so." in f
+                is_elf = os.access(p, os.X_OK) and not (f.endswith(".py") or f.endswith(".sh"))
+                if is_so or is_elf:
+                    try:
+                        subprocess.run(
+                            ["strip", "--strip-unneeded", str(p)],
+                            check=False,
+                            capture_output=True,
+                        )
+                    except Exception:
+                        pass
+
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)

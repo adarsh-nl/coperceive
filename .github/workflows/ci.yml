@@ -323,8 +323,32 @@ jobs:
           DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
           test -n "${DEB_FILE}" || { echo "No .deb package found" >&2; exit 1; }
           python3 scripts/check_bundle_assets.py --app "${DEB_FILE}"
-      - name: Run Linux Smoke Test
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/desktop/smoke_test_linux.sh src-tauri/target/release/coperceive-desktop
+      - name: Inspect Linux Package Sizes and Top Paths
+        run: |
+          DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
+          APPIMAGE_FILE=$(find src-tauri/target -iname "*.AppImage" -type f | head -n 1)
+          echo "=== Debian Package Size ==="
+          ls -lh "${DEB_FILE}"
+          echo "=== Top 25 Largest Files in .deb ==="
+          dpkg-deb -c "${DEB_FILE}" | sort -k3 -n -r | head -n 25
+          echo "=== AppImage Package Size ==="
+          ls -lh "${APPIMAGE_FILE}"
+      - name: Run Linux Smoke Test on Installed Debian Package
+        run: |
+          DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
+          test -n "${DEB_FILE}" || { echo "No .deb package found" >&2; exit 1; }
+          echo "Installing ${DEB_FILE} via apt-get..."
+          sudo apt-get install -y "${DEB_FILE}"
+          INSTALLED_BIN="/usr/bin/coperceive-desktop"
+          test -x "${INSTALLED_BIN}" || { echo "Installed binary not found at ${INSTALLED_BIN}" >&2; exit 1; }
+          xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/desktop/smoke_test_linux.sh "${INSTALLED_BIN}"
+          echo "Removing installed Debian package..."
+          sudo apt-get remove -y coperceive-desktop || sudo apt-get remove -y coperceive
+      - name: Run Linux Smoke Test on AppImage
+        run: |
+          APPIMAGE_FILE=$(find src-tauri/target -iname "*.AppImage" -type f | head -n 1)
+          chmod +x "${APPIMAGE_FILE}"
+          APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/desktop/smoke_test_linux.sh "${APPIMAGE_FILE}"
       - name: Locate Built Linux Packages
         run: |
           DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
@@ -410,9 +434,51 @@ jobs:
           $extractDir = Join-Path $env:RUNNER_TEMP "nsis-extract"
           7z x $installer.FullName -o"$extractDir"
           python scripts/check_bundle_assets.py --app $extractDir
-      - name: Run Windows Smoke Test
+      - name: Run Windows Smoke Test on Installed NSIS Package
         shell: pwsh
-        run: pwsh scripts/desktop/smoke_test_windows.ps1 src-tauri\target\release\coperceive-desktop.exe
+        run: |
+          $installer = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*.exe | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "No NSIS installer found"
+            exit 1
+          }
+          Write-Host "Installing NSIS package silently: $($installer.FullName)"
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
+          Start-Sleep -Seconds 3
+
+          $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "coperceive-desktop.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $installedExe) {
+            $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "Coperceive.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $installedExe) {
+            Write-Host "Falling back to search across LOCALAPPDATA and PROGRAMFILES..."
+            $installedExe = Get-ChildItem -Path @($env:LOCALAPPDATA, $env:ProgramFiles) -Filter "*coperceive*.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
+          }
+          if (-not $installedExe) {
+            Write-Error "Could not locate installed coperceive executable after silent install"
+            exit 1
+          }
+          Write-Host "Found installed application at $($installedExe.FullName)"
+          $installDir = $installedExe.DirectoryName
+
+          # Run smoke test against the INSTALLED executable
+          pwsh scripts/desktop/smoke_test_windows.ps1 $installedExe.FullName
+
+          # Silent uninstall
+          $uninstaller = Get-ChildItem -Path $installDir -Filter "*uninstall*.exe" | Select-Object -First 1
+          if (-not $uninstaller) {
+            Write-Error "Could not find uninstaller in $installDir"
+            exit 1
+          }
+          Write-Host "Uninstalling silently: $($uninstaller.FullName)"
+          Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S _?=$installDir" -Wait
+          Start-Sleep -Seconds 3
+
+          if (Test-Path $installedExe.FullName) {
+            Write-Error "Installed exe $($installedExe.FullName) still exists after silent uninstall!"
+            exit 1
+          }
+          Write-Host "Uninstall verified: $installDir is removed."
       - name: Locate Built Windows Installer
         shell: pwsh
         run: |
@@ -655,6 +721,26 @@ jobs:
           echo "### Desktop macOS (Intel x86_64) DMG Artifact" >> $GITHUB_STEP_SUMMARY
           echo "- **File**: \`$(basename "${DMG_INTEL_ABS}")\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Size**: ${DMG_INTEL_HUMAN} (${DMG_INTEL_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
+      - name: Verify Intel Mac App Bundle Under Rosetta
+        run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "Rosetta 2 is available on arm64 runner: executing Intel x86_64 verification"
+            APP_INTEL="$(find src-tauri/target/x86_64-apple-darwin -type d -name Coperceive.app | head -n 1)"
+            if [ -z "${APP_INTEL}" ]; then
+              APP_INTEL="$(find src-tauri/target -type d -name Coperceive.app | head -n 1)"
+            fi
+            echo "Intel App path: ${APP_INTEL}"
+            PY_INTEL="${APP_INTEL}/Contents/Resources/resources/python/bin/python3"
+            if [ -x "${PY_INTEL}" ]; then
+              echo "Testing bundled Intel python3 under Rosetta:"
+              arch -x86_64 "${PY_INTEL}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
+            fi
+            echo "Running smoke test on Intel .app under Rosetta:"
+            arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
+            echo "::notice title=Rosetta-Test::Intel Mac build verified under Rosetta 2"
+          else
+            echo "::notice title=Rosetta-Test::Rosetta 2 is not available on this runner (arch -x86_64 returned non-zero)"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: coperceive-desktop-macos-x86_64

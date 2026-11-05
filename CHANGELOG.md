@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Native installers across three operating systems (PR #134): Windows NSIS installer (`.exe`) with silent `/S` install and uninstall, Linux Debian package (`.deb`) and standalone AppImage, and macOS Apple Silicon (`arm64`) and Intel (`x86_64`) disk images (`.dmg`). The bundled Python standalone runtime is bundled and verified across all four targets. The Intel Mac build is cross-compiled on Apple Silicon runners and verified under Rosetta 2 emulation, but remains untested on physical Intel Mac hardware until verified by a user.
+- V2V4Real 10 Hz playback and optional camera manifests (PR #132): V2V4Real streams and plays at 10 Hz (0.1 s per frame), and camera records are marked optional so LiDAR-only manifests validate and play cleanly without requiring phantom camera files.
 - Windows and Linux platform behaviour (PR #129): native window decorations, Ctrl shortcut accelerator menu, dynamic reveal labels ("Show in Explorer", "Show in folder", "Show in Finder"), Windows OpenSSH support with `%USERPROFILE%\.ssh\config` and `ControlMaster=no`, process pause and resume via `ntdll.dll` on Windows, strict Windows ACL checks for token and state files, and pure Rust `zip` crate for diagnostics export.
 - V2V4Real LiDAR-only release confirmation and box angle keys in degrees `[roll, yaw, pitch]` (PR #131).
 - Dataset adapters for V2V4Real and DAIR-V2X-C with automated detection (PR #126). V2V4Real supports LiDAR point clouds and poses in OpenCOOD layout with unverified coordinate convention warnings; DAIR-V2X-C adds support for cooperative infrastructure-vehicle setups.
