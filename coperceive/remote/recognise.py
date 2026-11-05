@@ -106,6 +106,8 @@ def _opencood(folder: Path) -> tuple[str, list[str]] | None:
 def recognise(folder: Path) -> str | None:
     """A short label for a folder, or None when nothing here says what it is."""
     try:
+        if (folder / "scene.yaml").is_file():
+            return "Generic multi-view"
         if is_dair_v2x_c(folder):
             return "DAIR-V2X-C · train, val"
         if is_griffin(folder):

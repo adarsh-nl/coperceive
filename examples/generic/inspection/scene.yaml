@@ -1,0 +1,29 @@
+schema: coperceive-generic-1
+scene_id: generic-inspection
+handedness: right
+frame_rate_hz: 1
+frame_count: 2
+agents:
+  - id: cam_north
+    role: fixed camera
+    fixed_pose: {translation_m: [0.0, -3.0, 2.0], rotation_rpy_deg: [0.0, 0.0, 0.0]}
+    sensors:
+      - id: camera
+        modality: camera
+        files: "agents/cam_north/camera/{frame:06d}.png"
+        intrinsic: [400.0, 400.0, 320.0, 240.0]
+  - id: cam_south
+    role: fixed camera
+    fixed_pose: {translation_m: [0.0, 3.0, 2.0], rotation_rpy_deg: [0.0, 180.0, 0.0]}
+    sensors:
+      - id: camera
+        modality: camera
+        files: "agents/cam_south/camera/{frame:06d}.png"
+        intrinsic: [400.0, 400.0, 320.0, 240.0]
+  - id: lidar_scope
+    role: fixed lidar
+    fixed_pose: {translation_m: [0.0, 0.0, 1.5], rotation_rpy_deg: [0.0, 0.0, 0.0]}
+    sensors:
+      - id: lidar
+        modality: lidar
+        files: "agents/lidar_scope/lidar/{frame:06d}.pcd"

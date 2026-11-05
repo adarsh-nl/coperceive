@@ -28,6 +28,8 @@ from typing import NoReturn, cast
 
 import pytest
 import uvicorn
+from coperceive.adapters.generic import GenericAdapter
+from coperceive.adapters.ingest import ingest
 from coperceive.adapters.naming import display_names
 from coperceive.app.server import create_app
 from coperceive.evaluation.config import DEFAULT_CONFIG
@@ -211,6 +213,10 @@ def _write_roots(base: Path) -> tuple[Path, Path, Path]:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(_PNG)
     write_scene(_bare_scene(), scenes / SCENE_BARE)
+    # A generic multi-view example: two fixed cameras and one fixed lidar, no boxes,
+    # no vehicle. It must open with Orbit only.
+    examples = Path(__file__).resolve().parents[1] / "examples" / "generic" / "inspection"
+    ingest(GenericAdapter(), examples, scenes, workers=1)
     for scene_id in FILLER_SCENES:
         write_scene(_filler_scene(scene_id), scenes / scene_id)
     for child in scenes.iterdir():
@@ -1728,6 +1734,21 @@ def test_the_app_switches_scene_in_place_through_the_hash(session: _Session) -> 
 def _viewpoints(session: _Session) -> list[str]:
     buttons = session.page.locator("[role=group][aria-label=Viewpoint] button")
     return [buttons.nth(i).inner_text().strip() for i in range(buttons.count())]
+
+
+def test_generic_inspection_scene_opens_with_orbit_only(session: _Session) -> None:
+    """A generic fixed-camera/fixed-LiDAR scene has no vehicle/UAV, so Orbit is the
+    only viewpoint; it still plays and lists its cameras."""
+    session.choose_scene("generic-inspection")
+    session.wait_for(
+        lambda: session.page.locator("#scene-id").inner_text() == "generic-inspection",
+        "the generic inspection scene",
+    )
+    views = _viewpoints(session)
+    assert "Orbit" in views
+    assert "Chase" not in views
+    assert "Drone" not in views
+    assert session.page.get_by_role("switch", name="Road map", exact=True).count() == 0
 
 
 def test_views_and_layers_follow_what_the_scene_has(session: _Session) -> None:
