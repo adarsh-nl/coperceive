@@ -15,6 +15,26 @@ Academic Software License for the code, not a grant for the data. Terms are
 unknown as of 2026-11-05. Cite the paper. Research use on the HPC only; do not
 commit frames, crops, screenshots or derived scene files to this repository.
 
+## Confirmed cluster copy (test split)
+
+Adarsh extracted `/datasets/eemcs/ps/cv/opencood/v2v4real/test/` on 2026-11-05:
+**9 scenarios**, 7,972 files + 28 folders (the zip's 8,000 entries), 9.0 GB, so
+the split is complete. Scenario names include
+`testoutput_CAV_data_2022-03-15-09-54-40_0`; agents are `0/` and `1/`. A sample
+agent directory has 147 frames (`NNNNNN.pcd` + `NNNNNN.yaml`). **There are no
+camera images**: this release is LiDAR-only, so the adapter exposes no camera
+sensors and the viewer hides camera rows/strip through the normal capability
+rule.
+
+The frame YAML has `ego_speed`, `gps` (6 float64; latitude/longitude/altitude +
+three angles, confirming real-world Columbus, Ohio data), `lidar_pose`,
+`true_ego_pos` and `vehicles`. Vehicles carry `angle`, `ass_id`, `center`,
+`extent`, and location; the sample has `angle: [0.0, 1.5, 0.0]`. The official
+loader passes that angle to `x1_to_x2` / `x_to_world`, which applies
+`np.radians` (`opencood/utils/box_utils.py`, `opencood/utils/transformation_utils.py`),
+so the order is **`[roll, yaw, pitch]` in degrees** — the 1.5 is degrees, not
+radians. Synthetic tests now use these exact keys and values.
+
 ## Raw layout (published reference)
 
 ```text
@@ -42,17 +62,17 @@ commit frames, crops, screenshots or derived scene files to this repository.
   given. Do not assume the copy is complete: the zip suffixes `-001`/`-002`
   may be parts of a split download, not separate splits.
 
-**To verify against the cluster copy:** exact per-frame file names, camera count
-and component names, scenario-name pattern, whether `Day20_test/` is an extra
-scenario root rather than a split, and **the coordinate handedness/axis
-convention** (see below). The adapter is written against the published
-OpenCOOD layout and will be corrected from the listing.
+**Now verified from the cluster copy:** the split tree, 9 scenarios, agents
+0/1, 147 frames per agent in the sample, and **no camera files**. Still to
+verify: whether `Day20_test/` is an extra scenario root, the frame stem cadence
+(the manifest still uses OPV2V's assumed 0.05 s scale), and **the coordinate
+handedness/mirror** by looking at which side of the road the cars are on.
 
 ## Agent roles, frames and sensors
 
 - **Agents:** two connected **vehicles** (`0`, `1`). No roadside unit, drone or
   fixed infrastructure in V2V4Real.
-- **World frame: unverified against real data.** The official V2V4Real loader
+- **World frame: still unverified for the mirror.** The official V2V4Real loader
   reads `lidar_pose` as `[x, y, z, roll, yaw, pitch]` with angles in degrees
   (`opencood/data_utils/datasets/basedataset.py`) and builds the source-to-world
   transform with `x_to_world` in
