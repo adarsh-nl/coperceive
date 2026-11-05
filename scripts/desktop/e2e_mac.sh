@@ -3145,7 +3145,7 @@ secret = "${RELAUNCH_SECRET}"
 def eval_js(script, timeout=15):
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}/eval",
-        data=json.dumps({"script": script}).encode("utf-8"),
+        data=json.dumps({"script": script, "window": "main"}).encode("utf-8"),
         headers={"Authorization": f"Bearer {secret}", "Content-Type": "application/json"},
     )
     with urllib.request.urlopen(req, timeout=timeout + 5) as response:
