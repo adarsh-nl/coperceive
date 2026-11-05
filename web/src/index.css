@@ -1219,6 +1219,21 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   margin-top: 12px;
 }
 .dialog input[type="number"] { width: 5rem; }
+.paper-export {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  margin-top: 12px;
+  padding: 10px 12px 12px;
+}
+.paper-export legend { padding: 0 4px; font-size: 13px; }
+.paper-options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  align-items: center;
+}
+.paper-options label { display: flex; gap: 6px; align-items: center; font-size: 13px; }
+.paper-note { margin: 8px 0; font-size: 12px; color: var(--muted, #9a9588); }
 .plot-preview {
   display: block;
   max-width: min(100%, 420px);

@@ -552,6 +552,54 @@ assert "Saved to " in res["note"], "Expected Saved to in note: " + str(res.get("
 assert os.path.basename(bev_dest) in res["note"], "Expected filename in note: " + str(res.get("note"))
 
 print("Step 1c verified: BEV figure exported successfully and non-empty PNG asserted.", flush=True)
+
+print("Driving real UI: opening Export dialog for the paper zip...")
+eval_js("""(() => {
+    const exportBtn = Array.from(document.querySelectorAll(\x27button\x27)).find(b => b.textContent && b.textContent.trim() === "Export");
+    if (!exportBtn) throw new Error("Export button not found");
+    exportBtn.click();
+})()""")
+time.sleep(0.5)
+paper_dest = os.path.join(tmp_dir, f"e2e_paper_{int(time.time())}.zip")
+Path(mock_dialog_file).write_text(paper_dest + "\n", encoding="utf-8")
+print(f"Seeded mock dialog for paper export: {paper_dest}")
+eval_js("""(() => {
+    const dialog = document.querySelector(\x27.dialog\x27);
+    if (!dialog) throw new Error("Export dialog not found in DOM");
+    const paperBtn = dialog.querySelector(\x27#export-paper\x27);
+    if (!paperBtn) throw new Error("Export for paper button not found");
+    paperBtn.click();
+})()""")
+print("Waiting for paper export to finish...")
+deadline = time.monotonic() + 60.0
+paper_exported = False
+paper_res = None
+while time.monotonic() < deadline:
+    paper_res = eval_js("""(() => {
+        const dialog = document.querySelector(\x27.dialog\x27);
+        const note = dialog ? dialog.querySelector(\x27p.muted\x27) : null;
+        const noteText = note ? note.textContent : "";
+        if (noteText.includes("Ready for Overleaf")) {
+            return { done: true, note: noteText };
+        }
+        if (noteText.includes("Failed") || noteText.includes("Error") || noteText.includes("error")) {
+            return { error: noteText };
+        }
+        return { done: false, note: noteText };
+    })()""")
+    err_text = paper_res.get("error") if paper_res else None
+    if err_text:
+        raise RuntimeError(f"Paper export failed in UI: {err_text}")
+    if paper_res and paper_res.get("done"):
+        paper_exported = True
+        break
+    time.sleep(0.5)
+assert paper_exported, "Paper export timed out in UI"
+assert os.path.isfile(paper_dest), f"Paper zip does not exist at {paper_dest}"
+paper_size = os.path.getsize(paper_dest)
+print(f"Asserting non-empty paper zip: {paper_dest} is {paper_size} bytes")
+assert paper_size > 0, f"Paper zip {paper_dest} is empty"
+print("Step 1d verified: Paper export wrote a non-empty zip and said Ready for Overleaf.", flush=True)
 '
 
 screencapture -x "${SCREENSHOT_DIR}/02-before-quit.png" 2>/dev/null || true
