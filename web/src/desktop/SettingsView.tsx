@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 import React, { useEffect, useState } from "react";
+import { CarlaMapsSettings } from "./CarlaMapsSettings";
 import { ClusterDatasetSettings } from "./ClusterDatasetSettings";
 import {
   getPersistentState,
@@ -275,6 +276,10 @@ export function DesktopPreferences() {
           <ClusterDatasetSettings />
         </div>
       )}
+
+      <SettingsGroup title="Maps">
+        <CarlaMapsSettings />
+      </SettingsGroup>
 
       <SettingsGroup title="Updates">
         <SettingRow

@@ -134,3 +134,21 @@ def test_cli_prints_one_line_per_scene(tmp_path: Path, capsys: pytest.CaptureFix
     assert "on identified Carla/Maps/Town03" in text
     assert "identified 1 of 1 scenes" in text
     assert out.is_file()
+
+
+def test_unidentified_scene_keeps_no_map_and_surfaces_the_reason(tmp_path: Path) -> None:
+    maps = _maps(tmp_path, shift=0.3)
+    scenes = tmp_path / "scenes"
+    _scene(scenes, "ambiguous", y=-1.75)
+    guess = identify_towns(maps, scenes)[0]
+    assert guess.map_name is None
+    assert "within 0.5 m" in guess.reason
+    assert any(name == "Carla/Maps/Town03" for name, _ in guess.residuals)
+    stored = read_scene(scenes / "ambiguous")
+    assert not any(key == "map_name" for agent in stored.agents for key, _ in agent.platform)
+    table = tmp_path / "towns.yaml"
+    write_town_table([guess], table)
+    raw = yaml.safe_load(table.read_text(encoding="utf-8"))
+    assert "map_name" not in raw["ambiguous"]
+    assert raw["ambiguous"]["_status"] == "unidentified"
+    assert "within 0.5 m" in raw["ambiguous"]["_reason"]

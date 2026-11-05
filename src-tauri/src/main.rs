@@ -1436,6 +1436,132 @@ fn move_library_root(new_root: String) -> Result<coperceive_desktop::library::St
     Ok(coperceive_desktop::library::get_storage_stats(Path::new(&new_root), true))
 }
 
+/// The verified CARLA town table plus installed maps under <library_root>/maps.
+#[tauri::command]
+async fn list_carla_maps(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let persistent = state::load_state();
+        let library_root = persistent
+            .library_root
+            .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+        let maps_root = PathBuf::from(library_root).join("maps");
+        let python = resolve_python_binary(&app);
+        let output = std::process::Command::new(&python)
+            .args([
+                "-m", "coperceive.cli", "maps", "list",
+                "--maps", &maps_root.to_string_lossy(),
+            ])
+            .output()
+            .map_err(|error| format!("Could not list CARLA maps: {error}"))?;
+        if !output.status.success() {
+            return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+        }
+        serde_json::from_slice(&output.stdout)
+            .map_err(|error| format!("Could not read CARLA map list: {error}"))
+    })
+    .await
+    .map_err(|error| format!("CARLA map list failed: {error}"))?
+}
+
+/// Install one town whose SHA-256 is pinned in ADR 0008.
+#[tauri::command]
+async fn install_carla_map(
+    app: tauri::AppHandle,
+    town: String,
+) -> Result<serde_json::Value, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::io::{BufRead, BufReader, Read};
+        use std::process::{Command, Stdio};
+        use tauri::Emitter;
+        let persistent = state::load_state();
+        let library_root = persistent
+            .library_root
+            .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+        let library_root = PathBuf::from(library_root)
+            .canonicalize()
+            .map_err(|error| format!("Could not open the library root: {error}"))?;
+        let maps_root = library_root.join("maps");
+        let python = resolve_python_binary(&app);
+        let mut child = Command::new(&python)
+            .args([
+                "-m", "coperceive.cli", "maps", "install",
+                "--town", &town,
+                "--maps", &maps_root.to_string_lossy(),
+                "--scenes", &library_root.to_string_lossy(),
+                "--progress-json",
+            ])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|error| format!("Could not start the CARLA map installer: {error}"))?;
+        let stderr = child.stderr.take().map(|stderr| {
+            std::thread::spawn(move || {
+                let mut text = String::new();
+                let _ = BufReader::new(stderr).read_to_string(&mut text);
+                text
+            })
+        });
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Could not read CARLA map progress.".to_string())?;
+        let mut report: Option<serde_json::Value> = None;
+        for line in BufReader::new(stdout).lines() {
+            let line = line.map_err(|error| format!("Could not read CARLA map progress: {error}"))?;
+            if line.trim().is_empty() { continue; }
+            match serde_json::from_str::<serde_json::Value>(&line) {
+                Ok(event) if event.get("event").and_then(|v| v.as_str()) == Some("result") => {
+                    report = event.get("report").cloned();
+                }
+                Ok(event) => { let _ = app.emit("carla-map-progress", event); }
+                Err(_) => {
+                    let _ = app.emit(
+                        "carla-map-progress",
+                        serde_json::json!({"event": "log", "message": line}),
+                    );
+                }
+            }
+        }
+        let status = child
+            .wait()
+            .map_err(|error| format!("The CARLA map installer did not finish: {error}"))?;
+        let stderr = stderr.and_then(|handle| handle.join().ok()).unwrap_or_default();
+        if !status.success() {
+            return Err(format!(
+                "CARLA map install failed: {}",
+                stderr.trim().lines().last().unwrap_or("unknown error")
+            ));
+        }
+        report.ok_or_else(|| "The CARLA map installer returned no result.".to_string())
+    })
+    .await
+    .map_err(|error| format!("CARLA map install failed: {error}"))?
+}
+
+#[tauri::command]
+async fn remove_carla_map(app: tauri::AppHandle, town: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let persistent = state::load_state();
+        let library_root = persistent
+            .library_root
+            .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
+        let maps_root = PathBuf::from(library_root).join("maps");
+        let python = resolve_python_binary(&app);
+        let output = std::process::Command::new(&python)
+            .args([
+                "-m", "coperceive.cli", "maps", "remove",
+                "--town", &town,
+                "--maps", &maps_root.to_string_lossy(),
+            ])
+            .output()
+            .map_err(|error| format!("Could not remove the CARLA map: {error}"))?;
+        if output.status.success() { Ok(()) }
+        else { Err(String::from_utf8_lossy(&output.stderr).trim().to_string()) }
+    })
+    .await
+    .map_err(|error| format!("CARLA map removal failed: {error}"))?
+}
+
 /// One-click install of the official Town03 OpenDRIVE for a library scene:
 /// download (pinned mirror + SHA), ingest as a shared map, align to the scene
 /// poses, store under library_root/maps. Progress events are streamed as
@@ -3384,6 +3510,9 @@ fn main() {
             move_library_root,
             get_library_scenes,
             download_town_map,
+            list_carla_maps,
+            install_carla_map,
+            remove_carla_map,
             library_thumbnail,
             delete_library_scene,
             reveal_in_finder,
