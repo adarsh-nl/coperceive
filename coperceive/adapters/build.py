@@ -96,6 +96,8 @@ class CheckReport:
     errors: tuple[str, ...]
     counts: Mapping[str, tuple[tuple[str, int], ...]]
     variant_counts: tuple[tuple[int, int], ...] = ()
+    warnings: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -10,9 +10,11 @@ hold images/point clouds and optional boxes. See docs/spec/generic-multiview.md.
 from __future__ import annotations
 
 import csv
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from string import Formatter
 from typing import Any, NoReturn
 
 import yaml
@@ -49,6 +51,17 @@ _ROLES = {
 }
 
 
+def _role_type(role: str) -> AgentType:
+    words = set(re.split(r"[^a-z]+", role.lower()))
+    if "vehicle" in words:
+        return AgentType.VEHICLE
+    if "uav" in words or "drone" in words:
+        return AgentType.UAV
+    if words & {"infrastructure", "roadside", "fixed"}:
+        return AgentType.INFRASTRUCTURE
+    return AgentType.OTHER
+
+
 class GenericError(ValueError):
     """A generic dataset is malformed. The message names the file and field."""
 
@@ -81,8 +94,34 @@ def _pose(value: object, where: str) -> SE3:
     if not isinstance(value, dict):
         _fail(where, "pose must be a mapping")
     translation = _vec3(value.get("translation_m", [0, 0, 0]), where, "translation_m")
+    # rotation_rpy_deg is [roll, pitch, yaw]; keywords keep the order explicit.
     rpy = _vec3(value.get("rotation_rpy_deg", [0, 0, 0]), where, "rotation_rpy_deg")
-    return SE3.from_rpy_deg(rpy[0], rpy[1], rpy[2]).translation(*translation)
+    return SE3.from_rpy_deg(roll_deg=rpy[0], pitch_deg=rpy[1], yaw_deg=rpy[2]).translation(
+        *translation
+    )
+
+
+def _inside(root: Path, relative: str, where: str, field: str) -> Path:
+    """Resolve a path that must stay inside the dataset root, symlinks included."""
+    if not relative:
+        _fail(where, f"{field} must not be empty")
+    candidate = Path(relative)
+    if candidate.is_absolute() or ".." in candidate.parts:
+        _fail(where, f"{field} must stay inside the dataset folder")
+    root_resolved = root.resolve()
+    resolved = (root / candidate).resolve()
+    if resolved != root_resolved and root_resolved not in resolved.parents:
+        _fail(where, f"{field} must stay inside the dataset folder")
+    return root / candidate
+
+
+def _frame_template(value: object, where: str, field: str) -> str:
+    if not isinstance(value, str):
+        _fail(where, f"{field} must be a template")
+    parts = [part for part in Formatter().parse(value) if part[1] is not None]
+    if len(parts) != 1 or parts[0][1] != "frame" or parts[0][2] != "06d":
+        _fail(where, f"{field} must use exactly one {{frame:06d}} field")
+    return value
 
 
 def _matrix4(value: object, where: str) -> SE3:
@@ -106,7 +145,7 @@ def _matrix4(value: object, where: str) -> SE3:
     )
 
 
-def _timestamps(scene: dict[str, Any], where: str) -> tuple[int, ...]:
+def _timestamps(scene: dict[str, Any], raw_root: Path, where: str) -> tuple[int, ...]:
     if "timestamps_us" in scene:
         values = scene["timestamps_us"]
         if not isinstance(values, list) or not values:
@@ -115,7 +154,7 @@ def _timestamps(scene: dict[str, Any], where: str) -> tuple[int, ...]:
         name = scene["timestamp_file"]
         if not isinstance(name, str):
             _fail(where, "timestamp_file must be a path")
-        path = Path(where).parent / name
+        path = _inside(raw_root, name, where, "timestamp_file")
         try:
             values = [int(line.strip()) for line in path.read_text().splitlines() if line.strip()]
         except (OSError, ValueError) as exc:
@@ -173,7 +212,7 @@ class GenericAdapter:
     def validate(self, raw_root: Path) -> dict[str, Any]:
         path = self._scene_file(raw_root)
         payload = _read_yaml(path)
-        if payload.get("schema") != SCHEMA or not isinstance(payload.get("schema"), str):
+        if payload.get("schema") != SCHEMA:
             _fail(path.name, f"schema must be {SCHEMA}")
         scene_id = payload.get("scene_id")
         if not isinstance(scene_id, str) or not scene_id:
@@ -181,12 +220,12 @@ class GenericAdapter:
         handedness = payload.get("handedness", "right")
         if handedness not in ("right", "left"):
             _fail(path.name, "handedness must be right or left")
-        timestamps = _timestamps(payload, str(path))
+        timestamps = _timestamps(payload, raw_root, str(path))
         agents = payload.get("agents")
         if not isinstance(agents, list) or not agents:
             _fail(path.name, "agents must be a non-empty list")
         seen: set[str] = set()
-        count = 0
+        warnings: list[str] = []
         for index, agent in enumerate(agents):
             where = f"agent[{index}]"
             if not isinstance(agent, dict):
@@ -217,12 +256,19 @@ class GenericAdapter:
                 modality = sensor.get("modality")
                 if modality not in ("camera", "lidar"):
                     _fail(path.name, f"{swhere}.modality must be camera or lidar")
-                files = sensor.get("files")
-                if not isinstance(files, str) or "{frame:06d}" not in files:
-                    _fail(
-                        path.name,
-                        f"agent {agent_id}: sensor {sensor_id}: files must contain {{frame:06d}}",
+                raw_files = sensor.get("files")
+                if isinstance(raw_files, str) and (
+                    Path(raw_files).is_absolute() or ".." in Path(raw_files).parts
+                ):
+                    _inside(
+                        raw_root,
+                        raw_files,
+                        f"agent {agent_id}: sensors[{sindex}]",
+                        "files",
                     )
+                template = _frame_template(
+                    raw_files, f"agent {agent_id}: sensors[{sindex}]", "files"
+                )
                 if modality == "camera":
                     intrinsic = sensor.get("intrinsic")
                     if not isinstance(intrinsic, list) or len(intrinsic) != 4:
@@ -231,21 +277,18 @@ class GenericAdapter:
                             f"agent {agent_id}: sensor {sensor_id}: "
                             "intrinsic must be [fx, fy, cx, cy]",
                         )
-                    first = raw_root / files.format(frame=0)
-                    if not first.is_file():
-                        _fail(
-                            path.name,
-                            f"agent {agent_id}: sensor {sensor_id}: "
-                            f"missing {files.format(frame=0)}",
-                        )
-                else:
-                    first = raw_root / files.format(frame=0)
-                    if not first.is_file():
-                        _fail(
-                            path.name,
-                            f"agent {agent_id}: sensor {sensor_id}: "
-                            f"missing {files.format(frame=0)}",
-                        )
+                missing = []
+                for frame_index in range(len(timestamps)):
+                    relative = template.format(frame=frame_index)
+                    _inside(raw_root, relative, f"agent {agent_id}: sensor {sensor_id}", "files")
+                    if not (raw_root / relative).is_file():
+                        missing.append(frame_index)
+                if missing:
+                    warnings.append(
+                        f"agent {agent_id}: sensor {sensor_id}: "
+                        f"{len(missing)} of {len(timestamps)} frames missing "
+                        f"(first: {missing[0]:06d})"
+                    )
                 _sensor_extrinsic(sensor, swhere)
             has_fixed = "fixed_pose" in agent
             has_poses = "poses" in agent
@@ -257,18 +300,22 @@ class GenericAdapter:
                 poses_name = agent["poses"]
                 if not isinstance(poses_name, str):
                     _fail(path.name, f"agent {agent_id}: poses must be a CSV path")
-                if not (raw_root / poses_name).is_file():
+                poses_path = _inside(raw_root, poses_name, f"agent {agent_id}", "poses")
+                if not poses_path.is_file():
                     _fail(path.name, f"agent {agent_id}: missing poses file {poses_name}")
             boxes = agent.get("boxes")
             if boxes is not None:
-                if not isinstance(boxes, str) or not (raw_root / boxes).is_file():
+                if not isinstance(boxes, str):
+                    _fail(path.name, f"agent {agent_id}: boxes must be a CSV path")
+                boxes_path = _inside(raw_root, boxes, f"agent {agent_id}", "boxes")
+                if not boxes_path.is_file():
                     _fail(path.name, f"agent {agent_id}: boxes file is missing")
-            count += 1
         return {
             "scene_id": scene_id,
             "handedness": handedness,
             "timestamps": timestamps,
             "agents": agents,
+            "warnings": tuple(warnings),
         }
 
     def scenes(self, raw_root: Path, params: Mapping[str, str]) -> tuple[SceneRef, ...]:
@@ -284,22 +331,23 @@ class GenericAdapter:
             pose = _pose(agent["fixed_pose"], "fixed_pose")
             return tuple(StampedPose(int(t), pose) for t in timestamps), pose
         name = str(agent["poses"])
-        path = raw_root / name
+        path = _inside(raw_root, name, str(agent.get("id", "agent")), "poses")
         out: list[StampedPose] = []
         try:
             with path.open(newline="", encoding="utf-8") as handle:
                 for row in csv.DictReader(handle):
                     time_us = int(row["timestamp_us"])
-                    rpy = (float(row["roll_deg"]), float(row["yaw_deg"]), float(row["pitch_deg"]))
-                    pose = SE3.from_rpy_deg(*rpy).translation(
-                        float(row["x"]), float(row["y"]), float(row["z"])
-                    )
+                    pose = SE3.from_rpy_deg(
+                        roll_deg=float(row["roll_deg"]),
+                        pitch_deg=float(row["pitch_deg"]),
+                        yaw_deg=float(row["yaw_deg"]),
+                    ).translation(float(row["x"]), float(row["y"]), float(row["z"]))
                     out.append(StampedPose(time_us, pose))
         except (OSError, KeyError, ValueError) as exc:
             raise GenericError(f"{name}: cannot read poses: {exc}") from None
         out.sort(key=lambda p: p.time_us)
-        if not out:
-            raise GenericError(f"{name}: no poses")
+        if [p.time_us for p in out] != list(timestamps):
+            raise GenericError(f"{name}: pose timestamps must match scene timestamps exactly")
         return tuple(out), None
 
     def load(self, raw_root: Path, ref: SceneRef) -> Scene:
@@ -316,7 +364,7 @@ class GenericAdapter:
             assert isinstance(agent, dict)
             agent_id = str(agent["id"])
             role = str(agent.get("role", "other"))
-            agent_type = _ROLES.get(role.lower(), AgentType.OTHER)
+            agent_type = _role_type(role)
             poses, _fixed = self._poses(raw_root, agent, timestamps)
             if reflect is not None:
                 poses = tuple(StampedPose(p.time_us, reflect.se3(p.world_from_body)) for p in poses)
@@ -350,6 +398,8 @@ class GenericAdapter:
                 template = str(sensor["files"])
                 for frame_index, time_us in enumerate(timestamps):
                     path = raw_root / template.format(frame=frame_index)
+                    if not path.is_file():
+                        continue
                     if modality is Modality.CAMERA:
                         images.append(
                             ImageRef(
@@ -372,7 +422,8 @@ class GenericAdapter:
             agents.append(Agent(agent_id, agent_type, poses, platform=(("role", role),)))
             boxes = agent.get("boxes")
             if isinstance(boxes, str):
-                annotations.extend(self._boxes(raw_root / boxes, agent_id, reflect))
+                boxes_path = _inside(raw_root, boxes, agent_id, "boxes")
+                annotations.extend(self._boxes(boxes_path, agent_id, reflect, timestamps))
         return Scene(
             schema_version=1,
             scene_id=scene_id,
@@ -386,7 +437,13 @@ class GenericAdapter:
             images=tuple(images),
         )
 
-    def _boxes(self, path: Path, agent_id: str, reflect: Reflection | None) -> list[Annotation]:
+    def _boxes(
+        self,
+        path: Path,
+        agent_id: str,
+        reflect: Reflection | None,
+        timestamps: Sequence[int],
+    ) -> list[Annotation]:
         out: list[Annotation] = []
         try:
             with path.open(newline="", encoding="utf-8") as handle:
@@ -394,14 +451,17 @@ class GenericAdapter:
                     center = (float(row["x"]), float(row["y"]), float(row["z"]))
                     size = (float(row["length"]), float(row["width"]), float(row["height"]))
                     yaw = float(row.get("yaw_deg", 0.0))
-                    rotation = SE3.from_rpy_deg(0.0, yaw, 0.0)
+                    rotation = SE3.from_rpy_deg(roll_deg=0.0, pitch_deg=0.0, yaw_deg=yaw)
                     if reflect is not None:
                         center = reflect.point(center)
                         rotation = reflect.se3(rotation)
+                    time_us = int(row["timestamp_us"])
+                    if time_us not in timestamps:
+                        raise ValueError(f"timestamp {time_us} is not in the scene timestamps")
                     out.append(
                         Annotation(
                             agent_id=agent_id,
-                            time_us=int(row["timestamp_us"]),
+                            time_us=time_us,
                             track_id=row.get("track_id") or None,
                             category=row.get("category", "unknown"),
                             center=center,
@@ -427,7 +487,8 @@ class GenericAdapter:
                 ("boxes", len(scene.annotations)),
                 ("lidar", len(scene.point_clouds)),
             )
-            return CheckReport(1, (), {ref.scene_id: counts}, ())
+            payload = self.validate(raw_root)
+            return CheckReport(1, (), {ref.scene_id: counts}, (), tuple(payload["warnings"]))
         except (GenericError, OSError, ValueError) as exc:
             return CheckReport(1, (str(exc),), {}, ())
 

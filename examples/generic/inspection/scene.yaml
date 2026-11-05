@@ -14,7 +14,7 @@ agents:
         intrinsic: [400.0, 400.0, 320.0, 240.0]
   - id: cam_south
     role: fixed camera
-    fixed_pose: {translation_m: [0.0, 3.0, 2.0], rotation_rpy_deg: [0.0, 180.0, 0.0]}
+    fixed_pose: {translation_m: [0.0, 3.0, 2.0], rotation_rpy_deg: [0.0, 0.0, 180.0]}
     sensors:
       - id: camera
         modality: camera

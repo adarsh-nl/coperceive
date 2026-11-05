@@ -86,6 +86,8 @@ def check_command(args: argparse.Namespace) -> None:
         except GenericError as exc:
             print(str(exc), file=sys.stderr)
             raise SystemExit(1) from None
+        for warning in report.warnings:
+            print(f"warning: {warning}", file=sys.stderr)
         if report.errors:
             for error in report.errors:
                 print(error, file=sys.stderr)

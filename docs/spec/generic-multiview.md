@@ -11,15 +11,18 @@ dataset root.
 ```text
 <dataset>/
   scene.yaml
-  <agent_id>/
-    poses.csv                     # optional for a moving agent
-    boxes.csv                     # optional
-    <camera template>             # PNG or JPEG, {frame:06d}
-    <lidar template>              # .pcd, {frame:06d}
+  agents/                        # one layout choice, not required by the schema
+    <agent_id>/
+      poses.csv                  # optional for a moving agent
+      boxes.csv                  # optional
+      camera/{frame:06d}.png     # template example
+      lidar/{frame:06d}.pcd      # or .bin, float32 xyzi
 ```
 
-Only files named by `scene.yaml` are read. Templates are relative to the
-dataset root and must contain `{frame:06d}`, starting at frame 0.
+Only files named by `scene.yaml` are read. **Templates are free-form**: they are
+relative to the dataset root, must stay inside it, and must contain exactly the
+single field `{frame:06d}`, starting at frame 0. The `agents/` tree above is
+just one layout; a user's existing paths can be named directly.
 
 ## `scene.yaml`
 
@@ -56,22 +59,32 @@ agents:
 - **Frames:** `timestamps_us` (integers, strictly increasing), a
   `timestamp_file`, or `frame_rate_hz` + `frame_count` (time in µs).
 - **Agent pose:** a `fixed_pose` (same pose every frame) or `poses.csv` with
-  header `timestamp_us,x,y,z,roll_deg,yaw_deg,pitch_deg`. Pose is
+  header `timestamp_us,x,y,z,roll_deg,pitch_deg,yaw_deg`. Pose is
   `world_from_agent_body`; translation is metres, angles degrees, composition
-  `Rz(yaw) Ry(pitch) Rx(roll)` (intrinsic z-y-x).
+  `Rz(yaw) Ry(pitch) Rx(roll)` (intrinsic z-y-x). Pose timestamps must match
+  the scene timestamps exactly; extra, missing or reordered timestamps are an
+  error (not nearest or interpolated).
 - **Sensor extrinsic:** `body_from_sensor` as translation/rpy **or** a 4×4
-  `extrinsic` matrix (row-major, sensor→body). Default identity.
+  `extrinsic` matrix (row-major, sensor→body). Default identity. The rpy order
+  is `[roll, pitch, yaw]` degrees. **Camera frame:** depth is **+Z**, `x` right
+  and `y` down, with `u = fx·x/z + cx`, `v = fy·y/z + cy` (see
+  [format.md](format.md) §camera). A camera looking along the agent body +x
+  therefore has `body_from_sensor` rotation `[0, 90, 0]` (pitch 90°), not yaw
+  90°.
 - **Cameras:** `intrinsic: [fx, fy, cx, cy]`; files PNG/JPEG. **LiDAR:** PCD
   ASCII/binary with `x y z`, or a binary `.bin` of float32 `x y z i` records.
+- **Missing frames:** the validator reports a warning per sensor, e.g.
+  `sensor cam_north/camera: 3 of 120 frames missing (first: 000041)`, and load
+  skips those frames rather than referencing absent files.
 - **Boxes CSV** (optional, per agent):
   `timestamp_us,track_id,category,x,y,z,length,width,height,yaw_deg`, in the
   **world** frame. No boxes is valid; no track/category is required.
 - **World frame:** right-handed, metres, +z up. `handedness: left` applies one
   y-reflection (ADR 0012) to poses, extrinsics, points and boxes, so a
   left-handed source can say so instead of converting files.
-- **Roles** are arbitrary strings; `vehicle`, `uav`/`drone`,
-  `infrastructure`/`roadside`/`fixed` map to the schema types, everything else
-  is `other`. The viewer uses this: no Chase/Drone view without a vehicle/UAV,
+- **Roles** are arbitrary strings; word matching maps a role containing
+  `vehicle`, `uav`/`drone`, or `infrastructure`/`roadside`/`fixed` to the schema
+  type, everything else is `other` (so `fixed camera` is infrastructure). The viewer uses this: no Chase/Drone view without a vehicle/UAV,
   Orbit works for fixed sensors.
 
 ## Validation
