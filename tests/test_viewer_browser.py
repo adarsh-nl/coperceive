@@ -1754,7 +1754,8 @@ def test_generic_inspection_scene_opens_with_orbit_only(browser: Browser, tmp_pa
     page.add_init_script("window.__COPERCEIVE_TEST_ENV__ = true;")
     session = _Session(page, f"http://127.0.0.1:{port}")
     try:
-        session.open()
+        page.goto(f"{session.base}/#/viewer", wait_until="networkidle")
+        session.wait_status("generic-inspection")
         session.wait_for(
             lambda: page.locator("#scene-id").inner_text() == "generic-inspection",
             "the generic inspection scene",
