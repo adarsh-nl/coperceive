@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - feat/m2-import
+      - 'release/**'
   pull_request:
   schedule:
     - cron: "0 3 * * *"
