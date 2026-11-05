@@ -175,9 +175,21 @@ $probeProc = Start-Process -FilePath $AppExe -ArgumentList "--dry-run" -Environm
     COPERCEIVE_TEST_DATASET_FLOW_REQUEST = $tempRequest
     COPERCEIVE_TEST_DATASET_FLOW_RESULT = $tempResult
     COPERCEIVE_STATE_DIR = $StateDir
-} -PassThru -NoNewWindow -Wait
+} -PassThru -NoNewWindow
+
+$waited = 0
+while (-not (Test-Path $tempResult) -and $waited -lt 100) {
+    Start-Sleep -Milliseconds 200
+    $waited++
+}
 $sw.Stop()
-Write-Host "Fake-SSH dataset open completed in $($sw.ElapsedMilliseconds) ms"
+Stop-Process -Id $probeProc.Id -Force -ErrorAction SilentlyContinue
+
+if (Test-Path $tempResult) {
+    Write-Host "Fake-SSH dataset open completed in $($sw.ElapsedMilliseconds) ms"
+} else {
+    Write-Warning "Timed out waiting for fake-SSH dataset open result"
+}
 
 Remove-Item -Path $TempDir -Recurse -Force -ErrorAction SilentlyContinue
 Write-Host "Windows Desktop smoke test PASSED successfully."
