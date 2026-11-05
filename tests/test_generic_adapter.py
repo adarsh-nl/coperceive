@@ -238,13 +238,9 @@ def test_pose_timestamps_must_match_scene_timestamps(tmp_path: Path) -> None:
 
 def _project(scene, agent_id: str, sensor_id: str, body_point: tuple[float, float, float]):
     agent = scene.agent(agent_id)
-    sensor = next(
-        s for s in scene.sensors if s.agent_id == agent_id and s.sensor_id == sensor_id
-    )
+    sensor = next(s for s in scene.sensors if s.agent_id == agent_id and s.sensor_id == sensor_id)
     world_from_camera = agent.poses[0].world_from_body.compose(sensor.body_from_sensor)
-    cam = world_from_camera.inverse().apply(
-        agent.poses[0].world_from_body.apply(body_point)
-    )
+    cam = world_from_camera.inverse().apply(agent.poses[0].world_from_body.apply(body_point))
     assert sensor.fx is not None and sensor.fy is not None
     assert sensor.cx is not None and sensor.cy is not None
     return (
@@ -256,9 +252,7 @@ def _project(scene, agent_id: str, sensor_id: str, body_point: tuple[float, floa
 def test_front_camera_orients_right_and_up_like_a_camera(tmp_path: Path) -> None:
     root = _copy_example(tmp_path, "driving")
     _adapter, scene = _load(root)
-    camera = next(
-        s for s in scene.sensors if s.agent_id == "ego" and s.sensor_id == "front"
-    )
+    camera = next(s for s in scene.sensors if s.agent_id == "ego" and s.sensor_id == "front")
     assert camera.cx is not None and camera.cy is not None
     ahead_right = _project(scene, "ego", "front", (5.0, -1.0, 0.0))
     ahead_up = _project(scene, "ego", "front", (5.0, 0.0, 1.0))
