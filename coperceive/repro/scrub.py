@@ -141,9 +141,7 @@ def _scrub_object(
     return cleaned, dropped
 
 
-def _scrub_string(
-    value: str, path: str, markers: tuple[str, ...]
-) -> tuple[object, list[str]]:
+def _scrub_string(value: str, path: str, markers: tuple[str, ...]) -> tuple[object, list[str]]:
     if any(marker in value for marker in markers):
         return None, [path]
     if _TOKEN_VALUE.search(value) or _USER_AT.search(value) or _PERSONAL_IDENTIFIER.search(value):
