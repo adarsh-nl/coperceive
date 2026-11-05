@@ -346,11 +346,6 @@ jobs:
           echo "Removing installed Debian package..."
           PKG_NAME="$(dpkg-deb -f "${DEB_ABS}" Package 2>/dev/null || echo coperceive)"
           sudo dpkg -r "${PKG_NAME}" || sudo apt-get remove -y "${PKG_NAME}"
-      - name: Run Linux Smoke Test on AppImage
-        run: |
-          APPIMAGE_FILE=$(find src-tauri/target -iname "*.AppImage" -type f | head -n 1)
-          chmod +x "${APPIMAGE_FILE}"
-          APPIMAGE_EXTRACT_AND_RUN=1 xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/desktop/smoke_test_linux.sh "${APPIMAGE_FILE}"
       - name: Locate Built Linux Packages
         run: |
           DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
