@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coperceive.dev/spec/failures.schema.json",
+  "title": "coperceive eval failures",
+  "description": "Version 1 ranking of the worst frames of one run. badness sums class and distance weights of operating-point false negatives and false positives. Tags are rule names. latency_sensitive is absent unless latency_compared is true.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["format", "format_version", "run_id", "formula", "weights", "latency_compared", "frames"],
+  "properties": {
+    "format": {"type": "string", "const": "coperceive-failures"},
+    "format_version": {"type": "integer", "const": 1},
+    "run_id": {"type": "string", "minLength": 1},
+    "formula": {"type": "string", "minLength": 1},
+    "weights": {"type": "object"},
+    "latency_compared": {"type": "boolean"},
+    "frames": {"type": "array", "items": {"$ref": "#/$defs/frame"}}
+  },
+  "$defs": {
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["count", "object_ids", "distances_m", "centre_errors_m", "yaw_errors_deg"],
+      "properties": {
+        "count": {"type": "integer", "minimum": 1},
+        "object_ids": {"type": "array", "items": {"type": "string"}},
+        "distances_m": {"type": "array", "items": {"type": ["number", "null"]}},
+        "centre_errors_m": {"type": "array", "items": {"type": ["number", "null"]}},
+        "yaw_errors_deg": {"type": "array", "items": {"type": ["number", "null"]}}
+      }
+    },
+    "frame": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "rank",
+        "scene_id",
+        "time_us",
+        "agent_id",
+        "source",
+        "badness",
+        "tags",
+        "object_ids",
+        "evidence"
+      ],
+      "properties": {
+        "rank": {"type": "integer", "minimum": 1},
+        "scene_id": {"type": "string"},
+        "time_us": {"type": "integer"},
+        "agent_id": {"type": "string"},
+        "source": {"type": "string"},
+        "badness": {"type": "number", "minimum": 0},
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "missed_vru",
+              "ghost_box",
+              "duplicate_boxes",
+              "localisation_error",
+              "far_range_miss",
+              "occluded_miss",
+              "fusion_disagreement",
+              "latency_sensitive"
+            ]
+          }
+        },
+        "object_ids": {"type": "array", "items": {"type": "string"}},
+        "evidence": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/evidence"}
+        }
+      }
+    }
+  }
+}

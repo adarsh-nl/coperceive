@@ -9,6 +9,7 @@ own exit 2 for a malformed command line.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Callable, Sequence
 from dataclasses import replace
@@ -17,8 +18,29 @@ from pathlib import Path
 from typing import cast
 
 from coperceive.errors import CoperceiveError
+from coperceive.evaluation.breakdown import (
+    BREAKDOWNS,
+    build_compare,
+    render_breakdowns,
+    render_multi,
+    write_compare,
+)
 from coperceive.evaluation.config import ConfigError, load_config
 from coperceive.evaluation.evaluate import EvaluationError, evaluate_run
+from coperceive.evaluation.failures import (
+    FailureWeights,
+    declares_latency,
+    mine_failures,
+    render_failures,
+    weights_from_json,
+    write_failures,
+)
+from coperceive.evaluation.outcomes import (
+    DEFAULT_DISTANCE_EDGES,
+    DEFAULT_VISIBILITY_EDGES,
+    OutcomeRecord,
+    load_run_records,
+)
 from coperceive.evaluation.predictions import (
     BOXES_FILE,
     PredictionBox,
@@ -94,11 +116,66 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     _root_arguments(report)
     report.set_defaults(func=report_command)
 
-    compare = eval_commands.add_parser("compare", help="Print the table with b - a deltas.")
-    compare.add_argument("run_a")
-    compare.add_argument("run_b")
+    compare = eval_commands.add_parser(
+        "compare",
+        help="Compare 2 to 4 runs. Two runs keep the b - a table; --by adds breakdowns.",
+    )
+    compare.add_argument("runs", nargs="+", metavar="RUN", help="Two, three or four run ids.")
     _root_arguments(compare)
+    compare.add_argument(
+        "--by",
+        default=None,
+        help="Comma-separated breakdowns: distance, occlusion, agents, class, scene.",
+    )
+    compare.add_argument(
+        "--json",
+        default=None,
+        help="Write compare.json (schema docs/spec/compare.schema.json) to this path.",
+    )
+    compare.add_argument(
+        "--from-scores",
+        action="store_true",
+        help="Read outcomes.json or matches only; do not reopen scenes.",
+    )
+    compare.add_argument(
+        "--distance-bins",
+        default=None,
+        help="Ascending distance edges in metres. Default: 0,30,50.",
+    )
+    compare.add_argument(
+        "--visibility-bins",
+        default=None,
+        help="Ascending visibility-fraction edges inside (0, 1). Default: 0.2,0.6.",
+    )
     compare.set_defaults(func=compare_command)
+
+    failures = eval_commands.add_parser(
+        "failures", help="Rank the worst frames of a run and tag why each failed."
+    )
+    failures.add_argument("run_id")
+    _root_arguments(failures)
+    failures.add_argument(
+        "--top", type=int, default=50, help="How many frames to keep. Default 50."
+    )
+    failures.add_argument(
+        "--json",
+        nargs="?",
+        const="-",
+        default=None,
+        help="Write failures.json to this path, or print it when the path is omitted.",
+    )
+    failures.add_argument("--weights", default=None, help="JSON file of badness and tag weights.")
+    failures.add_argument(
+        "--latency-run",
+        default=None,
+        help="A run whose perturbation delays other agents, for the latency-sensitive tag.",
+    )
+    failures.add_argument(
+        "--from-scores",
+        action="store_true",
+        help="Read outcomes.json or matches only; do not reopen scenes.",
+    )
+    failures.set_defaults(func=failures_command)
 
 
 def _root_arguments(parser: argparse.ArgumentParser) -> None:
@@ -290,15 +367,171 @@ def compare_command(args: argparse.Namespace) -> None:
 
 
 def _compare(args: argparse.Namespace) -> None:
+    run_ids = [str(run_id) for run_id in cast(list[object], args.runs)]
+    if len(run_ids) < 2 or len(run_ids) > 4:
+        raise PredictionError("eval compare takes 2, 3 or 4 runs")
     root = _scenes_root(args)
     predictions = _existing_predictions_root(args)
-    rows_a = _evaluated_rows(root, predictions, args.run_a)
-    rows_b = _evaluated_rows(root, predictions, args.run_b)
-    for run_id, rows in ((args.run_a, rows_a), (args.run_b, rows_b)):
+    loaded = [(run_id, _evaluated_rows(root, predictions, run_id)) for run_id in run_ids]
+    for run_id, rows in loaded:
         note = partial_note(predictions, rows)
         if note:
             print(f"{run_id}: {note}")
-    print(render_compare(rows_a, rows_b, _thresholds(rows_a)), end="")
+    thresholds = _thresholds(loaded[0][1])
+    for run_id, rows in loaded[1:]:
+        other = _thresholds(rows)
+        if other != thresholds:
+            raise PredictionError(
+                f"run {run_id!r} thresholds {list(other)} differ from "
+                f"{loaded[0][0]!r} {list(thresholds)}"
+            )
+    if len(loaded) == 2:
+        print(render_compare(loaded[0][1], loaded[1][1], thresholds), end="")
+    else:
+        print(render_multi(loaded, thresholds), end="")
+    by = _breakdown_names(args.by)
+    if args.json or args.by:
+        names = by if args.by else BREAKDOWNS
+        document = _compare_document(args, root, predictions, loaded, thresholds, names)
+        if args.by:
+            print()
+            print(render_breakdowns(document), end="")
+        if isinstance(args.json, str):
+            destination = Path(args.json)
+            write_compare(destination, document)
+            print(f"wrote {destination}", file=sys.stderr)
+
+
+def failures_command(args: argparse.Namespace) -> None:
+    _guarded(_failures, args)
+
+
+def _failures(args: argparse.Namespace) -> None:
+    if not isinstance(args.top, int) or isinstance(args.top, bool) or args.top < 1:
+        raise PredictionError("--top must be at least 1")
+    root = _scenes_root(args)
+    predictions = _existing_predictions_root(args)
+    _evaluated_rows(root, predictions, args.run_id)
+    weights = FailureWeights()
+    if isinstance(args.weights, str):
+        try:
+            loaded: object = json.loads(Path(args.weights).read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise PredictionError(f"--weights: {error}") from error
+        if not isinstance(loaded, dict):
+            raise PredictionError("--weights must be a JSON object")
+        weights = weights_from_json(cast(dict[str, object], loaded))
+    records, _origin = load_run_records(
+        root, predictions, args.run_id, from_scores=bool(args.from_scores)
+    )
+    latency: tuple[OutcomeRecord, ...] | None = None
+    if isinstance(args.latency_run, str):
+        if not _declares_latency(predictions, args.latency_run):
+            raise PredictionError(
+                f"run {args.latency_run!r} has no latency perturbation "
+                "(latency_frames or latency_ms in perturbation.json or provenance)"
+            )
+        _evaluated_rows(root, predictions, args.latency_run)
+        latency, _latency_origin = load_run_records(
+            root, predictions, args.latency_run, from_scores=bool(args.from_scores)
+        )
+    document = mine_failures(
+        records, run_id=args.run_id, weights=weights, top=args.top, latency_records=latency
+    )
+    if args.json == "-":
+        print(json.dumps(document, indent=2, allow_nan=False))
+        return
+    print(render_failures(document), end="")
+    if isinstance(args.json, str):
+        destination = Path(args.json)
+        write_failures(destination, document)
+        print(f"wrote {destination}", file=sys.stderr)
+
+
+def _declares_latency(predictions: Path, run_id: str) -> bool:
+    path = predictions / run_id / "perturbation.json"
+    if path.is_file():
+        try:
+            loaded: object = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise PredictionError(f"{path}: {error}") from error
+        if isinstance(loaded, dict) and declares_latency(cast(dict[str, object], loaded)):
+            return True
+    provenance = read_run_meta(predictions, run_id).provenance or {}
+    raw = provenance.get("perturbation")
+    return isinstance(raw, dict) and declares_latency(cast(dict[str, object], raw))
+
+
+def _breakdown_names(value: object) -> tuple[str, ...]:
+    if not isinstance(value, str) or not value.strip():
+        return BREAKDOWNS
+    names = tuple(item.strip() for item in value.split(",") if item.strip())
+    unknown = [name for name in names if name not in BREAKDOWNS]
+    if unknown:
+        raise PredictionError(
+            f"unknown breakdown {unknown[0]!r}; choose from {', '.join(BREAKDOWNS)}"
+        )
+    if not names:
+        raise PredictionError(f"--by expects one of {', '.join(BREAKDOWNS)}")
+    return names
+
+
+def _edges(
+    value: object, default: tuple[float, ...], name: str, *, upper: float | None
+) -> tuple[float, ...]:
+    if not isinstance(value, str) or not value.strip():
+        return default
+    try:
+        edges = tuple(float(item) for item in value.split(",") if item.strip())
+    except ValueError as error:
+        raise PredictionError(f"--{name} must be comma-separated numbers") from error
+    if not edges:
+        raise PredictionError(f"--{name} needs at least one number")
+    if any(edge != edge or edge in (float("inf"), float("-inf")) for edge in edges):
+        raise PredictionError(f"--{name} must be finite")
+    if upper is not None and any(edge <= 0.0 or edge >= upper for edge in edges):
+        raise PredictionError(f"--{name} values must be between 0 and {upper}")
+    if upper is None and any(edge < 0.0 for edge in edges):
+        raise PredictionError(f"--{name} must be zero or positive")
+    if any(right <= left for left, right in zip(edges, edges[1:], strict=False)):
+        raise PredictionError(f"--{name} must be strictly increasing")
+    return edges
+
+
+def _compare_document(
+    args: argparse.Namespace,
+    root: Path,
+    predictions: Path,
+    loaded: Sequence[tuple[str, tuple[Row, ...]]],
+    thresholds: Sequence[float],
+    breakdowns: Sequence[str],
+) -> dict[str, object]:
+    distance_edges = _edges(args.distance_bins, DEFAULT_DISTANCE_EDGES, "distance-bins", upper=None)
+    visibility_edges = _edges(
+        args.visibility_bins, DEFAULT_VISIBILITY_EDGES, "visibility-bins", upper=1.0
+    )
+    runs: list[tuple[str, tuple[OutcomeRecord, ...]]] = []
+    origins: list[str] = []
+    for run_id, _rows in loaded:
+        records, origin = load_run_records(
+            root, predictions, run_id, from_scores=bool(args.from_scores)
+        )
+        runs.append((run_id, records))
+        origins.append(origin)
+    if all(origin == "scene" for origin in origins):
+        distance_source = "scene"
+    elif all(origin == "outcomes" for origin in origins):
+        distance_source = "outcomes"
+    else:
+        distance_source = "unavailable"
+    return build_compare(
+        runs,
+        thresholds=thresholds,
+        breakdowns=breakdowns,
+        distance_edges=distance_edges,
+        visibility_edges=visibility_edges,
+        distance_source=distance_source,
+    )
 
 
 def _evaluated_rows(root: Path, predictions: Path, run_id: str) -> tuple[Row, ...]:
