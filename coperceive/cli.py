@@ -326,7 +326,7 @@ def build_parser() -> argparse.ArgumentParser:
         "prepare", help="Prepare selected scenes into the cluster cache (CPU-only)."
     )
     prepare_parser.add_argument(
-        "--adapter", required=True, choices=("griffin", "opv2v", "v2xset", "v2v4real")
+        "--adapter", required=True, choices=("griffin", "opv2v", "v2xset", "v2v4real", "dair-v2x-c")
     )
     prepare_parser.add_argument("--raw-root", required=True)
     prepare_parser.add_argument(
@@ -396,7 +396,7 @@ def build_parser() -> argparse.ArgumentParser:
         "index", help="List every scene of a raw cluster dataset (metadata only)."
     )
     index_parser.add_argument(
-        "--adapter", required=True, choices=("griffin", "opv2v", "v2xset", "v2v4real")
+        "--adapter", required=True, choices=("griffin", "opv2v", "v2xset", "v2v4real", "dair-v2x-c")
     )
     index_parser.add_argument("--raw-root", required=True)
     index_parser.add_argument(
