@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 """``coperceive maps`` : fetch official CARLA OpenDRIVE files, ingest, align."""
 
 from __future__ import annotations

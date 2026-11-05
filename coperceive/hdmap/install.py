@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 """One-click install of the official CARLA Town03 OpenDRIVE map.
 
 The bytes are fetched from a public mirror whose SHA-256 is the one measured for
