@@ -442,7 +442,7 @@ def plan_sbatch(
             "",
             f'mkdir -p "$SCRATCH/out/"{shlex.quote(run_id)}',
             *environment_capture_lines(
-                f'"$SCRATCH/out/"{shlex.quote(run_id)}"/environment.json"',
+                f'"$SCRATCH/out/{run_id}/environment.json"',
                 python=shlex.quote(str(python)),
             ),
             "",

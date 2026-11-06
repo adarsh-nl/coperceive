@@ -40,7 +40,7 @@ set -e
 echo "model run exit $RC"
 
 mkdir -p "$SCRATCH/out/"griffin25m-vehicle-plugin
-/opt/venv/bin/python - "$SCRATCH/out/"griffin25m-vehicle-plugin"/environment.json" <<'PY' || true
+/opt/venv/bin/python - "$SCRATCH/out/griffin25m-vehicle-plugin/environment.json" <<'PY' || true
 import hashlib
 import json
 import os
