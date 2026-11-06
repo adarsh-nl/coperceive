@@ -193,43 +193,41 @@ def strip_bundle(python_dest: Path, is_windows: bool) -> None:
     # Strip debug symbols from shared libraries and binaries
     strip_bin = shutil.which("strip")
     if strip_bin and not is_windows:
-        for root, _dirs, files in os.walk(python_dest):
-            for f in files:
-                f_path = Path(root) / f
-                if f_path.is_symlink():
-                    continue
-                if f.endswith(".so") or ".so." in f or f.endswith(".dylib"):
-                    try:
-                        if sys.platform == "darwin":
-                            subprocess.run(
-                                [strip_bin, "-x", str(f_path)], capture_output=True, check=False
-                            )
-                        else:
-                            subprocess.run(
-                                [strip_bin, "--strip-unneeded", str(f_path)],
-                                capture_output=True,
-                                check=False,
-                            )
-                    except Exception:
-                        pass
-                elif (
-                    (f_path.stat().st_mode & 0o111)
-                    and not f.endswith(".py")
-                    and not f.endswith(".sh")
+        targets_to_strip: list[Path] = []
+        lib_root = python_dest / "lib"
+        if lib_root.is_dir():
+            for f in lib_root.glob("libpython*.so*"):
+                if not f.is_symlink():
+                    targets_to_strip.append(f)
+            dynload = lib_root / "python3.13" / "lib-dynload"
+            if dynload.is_dir():
+                for f in dynload.glob("*.so"):
+                    if not f.is_symlink():
+                        targets_to_strip.append(f)
+        bin_dir = python_dest / "bin"
+        if bin_dir.is_dir():
+            for f in bin_dir.glob("python*"):
+                if (
+                    not f.is_symlink()
+                    and not f.name.endswith(".py")
+                    and not f.name.endswith("-config")
                 ):
-                    try:
-                        if sys.platform == "darwin":
-                            subprocess.run(
-                                [strip_bin, "-x", str(f_path)], capture_output=True, check=False
-                            )
-                        else:
-                            subprocess.run(
-                                [strip_bin, "--strip-unneeded", str(f_path)],
-                                capture_output=True,
-                                check=False,
-                            )
-                    except Exception:
-                        pass
+                    targets_to_strip.append(f)
+
+        for target_path in targets_to_strip:
+            try:
+                if sys.platform == "darwin":
+                    subprocess.run(
+                        [strip_bin, "-x", str(target_path)], capture_output=True, check=False
+                    )
+                else:
+                    subprocess.run(
+                        [strip_bin, "--strip-debug", str(target_path)],
+                        capture_output=True,
+                        check=False,
+                    )
+            except Exception:
+                pass
 
     # Strip bytecode caches
     for root, dirs, files in os.walk(python_dest, topdown=False):
