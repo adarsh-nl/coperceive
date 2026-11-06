@@ -9,6 +9,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
 from coperceive.cli import main
 from coperceive.model import Agent, AgentType, Clock, Modality, Scene, Sensor, StampedPose
 from coperceive.se3 import SE3
@@ -124,6 +125,46 @@ def test_documented_eval_config_matches_the_expected_table() -> None:
     config = load_config(FIXTURE / "griffin-eval.yaml")
     assert config.max_range_m == 50.0
     assert config.score_threshold == 0.4
+
+
+def test_a_shell_shaped_run_id_is_refused(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    scenes, raw, out = _build_fixture(tmp_path)
+    with pytest.raises(SystemExit) as caught:
+        main(
+            [
+                "model",
+                "run",
+                "--manifest",
+                str(REPO / "plugins/griffin/coperceive_griffin_model/model.yaml"),
+                "--model",
+                "vehicle-side",
+                "--scenes",
+                str(scenes),
+                "--raw-root",
+                str(raw),
+                "--media-root",
+                str(raw),
+                "--out",
+                str(out),
+                "--run-id",
+                'x"$(id)',
+                "--slurm",
+                "--slurm-python",
+                "/opt/venv/bin/python",
+                "--slurm-partition",
+                "gpu-a40",
+                "--slurm-results",
+                "/home/tester/results",
+                "--slurm-logs",
+                "/home/tester/logs",
+                "--slurm-scratch-template",
+                "/scratch/$USER/$SLURM_JOB_ID",
+            ]
+        )
+    assert caught.value.code == 1
+    assert "run id" in capsys.readouterr().err
 
 
 def test_dry_run_never_submits_and_never_uses_a_real_profile(tmp_path: Path) -> None:

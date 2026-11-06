@@ -15,6 +15,7 @@
 
 set -euo pipefail
 SCRATCH="/scratch/$USER/$SLURM_JOB_ID"
+RUN_ID=griffin25m-vehicle-plugin
 mkdir -p "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 export TMPDIR="$SCRATCH/tmp"
@@ -39,8 +40,8 @@ RC=$?
 set -e
 echo "model run exit $RC"
 
-mkdir -p "$SCRATCH/out/"griffin25m-vehicle-plugin
-/opt/venv/bin/python - "$SCRATCH/out/griffin25m-vehicle-plugin/environment.json" <<'PY' || true
+mkdir -p "$SCRATCH/out/$RUN_ID"
+/opt/venv/bin/python - "$SCRATCH/out/$RUN_ID/environment.json" <<'PY' || true
 import hashlib
 import json
 import os
@@ -128,6 +129,6 @@ rsync -a "$SCRATCH/out/" <HOME>/results/"$SLURM_JOB_ID"/
 # The work directory's logs and artefacts, not its inputs or any toolkit copy.
 rsync -a --include='*/' --include='*.log' --include='artifacts/***' --exclude='*' --prune-empty-dirs "$SCRATCH/work/" <HOME>/results/"$SLURM_JOB_ID"/work/
 mkdir -p <FIXTURE>/predictions/griffin25m-vehicle-plugin
-rsync -a "$SCRATCH/out/griffin25m-vehicle-plugin/" <FIXTURE>/predictions/griffin25m-vehicle-plugin/
+rsync -a "$SCRATCH/out/$RUN_ID/" <FIXTURE>/predictions/griffin25m-vehicle-plugin/
 echo "done: <FIXTURE>/predictions/griffin25m-vehicle-plugin (exit $RC)"
 exit "$RC"
