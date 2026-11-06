@@ -18,6 +18,7 @@ from coperceive.model import SCHEMA_VERSION
 from coperceive.models.commands import add_parser as add_models_parser
 from coperceive.remote.commands import add_parser as add_remote_parser
 from coperceive.repro.commands import add_parser as add_repro_parser
+from coperceive.robustness.commands import add_parser as add_robustness_parser
 
 _LOOPBACK = {"127.0.0.1", "localhost", "::1"}
 
@@ -155,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
     add_models_parser(sub)
     add_remote_parser(sub)
     add_repro_parser(sub)
+    add_robustness_parser(sub)
 
     download = sub.add_parser("download", help="Download a dataset.")
     download_sub = download.add_subparsers(dest="dataset", required=True)
