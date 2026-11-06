@@ -40,7 +40,22 @@ def _own_md5() -> str:
     return hashlib.md5(Path(__file__).read_bytes()).hexdigest()  # noqa: S324 - a fingerprint
 
 
-def _hello() -> None:
+def _hello(checkpoint: str | None) -> None:
+    """``--checkpoint FILE`` (the ``{option:checkpoint}`` argv test) fixes the digest to that
+    file; without it the worker hashes its own source, as a model without weights does."""
+    if checkpoint:
+        path = Path(checkpoint).resolve()
+        environment = {
+            "python": sys.version.split()[0],
+            "checkpoint_md5": hashlib.md5(path.read_bytes()).hexdigest(),  # noqa: S324
+            "checkpoint_path": str(path),
+        }
+    else:
+        environment = {
+            "python": sys.version.split()[0],
+            "checkpoint_md5": _own_md5(),
+            "checkpoint_path": str(Path(__file__).resolve()),
+        }
     _emit(
         {
             "type": "hello",
@@ -48,11 +63,7 @@ def _hello() -> None:
             "version": VERSION,
             "models": list(MODELS),
             "capabilities": {"live": True, "cancel": True, "max_inflight": 1},
-            "environment": {
-                "python": sys.version.split()[0],
-                "checkpoint_md5": _own_md5(),
-                "checkpoint_path": str(Path(__file__).resolve()),
-            },
+            "environment": environment,
             "git_commit": None,
         }
     )
@@ -118,9 +129,10 @@ class _Stdin:
 
 
 class Worker:
-    def __init__(self, model: str, count_file: str | None) -> None:
+    def __init__(self, model: str, count_file: str | None, checkpoint: str | None = None) -> None:
         self.model = model
         self.count_file = count_file
+        self.checkpoint = checkpoint
         self.stdin = _Stdin(sys.stdin.fileno())
         self.config: dict[str, Any] = {}
         self.options: dict[str, Any] = {}
@@ -133,7 +145,7 @@ class Worker:
         return value if isinstance(value, str) else ""
 
     def run(self) -> int:
-        _hello()
+        _hello(self.checkpoint)
         while True:
             line = self.stdin.readline()
             if line == "":
@@ -371,9 +383,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--model", required=True)
     parser.add_argument("--count-file", default=None)
+    parser.add_argument("--checkpoint", default=None, help="a file whose MD5 fixes hello")
     args = parser.parse_args(argv)
     try:
-        return Worker(str(args.model), args.count_file).run()
+        return Worker(str(args.model), args.count_file, args.checkpoint).run()
     except BrokenPipeError:
         return 0
 

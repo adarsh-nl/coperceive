@@ -296,6 +296,25 @@ def _source(spec: ModelSpec, requested: str | None) -> str:
     return requested
 
 
+def require_checkpoint(spec: ModelSpec, effective: Mapping[str, object]) -> None:
+    """A model that declares ``checkpoint: {option: NAME}`` needs that option set.
+
+    The value is a path to the file the worker hashes at ``hello``; an empty value would
+    start a child that cannot report a checkpoint digest, so it is a user error here.
+    """
+    checkpoint = spec.checkpoint
+    if checkpoint is None:
+        return
+    value = effective.get(checkpoint.option)
+    if not isinstance(value, str) or not value:
+        raise BatchError(
+            f"model {spec.key} needs --option {checkpoint.option}=FILE (declared by "
+            f"models.{spec.key}.checkpoint in the manifest)"
+        )
+    if not Path(value).expanduser().is_file():
+        raise BatchError(f"model {spec.key}: --option {checkpoint.option}={value!r} is not a file")
+
+
 class _Stop(Exception):
     """Ends the run: the child is gone, misbehaved, or the run timed out."""
 
@@ -339,6 +358,7 @@ def run_batch(
     check_run_id(run_id)
     spec = select_model(manifest, options.model)
     effective = check_options(spec, options.options)
+    require_checkpoint(spec, effective)
     source = _source(spec, options.source)
     if manifest.environment.kind == "container":
         raise BatchError("environment.container is not implemented in this version")
@@ -465,6 +485,7 @@ def run_batch(
                     work_dir=work_dir,
                     parent_env=env,
                     hello_timeout_s=frame_timeout,
+                    options=effective,
                 )
                 environment = child.hello.environment
                 git_commit = child.hello.git_commit

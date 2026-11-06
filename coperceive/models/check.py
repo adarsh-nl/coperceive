@@ -139,6 +139,7 @@ def _check_model(
                 work_dir=work_dir,
                 parent_env=parent_env,
                 hello_timeout_s=timeout,
+                options=effective,
             )
         except RunnerTimeout as exc:
             rules.set(1, "fail", f"no hello within {timeout:g} s: {exc}")

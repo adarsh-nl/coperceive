@@ -30,6 +30,10 @@ ERROR_CODES = ("unsupported", "configure_failed", "frame_failed", "cancelled", "
 
 _NAME = re.compile(r"^[a-z0-9_-]+$")
 _ARGV_FIELD = re.compile(r"\{([^{}]*)\}")
+# ``{option:NAME}`` in ``commands.batch``/``commands.live``: the validated effective value of
+# the model's option NAME, which lets a child that needs a file to hash at ``hello`` receive
+# it in argv before the parent may send ``configure`` (the OpenCOOD plugin's checkpoint).
+_OPTION_FIELD_PREFIX = "option:"
 
 
 class ModelSpecError(CoperceiveError):
@@ -111,6 +115,19 @@ class OptionSpec:
 
 
 @dataclass(frozen=True)
+class CheckpointSpec:
+    """A model whose checkpoint is a file named by one of its options.
+
+    The option's value reaches the child in ``commands.batch`` through a
+    ``{option:<name>}`` placeholder (so a worker can hash it for ``hello`` before
+    ``configure``), and ``--slurm`` stages that file into the job's scratch and rewrites
+    the inner ``--option`` to the staged copy.
+    """
+
+    option: str
+
+
+@dataclass(frozen=True)
 class ModelSpec:
     key: str
     description: str | None
@@ -120,6 +137,7 @@ class ModelSpec:
     resources: Resources
     depends_on: tuple[Dependency, ...]
     options: Mapping[str, OptionSpec]
+    checkpoint: CheckpointSpec | None = None
 
 
 @dataclass(frozen=True)
@@ -166,7 +184,8 @@ def parse_manifest(payload: object, *, source: Path | None) -> Manifest:
     licence = _licence(root.sub("licence"))
     environment = _environment(root.sub("environment"))
     models = _models(root.sub("models"))
-    commands = _commands(root.sub("commands"))
+    commands, option_refs = _commands(root.sub("commands"))
+    _check_option_refs(models, option_refs)
     notes = root.opt_str("notes")
     root.done()
     return Manifest(
@@ -197,8 +216,13 @@ def render_argv(
     plugin_dir: Path,
     work_dir: Path,
     model: str,
+    options: Mapping[str, object] | None = None,
 ) -> list[str]:
-    """``commands.<command>`` with the closed placeholder set substituted; no shell."""
+    """``commands.<command>`` with the closed placeholder set substituted; no shell.
+
+    ``{option:NAME}`` resolves to the model's validated effective option value
+    (``options``); booleans render ``true``/``false``, numbers without a trailing ``.0``.
+    """
     template = manifest.commands.batch if command == "batch" else manifest.commands.live
     values = {
         "python": str(python),
@@ -206,7 +230,28 @@ def render_argv(
         "work_dir": str(work_dir),
         "model": model,
     }
-    return [_ARGV_FIELD.sub(lambda match: values[match.group(1)], arg) for arg in template]
+
+    def replace(match: re.Match[str]) -> str:
+        field = match.group(1)
+        if field in values:
+            return values[field]
+        if field.startswith(_OPTION_FIELD_PREFIX):
+            name = field[len(_OPTION_FIELD_PREFIX) :]
+            if options is None or name not in options:
+                raise ModelSpecError(f"commands.{command}: no value for {{option:{name}}}")
+            return option_text(options[name])
+        raise ModelSpecError(f"commands.{command}: unknown placeholder {{{field}}}")
+
+    return [_ARGV_FIELD.sub(replace, arg) for arg in template]
+
+
+def option_text(value: object) -> str:
+    """One option value as it appears in argv or on the command line."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return format(value, "g")
+    return str(value)
 
 
 def select_model(manifest: Manifest, name: str | None) -> ModelSpec:
@@ -441,6 +486,7 @@ def _models(node: _Node | None) -> dict[str, ModelSpec]:
 
 
 def _model(key: str, node: _Node) -> ModelSpec:
+    options = _options(node.sub("options", optional=True))
     spec = ModelSpec(
         key=key,
         description=node.opt_str("description"),
@@ -449,7 +495,8 @@ def _model(key: str, node: _Node) -> ModelSpec:
         outputs=_outputs(node.sub("outputs")),
         resources=_resources(node.sub("resources")),
         depends_on=_depends_on(node),
-        options=_options(node.sub("options", optional=True)),
+        options=options,
+        checkpoint=_checkpoint(node.sub("checkpoint", optional=True), options, key),
     )
     node.done()
     return spec
@@ -612,20 +659,78 @@ def _check_option_value(path: str, kind: str, value: object) -> None:
         raise ModelSpecError(f"{path}: expected a {kind}")
 
 
-def _commands(node: _Node | None) -> Commands:
+def _checkpoint(
+    node: _Node | None, options: Mapping[str, OptionSpec], model_key: str
+) -> CheckpointSpec | None:
+    if node is None:
+        return None
+    option = node.str("option")
+    node.done()
+    spec = options.get(option)
+    if spec is None:
+        raise ModelSpecError(
+            f"{node.at('option')}: model {model_key} declares no option {option!r}"
+        )
+    if spec.type != "str":
+        raise ModelSpecError(
+            f"{node.at('option')}: option {option!r} names a file path, so its type must "
+            f"be str, not {spec.type}"
+        )
+    return CheckpointSpec(option=option)
+
+
+def _check_option_refs(models: Mapping[str, ModelSpec], refs: tuple[tuple[str, str], ...]) -> None:
+    """``{option:NAME}`` must name an option every model of the manifest declares."""
+    for command, name in refs:
+        for spec in models.values():
+            if name not in spec.options:
+                raise ModelSpecError(
+                    f"commands.{command}: {{option:{name}}} is not an option of model "
+                    f"{spec.key}; declare it under models.{spec.key}.options"
+                )
+
+
+def _commands(node: _Node | None) -> tuple[Commands, tuple[tuple[str, str], ...]]:
     assert node is not None
     batch = _argv(node, "batch")
-    live = _argv(node, "live") if node.has("live") else batch
+    has_live = node.has("live")
+    live = _argv(node, "live") if has_live else batch
     node.done()
-    return Commands(batch=batch, live=live)
+    refs = list(_option_refs("batch", batch))
+    if has_live:
+        for ref in _option_refs("live", live):
+            if ref not in refs:
+                refs.append(ref)
+    return Commands(batch=batch, live=live), tuple(refs)
+
+
+def _option_refs(command: str, argv: tuple[str, ...]) -> tuple[tuple[str, str], ...]:
+    """The ``{option:NAME}`` names ``argv`` needs, in first-seen order, one entry each."""
+    seen: dict[str, str] = {}
+    for arg in argv:
+        for match in _ARGV_FIELD.finditer(arg):
+            field = match.group(1)
+            if field.startswith(_OPTION_FIELD_PREFIX):
+                name = field[len(_OPTION_FIELD_PREFIX) :]
+                seen.setdefault(name, field)
+    return tuple((command, name) for name in seen)
 
 
 def _argv(node: _Node, key: str) -> tuple[str, ...]:
     argv = node.strs(key)
     for arg in argv:
         for match in _ARGV_FIELD.finditer(arg):
-            if match.group(1) not in PLACEHOLDERS:
-                raise ModelSpecError(f"{node.at(key)}: unknown placeholder {match.group(0)!r}")
+            field = match.group(1)
+            if field in PLACEHOLDERS:
+                continue
+            if field.startswith(_OPTION_FIELD_PREFIX):
+                name = field[len(_OPTION_FIELD_PREFIX) :]
+                if not _NAME.match(name):
+                    raise ModelSpecError(
+                        f"{node.at(key)}: {{{field}}}: option names are [a-z0-9_-]+"
+                    )
+                continue
+            raise ModelSpecError(f"{node.at(key)}: unknown placeholder {match.group(0)!r}")
         if "{" in _ARGV_FIELD.sub("", arg) or "}" in _ARGV_FIELD.sub("", arg):
             raise ModelSpecError(f"{node.at(key)}: unbalanced braces in {arg!r}")
     return argv
@@ -638,6 +743,7 @@ __all__ = [
     "PLACEHOLDERS",
     "RAW_PLACEHOLDERS",
     "SPEC_VERSION",
+    "CheckpointSpec",
     "Commands",
     "Dependency",
     "Environment",
@@ -652,6 +758,7 @@ __all__ = [
     "check_options",
     "load_manifest",
     "manifest_sha256",
+    "option_text",
     "parse_manifest",
     "render_argv",
     "select_model",

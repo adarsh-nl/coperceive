@@ -70,6 +70,7 @@ Each entry of `models`:
 | `outputs` | map | yes | | §Outputs. |
 | `resources` | map | yes | | §Resources. |
 | `depends_on` | list map | no | `[]` | Each `{model: <model key>, artifact: <name>}`: an artefact a run of that model writes under `artifacts/` (§Working directory). |
+| `checkpoint` | map | no | null | `{option: <name>}`: the model's checkpoint is the file that option names. The worker hashes it for `hello`; `--slurm` stages it into scratch and rewrites the inner `--option` (§Checkpoint staging). |
 | `options` | map str → map | no | `{}` | Each `{type: str|int|float|bool, default, choices?, description?}`. `--option k=v` values are checked against this. |
 
 #### Inputs
@@ -117,8 +118,10 @@ Each entry of `models`:
 
 | Key | Type | Required | Meaning |
 | --- | --- | --- | --- |
-| `batch` | list str | yes | argv. Placeholders: `{python}`, `{plugin_dir}`, `{work_dir}`, `{model}`. No other `{…}` is allowed; no shell. |
+| `batch` | list str | yes | argv. Placeholders: `{python}`, `{plugin_dir}`, `{work_dir}`, `{model}`, and `{option:NAME}` for one of the model's options. No other `{…}` is allowed; no shell. |
 | `live` | list str | no | argv for live sessions; defaults to `batch`. |
+
+`{option:NAME}` renders the model's validated effective value of the option `NAME` as one argv element: strings as they are, `true`/`false` for booleans, and a number without a trailing `.0`. Exactly as for `{python}` and `{plugin_dir}`, the value is one element of an argv list passed with `shell=False`, so it is never split or expanded. Every model the command can run must declare `NAME`; a placeholder naming any other option is a manifest error. The placeholder exists because a worker must sometimes know a file before `configure` (the OpenCOOD plugin hashes its checkpoint for `hello`), while §Protocol sends options only in `configure`.
 
 Example (abridged from the Griffin plugin):
 
@@ -138,6 +141,15 @@ models:
 commands:
   batch: ["{python}", "-m", "coperceive_griffin_model.worker", "--model", "{model}"]
 ```
+
+### Checkpoint staging
+
+A model can name its checkpoint with `checkpoint: {option: checkpoint}`: the option's value is a path to the file the model loads. The declared option must be of type `str`. Two rules follow from the key:
+
+- `model run` refuses a run whose declared checkpoint option is empty or is not a file (exit 1) before a child starts; the message names the option and `--option <name>=FILE`.
+- `model run --slurm` stages that file into the job's scratch under `$SCRATCH/checkpoints/<option>/<file name>` with `rsync` before the run, and writes the inner `model run` with `--option <option>=$SCRATCH/checkpoints/<option>/<file name>`. The shared path the user passed is not read by the compute node; the checkpoint never appears in the copy-home `rsync` targets, only in the staged inputs. `coperceive model inspect` shows the key as part of the manifest.
+
+The file is the checkpoint the worker hashes: `hello.environment.checkpoint_path` names it and `checkpoint_md5` is its MD5 (the parent hashes it too, §Protocol), so the cache key changes when the file changes. A model without the key is staged exactly as before.
 
 ## Protocol
 
