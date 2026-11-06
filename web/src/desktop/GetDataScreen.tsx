@@ -7,6 +7,8 @@ import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   datasetDryRun,
   ensureDemoScene,
+  cancelDemoScene,
+  onDemoProgress,
   startDatasetJob,
   cancelDatasetJob,
   pauseDatasetJob,
@@ -109,6 +111,7 @@ export default function GetDataScreen({
   useEffect(() => subscribeDatasetJobs(() => setClusterJobs(datasetJobs())), []);
   const [generatingDemo, setGeneratingDemo] = useState(false);
   const [demoElapsedSec, setDemoElapsedSec] = useState(0);
+  const [demoStage, setDemoStage] = useState<string>("");
   const [demoError, setDemoError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<CatalogDataset[]>([]);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(true);
@@ -246,21 +249,40 @@ export default function GetDataScreen({
   const handleOpenDemo = async () => {
     setGeneratingDemo(true);
     setDemoElapsedSec(0);
+    setDemoStage("Starting bundled Python generator…");
     setDemoError(null);
     const start = Date.now();
     const timer = setInterval(() => {
       setDemoElapsedSec(Math.floor((Date.now() - start) / 1000));
     }, 1000);
+    const unlisten = await onDemoProgress((payload) => {
+      if (payload.stage) {
+        setDemoStage(payload.stage);
+      }
+      if (typeof payload.elapsed_seconds === "number") {
+        setDemoElapsedSec(Math.floor(payload.elapsed_seconds));
+      }
+    });
     try {
       const outcome = await ensureDemoScene();
       clearInterval(timer);
+      unlisten();
       setGeneratingDemo(false);
       onOpenScene(outcome.path);
     } catch (err) {
       clearInterval(timer);
+      unlisten();
       setGeneratingDemo(false);
-      setDemoError(errorText(err));
+      const msg = errorText(err);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        setDemoError(msg);
+      }
     }
+  };
+
+  const handleCancelDemo = async () => {
+    await cancelDemoScene();
+    setGeneratingDemo(false);
   };
 
   useEffect(() => {
@@ -635,7 +657,9 @@ export default function GetDataScreen({
                   Offline demo scene
                 </div>
                 <div style={{ fontSize: "12px", color: "var(--text-subtle)", marginTop: "2px" }}>
-                  Deterministic synthetic cooperative scene with 3 agents (LiDAR & cameras) and simulated predictions (~8.2 MB).
+                  {generatingDemo
+                    ? `${demoStage || "Generating demo scene…"} · ${demoElapsedSec}s elapsed · This can take up to 2 minutes on older Macs.`
+                    : "Deterministic synthetic cooperative scene with 3 agents (LiDAR & cameras) and simulated predictions (~8.2 MB)."}
                 </div>
                 {demoError && (
                   <div style={{ fontSize: "11.5px", color: "var(--danger)", marginTop: "4px" }}>
@@ -643,15 +667,25 @@ export default function GetDataScreen({
                   </div>
                 )}
               </div>
-              <button
-                type="button"
-                className="c-primary"
-                disabled={generatingDemo}
-                onClick={() => void handleOpenDemo()}
-                style={{ flexShrink: 0 }}
-              >
-                {generatingDemo ? `Generating… ${demoElapsedSec}s` : "Open the demo"}
-              </button>
+              <div style={{ display: "flex", gap: "8px", alignItems: "center", flexShrink: 0 }}>
+                {generatingDemo && (
+                  <button
+                    type="button"
+                    className="c-secondary"
+                    onClick={() => void handleCancelDemo()}
+                  >
+                    Cancel
+                  </button>
+                )}
+                <button
+                  type="button"
+                  className="c-primary"
+                  disabled={generatingDemo}
+                  onClick={() => void handleOpenDemo()}
+                >
+                  {generatingDemo ? `Generating… ${demoElapsedSec}s` : "Open the demo"}
+                </button>
+              </div>
             </div>
             <p className="c-page-note">
               {libraryRoot ? `Downloads go to ${libraryRoot}. ` : ""}

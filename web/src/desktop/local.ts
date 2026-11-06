@@ -1160,14 +1160,43 @@ export interface DemoOutcome {
   bytes: number;
   cached: boolean;
   elapsed_seconds: number;
+  python_path?: string;
 }
 
 export async function ensureDemoScene(): Promise<DemoOutcome> {
   if (isTauriEnvironment()) {
     const { invoke } = await import("@tauri-apps/api/core");
-    return await invoke<DemoOutcome>("ensure_demo_scene");
+    const outcome = await invoke<DemoOutcome>("ensure_demo_scene");
+    if (typeof window !== "undefined") {
+      (
+        window as unknown as { __COPERCEIVE_LAST_DEMO_OUTCOME__?: DemoOutcome }
+      ).__COPERCEIVE_LAST_DEMO_OUTCOME__ = outcome;
+    }
+    return outcome;
   }
   throw new Error("Demo scene is only available in the desktop application.");
+}
+
+export async function cancelDemoScene(): Promise<void> {
+  if (isTauriEnvironment()) {
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("cancel_demo_scene");
+    } catch (e) {
+      console.error("Failed to cancel demo scene:", e);
+    }
+  }
+}
+
+export async function onDemoProgress(
+  handler: (event: { stage: string; elapsed_seconds: number }) => void,
+): Promise<() => void> {
+  if (!isTauriEnvironment()) return () => undefined;
+  const { listen } = await import("@tauri-apps/api/event");
+  return await listen<{ stage: string; elapsed_seconds: number }>(
+    "coperceive-demo-progress",
+    (event) => handler(event.payload),
+  );
 }
 
 export async function dismissWelcomeCard(): Promise<void> {

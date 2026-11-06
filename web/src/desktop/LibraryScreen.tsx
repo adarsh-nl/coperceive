@@ -4,6 +4,7 @@ import type { LibrarySceneInfo, StorageStats } from "./types";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
+  cancelDemoScene,
   deleteLibraryScene,
   dismissWelcomeCard,
   downloadTownMap,
@@ -14,6 +15,7 @@ import {
   libraryThumbnail,
   listServerProfiles,
   moveLibraryRoot,
+  onDemoProgress,
   onTownMapProgress,
   pickDataRoot,
   revealInFinder,
@@ -96,18 +98,30 @@ function ValidationBadge({ status }: { status: "valid" | "invalid" | "checking" 
 export function WelcomeCard({
   generatingDemo,
   demoElapsedSec,
+  demoStage,
   demoError,
   onOpenDemo,
+  onCancelDemo,
   onTrySample,
   onDismiss,
 }: {
   generatingDemo: boolean;
   demoElapsedSec: number;
+  demoStage?: string;
   demoError: string | null;
   onOpenDemo: () => void;
+  onCancelDemo?: () => void;
   onTrySample: () => void;
   onDismiss: () => void;
 }) {
+  const activeStage =
+    demoStage ||
+    (demoElapsedSec < 3
+      ? "Starting bundled Python generator…"
+      : demoElapsedSec < 8
+        ? "Synthesising LiDAR & multi-agent cameras…"
+        : "Packing LiDAR frames & scoring predictions…");
+
   return (
     <div
       className="welcome-card"
@@ -158,6 +172,7 @@ export function WelcomeCard({
       <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
         <button
           type="button"
+          data-testid="welcome-open-demo"
           className="c-primary-wide"
           disabled={generatingDemo}
           onClick={onOpenDemo}
@@ -172,16 +187,41 @@ export function WelcomeCard({
         >
           <span style={{ fontWeight: 600, fontSize: "13.5px" }}>
             {generatingDemo
-              ? `Generating demo scene… (8.2 MB) ${demoElapsedSec}s`
+              ? `Generating demo scene… (8.2 MB) · ${demoElapsedSec}s elapsed`
               : "Open the demo"}
           </span>
           <span style={{ fontSize: "11.5px", opacity: 0.85 }}>
-            Works offline · No download needed (~8.2 MB synthetic junction)
+            {generatingDemo
+              ? `${activeStage} · This can take up to 2 minutes on older Macs.`
+              : "Works offline · No download needed (~8.2 MB synthetic junction)"}
           </span>
         </button>
 
+        {generatingDemo && onCancelDemo && (
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px" }}>
+            <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>
+              Running in background — you can still browse other tabs or cancel.
+            </span>
+            <button
+              type="button"
+              data-testid="welcome-cancel-demo"
+              className="ghost"
+              onClick={onCancelDemo}
+              style={{
+                padding: "4px 10px",
+                fontSize: "12px",
+                border: "1px solid var(--line)",
+                borderRadius: "6px",
+              }}
+            >
+              Cancel
+            </button>
+          </div>
+        )}
+
         <button
           type="button"
+          data-testid="welcome-try-sample"
           className="ghost"
           onClick={onTrySample}
           style={{
@@ -239,6 +279,7 @@ export default function LibraryScreen({
   const [serverCount, setServerCount] = useState<number>(0);
   const [generatingDemo, setGeneratingDemo] = useState<boolean>(false);
   const [demoElapsedSec, setDemoElapsedSec] = useState<number>(0);
+  const [demoStage, setDemoStage] = useState<string>("");
   const [demoError, setDemoError] = useState<string | null>(null);
   const [clusterProgress, setClusterProgress] = useState<DatasetJobs | null>(() => datasetJobs()[0] ?? null);
   useEffect(() => subscribeDatasetJobs(() => setClusterProgress(datasetJobs()[0] ?? null)), []);
@@ -366,21 +407,40 @@ export default function LibraryScreen({
   const handleOpenDemo = async () => {
     setGeneratingDemo(true);
     setDemoElapsedSec(0);
+    setDemoStage("Starting bundled Python generator…");
     setDemoError(null);
     const start = Date.now();
     const timer = setInterval(() => {
       setDemoElapsedSec(Math.floor((Date.now() - start) / 1000));
     }, 1000);
+    const unlisten = await onDemoProgress((payload) => {
+      if (payload.stage) {
+        setDemoStage(payload.stage);
+      }
+      if (typeof payload.elapsed_seconds === "number") {
+        setDemoElapsedSec(Math.floor(payload.elapsed_seconds));
+      }
+    });
     try {
       const outcome = await ensureDemoScene();
       clearInterval(timer);
+      unlisten();
       setGeneratingDemo(false);
       onOpenScene(outcome.path);
     } catch (err) {
       clearInterval(timer);
+      unlisten();
       setGeneratingDemo(false);
-      setDemoError(errorText(err));
+      const msg = errorText(err);
+      if (!msg.toLowerCase().includes("cancelled")) {
+        setDemoError(msg);
+      }
     }
+  };
+
+  const handleCancelDemo = async () => {
+    await cancelDemoScene();
+    setGeneratingDemo(false);
   };
 
   const handleDismissWelcomeCard = async () => {
@@ -399,9 +459,6 @@ export default function LibraryScreen({
         listServerProfiles().catch(() => []),
       ]);
       setStorage(stats);
-      if (stats && stats.is_configured === false) {
-        setShowFirstRunModal(true);
-      }
       applyScenes(list);
       if (pState?.welcome_card_dismissed) {
         setWelcomeCardDismissed(true);
@@ -815,8 +872,10 @@ export default function LibraryScreen({
               <WelcomeCard
                 generatingDemo={generatingDemo}
                 demoElapsedSec={demoElapsedSec}
+                demoStage={demoStage}
                 demoError={demoError}
                 onOpenDemo={() => void handleOpenDemo()}
+                onCancelDemo={() => void handleCancelDemo()}
                 onTrySample={() => onNavigateGetData("griffin", "dev")}
                 onDismiss={() => void handleDismissWelcomeCard()}
               />

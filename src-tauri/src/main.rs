@@ -1378,6 +1378,29 @@ async fn start_local_session(
         *lock = Some(data_root);
     }
 
+    if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
+        let log_path = {
+            let lock = state.sidecar.lock().ok();
+            lock.and_then(|s| s.as_ref().map(|sess| sess.log_path.clone()))
+                .unwrap_or_default()
+        };
+        let ctrl_secret = state
+            .ctrl_secret
+            .lock()
+            .ok()
+            .and_then(|s| s.clone())
+            .unwrap_or_default();
+        let content = format!(
+            "{}\n{}\n{}\n{}\n{}\n",
+            payload.origin,
+            payload.token,
+            log_path.display(),
+            ctrl_port,
+            ctrl_secret,
+        );
+        let _ = std::fs::write(&marker_path, content);
+    }
+
     Ok(payload)
 }
 
@@ -1837,12 +1860,38 @@ fn delete_library_scene(scene_path: String) -> Result<(), String> {
 
 #[tauri::command]
 async fn ensure_demo_scene(app: tauri::AppHandle) -> Result<coperceive_desktop::demo::DemoOutcome, String> {
+    use tauri::Emitter;
     let python = resolve_python_binary(&app);
-    tauri::async_runtime::spawn_blocking(move || {
-        coperceive_desktop::demo::ensure_demo(&python)
+    let app_for_progress = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        coperceive_desktop::demo::ensure_demo_with_progress(&python, |stage, elapsed_seconds| {
+            let _ = app_for_progress.emit(
+                "coperceive-demo-progress",
+                serde_json::json!({
+                    "stage": stage,
+                    "elapsed_seconds": elapsed_seconds,
+                }),
+            );
+        })
     })
     .await
-    .map_err(|e| format!("Task execution failed: {e}"))?
+    .map_err(|e| format!("Task execution failed: {e}"))??;
+
+    println!(
+        "COPERCEIVE_DEMO_OUTCOME: python={} elapsed_s={:.2} bytes={} cached={} path={}",
+        outcome.python_path,
+        outcome.elapsed_seconds,
+        outcome.bytes,
+        outcome.cached,
+        outcome.path
+    );
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    Ok(outcome)
+}
+
+#[tauri::command]
+fn cancel_demo_scene() -> Result<(), String> {
+    coperceive_desktop::demo::cancel_demo()
 }
 
 #[tauri::command]
@@ -3745,6 +3794,7 @@ fn main() {
             move_library_root,
             get_library_scenes,
             ensure_demo_scene,
+            cancel_demo_scene,
             dismiss_welcome_card,
             download_town_map,
             list_carla_maps,
@@ -4492,10 +4542,30 @@ fn main() {
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.show();
                     }
+                    if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
+                        let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+                        let ctrl_secret = state
+                            .ctrl_secret
+                            .lock()
+                            .ok()
+                            .and_then(|s| s.clone())
+                            .unwrap_or_default();
+                        let _ = std::fs::write(&marker_path, format!("\n\n\n{}\n{}\n", ctrl_port, ctrl_secret));
+                    }
                 }
             } else {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.show();
+                }
+                if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
+                    let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+                    let ctrl_secret = state
+                        .ctrl_secret
+                        .lock()
+                        .ok()
+                        .and_then(|s| s.clone())
+                        .unwrap_or_default();
+                    let _ = std::fs::write(&marker_path, format!("\n\n\n{}\n{}\n", ctrl_port, ctrl_secret));
                 }
             }
 

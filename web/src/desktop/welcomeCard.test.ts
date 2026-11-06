@@ -81,13 +81,18 @@ test("welcome card renders required actions, description, and handles callbacks"
   assert.equal(dismissed, true);
 
   // Re-render in generating state
+  let cancelled = false;
   await act(async () => {
     root.render(
       React.createElement(WelcomeCard, {
         generatingDemo: true,
         demoElapsedSec: 4,
+        demoStage: "Packing LiDAR frames & camera strip…",
         demoError: null,
         onOpenDemo: () => {},
+        onCancelDemo: () => {
+          cancelled = true;
+        },
         onTrySample: () => {},
         onDismiss: () => {},
       }),
@@ -95,10 +100,23 @@ test("welcome card renders required actions, description, and handles callbacks"
   });
 
   const generatingBtn = [...host.querySelectorAll("button")].find((b) =>
-    b.textContent?.includes("Generating demo scene… (8.2 MB) 4s"),
+    b.textContent?.includes("Generating demo scene… (8.2 MB) · 4s elapsed"),
   );
   assert.ok(generatingBtn, "shows progress and size while generating");
+  assert.ok(
+    generatingBtn.textContent?.includes("Packing LiDAR frames & camera strip…"),
+    "shows current generation stage",
+  );
+  assert.ok(
+    generatingBtn.textContent?.includes("This can take up to 2 minutes on older Macs."),
+    "shows older Mac timing guidance",
+  );
   assert.equal(generatingBtn.disabled, true, "primary button disabled while generating");
+
+  const cancelBtn = host.querySelector('[data-testid="welcome-cancel-demo"]') as HTMLButtonElement | null;
+  assert.ok(cancelBtn, "cancel button rendered while generating");
+  cancelBtn.click();
+  assert.equal(cancelled, true, "cancel callback invoked");
 
   // Re-render with error
   await act(async () => {
