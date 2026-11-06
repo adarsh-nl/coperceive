@@ -103,21 +103,39 @@ def _agent_pose(agent_id: str, frame: int) -> SE3:
     return SE3.identity().translation(0.0, -12.0, 6.0)
 
 
-def _box_corners(center: tuple[float, float, float], size: tuple[float, float, float], yaw: float) -> list[tuple[float, float, float]]:
+def _box_corners(
+    center: tuple[float, float, float], size: tuple[float, float, float], yaw: float
+) -> list[tuple[float, float, float]]:
     l, w, h = size
     local = [
-        (l / 2, w / 2, h / 2), (l / 2, w / 2, -h / 2), (l / 2, -w / 2, h / 2), (l / 2, -w / 2, -h / 2),
-        (-l / 2, w / 2, h / 2), (-l / 2, w / 2, -h / 2), (-l / 2, -w / 2, h / 2), (-l / 2, -w / 2, -h / 2),
+        (l / 2, w / 2, h / 2),
+        (l / 2, w / 2, -h / 2),
+        (l / 2, -w / 2, h / 2),
+        (l / 2, -w / 2, -h / 2),
+        (-l / 2, w / 2, h / 2),
+        (-l / 2, w / 2, -h / 2),
+        (-l / 2, -w / 2, h / 2),
+        (-l / 2, -w / 2, -h / 2),
     ]
     c, s = math.cos(yaw), math.sin(yaw)
-    return [(center[0] + c * x - s * y, center[1] + s * x + c * y, center[2] + z) for x, y, z in local]
+    return [
+        (center[0] + c * x - s * y, center[1] + s * x + c * y, center[2] + z) for x, y, z in local
+    ]
 
 
-def _ray_box(origin: np.ndarray, direction: np.ndarray, center: np.ndarray, yaw: float, size: tuple[float, float, float]) -> float | None:
+def _ray_box(
+    origin: np.ndarray,
+    direction: np.ndarray,
+    center: np.ndarray,
+    yaw: float,
+    size: tuple[float, float, float],
+) -> float | None:
     c, s = math.cos(-yaw), math.sin(-yaw)
     o = origin - center
     o = np.array([c * o[0] - s * o[1], s * o[0] + c * o[1], o[2]])
-    d = np.array([c * direction[0] - s * direction[1], s * direction[0] + c * direction[1], direction[2]])
+    d = np.array(
+        [c * direction[0] - s * direction[1], s * direction[0] + c * direction[1], direction[2]]
+    )
     half = np.array([size[0] / 2, size[1] / 2, size[2] / 2])
     tmin, tmax = -np.inf, np.inf
     for axis in range(3):
@@ -133,7 +151,9 @@ def _ray_box(origin: np.ndarray, direction: np.ndarray, center: np.ndarray, yaw:
     return float(tmin) if tmax >= max(tmin, 0) else None
 
 
-def _lidar(agent_id: str, frame: int, objects: tuple[_Object, ...], rng: random.Random) -> np.ndarray:
+def _lidar(
+    agent_id: str, frame: int, objects: tuple[_Object, ...], rng: random.Random
+) -> np.ndarray:
     pose = _agent_pose(agent_id, frame)
     origin = np.array(pose.apply((0.0, 0.0, 1.8)))
     # Direction in body FLU, rotated by the agent's yaw only.
@@ -143,20 +163,36 @@ def _lidar(agent_id: str, frame: int, objects: tuple[_Object, ...], rng: random.
         az = 2 * math.pi * az_i / LIDAR_AZ
         for el_i in range(LIDAR_EL):
             el = math.radians(-25.0 + 40.0 * el_i / (LIDAR_EL - 1))
-            body = np.array([math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el)])
-            world_dir = np.array([math.cos(yaw) * body[0] - math.sin(yaw) * body[1], math.sin(yaw) * body[0] + math.cos(yaw) * body[1], body[2]])
+            body = np.array(
+                [math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el)]
+            )
+            world_dir = np.array(
+                [
+                    math.cos(yaw) * body[0] - math.sin(yaw) * body[1],
+                    math.sin(yaw) * body[0] + math.cos(yaw) * body[1],
+                    body[2],
+                ]
+            )
             best = LIDAR_RANGE
             if world_dir[2] < -1e-6:
                 best = min(best, float(-origin[2] / world_dir[2]))
             for obj in objects:
                 center, obj_yaw = _actor_at(obj, frame / RATE_HZ)
-                t = _ray_box(origin, world_dir, np.array(center), obj_yaw, (obj.length, obj.width, obj.height))
+                t = _ray_box(
+                    origin,
+                    world_dir,
+                    np.array(center),
+                    obj_yaw,
+                    (obj.length, obj.width, obj.height),
+                )
                 if t is not None and 0.1 < t < best:
                     best = t
             if best < LIDAR_RANGE:
                 point = origin + world_dir * best
                 # centimetre-scale beam noise, deterministic from the seed
-                point = point + np.array([rng.gauss(0, 0.01), rng.gauss(0, 0.01), rng.gauss(0, 0.01)])
+                point = point + np.array(
+                    [rng.gauss(0, 0.01), rng.gauss(0, 0.01), rng.gauss(0, 0.01)]
+                )
                 points.append((float(point[0]), float(point[1]), float(point[2]), 0.0))
     # A few centre-directed beams guarantee a surface return for every box that
     # is not occluded, including thin pedestrians between the azimuth grid lines.
@@ -171,7 +207,9 @@ def _lidar(agent_id: str, frame: int, objects: tuple[_Object, ...], rng: random.
             best = LIDAR_RANGE
             for other in objects:
                 oc, oyaw = _actor_at(other, frame / RATE_HZ)
-                t = _ray_box(origin, direction, np.array(oc), oyaw, (other.length, other.width, other.height))
+                t = _ray_box(
+                    origin, direction, np.array(oc), oyaw, (other.length, other.width, other.height)
+                )
                 if t is not None and 0.1 < t < best:
                     best = t
             if best < LIDAR_RANGE:
@@ -200,7 +238,9 @@ def _camera_image(agent_id: str, frame: int, objects: tuple[_Object, ...]) -> Im
         if not visible:
             continue
         faces = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 2, 6, 4), (1, 5, 7, 3), (2, 3, 7, 6), (0, 4, 5, 1)]
-        shade = {"car": (200, 60, 50), "cyclist": (40, 150, 190), "pedestrian": (220, 180, 40)}[obj.category]
+        shade = {"car": (200, 60, 50), "cyclist": (40, 150, 190), "pedestrian": (220, 180, 40)}[
+            obj.category
+        ]
         for face in faces:
             pts = [projected[i] for i in face]
             if all(p[2] > 1.0 for p in [camera.inverse().apply(corners[i]) for i in face]):
@@ -226,14 +266,15 @@ def _write_agents(root: Path, objects: tuple[_Object, ...], seed: int) -> None:
                     f"{t},{o.track_id},{o.category},{_actor_at(o, t / 1e6)[0][0]},"
                     f"{_actor_at(o, t / 1e6)[0][1]},{_actor_at(o, t / 1e6)[0][2]},"
                     f"{o.length},{o.width},{o.height},{o.yaw_deg}\n"
-                    for t in timestamps for o in objects
+                    for t in timestamps
+                    for o in objects
                 ),
                 encoding="utf-8",
             )
             (agent_root / "poses.csv").write_text(
                 "timestamp_us,x,y,z,roll_deg,pitch_deg,yaw_deg\n"
                 + "".join(
-                    f"{i*100_000},{_agent_pose(agent_id, i).tx},{_agent_pose(agent_id, i).ty},"
+                    f"{i * 100_000},{_agent_pose(agent_id, i).tx},{_agent_pose(agent_id, i).ty},"
                     f"{_agent_pose(agent_id, i).tz},0,0,{0 if agent_id == 'cav-a' else 90}\n"
                     for i in range(FRAMES)
                 ),
@@ -244,7 +285,9 @@ def _write_agents(root: Path, objects: tuple[_Object, ...], seed: int) -> None:
             points = _lidar(agent_id, frame, objects, rng)
             (agent_root / "lidar" / f"{frame:06d}.bin").write_bytes(points.tobytes())
             if agent_id != "rsu":
-                _camera_image(agent_id, frame, objects).save(agent_root / "camera" / f"{frame:06d}.png")
+                _camera_image(agent_id, frame, objects).save(
+                    agent_root / "camera" / f"{frame:06d}.png"
+                )
     _write_yaml(
         root / "scene.yaml",
         {
@@ -255,28 +298,67 @@ def _write_agents(root: Path, objects: tuple[_Object, ...], seed: int) -> None:
             "frame_count": FRAMES,
             "agents": [
                 {
-                    "id": "cav-a", "role": "vehicle", "poses": "agents/cav-a/poses.csv",
+                    "id": "cav-a",
+                    "role": "vehicle",
+                    "poses": "agents/cav-a/poses.csv",
                     "boxes": "agents/cav-a/boxes.csv",
                     "sensors": [
-                        {"id": "lidar", "modality": "lidar", "files": "agents/cav-a/lidar/{frame:06d}.bin"},
-                        {"id": "front", "modality": "camera", "files": "agents/cav-a/camera/{frame:06d}.png",
-                         "intrinsic": [FX, FY, CX, CY], "image_size": [WIDTH, HEIGHT],
-                         "body_from_sensor": {"translation_m": [1.8, 0.0, 1.2], "rotation_rpy_deg": [-90, 0, -90]}},
+                        {
+                            "id": "lidar",
+                            "modality": "lidar",
+                            "files": "agents/cav-a/lidar/{frame:06d}.bin",
+                        },
+                        {
+                            "id": "front",
+                            "modality": "camera",
+                            "files": "agents/cav-a/camera/{frame:06d}.png",
+                            "intrinsic": [FX, FY, CX, CY],
+                            "image_size": [WIDTH, HEIGHT],
+                            "body_from_sensor": {
+                                "translation_m": [1.8, 0.0, 1.2],
+                                "rotation_rpy_deg": [-90, 0, -90],
+                            },
+                        },
                     ],
                 },
                 {
-                    "id": "cav-b", "role": "vehicle", "poses": "agents/cav-b/poses.csv",
+                    "id": "cav-b",
+                    "role": "vehicle",
+                    "poses": "agents/cav-b/poses.csv",
                     "boxes": "agents/cav-b/boxes.csv",
                     "sensors": [
-                        {"id": "lidar", "modality": "lidar", "files": "agents/cav-b/lidar/{frame:06d}.bin"},
-                        {"id": "front", "modality": "camera", "files": "agents/cav-b/camera/{frame:06d}.png",
-                         "intrinsic": [FX, FY, CX, CY], "image_size": [WIDTH, HEIGHT],
-                         "body_from_sensor": {"translation_m": [1.8, 0.0, 1.2], "rotation_rpy_deg": [-90, 0, -90]}},
+                        {
+                            "id": "lidar",
+                            "modality": "lidar",
+                            "files": "agents/cav-b/lidar/{frame:06d}.bin",
+                        },
+                        {
+                            "id": "front",
+                            "modality": "camera",
+                            "files": "agents/cav-b/camera/{frame:06d}.png",
+                            "intrinsic": [FX, FY, CX, CY],
+                            "image_size": [WIDTH, HEIGHT],
+                            "body_from_sensor": {
+                                "translation_m": [1.8, 0.0, 1.2],
+                                "rotation_rpy_deg": [-90, 0, -90],
+                            },
+                        },
                     ],
                 },
                 {
-                    "id": "rsu", "role": "roadside unit", "fixed_pose": {"translation_m": [0.0, -12.0, 6.0], "rotation_rpy_deg": [0, 0, 0]},
-                    "sensors": [{"id": "lidar", "modality": "lidar", "files": "agents/rsu/lidar/{frame:06d}.bin"}],
+                    "id": "rsu",
+                    "role": "roadside unit",
+                    "fixed_pose": {
+                        "translation_m": [0.0, -12.0, 6.0],
+                        "rotation_rpy_deg": [0, 0, 0],
+                    },
+                    "sensors": [
+                        {
+                            "id": "lidar",
+                            "modality": "lidar",
+                            "files": "agents/rsu/lidar/{frame:06d}.bin",
+                        }
+                    ],
                 },
             ],
         },
@@ -296,15 +378,32 @@ def _prediction_rows(scenes: Path, seed: int) -> list[PredictionBox]:
             if ann.track_id is not None and ann.track_id.endswith("5") and rng.random() < 0.12:
                 continue  # a deterministic miss
             world_from_body = lookup_pose(scene.agent(ann.agent_id), ann.time_us, max_gap_us=0)
-            placed = ann.box_from_rpy.translation(*ann.center) if ann.frame is BoxFrame.WORLD else world_from_body.compose(ann.box_from_rpy.translation(*ann.center))
-            noisy = placed.translation(placed.tx + rng.gauss(0, 0.18), placed.ty + rng.gauss(0, 0.18), placed.tz + rng.gauss(0, 0.05))
+            placed = (
+                ann.box_from_rpy.translation(*ann.center)
+                if ann.frame is BoxFrame.WORLD
+                else world_from_body.compose(ann.box_from_rpy.translation(*ann.center))
+            )
+            noisy = placed.translation(
+                placed.tx + rng.gauss(0, 0.18),
+                placed.ty + rng.gauss(0, 0.18),
+                placed.tz + rng.gauss(0, 0.05),
+            )
             body = world_from_body.inverse().compose(noisy)
-            rows.append(PredictionBox(
-                scene_id=scene.scene_id, agent_id=ann.agent_id, source="noisy", time_us=ann.time_us,
-                category=ann.category, score=round(0.95 - 0.03 * rng.random(), 4), track_id=ann.track_id,
-                center=(body.tx, body.ty, body.tz), size_lwh=ann.size_lwh,
-                box_from_rpy=SE3(body.qw, body.qx, body.qy, body.qz, 0, 0, 0), frame=BoxFrame.BODY,
-            ))
+            rows.append(
+                PredictionBox(
+                    scene_id=scene.scene_id,
+                    agent_id=ann.agent_id,
+                    source="noisy",
+                    time_us=ann.time_us,
+                    category=ann.category,
+                    score=round(0.95 - 0.03 * rng.random(), 4),
+                    track_id=ann.track_id,
+                    center=(body.tx, body.ty, body.tz),
+                    size_lwh=ann.size_lwh,
+                    box_from_rpy=SE3(body.qw, body.qx, body.qy, body.qz, 0, 0, 0),
+                    frame=BoxFrame.BODY,
+                )
+            )
     return rows
 
 
@@ -333,23 +432,45 @@ def create(path: str | Path, seed: int = 0) -> DemoScene:
         target.write_bytes(source.read_bytes())
     rows = _prediction_rows(scenes, seed)
     meta = RunMeta(
-        run_id=RUN_ID, model="synthetic demo", score_note="Simulated noisy boxes; not a model result.",
-        categories=("car", "cyclist", "pedestrian"), sources=(("noisy", "simulated detector"),),
+        run_id=RUN_ID,
+        model="synthetic demo",
+        score_note="Simulated noisy boxes; not a model result.",
+        categories=("car", "cyclist", "pedestrian"),
+        sources=(("noisy", "simulated detector"),),
         created_utc="2026-01-01T00:00:00Z",
     )
     write_run(predictions, RUN_ID, meta, rows)
     # The plain JSONL view of the same predictions, for readers that do not use parquet.
     with (predictions / RUN_ID / "predictions.jsonl").open("w", encoding="utf-8") as handle:
         for row in rows:
-            handle.write(json.dumps({
-                "scene_id": row.scene_id, "agent_id": row.agent_id, "source": row.source,
-                "time_us": row.time_us, "category": row.category, "score": row.score,
-                "track_id": row.track_id, "cx": row.center[0], "cy": row.center[1], "cz": row.center[2],
-                "length": row.size_lwh[0], "width": row.size_lwh[1], "height": row.size_lwh[2],
-                "qw": row.box_from_rpy.qw, "qx": row.box_from_rpy.qx, "qy": row.box_from_rpy.qy,
-                "qz": row.box_from_rpy.qz, "frame": "body",
-            }) + "\n")
-    report = evaluate_run(scenes, predictions, RUN_ID, DEFAULT_CONFIG, created_utc="2026-01-01T00:00:00Z")
+            handle.write(
+                json.dumps(
+                    {
+                        "scene_id": row.scene_id,
+                        "agent_id": row.agent_id,
+                        "source": row.source,
+                        "time_us": row.time_us,
+                        "category": row.category,
+                        "score": row.score,
+                        "track_id": row.track_id,
+                        "cx": row.center[0],
+                        "cy": row.center[1],
+                        "cz": row.center[2],
+                        "length": row.size_lwh[0],
+                        "width": row.size_lwh[1],
+                        "height": row.size_lwh[2],
+                        "qw": row.box_from_rpy.qw,
+                        "qx": row.box_from_rpy.qx,
+                        "qy": row.box_from_rpy.qy,
+                        "qz": row.box_from_rpy.qz,
+                        "frame": "body",
+                    }
+                )
+                + "\n"
+            )
+    report = evaluate_run(
+        scenes, predictions, RUN_ID, DEFAULT_CONFIG, created_utc="2026-01-01T00:00:00Z"
+    )
     if report.errors:
         raise RuntimeError("; ".join(report.errors))
     metrics = read_metrics(predictions / RUN_ID / SCENE_ID)
@@ -362,4 +483,6 @@ def create(path: str | Path, seed: int = 0) -> DemoScene:
     if total > MAX_BYTES:
         shutil.rmtree(root)
         raise RuntimeError(f"demo dataset is {total} bytes, over the {MAX_BYTES} budget")
-    return DemoScene(root, raw, scenes, predictions, seed, time.monotonic() - started, total, map_50)
+    return DemoScene(
+        root, raw, scenes, predictions, seed, time.monotonic() - started, total, map_50
+    )

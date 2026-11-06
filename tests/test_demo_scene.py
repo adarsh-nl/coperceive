@@ -100,5 +100,7 @@ def test_lidar_points_land_on_object_surfaces_and_cameras_see_objects(tmp_path: 
 def test_demo_predictions_score_with_a_nontrivial_map(tmp_path: Path) -> None:
     demo = create(tmp_path / "d", seed=0)
     assert demo.map_50 > 0.5
-    rows = (demo.predictions / "demo" / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+    rows = (
+        (demo.predictions / "demo" / "predictions.jsonl").read_text(encoding="utf-8").splitlines()
+    )
     assert rows and all(json.loads(row)["source"] == "noisy" for row in rows)
