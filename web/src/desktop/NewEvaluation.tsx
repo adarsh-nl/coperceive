@@ -163,6 +163,9 @@ export default function NewEvaluation() {
   const [argumentForm, setArgumentForm] = useState<ArgumentForm>({});
   const [checkpoint, setCheckpoint] = useState("");
   const [split, setSplit] = useState("");
+  const [model, setModel] = useState("vehicle-side");
+  const [rawRoot, setRawRoot] = useState("");
+  const [mediaRoot, setMediaRoot] = useState("");
   const [overrideEnv, setOverrideEnv] = useState(false);
   const [environment, setEnvironment] = useState<EnvironmentSetup>(emptyEnvironmentOverride());
   const [plan, setPlan] = useState<RunPlan | null>(null);
@@ -378,6 +381,13 @@ export default function NewEvaluation() {
       );
       return;
     }
+    if (
+      selectedPipeline.source === "builtin" &&
+      (!model.trim() || !rawRoot.trim() || !mediaRoot.trim())
+    ) {
+      setError("Choose the model key, raw root and media root for this built-in model.");
+      return;
+    }
     setError("");
     setNote("");
     setBusy("check");
@@ -391,6 +401,9 @@ export default function NewEvaluation() {
         values: collectValues(selectedPipeline.spec, argumentForm),
         checkpoint: checkpoint.trim(),
         split: split.trim(),
+        model: selectedPipeline.source === "builtin" ? model.trim() : "",
+        raw_root: selectedPipeline.source === "builtin" ? rawRoot.trim() : "",
+        media_root: selectedPipeline.source === "builtin" ? mediaRoot.trim() : "",
         environment_override: overrideEnv ? environment : null,
       };
       const built = await buildRunPlan(selectedProfile.id, request);
@@ -463,6 +476,16 @@ export default function NewEvaluation() {
                 <dd className="c-mono">{needsCheckpoint ? checkpoint.trim() || "—" : pipelineDone ? "not used" : "—"}</dd>
                 <dt>Test split</dt>
                 <dd className="c-mono">{needsSplit ? split.trim() || "—" : pipelineDone ? "not used" : "—"}</dd>
+                {selectedPipeline?.source === "builtin" ? (
+                  <>
+                    <dt>Model</dt>
+                    <dd className="c-mono">{model.trim() || "—"}</dd>
+                    <dt>Raw root</dt>
+                    <dd className="c-mono">{rawRoot.trim() || "—"}</dd>
+                    <dt>Media root</dt>
+                    <dd className="c-mono">{mediaRoot.trim() || "—"}</dd>
+                  </>
+                ) : null}
                 <dt>Environment</dt>
                 <dd>{pipelineDone ? environmentText : "—"}</dd>
                 <dt>Contract check</dt>
@@ -573,6 +596,40 @@ export default function NewEvaluation() {
                       {selectedPipeline.description || "A script with a typed argument schema."}
                       {selectedPipeline.plugin_manifest ? ` Manifest: ${selectedPipeline.plugin_manifest}.` : ""}
                     </span>
+                    {selectedPipeline.source === "builtin" ? (
+                      <>
+                        <div style={field}>
+                          <label style={labelStyle} htmlFor="plan-model">Model key</label>
+                          <input
+                            id="plan-model"
+                            className="c-path-input"
+                            value={model}
+                            onChange={(event) => setModel(event.target.value)}
+                            placeholder="vehicle-side"
+                          />
+                        </div>
+                        <div style={field}>
+                          <label style={labelStyle} htmlFor="plan-raw">Raw root</label>
+                          <input
+                            id="plan-raw"
+                            className="c-path-input"
+                            value={rawRoot}
+                            onChange={(event) => setRawRoot(event.target.value)}
+                            placeholder="/data/griffin-release"
+                          />
+                        </div>
+                        <div style={field}>
+                          <label style={labelStyle} htmlFor="plan-media">Media root</label>
+                          <input
+                            id="plan-media"
+                            className="c-path-input"
+                            value={mediaRoot}
+                            onChange={(event) => setMediaRoot(event.target.value)}
+                            placeholder="/data/griffin-release"
+                          />
+                        </div>
+                      </>
+                    ) : null}
               {/* Checkpoint and test-split arguments have their own steps (3 and 4). */}
               {stepArguments.length > 0 ? (
                 <div style={{ marginTop: "0.25rem" }}>

@@ -68,6 +68,14 @@ pub struct RunPlanRequest {
     pub checkpoint: String,
     #[serde(default)]
     pub split: String,
+    /// Built-in model key from the plugin manifest (e.g. `vehicle-side`).
+    #[serde(default)]
+    pub model: String,
+    /// Raw release/media roots for a model with raw inputs.
+    #[serde(default)]
+    pub raw_root: String,
+    #[serde(default)]
+    pub media_root: String,
     #[serde(default)]
     pub environment_override: Option<EnvironmentSetup>,
 }
@@ -132,6 +140,19 @@ pub struct RunPlan {
     pub checkpoint: PlanArtifact,
     #[serde(default)]
     pub split: PlanArtifact,
+    /// Built-in model key and raw/media roots the plan runs with.
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub raw_root: PlanArtifact,
+    #[serde(default)]
+    pub media_root: PlanArtifact,
+    /// Work directory (inside the run output) and the staging seconds the job
+    /// measured. Empty/None on plans saved before these fields existed.
+    #[serde(default)]
+    pub work_dir: String,
+    #[serde(default)]
+    pub staging_seconds: Option<f64>,
     /// Where a later submission would write the run (`results_root/runs/<id>`).
     pub output_dir: String,
     /// Scratch directory the contract-check job uses (profile template, expanded
@@ -459,6 +480,16 @@ pub fn build_pipeline_argv(
     Ok(argv)
 }
 
+/// A path chosen by the user. The remote revalidation below records its real
+/// path and sha, like checkpoint/split, but a folder has no sha.
+fn artifact_from_check_for_input(path: &str, kind: &str) -> PlanArtifact {
+    PlanArtifact {
+        path: path.trim().to_string(),
+        kind: kind.to_string(),
+        ..PlanArtifact::default()
+    }
+}
+
 /// Built-in argv for an installed model plugin (the plugin owns its checkpoint
 /// handling, so a checkpoint is passed as a model option).
 pub fn build_builtin_argv(
@@ -469,6 +500,10 @@ pub fn build_builtin_argv(
     split: &str,
     checkpoint: &str,
     output_dir: &str,
+    model: &str,
+    raw_root: &str,
+    media_root: &str,
+    work_dir: &str,
 ) -> Result<Vec<String>, String> {
     if plugin_manifest.trim().is_empty() {
         return Err(
@@ -494,6 +529,22 @@ pub fn build_builtin_argv(
             format!("checkpoint={checkpoint}"),
         ],
     );
+    if !model.trim().is_empty() {
+        argv.push("--model".to_string());
+        argv.push(model.trim().to_string());
+    }
+    if !raw_root.trim().is_empty() {
+        argv.push("--raw-root".to_string());
+        argv.push(raw_root.trim().to_string());
+    }
+    if !media_root.trim().is_empty() {
+        argv.push("--media-root".to_string());
+        argv.push(media_root.trim().to_string());
+    }
+    if !work_dir.trim().is_empty() {
+        argv.push("--work".to_string());
+        argv.push(work_dir.trim().to_string());
+    }
     if let Some(serde_json::Value::Array(extras)) = values.get("extras") {
         for extra in extras {
             argv.push("--option".to_string());
@@ -1063,6 +1114,23 @@ pub fn build_run_plan(
     if needs_split {
         validate_path_in_roots(profile, &request.split, "split")?;
     }
+    let builtin = request.pipeline_source == "builtin";
+    if builtin {
+        if request.model.trim().is_empty() {
+            return Err("Choose the model from the plugin manifest before checking the plan.".to_string());
+        }
+        for (path, label) in [
+            (request.raw_root.trim(), "raw root"),
+            (request.media_root.trim(), "media root"),
+        ] {
+            if path.is_empty() {
+                return Err(format!(
+                    "Choose the {label} on the cluster before checking the plan."
+                ));
+            }
+            validate_path_in_roots(profile, path, label)?;
+        }
+    }
     validate_plan_destinations(profile)?;
 
     let plan_id = new_plan_id();
@@ -1523,6 +1591,10 @@ pub fn build_run_plan(
                 &request.split,
                 &request.checkpoint,
                 &output_dir,
+                request.model.trim(),
+                request.raw_root.trim(),
+                request.media_root.trim(),
+                &format!("{output_dir}/work"),
             )?
         }
         _ => build_pipeline_argv(&pipeline, &request.values, &output_dir)?,
@@ -1580,6 +1652,11 @@ pub fn build_run_plan(
         environment_note: env_note,
         checkpoint,
         split,
+        model: if builtin { request.model.trim().to_string() } else { String::new() },
+        raw_root: if builtin { artifact_from_check_for_input(&request.raw_root, "folder") } else { PlanArtifact::default() },
+        media_root: if builtin { artifact_from_check_for_input(&request.media_root, "folder") } else { PlanArtifact::default() },
+        work_dir: if builtin { format!("{output_dir}/work") } else { String::new() },
+        staging_seconds: None,
         output_dir,
         scratch_dir: profile.scratch_template.clone(),
         gres: default_eval_gres(entry),
@@ -2314,6 +2391,17 @@ pub fn save_run_plan(
                  custom pipeline."
                     .to_string()
             })?;
+        let model = request.model.trim();
+        let raw = request.raw_root.trim();
+        let media = request.media_root.trim();
+        if model.is_empty() || raw.is_empty() || media.is_empty() {
+            return Err(
+                "This plan predates the model/raw/media fields; rebuild this plan before saving."
+                    .to_string(),
+            );
+        }
+        validate_path_in_roots(profile, raw, "raw root")?;
+        validate_path_in_roots(profile, media, "media root")?;
         build_builtin_argv(
             profile,
             manifest,
@@ -2322,6 +2410,10 @@ pub fn save_run_plan(
             &split.path,
             &checkpoint.path,
             &output_dir,
+            model,
+            raw,
+            media,
+            &format!("{output_dir}/work"),
         )?
     } else {
         build_pipeline_argv(&save_pipeline.spec, &typed, &output_dir)?
@@ -2385,6 +2477,26 @@ pub fn save_run_plan(
     validated.environment_note = save_pipeline.env_note;
     validated.checkpoint = checkpoint;
     validated.split = split;
+    validated.model = if save_pipeline.source == "builtin" {
+        request.model.trim().to_string()
+    } else {
+        String::new()
+    };
+    validated.raw_root = if save_pipeline.source == "builtin" {
+        artifact_from_check_for_input(&request.raw_root, "folder")
+    } else {
+        PlanArtifact::default()
+    };
+    validated.media_root = if save_pipeline.source == "builtin" {
+        artifact_from_check_for_input(&request.media_root, "folder")
+    } else {
+        PlanArtifact::default()
+    };
+    validated.work_dir = if save_pipeline.source == "builtin" {
+        format!("{output_dir}/work")
+    } else {
+        String::new()
+    };
     validated.checks = checks;
     validated.output_dir = output_dir;
     validated.scratch_dir = profile.scratch_template.clone();
@@ -2647,6 +2759,9 @@ mod tests {
             values,
             checkpoint: "/data/code/checkpoints/model.pt".to_string(),
             split: "/data/code/splits/test.txt".to_string(),
+            model: String::new(),
+            raw_root: String::new(),
+            media_root: String::new(),
             environment_override: None,
         }
     }
@@ -2859,6 +2974,9 @@ mod tests {
     fn a_builtin_plan_without_a_plugin_manifest_is_refused() {
         let mut req = request();
         req.pipeline_source = "builtin".to_string();
+        req.model = "vehicle-side".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = "/data/code/raw".to_string();
         req.plugin_manifest = None;
         let error = build_run_plan(&checked_runner(), &entry(), &req)
             .expect_err("builtin without manifest");
@@ -3475,6 +3593,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
+            "", "", "", "",
         )
         .expect("argv");
         assert_eq!(
@@ -3511,6 +3630,7 @@ mod tests {
             "/data/scenes",
             "/data/checkpoints/model.pt",
             "/data/results/runs/plan-1790000000-aabbccddeeff",
+            "vehicle-side", "/data/raw", "/data/raw", "/data/results/runs/plan-1790000000-aabbccddeeff/work",
         )
         .expect("argv");
         for item in [
@@ -3526,25 +3646,34 @@ mod tests {
             "plan-1790000000-aabbccddeeff",
             "--option",
             "checkpoint=/data/checkpoints/model.pt",
+            "--model",
+            "vehicle-side",
+            "--raw-root",
+            "/data/raw",
+            "--media-root",
+            "/data/raw",
+            "--work",
+            "/data/results/runs/plan-1790000000-aabbccddeeff/work",
         ] {
             assert!(argv.iter().any(|value| value == item), "missing {item}: {argv:?}");
         }
-        // Known, deliberate CLI-only sections: the CLI knows the model name and
-        // raw/media roots and runs its own staging. The app's submission wrapper
-        // supplies its own output directory and contract checks instead.
-        for cli_only in [
-            "--model",
-            "--raw-root",
-            "--media-root",
-            "--work",
-            "--staging-seconds",
-            "--slurm",
-        ] {
-            assert!(
-                !argv.iter().any(|value| value == cli_only),
-                "unexpected {cli_only} in app argv: {argv:?}"
-            );
-        }
+        // Any flag not listed here is an unlisted difference and fails this test.
+        let mut flags: Vec<&str> = argv
+            .iter()
+            .filter(|value| value.starts_with("--"))
+            .map(String::as_str)
+            .collect();
+        flags.sort_unstable();
+        assert_eq!(
+            flags,
+            [
+                "--manifest", "--media-root", "--model", "--option", "--out",
+                "--raw-root", "--run-id", "--scenes", "--work",
+            ]
+        );
+        // The CLI-only staging timer is the one justified missing value: the app
+        // runs against already-present cluster paths, not an rsync stage.
+        assert!(!argv.iter().any(|value| value == "--staging-seconds"));
     }
 
     #[test]
@@ -3562,6 +3691,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
+            "", "", "", "",
         )
         .expect("argv");
         assert_eq!(argv[0], "/home/bob/coperceive-app/.venv/bin/python");
@@ -3583,6 +3713,7 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
+            "", "", "", "",
         )
         .expect_err("empty manifest");
         assert!(error.contains("no pipeline manifest"), "{error}");
@@ -3622,6 +3753,9 @@ mod tests {
         let mut req = request();
         req.pipeline_source = "builtin".to_string();
         req.pipeline.name = "griffin".to_string();
+        req.model = "vehicle-side".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = "/data/code/raw".to_string();
         req.plugin_manifest = Some("/tmp/client-manifest.yaml".to_string());
         let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
         let mut echo = EchoRunner::new();
@@ -3636,10 +3770,33 @@ mod tests {
     }
 
     #[test]
+    fn a_builtin_plan_carries_model_raw_media_and_work() {
+        let mut req = request();
+        req.pipeline_source = "builtin".to_string();
+        req.pipeline.name = "griffin".to_string();
+        req.plugin_manifest = Some("/data/code/griffin/manifest.yaml".to_string());
+        req.values.clear();
+        req.model = "vehicle-side".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = "/data/code/raw".to_string();
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        assert_eq!(plan.model, "vehicle-side");
+        assert_eq!(plan.raw_root.path, "/data/code/raw");
+        assert_eq!(plan.media_root.path, "/data/code/raw");
+        assert_eq!(plan.work_dir, format!("{}/work", plan.output_dir));
+        for item in ["--model", "vehicle-side", "--raw-root", "/data/code/raw", "--media-root", "/data/code/raw", "--work"] {
+            assert!(plan.argv.iter().any(|value| value == item), "missing {item}: {:?}", plan.argv);
+        }
+    }
+
+    #[test]
     fn save_uses_the_installed_manifest_not_the_client_path() {
         let mut req = request();
         req.pipeline_source = "builtin".to_string();
         req.pipeline.name = "griffin".to_string();
+        req.model = "vehicle-side".to_string();
+        req.raw_root = "/data/code/raw".to_string();
+        req.media_root = "/data/code/raw".to_string();
         req.plugin_manifest = Some("/tmp/client-manifest.yaml".to_string());
         // The installed plugin's spec only accepts its own arguments. Checkpoint
         // and split travel in the dedicated fields, not as unknown values.
