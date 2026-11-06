@@ -29,9 +29,12 @@ in the user's conda environment, and the numeric boxes. They are cluster checks 
 from __future__ import annotations
 
 import copy
+import hashlib
 import importlib
 import importlib.util
 import os
+import shutil
+import tempfile
 
 from convert import ConvertError, boxes_from_opencood
 
@@ -91,6 +94,19 @@ def torch_environment() -> dict[str, str]:
     except Exception:  # noqa: BLE001 - a broken CUDA stack is a fact to report
         pass
     return environment
+
+
+def frame_seed(scene_id: str, time_us: int) -> int:
+    """A stable per-frame seed: two passes over one frame shuffle points the same way.
+
+    OpenCOOD's dataset calls ``shuffle_points`` before voxelisation, so two ``model check``
+    passes over one scene would otherwise see different point order and could differ box for
+    box. Seeding numpy/torch from ``(scene_id, time_us)`` makes a rerun of the same frame
+    repeat the shuffle; CUDA kernel determinism is a separate, unverified question
+    (docs/models/opencood.md).
+    """
+    material = f"{scene_id}|{int(time_us)}".encode()
+    return int.from_bytes(hashlib.blake2s(material).digest()[:4], "little")
 
 
 def _order_of(config: dict[str, object]) -> str:
@@ -201,8 +217,10 @@ class OpenCOODEngine:
         dataset_class = getattr(datasets, self.fusion, None)
         if dataset_class is None:
             raise EngineError(f"opencood.data_utils.datasets has no {self.fusion}")
-        # The dataset's __init__ enumerates its roots even in test mode: give it empty ones.
-        dataset_root = os.path.join(work_dir, "opencood-dataset")
+        # The dataset's __init__ enumerates its roots even in test mode: give it empty ones,
+        # and remove them again once it has built its (empty) bookkeeping. Nothing reads them
+        # afterwards because only retrieve_base_data is used.
+        dataset_root = tempfile.mkdtemp(prefix="opencood-dataset-", dir=work_dir)
         for split in ("train", "validate"):
             os.makedirs(os.path.join(dataset_root, split), exist_ok=True)
         config["root_dir"] = os.path.join(dataset_root, "train")
@@ -222,6 +240,8 @@ class OpenCOODEngine:
             raise EngineError(
                 f"cannot build {self.fusion} from the checkpoint config: {exc}"
             ) from None
+        finally:
+            shutil.rmtree(dataset_root, ignore_errors=True)
         self._injected = injected
         self.device = device or "cpu"
         if self.device.startswith("cuda") and not self._torch.cuda.is_available():
@@ -252,7 +272,7 @@ class OpenCOODEngine:
         except Exception as exc:  # noqa: BLE001 - a CPU-only build asked for cuda, etc.
             raise EngineError(f"cannot move the model to {self.device}: {exc}") from None
         self.model.eval()
-        # Determinism: OpenCOOD shuffles points before voxelisation; seed both generators.
+        # A first seed for anything the build itself draws; `infer` reseeds per frame.
         self._numpy.random.seed(0)
         self._torch.manual_seed(0)
         self._log(
@@ -262,8 +282,17 @@ class OpenCOODEngine:
 
     # -- inference -----------------------------------------------------------------------
 
-    def infer(self, base_data: dict[str, object]) -> list[dict[str, object]]:
-        """One frame's predictions as ``[{center, size_lwh, heading, score}]`` in the ego frame."""
+    def infer(
+        self, base_data: dict[str, object], *, scene_id: str = "", time_us: int = 0
+    ) -> list[dict[str, object]]:
+        """One frame's predictions as ``[{center, size_lwh, heading, score}]`` in the ego frame.
+
+        The point shuffle is seeded from ``(scene_id, time_us)`` (``frame_seed``) so a second
+        pass over the same frame in the same worker repeats it.
+        """
+        seed = frame_seed(scene_id, time_us)
+        self._numpy.random.seed(seed)
+        self._torch.manual_seed(seed)
         self._injected["frame"] = base_data
         try:
             item = self._dataset[0]

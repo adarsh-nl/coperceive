@@ -25,6 +25,7 @@ from tests.opencood_plugin import (
     MANIFEST,
     PLUGIN_DIR,
     copy_plugin_for_tests,
+    load,
     torch_weights_bytes,
     write_checkpoint,
 )
@@ -98,6 +99,15 @@ def test_plugin_code_imports_neither_coperceive_nor_opencood_statically() -> Non
         text = path.read_text(encoding="utf-8")
         assert "/datasets/" not in text, path.name
         assert "eemcs" not in text, path.name
+
+
+def test_frame_seed_is_stable_per_scene_and_time() -> None:
+    """Two model check passes reseed the same shuffle; different frames do not collide."""
+    engine = load("engine")
+    assert engine.frame_seed("coop", 100_000) == engine.frame_seed("coop", 100_000)
+    assert engine.frame_seed("coop", 100_000) != engine.frame_seed("coop", 100_001)
+    assert engine.frame_seed("coop", 100_000) != engine.frame_seed("other", 100_000)
+    assert 0 <= engine.frame_seed("", 0) < 2**32
 
 
 def test_worker_without_a_checkpoint_is_a_clean_skip_in_model_check(
@@ -180,6 +190,13 @@ def test_model_run_eval_run_chain_with_the_fake_open_cood(
         / SCENE_ID
     )
     assert (cache / "result.json").is_file()
+    # The extracted checkpoint is a temporary tree: nothing large is left in the work dir.
+    work_dir = predictions / ".work" / PREDICTIONS
+    leftovers = [path.name for path in work_dir.iterdir() if "checkpoint" in path.name]
+    assert leftovers == []
+    log = (work_dir / "plugin.log").read_text(encoding="utf-8")
+    assert "cobevt-lidar/config.yaml" in log
+    assert "cobevt-lidar/net_epoch_bestval_at_10.pth" in log
 
     # The run is an ordinary predictions run: eval reads it unchanged.
     capsys.readouterr()

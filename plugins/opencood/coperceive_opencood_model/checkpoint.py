@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import shutil
 import zipfile
 
 CONFIG_SUFFIXES = (".yaml", ".yml")
@@ -109,7 +110,7 @@ def extract(archive: str, destination: str) -> list[str]:
                     raise CheckpointError(f"{archive}: refusing archive member {member.filename!r}")
                 os.makedirs(os.path.dirname(target), exist_ok=True)
                 with bundle.open(member) as source, open(target, "wb") as handle:
-                    handle.write(source.read())
+                    shutil.copyfileobj(source, handle, 1 << 20)
                 written.append("/".join(parts))
     except zipfile.BadZipFile as exc:
         raise CheckpointError(f"{archive}: not a readable zip archive ({exc})") from None

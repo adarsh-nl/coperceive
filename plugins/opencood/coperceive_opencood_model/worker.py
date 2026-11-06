@@ -21,7 +21,9 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
+import tempfile
 import time
 import traceback
 
@@ -91,6 +93,7 @@ class Worker:
         self.ego: str | None = None
         self.engine: engine.OpenCOODEngine | None = None
         self.scene_id: str | None = None
+        self.source = "fused"
         self._pending_conversion_s = 0.0
         self._pending_inference_s = 0.0
         self._config_rel = ""
@@ -197,6 +200,7 @@ class Worker:
             )
             return
         self.scene_id = str(message.get("scene_id") or "")
+        self.source = str(message.get("source") or "fused")
         try:
             if self.engine is None:
                 self._load_engine(message, option_path)
@@ -222,37 +226,43 @@ class Worker:
 
     def _load_engine(self, message: dict, option_path: str) -> None:
         work_dir = str(message.get("work_dir") or os.environ.get("COPERCEIVE_MODEL_WORK") or ".")
-        destination = os.path.join(work_dir, "opencood-checkpoint")
         config_hint = str(_option(message, "checkpoint_config", "") or "")
         weights_hint = str(_option(message, "checkpoint_weights", "") or "")
         _progress("extracting the checkpoint archive", 0.1)
+        # Extract under the work directory (the Slurm job's scratch), and remove the
+        # extraction as soon as the config is parsed and the weights are in memory: a
+        # multi-GB checkpoint must not stay under <out>/.work on a local run.
+        destination = tempfile.mkdtemp(prefix="opencood-checkpoint-", dir=work_dir)
         started = time.monotonic()
-        config_path, weights_path, written = checkpoint.prepare(
-            option_path,
-            destination,
-            config_hint=config_hint,
-            weights_hint=weights_hint,
-        )
-        self._config_rel = os.path.relpath(config_path, destination)
-        self._weights_rel = os.path.relpath(weights_path, destination)
-        _log(
-            f"checkpoint {option_path}: {len(written)} files extracted; config "
-            f"{self._config_rel}, weights {self._weights_rel}"
-        )
-        device = str(_option(message, "device", "") or "") or str(message.get("device") or "")
         try:
-            score_threshold = float(_option(message, "score_threshold", -1.0) or -1.0)
-        except (TypeError, ValueError):
-            score_threshold = -1.0
-        _progress("loading the OpenCOOD model from the checkpoint config", 0.5)
-        self.engine = engine.OpenCOODEngine(
-            config_path,
-            weights_path,
-            work_dir=work_dir,
-            device=device,
-            score_threshold=score_threshold,
-            log=_log,
-        )
+            config_path, weights_path, written = checkpoint.prepare(
+                option_path,
+                destination,
+                config_hint=config_hint,
+                weights_hint=weights_hint,
+            )
+            self._config_rel = os.path.relpath(config_path, destination)
+            self._weights_rel = os.path.relpath(weights_path, destination)
+            _log(
+                f"checkpoint {option_path}: {len(written)} files extracted; config "
+                f"{self._config_rel}, weights {self._weights_rel}"
+            )
+            device = str(_option(message, "device", "") or "") or str(message.get("device") or "")
+            try:
+                score_threshold = float(_option(message, "score_threshold", -1.0) or -1.0)
+            except (TypeError, ValueError):
+                score_threshold = -1.0
+            _progress("loading the OpenCOOD model from the checkpoint config", 0.5)
+            self.engine = engine.OpenCOODEngine(
+                config_path,
+                weights_path,
+                work_dir=work_dir,
+                device=device,
+                score_threshold=score_threshold,
+                log=_log,
+            )
+        finally:
+            shutil.rmtree(destination, ignore_errors=True)
         self._pending_conversion_s = time.monotonic() - started
         description = self.engine.describe()
         _log("loaded: " + ", ".join(f"{key}={value}" for key, value in description.items()))
@@ -312,13 +322,18 @@ class Worker:
         )
         if base_data is None:
             return []
+        time_us = message.get("time_us")
         started = time.monotonic()
-        predictions = self.engine.infer(base_data)
+        predictions = self.engine.infer(
+            base_data,
+            scene_id=self.scene_id or "",
+            time_us=int(time_us) if isinstance(time_us, int) else 0,
+        )
         self._pending_inference_s += time.monotonic() - started
         ego_pose = poses.get(self.ego)
         if ego_pose is None:
             raise engine.EngineError(f"frame has no pose for the ego agent {self.ego!r}")
-        source = str(message.get("source") or "fused")
+        source = self.source
         boxes: list[dict] = []
         for prediction in predictions:
             score = prediction.get("score")
