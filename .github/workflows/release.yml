@@ -410,12 +410,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y minisign
-          python3 -c "
-          import json, base64
-          conf = json.load(open('src-tauri/tauri.conf.json'))
-          pubkey_b64 = conf['plugins']['updater']['pubkey']
-          open('minisign.pub', 'wb').write(base64.b64decode(pubkey_b64))
-          "
+          python3 -c "import json, base64; conf = json.load(open('src-tauri/tauri.conf.json')); open('minisign.pub', 'wb').write(base64.b64decode(conf['plugins']['updater']['pubkey']))"
           echo "Public key file created:"
           cat minisign.pub
           for file in \
@@ -425,17 +420,7 @@ jobs:
             release-assets/Coperceive_*_x64-setup.exe; do
             if [ -f "${file}" ]; then
               echo "Verifying ${file} with minisign -Vm..."
-              python3 -c "
-import base64, sys
-content = open(sys.argv[1], 'rb').read().strip()
-try:
-    decoded = base64.b64decode(content)
-    if b'untrusted comment:' in decoded:
-        content = decoded
-except Exception:
-    pass
-open(sys.argv[2], 'wb').write(content)
-" "${file}.sig" "${file}.minisig"
+              python3 -c "import base64, sys; data = open(sys.argv[1], 'rb').read().strip(); d = base64.b64decode(data) if not data.startswith(b'untrusted comment:') else data; open(sys.argv[2], 'wb').write(d)" "${file}.sig" "${file}.minisig"
               minisign -Vm "${file}" -x "${file}.minisig" -p minisign.pub
               rm -f "${file}.minisig"
             else
