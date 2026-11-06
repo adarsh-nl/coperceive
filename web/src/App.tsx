@@ -103,8 +103,13 @@ export default function App() {
   const queryClient = useQueryClient();
   const route = useHashRoute();
   const [isTauri] = useState(isTauriEnvironment);
+  const isTauriLocalhost =
+    typeof window !== "undefined" &&
+    (window.location.hostname === "tauri.localhost" ||
+      window.location.hostname.endsWith(".tauri.localhost"));
   const isRemoteOrHttp =
     typeof window !== "undefined" &&
+    !isTauriLocalhost &&
     (window.location.protocol === "http:" || window.location.protocol === "https:");
   const [connected, setConnected] = useState(
     () => !isTauriEnvironment() || isRemoteOrHttp || Boolean(storedToken()),
