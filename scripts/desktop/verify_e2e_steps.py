@@ -40,6 +40,7 @@ REQUIRED_STEP_MARKERS: list[str] = [
         " old root empty, and updated state.json."
     ),
     "Step 5g verified: Library badge ran in the background and its answer is cached.",
+    "Step 5j verified: Export repro card showed missing fields and saved the card.",
     "Real-App macOS E2E Test PASSED",
 ]
 

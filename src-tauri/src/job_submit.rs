@@ -254,6 +254,10 @@ pub fn render_run_script(
     lines.push("mkdir -p -m 0700 -- \"$OUT_DIR\"".to_string());
     lines.push(String::new());
     render_environment(&plan.environment, &mut lines)?;
+    lines.extend(crate::slurm_adapter::environment_capture_lines(
+        "python3",
+        "\"$OUT_DIR/environment.json\"",
+    ));
     lines.push(format!(
         "echo \"Starting run for plan {} on $(hostname)\"",
         plan.id

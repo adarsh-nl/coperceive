@@ -34,6 +34,7 @@ from coperceive.model import Scene
 from coperceive.models.batch import RunOptions, select_agents
 from coperceive.models.inputs import raw_files, selected_sensors
 from coperceive.models.spec import Manifest, ModelSpec
+from coperceive.repro.environment import environment_capture_lines
 from coperceive.viewdata import pose_times
 
 IMAGE_SUFFIXES = frozenset({".png", ".jpg", ".jpeg"})
@@ -438,6 +439,12 @@ def plan_sbatch(
             "RC=$?",
             "set -e",
             'echo "model run exit $RC"',
+            "",
+            f'mkdir -p "$SCRATCH/out/"{shlex.quote(run_id)}',
+            *environment_capture_lines(
+                f'"$SCRATCH/out/"{shlex.quote(run_id)}"/environment.json"',
+                python=shlex.quote(str(python)),
+            ),
             "",
             f'mkdir -p {shlex.quote(str(results))}/"$SLURM_JOB_ID"',
             f'rsync -a "$SCRATCH/out/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/',

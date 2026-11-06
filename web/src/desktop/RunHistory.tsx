@@ -6,13 +6,18 @@ import {
   listRunHistory,
   listServerProfiles,
   openPredictions,
+  pickSavePath,
+  previewReproCard,
   previewSubmission,
+  revealInFinder,
+  saveExportedFile,
   submitRunPlan,
 } from "./local";
 import type { ServerEntry } from "./hpc";
 import {
   historyCanRerun,
   historyStateLabel,
+  reproPreviewLines,
   slurmSeconds,
   type JobSubmitOutcome,
   type RunHistoryEntry,
@@ -33,6 +38,19 @@ import {
 } from "./components/Page";
 
 const rowKey = (entry: RunHistoryEntry) => entry.job_id;
+
+const TEST_REPRO_ENTRY: RunHistoryEntry = {
+  job_id: "1001",
+  plan_id: "plan-1790000000-aabbccddeeff",
+  state: "completed",
+  active: false,
+  elapsed: null,
+  time_limit: "01:00:00",
+  partition: null,
+  started: null,
+  ended: null,
+  plan_available: true,
+};
 
 const RERUN_OPTIONS: SubmitOptions = {
   walltime: "04:00:00",
@@ -91,6 +109,16 @@ export default function RunHistory() {
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [opened, setOpened] = useState("");
+  const [savedCard, setSavedCard] = useState("");
+  const [repro, setRepro] = useState<{
+    planId: string;
+    included: string[];
+    missing: string[];
+    card: Record<string, unknown>;
+    error: string;
+  } | null>(null);
+  const testRepro =
+    typeof window !== "undefined" && window.__COPERCEIVE_TEST_REPRO__ === true;
   const [filter, setFilter] = useState("all");
   const seeded = useRef(false);
   const [selectedJob, setSelectedJob] = useState<string | null>(null);
@@ -196,6 +224,41 @@ export default function RunHistory() {
     }
   };
 
+  const exportCard = async (entry: RunHistoryEntry) => {
+    setBusy(entry.job_id);
+    setError("");
+    setSavedCard("");
+    try {
+      const card = await previewReproCard(profileId, entry.plan_id, entry.time_limit);
+      const lines = reproPreviewLines(card);
+      setRepro({ planId: entry.plan_id, ...lines, card, error: "" });
+    } catch (e) {
+      setError(errorText(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveCard = async () => {
+    if (!repro) return;
+    setBusy("save-card");
+    setRepro({ ...repro, error: "" });
+    try {
+      const name = `repro-${typeof repro.card.id === "string" ? repro.card.id : repro.planId}.json`;
+      const chosen = await pickSavePath(name, "json");
+      if (!chosen) {
+        setBusy(null);
+        return;
+      }
+      const bytes = new TextEncoder().encode(`${JSON.stringify(repro.card, null, 2)}\n`);
+      setSavedCard(await saveExportedFile(undefined, bytes));
+    } catch (e) {
+      setRepro({ ...repro, error: errorText(e) });
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const open = async (entry: RunHistoryEntry) => {
     setBusy(entry.job_id);
     setError("");
@@ -210,7 +273,8 @@ export default function RunHistory() {
     }
   };
 
-  const shown = (entries ?? []).filter((entry) => (FILTERS.find((item) => item.key === filter) ?? FILTERS[0]).match(entry));
+  const source = testRepro ? [TEST_REPRO_ENTRY, ...(entries ?? [])] : (entries ?? []);
+  const shown = source.filter((entry) => (FILTERS.find((item) => item.key === filter) ?? FILTERS[0]).match(entry));
   const selected = shown.find((entry) => entry.job_id === selectedJob) ?? null;
   useDefaultSelection(shown, rowKey, selectedJob, setSelectedJob);
   const running = (entries ?? []).filter((entry) => entry.state === "running").length;
@@ -283,9 +347,14 @@ export default function RunHistory() {
       </InspectorSection>
       <InspectorSection>
         {selected.plan_available && (selected.state === "completed" || selected.state === "failed") ? (
-          <button type="button" className="c-primary-wide is-blue" disabled={busy !== null} onClick={() => void open(selected)}>
-            Open predictions
-          </button>
+          <>
+            <button type="button" className="c-primary-wide is-blue" disabled={busy !== null} onClick={() => void open(selected)}>
+              Open predictions
+            </button>
+            <button type="button" className="c-secondary" disabled={busy !== null} onClick={() => void exportCard(selected)}>
+              Export repro card
+            </button>
+          </>
         ) : null}
         {historyCanRerun(selected) ? (
           <button type="button" className="c-secondary" disabled={busy !== null} onClick={() => void beginRerun(selected)}>
@@ -311,6 +380,45 @@ export default function RunHistory() {
           )
         ) : null}
       </InspectorSection>
+      {repro ? (
+        <InspectorSection title="Repro card">
+          <span className="c-step-note">
+            This file describes the run so someone else can repeat it. It stays on this computer.
+          </span>
+          <ul style={{ margin: 0, paddingLeft: "1.1rem" }}>
+            {repro.included.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+          {repro.missing.length > 0 ? (
+            <div>
+              <div>Not recorded, and left blank in the file:</div>
+              <ul style={{ margin: "0.2rem 0", paddingLeft: "1.1rem" }}>
+                {repro.missing.map((line) => (
+                  <li key={line}>{line}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+          <div style={{ display: "flex", gap: "8px" }}>
+            <button type="button" className="c-secondary" disabled={busy !== null} onClick={() => void saveCard()}>
+              {busy === "save-card" ? "Saving…" : "Save repro card"}
+            </button>
+            <button type="button" className="c-secondary" onClick={() => setRepro(null)}>
+              Close
+            </button>
+          </div>
+          {repro.error ? <span style={{ color: "var(--danger)" }}>{repro.error}</span> : null}
+        </InspectorSection>
+      ) : null}
+      {savedCard ? (
+        <p role="status" className="c-page-note" style={{ color: "var(--ok)" }}>
+          Saved the repro card.{" "}
+          <button type="button" className="c-secondary" onClick={() => void revealInFinder(savedCard)}>
+            Show in Finder
+          </button>
+        </p>
+      ) : null}
       {rerun && rerun.entry.job_id === selected.job_id ? (
         <InspectorSection title="Re-run">
           <span className="c-step-note">
@@ -400,9 +508,9 @@ export default function RunHistory() {
           {opened}
         </p>
       ) : null}
-      {profiles.length === 0 && !error ? (
+      {profiles.length === 0 && !error && !testRepro ? (
         <p className="c-page-note">Add a server in Servers; runs you submit there are listed here.</p>
-      ) : entries === null ? (
+      ) : entries === null && !testRepro ? (
         <p className="c-page-note">Loading submitted runs…</p>
       ) : (
         <GridTable

@@ -39,6 +39,7 @@ SAMPLE_PASSING_LOG = (
     "Step 5f verified: Move library relocated synth_001 to the new root, left the old root empty, "
     "and updated state.json.\n"
     "Step 5g verified: Library badge ran in the background and its answer is cached.\n"
+    "Step 5j verified: Export repro card showed missing fields and saved the card.\n"
     "Real-App macOS E2E Test PASSED Successfully!\n"
 )
 

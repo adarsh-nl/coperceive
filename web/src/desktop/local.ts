@@ -51,6 +51,7 @@ declare global {
     /** "overlay": no native title bar; the traffic lights sit in the app's top bar. */
     __COPERCEIVE_TITLEBAR__?: string;
     __COPERCEIVE_CTRL_SECRET__?: string;
+    __COPERCEIVE_TEST_REPRO__?: boolean;
   }
 }
 
@@ -845,6 +846,25 @@ export async function openPredictions(
     return await invoke<ImportedPredictions>("open_predictions", { profileId, planId });
   }
   throw new Error("Opening predictions is only available in the desktop app.");
+}
+
+/** The repro card for one finished run, built by `coperceive repro export`. */
+export async function previewReproCard(
+  profileId: string,
+  planId: string,
+  timeLimit: string | null,
+): Promise<Record<string, unknown>> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<Record<string, unknown>>("preview_repro_card", {
+      profileId,
+      planId,
+      timeLimit,
+      gpus: null,
+      memory: null,
+    });
+  }
+  throw new Error("Exporting a repro card is only available in the desktop app.");
 }
 
 /** The app's submitted runs from Slurm accounting, newest first. */

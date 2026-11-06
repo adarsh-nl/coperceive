@@ -13,6 +13,8 @@ import {
   slurmSeconds,
   historyStateLabel,
   historyTiming,
+  reproPreviewLines,
+  reproPreviewLines,
   isJobActive,
   jobStateLabel,
   metricsRows,
@@ -264,4 +266,24 @@ test("slurmSeconds reads sacct durations and refuses anything else", () => {
   assert.strictEqual(slurmSeconds(null), null);
   assert.strictEqual(slurmSeconds("UNLIMITED"), null);
   assert.strictEqual(slurmSeconds(""), null);
+});
+
+test("repro card preview names what is included and what is missing", () => {
+  const lines = reproPreviewLines({
+    dataset: { id: null, version: null },
+    split: { name: null, scene_ids: ["scene-a"] },
+    pipeline: { name: "synthetic" },
+    checkpoint: { file_name: "model.pt", sha256: null },
+    code: { git_commit: null },
+    coperceive: { version: "0.1.0" },
+    environment: { python: null },
+    metrics: null,
+    unknown: ["checkpoint.sha256", "environment.python", "metrics", "metrics.scene-a"],
+  } as Record<string, unknown>);
+  assert.ok(lines.included.some((line) => line.includes("synthetic")));
+  assert.ok(lines.included.some((line) => line.includes("has not scored")));
+  assert.ok(lines.missing.some((line) => line.includes("checkpoint hash")));
+  assert.ok(lines.missing.some((line) => line.includes("Python version")));
+  assert.ok(lines.missing.some((line) => line.includes("has not scored")));
+  assert.ok(lines.missing.some((line) => line.includes("metrics.scene-a")));
 });

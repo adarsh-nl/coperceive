@@ -115,6 +115,17 @@ coperceive export bev /path/scenes/Town03-000 --out /path/bev.svg --time-us 1118
 
 `--run` draws the match rows of that evaluated run at the sample on top of the ground-truth boxes. `--predictions` names the root when it is not `<scene>/../predictions`. The styles are the ones in [the spec](spec/predictions.md#colours-and-styles): `tp` solid teal `#1FA3A3`, `fp` dashed amber `#E0A431`, `miss` dotted violet `#8E6CEF` and thicker, `ignored` and `below_threshold` thin grey `#6B6B6B` at half opacity. The legend names each status in words, and a ground-truth box that was matched is dimmed to 40 % so the `tp` wire reads on top. The command prints the counts it drew, ending in `predictions N`. The same figure is the bird's-eye export button on the page.
 
+## Repro card
+
+`coperceive repro export` writes one JSON file that describes a run: the dataset and split, the pipeline and its arguments, the checkpoint by hash and file name, the code commit, the environment, the scheduler request, and the scores `coperceive eval run` wrote. A pipeline's own metrics file is attached only as a non-authoritative report. The contract is [the repro card spec](spec/repro-card.md) and [its schema](spec/repro-card.schema.json).
+
+```bash
+coperceive repro export det-v1 --root /path/scenes --out card.json
+coperceive repro check card.json --run-dir /path/scenes/predictions/det-v1
+```
+
+Run history has the same export. Fields that were not recorded are `null` and named in `unknown`; the card does not guess them.
+
 ## What was checked
 
 Everything on this page has run on synthetic fixtures only. There is no real model output in the repository yet, and no number from a real detector has been through `eval run`.
