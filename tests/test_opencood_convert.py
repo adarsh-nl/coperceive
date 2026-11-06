@@ -349,6 +349,65 @@ def test_reflection_flips_the_ego_frame_box() -> None:
     assert forward == pytest.approx([0.0, -1.0, 0.0], abs=1e-12)  # yaw -90: +x -> -y
 
 
+def _yaw_deg(quaternion: list[float]) -> float:
+    """World yaw in degrees from a protocol ``[qw, qx, qy, qz]`` box rotation."""
+    qw, qx, qy, qz = quaternion
+    return math.degrees(math.atan2(2.0 * (qw * qz + qx * qy), 1.0 - 2.0 * (qy * qy + qz * qz)))
+
+
+def test_reviewer_hand_computation_ego_yaw_30_box_yaw_45() -> None:
+    """The reviewer's numeric case, hand-calculated: p_scene = T_ego·S·p_ego, yaw -= box yaw."""
+    ego = _pose(convert.quaternion_from_rpy_deg(0.0, 0.0, 30.0), (10.0, 20.0, 1.9))
+    box = convert.box_to_protocol(
+        center=[0.0, 2.0, 0.5],  # +y in the CARLA ego frame
+        size_lwh=[4.0, 2.0, 1.5],
+        heading_deg=45.0,
+        ego_pose=ego,
+        agent_id="vehicle",
+        source="fused",
+        category="vehicle",
+        score=0.9,
+    )
+    # S·(0,2,0.5) = (0,-2,0.5); Rz(30°)·(0,-2) = (1,-√3); +(10,20,1.9).
+    expected_center = [11.0, 20.0 - 2.0 * math.cos(math.radians(30.0)), 2.4]
+    assert expected_center == pytest.approx([11.0, 18.267949192431123, 2.4], abs=1e-12)
+    assert box["center"] == pytest.approx(expected_center, abs=1e-12)
+    # yaw_world = ego_yaw_schema - box_yaw_carla = 30 - 45.
+    assert _yaw_deg(cast(list[float], box["quaternion"])) == pytest.approx(-15.0, abs=1e-9)
+
+
+def test_scene_ego_scene_round_trip_with_explicit_inverse() -> None:
+    """Invert the documented map by hand: p_ego = S·(T_scene_ego^-1·p_scene)."""
+    ego_pose = _pose(convert.quaternion_from_rpy_deg(0.0, 0.0, 30.0), (10.0, 20.0, 1.9))
+    ego_yaw = 30.0
+    ego_t = (10.0, 20.0, 1.9)
+    scene_center = [12.5, 17.0, 2.4]
+    scene_yaw = -15.0
+    size = [4.0, 2.0, 1.5]
+    # T_scene_ego^-1: rotate into the ego frame (Rz(-ego_yaw)), then subtract the translation.
+    dx, dy, dz = scene_center[0] - ego_t[0], scene_center[1] - ego_t[1], scene_center[2] - ego_t[2]
+    theta = math.radians(-ego_yaw)
+    ex = math.cos(theta) * dx - math.sin(theta) * dy
+    ey = math.sin(theta) * dx + math.cos(theta) * dy
+    # S: the OpenCOOD ego frame is the mirror of the schema ego frame.
+    ego_center = [ex, -ey, dz]
+    ego_yaw_carla = ego_yaw - scene_yaw  # inverse of yaw_world = ego_yaw - box_yaw
+    assert ego_yaw_carla == pytest.approx(45.0)
+    box = convert.box_to_protocol(
+        center=ego_center,
+        size_lwh=size,
+        heading_deg=ego_yaw_carla,
+        ego_pose=ego_pose,
+        agent_id="vehicle",
+        source="fused",
+        category="vehicle",
+        score=0.7,
+    )
+    assert box["center"] == pytest.approx(scene_center, abs=1e-12)
+    assert cast(list[float], box["size_lwh"]) == pytest.approx(size)
+    assert _yaw_deg(cast(list[float], box["quaternion"])) == pytest.approx(scene_yaw, abs=1e-9)
+
+
 def test_schema_yaw_90_maps_body_x_to_world_y() -> None:
     """The schema convention itself: a world yaw of +90 sends body +x to world +y."""
     quaternion = convert.quaternion_from_rpy_deg(0.0, 0.0, 90.0)

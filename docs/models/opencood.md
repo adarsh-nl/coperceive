@@ -175,7 +175,9 @@ is never modified, and a multi-GB extraction does not stay under `<out>/.work` o
 (in a Slurm job the temporary directory is on the job's scratch and disappears with it).
 
 Other options: `score_threshold` (float, negative means the checkpoint config's own value),
-`device` (torch device; empty uses the parent's choice, `cuda:0` when it exposes a GPU).
+`device` (torch device; empty uses the parent's choice, `cuda:0` when it exposes a GPU), and
+`ego_agent` (agent id to attribute the fused rows to; empty uses the first vehicle, see
+[How the input is built](#how-the-input-is-built)).
 
 ## How the input is built
 
@@ -196,10 +198,15 @@ Per frame:
 
 - **Agents asked of the parent:** `vehicle` and `infrastructure`, so the V2XSet roadside
   unit's sweep is part of the fusion (`inputs.agents`).
-- **Ego:** the first requested `vehicle` in scene order (`configure.agents`). A frame where
-  that ego has no pose or sweep produces no boxes rather than boxes attributed to another
-  agent. `--agents` restricts which CAVs are sent and can therefore change the ego; do not
-  pass a subset when reproducing a fused result.
+- **Ego:** `--option ego_agent=<agent id>` when set (it must be one of the scene's
+  requested agents; a clear `unsupported` error otherwise). Empty (default) means the first
+  `vehicle` in the scene's agent order (`configure.agents`), which mirrors OpenCOOD's own
+  dataset rule: its CAV list is sorted and the first non-negative CAV id is the ego, with the
+  V2XSet roadside unit (`-1`) last and never the ego. The ego is put first in the per-CAV
+  batch (CAV id `0`) and gets the fused rows; a frame where the ego has no pose or sweep
+  yields no boxes rather than boxes attributed to another agent. `--agents` restricts which
+  CAVs are sent and can therefore change the default ego; do not pass a subset when
+  reproducing a fused result.
 - **CAV selection:** the ego plus every CAV within the checkpoint environment's
   `COM_RANGE` (70 m in OpenCOOD `main`), nearest first, infrastructure last, at most the
   checkpoint config's `max_cav` CAVs (`5` in the CoBEVT config).
@@ -221,6 +228,12 @@ reorders only the 7-vector form (`hwl` = `[h, w, l]`); the corner form is order-
 (upstream reorders the 7-vector before writing corners and always uses the l, w, h template),
 so an `hwl` checkpoint cannot swap a car's length and height on the corner path. The worker
 parses corners with the l, w, h template and only the 7-vector path applies the order mapping.
+
+For the output side, with `S = diag(1, -1, 1)` and `T` the schema ego pose, an OpenCOOD
+ego-frame box maps to the scene as `p_scene = T · S · p_ego` and
+`yaw_world = yaw_ego_schema - yaw_ego_carla` (the OpenCOOD/carla heading changes sign under
+the reflection). Both are asserted against a hand calculation in the tests; the existing
+reflection tests stay.
 
 ## Run
 
@@ -283,18 +296,24 @@ and job id next to it.
 All commands below are read-only. Record the output in the task/PR (no dataset bytes, no
 checkpoint bytes in the repository).
 
-1. **Archive contents** (they are unknown to this repository):
+1. **Archive contents and digests** (they are unknown to this repository):
 
    ```bash
    unzip -l /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip
    md5sum /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip
+   # read-only: stream the weights file (.pth path from the listing) through md5sum
+   unzip -p /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip \
+     '<weights .pth path from the listing>' | md5sum
    ```
 
-   Record the listing (`unzip -l`) and the digest (`md5sum`). Note the directory layout, the
-   config file name and the weights file name/epoch. If there is exactly one YAML and one
-   weights file, no extra options are needed. The digest is what `hello` and `run.json`
-   `provenance.checkpoint.md5` will report; the parent recomputes it from the file and refuses
-   a mismatch.
+   Record the listing (`unzip -l`), the archive digest and the **weights** digest. Note the
+   directory layout, the config file name and the weights file name/epoch. If there is
+   exactly one YAML and one weights file, no extra options are needed. The archive digest is
+   what `hello` and `run.json` `provenance.checkpoint.md5` report (the parent recomputes it
+   from the file and refuses a mismatch); the weights digest is evidence for comparing this
+   copy with the model-zoo table or another copy — the plugin does not hash the weights
+   itself. The plugin only accepts an archive whose config is named `config.yaml`/`config.yml`
+   from discovery; any other name needs `--option checkpoint_config=...`.
 
 2. **Roll/pitch in the real frame YAMLs** (read-only) — is the assumption that flattened
    CARLA roads make pitch/roll ~0 true? The plugin's inversion is exact regardless, but this
@@ -315,23 +334,45 @@ checkpoint bytes in the repository).
    Record the range in the PR. If it is not ~0, the plugin still inverts the adapter's decode
    exactly, but a large range is the first thing to look at if boxes look rotated.
 
+   The frame convention itself, against the dataset's own protocol file: `lidar_pose` must be
+   `[x, y, z, roll, yaw, pitch]` in **degrees** (six numbers, CARLA's Z-up left-handed world),
+   and the scene's `data_protocol.yaml` should agree with the staged clock (0.05 s step, sync
+   mode):
+
+   ```bash
+   SCENE=/datasets/eemcs/ps/cv/opencood/v2xset/validate/<scene>
+   head -20 "$SCENE"/data_protocol.yaml
+   .venv/bin/python - "$SCENE" <<'PY'
+   import glob
+   import sys
+   import yaml
+   frame = sorted(glob.glob(sys.argv[1] + "/*/*.yaml"))[0]
+   lidar_pose = yaml.safe_load(open(frame, encoding="utf-8"))["lidar_pose"]
+   print(frame)
+   print("lidar_pose", lidar_pose)
+   print("length", len(lidar_pose), "(must be 6: x, y, z, roll, yaw, pitch in degrees)")
+   PY
+   ```
+
 3. **Checkpoint config** — confirm it is a CoBEVT/point-pillar config and note the values the
    plugin will read (do not change them). The plugin reads the config out of the archive's
    discovered YAML; the command below only prints it:
 
    ```bash
    unzip -p /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip '*config*.yaml' \
-     | head -120
+     | head -80
    unzip -p /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip '*config*.yaml' \
      | grep -nE 'core_method|voxel_size|cav_lidar_range|root_dir|validate_dir|postprocess|target_args|score_threshold|order|max_cav'
    ```
 
-   Look for `model.core_method`, `fusion.core_method`, `preprocess.args.voxel_size`,
+   Confirm in particular `fusion.core_method`, `preprocess.args.voxel_size`,
+   `preprocess.args.cav_lidar_range` and `model.core_method`, and note
    `postprocess.order`, `postprocess.target_args.score_threshold`, `train_params.max_cav`.
    `fusion.core_method` must be `IntermediateFusionDataset` or `EarlyFusionDataset` (the
-   plugin refuses late fusion and the V2 classes with a clear error). If the grep does not
-   match the expected keys, the archive's config is not the one this seam was written for:
-   stop and report rather than editing the code around it.
+   plugin refuses late fusion and the V2 classes with a clear error; V2X-ViT/Where2comm-style
+   priors are not supported). If the grep does not match the expected keys, the archive's
+   config is not the one this seam was written for: stop and report rather than editing the
+   code around it.
 
 4. **OpenCOOD environment** — the plugin's seam follows OpenCOOD `main`; record the checkout
    commit and that these imports exist in the environment the worker will use:
@@ -339,6 +380,7 @@ checkpoint bytes in the repository).
    ```bash
    git -C /path/to/OpenCOOD rev-parse --short HEAD
    conda run -n opencood python -c 'import opencood; print(opencood.__file__)'
+   conda run -n opencood python -c 'import opencood, spconv; print(opencood.__file__, spconv.__version__)'
    conda run -n opencood python -c \
      "import opencood, torch; from opencood.hypes_yaml import yaml_utils; \
       from opencood.tools import train_utils; import opencood.data_utils.datasets as d; \
@@ -346,7 +388,9 @@ checkpoint bytes in the repository).
    ```
 
    The second line is the interpreter and package path the Slurm job will use (both are
-   recorded in `run.json` `provenance`); the third checks the seam's imports in one go.
+   recorded in `run.json` `provenance`); the third confirms `spconv` (the sparse
+   convolution dependency the point-pillar/CoBEVT configs need) imports in the same
+   environment; the fourth checks the seam's imports in one go.
 
 5. **Manifest and interpreter** — from a checkout with the plugin installed (or with
    `--manifest`):
@@ -392,21 +436,28 @@ three-value `post_process` returning ego-frame corners.
 Checked by this repository's tests:
 
 - `tests/test_opencood_convert.py`: the inverse reflection against hand-computed `M R M`
-  matrices, OpenCOOD's `x_to_world` elementary rotations, the per-CAV batch mapping
-  round trip (hand-computed `x1_to_x2`, CAV selection), both box formats, a transcription of
-  upstream's hwl reorder + l/w/h template (a `[h=1.5, w=2, l=4]` hwl box must come back as
-  `size_lwh (4, 2, 1.5)`, not `(1.5, 2, 4)`), order-independent corner parsing, and the
-  positive corner-order volume.
+  matrices, the reviewer's hand case (ego yaw 30° at `(10, 20, 1.9)` + OpenCOOD-ego box at
+  +y yaw 45° → world `(11.0, 18.267949..., 2.4)`, yaw −15°) and an explicit
+  scene→ego→scene round trip with the inverse written out in the test, OpenCOOD's
+  `x_to_world` elementary rotations, the per-CAV batch mapping round trip (hand-computed
+  `x1_to_x2`, CAV selection), both box formats, a transcription of upstream's hwl reorder +
+  l/w/h template (a `[h=1.5, w=2, l=4]` hwl box must come back as `size_lwh (4, 2, 1.5)`, not
+  `(1.5, 2, 4)`), order-independent corner parsing, and the positive corner-order volume.
 - `tests/test_opencood_checkpoint.py`: archive MD5, safe extraction (zip-slip refused),
-  config/weights discovery, ambiguity and hint errors.
+  config/weights discovery, ambiguity and hint errors, a config that is not named
+  `config.yaml` refused with the YAML list + `--option checkpoint_config` hint (and accepted
+  when hinted), symlinked/empty/non-regular config and weights refused, and the engine's
+  defensive weights guards.
 - `tests/test_opencood_plugin.py`: the manifest and its licence wording, that the plugin
   imports neither coperceive nor OpenCOOD statically and holds no cluster path, the
   `model check` skip without a checkpoint, the engine's ndarray conversion of the injected
   frame (float32 `lidar_np`, float64 4×4 matrices — the fake `__getitem__` consumes them the
-  way upstream does, so a list-shaped batch fails), the zero `score_threshold` case, the full
-  `model run` → `eval run` chain against `tests/fake_opencood` (a stand-in package whose
-  corner writer transcribes upstream, no GPU), and the emitted sbatch (`bash -n`, checkpoint
-  staged to scratch before the run, inner `--option` rewritten to the staged path, never a
-  copy-home target, `points.bin` staged for this lidar model).
+  way upstream does, so a list-shaped batch fails), the zero `score_threshold` case, the ego
+  rule (RSU listed first still yields the first vehicle; `--option ego_agent` pins an agent
+  listed later and its rows are attributed to it; an unknown pinned agent is an
+  `unsupported` error), the full `model run` → `eval run` chain against `tests/fake_opencood`
+  (a stand-in package whose corner writer transcribes upstream, no GPU), and the emitted
+  sbatch (`bash -n`, checkpoint staged to scratch before the run, inner `--option` rewritten
+  to the staged path, never a copy-home target, `points.bin` staged for this lidar model).
 - **Not checked here** (the [unverified list](#what-is-unverified-until-the-cluster-run)):
   the real OpenCOOD run, the real archive, the real numeric boxes and AP.

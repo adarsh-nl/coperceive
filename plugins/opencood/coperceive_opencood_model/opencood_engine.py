@@ -145,6 +145,14 @@ def _fusion_of(config: dict[str, object]) -> str:
 
 def _load_weights(torch, path: str) -> dict[str, object]:
     """Load a state dict, preferring the safe unpickler and falling back to the old one."""
+    # Defensive repeats of the archive guards: the seam must not hand a link, a directory or
+    # an empty file to torch.load even if it is constructed directly.
+    if os.path.islink(path):
+        raise EngineError(f"weights {path!r} is a symbolic link; refusing it")
+    if not os.path.isfile(path):
+        raise EngineError(f"weights {path!r} is not a regular file")
+    if os.path.getsize(path) == 0:
+        raise EngineError(f"weights {path!r} is empty")
     try:
         state = torch.load(path, map_location="cpu", weights_only=True)
     except TypeError:  # torch older than 2.0 has no weights_only argument

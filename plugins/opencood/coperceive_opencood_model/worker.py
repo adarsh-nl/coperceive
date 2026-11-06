@@ -99,6 +99,32 @@ def _as_str_list(value: object) -> list[dict[str, str]]:
     return out
 
 
+def _choose_ego(agents: list[dict[str, str]], pinned: str) -> str:
+    """The ego agent id for this scene: ``pinned`` when set, else the first vehicle.
+
+    The empty default mirrors OpenCOOD's own dataset rule: its CAV list is sorted and the
+    first non-negative CAV id is the ego (V2XSet's roadside unit ``-1`` sorts last and is not
+    an ego), so the first vehicle in ``configure.agents`` is the closest analogue. A pinned
+    ego must be one of the scene's listed agents; whether it has a pose and sweep is a
+    per-frame question — a frame without the ego's data yields no boxes, as before.
+    """
+    agent_ids = [agent["agent_id"] for agent in agents]
+    if pinned:
+        if pinned not in agent_ids:
+            raise ValueError(
+                f"ego_agent {pinned!r} is not a listed agent of this scene; listed agents: "
+                + (", ".join(agent_ids) or "none")
+            )
+        return pinned
+    ego = batch.ego_agent_id(agents)
+    if ego is None:
+        raise ValueError(
+            "this plugin needs a vehicle ego: the scene has no vehicle agent (fused output "
+            "is attributed to the ego vehicle); pass --option ego_agent=<agent id> to choose one"
+        )
+    return ego
+
+
 class Worker:
     def __init__(self, model: str, checkpoint_path: str) -> None:
         self.model = model
@@ -180,14 +206,10 @@ class Worker:
         if not self.agents:
             _error(None, "unsupported", "this scene has no agents to fuse")
             return
-        self.ego = batch.ego_agent_id(self.agents)
-        if self.ego is None:
-            _error(
-                None,
-                "unsupported",
-                "this plugin needs a vehicle ego: the scene has no vehicle agent "
-                "(fused output is attributed to the ego vehicle)",
-            )
+        try:
+            self.ego = _choose_ego(self.agents, str(_option(message, "ego_agent", "") or ""))
+        except ValueError as exc:
+            _error(None, "unsupported", str(exc))
             return
         sensors = message.get("sensors")
         if not any(

@@ -6,6 +6,7 @@ from __future__ import annotations
 import ast
 import hashlib
 import shutil
+import struct
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -167,6 +168,205 @@ def test_worker_keeps_a_zero_score_threshold() -> None:
     assert worker._score_threshold({"options": {"score_threshold": -1.0}}) == -1.0  # noqa: SLF001
     assert worker._score_threshold({"options": {"score_threshold": None}}) == -1.0  # noqa: SLF001
     assert worker._score_threshold({"options": {"score_threshold": True}}) == -1.0  # noqa: SLF001
+
+
+_SWEEP = struct.pack("<4f", 0.0, 0.0, 0.0, 0.0)
+
+
+def _sweep_file(tmp_path: Path, name: str) -> Path:
+    path = tmp_path / f"{name}.bin"
+    path.write_bytes(_SWEEP)
+    return path
+
+
+def _identity_pose(tx: float, ty: float = 0.0, tz: float = 0.0) -> dict[str, float]:
+    return {"qw": 1.0, "qx": 0.0, "qy": 0.0, "qz": 0.0, "tx": tx, "ty": ty, "tz": tz}
+
+
+class _CapturingEngine:
+    """Stands in for the OpenCOOD engine: records the injected frame and returns one box."""
+
+    com_range = 70.0
+    max_cav = 5
+
+    def __init__(self) -> None:
+        self.frames: list[dict[str, object]] = []
+
+    def infer(self, base_data: dict[str, object], *, scene_id: str = "", time_us: int = 0):  # noqa: ANN201
+        self.frames.append(base_data)
+        return [
+            {"center": [5.0, 0.0, -1.5], "size_lwh": [4.0, 2.0, 1.5], "heading": 0.0, "score": 0.9}
+        ]
+
+
+def _dict(value: object) -> dict[str, object]:
+    assert isinstance(value, dict), value
+    return cast(dict[str, object], value)
+
+
+def _capturing_emitter(emitted: list[dict[str, object]]):  # noqa: ANN201 - a monkeypatch value
+    def capture(payload: dict[str, object]) -> None:
+        emitted.append(payload)
+
+    return capture
+
+
+def _captured_worker(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ego_agent: str = ""
+) -> tuple[object, _CapturingEngine, list[dict[str, object]], object]:
+    """A Worker with a capturing engine, run through configure (+one frame) in-process."""
+    worker_module = load("worker")
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(worker_module, "_emit", _capturing_emitter(emitted))
+    worker = worker_module.Worker("cobevt-lidar-v2xset", "")
+    capturer = _CapturingEngine()
+    worker.engine = capturer
+    agent_types = {"-1": "infrastructure", "650": "vehicle", "641": "vehicle"}
+    agents = [{"agent_id": agent_id, "agent_type": kind} for agent_id, kind in agent_types.items()]
+    sensors = [
+        {
+            "agent_id": agent_id,
+            "sensor_id": "lidar",
+            "modality": "lidar",
+            "body_from_sensor": {
+                "qw": 1.0,
+                "qx": 0.0,
+                "qy": 0.0,
+                "qz": 0.0,
+                "tx": 0.0,
+                "ty": 0.0,
+                "tz": 0.0,
+            },
+        }
+        for agent_id in agent_types
+    ]
+    options = {"checkpoint": "ck.zip", "ego_agent": ego_agent}
+    worker._configure(  # noqa: SLF001 - the worker's own protocol step
+        {
+            "type": "configure",
+            "protocol": 1,
+            "model": "cobevt-lidar-v2xset",
+            "scene_id": "two-vehicles",
+            "agents": agents,
+            "source": "fused",
+            "options": options,
+            "work_dir": str(tmp_path),
+            "scene_dir": str(tmp_path),
+            "device": "cpu",
+            "sensors": sensors,
+            "samples": [100_000],
+        }
+    )
+    positions = {"-1": -10.0, "650": 20.0, "641": 40.0}
+    frame = {
+        "type": "frame",
+        "protocol": 1,
+        "id": 1,
+        "scene_id": "two-vehicles",
+        "time_us": 100_000,
+        "poses": {agent_id: _identity_pose(x) for agent_id, x in positions.items()},
+        "images": [],
+        "points": [
+            {
+                "agent_id": agent_id,
+                "sensor_id": "lidar",
+                "path": str(_sweep_file(tmp_path, agent_id)),
+                "count": 1,
+                "layout": "xyzi_f32le",
+            }
+            for agent_id in positions
+        ],
+    }
+    worker._frame(frame)  # noqa: SLF001 - the worker's own protocol step
+    return worker, capturer, emitted, frame
+
+
+def _result_boxes(emitted: list[dict[str, object]]) -> list[dict[str, object]]:
+    results = [payload for payload in emitted if payload.get("type") == "result"]
+    assert len(results) == 1
+    return cast(list[dict[str, object]], results[0]["boxes"])
+
+
+def test_choose_ego_defaults_to_first_vehicle_and_respects_a_pin() -> None:
+    worker = load("worker")
+    agents = [
+        {"agent_id": "-1", "agent_type": "infrastructure"},
+        {"agent_id": "650", "agent_type": "vehicle"},
+        {"agent_id": "641", "agent_type": "vehicle"},
+    ]
+    # OpenCOOD's own rule: the first non-negative CAV, i.e. the first vehicle in scene order.
+    assert worker._choose_ego(agents, "") == "650"  # noqa: SLF001
+    assert worker._choose_ego(agents, "641") == "641"  # noqa: SLF001
+    with pytest.raises(ValueError, match="not a listed agent"):
+        worker._choose_ego(agents, "nope")  # noqa: SLF001
+    with pytest.raises(ValueError, match="ego_agent"):
+        worker._choose_ego([{"agent_id": "-1", "agent_type": "infrastructure"}], "")  # noqa: SLF001
+
+
+def test_rsu_listed_first_still_picks_the_first_vehicle_as_ego(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The reviewer's non-ego ordering failure cannot happen: the RSU sorts after the CAVs."""
+    _, capturer, emitted, _ = _captured_worker(monkeypatch, tmp_path)
+    configured = [payload for payload in emitted if payload.get("type") == "configured"]
+    assert configured, emitted
+    base_data = capturer.frames[0]
+    assert list(base_data)[0] == "0"
+    ego_content = _dict(base_data["0"])
+    assert ego_content["ego"] is True
+    params = _dict(ego_content["params"])
+    assert cast(list[float], params["lidar_pose"])[0] == pytest.approx(20.0)
+    # CAV ids: ego "0"; then the other vehicle "1" (641 at x=40); the RSU last, negative.
+    assert list(base_data) == ["0", "1", "-1"]
+    other = _dict(base_data["1"])
+    assert other["ego"] is False
+    other_params = _dict(other["params"])
+    assert cast(list[float], other_params["lidar_pose"])[0] == pytest.approx(40.0)
+    boxes = _result_boxes(emitted)
+    assert boxes and boxes[0]["agent_id"] == "650"
+
+
+def test_pinned_ego_agent_listed_second_is_used_and_attributed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _, capturer, emitted, _ = _captured_worker(monkeypatch, tmp_path, ego_agent="641")
+    base_data = capturer.frames[0]
+    assert list(base_data)[0] == "0"
+    ego_content = _dict(base_data["0"])
+    assert ego_content["ego"] is True
+    params = _dict(ego_content["params"])
+    assert cast(list[float], params["lidar_pose"])[0] == pytest.approx(40.0)
+    boxes = _result_boxes(emitted)
+    assert boxes and boxes[0]["agent_id"] == "641"
+
+
+def test_unknown_pinned_ego_is_an_unsupported_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    worker_module = load("worker")
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(worker_module, "_emit", _capturing_emitter(emitted))
+    worker = worker_module.Worker("cobevt-lidar-v2xset", "")
+    worker._configure(  # noqa: SLF001
+        {
+            "type": "configure",
+            "protocol": 1,
+            "model": "cobevt-lidar-v2xset",
+            "scene_id": "two-vehicles",
+            "agents": [{"agent_id": "650", "agent_type": "vehicle"}],
+            "source": "fused",
+            "options": {"checkpoint": "ck.zip", "ego_agent": "ghost"},
+            "work_dir": str(tmp_path),
+            "scene_dir": str(tmp_path),
+            "device": "cpu",
+            "sensors": [],
+            "samples": [],
+        }
+    )
+    errors = [payload for payload in emitted if payload.get("type") == "error"]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "unsupported"
+    assert "not a listed agent" in cast(str, errors[0]["message"])
 
 
 def test_frame_seed_is_stable_per_scene_and_time() -> None:

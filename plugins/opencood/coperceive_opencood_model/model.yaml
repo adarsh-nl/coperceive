@@ -93,6 +93,13 @@ models:
         type: str
         default: ""
         description: torch device; empty means the parent's choice (cuda:0 when it exposes a GPU)
+      ego_agent:
+        type: str
+        default: ""
+        description: >-
+          schema agent id to attribute the fused boxes to; empty means the first vehicle in
+          the scene's agent order (OpenCOOD's own rule: CAVs sorted, first non-negative id is
+          the ego, the V2XSet roadside unit -1 last). Must be a listed agent of the scene.
     checkpoint: {option: checkpoint}
 commands:
   # {option:checkpoint} reaches the worker before `configure`, so `hello` can report the

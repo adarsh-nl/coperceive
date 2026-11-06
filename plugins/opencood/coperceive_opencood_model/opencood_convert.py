@@ -389,10 +389,21 @@ def box_to_protocol(
 ) -> dict[str, object]:
     """One protocol result box in ``frame: world`` from an OpenCOOD ego-frame prediction box.
 
-    The prediction box is in the ego vehicle's OpenCOOD (CARLA) frame. Reflecting it into
-    the schema ego frame gives centre ``(x, -y, z)`` and heading ``-yaw``; the schema ego
-    pose then takes it to the world. A yaw-90 box therefore points along schema ``-y``,
-    matching the reflected dataset.
+    The prediction box is in the ego vehicle's OpenCOOD (CARLA) frame. With
+    ``S = diag(1, -1, 1)`` and ``T_scene_ego`` the schema ego pose (``world <- body``), the
+    input side sends CARLA poses such that ``x_to_world(carla_pose) = S · R · S`` and
+    ``t_carla = S · t`` for the schema rotation ``R``, so a point of the OpenCOOD ego frame
+    is ``S · p_ego`` in the schema ego frame and the box map is
+
+        p_scene = T_scene_ego · S · p_ego
+
+    (equivalently ``S · T_carla · p_ego`` with ``T_carla = S · T_scene_ego · S``). A box yaw
+    ``θ`` in the OpenCOOD ego frame is ``Rz(-θ)`` in the schema ego frame; composing yaws
+    gives ``yaw_world = yaw_ego_schema - θ``. Example: ego yaw 30° at ``(10, 20, 1.9)`` and
+    OpenCOOD-ego box centre ``[0, 2, 0.5]`` heading 45° map to
+    ``T_scene_ego · S · [0, 2, 0.5] = (11.0, 18.267949..., 2.4)`` with world yaw
+    ``30° - 45° = -15°``. A yaw-90 box therefore points along schema ``-y``, matching the
+    reflected dataset.
     """
     if len(center) != 3 or len(size_lwh) != 3:
         raise ConvertError("a prediction box needs a 3-vector centre and a 3-vector size")

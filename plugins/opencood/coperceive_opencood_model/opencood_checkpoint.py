@@ -19,6 +19,10 @@ import shutil
 import zipfile
 
 CONFIG_SUFFIXES = (".yaml", ".yml")
+# The only names the plugin accepts from discovery: an OpenCOOD checkpoint directory's own
+# "config.yaml" (train.py/setup_train writes that name). A differently named YAML is accepted
+# only through the explicit --option checkpoint_config=... override.
+CONFIG_NAMES = ("config.yaml", "config.yml")
 WEIGHTS_SUFFIXES = (".pth", ".pt", ".ckpt")
 # Names to prefer when an archive holds several candidates, best first. Case-insensitive.
 CONFIG_PREFERRED = ("config", "hypes", "cobevt")
@@ -119,12 +123,42 @@ def extract(archive: str, destination: str) -> list[str]:
     return sorted(written)
 
 
+def _regular_file(path: str, label: str) -> None:
+    """Refuse a config/weights path that is not a plain, non-empty regular file."""
+    if os.path.islink(path):
+        raise CheckpointError(
+            f"{label} {path!r} is a symbolic link; the checkpoint must hold the file itself"
+        )
+    if not os.path.isfile(path):
+        raise CheckpointError(f"{label} {path!r} is not a regular file")
+    if os.path.getsize(path) == 0:
+        raise CheckpointError(f"{label} {path!r} is empty")
+
+
 def discover(root: str, *, config_hint: str = "", weights_hint: str = "") -> tuple[str, str]:
-    """``(config path, weights path)`` for an extracted checkpoint directory."""
+    """``(config path, weights path)`` for an extracted checkpoint directory.
+
+    Discovery refuses to guess the config: without ``config_hint`` the chosen YAML must be
+    named ``config.yaml``/``config.yml`` (the name OpenCOOD's own training writes). Any other
+    name is an error that lists the YAMLs found and asks for
+    ``--option checkpoint_config=<path inside the archive>``. Symlinked or non-regular files,
+    and an empty weights file, are refused; the archive extraction never writes links.
+    """
     names = _walk(root)
     config_rel = _pick(names, CONFIG_SUFFIXES, CONFIG_PREFERRED, "config", config_hint)
+    if not config_hint and os.path.basename(config_rel).lower() not in CONFIG_NAMES:
+        yamls = [name for name in names if name.lower().endswith(CONFIG_SUFFIXES)]
+        raise CheckpointError(
+            f"the discovered config {config_rel!r} is not named config.yaml/config.yml; "
+            f"YAMLs in the archive: {', '.join(yamls) or 'none'}; pass "
+            "--option checkpoint_config=<path inside the archive> to choose it explicitly"
+        )
     weights_rel = _pick(names, WEIGHTS_SUFFIXES, WEIGHTS_PREFERRED, "weights", weights_hint)
-    return os.path.join(root, *config_rel.split("/")), os.path.join(root, *weights_rel.split("/"))
+    config_path = os.path.join(root, *config_rel.split("/"))
+    weights_path = os.path.join(root, *weights_rel.split("/"))
+    _regular_file(config_path, "config")
+    _regular_file(weights_path, "weights")
+    return config_path, weights_path
 
 
 def prepare(
