@@ -242,6 +242,10 @@ All metrics are pooled across the 10 val scenes, within 50 m range, operating po
 | `vehicle · fused` (instance) | `0.071 / 0.057` (model: `0.141 / 0.114`) | `0.132 / 0.088` | `0.114 / 0.102 / 0.081 / 0.062` (model: `0.229 / 0.203 / 0.162 / 0.123`) | `0.309 / 0.247 / 0.159 / 0.099` |
 | `vehicle · fused` (early) | `0.081 / 0.062` (model: `0.163 / 0.124`) | `0.180 / 0.108` | `0.118 / 0.113 / 0.101 / 0.077` (model: `0.236 / 0.226 / 0.203 / 0.153`) | `0.378 / 0.365 / 0.302 / 0.146` |
 
+## Perturbations
+
+`coperceive model run ... --perturb latency_frames=2,pose_noise_xy=0.2,seed=7` delays, drops, or jitters every agent except the ego before the frame is sent. Ground truth is unchanged. The spec is stored in `provenance.perturbation` and in `perturbation.json`. The definitions and the order are in [Perturbations](spec/perturbations.md). `coperceive model perturb-inputs` writes the same inputs for a script that is not a plugin.
+
 ## Live mode (designed, deferred)
 
 Live mode (`coperceive serve --model <plugin>` streaming per-frame matches over SSE and freezing a live session into a stored run) is specified in [the model-plugin spec](spec/model-plugin.md#live-session) and [ADR 0011 decision 4](adr/0011-live-model-plugin.md#4-live-mode-a-session-started-by-post-results-pushed-over-sse) so that batch mode's protocol, cache and provenance fit it without changes. Its server routes and viewer controls are deferred to a later step after batch mode.

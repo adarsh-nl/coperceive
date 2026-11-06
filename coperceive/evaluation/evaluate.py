@@ -918,6 +918,9 @@ def evaluate_run(
             if partial:
                 result.metrics["missing_scenes"] = list(missing)
             write_scene_evaluation(output_dir, result)
+            from coperceive.evaluation.outcomes import write_scene_outcomes
+
+            write_scene_outcomes(output_dir, scene, result.matches, meta.run_id)
         except (CoperceiveError, ValueError, OSError) as error:
             errors.append(f"{scene_id}: {error}")
             continue

@@ -28,6 +28,16 @@ from coperceive.evalview import EvalViewError, frame_rows, runs_for_scene, serie
 from coperceive.hdmap.store import HdMap, find_map, load_map, scene_map_name
 from coperceive.images import open_image
 from coperceive.model import PointCloud, Scene
+from coperceive.paper_export import (
+    PaperExportError,
+    PaperFrame,
+    PaperInputs,
+    PaperOptions,
+    discover_sidecars,
+    export_paper,
+    repro_card_directory,
+    resolve_dataset_id,
+)
 from coperceive.plot import (
     PlotError,
     PlotNotFound,
@@ -138,6 +148,24 @@ class OverlayRequest(BaseModel):
     box_style: str = "wire"
     hidden_classes: list[str] = Field(default_factory=list)
     agents: list[str] | None = None
+
+
+class PaperFrameIn(BaseModel):
+    scene_id: str
+    time_us: int
+    agent_id: str | None = None
+    sensor_id: str | None = None
+
+
+class PaperExportRequest(BaseModel):
+    run_id: str | None = None
+    decimals: int = 3
+    bold_best: bool = True
+    include_counts: bool = True
+    metrics: list[str] = Field(default_factory=lambda: ["precision", "recall", "ap"])
+    qualitative: bool = False
+    allow_datasets: list[str] = Field(default_factory=list)
+    frames: list[PaperFrameIn] = Field(default_factory=list)
 
 
 class ViewSequenceRequest(BaseModel):
@@ -522,6 +550,67 @@ def create_app(
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         return _plot_body(app.state.root, result)
 
+    @app.post("/api/scenes/{scene_id}/export/paper")
+    def scene_paper(scene_id: str, body: PaperExportRequest) -> dict[str, object]:
+        _cached_scene(app, scene_id)
+        try:
+            options = PaperOptions(
+                decimals=body.decimals,
+                bold_best=body.bold_best,
+                include_counts=body.include_counts,
+                metrics=tuple(body.metrics),
+                qualitative=body.qualitative,
+                allow_datasets=tuple(body.allow_datasets),
+            )
+            frames = tuple(_paper_frame(app.state.root, item) for item in body.frames)
+            predictions = app.state.predictions if isinstance(app.state.predictions, Path) else None
+            cards: list[Path] = []
+            compare_path: Path | None = None
+            degradation_path: Path | None = None
+            failures_path: Path | None = None
+            bookmarks_path: Path | None = None
+            if predictions is not None and body.run_id:
+                found = discover_sidecars(predictions, body.run_id)
+                compare_path = found.get("compare.json")
+                degradation_path = found.get("degradation.json")
+                failures_path = found.get("failures.json")
+                bookmarks_path = found.get("bookmarks.json")
+                card = found.get("repro-card.json")
+                if card is not None:
+                    cards.append(card)
+                extra = repro_card_directory(predictions, body.run_id)
+                if extra is not None:
+                    cards.append(extra)
+            label = scene_id if _EXPORT_NAME.fullmatch(scene_id) else "scene"
+            relative = f"exports/{label}-paper.zip"
+            dest = confine(app.state.root, relative)
+            manifest = export_paper(
+                dest,
+                options,
+                PaperInputs(
+                    run_id=body.run_id,
+                    predictions_root=predictions,
+                    scenes_root=app.state.root,
+                    compare_path=compare_path,
+                    degradation_path=degradation_path,
+                    failures_path=failures_path,
+                    repro_card_paths=tuple(cards),
+                    bookmarks_path=bookmarks_path,
+                    frames=frames,
+                ),
+            )
+        except PaperExportError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        notes = manifest.get("notes")
+        card_ids = manifest.get("repro_card_ids")
+        return {
+            "path": relative,
+            "notes": notes if isinstance(notes, list) else [],
+            "repro_card_ids": card_ids if isinstance(card_ids, list) else [],
+        }
+
     @app.get("/api/files")
     def files(path: str) -> FileResponse:
         try:
@@ -831,6 +920,21 @@ def _decode_frame(item: str) -> bytes:
         return base64.b64decode(item, validate=True)
     except Exception as exc:
         raise SequenceExportError("a frame is not base64") from exc
+
+
+def _paper_frame(root: Path, item: PaperFrameIn) -> PaperFrame:
+    """One qualitative frame. The dataset id comes from the scene on disk."""
+    directory = _scene_dir(root, item.scene_id)
+    if item.time_us < 0:
+        raise PaperExportError("bad sample time")
+    return PaperFrame(
+        scene_dir=directory,
+        scene_id=item.scene_id,
+        time_us=item.time_us,
+        agent_id=item.agent_id,
+        sensor_id=item.sensor_id,
+        dataset_id=resolve_dataset_id(directory),
+    )
 
 
 def _plot_time(scene: Scene, time_us: int | None) -> int:

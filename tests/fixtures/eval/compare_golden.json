@@ -1,0 +1,1207 @@
+{
+  "format": "coperceive-compare",
+  "format_version": 1,
+  "runs": [
+    "det-a",
+    "det-b"
+  ],
+  "thresholds": [
+    0.5,
+    0.7
+  ],
+  "distance_edges_m": [
+    0.0,
+    30.0,
+    50.0
+  ],
+  "visibility_edges": [
+    0.2,
+    0.6
+  ],
+  "breakdowns": [
+    "distance",
+    "occlusion",
+    "agents",
+    "class",
+    "scene"
+  ],
+  "distance_source": "scene",
+  "definitions": {
+    "distance": "Horizontal metres from the reference agent (the first agent in the scene) to the box centre at that box's time. The reference agent is the one CooperativeDataset uses when no agent list is passed.",
+    "occlusion": "From the ground-truth visibility fraction. Null visibility is unknown. The default edges 0.2 and 0.6 name heavy, partial and clear. A value outside [0, 1] keeps its own visibility:<value> label.",
+    "agents": "How many agents annotate the object at that time, including the annotating agent. Pairing is the cooperative gate (shared track, or a computed pair within 2 m). 2+ means the match table only recorded that another agent sees it.",
+    "reference_agent": "The first agent in scene.agents."
+  },
+  "outputs": [
+    {
+      "agent_id": "vehicle",
+      "source": "fused",
+      "breakdowns": {
+        "distance": [
+          {
+            "bin": "0-30m",
+            "runs": {
+              "det-a": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              },
+              "0.7": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              }
+            }
+          },
+          {
+            "bin": "30-50m",
+            "runs": {
+              "det-a": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 1.0,
+                "by_class": {
+                  "pedestrian": 1.0
+                }
+              },
+              "0.7": {
+                "mean": 1.0,
+                "by_class": {
+                  "pedestrian": 1.0
+                }
+              }
+            }
+          },
+          {
+            "bin": "50m+",
+            "runs": {
+              "det-a": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              },
+              "0.7": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              }
+            }
+          }
+        ],
+        "occlusion": [
+          {
+            "bin": "heavy",
+            "runs": {
+              "det-a": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 1.0,
+                "by_class": {
+                  "pedestrian": 1.0
+                }
+              },
+              "0.7": {
+                "mean": 1.0,
+                "by_class": {
+                  "pedestrian": 1.0
+                }
+              }
+            }
+          },
+          {
+            "bin": "partial",
+            "runs": {
+              "det-a": {
+                "n_objects": 0,
+                "ap": {
+                  "0.5": {
+                    "mean": null,
+                    "n_objects": 0,
+                    "note": "no objects",
+                    "by_class": {}
+                  },
+                  "0.7": {
+                    "mean": null,
+                    "n_objects": 0,
+                    "note": "no objects",
+                    "by_class": {}
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 0,
+                "ap": {
+                  "0.5": {
+                    "mean": null,
+                    "n_objects": 0,
+                    "note": "no objects",
+                    "by_class": {}
+                  },
+                  "0.7": {
+                    "mean": null,
+                    "n_objects": 0,
+                    "note": "no objects",
+                    "by_class": {}
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": null,
+                "by_class": {}
+              },
+              "0.7": {
+                "mean": null,
+                "by_class": {}
+              }
+            }
+          },
+          {
+            "bin": "clear",
+            "runs": {
+              "det-a": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              },
+              "0.7": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              }
+            }
+          },
+          {
+            "bin": "unknown",
+            "runs": {
+              "det-a": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              },
+              "0.7": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              }
+            }
+          }
+        ],
+        "agents": [
+          {
+            "bin": "1",
+            "runs": {
+              "det-a": {
+                "n_objects": 2,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.0,
+                    "n_objects": 2,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      },
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.0,
+                    "n_objects": 2,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      },
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 2,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.5,
+                    "n_objects": 2,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      },
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.5,
+                    "n_objects": 2,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      },
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 0.5,
+                "by_class": {
+                  "car": 0.0,
+                  "pedestrian": 1.0
+                }
+              },
+              "0.7": {
+                "mean": 0.5,
+                "by_class": {
+                  "car": 0.0,
+                  "pedestrian": 1.0
+                }
+              }
+            }
+          },
+          {
+            "bin": "2",
+            "runs": {
+              "det-a": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              },
+              "0.7": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              }
+            }
+          },
+          {
+            "bin": "unknown",
+            "runs": {
+              "det-a": {
+                "n_objects": 0,
+                "ap": {
+                  "0.5": {
+                    "mean": null,
+                    "n_objects": 0,
+                    "note": "no objects",
+                    "by_class": {
+                      "car": {
+                        "ap": null,
+                        "n_objects": 0,
+                        "note": "no objects"
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": null,
+                    "n_objects": 0,
+                    "note": "no objects",
+                    "by_class": {
+                      "car": {
+                        "ap": null,
+                        "n_objects": 0,
+                        "note": "no objects"
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 0,
+                "ap": {
+                  "0.5": {
+                    "mean": null,
+                    "n_objects": 0,
+                    "note": "no objects",
+                    "by_class": {}
+                  },
+                  "0.7": {
+                    "mean": null,
+                    "n_objects": 0,
+                    "note": "no objects",
+                    "by_class": {}
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": null,
+                "by_class": {
+                  "car": null
+                }
+              },
+              "0.7": {
+                "mean": null,
+                "by_class": {
+                  "car": null
+                }
+              }
+            }
+          }
+        ],
+        "class": [
+          {
+            "bin": "car",
+            "runs": {
+              "det-a": {
+                "n_objects": 2,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.5,
+                    "n_objects": 2,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.5,
+                        "n_objects": 2,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.5,
+                    "n_objects": 2,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.5,
+                        "n_objects": 2,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 2,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.5,
+                    "n_objects": 2,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.5,
+                        "n_objects": 2,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.5,
+                    "n_objects": 2,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.5,
+                        "n_objects": 2,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              },
+              "0.7": {
+                "mean": 0.0,
+                "by_class": {
+                  "car": 0.0
+                }
+              }
+            }
+          },
+          {
+            "bin": "pedestrian",
+            "runs": {
+              "det-a": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 1,
+                "ap": {
+                  "0.5": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 1.0,
+                    "n_objects": 1,
+                    "note": null,
+                    "by_class": {
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 1.0,
+                "by_class": {
+                  "pedestrian": 1.0
+                }
+              },
+              "0.7": {
+                "mean": 1.0,
+                "by_class": {
+                  "pedestrian": 1.0
+                }
+              }
+            }
+          }
+        ],
+        "scene": [
+          {
+            "bin": "bins",
+            "runs": {
+              "det-a": {
+                "n_objects": 3,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.25,
+                    "n_objects": 3,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.5,
+                        "n_objects": 2,
+                        "note": null
+                      },
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.25,
+                    "n_objects": 3,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.5,
+                        "n_objects": 2,
+                        "note": null
+                      },
+                      "pedestrian": {
+                        "ap": 0.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              },
+              "det-b": {
+                "n_objects": 3,
+                "ap": {
+                  "0.5": {
+                    "mean": 0.75,
+                    "n_objects": 3,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.5,
+                        "n_objects": 2,
+                        "note": null
+                      },
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  },
+                  "0.7": {
+                    "mean": 0.75,
+                    "n_objects": 3,
+                    "note": null,
+                    "by_class": {
+                      "car": {
+                        "ap": 0.5,
+                        "n_objects": 2,
+                        "note": null
+                      },
+                      "pedestrian": {
+                        "ap": 1.0,
+                        "n_objects": 1,
+                        "note": null
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "delta_b_minus_a": {
+              "0.5": {
+                "mean": 0.5,
+                "by_class": {
+                  "car": 0.0,
+                  "pedestrian": 1.0
+                }
+              },
+              "0.7": {
+                "mean": 0.5,
+                "by_class": {
+                  "car": 0.0,
+                  "pedestrian": 1.0
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "objects": [
+    {
+      "key": "gt:bins:vehicle:0:0",
+      "kind": "gt",
+      "scene_id": "bins",
+      "agent_id": "vehicle",
+      "source": null,
+      "run_id": null,
+      "time_us": 0,
+      "row": 0,
+      "track_id": "near",
+      "category": "car",
+      "score": null,
+      "distance_m": 10.0,
+      "occlusion": "clear",
+      "visibility": 1.0,
+      "agent_count": 2,
+      "agent_bin": "2",
+      "outcome": null,
+      "iou_bev": null,
+      "centre_error_m": null,
+      "yaw_error_deg": null,
+      "runs": {
+        "det-a": {
+          "fused": {
+            "outcome": "tp",
+            "iou_bev": 1.0,
+            "centre_error_m": 0.0,
+            "yaw_error_deg": 0.0
+          }
+        },
+        "det-b": {
+          "fused": {
+            "outcome": "tp",
+            "iou_bev": 1.0,
+            "centre_error_m": 0.0,
+            "yaw_error_deg": 0.0
+          }
+        }
+      },
+      "distance_bin": "0-30m"
+    },
+    {
+      "key": "gt:bins:vehicle:0:1",
+      "kind": "gt",
+      "scene_id": "bins",
+      "agent_id": "vehicle",
+      "source": null,
+      "run_id": null,
+      "time_us": 0,
+      "row": 1,
+      "track_id": "ped",
+      "category": "pedestrian",
+      "score": null,
+      "distance_m": 40.0,
+      "occlusion": "heavy",
+      "visibility": 0.1,
+      "agent_count": 1,
+      "agent_bin": "1",
+      "outcome": null,
+      "iou_bev": null,
+      "centre_error_m": null,
+      "yaw_error_deg": null,
+      "runs": {
+        "det-a": {
+          "fused": {
+            "outcome": "fn",
+            "iou_bev": null,
+            "centre_error_m": null,
+            "yaw_error_deg": null
+          }
+        },
+        "det-b": {
+          "fused": {
+            "outcome": "tp",
+            "iou_bev": 1.0,
+            "centre_error_m": 0.0,
+            "yaw_error_deg": 0.0
+          }
+        }
+      },
+      "distance_bin": "30-50m"
+    },
+    {
+      "key": "gt:bins:vehicle:0:2",
+      "kind": "gt",
+      "scene_id": "bins",
+      "agent_id": "vehicle",
+      "source": null,
+      "run_id": null,
+      "time_us": 0,
+      "row": 2,
+      "track_id": "far",
+      "category": "car",
+      "score": null,
+      "distance_m": 60.0,
+      "occlusion": "unknown",
+      "visibility": null,
+      "agent_count": 1,
+      "agent_bin": "1",
+      "outcome": null,
+      "iou_bev": null,
+      "centre_error_m": null,
+      "yaw_error_deg": null,
+      "runs": {
+        "det-a": {
+          "fused": {
+            "outcome": "fn",
+            "iou_bev": null,
+            "centre_error_m": null,
+            "yaw_error_deg": null
+          }
+        },
+        "det-b": {
+          "fused": {
+            "outcome": "fn",
+            "iou_bev": null,
+            "centre_error_m": null,
+            "yaw_error_deg": null
+          }
+        }
+      },
+      "distance_bin": "50m+"
+    },
+    {
+      "key": "fp:det-a:bins:vehicle:fused:0:1",
+      "kind": "fp",
+      "scene_id": "bins",
+      "agent_id": "vehicle",
+      "source": "fused",
+      "run_id": "det-a",
+      "time_us": 0,
+      "row": 1,
+      "track_id": null,
+      "category": "car",
+      "score": 0.4,
+      "distance_m": 80.0,
+      "occlusion": "unknown",
+      "visibility": null,
+      "agent_count": null,
+      "agent_bin": "unknown",
+      "outcome": "fp",
+      "iou_bev": null,
+      "centre_error_m": null,
+      "yaw_error_deg": null,
+      "runs": null,
+      "distance_bin": "50m+"
+    }
+  ]
+}

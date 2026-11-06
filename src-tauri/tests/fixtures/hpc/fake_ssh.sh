@@ -18,7 +18,6 @@ log_command() {
     fi
 }
 
-# Record remote command if asked
 
 # Invalid JSON injection (the output looks like it may hold a token).
 if [[ "${all_args}" == *"--fail-json"* ]]; then

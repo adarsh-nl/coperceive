@@ -39,6 +39,8 @@ import {
   type ViewerJob,
 } from "../desktop/local";
 import { getRevealLabel, getModifierKey } from "../desktop/platform";
+import PaperExportPanel from "./PaperExportPanel";
+import { defaultPaperOptions, paperRequestBody, paperSavedNote, type PaperOptions } from "./paperExport";
 import { formatClock, indexAfter, isEndZone, neighborSpeed, stepIndex, type Speed } from "./playback";
 import {
   clampLeft,
@@ -1341,6 +1343,7 @@ export default function Viewer({
     message: string;
     error: string;
   } | null>(null);
+  const [paperOptions, setPaperOptions] = useState<PaperOptions>(defaultPaperOptions);
   const [exportNote, setExportNote] = useState("");
   const [exportSource, setExportSource] = useState("view");
   const [exportFormat, setExportFormat] = useState<"mp4" | "gif" | "png">("mp4");
@@ -3583,7 +3586,9 @@ export default function Viewer({
       relative.endsWith(".mp4") ||
       relative.endsWith(".gif") ||
       relative.endsWith(".png") ||
-      relative.endsWith(".svg");
+      relative.endsWith(".svg") ||
+      relative.endsWith(".pdf") ||
+      relative.endsWith(".zip");
     if (!file) {
       return;
     }
@@ -3693,6 +3698,56 @@ export default function Viewer({
       }
     } catch (error) {
       setExportNote(error instanceof Error ? error.message : "Export failed.");
+    } finally {
+      setExporting(false);
+    }
+  }
+
+  async function exportPaper() {
+    if (!summary || exporting) {
+      return;
+    }
+    const fileName = `${summary.scene_id}-paper.zip`;
+    let targetPath: string | null = null;
+    if (isDesktop) {
+      targetPath = await pickSavePath(fileName, "zip");
+      if (targetPath === null) {
+        setExportNote("Export cancelled.");
+        return;
+      }
+    }
+    setExporting(true);
+    setPlotNote("");
+    setExportNote("Writing the paper export…");
+    try {
+      const when = summary.times_us[Math.min(frameIndex, Math.max(summary.times_us.length - 1, 0))];
+      const slash = cameraId.indexOf("/");
+      const frame =
+        typeof when === "number"
+          ? {
+              scene_id: summary.scene_id,
+              time_us: when,
+              ...(slash > 0
+                ? { agent_id: cameraId.slice(0, slash), sensor_id: cameraId.slice(slash + 1) }
+                : {}),
+            }
+          : null;
+      const saved = await postExport(
+        summary.scene_id,
+        "/export/paper",
+        paperRequestBody(paperOptions, run?.evaluated ? run.run_id : null, frame),
+      );
+      const path = typeof saved.path === "string" ? saved.path : "";
+      const savedName = targetPath ? (targetPath.split("/").pop() ?? fileName) : (path.split("/").pop() ?? fileName);
+      if (isDesktop && targetPath && path) {
+        await saveExportedFile(path);
+        setLastSavedPath(targetPath);
+      } else if (path) {
+        await downloadExported(path);
+      }
+      setExportNote(paperSavedNote(savedName));
+    } catch (error) {
+      setExportNote(error instanceof Error ? error.message : "Paper export failed.");
     } finally {
       setExporting(false);
     }
@@ -5223,6 +5278,12 @@ export default function Viewer({
             </button>
           )}
         </div>
+        <PaperExportPanel
+          options={paperOptions}
+          disabled={!summary || exporting}
+          onChange={setPaperOptions}
+          onExport={() => void exportPaper()}
+        />
         {plotUrl ? <img className="plot-preview" src={plotUrl} alt={plotAlt} /> : null}
       </ExportDialog>
     </div>
