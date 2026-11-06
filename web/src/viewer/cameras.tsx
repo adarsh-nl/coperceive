@@ -497,8 +497,8 @@ function Thumb({
 }) {
   const hostRef = useRef<HTMLButtonElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  // Without IntersectionObserver every thumbnail counts as visible.
-  const [visible, setVisible] = useState(() => typeof IntersectionObserver === "undefined");
+  // Start visible so open-strip thumbnails decode immediately even in headless/background windows.
+  const [visible, setVisible] = useState(true);
   const [bitmap, setBitmap] = useState<ImageBitmap | null | undefined>(undefined);
   const lastLoadRef = useRef(0);
   const key = cameraKey(camera.agent_id, camera.sensor_id);

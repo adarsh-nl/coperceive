@@ -117,7 +117,14 @@ export default function PredictionsBlock({
 }: PredictionsBlockProps) {
   const run = runs?.find((item) => item.run_id === runId) ?? null;
   const others = (runs ?? []).filter((item) => item.run_id !== runId && item.evaluated);
-  const runLabel = (item: RunInfo) => (item.evaluated ? item.run_id : `${item.run_id} (not evaluated)`);
+  const isDemoRun = (item: RunInfo) =>
+    item.run_id === "demo" || item.run.model === "synthetic demo" || Boolean(item.run.model?.toLowerCase().includes("synthetic"));
+  const runLabel = (item: RunInfo) => {
+    if (isDemoRun(item)) {
+      return "synthetic predictions";
+    }
+    return item.evaluated ? item.run_id : `${item.run_id} (not evaluated)`;
+  };
   return (
     <details open>
       <summary>Predictions</summary>
@@ -182,7 +189,7 @@ export default function PredictionsBlock({
                 id="prediction-compare"
                 label="Compare"
                 value={others.some((item) => item.run_id === compareId) ? compareId : ""}
-                options={[{ value: "", label: "None" }, ...others.map((item) => ({ value: item.run_id, label: `B: ${item.run_id}` }))]}
+                options={[{ value: "", label: "None" }, ...others.map((item) => ({ value: item.run_id, label: `B: ${isDemoRun(item) ? "synthetic predictions" : item.run_id}` }))]}
                 onChange={onCompare}
               />
               <Menu

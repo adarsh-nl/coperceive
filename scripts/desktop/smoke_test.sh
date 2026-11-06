@@ -54,6 +54,7 @@ fi
 echo "Found bundled Python: ${PYTHON_BIN}"
 echo "Python version: $("${PYTHON_BIN}" --version)"
 (cd /tmp && "${PYTHON_BIN}" -c "import coperceive, fastapi, uvicorn; print('coperceive import verified from:', coperceive.__file__)")
+unset COPERCEIVE_PYTHON
 
 # Measure artifact sizes
 echo ""
@@ -303,9 +304,20 @@ if [ "${FRAME_TIME}" -ne 0 ]; then
 fi
 echo "Verified: frame endpoint returned valid frame data at time_us 0."
 
-# Wait up to 10 seconds to verify process stability and let the viewer webview fetch scenes
-echo "Waiting 10 seconds to verify viewer stability..."
-sleep 10
+# Poll until viewer webview is responsive
+echo "Polling for viewer readiness via controller..."
+CTRL_PORT=$(sed -n '4p' "${MARKER_FILE}" || echo "0")
+CTRL_SECRET=$(sed -n '5p' "${MARKER_FILE}" || echo "")
+if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
+    for i in {1..50}; do
+        RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"script":"Boolean(window.__COPERCEIVE_DESKTOP__)"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+        if echo "${RESP}" | grep -q '"result":true'; then
+            echo "Verified: Viewer webview responded to controller eval probe."
+            break
+        fi
+        sleep 0.2
+    done
+fi
 
 # Capture native window screenshot on macOS
 SCREENSHOT_DIR="/tmp/e2e-shots"
@@ -338,7 +350,7 @@ if [ -f "${SIDECAR_LOG}" ]; then
 fi
 
 echo "Verified: App process ${APP_PID} is alive and healthy."
-echo "Terminating app process..."
+echo "Terminating auto-connect app process..."
 kill -TERM "${APP_PID}" 2>/dev/null || true
 sleep 1
 if kill -0 "${APP_PID}" 2>/dev/null; then
@@ -347,6 +359,185 @@ fi
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
 echo "Verified: App binary launched, auto-connected to fixture, loaded scenes, and terminated successfully."
+
+# Test 5: First-Run Welcome Card & Demo Mode End-to-End Verification
+echo ""
+echo "--- First-Run Welcome Card & Demo Mode Verification (macOS) ---"
+DEMO_STATE_DIR="${TMPDIR}/demo-state"
+mkdir -p "${DEMO_STATE_DIR}"
+DEMO_MARKER="${TMPDIR}/demo_marker.txt"
+DEMO_STDOUT="${TMPDIR}/demo_stdout.log"
+DEMO_STDERR="${TMPDIR}/demo_stderr.log"
+
+unset COPERCEIVE_AUTOCONNECT_ROOT
+unset COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT
+unset COPERCEIVE_PYTHON
+
+echo "Starting app binary on empty state dir: ${DEMO_STATE_DIR}..."
+COPERCEIVE_STATE_DIR="${DEMO_STATE_DIR}" \
+COPERCEIVE_TEST_MARKER_FILE="${DEMO_MARKER}" \
+"${APP_EXE}" > "${DEMO_STDOUT}" 2> "${DEMO_STDERR}" &
+APP_PID=$!
+echo "Demo test app process spawned with PID ${APP_PID}"
+
+DEMO_CTRL_PORT=""
+DEMO_CTRL_SECRET=""
+for i in {1..90}; do
+    if [ -f "${DEMO_MARKER}" ]; then
+        DEMO_CTRL_PORT=$(sed -n '4p' "${DEMO_MARKER}")
+        DEMO_CTRL_SECRET=$(sed -n '5p' "${DEMO_MARKER}")
+        if [ -n "${DEMO_CTRL_PORT}" ] && [ "${DEMO_CTRL_PORT}" != "0" ] && [ -n "${DEMO_CTRL_SECRET}" ]; then
+            break
+        fi
+    fi
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: Demo test app process died during startup!" >&2
+        cat "${DEMO_STDERR}" >&2
+        cat "${DEMO_STDOUT}" >&2
+        exit 20
+    fi
+    sleep 0.5
+done
+
+if [ -z "${DEMO_CTRL_PORT}" ] || [ "${DEMO_CTRL_PORT}" = "0" ] || [ -z "${DEMO_CTRL_SECRET}" ]; then
+    echo "Error: Controller port/secret not written to ${DEMO_MARKER} within timeout!" >&2
+    cat "${DEMO_STDERR}" >&2
+    cat "${DEMO_STDOUT}" >&2
+    exit 20
+fi
+echo "Controller ready on port ${DEMO_CTRL_PORT}"
+
+echo "Polling for first-run Welcome Card on empty state dir (no injected seed)..."
+WELCOME_READY=0
+for i in {1..120}; do
+    RESP=$(curl -s -f -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"main","script":"Boolean(document.querySelector(\".welcome-card\") && document.querySelector(\"[data-testid=\\\"welcome-open-demo\\\"]\"))"}' \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+    if echo "${RESP}" | grep -q '"result":true'; then
+        WELCOME_READY=1
+        break
+    fi
+    sleep 0.25
+done
+
+if [ "${WELCOME_READY}" -ne 1 ]; then
+    PAGE_STATE=$(curl -s -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"main","script":"document.body ? document.body.innerText : \"<no body>\""}' \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "<eval failed>")
+    echo "Error: Welcome card did not appear on empty state dir within timeout!" >&2
+    echo "Main window page content: ${PAGE_STATE}" >&2
+    cat "${DEMO_STDERR}" >&2
+    exit 21
+fi
+echo "Verified: Welcome card appeared automatically on empty first-run state dir."
+screencapture -x "${SCREENSHOT_DIR}/welcome_card.png" 2>/dev/null || true
+
+echo "Clicking 'Open the demo' button in Welcome Card..."
+CLICK_RESP=$(curl -s -f -X POST \
+    -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"window":"main","script":"(() => { const btn = document.querySelector(\"[data-testid=\\\"welcome-open-demo\\\"]\"); if (!btn) return \"missing\"; btn.click(); return \"clicked\"; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
+if ! echo "${CLICK_RESP}" | grep -q '"clicked"'; then
+    echo "Error: Failed to click 'Open the demo' button: ${CLICK_RESP}" >&2
+    exit 22
+fi
+
+echo "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
+VIEWER_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const title = (document.querySelector(\".dataset-badge .dataset-name\")?.textContent || \"\").trim(); const points = [...document.querySelectorAll(\".agent-points\")].reduce((s, el) => s + (parseInt((el.getAttribute(\"title\") || \"0\").split(\" \")[0], 10) || 0), 0); const cameras = [...document.querySelectorAll(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb canvas\")].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector(\"button.eye[aria-label=\\\"Boxes\\\"] .eye-meta\")?.textContent || \"0\").trim(), 10) || 0; const ready = title === \"Demo (synthetic)\" && points > 0 && cameras >= 1 && boxes > 0; return { ready, title, points, cameras, boxes }; })()"}'
+
+DEMO_LOADED=0
+LAST_VIEWER_STATE=""
+for i in {1..480}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: App process exited while generating/opening demo!" >&2
+        cat "${DEMO_STDERR}" >&2
+        cat "${DEMO_STDOUT}" >&2
+        exit 23
+    fi
+    RESP=$(curl -s -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d "${VIEWER_CHECK_SCRIPT}" \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+    if [ -n "${RESP}" ]; then
+        LAST_VIEWER_STATE="${RESP}"
+        if echo "${RESP}" | grep -q '"ready":true'; then
+            DEMO_LOADED=1
+            break
+        fi
+    fi
+    sleep 0.5
+done
+
+if [ "${DEMO_LOADED}" -ne 1 ]; then
+    echo "Error: Demo scene did not finish loading in viewer within timeout!" >&2
+    echo "Last viewer state: ${LAST_VIEWER_STATE}" >&2
+    echo "=== Demo App stdout ===" >&2
+    cat "${DEMO_STDOUT}" >&2
+    echo "=== Demo App stderr ===" >&2
+    cat "${DEMO_STDERR}" >&2
+    exit 23
+fi
+echo "Verified viewer loaded demo scene: ${LAST_VIEWER_STATE}"
+
+echo "Opening comparison/predictions view and verifying 'synthetic predictions' run..."
+COMPARE_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const runBtn = document.querySelector(\"#prediction-run\"); const compareBtn = document.querySelector(\"#prediction-compare\"); if (compareBtn) compareBtn.click(); const predRun = (runBtn?.textContent || \"\").trim(); const evalHead = (document.querySelector(\".eval-head\")?.textContent || \"\").trim(); const ok = predRun.includes(\"synthetic predictions\") && evalHead.includes(\"synthetic predictions\"); return { ok, predRun, evalHead }; })()"}'
+
+COMPARE_OK=0
+LAST_COMPARE_STATE=""
+for i in {1..60}; do
+    RESP=$(curl -s -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d "${COMPARE_CHECK_SCRIPT}" \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+    if [ -n "${RESP}" ]; then
+        LAST_COMPARE_STATE="${RESP}"
+        if echo "${RESP}" | grep -q '"ok":true'; then
+            COMPARE_OK=1
+            break
+        fi
+    fi
+    sleep 0.25
+done
+
+if [ "${COMPARE_OK}" -ne 1 ]; then
+    echo "Error: Predictions/comparison view did not show 'synthetic predictions'!" >&2
+    echo "Last comparison state: ${LAST_COMPARE_STATE}" >&2
+    exit 24
+fi
+echo "Verified comparison/predictions view: ${LAST_COMPARE_STATE}"
+screencapture -x "${SCREENSHOT_DIR}/demo-viewer.png" 2>/dev/null || true
+
+DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
+if [ -z "${DEMO_OUTCOME_LINE}" ]; then
+    echo "Error: COPERCEIVE_DEMO_OUTCOME log line not found in app stdout!" >&2
+    cat "${DEMO_STDOUT}" >&2
+    exit 25
+fi
+echo "${DEMO_OUTCOME_LINE}"
+echo "DEMO_SMOKE_VERIFIED: os=macos viewer=${LAST_VIEWER_STATE} comparison=${LAST_COMPARE_STATE} outcome=\"${DEMO_OUTCOME_LINE}\""
+
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    echo "### Demo Mode Smoke Verification (macOS)" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Outcome**: \`${DEMO_OUTCOME_LINE}\`" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Viewer**: \`${LAST_VIEWER_STATE}\`" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Comparison**: \`${LAST_COMPARE_STATE}\`" >> "${GITHUB_STEP_SUMMARY}"
+fi
+
+echo "Terminating demo app process..."
+kill -TERM "${APP_PID}" 2>/dev/null || true
+sleep 1
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -9 "${APP_PID}" 2>/dev/null || true
+fi
+wait "${APP_PID}" 2>/dev/null || true
+APP_PID=""
 echo "=========================================================="
 echo "Smoke test PASSED successfully!"
 echo "=========================================================="
