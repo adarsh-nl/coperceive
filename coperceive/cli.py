@@ -39,6 +39,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capabilities.set_defaults(func=_capabilities)
 
+    bundle = sub.add_parser("bundle", help="Export or open a shareable result bundle.")
+    bundle_commands = bundle.add_subparsers(dest="bundle_command", required=True)
+    bundle_export = bundle_commands.add_parser("export", help="Write a .cpbundle from a run.")
+    bundle_export.add_argument("run_id")
+    bundle_export.add_argument(
+        "--root", required=True, help="Scenes root the run was evaluated on."
+    )
+    bundle_export.add_argument("--predictions", required=True, help="Predictions root.")
+    bundle_export.add_argument("-o", "--out", required=True, help="Output .cpbundle path.")
+    bundle_export.add_argument("--title", default="")
+    bundle_export.add_argument("--compare", action="append", default=[], metavar="RUN")
+    bundle_export.add_argument("--frames", default="worst:6")
+    bundle_export.add_argument("--config", default=None, help="Eval config YAML used for the run.")
+    bundle_export.add_argument("--include-raw", action="store_true")
+    bundle_export.add_argument("--include-full-predictions", action="store_true")
+    bundle_export.set_defaults(func=_bundle_export)
+    bundle_open = bundle_commands.add_parser("open", help="Verify and open a .cpbundle read-only.")
+    bundle_open.add_argument("file")
+    bundle_open.add_argument(
+        "--data-root", default=None, help="App data folder for bundles/<sha>/."
+    )
+    bundle_open.set_defaults(func=_bundle_open)
+
     demo = sub.add_parser("demo", help="Create the synthetic demo scene.")
     demo_sub = demo.add_subparsers(dest="demo_command")
     demo_create = demo_sub.add_parser("create", help="Write the demo scene into a new directory.")
@@ -499,6 +522,43 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
     func(args)
+
+
+def _bundle_export(args: argparse.Namespace) -> None:
+    from coperceive.bundle import BundleExportRequest, export_bundle
+
+    try:
+        path = export_bundle(
+            BundleExportRequest(
+                run_id=args.run_id,
+                scenes_root=Path(args.root),
+                predictions_root=Path(args.predictions),
+                out=Path(args.out),
+                title=args.title,
+                compare_runs=tuple(args.compare),
+                frames=args.frames,
+                include_raw=args.include_raw,
+                include_full_predictions=args.include_full_predictions,
+                config_path=Path(args.config) if args.config else None,
+            )
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {path}")
+
+
+def _bundle_open(args: argparse.Namespace) -> None:
+    from coperceive.bundle import open_bundle
+
+    data_root = Path(args.data_root) if args.data_root else Path.home() / ".coperceive"
+    try:
+        opened = open_bundle(Path(args.file), data_root=data_root)
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"opened {opened.root}")
+    print(f"run {opened.manifest.get('run_id')} schema {opened.manifest.get('schema_version')}")
 
 
 def _demo_create(args: argparse.Namespace) -> None:
