@@ -219,3 +219,17 @@ def test_the_release_runs_the_tests_before_it_builds() -> None:
     assert "needs: [checks, build-macos, build-windows, build-linux]" in publish_header
     # The checks job runs the repository's tests: it must not get write access.
     assert "permissions:\n      contents: read" in checks.split("steps:", 1)[0]
+
+
+def test_the_release_publish_step_requires_tag_ref() -> None:
+    """A manual dispatch or push from a branch must never publish a release."""
+    workflow = RELEASE_YML.read_text()
+    publish = workflow[workflow.index("  publish-release:") :]
+    create_step = publish[publish.index("- name: Create GitHub Release") :]
+    if_line = [line.strip() for line in create_step.splitlines() if line.strip().startswith("if:")][
+        0
+    ]
+    assert "github.ref_type == 'tag'" in if_line
+    # workflow_dispatch dry_run must default to true so accidental clicks never publish
+    dispatch_input = workflow[workflow.index("  workflow_dispatch:") : workflow.index("jobs:")]
+    assert "default: true" in dispatch_input

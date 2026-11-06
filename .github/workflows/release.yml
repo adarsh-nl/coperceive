@@ -9,7 +9,7 @@ on:
       dry_run:
         description: "Dry run: build all packages and generate latest.json without publishing"
         type: boolean
-        default: false
+        default: true
         required: false
 
 permissions:
@@ -374,7 +374,7 @@ jobs:
             --require-all
           cat release-assets/latest.json
       - name: Create GitHub Release
-        if: ${{ github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
+        if: ${{ github.ref_type == 'tag' && (github.event_name == 'push' || !inputs.dry_run) }}
         uses: softprops/action-gh-release@v2
         with:
           files: release-assets/*
@@ -382,7 +382,7 @@ jobs:
           prerelease: false
           generate_release_notes: true
       - name: Summary for Dry Run
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        if: ${{ github.ref_type != 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         run: |
           echo "### Release Dry Run Completed Successfully" >> $GITHUB_STEP_SUMMARY
           echo "Release assets generated for tag ${TAG_NAME}:" >> $GITHUB_STEP_SUMMARY
@@ -394,7 +394,7 @@ jobs:
           cat release-assets/latest.json >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
       - name: Upload Dry Run Assets Artifact
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+        if: ${{ github.ref_type != 'tag' || (github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         uses: actions/upload-artifact@v4
         with:
           name: release-dry-run-assets
