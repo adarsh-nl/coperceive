@@ -3654,7 +3654,7 @@ def eval_js(script, timeout=20):
         raise RuntimeError(data["error"])
     return data.get("result")
 
-clicked = eval_js("""(() => {
+opened = eval_js("""(() => {
     const back = Array.from(document.querySelectorAll('a, button')).find(
         (item) => (item.textContent || '').trim() === 'Return to Library'
     );
@@ -3663,24 +3663,47 @@ clicked = eval_js("""(() => {
         (button) => (button.textContent || '').trim() === 'HPC Workspace'
     );
     if (tab) tab.click();
+    return 'clicked';
+})()""")
+print(f"Step 5j history tab: {opened}")
+
+def wait_for(script, label, timeout=10.0):
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        last = eval_js(script)
+        if last == "clicked":
+            return
+        time.sleep(0.1)
+    diag = eval_js("""(() => ({
+        hash: location.hash,
+        tabs: Array.from(document.querySelectorAll('[role="tab"], nav button')).map(
+            (item) => (item.textContent || '').trim()
+        ).filter(Boolean).slice(0, 20),
+        buttons: Array.from(document.querySelectorAll('button')).map(
+            (item) => (item.textContent || '').trim()
+        ).filter(Boolean).slice(0, 30),
+    }))()""")
+    raise SystemExit(f"{label} did not appear: {last}; page={json.dumps(diag)}")
+
+wait_for("""(() => {
     const history = Array.from(document.querySelectorAll('[role="tab"], button')).find(
         (button) => (button.textContent || '').trim() === 'Run history'
     );
     if (!history) return 'missing_history_tab';
     history.click();
     return 'clicked';
-})()""")
-print(f"Step 5j history tab: {clicked}")
-time.sleep(0.4)
-opened = eval_js("""(() => {
+})()""", "Run history tab")
+print("Step 5j history tab: clicked")
+wait_for("""(() => {
     const button = Array.from(document.querySelectorAll('button')).find(
         (item) => (item.textContent || '').trim() === 'Export repro card'
     );
     if (!button) return 'missing_export_button';
     button.click();
     return 'clicked';
-})()""")
-print(f"Step 5j export button: {opened}")
+})()""", "Export repro card button")
+print("Step 5j export button: clicked")
 preview = ""
 for _ in range(40):
     time.sleep(0.25)
