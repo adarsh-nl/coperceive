@@ -71,7 +71,8 @@ def test_griffin_vehicle_sbatch_matches_the_golden(tmp_path: Path) -> None:
     args = [
         "model",
         "run",
-        "griffin",
+        "--manifest",
+        str(REPO / "plugins/griffin/coperceive_griffin_model/model.yaml"),
         "--model",
         "vehicle-side",
         "--scenes",
@@ -133,7 +134,8 @@ def test_dry_run_never_submits_and_never_uses_a_real_profile(tmp_path: Path) -> 
             [
                 "model",
                 "run",
-                "griffin",
+                "--manifest",
+                str(REPO / "plugins/griffin/coperceive_griffin_model/model.yaml"),
                 "--model",
                 "vehicle-side",
                 "--scenes",
