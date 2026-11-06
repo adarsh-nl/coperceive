@@ -2,9 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Stage the Griffin-25m ``val`` scenes for the viewer without copying the dataset.
 
-Runs inside a Slurm allocation and writes only under ``--scratch``, which is
-``/local/$SLURM_JOB_ID/coperceive-viewer`` by default. A scratch under ``/home``
-is refused (cluster rule: no job data on ``/home``).
+Runs inside a Slurm allocation and writes only under ``--scratch``. When that
+is omitted, the staging directory is the server profile's scratch template
+(``--scratch-template`` or ``COPERCEIVE_SLURM_SCRATCH_TEMPLATE``, the same
+source ``coperceive model run --slurm`` uses) with ``$USER`` and
+``$SLURM_JOB_ID`` filled from the environment, or the concrete directory in
+``COPERCEIVE_STAGE_ROOT``. Nothing here assumes a site scratch path. A scratch
+under ``/home`` is refused.
 
 ```text
 <scratch>/
@@ -169,21 +173,59 @@ def check_scratch(scratch: Path) -> Path:
     for candidate in (absolute, absolute.resolve()):
         if candidate == FORBIDDEN_SCRATCH_ROOT or FORBIDDEN_SCRATCH_ROOT in candidate.parents:
             raise StagingError(
-                f"--scratch {scratch} is under {FORBIDDEN_SCRATCH_ROOT}; job data belongs "
-                "on /local/$SLURM_JOB_ID"
+                f"--scratch {scratch} is under {FORBIDDEN_SCRATCH_ROOT}. Pass the server "
+                "profile's scratch folder with --scratch or --scratch-template; job data "
+                "does not belong on a home directory."
             )
     return absolute
 
 
+def expand_scratch_template(template: str) -> Path:
+    """Turn a profile scratch template into a directory for this process.
+
+    Uses the same check as ``coperceive.models.slurm.validate_scratch_template``:
+    only ``$USER`` / ``${USER}`` and ``$SLURM_JOB_ID`` / ``${SLURM_JOB_ID}`` are
+    expanded, and only from the environment. A missing variable is an error,
+    not a guessed path.
+    """
+    from coperceive.models.slurm import SlurmError, validate_scratch_template
+
+    try:
+        checked = validate_scratch_template(template)
+    except SlurmError as exc:
+        raise StagingError(str(exc)) from None
+    expanded = checked
+    for name in ("USER", "SLURM_JOB_ID"):
+        value = os.environ.get(name, "")
+        token = f"${name}"
+        braced = "${" + name + "}"
+        if value == "" and (token in expanded or braced in expanded):
+            raise StagingError(
+                f"The scratch template needs ${name}, which is not set. Run inside the "
+                "job, or pass --scratch with a directory."
+            )
+        expanded = expanded.replace(braced, value).replace(token, value)
+    if "$" in expanded:
+        raise StagingError(
+            "The scratch template still has an unexpanded token after filling "
+            f"$USER and $SLURM_JOB_ID: {expanded}"
+        )
+    return Path(expanded)
+
+
 def default_scratch() -> Path | None:
-    """$COPERCEIVE_STAGE_ROOT, else /local/$SLURM_JOB_ID/coperceive-viewer."""
+    """``COPERCEIVE_STAGE_ROOT``, else the profile scratch template.
+
+    ``COPERCEIVE_SLURM_SCRATCH_TEMPLATE`` is the server profile's
+    ``scratch_template``. A job id alone does not select a directory.
+    """
     configured = os.environ.get("COPERCEIVE_STAGE_ROOT", "").strip()
     if configured:
         return Path(configured)
-    job = os.environ.get("SLURM_JOB_ID", "")
-    if job == "":
-        return None
-    return Path("/local") / job / "coperceive-viewer"
+    template = os.environ.get("COPERCEIVE_SLURM_SCRATCH_TEMPLATE", "").strip()
+    if template:
+        return expand_scratch_template(template)
+    return None
 
 
 def allocated_cpus() -> int:
@@ -553,9 +595,15 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument(
         "--scratch",
         type=Path,
-        default=default_scratch(),
-        help="staging root; default $COPERCEIVE_STAGE_ROOT or "
-        "/local/$SLURM_JOB_ID/coperceive-viewer inside a job",
+        default=None,
+        help="staging directory. Overrides --scratch-template.",
+    )
+    parser.add_argument(
+        "--scratch-template",
+        default=None,
+        help="server profile scratch_template, for example "
+        "/scratch/$USER/$SLURM_JOB_ID. Also read from "
+        "COPERCEIVE_SLURM_SCRATCH_TEMPLATE when this is omitted.",
     )
     parser.add_argument(
         "--xodr-dir",
@@ -583,12 +631,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="accept .xodr files whose SHA-256 is not the ADR 0008 pin (tests only)",
     )
     args = parser.parse_args(argv)
-    if args.scratch is None:
-        parser.error("--scratch is required outside a Slurm job (SLURM_JOB_ID is not set)")
+    try:
+        if args.scratch is not None:
+            scratch = Path(args.scratch)
+        elif str(args.scratch_template or "").strip():
+            scratch = expand_scratch_template(str(args.scratch_template).strip())
+        else:
+            scratch = default_scratch()
+    except StagingError as exc:
+        print(f"stage_viewer: {exc}", file=sys.stderr)
+        return 2
+    if scratch is None:
+        parser.error(
+            "--scratch is required, or pass --scratch-template (or set "
+            "COPERCEIVE_SLURM_SCRATCH_TEMPLATE) to the server profile's scratch_template, "
+            "for example /scratch/$USER/$SLURM_JOB_ID"
+        )
     options = StageOptions(
         raw=Path(args.raw),
         split=Path(args.split),
-        scratch=Path(args.scratch),
+        scratch=scratch,
         xodr_dir=Path(args.xodr_dir),
         workers=int(args.workers),
         predictions=None if args.predictions is None else Path(args.predictions),

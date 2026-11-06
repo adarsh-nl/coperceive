@@ -44,6 +44,13 @@ REQUIRED_STEP_MARKERS: list[str] = [
     "Real-App macOS E2E Test PASSED",
 ]
 
+# Markers for desktop flows that are not part of the viewer e2e_mac.sh log.
+# `verify_e2e_log` stays limited to REQUIRED_STEP_MARKERS so the viewer log
+# does not fail when a later HPC flow adds a marker.
+LAB_PROFILE_MARKERS: list[str] = [
+    "E2E_SHARE_MARK:",
+]
+
 # Patterns for lines to surface as GitHub Actions notices
 NOTICE_PATTERNS: list[re.Pattern[str]] = [
     re.compile(r"^Step \d[a-z]? verified.*", re.IGNORECASE),
@@ -89,6 +96,12 @@ def verify_e2e_log(log_text: str) -> list[str]:
             missing.append(marker)
 
     return missing
+
+
+def verify_lab_profile_log(log_text: str) -> list[str]:
+    """Return lab-profile markers missing from an HPC e2e log."""
+    clean = strip_ansi(log_text)
+    return [marker for marker in LAB_PROFILE_MARKERS if marker not in clean]
 
 
 def main() -> int:

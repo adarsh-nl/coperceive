@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from coperceive.cli import build_parser, main
 
@@ -63,3 +65,31 @@ def test_convert_griffin_reports_a_missing_raw_root_without_a_traceback(
     err = capsys.readouterr().err
     assert f"Griffin raw root does not exist: {missing}" in err
     assert "Traceback" not in err
+
+
+def test_convert_griffin_reports_an_empty_raw_root_without_a_traceback(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    out = tmp_path / "out"
+    with pytest.raises(SystemExit) as caught:
+        main(
+            [
+                "convert",
+                "griffin",
+                "--subset",
+                "25m",
+                "--raw-root",
+                str(raw),
+                "--out",
+                str(out),
+                "--workers",
+                "1",
+            ]
+        )
+    assert caught.value.code == 1
+    err = capsys.readouterr().err
+    assert "Traceback" not in err
+    assert "scene_infos.json" in err
+    assert err.count("\n") <= 2

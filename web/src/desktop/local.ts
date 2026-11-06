@@ -145,6 +145,36 @@ export async function saveServerProfile(entry: ServerEntry): Promise<ServerEntry
   throw new Error("Saving server profiles is only available in the desktop app.");
 }
 
+export async function exportLabProfile(
+  entry: ServerEntry,
+  pipelines: import("./runPlan").PipelineSpec[] = [],
+): Promise<string> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string>("export_lab_profile", { entry, pipelines });
+  }
+  throw new Error("Sharing a lab profile is only available in the desktop app.");
+}
+
+export async function prepareLabImport(
+  document: string,
+  identity: { sshAlias: string; user: string; home: string; scratch: string },
+): Promise<ServerEntry & { shared_pipelines?: import("./runPlan").PipelineSpec[] }> {
+  if (isTauriEnvironment()) {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke("prepare_lab_import", {
+      document,
+      identity: {
+        ssh_alias: identity.sshAlias,
+        user: identity.user,
+        home: identity.home,
+        scratch: identity.scratch,
+      },
+    });
+  }
+  throw new Error("Importing a lab profile is only available in the desktop app.");
+}
+
 export async function deleteServerProfile(id: string): Promise<void> {
   if (isTauriEnvironment()) {
     const { invoke } = await import("@tauri-apps/api/core");

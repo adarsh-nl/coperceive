@@ -77,6 +77,18 @@ def test_verify_e2e_log_detects_missing_passed() -> None:
     assert marker in missing[0]
 
 
+def test_lab_profile_marker_is_required_for_that_log() -> None:
+    assert verify_e2e_steps.verify_lab_profile_log("noise\n") == ["E2E_SHARE_MARK:"]
+    assert (
+        verify_e2e_steps.verify_lab_profile_log(
+            "E2E_SHARE_MARK: lab profile export/import verified (alias=student-cluster)\n"
+        )
+        == []
+    )
+    # The viewer log does not have to contain the lab-profile marker.
+    assert verify_e2e_steps.verify_e2e_log(SAMPLE_PASSING_LOG) == []
+
+
 def test_main_cli_exit_codes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     passing_file = tmp_path / "passing.log"
     passing_file.write_text(SAMPLE_PASSING_LOG, encoding="utf-8")

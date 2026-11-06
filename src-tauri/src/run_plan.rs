@@ -469,7 +469,14 @@ pub fn build_builtin_argv(
     split: &str,
     checkpoint: &str,
     output_dir: &str,
-) -> Vec<String> {
+) -> Result<Vec<String>, String> {
+    if plugin_manifest.trim().is_empty() {
+        return Err(
+            "This built-in model has no pipeline manifest. Reinstall the model or choose a \
+             custom pipeline."
+                .to_string(),
+        );
+    }
     let mut argv: Vec<String> = coperceive_argv(
         profile,
         &[
@@ -493,7 +500,7 @@ pub fn build_builtin_argv(
             argv.push(value_argv(extra));
         }
     }
-    argv
+    Ok(argv)
 }
 
 fn coperceive_version_command(profile: &ServerProfile) -> String {
@@ -1516,7 +1523,7 @@ pub fn build_run_plan(
                 &request.split,
                 &request.checkpoint,
                 &output_dir,
-            )
+            )?
         }
         _ => build_pipeline_argv(&pipeline, &request.values, &output_dir)?,
     };
@@ -1918,6 +1925,19 @@ fn resolve_pipeline_for_save(
                     "The installed pipeline {wanted:?} is no longer on the cluster. Reload the                      pipeline list and rebuild the plan."
                 )
             })?;
+        if entry
+            .plugin_manifest
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .is_none()
+        {
+            return Err(
+                "This built-in model has no pipeline manifest. Reinstall the model or choose a \
+                 custom pipeline."
+                    .to_string(),
+            );
+        }
         (entry.spec, entry.plugin_manifest)
     } else {
         let entry = load_pipeline_registration(runner, profile, &request.pipeline.script)?;
@@ -2302,7 +2322,7 @@ pub fn save_run_plan(
             &split.path,
             &checkpoint.path,
             &output_dir,
-        )
+        )?
     } else {
         build_pipeline_argv(&save_pipeline.spec, &typed, &output_dir)?
     };
@@ -2478,6 +2498,18 @@ mod tests {
     /// returns the written JSON for the read-back verification.
     struct EchoRunner {
         written: Mutex<Vec<(String, Option<String>)>>,
+        pipeline_json: Option<String>,
+        model_list: Option<String>,
+    }
+
+    impl EchoRunner {
+        fn new() -> Self {
+            Self {
+                written: Mutex::new(Vec::new()),
+                pipeline_json: None,
+                model_list: None,
+            }
+        }
     }
 
     impl RemoteRunner for EchoRunner {
@@ -2492,16 +2524,19 @@ mod tests {
                 .unwrap()
                 .push((remote_cmd.to_string(), stdin.map(str::to_string)));
             if remote_cmd.contains("coperceive-pipeline.json") {
+                let stdout = self.pipeline_json.clone().unwrap_or_else(|| {
+                    r#"{"name":"contract-check","script":"/data/code/pipelines/contract_pipeline.py","interpreter":["/usr/bin/python3"],"environment":{"kind":"none"},"arguments":[{"name":"checkpoint","kind":"path","role":"checkpoint","required":true},{"name":"split","kind":"path","role":"test_data","required":true},{"name":"extra","kind":"str"}]}"#.to_string()
+                });
                 return Ok(CommandResult {
                     success: true,
-                    stdout: r#"{"name":"contract-check","script":"/data/code/pipelines/contract_pipeline.py","interpreter":["/usr/bin/python3"],"environment":{"kind":"none"},"arguments":[{"name":"checkpoint","kind":"path","role":"checkpoint","required":true},{"name":"split","kind":"path","role":"test_data","required":true},{"name":"extra","kind":"str"}]}"# .to_string(),
+                    stdout,
                     stderr: String::new(),
                 });
             }
             if remote_cmd.contains("coperceive-check:model-list") {
                 return Ok(CommandResult {
                     success: true,
-                    stdout: String::new(),
+                    stdout: self.model_list.clone().unwrap_or_default(),
                     stderr: String::new(),
                 });
             }
@@ -2847,9 +2882,7 @@ mod tests {
 
     #[test]
     fn save_writes_json_atomically_via_stdin_and_names_the_plan_path() {
-        let echo = EchoRunner {
-            written: Mutex::new(Vec::new()),
-        };
+        let echo = EchoRunner::new();
         let mut plan = build_run_plan(&checked_runner(), &entry(), &request()).expect("build");
         assert!(plan.is_saveable(), "checks: {:?}", plan.checks);
         // Client-supplied identity must not survive the save.
@@ -2878,6 +2911,8 @@ mod tests {
         let payload = write_call.1.as_deref().expect("stdin payload");
         let parsed: serde_json::Value = serde_json::from_str(payload).expect("plan JSON");
         assert_eq!(parsed["schema"], RUN_PLAN_SCHEMA);
+        assert_eq!(parsed["profile_name"], entry().profile.name);
+        assert!(parsed["created_unix"].as_u64().unwrap_or(0) > 1);
         assert_eq!(parsed["nothing_submitted"], true);
         // The follow-up read verifies the saved bytes.
         assert!(written
@@ -2961,9 +2996,7 @@ mod tests {
         let mut claimed = built.clone();
         claimed.checkpoint.sha256 = Some("f".repeat(64));
         claimed.split.sha256 = Some("f".repeat(64));
-        let echo = EchoRunner {
-            written: Mutex::new(Vec::new()),
-        };
+        let echo = EchoRunner::new();
         let saved = save_run_plan(&echo, &entry(), &claimed, &request()).expect("save");
         assert_eq!(
             saved.checkpoint.sha256.as_deref(),
@@ -3025,9 +3058,7 @@ mod tests {
             .values
             .insert("extra".to_string(), serde_json::json!("secret=abc"));
         let plan = build_run_plan(&checked_runner(), &entry(), &cred_request).expect("build");
-        let echo = EchoRunner {
-            written: Mutex::new(Vec::new()),
-        };
+        let echo = EchoRunner::new();
         let error = save_run_plan(&echo, &entry(), &plan, &cred_request)
             .expect_err("credential refused");
         assert!(error.contains("credential-like"), "{error}");
@@ -3036,9 +3067,7 @@ mod tests {
     #[test]
     fn save_refuses_a_bad_id_or_a_path_outside_the_roots() {
         let plan = build_run_plan(&checked_runner(), &entry(), &request()).expect("build");
-        let echo = || EchoRunner {
-            written: Mutex::new(Vec::new()),
-        };
+        let echo = || EchoRunner::new();
         let mut bad_id = plan.clone();
         bad_id.id = "../../etc/evil".to_string();
         assert!(save_run_plan(&echo(), &entry(), &bad_id, &request())
@@ -3125,8 +3154,9 @@ mod tests {
         let mut forged = built.clone();
         forged.argv = vec![
             "evil".to_string(),
+            "--output-dir=/tmp/evil".to_string(),
             "--output-dir".to_string(),
-            "/tmp/evil".to_string(),
+            "/tmp/also-evil".to_string(),
         ];
         forged.pipeline = PlanPipelineRef {
             id: "evil".to_string(),
@@ -3147,14 +3177,16 @@ mod tests {
             compute_has_internet: true,
             ..EnvironmentSetup::default()
         });
-        let echo = EchoRunner {
-            written: Mutex::new(Vec::new()),
-        };
+        let echo = EchoRunner::new();
         let saved = save_run_plan(&echo, &entry(), &forged, &req).expect("save");
         // Pipeline ref, argv, environment and output dir are rebuilt, not copied.
         assert_eq!(saved.pipeline.name, "contract-check");
         assert_eq!(saved.pipeline.source, "custom");
         assert!(!saved.argv.iter().any(|element| element == "evil"));
+        assert!(!saved
+            .argv
+            .iter()
+            .any(|element| element.contains("/tmp/evil") || element.contains("/tmp/also-evil")));
         assert!(saved.argv.contains(&"a b; touch /tmp/x".to_string()));
         let len = saved.argv.len();
         assert_eq!(saved.argv[len - 2], "--output-dir");
@@ -3185,9 +3217,7 @@ mod tests {
         let built = build_run_plan(&checked_runner(), &entry(), &request()).expect("build");
         let mut req = request();
         req.pipeline.script = "/etc/evil.py".to_string();
-        let echo = EchoRunner {
-            written: Mutex::new(Vec::new()),
-        };
+        let echo = EchoRunner::new();
         let error = save_run_plan(&echo, &entry(), &built, &req).expect_err("script refused");
         assert!(
             error.contains("outside code_roots and data_roots")
@@ -3441,7 +3471,8 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-        );
+        )
+        .expect("argv");
         assert_eq!(
             &argv[..3],
             &[
@@ -3478,7 +3509,8 @@ mod tests {
             "/data/scenes",
             "/data/code/checkpoints/model.pt",
             "/data/results/runs/plan-1",
-        );
+        )
+        .expect("argv");
         assert_eq!(argv[0], "/home/bob/coperceive-app/.venv/bin/python");
         assert_eq!(argv[1], "-m");
         assert_eq!(argv[2], "coperceive");
@@ -3486,5 +3518,96 @@ mod tests {
         assert!(argv.contains(&"/data/code/griffin/manifest.yaml".to_string()));
         assert!(argv.contains(&"checkpoint=/data/code/checkpoints/model.pt".to_string()));
         assert!(argv.contains(&"a b; touch /tmp/x".to_string()));
+    }
+
+    #[test]
+    fn an_empty_plugin_manifest_is_not_an_argv_element() {
+        let error = build_builtin_argv(
+            &entry().profile,
+            "  ",
+            "plan-1",
+            &BTreeMap::new(),
+            "/data/scenes",
+            "/data/code/checkpoints/model.pt",
+            "/data/results/runs/plan-1",
+        )
+        .expect_err("empty manifest");
+        assert!(error.contains("no pipeline manifest"), "{error}");
+    }
+
+    #[test]
+    fn save_refuses_a_path_argument_outside_the_profile_roots() {
+        let mut req = request();
+        req.pipeline.arguments.push(crate::hpc::ArgumentSpec {
+            name: "config".to_string(),
+            kind: ArgumentKind::Path,
+            help: "config".to_string(),
+            required: true,
+            default: None,
+            choices: Vec::new(),
+            multiple: false,
+            role: ArgumentRole::Other,
+        });
+        req.values
+            .insert("config".to_string(), serde_json::json!("/etc/passwd"));
+        let plan = build_run_plan(&checked_runner(), &entry(), &request()).expect("build");
+        let mut echo = EchoRunner::new();
+        echo.pipeline_json = Some(
+            r#"{"name":"contract-check","script":"/data/code/pipelines/contract_pipeline.py","interpreter":["/usr/bin/python3"],"environment":{"kind":"none"},"arguments":[{"name":"checkpoint","kind":"path","role":"checkpoint","required":true},{"name":"split","kind":"path","role":"test_data","required":true},{"name":"extra","kind":"str"},{"name":"config","kind":"path","role":"other","required":true}]}"#.to_string(),
+        );
+        let error = save_run_plan(&echo, &entry(), &plan, &req).expect_err("path refused");
+        assert!(error.contains("--config argument"), "{error}");
+        assert!(error.contains("outside this server"), "{error}");
+        let written = echo.written.lock().unwrap();
+        assert!(!written
+            .iter()
+            .any(|(command, _)| command.contains("coperceive-check:plan-write")));
+    }
+
+    #[test]
+    fn save_refuses_an_installed_model_whose_manifest_path_is_missing() {
+        let mut req = request();
+        req.pipeline_source = "builtin".to_string();
+        req.pipeline.name = "griffin".to_string();
+        req.plugin_manifest = Some("/tmp/client-manifest.yaml".to_string());
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        let mut echo = EchoRunner::new();
+        echo.model_list = Some("griffin entry-point\n".to_string());
+        let error = save_run_plan(&echo, &entry(), &plan, &req).expect_err("no manifest");
+        assert!(error.contains("no pipeline manifest"), "{error}");
+        let written = echo.written.lock().unwrap();
+        assert!(!written.iter().any(|(command, stdin)| {
+            stdin.as_deref().unwrap_or("").contains("--manifest")
+                && command.contains("coperceive-check:plan-write")
+        }));
+    }
+
+    #[test]
+    fn save_uses_the_installed_manifest_not_the_client_path() {
+        let mut req = request();
+        req.pipeline_source = "builtin".to_string();
+        req.pipeline.name = "griffin".to_string();
+        req.plugin_manifest = Some("/tmp/client-manifest.yaml".to_string());
+        // The installed plugin's spec only accepts its own arguments. Checkpoint
+        // and split travel in the dedicated fields, not as unknown values.
+        req.values.clear();
+        let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
+        let mut echo = EchoRunner::new();
+        echo.model_list =
+            Some("griffin entry-point /data/code/griffin/manifest.yaml\n".to_string());
+        let saved = save_run_plan(&echo, &entry(), &plan, &req).expect("save");
+        assert!(saved
+            .argv
+            .contains(&"/data/code/griffin/manifest.yaml".to_string()));
+        assert!(!saved
+            .argv
+            .iter()
+            .any(|element| element.contains("/tmp/client-manifest")));
+        let manifest_at = saved
+            .argv
+            .iter()
+            .position(|element| element == "--manifest")
+            .expect("manifest flag");
+        assert!(!saved.argv[manifest_at + 1].is_empty());
     }
 }
