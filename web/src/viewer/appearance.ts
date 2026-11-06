@@ -1,4 +1,4 @@
-export type ColorBy = "agent" | "class";
+export type ColorBy = "agent" | "class" | "seen";
 export type BoxStyle = "wire" | "solid";
 export type ThemeName = "dark" | "light";
 
@@ -176,7 +176,7 @@ export function loadAppearance(): Appearance {
       frustums: bool(row.frustums, base.frustums),
       map: bool(row.map, base.map),
       axes: bool(row.axes, base.axes),
-      colorBy: row.colorBy === "class" ? "class" : "agent",
+      colorBy: row.colorBy === "class" || row.colorBy === "seen" ? row.colorBy : "agent",
       pointSize: pointSize(row.pointSize),
       boxStyle: row.boxStyle === "solid" ? "solid" : "wire",
       hiddenClasses: classes(row.hiddenClasses),

@@ -27,6 +27,8 @@ export type SceneSummary = {
   point_sweeps?: number;
   image_rows?: number;
   images_staged?: boolean | null;
+  /** Set when the scene records which agent observed each object. Absent on an older server. */
+  seen_by?: { available: boolean; dataset: string; field: string };
 };
 
 export type FrameBox = {

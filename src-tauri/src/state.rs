@@ -455,6 +455,15 @@ pub struct AppPersistentState {
     /// filmstrip) or "agent" (one agent's cameras with Switch agent). "all" by default.
     #[serde(default = "default_camera_strip")]
     pub camera_strip: String,
+
+    /// Settings → Viewer → Style. "classic" is today's layout and the default.
+    #[serde(default = "default_viewer_style")]
+    pub viewer_style: String,
+
+    /// Cinema's slow camera drift while playing. On by default; the page turns
+    /// it off while the OS asks for reduced motion.
+    #[serde(default = "default_true")]
+    pub cinema_drift: bool,
 }
 
 /// The values "Group scenes" may hold; anything else is ignored.
@@ -462,6 +471,9 @@ pub const DATASET_GROUPINGS: [&str; 3] = ["none", "state", "day"];
 
 /// The values "Camera strip" may hold; anything else is ignored.
 pub const CAMERA_STRIP_MODES: [&str; 2] = ["all", "agent"];
+
+/// The values "Style" may hold; anything else is ignored.
+pub const VIEWER_STYLES: [&str; 4] = ["classic", "studio", "instrument", "cinema"];
 
 fn default_camera_strip() -> String {
     "all".to_string()
@@ -471,6 +483,16 @@ fn default_camera_strip() -> String {
 pub fn camera_strip_from(value: &serde_json::Value) -> Option<String> {
     let text = value.as_str()?;
     CAMERA_STRIP_MODES.contains(&text).then(|| text.to_string())
+}
+
+fn default_viewer_style() -> String {
+    "classic".to_string()
+}
+
+/// A viewer style from a settings update, when it is one of [`VIEWER_STYLES`].
+pub fn viewer_style_from(value: &serde_json::Value) -> Option<String> {
+    let text = value.as_str()?;
+    VIEWER_STYLES.contains(&text).then(|| text.to_string())
 }
 
 fn default_dataset_grouping() -> String {
@@ -589,6 +611,8 @@ impl Default for AppPersistentState {
             remote_view_cache_bytes: DEFAULT_REMOTE_VIEW_CACHE_BYTES,
             dataset_grouping: default_dataset_grouping(),
             camera_strip: default_camera_strip(),
+            viewer_style: default_viewer_style(),
+            cinema_drift: true,
         }
     }
 }
@@ -804,6 +828,21 @@ mod camera_images_tests {
 #[cfg(test)]
 pub mod tests {
     #[test]
+    fn viewer_style_defaults_to_classic_and_accepts_only_known_values() {
+        assert_eq!(AppPersistentState::default().viewer_style, "classic");
+        assert!(AppPersistentState::default().cinema_drift);
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert_eq!(old.viewer_style, "classic");
+        assert!(old.cinema_drift);
+        for value in VIEWER_STYLES {
+            assert_eq!(viewer_style_from(&serde_json::json!(value)).as_deref(), Some(value));
+        }
+        for value in [serde_json::json!("neon"), serde_json::json!(""), serde_json::json!(1), serde_json::Value::Null] {
+            assert_eq!(viewer_style_from(&value), None, "{value}");
+        }
+    }
+
+    #[test]
     fn camera_strip_defaults_to_all_and_accepts_only_known_values() {
         assert_eq!(AppPersistentState::default().camera_strip, "all");
         // A state.json written before the setting existed reads as the filmstrip.
@@ -930,6 +969,8 @@ pub mod tests {
             remote_view_cache_bytes: 512 * 1024 * 1024,
             dataset_grouping: "day".into(),
             camera_strip: "agent".into(),
+            viewer_style: "cinema".into(),
+            cinema_drift: false,
         };
 
         let json = serde_json::to_string(&state).expect("serialize");
