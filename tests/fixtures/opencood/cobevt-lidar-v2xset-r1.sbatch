@@ -33,7 +33,7 @@ STAGING=$((SECONDS - STAGE_START))  # rsync wall time -> timings.staging_s
 
 # The run's exit status is kept: a partial run (3 or 4) still comes home below.
 set +e
-<python> -m coperceive model run --manifest <home>/Desktop/Workspace/wt-deepseek2-opencood/plugins/opencood/coperceive_opencood_model/model.yaml --scenes "$SCRATCH/scenes" --out "$SCRATCH/out" --run-id r1 --work "$SCRATCH/work" --staging-seconds "$STAGING" --model cobevt-lidar-v2xset --option "checkpoint=$SCRATCH/checkpoints/checkpoint/cobevt_lidar.zip"
+<python> -m coperceive model run --manifest <plugin>/model.yaml --scenes "$SCRATCH/scenes" --out "$SCRATCH/out" --run-id r1 --work "$SCRATCH/work" --staging-seconds "$STAGING" --model cobevt-lidar-v2xset --option "checkpoint=$SCRATCH/checkpoints/checkpoint/cobevt_lidar.zip"
 RC=$?
 set -e
 echo "model run exit $RC"

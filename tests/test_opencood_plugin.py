@@ -697,6 +697,10 @@ def _normalised_sbatch(script: str, tmp_path: Path) -> str:
     normalised = normalised.replace(str(tmp_path), "<tmp>")
     normalised = normalised.replace("/opt/venv/bin/python", "<python>")
     normalised = normalised.replace("/opt/coperceive-checkout", "<repo>")
+    # The inner command carries the manifest's own resolved path, which is this checkout:
+    # normalise the plugin directory before the home prefix so the golden is machine-free.
+    normalised = normalised.replace(str(MANIFEST.parent.resolve()), "<plugin>")
+    normalised = normalised.replace(str(MANIFEST.parent), "<plugin>")
     normalised = normalised.replace(str(Path.home()), "<home>")
     return normalised.replace("\r\n", "\n")
 
