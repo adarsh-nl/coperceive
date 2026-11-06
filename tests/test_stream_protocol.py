@@ -85,14 +85,32 @@ def _read_line(fd: int, timeout: float) -> bytes:
     return line
 
 
+def _parse_replies(data: bytes) -> list[tuple[dict[str, object], bytes]]:
+    """Split a captured stdout byte stream into (header, payload) replies."""
+    replies: list[tuple[dict[str, object], bytes]] = []
+    offset = 0
+    while offset < len(data):
+        end = data.index(b"\n", offset)
+        header = cast(dict[str, object], json.loads(data[offset:end]))
+        offset = end + 1
+        size = int(cast(int, header.get("size") or 0))
+        replies.append((header, data[offset : offset + size]))
+        offset += size
+    return replies
+
+
 class PipeServer:
     """A real ``StreamServer`` in a thread, requests and replies as OS pipes."""
 
-    def __init__(self, root: Path, **options: int) -> None:
+    def __init__(self, root: Path, *, stdout: Any = None, **options: int) -> None:
         requests_r, self._requests_w = os.pipe()
-        self._replies_r, replies_w = os.pipe()
         self._stdin = os.fdopen(requests_r, "rb")
-        self._stdout = os.fdopen(replies_w, "wb")
+        self._replies_r: int | None = None
+        if stdout is None:
+            self._replies_r, replies_w = os.pipe()
+            self._stdout = os.fdopen(replies_w, "wb")
+        else:
+            self._stdout = stdout
         self.server = StreamServer(Roots([root]), self._stdout, **options)
         self._thread = threading.Thread(target=self.server.run, args=(self._stdin,), daemon=True)
         self._thread.start()
@@ -113,6 +131,7 @@ class PipeServer:
         os.write(self._requests_w, line + b"\n")
 
     def read_reply(self, timeout: float = 20.0) -> tuple[dict[str, object], bytes]:
+        assert self._replies_r is not None, "this server was built with an external stdout"
         header = cast(dict[str, object], json.loads(_read_line(self._replies_r, timeout)))
         size = int(cast(int, header.get("size") or 0))
         payload = _read_exact(self._replies_r, size, timeout)
@@ -125,7 +144,8 @@ class PipeServer:
             pass
         self._thread.join(timeout)
         assert not self._thread.is_alive(), "the streamer did not stop when stdin closed"
-        os.close(self._replies_r)
+        if self._replies_r is not None:
+            os.close(self._replies_r)
 
 
 @pytest.fixture
@@ -197,6 +217,118 @@ def test_a_large_read_does_not_hold_up_a_later_small_one(
         release.set()
         header, payload = server.read_reply()
         assert (header["id"], payload) == (1, b"slow")
+    finally:
+        release.set()
+        server.close()
+
+
+class _BlockingStdout:
+    """A stdout that blocks in ``write`` until the test releases it."""
+
+    def __init__(self) -> None:
+        self.gate = threading.Event()
+        self.blocked = threading.Event()
+        self.lock = threading.Lock()
+        self.written = bytearray()
+
+    def write(self, data: bytes) -> int:
+        self.blocked.set()
+        assert self.gate.wait(timeout=20), "the test did not release the writer"
+        with self.lock:
+            self.written.extend(data)
+        return len(data)
+
+    def flush(self) -> None:
+        return
+
+
+def test_slow_writer_applies_backpressure_instead_of_buffering_replies(
+    small_root: Path,
+) -> None:
+    """A writer stuck on the link must cap queued replies and block the reader.
+
+    ``max_queued`` slots are held until the writer has written the reply, so a
+    client cannot make the login node hold more than that many finished sweep
+    replies; the read loop blocks instead of accepting more work.
+    """
+    (small_root / "big.bin").write_bytes(b"x" * 4096)
+    stdout = _BlockingStdout()
+    max_queued = 3
+    server = PipeServer(small_root, stdout=stdout, workers=2, max_queued=max_queued)
+    try:
+        for request_id in range(1, max_queued + 4):
+            server.send({"id": request_id, "op": "read", "path": "big.bin", "protocol": 2})
+        # The writer blocks on the first reply; the pool fills the remaining
+        # slots, and the read loop stops accepting once one request more than the
+        # slot count has been parsed (it counts, then blocks on a slot).
+        assert stdout.blocked.wait(timeout=20)
+        requested = 0
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            requested = int(cast(int, server.server.counters.snapshot()["requests"]))
+            if requested >= max_queued + 1:
+                break
+            time.sleep(0.01)
+        assert requested == max_queued + 1, requested
+        # Finished replies are bounded by the slot count, not by how many
+        # requests the client sent (the writer holds one while blocked in write).
+        deadline = time.monotonic() + 5
+        while server.server._replies.qsize() == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert 0 < server.server._replies.qsize() <= max_queued
+        time.sleep(0.2)
+        assert server.server._replies.qsize() <= max_queued
+        assert int(cast(int, server.server.counters.snapshot()["requests"])) == requested
+
+        # Let the writer drain: every accepted request gets its reply, in order.
+        stdout.gate.set()
+        server.close()
+        replies = _parse_replies(bytes(stdout.written))
+        assert len(replies) == max_queued + 3, [reply[0].get("id") for reply in replies]
+        assert all(header["ok"] for header, _ in replies), replies
+        # Protocol 2 replies may be out of order; all six arrived exactly once.
+        assert sorted(int(cast(int, header["id"])) for header, _ in replies) == list(
+            range(1, max_queued + 4)
+        )
+        assert all(len(payload) == 4096 for _, payload in replies)
+    finally:
+        stdout.gate.set()
+        server.close()
+
+
+def test_duplicate_protocol_2_request_id_is_refused_while_in_flight(
+    small_root: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A second request reusing an in-flight id is refused, so cancel hits one."""
+    release = threading.Event()
+    entered = threading.Event()
+    original = stream_module.handle
+
+    def slow_large(roots: Roots, request: dict[str, object]) -> tuple[dict[str, object], bytes]:
+        if request.get("path") == "slow.bin":
+            entered.set()
+            assert release.wait(timeout=20), "the test did not release the slow read"
+            return {"ok": True, "size": 4}, b"slow"
+        return original(roots, request)
+
+    monkeypatch.setattr(stream_module, "handle", slow_large)
+    server = PipeServer(small_root, workers=2)
+    try:
+        server.send({"id": 1, "op": "read", "path": "slow.bin", "protocol": 2})
+        assert entered.wait(timeout=20)
+        server.send({"id": 1, "op": "read", "path": "a.bin", "protocol": 2})
+        header, payload = server.read_reply()
+        assert header["ok"] is False
+        assert header["id"] == 1
+        assert "duplicate request id 1" in str(header["error"]), header
+        assert payload == b""
+        # Only the original request answers for id 1.
+        release.set()
+        header, payload = server.read_reply()
+        assert (header["ok"], payload) == (True, b"slow")
+        # The refused duplicate never replies, so no second header for id 1 follows.
+        with pytest.raises(AssertionError):
+            server.read_reply(timeout=0.3)
     finally:
         release.set()
         server.close()

@@ -362,7 +362,12 @@ read-only streamer on the login node:
   may arrive out of order. A request without the field keeps the old behaviour
   exactly: it is answered one at a time, in request order, so raw legacy
   consumers that read one reply per request (the cluster-dataset app e2e) keep
-  working byte for byte. The SSH options are the
+  working byte for byte. A slot is held until the writer has written that
+  request's reply, so on a slow link finished replies are bounded by the same
+  32-request cap and the reader is backpressured instead of buffering sweeps
+  in memory on the (shared) login node. A second concurrent protocol-2 request
+  reusing an id that is still in flight is refused with a clear error, so a
+  `cancel` never names two requests. The SSH options are the
   app's usual ones (`BatchMode`, `ControlMaster=auto`, `ControlPersist`). Every
   remote argument is shell-quoted; file paths only travel on stdin, never
   through a shell.

@@ -102,10 +102,27 @@ _CSRF_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
 
 class _AuthAndCsrfMiddleware:
-    """Bearer-token and CSRF checks for ``/api`` as plain ASGI middleware."""
+    """Bearer-token and CSRF checks for ``/api`` as plain ASGI middleware.
 
-    def __init__(self, app: object) -> None:
+    The token is fixed when the middleware is constructed, not read back from
+    ``scope["app"]``: a request must never be able to make the guard skip
+    authentication by presenting a scope without that state. Constructing the
+    middleware without a token and without ``allow_anonymous`` fails closed with
+    a 500 for every ``/api`` request. ``allow_anonymous`` is the explicit
+    loopback-only mode ``create_app`` opts into when it has no token; the CSRF
+    check still runs in both modes.
+    """
+
+    def __init__(
+        self,
+        app: object,
+        token: str | None = None,
+        *,
+        allow_anonymous: bool = False,
+    ) -> None:
         self.app = app
+        self.token = token
+        self.allow_anonymous = allow_anonymous
 
     async def __call__(self, scope: dict[str, object], receive: object, send: object) -> None:
         if scope.get("type") != "http" or scope.get("method") == "OPTIONS":
@@ -114,15 +131,18 @@ class _AuthAndCsrfMiddleware:
         if not str(scope.get("path", "")).startswith("/api/"):
             await self.app(scope, receive, send)  # type: ignore[operator]
             return
-        application = scope.get("app")
-        state = getattr(application, "state", None)
-        expected = getattr(state, "token", None)
         headers = Headers(scope=scope)  # type: ignore[arg-type]
-        if expected:
+        if not self.token:
+            if not self.allow_anonymous:
+                await _json_error(500, "server authentication is not configured")(
+                    scope, receive, send
+                )
+                return
+        else:
             header = headers.get("authorization", "")
             prefix = "Bearer "
             if not (
-                header.startswith(prefix) and hmac.compare_digest(header[len(prefix) :], expected)
+                header.startswith(prefix) and hmac.compare_digest(header[len(prefix) :], self.token)
             ):
                 await _json_error(401, "bearer token required")(scope, receive, send)
                 return
@@ -380,7 +400,10 @@ def create_app(
     # A pure ASGI guard, not BaseHTTPMiddleware: that wrapper hides the receive
     # channel, so downstream request.is_disconnected() never sees a browser
     # that went away (the points endpoint relies on it to cancel a remote read).
-    app.add_middleware(_AuthAndCsrfMiddleware)
+    # The token is passed in at construction so the guard cannot fail open; with
+    # no token this app is the loopback-only mode (`coperceive serve` refuses a
+    # non-loopback host without a token), and the guard still enforces CSRF.
+    app.add_middleware(_AuthAndCsrfMiddleware, token=token, allow_anonymous=token is None)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:

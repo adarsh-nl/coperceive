@@ -31,7 +31,12 @@ requests without the field get exactly the legacy reply, field for field.
 ``{"op": "stats"}`` returns the streamer's aggregate counters and p50/p95.
 Cancelled queued requests are skipped; a cancelled in-flight read finishes but
 its reply (header and payload) is dropped, so the client never waits for bytes
-that will not come.
+that will not come. A second concurrent protocol-2 request reusing an id that
+is still in flight is refused with a clear error (a cancel could otherwise hit
+both requests). Slots for accepted requests are released only once the writer
+has written the reply, so replies waiting on a slow link are bounded by
+``max_queued`` and the reader is backpressured instead of buffering
+unboundedly on the login node.
 
 ``MAX_READ`` and the root confinement are unchanged from the single-request
 version.
@@ -44,7 +49,7 @@ import os
 import sys
 import threading
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from queue import Queue
@@ -230,9 +235,10 @@ class StreamServer:
 
     Reads run on a bounded pool (``workers``), replies are written by a single
     writer thread in completion order so a header and its payload never
-    interleave. ``max_queued`` caps the accepted-but-unanswered requests, which
-    bounds memory and, when the client outruns the disk, applies backpressure
-    by blocking the read loop instead of growing a queue.
+    interleave. ``max_queued`` caps the accepted-but-not-yet-written requests:
+    a slot is held until the writer has written that reply, so a slow link
+    cannot let finished replies pile up in memory, and when the client outruns
+    the writer the read loop blocks instead of growing a queue.
     """
 
     def __init__(
@@ -246,7 +252,9 @@ class StreamServer:
     ) -> None:
         self.roots = roots
         self._stdout = stdout
-        self._replies: Queue[tuple[dict[str, object], bytes] | None] = Queue()
+        self._replies: Queue[tuple[dict[str, object], bytes, Callable[[], None] | None] | None] = (
+            Queue()
+        )
         self._pool = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="stream")
         self._slots = threading.Semaphore(max(1, max_queued))
         self._lock = threading.Lock()
@@ -313,8 +321,12 @@ class StreamServer:
                     header, payload = _error_header(exc), b""
                 self._publish(header, payload, request_id, request, queued_at, read_started)
                 return
-            self._slots.acquire()
             key = _cancel_key(request_id)
+            if key is not None:
+                with self._lock:
+                    if key in self._outstanding:
+                        raise StreamError(f"duplicate request id {key}: it is still in flight")
+            self._slots.acquire()
             with self._lock:
                 if key is not None:
                     self._outstanding.add(key)
@@ -366,6 +378,8 @@ class StreamServer:
     def _work(
         self, request: dict[str, object], request_id: object, queued_at: float, key: int | None
     ) -> None:
+        release = self._slots.release
+        handed_to_writer = False
         try:
             if self._take_cancelled(key):
                 return
@@ -376,9 +390,13 @@ class StreamServer:
                 header, payload = _error_header(exc), b""
             if not self._finish(key):
                 return  # cancelled while reading: finish the read, drop the reply
-            self._publish(header, payload, request_id, request, queued_at, read_started)
+            # The slot stays held until the writer has written the bytes: a slow
+            # link must not let finished replies accumulate in memory.
+            self._publish(header, payload, request_id, request, queued_at, read_started, release)
+            handed_to_writer = True
         finally:
-            self._slots.release()
+            if not handed_to_writer:
+                release()
 
     # -- replies -----------------------------------------------------------------
 
@@ -390,6 +408,7 @@ class StreamServer:
         request: dict[str, object],
         queued_at: float,
         read_started: float,
+        release: Callable[[], None] | None = None,
     ) -> None:
         now = time.perf_counter()
         queue_ms = (read_started - queued_at) * 1000.0
@@ -402,14 +421,14 @@ class StreamServer:
             header["read_ms"] = round(read_ms, 3)
             header["bytes"] = len(payload)
         self.counters.completed(header, payload, queue_ms, read_ms)
-        self._replies.put((header, payload))
+        self._replies.put((header, payload, release))
 
     def _write_replies(self) -> None:
         while True:
             item = self._replies.get()
             if item is None:
                 return
-            header, payload = item
+            header, payload, release = item
             try:
                 self._stdout.write(
                     json.dumps(header, separators=(",", ":")).encode("utf-8") + b"\n"
@@ -419,6 +438,9 @@ class StreamServer:
                 self._stdout.flush()
             except OSError:
                 return
+            finally:
+                if release is not None:
+                    release()
 
 
 def serve(roots: Roots, stdin: BinaryIO, stdout: BinaryIO) -> None:
