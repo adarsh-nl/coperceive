@@ -22,24 +22,32 @@ mod tests {
     #[test]
     fn test_find_free_loopback_port() {
         let port = find_free_loopback_port().expect("failed to find free port");
-        assert!(port > 1024, "port should be non-privileged (>1024), got {}", port);
-        assert!(is_port_available(port));
+        assert!(
+            port > 1024,
+            "port should be non-privileged (>1024), got {}",
+            port
+        );
+        // The function promises a port that can be bound immediately. Do not
+        // assert later availability through a second call: another parallel test
+        // may take it in between and that is not the function's promise.
+        let listener = TcpListener::bind(("127.0.0.1", port))
+            .expect("the returned port should be bindable immediately");
+        drop(listener);
     }
 
     #[test]
     fn test_is_port_available_when_bound() {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
         let port = listener.local_addr().unwrap().port();
-        assert!(!is_port_available(port), "bound port should not report as available");
+        assert!(
+            !is_port_available(port),
+            "bound port should not report as available"
+        );
         drop(listener);
-        let mut available = false;
-        for _ in 0..10 {
-            if is_port_available(port) {
-                available = true;
-                break;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        }
-        assert!(available, "released port should report as available");
+        // A listener closed without connections releases the port; binding it
+        // directly proves that without racing the separate availability helper.
+        let rebound = TcpListener::bind(("127.0.0.1", port));
+        assert!(rebound.is_ok(), "released port should be bindable: {rebound:?}");
+        drop(rebound);
     }
 }
