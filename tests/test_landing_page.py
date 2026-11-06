@@ -287,8 +287,9 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         # latest-release lookup, so a published release replaces the build-time copy.
         origin = site_server.split("/coperceive/")[0]
         latest = "https://api.github.com/repos/adarsh-nl/coperceive/releases/latest"
-        if latest not in requests:
-            page.wait_for_request(latest, timeout=5000)
+        deadline = time.monotonic() + 5
+        while latest not in requests and time.monotonic() < deadline:
+            page.wait_for_timeout(100)
         off_origin = [url for url in requests if not url.startswith(origin)]
         assert off_origin == [latest]
 
