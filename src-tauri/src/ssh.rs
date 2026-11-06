@@ -255,16 +255,26 @@ pub fn run_local_command(
     stdin: Option<&str>,
 ) -> std::io::Result<CommandResult> {
     ensure_control_dir();
-    let mut child = crate::platform::create_command(bin)
-        .args(args)
-        .stdin(if stdin.is_some() {
-            Stdio::piped()
-        } else {
-            Stdio::null()
-        })
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
+    let mut attempts = 0;
+    let mut child = loop {
+        match crate::platform::create_command(bin)
+            .args(args)
+            .stdin(if stdin.is_some() {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+        {
+            Err(e) if e.raw_os_error() == Some(26) && attempts < 10 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(15 * attempts));
+            }
+            res => break res?,
+        }
+    };
 
     if let Some(input) = stdin {
         if let Some(mut pipe) = child.stdin.take() {

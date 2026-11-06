@@ -315,6 +315,19 @@ fn verify_remote_cache(runner: &dyn RemoteRunner, version: &str) -> Result<(), S
     run_ssh(runner, &command, None).map(|_| ())
 }
 
+fn run_command_output(cmd: &mut std::process::Command) -> std::io::Result<std::process::Output> {
+    let mut attempts = 0;
+    loop {
+        match cmd.output() {
+            Err(e) if e.raw_os_error() == Some(26) && attempts < 10 => {
+                attempts += 1;
+                std::thread::sleep(std::time::Duration::from_millis(15 * attempts));
+            }
+            res => return res,
+        }
+    }
+}
+
 fn fetch_remote_manifest(
     alias: &str,
     remote_rel: &str,
@@ -322,12 +335,13 @@ fn fetch_remote_manifest(
     scp: &str,
 ) -> Result<Option<String>, String> {
     let _ = fs::remove_file(destination);
-    let output = crate::platform::create_command(scp)
-        .args(["-q", "-p"])
-        .arg(format!("{alias}:{remote_rel}/{MANIFEST_NAME}"))
-        .arg(destination)
-        .output()
-        .map_err(|error| format!("Could not run scp: {error}"))?;
+    let output = run_command_output(
+        crate::platform::create_command(scp)
+            .args(["-q", "-p"])
+            .arg(format!("{alias}:{remote_rel}/{MANIFEST_NAME}"))
+            .arg(destination),
+    )
+    .map_err(|error| format!("Could not run scp: {error}"))?;
     if !output.status.success() || !destination.is_file() {
         return Ok(None);
     }
@@ -339,12 +353,13 @@ fn fetch_remote_manifest(
 fn upload_static(alias: &str, local: &Path, remote_rel: &str, scp: &str) -> Result<(), String> {
     let source = format!("{}/.", local.display());
     let destination = format!("{alias}:{remote_rel}");
-    let output = crate::platform::create_command(scp)
-        .args(["-r", "-q", "-p"])
-        .arg(&source)
-        .arg(&destination)
-        .output()
-        .map_err(|error| format!("Could not run scp: {error}"))?;
+    let output = run_command_output(
+        crate::platform::create_command(scp)
+            .args(["-r", "-q", "-p"])
+            .arg(&source)
+            .arg(&destination),
+    )
+    .map_err(|error| format!("Could not run scp: {error}"))?;
     if output.status.success() {
         Ok(())
     } else {
@@ -427,7 +442,11 @@ mod tests {
     use super::*;
 
     fn write_script(path: &Path, body: &str) {
-        fs::write(path, body).expect("write script");
+        use std::io::Write;
+        let mut file = fs::File::create(path).expect("create script");
+        file.write_all(body.as_bytes()).expect("write script");
+        file.sync_all().expect("sync script");
+        drop(file);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
