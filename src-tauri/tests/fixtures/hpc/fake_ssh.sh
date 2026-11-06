@@ -12,6 +12,86 @@ set -u
 all_args="$*"
 remote="${!#:-}"
 
+log_command() {
+    if [ -n "${FAKE_SSH_LOG:-}" ]; then
+        printf '%s\n' "$1" >> "${FAKE_SSH_LOG}"
+    fi
+}
+
+
+# Invalid JSON injection (the output looks like it may hold a token).
+if [[ "${all_args}" == *"--fail-json"* ]]; then
+    echo '{"status": "running", "token": "supersecret-token-value", broken'
+    exit 0
+fi
+
+# Error injection tests
+if [[ "${all_args}" == *"--fail-unreachable"* ]]; then
+    echo "ssh: connect to host hpc-test port 22: No route to host" >&2
+    exit 255
+fi
+
+if [[ "${all_args}" == *"--fail-auth"* ]]; then
+    echo "Permission denied (publickey)." >&2
+    exit 255
+fi
+
+# Tunnel invocation
+if [[ "${all_args}" == *"-N -L"* ]]; then
+    while true; do
+        sleep 1
+    done
+    exit 0
+fi
+
+# Remote session management
+case "${all_args}" in
+    *"coperceive remote start"*)
+        log_command "${remote}"
+        if [[ "${all_args}" == *"--root /queued"* ]]; then
+            echo '{"status": "pending", "state": "PENDING", "reason": "Priority", "uuid": "test-queued", "job_id": 5560, "token": "tokq"}'
+        elif [[ "${all_args}" == *"--root /slow-session"* ]]; then
+            echo '{"status": "pending", "state": "PENDING", "reason": "Resources", "uuid": "test-slow", "job_id": 5570, "token": "toks"}'
+        elif [[ "${all_args}" == *"--root /stuck"* ]]; then
+            echo '{"status": "pending", "state": "PENDING", "reason": "ReqNodeNotAvail", "uuid": "test-pending", "job_id": 5556, "token": "tokp"}'
+        else
+            echo '{"status": "running", "uuid": "test-uuid-99", "job_id": 5555, "node": "hpc-node11", "ip": "10.20.240.48", "port": 52657, "token": "tok12345"}'
+        fi
+        exit 0
+        ;;
+    *"coperceive remote status"*)
+        if [[ "${all_args}" == *"test-slow"* && "${all_args}" != *"--job-id"* ]]; then
+            printf '%s\n' '{' '  "status": "stopped",' '  "state": "RUNNING",' '  "stopped_reason": "unknown",' '  "uuid": "test-slow",' '  "job_id": 5570,' '  "healthy": false' '}'
+        elif [[ "${all_args}" == *"test-slow"* ]]; then
+            echo '{"status": "running", "state": "RUNNING", "uuid": "test-slow", "job_id": 5570, "node": "hpc-node3", "ip": "10.20.240.50", "port": 52700, "healthy": true}'
+        elif [[ "${all_args}" == *"test-pending"* ]]; then
+            echo '{"status": "pending", "state": "PENDING", "uuid": "test-pending", "job_id": 5556, "reason": "ReqNodeNotAvail"}'
+        elif [[ "${all_args}" == *"test-timeout"* ]]; then
+            echo '{"status": "stopped", "state": "TIMEOUT", "stopped_reason": "timeout", "uuid": "test-timeout", "job_id": 5557, "last_heartbeat_age_s": 650.0}'
+        else
+            echo '{"status": "running", "state": "RUNNING", "uuid": "test-uuid-99", "job_id": 5555, "node": "hpc-node11", "ip": "10.20.240.48", "port": 52657, "healthy": true, "last_heartbeat_age_s": 12.5}'
+        fi
+        exit 0
+        ;;
+    *"coperceive remote stop"*)
+        log_command "${remote}"
+        echo '{"status": "stopped", "uuid": "test-uuid-99", "job_id": 5555, "cancelled": true}'
+        exit 0
+        ;;
+    *"coperceive remote heartbeat"*)
+        echo '{"status": "ok", "uuid": "test-uuid-99", "timestamp": 1792500000.0}'
+        exit 0
+        ;;
+    *"coperceive remote token"*)
+        echo '{"status": "running", "token": "tok-reattach-99"}'
+        exit 0
+        ;;
+    *"coperceive remote list"*)
+        echo '{"sessions": [{"uuid": "test-uuid-99", "job_id": 5555, "state": "RUNNING", "ip": "10.20.240.48", "port": 52657, "is_orphan": false}]}'
+        exit 0
+        ;;
+esac
+
 # The packaged-app e2e sets this so a regression back to bare `coperceive`
 # (ignoring the saved venv argv) fails loudly instead of being silently accepted.
 if [ "${COPERCEIVE_E2E_REQUIRE_PREFIX:-}" = "1" ]; then
@@ -45,11 +125,6 @@ quoted_pair() {
     printf '%s' "${rest}" | sed -E "s/^'?([^' ]+)'? '?([^' ]+)'?\$/\1|\2/"
 }
 
-log_command() {
-    if [ -n "${FAKE_SSH_LOG:-}" ]; then
-        printf '%s\n' "$1" >> "${FAKE_SSH_LOG}"
-    fi
-}
 
 case "${all_args}" in
     *"-G cluster-a"*)
@@ -482,6 +557,10 @@ JSON
 }
 JSON
                 exit 0
+                ;;
+            *"escape"*)
+                printf '{"status": "error", "error": "the path is outside the data root: /etc"}'
+                exit 1
                 ;;
             *"--root /data/scenes"*)
                 cat <<'JSON'

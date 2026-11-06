@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -59,6 +60,8 @@ pub struct ControllerConfig {
     pub scene_preparer: Option<Arc<dyn Fn(String) -> bool + Send + Sync>>,
     /// Names the viewer window after the scene it shows.
     pub viewer_titler: Option<Arc<dyn Fn(String) + Send + Sync>>,
+    /// Custom state file path override (useful for testing state persistence in isolation).
+    pub state_path: Option<PathBuf>,
 }
 
 impl ControllerConfig {
@@ -82,6 +85,7 @@ impl ControllerConfig {
             dataset_scenes: Arc::new(Mutex::new(serde_json::Value::Null)),
             scene_preparer: None,
             viewer_titler: None,
+            state_path: None,
         }
     }
 
@@ -509,7 +513,10 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
 
         // Parse JSON and apply updates to state.json
         if let Ok(val) = serde_json::from_slice::<serde_json::Value>(&body) {
-            let mut persistent = state::load_state();
+            let mut persistent = match &config.state_path {
+                Some(p) => state::load_state_from_path(p),
+                None => state::load_state(),
+            };
             if let Some(sc) = val.get("scene_id").and_then(|v| v.as_str()) {
                 persistent.last_scene_id = Some(sc.to_string());
             }
@@ -588,7 +595,14 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
                 }
             }
 
-            let _ = state::save_state(&persistent);
+            match &config.state_path {
+                Some(p) => {
+                    let _ = state::save_state_to_path(&persistent, p);
+                }
+                None => {
+                    let _ = state::save_state(&persistent);
+                }
+            }
         }
 
         write_json_response(writer, 200, "OK", cors_origin.as_deref(), b"{\"status\":\"ok\"}")?;
@@ -961,10 +975,11 @@ pub mod tests {
     fn test_body_split_across_packets_saved() {
         let temp_dir = std::env::temp_dir().join(format!("cp-state-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
-        let orig_state_dir = std::env::var_os("COPERCEIVE_STATE_DIR");
-        std::env::set_var("COPERCEIVE_STATE_DIR", &temp_dir);
+        let state_file = temp_dir.join("state.json");
 
-        let config = make_test_config();
+        let mut config = make_test_config();
+        config.state_path = Some(state_file.clone());
+
         let payload = r#"{"scene_id":"synth_001","sample_index":3,"timestamp_us":300000}"#;
         let header = format!(
             "POST /state HTTP/1.1\r\n\
@@ -993,16 +1008,11 @@ pub mod tests {
         assert!(resp.starts_with("HTTP/1.1 200 OK"), "Expected 200 OK, got: {}", resp);
         assert!(resp.contains("Access-Control-Allow-Origin: http://127.0.0.1:8000"));
 
-        let loaded = state::load_state();
+        let loaded = state::load_state_from_path(&state_file);
         assert_eq!(loaded.last_scene_id, Some("synth_001".into()));
         assert_eq!(loaded.last_sample_index, Some(3));
         assert_eq!(loaded.last_timestamp_us, Some(300000));
 
-        if let Some(orig) = orig_state_dir {
-            std::env::set_var("COPERCEIVE_STATE_DIR", orig);
-        } else {
-            std::env::remove_var("COPERCEIVE_STATE_DIR");
-        }
         let _ = std::fs::remove_dir_all(&temp_dir);
     }
 

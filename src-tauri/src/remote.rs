@@ -789,131 +789,20 @@ mod tests {
         path: PathBuf,
     }
 
-    static SCRIPT_COUNTER: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
     /// FAKE_SSH_LOG is process-wide; tests that read it take turns.
     static FAKE_SSH_LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     impl FakeSshScript {
         fn create() -> Self {
-            let id = SCRIPT_COUNTER.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-            let tmp = std::env::temp_dir().join(format!(
-                "fake_ssh_{}_{}_{}.sh",
-                std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_nanos(),
-                id
-            ));
-            let script = r#"#!/usr/bin/env bash
-args="$*"
-
-# Record the remote command line when a test asks for it.
-if [ -n "${FAKE_SSH_LOG:-}" ]; then
-    printf '%s\n' "${!#}" >> "$FAKE_SSH_LOG"
-fi
-
-# Invalid JSON injection (the output looks like it may hold a token).
-if [[ "$args" == *"--fail-json"* ]]; then
-    echo '{"status": "running", "token": "supersecret-token-value", broken'
-    exit 0
-fi
-
-# Error injection tests
-if [[ "$args" == *"--fail-unreachable"* ]]; then
-    echo "ssh: connect to host hpc-test port 22: No route to host" >&2
-    exit 255
-fi
-
-if [[ "$args" == *"--fail-auth"* ]]; then
-    echo "Permission denied (publickey)." >&2
-    exit 255
-fi
-
-# Tunnel invocation
-if [[ "$args" == *"-N -L"* ]]; then
-    # Keep running until killed
-    while true; do
-        sleep 1
-    done
-    exit 0
-fi
-
-# Remote start
-if [[ "$args" == *"coperceive remote start"* ]]; then
-    if [[ "$args" == *"--root /queued"* ]]; then
-        echo '{"status": "pending", "state": "PENDING", "reason": "Priority", "uuid": "test-queued", "job_id": 5560, "token": "tokq"}'
-    elif [[ "$args" == *"--root /slow-session"* ]]; then
-        echo '{"status": "pending", "state": "PENDING", "reason": "Resources", "uuid": "test-slow", "job_id": 5570, "token": "toks"}'
-    elif [[ "$args" == *"--root /stuck"* ]]; then
-        echo '{"status": "pending", "state": "PENDING", "reason": "ReqNodeNotAvail", "uuid": "test-pending", "job_id": 5556, "token": "tokp"}'
-    else
-        echo '{"status": "running", "uuid": "test-uuid-99", "job_id": 5555, "node": "hpc-node11", "ip": "10.20.240.48", "port": 52657, "token": "tok12345"}'
-    fi
-    exit 0
-fi
-
-# Remote status
-if [[ "$args" == *"coperceive remote status"* ]]; then
-    if [[ "$args" == *"test-slow"* && "$args" != *"--job-id"* ]]; then
-        # The cluster's reply (pretty-printed) while the job runs but has not
-        # written its session file: the sacct-by-name fallback said "stopped".
-        printf '%s\n' '{' '  "status": "stopped",' '  "state": "RUNNING",' '  "stopped_reason": "unknown",' '  "uuid": "test-slow",' '  "job_id": 5570,' '  "healthy": false' '}'
-    elif [[ "$args" == *"test-slow"* ]]; then
-        echo '{"status": "running", "state": "RUNNING", "uuid": "test-slow", "job_id": 5570, "node": "hpc-node3", "ip": "10.20.240.50", "port": 52700, "healthy": true}'
-    elif [[ "$args" == *"test-pending"* ]]; then
-        echo '{"status": "pending", "state": "PENDING", "uuid": "test-pending", "job_id": 5556, "reason": "ReqNodeNotAvail"}'
-    elif [[ "$args" == *"test-timeout"* ]]; then
-        echo '{"status": "stopped", "state": "TIMEOUT", "stopped_reason": "timeout", "uuid": "test-timeout", "job_id": 5557, "last_heartbeat_age_s": 650.0}'
-    else
-        echo '{"status": "running", "state": "RUNNING", "uuid": "test-uuid-99", "job_id": 5555, "node": "hpc-node11", "ip": "10.20.240.48", "port": 52657, "healthy": true, "last_heartbeat_age_s": 12.5}'
-    fi
-    exit 0
-fi
-
-# Remote stop
-if [[ "$args" == *"coperceive remote stop"* ]]; then
-    echo '{"status": "stopped", "uuid": "test-uuid-99", "job_id": 5555, "cancelled": true}'
-    exit 0
-fi
-
-# Remote heartbeat
-if [[ "$args" == *"coperceive remote heartbeat"* ]]; then
-    echo '{"status": "ok", "uuid": "test-uuid-99", "timestamp": 1792500000.0}'
-    exit 0
-fi
-
-# Remote token (read-only; returns the running session key over the SSH channel)
-if [[ "$args" == *"coperceive remote token"* ]]; then
-    echo '{"status": "running", "token": "tok-reattach-99"}'
-    exit 0
-fi
-
-# Remote list
-if [[ "$args" == *"coperceive remote list"* ]]; then
-    echo '{"sessions": [{"uuid": "test-uuid-99", "job_id": 5555, "state": "RUNNING", "ip": "10.20.240.48", "port": 52657, "is_orphan": false}]}'
-    exit 0
-fi
-
-echo "unknown command: $args" >&2
-exit 1
-"#;
-            fs::write(&tmp, script).expect("write fake_ssh");
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let mut perms = fs::metadata(&tmp).expect("metadata").permissions();
-                perms.set_mode(0o755);
-                fs::set_permissions(&tmp, perms).expect("set_permissions");
+            let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
+            Self {
+                path: PathBuf::from(fixture),
             }
-            Self { path: tmp }
         }
     }
 
     impl Drop for FakeSshScript {
-        fn drop(&mut self) {
-            let _ = fs::remove_file(&self.path);
-        }
+        fn drop(&mut self) {}
     }
 
     #[test]
@@ -1199,23 +1088,7 @@ exit 1
         ));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).expect("temp dir");
-        let bin_dir = dir.join("bin");
-        fs::create_dir_all(&bin_dir).expect("bin dir");
-        let fake_coperceive = bin_dir.join("coperceive");
-        fs::write(
-            &fake_coperceive,
-            "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$FAKE_COPER_LOG\"\n",
-        )
-        .expect("write fake coperceive");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(&fake_coperceive)
-                .expect("metadata")
-                .permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(&fake_coperceive, perms).expect("chmod");
-        }
+        let bin_dir = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bin"));
 
         let marker = dir.join("pwned");
         let log = dir.join("argv.log");
