@@ -860,17 +860,12 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     cfg.updater_checker = Some(Arc::new(move |_is_manual: bool, override_url_opt: Option<String>| {
         #[cfg(target_os = "linux")]
         {
-            if std::env::var_os("APPIMAGE").is_none() && !coperceive_desktop::test_seams::test_env_active() {
-                let outcome = if _is_manual {
-                    coperceive_desktop::updater::UpdateCheckOutcome::Error {
-                        error: "In-app updates are supported when running from AppImage. On Debian/Ubuntu (.deb), update using your package manager or download the latest .deb from GitHub Releases.".to_string(),
-                        is_network: false,
-                    }
-                } else {
-                    coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
-                        current_version: coperceive_desktop::updater::app_version(&check_handle.package_info().version),
-                    }
-                };
+            if let Some(outcome) = coperceive_desktop::updater::linux_deb_check_outcome(
+                _is_manual,
+                std::env::var_os("APPIMAGE").as_deref(),
+                coperceive_desktop::test_seams::test_env_active(),
+                &check_handle.package_info().version,
+            ) {
                 return Ok(serde_json::to_value(&outcome).unwrap_or_default());
             }
         }
@@ -946,8 +941,11 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     cfg.updater_installer = Some(Arc::new(move |override_url_opt: Option<String>| {
         #[cfg(target_os = "linux")]
         {
-            if std::env::var_os("APPIMAGE").is_none() && !coperceive_desktop::test_seams::test_env_active() {
-                return Err("In-app updates are supported when running from AppImage. On Debian/Ubuntu (.deb), update using your package manager or download the latest .deb from GitHub Releases.".to_string());
+            if coperceive_desktop::updater::linux_deb_install_prevented(
+                std::env::var_os("APPIMAGE").as_deref(),
+                coperceive_desktop::test_seams::test_env_active(),
+            ) {
+                return Err(coperceive_desktop::updater::DEB_UPDATE_NOTICE.to_string());
             }
         }
         {
