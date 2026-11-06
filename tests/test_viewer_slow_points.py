@@ -1,8 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Playback over a slow point-cloud link, as through the SSH tunnel to a cluster.
 
-The server here answers ``/points`` requests one at a time, 300 ms each, three
-times the 10 Hz sample gap, like a bandwidth-limited tunnel. The boxes must
+The server here answers ``/points`` requests one at a time, 600 ms each, six
+times the 10 Hz sample gap, like a bandwidth-limited tunnel. The scene is long
+enough (40 samples) that even a slow page load cannot prefetch it all before
+playback starts, so the underrun is deterministic rather than load-dependent. The boxes must
 never move ahead of the point cloud: on every rendered frame during playback
 both come from the same sample, and the timeline says "Buffering…" while it
 waits instead of running on.
@@ -51,9 +53,9 @@ from tests.test_viewer_browser import (
 )
 
 SCENE = "Slow-000"
-SAMPLES = 20
+SAMPLES = 40
 POINTS_PER_SWEEP = 64
-POINTS_DELAY_S = 0.3
+POINTS_DELAY_S = 0.6
 
 
 def _slow_scene() -> Scene:
@@ -146,10 +148,14 @@ def test_points_and_boxes_stay_on_the_same_sample_while_playing_over_a_slow_link
     # what makes the link slow enough to hold on a sample.
     page.goto(f"{slow_url}/#/viewer", wait_until="domcontentloaded")
     session.wait_status(SCENE)
-    session.wait_for(lambda: "64 points" in session.status(), "the first sweep to draw")
+    # The first sweep competes with the scheduler's initial prefetch on the
+    # serialized 600 ms link; allow for that rather than a fixed 10 s.
+    session.wait_for(
+        lambda: "64 points" in session.status(), "the first sweep to draw", timeout_s=30.0
+    )
     page.locator("button[aria-label=Loop]").click()  # play once, stop on the last sample
 
-    # The slow link (~3.3 sweeps/s against 10 samples/s playback) must run the
+    # The slow link (~1.7 sweeps/s against 10 samples/s playback) must run the
     # buffer dry soon after Play, so the timeline says "Buffering…" while it
     # holds. Poll the label directly: it stays up while the refill happens.
     play_start = page.evaluate("performance.now()")
@@ -212,9 +218,9 @@ def test_the_buffer_bar_fills_and_playback_buffers_then_resumes(
 
     The 1 s target is reachable, and while not playing the scheduler stops there,
     so at Play time at most ~1 s is buffered; the slow link (one serialized sweep
-    request per 300 ms = ~3.3 samples/s against 10 samples/s playback) then drains
-    that buffer in about a second — well before the 1.9 s scene ends — so the
-    underrun and the auto-resume do not depend on how long the page took to load.
+    request per 600 ms = ~1.7 samples/s against 10 samples/s playback) drains that
+    buffer quickly, and the 4 s scene is long enough that a slow page load cannot
+    have prefetched it all first, so the underrun and auto-resume are deterministic.
     """
     page = browser.new_page(viewport={"width": 1400, "height": 900})
     page.add_init_script(
@@ -226,7 +232,11 @@ def test_the_buffer_bar_fills_and_playback_buffers_then_resumes(
     # background, so the network stays busy for as long as the prefetch runs.
     page.goto(f"{slow_url}/#/viewer", wait_until="domcontentloaded")
     session.wait_status(SCENE)
-    session.wait_for(lambda: "64 points" in session.status(), "the first sweep to draw")
+    # The first sweep competes with the scheduler's initial prefetch on the
+    # serialized 600 ms link; allow for that rather than a fixed 10 s.
+    session.wait_for(
+        lambda: "64 points" in session.status(), "the first sweep to draw", timeout_s=30.0
+    )
 
     # The stats line is on through the initial state, and the buffer bar is part
     # of the timeline track (it starts empty and fills as sweeps arrive).
