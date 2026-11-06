@@ -337,7 +337,7 @@ jobs:
           echo "=== AppImage Package Size ==="
           ls -lh "${APPIMAGE_FILE}"
           echo "=== Top 25 Largest Files in Bundled Python ==="
-          find src-tauri/resources/python -type f -exec ls -la {} + | sort -k5 -n -r | head -n 25
+          (find src-tauri/resources/python -type f -exec ls -la {} + | sort -k5 -n -r || true) | head -n 25
       - name: Run Linux Smoke Test on Installed Debian Package
         run: |
           DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
