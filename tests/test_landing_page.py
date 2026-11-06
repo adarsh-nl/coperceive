@@ -283,9 +283,14 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
 
         response = page.goto(site_server, wait_until="networkidle")
         assert response is not None and response.status == 200
-        # Fonts and scripts are self-hosted: nothing is fetched from another origin.
+        # Fonts and scripts are self-hosted. The one off-origin request is the
+        # latest-release lookup, so a published release replaces the build-time copy.
         origin = site_server.split("/coperceive/")[0]
-        assert [u for u in requests if not u.startswith(origin)] == []
+        latest = "https://api.github.com/repos/adarsh-nl/coperceive/releases/latest"
+        if latest not in requests:
+            page.wait_for_request(latest, timeout=5000)
+        off_origin = [url for url in requests if not url.startswith(origin)]
+        assert off_origin == [latest]
 
         assert page.locator("h1").inner_text() == "Many agents.\nOne scene."
         nav = page.locator("header nav a")

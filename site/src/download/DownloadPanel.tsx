@@ -9,7 +9,7 @@ import {
   type ClientInfo,
   type ReleaseJson,
 } from "./assets.ts";
-import { loadRelease } from "./releaseLoad.ts";
+import { embeddedRelease, loadRelease, readCachedRelease, shownRelease } from "./releaseLoad.ts";
 
 interface UserAgentData {
   getHighEntropyValues?: (hints: string[]) => Promise<{ architecture?: string }>;
@@ -29,18 +29,30 @@ async function detectClient(): Promise<ClientInfo> {
   return clientFromSignals(navigator.userAgent, architecture);
 }
 
+function releaseOnScreen(): ReleaseJson | null {
+  const embedded = embeddedRelease();
+  try {
+    return shownRelease(embedded, readCachedRelease(sessionStorage));
+  } catch {
+    return embedded;
+  }
+}
+
 export function DownloadPanel() {
-  const [release, setRelease] = useState<ReleaseJson | null>(null);
+  const [release, setRelease] = useState<ReleaseJson | null>(releaseOnScreen);
   const [client, setClient] = useState<ClientInfo | null>(null);
   const [settled, setSettled] = useState(false);
 
   useEffect(() => {
     let live = true;
-    void Promise.all([detectClient(), loadRelease()]).then(([nextClient, nextRelease]) => {
+    void detectClient().then((nextClient) => {
       if (!live) return;
       setClient(nextClient);
-      setRelease(nextRelease);
       setSettled(true);
+    });
+    void loadRelease().then((nextRelease) => {
+      if (!live) return;
+      setRelease(nextRelease);
     });
     return () => {
       live = false;

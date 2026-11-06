@@ -69,6 +69,11 @@ test("Safari on a Mac is offered both disk images", () => {
   );
 });
 
+test("a release without an NSIS updater archive does not list that slot", () => {
+  const names = otherPlatforms(V010).map((item) => item.asset.name);
+  assert.equal(names.some((name) => name.endsWith(".nsis.zip")), false);
+});
+
 test("a Mac-only release says Windows and Linux are coming, and never links them", () => {
   const windows = primaryOffer(V010, clientFromSignals(WINDOWS, null));
   assert.deepEqual(windows.links, []);
