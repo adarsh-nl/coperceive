@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { DownloadPanel } from "../download/DownloadPanel.tsx";
 import type { EvalChoice, EvalScene } from "./evalScene";
 import type { StoryScene } from "./story";
 
@@ -249,14 +250,9 @@ export function Landing() {
           <div data-reveal="0" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
             <h2 style={{ margin: 0, fontSize: "clamp(40px,4.6vw,72px)", lineHeight: 1, letterSpacing: "-0.04em", fontWeight: 500 }}>Three commands to your first scene.</h2>
             <p style={{ margin: 0, fontSize: 18, lineHeight: 1.55, color: "#a1a1a6", maxWidth: 440 }}>Python 3.10–3.13. Apache-2.0. Local by default — nothing leaves your machine.</p>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "16px 18px", borderRadius: 12, border: "1px solid rgba(255,255,255,0.12)", background: "#0a0a0c", maxWidth: 440 }}>
-              <span style={{ width: 7, height: 7, borderRadius: "50%", background: "#E03A22", flexShrink: 0 }} />
-              <span style={{ fontSize: 15, lineHeight: 1.45, color: "#d2d2d7" }}>
-                Prefer an app? <span style={{ color: "#f5f5f7" }}>coperceive for Mac</span> is coming soon — same scenes, no terminal.
-              </span>
-            </div>
+            <DownloadPanel />
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
-              <a href={DOCS} className="lm-btn-primary">Read the docs</a>
+              <a href={DOCS} className="lm-btn-ghost">Read the docs</a>
               <a href={REPO} className="lm-btn-ghost">View on GitHub</a>
             </div>
           </div>
