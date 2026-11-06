@@ -425,7 +425,19 @@ jobs:
             release-assets/Coperceive_*_x64-setup.exe; do
             if [ -f "${file}" ]; then
               echo "Verifying ${file} with minisign -Vm..."
-              minisign -Vm "${file}" -x "${file}.sig" -p minisign.pub
+              python3 -c "
+import base64, sys
+content = open(sys.argv[1], 'rb').read().strip()
+try:
+    decoded = base64.b64decode(content)
+    if b'untrusted comment:' in decoded:
+        content = decoded
+except Exception:
+    pass
+open(sys.argv[2], 'wb').write(content)
+" "${file}.sig" "${file}.minisig"
+              minisign -Vm "${file}" -x "${file}.minisig" -p minisign.pub
+              rm -f "${file}.minisig"
             else
               echo "::error::File ${file} does not exist" >&2
               exit 1
