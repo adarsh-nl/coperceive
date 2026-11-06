@@ -35,7 +35,7 @@ locally and through `model run --slurm`, writing an ordinary predictions format 
 
 ## What is verified from upstream OpenCOOD (public source, checked 2026-11-06)
 
-The seam in `engine.py` was written against, and checked against, the public
+The seam in `opencood_engine.py` was written against, and checked against, the public
 [`DerrickXuNu/OpenCOOD`](https://github.com/DerrickXuNu/OpenCOOD) `main` branch on 2026-11-06
 (no commit SHA is pinned here: the user's checkout may differ, and the cluster check below
 records which one runs). These are the facts the plugin relies on, with the file each comes
@@ -347,7 +347,7 @@ checkpoint bytes in the repository).
    ```
 
    If the archives' boxes are mirrored relative to the ground truth, the convention in
-   `convert.py` is the thing to revisit, not the adapter. After the run, the work directory
+   `opencood_convert.py` is the thing to revisit, not the adapter. After the run, the work directory
    must hold no extracted checkpoint tree (`<out>/.work/<run-id>/` outside a Slurm job): the
    extraction is a temporary directory removed once the model is loaded, and `plugin.log`
    names the config and weights files it used.

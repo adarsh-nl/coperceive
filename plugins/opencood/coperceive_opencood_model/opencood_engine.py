@@ -36,7 +36,7 @@ import os
 import shutil
 import tempfile
 
-from convert import ConvertError, boxes_from_opencood
+from opencood_convert import ConvertError, boxes_from_opencood
 
 SUPPORTED_FUSION = ("IntermediateFusionDataset", "EarlyFusionDataset")
 

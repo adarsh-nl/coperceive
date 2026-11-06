@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import struct
 
-from convert import (
+from opencood_convert import (
     ConvertError,
     carla_pose_from_schema,
     carla_x_to_world,

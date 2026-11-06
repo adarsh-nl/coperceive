@@ -14,12 +14,12 @@ The plugin contract itself is [`docs/spec/model-plugin.md`](../../docs/spec/mode
   from every CAV, fused world-frame boxes attributed to the ego vehicle, `gpu: true`, the
   `checkpoint` option that names the archive (there is **no** default checkpoint path).
 - `worker.py` — the protocol-1 child, run by the OpenCOOD conda environment's interpreter.
-- `convert.py` / `batch.py` — pure schema-1 ↔ OpenCOOD conversions: the inverse of the
+- `opencood_convert.py` / `opencood_batch.py` — pure schema-1 ↔ OpenCOOD conversions: the inverse of the
   ADR 0012 `diag(1, -1, 1)` reflection, OpenCOOD's `x_to_world` pose convention, both box
   formats, and the per-CAV `base_data_dict` OpenCOOD's datasets take.
-- `checkpoint.py` — archive hashing, safe extraction, discovery of `config.yaml` and the
+- `opencood_checkpoint.py` — archive hashing, safe extraction, discovery of `config.yaml` and the
   weights file inside the archive.
-- `engine.py` — the thin OpenCOOD seam: loads the checkpoint's own config and weights and
+- `opencood_engine.py` — the thin OpenCOOD seam: loads the checkpoint's own config and weights and
   runs OpenCOOD's own dataset/preprocessing model-forward/postprocessing calls. OpenCOOD is
   imported from the user's environment at runtime; no OpenCOOD code is vendored.
 

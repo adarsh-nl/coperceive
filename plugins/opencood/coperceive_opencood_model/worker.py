@@ -27,10 +27,10 @@ import tempfile
 import time
 import traceback
 
-import batch
-import checkpoint
-import convert
-import engine
+import opencood_batch as batch
+import opencood_checkpoint as checkpoint
+import opencood_convert as convert
+import opencood_engine as engine
 
 PROTOCOL = 1
 PLUGIN = "opencood"

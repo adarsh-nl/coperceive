@@ -80,7 +80,7 @@ def test_manifest_states_the_open_cood_licence_truthfully() -> None:
 
 
 def test_plugin_code_imports_neither_coperceive_nor_opencood_statically() -> None:
-    """The worker speaks the stdio protocol and imports OpenCOOD dynamically, via engine.py."""
+    """The worker speaks the stdio protocol and imports OpenCOOD dynamically (opencood_engine)."""
     for path in sorted(PLUGIN_DIR.glob("*.py")):
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for node in ast.walk(tree):
@@ -90,9 +90,11 @@ def test_plugin_code_imports_neither_coperceive_nor_opencood_statically() -> Non
                     assert root not in ("coperceive", "opencood"), f"{path.name}: {alias.name}"
             elif isinstance(node, ast.ImportFrom):
                 module = node.module or ""
-                assert not module.startswith(("coperceive", "opencood")), (
-                    f"{path.name}: from {module}"
-                )
+                # The real package is ``opencood``; the plugin's own siblings are
+                # ``opencood_convert``, ``opencood_engine``, … and are allowed.
+                assert module != "opencood" and not module.startswith(
+                    ("coperceive.", "opencood.")
+                ), f"{path.name}: from {module}"
     # No vendored OpenCOOD package and no cluster path anywhere in the plugin.
     assert not list(PLUGIN_DIR.rglob("opencood/__init__.py"))
     for path in [*PLUGIN_DIR.glob("*.py"), MANIFEST, PLUGIN_DIR.parent / "README.md"]:

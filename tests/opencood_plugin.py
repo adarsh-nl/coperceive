@@ -27,6 +27,17 @@ FAKE_OPENCOOD_PARENT = Path(__file__).resolve().parent / "fake_opencood"
 
 _LOADED: dict[str, Any] = {}
 
+# The plugin's modules carry an ``opencood_`` prefix so that a top-level ``import convert``
+# in this test process can never resolve to the plugin's module instead of another plugin's
+# (plugins/griffin/tests/test_convert.py imports its sibling ``convert`` by name). The short
+# names are what the tests call these modules.
+_MODULES = {
+    "batch": "opencood_batch",
+    "checkpoint": "opencood_checkpoint",
+    "convert": "opencood_convert",
+    "engine": "opencood_engine",
+}
+
 
 def load(name: str) -> Any:
     """Import one of the plugin package's modules (``convert``, ``batch``, …) by file."""
@@ -34,7 +45,7 @@ def load(name: str) -> Any:
         directory = str(PLUGIN_DIR)
         if directory not in sys.path:
             sys.path.insert(0, directory)
-        _LOADED[name] = importlib.import_module(name)
+        _LOADED[name] = importlib.import_module(_MODULES.get(name, name))
     return _LOADED[name]
 
 
