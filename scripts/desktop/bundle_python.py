@@ -174,8 +174,8 @@ def strip_bundle(python_dest: Path, is_windows: bool) -> None:
     # Strip packages test suites (preserve *.testing packages like numpy.testing)
     if site_packages.is_dir():
         for root, dirs, _files in os.walk(site_packages, topdown=False):
-            for d in dirs:
-                if d == "tests":
+            for d in list(dirs):
+                if d in ("tests", "test") and not Path(root).name.endswith("testing"):
                     shutil.rmtree(Path(root) / d, ignore_errors=True)
 
     # Strip C headers and static libs
@@ -190,6 +190,47 @@ def strip_bundle(python_dest: Path, is_windows: bool) -> None:
             if f.endswith(".a") or f.endswith(".pdb"):
                 (Path(root) / f).unlink(missing_ok=True)
 
+    # Strip debug symbols from shared libraries and binaries
+    strip_bin = shutil.which("strip")
+    if strip_bin and not is_windows:
+        for root, _dirs, files in os.walk(python_dest):
+            for f in files:
+                f_path = Path(root) / f
+                if f_path.is_symlink():
+                    continue
+                if f.endswith(".so") or ".so." in f or f.endswith(".dylib"):
+                    try:
+                        if sys.platform == "darwin":
+                            subprocess.run(
+                                [strip_bin, "-x", str(f_path)], capture_output=True, check=False
+                            )
+                        else:
+                            subprocess.run(
+                                [strip_bin, "--strip-unneeded", str(f_path)],
+                                capture_output=True,
+                                check=False,
+                            )
+                    except Exception:
+                        pass
+                elif (
+                    (f_path.stat().st_mode & 0o111)
+                    and not f.endswith(".py")
+                    and not f.endswith(".sh")
+                ):
+                    try:
+                        if sys.platform == "darwin":
+                            subprocess.run(
+                                [strip_bin, "-x", str(f_path)], capture_output=True, check=False
+                            )
+                        else:
+                            subprocess.run(
+                                [strip_bin, "--strip-unneeded", str(f_path)],
+                                capture_output=True,
+                                check=False,
+                            )
+                    except Exception:
+                        pass
+
     # Strip bytecode caches
     for root, dirs, files in os.walk(python_dest, topdown=False):
         for d in dirs:
@@ -198,6 +239,20 @@ def strip_bundle(python_dest: Path, is_windows: bool) -> None:
         for f in files:
             if f.endswith(".pyc") or f.endswith(".pyo"):
                 (Path(root) / f).unlink(missing_ok=True)
+
+    print("Top 25 largest files in stripped bundled Python runtime:")
+    all_files: list[tuple[int, Path]] = []
+    for root, _, files in os.walk(python_dest):
+        for f in files:
+            fp = Path(root) / f
+            try:
+                if not fp.is_symlink():
+                    all_files.append((fp.stat().st_size, fp.relative_to(python_dest)))
+            except OSError:
+                pass
+    all_files.sort(key=lambda item: item[0], reverse=True)
+    for size, rel in all_files[:25]:
+        print(f"  {size:10d} bytes: {rel}")
 
 
 def main(argv: list[str] | None = None) -> int:

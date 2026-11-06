@@ -622,6 +622,7 @@ mod tests {
 
     #[test]
     fn test_run_scan_uses_fake_ssh_and_parses_the_listing() {
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let root = "/data/scenes";
         let limits = ScanLimits::default();
         let ssh = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
@@ -633,6 +634,7 @@ mod tests {
 
     #[test]
     fn test_run_scan_reports_a_refused_path_from_the_server() {
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let ssh = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
         let target = SshTarget::alias("cluster-a");
         let error = run_scan(ssh, &target, &["coperceive".to_string()], "/data/scenes", "escape", ScanLimits::default())

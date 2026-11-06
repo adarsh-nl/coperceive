@@ -312,8 +312,11 @@ jobs:
       - name: Bundle Python Standalone Runtime
         run: python3 scripts/desktop/bundle_python.py --target x86_64-unknown-linux-gnu --skip-web-build
       - name: Run Rust unit tests
-        run: cargo test --lib --verbose --color=never
-        working-directory: src-tauri
+        run: |
+          for i in $(seq 20); do
+            echo "=== Rust unit tests run ${i}/20 ==="
+            cargo test --manifest-path src-tauri/Cargo.toml -q || exit 1
+          done
       - name: Sync Desktop Bundle Version
         run: bash scripts/desktop/sync_version.sh
       - name: Build Tauri Desktop (AppImage and deb)
@@ -333,6 +336,8 @@ jobs:
           (dpkg-deb -c "${DEB_FILE}" | sort -k3 -n -r || true) | head -n 25
           echo "=== AppImage Package Size ==="
           ls -lh "${APPIMAGE_FILE}"
+          echo "=== Top 25 Largest Files in Bundled Python ==="
+          find src-tauri/resources/python -type f -exec ls -la {} + | sort -k5 -n -r | head -n 25
       - name: Run Linux Smoke Test on Installed Debian Package
         run: |
           DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
@@ -728,10 +733,12 @@ jobs:
             fi
             echo "Intel App path: ${APP_INTEL}"
             PY_INTEL="${APP_INTEL}/Contents/Resources/resources/python/bin/python3"
-            if [ -x "${PY_INTEL}" ]; then
-              echo "Testing bundled Intel python3 under Rosetta:"
-              arch -x86_64 "${PY_INTEL}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
+            if [ ! -x "${PY_INTEL}" ]; then
+              echo "Error: Bundled Intel python3 not found or not executable at ${PY_INTEL}" >&2
+              exit 1
             fi
+            echo "Testing bundled Intel python3 under Rosetta:"
+            arch -x86_64 "${PY_INTEL}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
             echo "Running smoke test on Intel .app under Rosetta:"
             arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
             echo "::notice title=Rosetta-Test::Intel Mac build verified under Rosetta 2"

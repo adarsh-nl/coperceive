@@ -787,16 +787,18 @@ mod tests {
 
     struct FakeSshScript {
         path: PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
     }
-
-    /// FAKE_SSH_LOG is process-wide; tests that read it take turns.
-    static FAKE_SSH_LOG_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     impl FakeSshScript {
         fn create() -> Self {
+            let guard = crate::test_seams::FAKE_SSH_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
             Self {
                 path: PathBuf::from(fixture),
+                _guard: guard,
             }
         }
     }
@@ -875,7 +877,6 @@ mod tests {
 
     #[test]
     fn a_viewer_job_that_never_leaves_the_queue_is_cancelled() {
-        let _turn = FAKE_SSH_LOG_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let fake = FakeSshScript::create();
         let log = std::env::temp_dir().join(format!("fake_ssh_stuck_{}.log", std::process::id()));
         let _ = fs::remove_file(&log);
@@ -908,7 +909,6 @@ mod tests {
 
     #[test]
     fn remote_start_passes_the_uploaded_static_directory() {
-        let _turn = FAKE_SSH_LOG_LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         let fake = FakeSshScript::create();
         let log = std::env::temp_dir().join(format!(
             "coperceive_remote_start_static_{}_{}.log",
