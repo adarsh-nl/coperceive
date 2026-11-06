@@ -81,14 +81,14 @@ def test_a_release_tag_becomes_the_bundle_version_and_names_latest_json(tmp_path
     assert _synced_version(work, GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v0.1.1") == "0.1.1"
     assets = tmp_path / "assets"
     assets.mkdir()
-    (assets / "Coperceive.app.tar.gz").write_bytes(b"archive-arm64")
-    (assets / "Coperceive.app.tar.gz.sig").write_text("c2lnLWFybTY0\n")
-    (assets / "Coperceive-x86_64.app.tar.gz").write_bytes(b"archive-intel")
-    (assets / "Coperceive-x86_64.app.tar.gz.sig").write_text("c2lnLWludGVs\n")
-    (assets / "Coperceive_0.1.1_x64-setup.nsis.zip").write_bytes(b"archive-win")
-    (assets / "Coperceive_0.1.1_x64-setup.nsis.zip.sig").write_text("c2lnLXdpbg==\n")
-    (assets / "coperceive_0.1.1_amd64.AppImage.tar.gz").write_bytes(b"archive-linux")
-    (assets / "coperceive_0.1.1_amd64.AppImage.tar.gz.sig").write_text("c2lnLWxpbng=\n")
+    (assets / "Coperceive_aarch64.app.tar.gz").write_bytes(b"archive-arm64")
+    (assets / "Coperceive_aarch64.app.tar.gz.sig").write_text("c2lnLWFybTY0\n")
+    (assets / "Coperceive_x64.app.tar.gz").write_bytes(b"archive-intel")
+    (assets / "Coperceive_x64.app.tar.gz.sig").write_text("c2lnLWludGVs\n")
+    (assets / "Coperceive_0.1.1_x64-setup.exe").write_bytes(b"archive-win")
+    (assets / "Coperceive_0.1.1_x64-setup.exe.sig").write_text("c2lnLXdpbg==\n")
+    (assets / "Coperceive_0.1.1_amd64.AppImage").write_bytes(b"archive-linux")
+    (assets / "Coperceive_0.1.1_amd64.AppImage.sig").write_text("c2lnLWxpbng=\n")
     out = tmp_path / "latest.json"
     argv = [
         "--conf",
@@ -113,19 +113,19 @@ def test_a_release_tag_becomes_the_bundle_version_and_names_latest_json(tmp_path
         "linux-x86_64",
     }
     assert manifest["platforms"]["darwin-aarch64"]["url"] == (
-        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive.app.tar.gz"
+        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_aarch64.app.tar.gz"
     )
     assert manifest["platforms"]["darwin-aarch64"]["signature"] == "c2lnLWFybTY0"
     assert manifest["platforms"]["darwin-x86_64"]["url"] == (
-        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive-x86_64.app.tar.gz"
+        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_x64.app.tar.gz"
     )
     assert manifest["platforms"]["darwin-x86_64"]["signature"] == "c2lnLWludGVs"
     assert manifest["platforms"]["windows-x86_64"]["url"] == (
-        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_0.1.1_x64-setup.nsis.zip"
+        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_0.1.1_x64-setup.exe"
     )
     assert manifest["platforms"]["windows-x86_64"]["signature"] == "c2lnLXdpbg=="
     assert manifest["platforms"]["linux-x86_64"]["url"] == (
-        f"https://github.com/{REPO}/releases/download/v0.1.1/coperceive_0.1.1_amd64.AppImage.tar.gz"
+        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_0.1.1_amd64.AppImage"
     )
     assert manifest["platforms"]["linux-x86_64"]["signature"] == "c2lnLWxpbng="
 
@@ -135,8 +135,8 @@ def test_require_all_fails_when_a_platform_is_missing(tmp_path: Path) -> None:
     work = _checkout(tmp_path, "v0.1.1")
     assets = tmp_path / "assets"
     assets.mkdir()
-    (assets / "Coperceive.app.tar.gz").write_bytes(b"archive-arm64")
-    (assets / "Coperceive.app.tar.gz.sig").write_text("c2lnLWFybTY0\n")
+    (assets / "Coperceive_aarch64.app.tar.gz").write_bytes(b"archive-arm64")
+    (assets / "Coperceive_aarch64.app.tar.gz.sig").write_text("c2lnLWFybTY0\n")
     out = tmp_path / "latest.json"
     argv = [
         "--conf",

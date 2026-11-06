@@ -858,6 +858,22 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     let check_handle = app_handle.clone();
     let check_state = app_state.clone();
     cfg.updater_checker = Some(Arc::new(move |_is_manual: bool, override_url_opt: Option<String>| {
+        #[cfg(target_os = "linux")]
+        {
+            if std::env::var_os("APPIMAGE").is_none() && !coperceive_desktop::test_seams::test_env_active() {
+                let outcome = if _is_manual {
+                    coperceive_desktop::updater::UpdateCheckOutcome::Error {
+                        error: "In-app updates are supported when running from AppImage. On Debian/Ubuntu (.deb), update using your package manager or download the latest .deb from GitHub Releases.".to_string(),
+                        is_network: false,
+                    }
+                } else {
+                    coperceive_desktop::updater::UpdateCheckOutcome::UpToDate {
+                        current_version: coperceive_desktop::updater::app_version(&check_handle.package_info().version),
+                    }
+                };
+                return Ok(serde_json::to_value(&outcome).unwrap_or_default());
+            }
+        }
         {
             use tauri_plugin_updater::UpdaterExt;
             let effective_url = coperceive_desktop::updater::resolve_update_endpoint_override(override_url_opt.as_deref());
@@ -928,6 +944,12 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     let install_handle = app_handle.clone();
     let install_state = app_state.clone();
     cfg.updater_installer = Some(Arc::new(move |override_url_opt: Option<String>| {
+        #[cfg(target_os = "linux")]
+        {
+            if std::env::var_os("APPIMAGE").is_none() && !coperceive_desktop::test_seams::test_env_active() {
+                return Err("In-app updates are supported when running from AppImage. On Debian/Ubuntu (.deb), update using your package manager or download the latest .deb from GitHub Releases.".to_string());
+            }
+        }
         {
             let update_opt = {
                 let lock = install_state.pending_update.lock().map_err(|e| e.to_string())?;

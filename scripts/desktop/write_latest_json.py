@@ -11,15 +11,16 @@ The tag must match the bundle version: an app that still reports the old version
 after updating would be offered the same update again on every check.
 
 Platforms supported in the updater manifest:
-- darwin-aarch64 (macOS Apple Silicon)
-- darwin-x86_64  (macOS Intel)
-- windows-x86_64 (Windows x86_64)
-- linux-x86_64   (Linux x86_64)
+- darwin-aarch64 (macOS Apple Silicon): Coperceive_aarch64.app.tar.gz
+- darwin-x86_64  (macOS Intel):         Coperceive_x64.app.tar.gz
+- linux-x86_64   (Linux x86_64):        Coperceive_{version}_amd64.AppImage
+- windows-x86_64 (Windows x86_64):      Coperceive_{version}_x64-setup.exe
 """
 
 from __future__ import annotations
 
 import argparse
+import base64
 import json
 import sys
 from datetime import datetime, timezone
@@ -33,61 +34,94 @@ ALL_PLATFORMS = (
 )
 
 
-def classify_archive(path: Path) -> str | None:
-    """Classify an update archive by target platform."""
-    name = path.name
-    if name.endswith(".sig") or name.endswith(".dmg") or name.endswith(".deb"):
-        return None
-    name_lower = name.lower()
-
-    # Windows: .nsis.zip or .exe installer
-    if (
-        name.endswith(".nsis.zip")
-        or name.endswith(".exe")
-        or ("windows" in name_lower and name.endswith(".zip"))
-    ):
-        if (
-            "x64" in name_lower
-            or "x86_64" in name_lower
-            or "setup" in name_lower
-            or "windows" in name_lower
-        ):
-            return "windows-x86_64"
-
-    # Linux: .AppImage or .AppImage.tar.gz
-    if ".appimage" in name_lower or ("linux" in name_lower and name.endswith(".tar.gz")):
-        if "amd64" in name_lower or "x86_64" in name_lower or "linux" in name_lower:
-            return "linux-x86_64"
-
-    # macOS: .app.tar.gz
-    if name.endswith(".app.tar.gz") or (name.endswith(".tar.gz") and "darwin" in name_lower):
-        if "x86_64" in name_lower or "x64" in name_lower or "intel" in name_lower:
-            return "darwin-x86_64"
-        if "aarch64" in name_lower or "arm64" in name_lower:
-            return "darwin-aarch64"
-        # If default Coperceive.app.tar.gz without arch qualifier, default to darwin-aarch64
-        if name == "Coperceive.app.tar.gz":
-            return "darwin-aarch64"
-
+def extract_trusted_comment_file(sig_content: str) -> str | None:
+    """Parse trusted comment from a minisign signature and extract the file: parameter."""
+    text = sig_content.strip()
+    if not text.startswith("untrusted comment:"):
+        try:
+            decoded = base64.b64decode(text).decode("utf-8", errors="replace")
+            if "trusted comment:" in decoded:
+                text = decoded
+        except Exception:
+            pass
+    for line in text.splitlines():
+        if line.startswith("trusted comment:"):
+            # Tokens separated by tabs or spaces
+            for token in line.split("\t"):
+                token = token.strip()
+                if token.startswith("file:"):
+                    return token[len("file:") :].strip()
+            for token in line.split():
+                token = token.strip()
+                if token.startswith("file:"):
+                    return token[len("file:") :].strip()
     return None
 
 
-def find_platform_archives(assets: Path) -> dict[str, tuple[Path, Path]]:
-    """Scan the assets directory for updater archives and signatures for each platform."""
+def get_expected_filenames(version: str) -> dict[str, list[str]]:
+    """Return explicit expected archive filenames for each platform."""
+    return {
+        "darwin-aarch64": ["Coperceive_aarch64.app.tar.gz"],
+        "darwin-x86_64": ["Coperceive_x64.app.tar.gz"],
+        "linux-x86_64": [
+            f"Coperceive_{version}_amd64.AppImage",
+            f"coperceive_{version}_amd64.AppImage",
+            f"Coperceive_{version}_amd64.AppImage.tar.gz",
+            f"coperceive_{version}_amd64.AppImage.tar.gz",
+        ],
+        "windows-x86_64": [
+            f"Coperceive_{version}_x64-setup.exe",
+            f"Coperceive_{version}_x64-setup.nsis.zip",
+        ],
+    }
+
+
+def find_platform_archives(assets: Path, version: str) -> dict[str, tuple[Path, Path]]:
+    """Scan the assets directory for updater archives and signatures for each platform.
+
+    Enforces strict mapping from explicit filenames and ensures no two platforms
+    resolve to the same archive file.
+    """
+    expected = get_expected_filenames(version)
     platforms: dict[str, tuple[Path, Path]] = {}
-    for p in sorted(assets.iterdir()):
-        if not p.is_file():
-            continue
-        platform = classify_archive(p)
-        if platform is None:
-            continue
-        sig = p.with_name(p.name + ".sig")
-        if not sig.is_file():
+
+    for platform, candidates in expected.items():
+        for candidate_name in candidates:
+            archive_path = assets / candidate_name
+            if archive_path.is_file():
+                sig_path = archive_path.with_name(archive_path.name + ".sig")
+                if not sig_path.is_file():
+                    raise SystemExit(
+                        f"Missing {sig_path.name}: the build did not sign updater archive "
+                        f"{archive_path.name}. Check TAURI_SIGNING_PRIVATE_KEY."
+                    )
+                platforms[platform] = (archive_path, sig_path)
+                break
+
+    # Guard: ensure no two platforms resolved to the same archive file
+    resolved_paths: dict[Path, str] = {}
+    for platform, (archive, _) in platforms.items():
+        canonical = archive.resolve()
+        if canonical in resolved_paths:
             raise SystemExit(
-                f"Missing {sig.name}: the build did not sign updater archive {p.name}. "
-                "Check TAURI_SIGNING_PRIVATE_KEY and TAURI_SIGNING_PRIVATE_KEY_PASSWORD."
+                f"Conflict: platforms '{resolved_paths[canonical]}' and '{platform}' "
+                f"both resolved to the same file '{archive.name}'."
             )
-        platforms[platform] = (p, sig)
+        resolved_paths[canonical] = platform
+
+    # Guard: verify signature trusted comment file: matches archive filename
+    for platform, (archive, sig) in platforms.items():
+        sig_text = sig.read_text().strip()
+        if not sig_text:
+            raise SystemExit(f"Signature file {sig.name} for platform {platform} is empty.")
+        trusted_file = extract_trusted_comment_file(sig_text)
+        if trusted_file is not None and trusted_file != archive.name:
+            raise SystemExit(
+                f"Signature verification mismatch for {platform}: signature {sig.name} "
+                f"trusted comment specifies file '{trusted_file}', "
+                f"but the archive is '{archive.name}'."
+            )
+
     return platforms
 
 
@@ -135,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 1
 
-    archives = find_platform_archives(args.assets)
+    archives = find_platform_archives(args.assets, version)
     if not archives:
         print(f"No valid update archives found in {args.assets}", file=sys.stderr)
         return 1
@@ -152,9 +186,6 @@ def main(argv: list[str] | None = None) -> int:
     platforms_map: dict[str, dict[str, str]] = {}
     for platform, (archive, sig) in sorted(archives.items()):
         signature = sig.read_text().strip()
-        if not signature:
-            print(f"{sig.name} is empty.", file=sys.stderr)
-            return 1
         url = f"https://github.com/{args.repo}/releases/download/{args.tag}/{archive.name}"
         platforms_map[platform] = {"signature": signature, "url": url}
 
