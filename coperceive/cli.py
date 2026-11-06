@@ -38,6 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     capabilities.set_defaults(func=_capabilities)
 
+    demo = sub.add_parser("demo", help="Create the synthetic demo scene.")
+    demo_sub = demo.add_subparsers(dest="demo_command")
+    demo_create = demo_sub.add_parser("create", help="Write the demo scene into a new directory.")
+    demo_create.add_argument("directory", help="New directory for the demo.")
+    demo_create.add_argument("--seed", type=int, default=0)
+    demo_create.set_defaults(func=_demo_create)
+
     serve = sub.add_parser("serve", help="Serve the local web app.")
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8731)
@@ -490,6 +497,21 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
     func(args)
+
+
+def _demo_create(args: argparse.Namespace) -> None:
+    from coperceive.demo import create
+
+    try:
+        result = create(args.directory, seed=args.seed)
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {result.root}")
+    print(f"scenes {result.scenes / 'demo-junction'}")
+    print(f"predictions {result.predictions}")
+    print(f"mAP@0.5 {result.map_50:.3f} (simulated, not a model result)")
+    print(f"bytes {result.bytes} seconds {result.seconds:.2f}")
 
 
 def _scene_pack(args: argparse.Namespace) -> None:
