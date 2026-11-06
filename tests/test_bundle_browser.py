@@ -27,7 +27,10 @@ except ImportError:  # pragma: no cover
 @pytest.fixture(scope="module")
 def browser() -> Iterator[Browser]:
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=True)
+        try:
+            browser = playwright.chromium.launch(headless=True)
+        except Exception as exc:  # browser binary absent in unit-test jobs
+            pytest.skip(f"Chromium cannot start: {exc}")
         yield browser
         browser.close()
 
