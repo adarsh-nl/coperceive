@@ -22,6 +22,7 @@ import yaml
 from coperceive.adapters.build import CheckReport, SceneRef
 from coperceive.adapters.readers.lidar import read_bin_f32, read_pcd
 from coperceive.adapters.rotation import Reflection
+from coperceive.diagnostics import shared_objects
 from coperceive.model import (
     Agent,
     AgentType,
@@ -447,7 +448,7 @@ class GenericAdapter:
             agents=tuple(agents),
             sensors=tuple(sensors),
             annotations=tuple(annotations),
-            objects=(),
+            objects=shared_objects(annotations),
             point_clouds=tuple(clouds),
             images=tuple(images),
         )
