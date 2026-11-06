@@ -53,8 +53,8 @@ def test_each_dataset_reports_the_field_that_records_an_observer() -> None:
         _scene("v2v4real-world", ("0", AgentType.VEHICLE), ("1", AgentType.VEHICLE)),
         "v2v4real",
     )
-    assert v2v["available"] is True
-    assert "vehicles" in str(v2v["field"])
+    assert v2v["available"] is False
+    assert "ass_id" in str(v2v["field"])
 
     dair = seen_by_for_scene(
         _scene(
@@ -104,7 +104,7 @@ def test_carla_map_without_an_adapter_name_is_not_guessed(tmp_path: Path) -> Non
 def test_a_unique_world_frame_names_the_dataset_when_the_marker_has_no_adapter() -> None:
     report = seen_by_for_scene(_scene("v2v4real-world", ("0", AgentType.VEHICLE)), None)
     assert report["dataset"] == "v2v4real"
-    assert report["available"] is True
+    assert report["available"] is False
     demo = seen_by_for_scene(_scene("right-handed ENU", ("cav-a", AgentType.VEHICLE)), None)
     assert demo["dataset"] == "generic"
     assert demo["available"] is False

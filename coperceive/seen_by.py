@@ -9,7 +9,9 @@ when the source file for each agent is that agent's own list and a shared
   and ``annotations.track_id``. Each list is that agent's lidar hits.
 - V2XSet: no. The same ``vehicles`` key is not each agent's own hits
   (``docs/datasets/opencood.md``).
-- V2V4Real: yes. Per-agent YAML ``vehicles`` key on that CAV's frame file.
+- V2V4Real: no. Each CAV file's ``vehicles`` keys are that file's own ids.
+  The cross-CAV field is ``ass_id`` (``-1`` is unassociated); nothing cited
+  says the list is what that CAV's LiDAR saw.
 - DAIR-V2X-C: no. ``label_world`` is one shared list stored on the vehicle.
 - Griffin: yes. ``{agent}/label/{frame}.txt`` ``track_id`` column.
 - generic, including ``coperceive demo create``: no. The demo copies one
@@ -25,6 +27,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import cast
 
 from coperceive.model import Scene
 
@@ -40,8 +43,9 @@ _POLICY: dict[str, tuple[bool, str]] = {
         "per-agent YAML vehicles key; the lists are not each agent's own observations",
     ),
     "v2v4real": (
-        True,
-        "per-agent YAML vehicles mapping key on that CAV's frame file",
+        False,
+        "per-CAV vehicles keys are not a shared observation; "
+        "ass_id is the cross-CAV field and is not read",
     ),
     "dair-v2x-c": (
         False,
@@ -72,12 +76,12 @@ def adapter_name(scene_dir: Path | None) -> str | None:
         return None
     path = scene_dir / "COMPLETE.json"
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload: object = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
     if not isinstance(payload, dict):
         return None
-    name = payload.get("adapter")
+    name = cast(dict[str, object], payload).get("adapter")
     return name if isinstance(name, str) and name else None
 
 
