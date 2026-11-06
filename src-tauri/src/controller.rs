@@ -976,8 +976,10 @@ pub mod tests {
         let temp_dir = std::env::temp_dir().join(format!("cp-state-test-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&temp_dir);
         let state_file = temp_dir.join("state.json");
+
         let mut config = make_test_config();
         config.state_path = Some(state_file.clone());
+
         let payload = r#"{"scene_id":"synth_001","sample_index":3,"timestamp_us":300000}"#;
         let header = format!(
             "POST /state HTTP/1.1\r\n\
