@@ -18,7 +18,7 @@ import pytest
 from coperceive.cli import main
 from coperceive.demo import DemoScene, create
 from coperceive.evaluation.schemautil import SchemaError, validate_schema
-from coperceive.models.spec import Manifest, load_manifest
+from coperceive.models.spec import Manifest, load_manifest, select_model
 from coperceive.robustness.sweep import (
     DEFAULT_MAX_CELLS,
     EvalChoice,
@@ -27,6 +27,7 @@ from coperceive.robustness.sweep import (
     check_cell_limit,
     default_eval,
     load_grid,
+    run_id_for,
     run_sweep,
 )
 from coperceive.store import write_scene
@@ -166,7 +167,37 @@ def test_the_cell_limit_counts_combinations_times_seeds() -> None:
     assert grid.combination_count == 9 and grid.cell_count == 18
     with pytest.raises(SweepError, match=r"18 cells \(9 perturbation combinations x 2 seeds\)"):
         check_cell_limit(grid, 17)
+    with pytest.raises(SweepError, match=r"\(2 perturbation combinations x 1 seed\)"):
+        check_cell_limit(load_grid("pose_noise_xy: [0, 0.5]"), 1)
     check_cell_limit(grid, DEFAULT_MAX_CELLS)
+
+
+def test_the_scene_split_is_part_of_the_cell_run_id(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest = load_manifest(SWEEP_MANIFEST)
+    model = select_model(manifest, None)
+    grid = load_grid("pose_noise_xy: [0.5]")
+    spec = grid.cells()[0].spec
+
+    def options(scenes: Path) -> SweepOptions:
+        return SweepOptions(
+            manifest=manifest,
+            scenes=scenes,
+            out=tmp_path / "out",
+            run_id="sweep",
+            grid=grid,
+            evals=(default_eval(),),
+        )
+
+    split_a = options(tmp_path / "split-a")
+    assert run_id_for(split_a, model, spec) == run_id_for(split_a, model, spec)
+    assert run_id_for(split_a, model, spec) != run_id_for(
+        options(tmp_path / "split-b"), model, spec
+    )
+    # The resolved root is in the digest, so a relative spelling of the same split matches.
+    monkeypatch.chdir(tmp_path)
+    assert run_id_for(options(Path("split-a")), model, spec) == run_id_for(split_a, model, spec)
 
 
 def test_cli_refuses_a_grid_over_the_cell_limit(
@@ -285,6 +316,17 @@ def test_sweep_end_to_end_on_the_demo_scene(
     assert stats["n"] == 2
     assert float(cast(float, stats["mean"])) == pytest.approx(1.0)
     assert float(cast(float, stats["std"])) == pytest.approx(0.0)
+    # Two seeds draw different noise, so the noisy combination has a non-zero sample std.
+    noisy_combo = next(
+        _obj(item)
+        for item in aggregates
+        if _obj(_obj(item)["spec"])["latency_frames"] == 0
+        and _obj(_obj(item)["spec"])["pose_noise_xy"] == 1.0
+    )
+    noisy_stats = _obj(_obj(_obj(_obj(noisy_combo["eval"])["default"])["mAP_display"]))
+    assert noisy_stats["n"] == 2
+    assert float(cast(float, noisy_stats["mean"])) < 1.0
+    assert float(cast(float, noisy_stats["std"])) > 0.0
 
     # Charts: mAP against each swept axis with the other axis at its neutral value 0.
     charts = [_obj(item) for item in _arr(document["charts"])]
@@ -296,10 +338,18 @@ def test_sweep_end_to_end_on_the_demo_scene(
     baseline = _obj(pose["baseline"])
     assert float(cast(float, baseline["mean"])) == pytest.approx(1.0)
 
-    # A re-run reuses each cell's run directory: a forced re-run answers every cell from
-    # the per-scene cache (no frames, no fresh child) and the document does not move.
+    # A plain re-run reuses each cell's run directory without model work: every scene is
+    # already written, so the batch reports it skipped and runs no frame and no child.
     before = (out / "sweep.json").read_bytes()
     one_cell = "latency_frames: [0]\npose_noise_xy: [1.0]\nseeds: [0]"
+    reused = run_sweep(_options(demo.scenes, out, one_cell, run_id="demo"))
+    reused_report = reused.cells[0].report
+    assert reused_report.status == "complete"
+    assert reused_report.skipped == ("demo-junction",) and reused_report.completed == ()
+    assert reused_report.frames_run == 0 and reused_report.cache_hits == 0
+
+    # A forced re-run answers every scene from the per-scene cache (no frames, no fresh
+    # child) and the document does not move.
     single = run_sweep(_options(demo.scenes, out, one_cell, force=True, run_id="demo"))
     assert single.cells[0].run_id == _obj(cells[2])["run_id"]
     report = single.cells[0].report
@@ -358,7 +408,8 @@ def test_every_eval_config_is_recorded_under_its_name(
         f"by-centre={centre}",
     ]
     main(argv)
-    capsys.readouterr()
+    printed = capsys.readouterr().out
+    assert "cells 2 (2 perturbation combinations x 1 seed), eval 2" in printed
     document = _document(out)
     validate_schema(document, SCHEMA)
     choices = [_obj(item) for item in _arr(document["eval"])]
@@ -413,6 +464,17 @@ def test_every_eval_config_is_recorded_under_its_name(
     cast(dict[str, object], bad_cell["spec"])["packet_loss"] = 2
     with pytest.raises(SchemaError, match="packet_loss"):
         validate_schema(bad, SCHEMA)
+
+
+def test_a_max_agents_axis_leaves_no_chart_slice(coop: Path, tmp_path: Path) -> None:
+    # max_agents has no neutral 0, so no other axis has a 0 slice and max_agents itself is
+    # not a chart axis: the complete grid stays in aggregates, charts stays empty.
+    result = run_sweep(
+        _options(coop, tmp_path / "out", "max_agents: [1, 2]\npose_noise_xy: [0, 1]")
+    )
+    assert len(result.cells) == 4
+    assert len(result.aggregates) == 4
+    assert _arr(result.document["charts"]) == []
 
 
 # --- Slurm ----------------------------------------------------------------------------

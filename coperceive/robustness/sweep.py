@@ -187,10 +187,11 @@ def check_cell_limit(grid: SweepGrid, max_cells: int) -> None:
         raise SweepError("--max-cells must be an integer of at least 1")
     count = grid.cell_count
     if count > max_cells:
+        combinations = _count_label(grid.combination_count, "perturbation combination")
+        seeds = _count_label(len(grid.seeds), "seed")
         raise SweepError(
-            f"the sweep has {count} cells ({grid.combination_count} perturbation "
-            f"combinations x {len(grid.seeds)} seeds), over the limit of {max_cells}; "
-            "reduce the grid or raise it with --max-cells"
+            f"the sweep has {count} cells ({combinations} x {seeds}), over the limit of "
+            f"{max_cells}; reduce the grid or raise it with --max-cells"
         )
 
 
@@ -433,16 +434,17 @@ def emit_slurm(options: SweepOptions) -> tuple[Path, ...]:
 
 
 def run_id_for(options: SweepOptions, model: ModelSpec, spec: PerturbationSpec) -> str:
-    """The cell's run id: stable for the same manifest, model, spec and prediction options.
+    """The cell's run id: stable for the same split, manifest, model, spec and options.
 
     Stability is what makes a re-run of the same sweep reuse the run directory, the
-    cache under it and the evaluated files; a changed option changes the id so two
-    different predictions never share a run directory.
+    cache under it and the evaluated files; a changed option, a changed scene split or a
+    changed spec changes the id so two different predictions never share a run directory.
     """
     payload: dict[str, object] = {
         "manifest_sha256": manifest_sha256(options.manifest),
         "model": model.key,
         "spec": spec.canonical(),
+        "scenes_root": str(options.scenes.resolve()),
         "agents": list(options.agent_ids) if options.agent_ids is not None else None,
         "source": options.source,
         "scenes": list(options.scene_ids) if options.scene_ids is not None else None,
@@ -750,6 +752,10 @@ def _stats(values: Sequence[float | None]) -> Stats:
     mean = statistics.fmean(numbers)
     std = statistics.stdev(numbers) if len(numbers) > 1 else 0.0
     return Stats(mean, std, len(numbers))
+
+
+def _count_label(count: int, singular: str) -> str:
+    return f"{count} {singular}" if count == 1 else f"{count} {singular}s"
 
 
 def _format_map(value: float | None) -> str:

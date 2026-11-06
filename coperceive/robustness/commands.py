@@ -182,9 +182,10 @@ def _sweep(args: argparse.Namespace) -> None:
         return
     result = run_sweep(options, progress=print)
     print(f"wrote {result.path}")
+    seeds = f"{len(grid.seeds)} seed" if len(grid.seeds) == 1 else f"{len(grid.seeds)} seeds"
     print(
         f"cells {grid.cell_count} ({grid.combination_count} perturbation combinations "
-        f"x {len(grid.seeds)} seeds), eval {len(choices)}"
+        f"x {seeds}), eval {len(choices)}"
     )
 
 

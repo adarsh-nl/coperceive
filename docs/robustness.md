@@ -51,10 +51,10 @@ The definition has these rules:
   ascending. A repeated value or a repeated seed is an error.
 - `seeds` is optional and defaults to `[0]`. Seeds are integers `>= 0`; a seed that appears
   twice is an error.
-- The grid is the cartesian product of the axes (`4 combinations`), and the sweep's cells
-  are that product crossed with the seeds (`4 x 2 = 8` cells). The cell order is fixed:
-  combinations in axis order, then seeds ascending. The same definition always plans the
-  same cells in the same order.
+- The grid is the cartesian product of the axes, and the sweep's cells are that product
+  crossed with the seeds (the demo grid above: 2 axes x 2 values = 4 combinations, x 2
+  seeds = 8 cells). The cell order is fixed: combinations in axis order, then seeds
+  ascending. The same definition always plans the same cells in the same order.
 - At least one axis is required; an empty definition, an empty axis list and an empty seed
   list are errors.
 - A grid over `--max-cells` (default **64**, counting combinations x seeds) is refused with
@@ -71,9 +71,11 @@ seeds: [0, 1, 2]' --manifest det.yaml --scenes /data/scenes --out /data/sweeps -
 ## Results
 
 Each cell gets a deterministic run id: `<run-id prefix>-<digest>` (the digest is opaque;
-the examples below print it as `<digest>`), where the digest covers
-the manifest's SHA-256, the model key, the canonical spec and every option that changes the
-predictions (agents, source, scene ids, raw root, media roots, `--option`). Re-running the
+the examples below print it as `<digest>`), where the digest covers the resolved `--scenes`
+root, the manifest's SHA-256, the model key, the canonical spec and every option that
+changes the predictions (agents, source, scene ids, raw root, media roots, `--option`). The
+id is therefore per scene split: the same `--out` and `--run-id` over a different split
+plans different cells, so it never reuses another split's run directories. Re-running the
 same sweep therefore reuses each cell's run directory:
 
 - a plain re-run finds every scene already written and skips it (`skipped` in the per-cell
@@ -81,8 +83,8 @@ same sweep therefore reuses each cell's run directory:
 - `--force` re-emits the cells but answers every scene from the per-scene cache: the
   progress line shows `1 cached` and `run.json` shows `cache_hits: 1, frames_run: 0`.
 
-Changing an option or a cell's spec changes its run id, so two different predictions never
-share a run directory. Because the cells are plain runs, `coperceive eval report`,
+Changing an option, the scene split or a cell's spec changes its run id, so two different
+predictions never share a run directory. Because the cells are plain runs, `coperceive eval report`,
 `coperceive eval compare`, the viewer and `coperceive repro export` keep working on them.
 
 The console prints one line per cell and a summary. This is the demo/fixture output of a
@@ -92,7 +94,7 @@ small two-cell sweep:
 cell 1/2: run sweep-<digest> (pose_noise_xy=0, seed=0) default mAP@0.5 all 1.000 [1 run, 0 skipped, 0 cached]
 cell 2/2: run sweep-<digest> (pose_noise_xy=1, seed=0) default mAP@0.5 all 0.536 [1 run, 0 skipped, 0 cached]
 wrote /tmp/sweep/sweep.json
-cells 2 (2 perturbation combinations x 1 seeds), eval 1
+cells 2 (2 perturbation combinations x 1 seed), eval 1
 ```
 
 `mAP@<t> all` is the pooled AP that [`eval report`](eval.md) prints as its headline: one
