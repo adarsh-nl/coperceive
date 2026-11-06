@@ -57,6 +57,7 @@ class _Staging:
     files: dict[str, str] = field(default_factory=dict)  # relative -> kind
     licences: list[dict[str, str]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
+    redactions: int = 0
 
 
 def _safe_scene_id(value: object) -> str:
@@ -99,6 +100,7 @@ def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[st
 def _copy_scene_structure(staging: _Staging, scene_dir: Path, work: Path) -> None:
     for name in (
         "manifest.json",
+        "COMPLETE.json",
         "poses.parquet",
         "annotations.parquet",
         "objects.parquet",
@@ -140,7 +142,8 @@ def _write_frame(
     staging.files[target] = "frame-json"
 
 
-def _scrub_work(work: Path) -> None:
+def _scrub_work(work: Path) -> int:
+    redactions = 0
     for path in work.rglob("*"):
         if not path.is_file():
             continue
@@ -149,11 +152,19 @@ def _scrub_work(work: Path) -> None:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 continue
-            path.write_text(json.dumps(scrub_json(payload), indent=2) + "\n", encoding="utf-8")
+            before = json.dumps(payload, sort_keys=True)
+            after_doc = scrub_json(payload)
+            after = json.dumps(after_doc, sort_keys=True)
+            if after != before:
+                redactions += 1
+            path.write_text(json.dumps(after_doc, indent=2) + "\n", encoding="utf-8")
         elif path.suffix.lower() in {".txt", ".log", ".md", ".yaml", ".yml"}:
-            path.write_text(
-                scrub_text(path.read_text(encoding="utf-8", errors="replace")), encoding="utf-8"
-            )
+            before = path.read_text(encoding="utf-8", errors="replace")
+            after_text = scrub_text(before)
+            if after_text != before:
+                redactions += 1
+            path.write_text(after_text, encoding="utf-8")
+    return redactions
 
 
 def export_bundle(request: BundleExportRequest) -> Path:
@@ -244,7 +255,7 @@ def export_bundle(request: BundleExportRequest) -> Path:
                         "note": "raw files included; check the dataset licence before sharing",
                     }
                 )
-        _scrub_work(work)
+        staging.redactions = _scrub_work(work)
         # manifest over every file except itself
         contents: list[Content] = []
         for rel in sorted(staging.files):
@@ -264,7 +275,11 @@ def export_bundle(request: BundleExportRequest) -> Path:
             run_id=run_id,
             contents=contents,
             licences=licence_rows,
-            privacy={"raw_sensor_data": request.include_raw, "scrubbed": True},
+            privacy={
+                "raw_sensor_data": request.include_raw,
+                "scrubbed": True,
+                "redacted_files": staging.redactions,
+            },
         )
         (work / MANIFEST).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
@@ -278,3 +293,23 @@ def config_to_json(config: object) -> dict[str, object]:
     from coperceive.evaluation.config import config_json as convert
 
     return convert(config)  # type: ignore[arg-type]
+
+
+def preview_bundle(request: BundleExportRequest) -> dict[str, object]:
+    """The review manifest (files, sizes, total, scrub count) without keeping an archive."""
+    temporary = request.out.parent / f".{request.out.name}.preview"
+    request.out.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path = export_bundle(replace_request_out(request, temporary))
+        with zipfile.ZipFile(path) as archive:
+            manifest = json.loads(archive.read(MANIFEST))
+        manifest["total_bytes"] = sum(int(item["size"]) for item in manifest["contents"])
+        return manifest
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def replace_request_out(request: BundleExportRequest, out: Path) -> BundleExportRequest:
+    from dataclasses import replace
+
+    return replace(request, out=out)

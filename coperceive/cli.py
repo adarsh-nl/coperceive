@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import warnings
@@ -55,6 +56,16 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_export.add_argument("--include-raw", action="store_true")
     bundle_export.add_argument("--include-full-predictions", action="store_true")
     bundle_export.set_defaults(func=_bundle_export)
+    bundle_preview = bundle_commands.add_parser("preview", help="Print the export review as JSON.")
+    bundle_preview.add_argument("run_id")
+    bundle_preview.add_argument("--root", required=True)
+    bundle_preview.add_argument("--predictions", required=True)
+    bundle_preview.add_argument("--title", default="")
+    bundle_preview.add_argument("--frames", default="worst:6")
+    bundle_preview.add_argument("--config", default=None)
+    bundle_preview.add_argument("--include-raw", action="store_true")
+    bundle_preview.add_argument("--include-full-predictions", action="store_true")
+    bundle_preview.set_defaults(func=_bundle_preview)
     bundle_open = bundle_commands.add_parser("open", help="Verify and open a .cpbundle read-only.")
     bundle_open.add_argument("file")
     bundle_open.add_argument(
@@ -546,6 +557,29 @@ def _bundle_export(args: argparse.Namespace) -> None:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
     print(f"wrote {path}")
+
+
+def _bundle_preview(args: argparse.Namespace) -> None:
+    from coperceive.bundle import BundleExportRequest, preview_bundle
+
+    try:
+        manifest = preview_bundle(
+            BundleExportRequest(
+                run_id=args.run_id,
+                scenes_root=Path(args.root),
+                predictions_root=Path(args.predictions),
+                out=Path(".coperceive-preview.cpbundle"),
+                title=args.title,
+                frames=args.frames,
+                include_raw=args.include_raw,
+                include_full_predictions=args.include_full_predictions,
+                config_path=Path(args.config) if args.config else None,
+            )
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(json.dumps(manifest, indent=2))
 
 
 def _bundle_open(args: argparse.Namespace) -> None:
