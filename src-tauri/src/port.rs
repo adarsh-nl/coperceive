@@ -43,11 +43,8 @@ mod tests {
             !is_port_available(port),
             "bound port should not report as available"
         );
-        drop(listener);
-        // A listener closed without connections releases the port; binding it
-        // directly proves that without racing the separate availability helper.
-        let rebound = TcpListener::bind(("127.0.0.1", port));
-        assert!(rebound.is_ok(), "released port should be bindable: {rebound:?}");
-        drop(rebound);
+        // The port is still held by `listener`; `is_port_available` must see
+        // that. Do not close it and then re-bind: another parallel test can take
+        // the released port, which is not this function's promise.
     }
 }
