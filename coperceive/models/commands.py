@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import os
+import re
 import sys
 from collections.abc import Callable, Mapping
 from pathlib import Path
@@ -34,6 +35,15 @@ from coperceive.robustness.apply import export_perturbed_inputs
 from coperceive.robustness.spec import PerturbationError, load_perturbation
 from coperceive.store import read_scene
 from coperceive.viewdata import scene_directories
+
+_RUN_ID = re.compile(r"^[A-Za-z0-9._-]+$")
+
+
+def _check_run_id(value: str) -> str:
+    if value in {"", ".", ".."} or _RUN_ID.fullmatch(value) is None:
+        raise BatchError("The run id may contain only letters, digits, '.', '_' and '-'.")
+    return value
+
 
 _USER_ERRORS = (
     ModelSpecError,
@@ -265,6 +275,7 @@ def run_command(args: argparse.Namespace) -> None:
 
 
 def _run(args: argparse.Namespace) -> None:
+    args.run_id = _check_run_id(str(args.run_id))
     manifest = _manifest(args)
     options = _run_options(args)
     out = Path(args.out)

@@ -23,6 +23,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          # The change filter must compare the PR head, not GitHub's merge ref:
+          # a stale merge ref still contains base-branch changes and makes the
+          # guard report desktop files that this PR never touched.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
       - uses: dorny/paths-filter@v3
         id: filter
         with:

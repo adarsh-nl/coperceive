@@ -3499,6 +3499,55 @@ mod tests {
     }
 
     #[test]
+    fn builtin_argv_parity_with_the_cli_golden_sections() {
+        // The app builds the inner `coperceive model run` argv; the CLI --slurm
+        // path wraps the same kind of argv. Compare the shared sections and
+        // pin the deliberate differences so a drift is visible in review.
+        let argv = build_builtin_argv(
+            &entry().profile,
+            "/data/code/griffin/manifest.yaml",
+            "plan-1790000000-aabbccddeeff",
+            &BTreeMap::new(),
+            "/data/scenes",
+            "/data/checkpoints/model.pt",
+            "/data/results/runs/plan-1790000000-aabbccddeeff",
+        )
+        .expect("argv");
+        for item in [
+            "model",
+            "run",
+            "--manifest",
+            "/data/code/griffin/manifest.yaml",
+            "--scenes",
+            "/data/scenes",
+            "--out",
+            "/data/results/runs/plan-1790000000-aabbccddeeff",
+            "--run-id",
+            "plan-1790000000-aabbccddeeff",
+            "--option",
+            "checkpoint=/data/checkpoints/model.pt",
+        ] {
+            assert!(argv.iter().any(|value| value == item), "missing {item}: {argv:?}");
+        }
+        // Known, deliberate CLI-only sections: the CLI knows the model name and
+        // raw/media roots and runs its own staging. The app's submission wrapper
+        // supplies its own output directory and contract checks instead.
+        for cli_only in [
+            "--model",
+            "--raw-root",
+            "--media-root",
+            "--work",
+            "--staging-seconds",
+            "--slurm",
+        ] {
+            assert!(
+                !argv.iter().any(|value| value == cli_only),
+                "unexpected {cli_only} in app argv: {argv:?}"
+            );
+        }
+    }
+
+    #[test]
     fn builtin_argv_uses_plugin_manifest_and_separate_option_elements() {
         let mut values = BTreeMap::new();
         values.insert(
