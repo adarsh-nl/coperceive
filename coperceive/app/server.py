@@ -49,6 +49,7 @@ from coperceive.plot import (
 from coperceive.remote_view.client import StreamRefused, StreamUnavailable
 from coperceive.remote_view.scenes import RemoteScenes
 from coperceive.rerun_export import RerunUnavailable, export_rerun
+from coperceive.seen_by import adapter_name, seen_by_for_scene
 from coperceive.sequence_export import (
     FORMATS,
     SequenceExport,
@@ -296,8 +297,12 @@ def create_app(
         if app.state.remote is not None:
             body["point_sweeps"] = len(_remote_call(lambda: app.state.remote.sweeps(scene_id)))
             body["images_staged"] = _remote_images_staged(app, scene, scene_id)
+            mirrored = _remote_call(lambda: app.state.remote.ensure(scene_id))
+            body["seen_by"] = seen_by_for_scene(scene, adapter_name(mirrored))
             return body
-        body["images_staged"] = _images_staged(app, scene, _scene_dir(app.state.root, scene_id))
+        directory = _scene_dir(app.state.root, scene_id)
+        body["images_staged"] = _images_staged(app, scene, directory)
+        body["seen_by"] = seen_by_for_scene(scene, adapter_name(directory))
         return body
 
     @app.get("/api/scenes/{scene_id}/frame")

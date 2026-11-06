@@ -15,6 +15,7 @@ left panel may start left of the panel's edge (the trackpad-scrolled clipping).
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from collections.abc import Iterator
@@ -473,3 +474,112 @@ def test_the_selected_camera_is_highlighted_and_scrolled_into_view(
         )
     finally:
         page.context.close()
+
+
+# --- Viewer styles: the same overlap rule, at the four sizes the style work names ------
+
+STYLE_SIZES = ((1280, 800), (1440, 900), (1920, 1080), (2560, 1440))
+STYLES = ("classic", "studio", "instrument", "cinema")
+
+# Panels float over the stage in Instrument and Cinema. They may cover the
+# canvas. They may not cover each other, the top bar, the timeline or the strip.
+_CHROME_JS = """
+() => {
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    const style = getComputedStyle(el);
+    return style.visibility !== 'hidden' && style.display !== 'none' && Number(style.opacity) > 0;
+  };
+  const sels = [
+    '.topbar',
+    '.workspace > .panel:not(.panel-right)',
+    '.workspace > .panel-right',
+    '.timeline',
+    '.cam-strip',
+  ];
+  const nodes = sels.map((sel) => document.querySelector(sel)).filter((el) => el && visible(el));
+  const out = [];
+  for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+    const a = nodes[i], b = nodes[j];
+    if (a.contains(b) || b.contains(a)) continue;
+    const p = a.getBoundingClientRect(), q = b.getBoundingClientRect();
+    const w = Math.min(p.right, q.right) - Math.max(p.left, q.left);
+    const h = Math.min(p.bottom, q.bottom) - Math.max(p.top, q.top);
+    if (w > 0.5 && h > 0.5) {
+      const pair = a.className + ' overlaps ' + b.className;
+      out.push(pair + ' by ' + w.toFixed(0) + 'x' + h.toFixed(0));
+    }
+  }
+  return out;
+}
+"""
+
+
+def _style_case(
+    browser: Browser, url: str, size: tuple[int, int], style: str, theme: str
+) -> list[str]:
+    label = f"{style} {theme} {size[0]}x{size[1]}"
+    page = _open(
+        browser,
+        url,
+        size,
+        {
+            "last_scene_id": SCENE,
+            "viewer_style": style,
+            "theme_override": theme,
+            "cinema_drift": True,
+        },
+    )
+    problems: list[str] = []
+    try:
+        page.wait_for_function(
+            "(name) => document.querySelector('.viewer')?.dataset.viewerStyle === name",
+            arg=style,
+            timeout=5000,
+        )
+        if style == "classic":
+            theme_ok = page.evaluate(
+                "(theme) => document.documentElement.getAttribute('data-theme') === theme",
+                theme,
+            )
+            if not theme_ok:
+                problems.append(f"{label}: theme is not {theme}")
+        views = page.locator(".view-row").inner_text()
+        for word in ("Orbit", "Bird", "Chase", "Drone", "Camera"):
+            if word not in views:
+                problems.append(f"{label}: the {word} view is missing ({views!r})")
+        if page.locator(".cam-strip").count() != 1:
+            problems.append(f"{label}: the camera strip is missing on a scene that has cameras")
+        problems += _problems(page, f"{label} camera viewer closed")
+        chrome = cast(list[str], page.evaluate(_CHROME_JS))
+        problems += [f"{label}: {item}" for item in chrome]
+        if os.environ.get("COPERCEIVE_STYLE_SHOTS") == "1" and size == (1440, 900):
+            shot = (
+                Path(__file__).resolve().parents[1]
+                / "docs"
+                / "design"
+                / "scene-viewer-v2"
+                / "screenshots"
+            )
+            shot.mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(shot / f"{style}-{theme}-1440x900.png"))
+        _open_split(page)
+        problems += _problems(page, f"{label} camera viewer open")
+        chrome = cast(list[str], page.evaluate(_CHROME_JS))
+        problems += [f"{label} split: {item}" for item in chrome]
+    finally:
+        page.context.close()
+    return problems
+
+
+@pytest.mark.parametrize("size", STYLE_SIZES, ids=[f"{w}x{h}" for w, h in STYLE_SIZES])
+@pytest.mark.parametrize("style", STYLES)
+def test_viewer_styles_do_not_overlap(
+    browser: Browser, layout_url: str, size: tuple[int, int], style: str
+) -> None:
+    themes = ("light", "dark") if style == "classic" else ("dark",)
+    problems: list[str] = []
+    for theme in themes:
+        problems += _style_case(browser, layout_url, size, style, theme)
+    assert problems == [], "\n".join(problems)

@@ -66,6 +66,10 @@ export interface AppPersistentState {
   dataset_grouping?: string;
   /** Viewer "Camera strip": "all" (filmstrip, default) or "agent". */
   camera_strip?: string;
+  /** Viewer "Style": "classic" (default), "studio", "instrument" or "cinema". */
+  viewer_style?: string;
+  /** Cinema camera drift. Off while the OS asks for reduced motion. */
+  cinema_drift?: boolean;
   last_data_root?: string;
   library_root?: string;
   auto_download_updates?: boolean;

@@ -1,0 +1,697 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+html,body{margin:0;background:#0d0d0e;color:#f5f5f7;font-family:"Geist",-apple-system,sans-serif;-webkit-font-smoothing:antialiased}
+*{box-sizing:border-box}
+a{color:#79c0ff;text-decoration:none}a:hover{color:#a5d6ff;text-decoration:underline}
+</style>
+<script src="./scene-render.js"></script>
+</helmet>
+<section style="padding:56px;display:flex;flex-direction:column;gap:36px">
+  <div style="display:flex;flex-direction:column;gap:8px;max-width:920px">
+    <span style="font-size:12px;color:#6e6e73">Turn 1 · Scene viewer, three bold directions</span>
+    <h1 style="margin:0;font-size:28px;font-weight:600;letter-spacing:-0.01em">A fresh look for the visualiser</h1>
+    <p style="margin:0;font-size:14px;line-height:1.55;color:#a1a1a6;text-wrap:pretty">All three keep play with Loop and the camera strip along the bottom, and share one idea: every box is coloured by which agent sees it — white for both, orange for the ego only, blue for the roadside unit only — so the value of cooperation is visible at a glance. Drag a scene to orbit, click a box to select it, click a timeline to seek. Space, L, ← → and 1–4 control the last option you touched.</p>
+  </div>
+
+  <div style="display:flex;flex-wrap:wrap;gap:56px;align-items:flex-start">
+
+    <!-- 1a STUDIO -->
+    <div id="1a" style="display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:baseline;gap:12px">
+        <span style="font-family:'Geist Mono',monospace;font-size:12px;padding:3px 8px;border-radius:6px;background:#2c2c2e;color:#f5f5f7">1a</span>
+        <span style="font-size:18px;font-weight:600">Studio</span>
+        <span style="font-size:13px;color:#8e8e93">Quiet pro tool. A multi-track timeline shows what each agent saw, frame by frame.</span>
+      </div>
+      <div onPointerDown="{{ a.focus }}" style="width:1280px;height:800px;border-radius:12px;overflow:hidden;border:1px solid rgba(255,255,255,0.12);box-shadow:0 30px 80px rgba(0,0,0,0.55);background:#161618;display:grid;grid-template-rows:44px minmax(0,1fr) 180px;font-size:12.5px;color:#f5f5f7">
+        <div style="display:grid;grid-template-columns:232px minmax(0,1fr) auto;align-items:center;border-bottom:1px solid rgba(255,255,255,0.08);background:#1c1c1e">
+          <div style="display:flex;align-items:center;gap:18px;padding:0 14px">
+            <div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+            <span style="font-family:'Geist Mono',monospace;font-size:13px;font-weight:500;color:#c7c7cc">coperceive</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;min-width:0;padding:0 14px">
+            <span style="width:22px;height:22px;display:grid;place-items:center;border-radius:5px;color:#a1a1a6;cursor:pointer" style-hover="background:rgba(255,255,255,0.08)">‹</span>
+            <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0"><span style="color:#8e8e93">V2XSET / train / </span><span style="font-family:'Geist Mono',monospace;font-weight:500">2021_08_18_23_23_19</span></span>
+            <span style="color:#6e6e73;white-space:nowrap">4 of 33</span>
+            <span style="width:22px;height:22px;display:grid;place-items:center;border-radius:5px;color:#a1a1a6;cursor:pointer" style-hover="background:rgba(255,255,255,0.08)">›</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;padding:0 14px">
+            <div style="display:flex;gap:2px;padding:2px;border-radius:7px;background:rgba(255,255,255,0.06)">
+              <sc-for list="{{ a.views }}" as="v" hint-placeholder-count="4">
+                <span onClick="{{ v.pick }}" style="display:flex;align-items:center;gap:6px;padding:3px 10px;border-radius:5px;cursor:pointer;white-space:nowrap;background:{{ v.bg }};color:{{ v.color }}">{{ v.label }}<span style="font-family:'Geist Mono',monospace;font-size:10px;color:#6e6e73">{{ v.key }}</span></span>
+              </sc-for>
+            </div>
+            <span style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:#a1a1a6;white-space:nowrap"><span style="width:6px;height:6px;border-radius:50%;background:#3fb950"></span>HPC · 1 CPU</span>
+            <span style="padding:4px 10px;border-radius:5px;border:1px solid rgba(255,255,255,0.14);color:#e5e5ea;cursor:pointer" style-hover="background:rgba(255,255,255,0.06)">Export…</span>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:232px minmax(0,1fr) 272px;min-height:0">
+          <aside style="border-right:1px solid rgba(255,255,255,0.08);background:#1a1a1c;display:flex;flex-direction:column;min-height:0;overflow:hidden">
+            <div style="padding:12px 14px 10px;display:flex;flex-direction:column;gap:6px;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px;font-weight:500;color:#6e6e73">Agents</span>
+              <div style="display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:center"><span style="width:9px;height:9px;border-radius:2px;background:#F58A1F"></span><span>Ego <span style="color:#6e6e73">· car 641</span></span><span style="font-size:11px;color:#6e6e73">55 m</span></div>
+              <div style="display:grid;grid-template-columns:10px minmax(0,1fr) auto;gap:8px;align-items:center"><span style="width:9px;height:9px;border-radius:2px;background:#5aa2ff"></span><span>RSU 2 <span style="color:#6e6e73">· roadside</span></span><span style="font-size:11px;color:#6e6e73">48 m</span></div>
+            </div>
+            <div style="padding:10px 8px 8px;display:flex;flex-direction:column;gap:1px;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="padding:0 6px 4px;font-size:11px;font-weight:500;color:#6e6e73">Layers</span>
+              <sc-for list="{{ a.layers }}" as="l" hint-placeholder-count="5">
+                <div onClick="{{ l.toggle }}" style="display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:8px;align-items:center;padding:3px 6px;border-radius:5px;cursor:pointer" style-hover="background:rgba(255,255,255,0.05)">
+                  <span style="width:12px;height:12px;border-radius:3px;display:grid;place-items:center;font-size:9px;border:1px solid {{ l.box }};background:{{ l.fill }};color:#fff">{{ l.check }}</span>
+                  <span style="color:{{ l.color }}">{{ l.label }}</span>
+                  <span style="font-family:'Geist Mono',monospace;font-size:10px;color:#6e6e73">{{ l.key }}</span>
+                </div>
+              </sc-for>
+            </div>
+            <div style="padding:10px 8px 0;display:flex;justify-content:space-between;align-items:baseline"><span style="padding:0 6px;font-size:11px;font-weight:500;color:#6e6e73">Objects · by distance</span><span style="padding:0 6px;font-size:10.5px;color:#6e6e73">E R</span></div>
+            <div style="flex:1;min-height:0;overflow:auto;padding:4px 8px 8px">
+              <sc-for list="{{ a.rows }}" as="r" hint-placeholder-count="12">
+                <div onClick="{{ r.select }}" style="display:grid;grid-template-columns:minmax(0,1fr) 44px 22px;gap:6px;align-items:center;height:24px;padding:0 6px;border-radius:5px;cursor:default;background:{{ r.bg }};opacity:{{ r.opacity }}" style-hover="background:rgba(255,255,255,0.05)">
+                  <span style="display:flex;align-items:center;gap:7px;min-width:0"><span style="width:7px;height:7px;border-radius:2px;flex-shrink:0;background:{{ r.visColor }}"></span><span style="font-family:'Geist Mono',monospace;font-size:11.5px;white-space:nowrap">{{ r.id }}</span></span>
+                  <span style="text-align:right;font-variant-numeric:tabular-nums;color:#a1a1a6;font-size:11.5px">{{ r.dist }} m</span>
+                  <span style="display:flex;gap:3px;justify-content:flex-end"><span style="width:6px;height:6px;border-radius:50%;background:{{ r.egoC }}"></span><span style="width:6px;height:6px;border-radius:50%;background:{{ r.rsuC }}"></span></span>
+                </div>
+              </sc-for>
+            </div>
+          </aside>
+
+          <div style="display:flex;flex-direction:column;min-width:0;min-height:0">
+            <div style="flex:1;position:relative;min-height:0;background:#121214">
+              <canvas ref="{{ a.mainRef }}" onPointerDown="{{ a.down }}" style="position:absolute;inset:0;width:100%;height:100%;cursor:grab;touch-action:none;display:block"></canvas>
+              <div style="position:absolute;top:10px;left:10px;display:flex;gap:8px;padding:4px 9px;border-radius:6px;background:rgba(22,22,24,0.85);font-family:'Geist Mono',monospace;font-size:11px;color:#a1a1a6;pointer-events:none"><span style="color:#f5f5f7">t {{ a.timecode }} s</span><span>frame {{ a.frameLabel }}</span></div>
+              <div style="position:absolute;left:10px;bottom:10px;display:flex;gap:12px;padding:5px 10px;border-radius:6px;background:rgba(22,22,24,0.85);font-size:11.5px;color:#c7c7cc;pointer-events:none;font-variant-numeric:tabular-nums">
+                <span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:7px;border:1.5px solid #e5e5ea;border-radius:1px"></span>Both <span style="color:#f5f5f7">{{ a.cnt.both }}</span></span>
+                <span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:7px;border:1.5px solid #F58A1F;border-radius:1px"></span>Ego only <span style="color:#f5f5f7">{{ a.cnt.ego }}</span></span>
+                <span style="display:flex;align-items:center;gap:6px"><span style="width:10px;height:7px;border:1.5px solid #5aa2ff;border-radius:1px"></span>RSU only <span style="color:#f5f5f7">{{ a.cnt.rsu }}</span></span>
+                <span style="display:flex;align-items:center;gap:6px;color:#8e8e93"><span style="width:10px;height:7px;border:1.5px dashed #6e6e73;border-radius:1px"></span>Not seen {{ a.cnt.none }}</span>
+              </div>
+              <span style="position:absolute;right:10px;bottom:12px;font-size:11px;color:#6e6e73;pointer-events:none">Drag to orbit · click a box to select</span>
+            </div>
+            <div style="height:112px;flex-shrink:0;border-top:1px solid rgba(255,255,255,0.08);background:#18181a;display:grid;grid-template-columns:112px repeat(4,minmax(0,1fr));gap:8px;padding:8px 10px">
+              <div style="display:flex;flex-direction:column;justify-content:center;gap:4px">
+                <span style="font-size:11px;color:#6e6e73">Cameras · 4</span>
+                <span style="display:flex;align-items:center;gap:6px;font-weight:500"><span style="width:8px;height:8px;border-radius:2px;background:{{ a.agentColor }}"></span>{{ a.agentName }}</span>
+                <span onClick="{{ a.switchAgent }}" style="font-size:11.5px;color:#79c0ff;cursor:pointer">Switch agent</span>
+              </div>
+              <sc-for list="{{ a.cams }}" as="c" hint-placeholder-count="4">
+                <div onClick="{{ c.pick }}" style="position:relative;border-radius:6px;overflow:hidden;cursor:pointer;background:#0e0e10;box-shadow:0 0 0 1px {{ c.border }}">
+                  <canvas ref="{{ c.ref }}" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+                  <span style="position:absolute;left:6px;bottom:5px;padding:1px 5px;border-radius:3px;background:rgba(0,0,0,0.6);font-family:'Geist Mono',monospace;font-size:10px;color:#e5e5ea">{{ c.label }}</span>
+                </div>
+              </sc-for>
+            </div>
+          </div>
+
+          <aside style="border-left:1px solid rgba(255,255,255,0.08);background:#1a1a1c;display:flex;flex-direction:column;min-height:0;overflow:auto">
+            <div style="padding:14px 16px 12px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px;color:#6e6e73">Selected object</span>
+              <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px"><span style="font-family:'Geist Mono',monospace;font-size:16px;font-weight:500">{{ a.sel.id }}</span><span style="color:#a1a1a6">{{ a.sel.clsLabel }}</span></div>
+              <div style="display:flex;gap:6px;align-items:center">
+                <span style="padding:2px 8px;border-radius:10px;font-size:11.5px;border:1px solid {{ a.sel.egoBorder }};color:{{ a.sel.egoColor }}">Ego</span>
+                <span style="padding:2px 8px;border-radius:10px;font-size:11.5px;border:1px solid {{ a.sel.rsuBorder }};color:{{ a.sel.rsuColor }}">RSU 2</span>
+                <span style="margin-left:auto;font-size:12px;color:{{ a.sel.visColor }}">{{ a.sel.visLabel }}</span>
+              </div>
+            </div>
+            <div style="padding:12px 16px;display:grid;grid-template-columns:1fr 1fr;gap:12px;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Distance</span><span style="font-size:16px;font-variant-numeric:tabular-nums">{{ a.sel.dist }} <span style="font-size:11px;color:#6e6e73">m</span></span></div>
+              <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Speed</span><span style="font-size:16px;font-variant-numeric:tabular-nums">{{ a.sel.speed }} <span style="font-size:11px;color:#6e6e73">km/h</span></span></div>
+              <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Heading</span><span style="font-size:16px;font-variant-numeric:tabular-nums">{{ a.sel.hdg }}°</span></div>
+              <div style="display:flex;flex-direction:column;gap:2px"><span style="font-size:11px;color:#6e6e73">Size</span><span style="font-size:13px;font-variant-numeric:tabular-nums;padding-top:2px">{{ a.sel.size }} m</span></div>
+            </div>
+            <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px;color:#6e6e73">Visibility across the scene</span>
+              <div style="position:relative;height:12px;border-radius:2px;overflow:hidden;background:rgba(255,255,255,0.04)">
+                <svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;display:block"><path d="{{ a.sel.pBoth }}" fill="#c7c7cc"></path><path d="{{ a.sel.pEgo }}" fill="#F58A1F"></path><path d="{{ a.sel.pRsu }}" fill="#5aa2ff"></path></svg>
+                <span style="position:absolute;top:-2px;bottom:-2px;width:2px;background:#ff453a;left:{{ a.playPct }}"></span>
+              </div>
+              <div style="display:grid;grid-template-columns:auto minmax(0,1fr) 40px;gap:4px 10px;align-items:center;font-size:12px;font-variant-numeric:tabular-nums">
+                <span style="color:#a1a1a6">Ego alone</span><span style="height:4px;border-radius:2px;background:rgba(255,255,255,0.06)"><span style="display:block;height:100%;border-radius:2px;background:#F58A1F;width:{{ a.sel.egoPct }}"></span></span><span style="text-align:right">{{ a.sel.egoPct }}</span>
+                <span style="color:#a1a1a6">With RSU</span><span style="height:4px;border-radius:2px;background:rgba(255,255,255,0.06)"><span style="display:block;height:100%;border-radius:2px;background:#e5e5ea;width:{{ a.sel.coopPct }}"></span></span><span style="text-align:right">{{ a.sel.coopPct }}</span>
+              </div>
+            </div>
+            <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid rgba(255,255,255,0.06)">
+              <span style="font-size:11px;color:#6e6e73">Cooperation at this frame</span>
+              <div style="display:flex;height:8px;border-radius:2px;overflow:hidden;gap:1px">
+                <span style="background:#c7c7cc;transition:width .3s;width:{{ a.gain.wBoth }}"></span><span style="background:#F58A1F;transition:width .3s;width:{{ a.gain.wEgo }}"></span><span style="background:#5aa2ff;transition:width .3s;width:{{ a.gain.wRsu }}"></span>
+              </div>
+              <span style="font-size:12.5px;line-height:1.45;color:#c7c7cc;text-wrap:pretty">{{ a.gain.text }}</span>
+            </div>
+            <div style="padding:12px 16px;display:grid;grid-template-columns:auto 1fr;gap:4px 12px;font-size:12px">
+              <span style="color:#6e6e73">V2X latency</span><span style="color:{{ a.latColor }};font-variant-numeric:tabular-nums">{{ a.latNow }}</span>
+              <span style="color:#6e6e73">Late frames</span><span style="color:#c7c7cc">{{ tl.droppedCount }} RSU frames dropped</span>
+            </div>
+          </aside>
+        </div>
+
+        <div style="display:grid;grid-template-columns:232px minmax(0,1fr);border-top:1px solid rgba(255,255,255,0.08);background:#1c1c1e;min-height:0">
+          <div style="padding:14px 14px;display:flex;flex-direction:column;justify-content:space-between;border-right:1px solid rgba(255,255,255,0.06)">
+            <div style="display:flex;flex-direction:column;gap:2px">
+              <span style="font-family:'Geist Mono',monospace;font-size:26px;font-weight:500;font-variant-numeric:tabular-nums;letter-spacing:-0.02em">{{ a.timecode }}<span style="font-size:13px;color:#6e6e73"> / 9.20 s</span></span>
+              <span style="font-size:11.5px;color:#8e8e93;font-variant-numeric:tabular-nums">Frame {{ a.frameLabel }} · 20 Hz</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:6px">
+              <span onClick="{{ a.prev }}" title="Previous frame (←)" style="width:28px;height:28px;display:grid;place-items:center;border-radius:6px;color:#c7c7cc;cursor:pointer" style-hover="background:rgba(255,255,255,0.08)">⏮</span>
+              <span onClick="{{ a.togglePlay }}" title="Play / pause (Space)" style="width:38px;height:38px;display:grid;place-items:center;border-radius:50%;background:rgba(255,255,255,0.12);cursor:pointer" style-hover="background:rgba(255,255,255,0.18)">
+                <sc-if value="{{ a.isPaused }}" hint-placeholder-val="{{ false }}"><span style="width:0;height:0;margin-left:3px;border-left:11px solid #f5f5f7;border-top:7px solid transparent;border-bottom:7px solid transparent"></span></sc-if>
+                <sc-if value="{{ a.isPlaying }}" hint-placeholder-val="{{ true }}"><span style="display:flex;gap:3px"><span style="width:3.5px;height:13px;border-radius:1px;background:#f5f5f7"></span><span style="width:3.5px;height:13px;border-radius:1px;background:#f5f5f7"></span></span></sc-if>
+              </span>
+              <span onClick="{{ a.next }}" title="Next frame (→)" style="width:28px;height:28px;display:grid;place-items:center;border-radius:6px;color:#c7c7cc;cursor:pointer" style-hover="background:rgba(255,255,255,0.08)">⏭</span>
+              <span onClick="{{ a.toggleLoop }}" title="Loop (L)" style="margin-left:6px;display:flex;align-items:center;gap:5px;padding:4px 9px;border-radius:6px;font-size:12px;cursor:pointer;background:{{ a.loopBg }};color:{{ a.loopColor }}">↻ Loop</span>
+              <span onClick="{{ a.cycleSpeed }}" title="Playback speed" style="padding:4px 8px;border-radius:6px;font-size:12px;font-family:'Geist Mono',monospace;color:#c7c7cc;cursor:pointer;background:rgba(255,255,255,0.06)">{{ a.speedLabel }}</span>
+            </div>
+          </div>
+          <div style="position:relative;padding:4px 12px 8px 0;display:flex;flex-direction:column;min-width:0">
+            <div style="display:grid;grid-template-columns:92px minmax(0,1fr);height:20px;align-items:end">
+              <span></span>
+              <div style="position:relative;height:100%;font-size:10.5px;color:#6e6e73;font-variant-numeric:tabular-nums">
+                <sc-for list="{{ tl.secs }}" as="s" hint-placeholder-count="10"><span style="position:absolute;bottom:2px;left:{{ s.left }};border-left:1px solid rgba(255,255,255,0.15);padding-left:3px;height:10px;line-height:10px">{{ s.label }}</span></sc-for>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:92px minmax(0,1fr);height:44px;align-items:center;border-top:1px solid rgba(255,255,255,0.05)">
+              <span style="padding-left:12px;display:flex;flex-direction:column"><span style="font-size:11.5px;color:#c7c7cc">Objects</span><span style="font-size:10.5px;color:#6e6e73">by who sees them</span></span>
+              <svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="width:100%;height:36px;display:block"><path d="{{ tl.stackBoth }}" fill="rgba(199,199,204,0.55)"></path><path d="{{ tl.stackEgo }}" fill="rgba(245,138,31,0.75)"></path><path d="{{ tl.stackRsu }}" fill="rgba(90,162,255,0.8)"></path></svg>
+            </div>
+            <div style="display:grid;grid-template-columns:92px minmax(0,1fr);height:32px;align-items:center;border-top:1px solid rgba(255,255,255,0.05)">
+              <span style="padding-left:12px;display:flex;flex-direction:column"><span style="font-size:11.5px;color:#c7c7cc">V2X latency</span><span style="font-size:10.5px;color:#6e6e73">0–200 ms</span></span>
+              <div style="position:relative;height:26px">
+                <span style="position:absolute;top:0;bottom:0;background:rgba(227,179,65,0.12);left:{{ tl.spikeLeft }};width:{{ tl.spikeWidth }}"></span>
+                <span style="position:absolute;left:0;right:0;top:50%;border-top:1px dashed rgba(227,179,65,0.45)"></span>
+                <svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;display:block"><path d="{{ tl.latPath }}" fill="none" stroke="#c7c7cc" stroke-width="1.5" vector-effect="non-scaling-stroke"></path></svg>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:92px minmax(0,1fr);height:18px;align-items:center;border-top:1px solid rgba(255,255,255,0.05)">
+              <span style="padding-left:12px;font-size:11.5px;color:#c7c7cc">Ego LiDAR</span>
+              <span style="height:6px;border-radius:2px;background:rgba(245,138,31,0.7)"></span>
+            </div>
+            <div style="display:grid;grid-template-columns:92px minmax(0,1fr);height:18px;align-items:center;border-top:1px solid rgba(255,255,255,0.05)">
+              <span style="padding-left:12px;font-size:11.5px;color:#c7c7cc">RSU LiDAR</span>
+              <div style="position:relative;height:6px">
+                <svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;display:block"><path d="{{ tl.rsuFrames }}" fill="rgba(90,162,255,0.75)"></path></svg>
+                <sc-for list="{{ tl.drops }}" as="d" hint-placeholder-count="3"><span title="Frame arrived late, dropped" style="position:absolute;top:-3px;bottom:-3px;width:2px;background:#ff7b72;left:{{ d.left }}"></span></sc-for>
+              </div>
+            </div>
+            <div style="display:grid;grid-template-columns:92px minmax(0,1fr);height:22px;align-items:center;border-top:1px solid rgba(255,255,255,0.05)">
+              <span style="padding-left:12px;font-size:11.5px;color:#c7c7cc;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{{ a.sel.short }}</span>
+              <div style="position:relative;height:100%">
+                <sc-for list="{{ a.sel.events }}" as="e" hint-placeholder-count="2">
+                  <span title="{{ e.title }}" style="position:absolute;top:4px;display:flex;align-items:center;gap:5px;white-space:nowrap;font-size:10.5px;color:#a1a1a6;left:{{ e.left }}"><span style="width:7px;height:7px;transform:rotate(45deg);background:{{ e.color }}"></span>{{ e.text }}</span>
+                </sc-for>
+              </div>
+            </div>
+            <div onClick="{{ a.seek }}" style="position:absolute;top:0;bottom:0;left:92px;right:12px;cursor:pointer">
+              <span style="position:absolute;top:2px;bottom:6px;width:1px;background:#ff453a;left:{{ a.playPct }}"><span style="position:absolute;top:0;left:-5px;width:11px;height:11px;border-radius:2px 2px 6px 6px;background:#ff453a"></span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1b INSTRUMENT -->
+    <div id="1b" style="display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:baseline;gap:12px">
+        <span style="font-family:'Geist Mono',monospace;font-size:12px;padding:3px 8px;border-radius:6px;background:#2c2c2e;color:#f5f5f7">1b</span>
+        <span style="font-size:18px;font-weight:600">Instrument</span>
+        <span style="font-size:13px;color:#8e8e93">Heads-up display. Monospace readouts, compass tape, per-frame barcode timeline, keyboard-first.</span>
+      </div>
+      <div onPointerDown="{{ b.focus }}" style="width:1280px;height:800px;position:relative;border-radius:12px;overflow:hidden;border:1px solid rgba(90,255,220,0.2);box-shadow:0 30px 80px rgba(0,0,0,0.6);background:#04060a;font-family:'Geist Mono',monospace;color:#bafff0;font-size:11px;letter-spacing:0.02em">
+        <canvas ref="{{ b.mainRef }}" onPointerDown="{{ b.down }}" style="position:absolute;inset:0;width:100%;height:100%;cursor:crosshair;touch-action:none;display:block"></canvas>
+        <div style="position:absolute;inset:0;pointer-events:none;background:repeating-linear-gradient(0deg,rgba(0,0,0,0.16) 0 1px,transparent 1px 3px)"></div>
+        <div style="position:absolute;left:0;right:0;top:0;height:120px;pointer-events:none;background:linear-gradient(180deg,rgba(4,6,10,0.95),rgba(4,6,10,0))"></div>
+        <div style="position:absolute;left:0;right:0;bottom:0;height:300px;pointer-events:none;background:linear-gradient(0deg,rgba(4,6,10,0.97) 55%,rgba(4,6,10,0))"></div>
+
+        <div style="position:absolute;left:0;right:0;top:0;height:36px;display:flex;align-items:center;gap:16px;padding:0 14px;border-bottom:1px solid rgba(90,255,220,0.14)">
+          <div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+          <span style="color:#6fbfb0">COPERCEIVE <span style="color:#2f5d56">//</span> V2XSET/TRAIN <span style="color:#2f5d56">//</span> <span style="color:#e6fff9">2021_08_18_23_23_19</span></span>
+          <span style="color:#6fbfb0">[‹] <span style="color:#e6fff9">04</span>/33 [›]</span>
+          <span style="margin-left:auto;display:flex;align-items:center;gap:6px;color:#6fbfb0"><span style="width:6px;height:6px;background:#4fe0c4"></span>LINK SSH·HPC</span>
+          <span style="color:#6fbfb0">REC 20 HZ</span>
+          <span style="padding:2px 8px;border:1px solid rgba(90,255,220,0.35);color:#d7fff4;cursor:pointer" style-hover="background:rgba(90,255,220,0.1)">[E] EXPORT</span>
+        </div>
+
+        <div style="position:absolute;top:46px;left:50%;transform:translateX(-50%);width:480px;display:flex;flex-direction:column;align-items:center;gap:4px;pointer-events:none">
+          <div style="position:relative;width:100%;height:28px;border-bottom:1px solid rgba(90,255,220,0.4);overflow:hidden">
+            <sc-for list="{{ b.ticks }}" as="t" hint-placeholder-count="24"><span style="position:absolute;bottom:0;width:1px;background:#6fbfb0;height:{{ t.h }};left:{{ t.left }}"></span></sc-for>
+            <sc-for list="{{ b.tickLabels }}" as="t" hint-placeholder-count="5"><span style="position:absolute;top:0;transform:translateX(-50%);font-size:10px;left:{{ t.left }};color:{{ t.color }}">{{ t.label }}</span></sc-for>
+          </div>
+          <span style="width:0;height:0;border-left:5px solid transparent;border-right:5px solid transparent;border-bottom:6px solid #d7fff4;margin-top:-3px"></span>
+          <span style="padding:1px 6px;border:1px solid rgba(215,255,244,0.6);color:#e6fff9">HDG {{ b.bearing }}°</span>
+        </div>
+
+        <div style="position:absolute;top:46px;right:16px;display:flex;gap:4px">
+          <sc-for list="{{ b.views }}" as="v" hint-placeholder-count="4">
+            <span onClick="{{ v.pick }}" style="padding:3px 7px;cursor:pointer;border:1px solid rgba(90,255,220,0.3);background:{{ v.bg }};color:{{ v.color }}">[{{ v.key }}] {{ v.upper }}</span>
+          </sc-for>
+        </div>
+
+        <div style="position:absolute;top:92px;left:16px;width:300px;max-height:410px;display:flex;flex-direction:column;border:1px solid rgba(90,255,220,0.16);background:rgba(4,6,10,0.72)">
+          <div style="display:flex;justify-content:space-between;padding:6px 10px;border-bottom:1px solid rgba(90,255,220,0.16);color:#6fbfb0"><span>TRACKS <span style="color:#e6fff9">{{ b.rowCount }}</span></span><span>SORT: RANGE</span></div>
+          <div style="display:grid;grid-template-columns:minmax(0,1fr) 54px 44px 40px;gap:6px;padding:4px 10px;color:#2f8f80;font-size:10px"><span>ID</span><span style="text-align:right">R m</span><span style="text-align:right">V</span><span style="text-align:right">SRC</span></div>
+          <div style="overflow:auto;min-height:0">
+            <sc-for list="{{ b.rows }}" as="r" hint-placeholder-count="12">
+              <div onClick="{{ r.select }}" style="display:grid;grid-template-columns:minmax(0,1fr) 54px 44px 40px;gap:6px;align-items:center;padding:3px 10px;cursor:default;background:{{ r.bg }};color:{{ r.fg }};opacity:{{ r.opacity }}">
+                <span style="white-space:nowrap">{{ r.mark }} {{ r.id }}</span>
+                <span style="text-align:right;font-variant-numeric:tabular-nums">{{ r.dist }}</span>
+                <span style="text-align:right;font-variant-numeric:tabular-nums">{{ r.speed }}</span>
+                <span style="display:flex;justify-content:flex-end;gap:2px"><span style="padding:0 3px;background:{{ r.egoBg }};color:{{ r.egoFg }}">E</span><span style="padding:0 3px;background:{{ r.rsuBg }};color:{{ r.rsuFg }}">R</span></span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+
+        <div style="position:absolute;top:118px;right:16px;width:250px;display:flex;flex-direction:column;gap:12px">
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+            <span style="font-size:34px;font-weight:500;color:#e6fff9;letter-spacing:-0.01em;font-variant-numeric:tabular-nums">T+{{ b.timecode3 }}</span>
+            <span style="color:#6fbfb0">FRM {{ b.frameLabel }} · 9.200 S</span>
+          </div>
+          <div style="border:1px solid rgba(90,255,220,0.2);background:rgba(4,6,10,0.72);padding:8px 10px;display:grid;grid-template-columns:auto 1fr;gap:3px 12px">
+            <span style="grid-column:1 / -1;display:flex;justify-content:space-between;color:#6fbfb0;padding-bottom:4px;border-bottom:1px solid rgba(90,255,220,0.12);margin-bottom:3px"><span>TARGET</span><span style="color:{{ b.sel.visColor }}">{{ b.sel.visUpper }}</span></span>
+            <span style="color:#2f8f80">ID</span><span style="color:#e6fff9;text-align:right">{{ b.sel.id }}</span>
+            <span style="color:#2f8f80">RANGE</span><span style="color:#e6fff9;text-align:right">{{ b.sel.dist }} M</span>
+            <span style="color:#2f8f80">SPEED</span><span style="color:#e6fff9;text-align:right">{{ b.sel.speed }} KM/H</span>
+            <span style="color:#2f8f80">HDG</span><span style="color:#e6fff9;text-align:right">{{ b.sel.hdg }}°</span>
+            <span style="color:#2f8f80">SIZE</span><span style="color:#e6fff9;text-align:right">{{ b.sel.size }}</span>
+            <span style="color:#2f8f80">EGO / COOP</span><span style="color:#e6fff9;text-align:right">{{ b.sel.egoPct }} / {{ b.sel.coopPct }}</span>
+          </div>
+          <div style="border:1px solid rgba(90,255,220,0.2);background:rgba(4,6,10,0.72);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between;color:#6fbfb0"><span>COOP GAIN</span><span style="font-size:18px;color:#5cc8ff">+{{ b.cnt.rsu }}</span></div>
+            <div style="display:flex;height:6px;gap:1px"><span style="background:#d7fff4;width:{{ b.gain.wBoth }}"></span><span style="background:#ffb347;width:{{ b.gain.wEgo }}"></span><span style="background:#5cc8ff;width:{{ b.gain.wRsu }}"></span></div>
+            <span style="color:#6fbfb0;font-size:10px">BOTH {{ b.cnt.both }} · EGO {{ b.cnt.ego }} · RSU {{ b.cnt.rsu }} · NONE {{ b.cnt.none }}</span>
+          </div>
+          <div style="border:1px solid rgba(90,255,220,0.2);background:rgba(4,6,10,0.72);padding:8px 10px;display:flex;flex-direction:column;gap:6px">
+            <div style="display:flex;justify-content:space-between;color:#6fbfb0"><span>V2X LAT</span><span style="color:{{ b.latColor }}">{{ b.latNow }}</span></div>
+            <div style="display:flex;gap:2px"><sc-for list="{{ b.leds }}" as="l" hint-placeholder-count="20"><span style="flex:1;height:8px;background:{{ l.c }}"></span></sc-for></div>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:4px;justify-content:flex-end">
+            <sc-for list="{{ b.layers }}" as="l" hint-placeholder-count="5"><span onClick="{{ l.toggle }}" style="padding:2px 6px;cursor:pointer;border:1px solid rgba(90,255,220,0.3);background:{{ l.hudBg }};color:{{ l.hudFg }}">[{{ l.key }}] {{ l.short }}</span></sc-for>
+          </div>
+        </div>
+
+        <div style="position:absolute;left:50%;top:44%;width:24px;height:24px;margin:-12px;pointer-events:none">
+          <span style="position:absolute;left:11px;top:0;width:1px;height:8px;background:rgba(215,255,244,0.6)"></span><span style="position:absolute;left:11px;bottom:0;width:1px;height:8px;background:rgba(215,255,244,0.6)"></span>
+          <span style="position:absolute;top:11px;left:0;height:1px;width:8px;background:rgba(215,255,244,0.6)"></span><span style="position:absolute;top:11px;right:0;height:1px;width:8px;background:rgba(215,255,244,0.6)"></span>
+        </div>
+
+        <div style="position:absolute;left:16px;right:16px;bottom:12px;display:flex;flex-direction:column;gap:10px">
+          <div style="display:grid;grid-template-columns:120px repeat(4,minmax(0,1fr));gap:8px;height:96px">
+            <div style="display:flex;flex-direction:column;justify-content:center;gap:4px;color:#6fbfb0">
+              <span>CAM // 4</span>
+              <span style="color:{{ b.agentColor }}">{{ b.agentUpper }}</span>
+              <span onClick="{{ b.switchAgent }}" style="color:#d7fff4;cursor:pointer">[A] SWITCH</span>
+            </div>
+            <sc-for list="{{ b.cams }}" as="c" hint-placeholder-count="4">
+              <div onClick="{{ c.pick }}" style="position:relative;overflow:hidden;cursor:pointer;background:#020305;border:1px solid {{ c.border }}">
+                <canvas ref="{{ c.ref }}" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+                <span style="position:absolute;left:5px;top:4px;font-size:9.5px;color:#d7fff4">{{ c.label }}</span>
+                <span style="position:absolute;right:5px;top:4px;font-size:9.5px;color:#6fbfb0">{{ b.frameShort }}</span>
+              </div>
+            </sc-for>
+          </div>
+          <div onClick="{{ b.seek }}" style="position:relative;height:58px;cursor:pointer;border-top:1px solid rgba(90,255,220,0.25)">
+            <svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="position:absolute;left:0;right:0;top:6px;width:100%;height:30px;display:block"><path d="{{ tl.barsBoth }}" fill="#4fe0c4"></path><path d="{{ tl.barsEgo }}" fill="#ffb347"></path><path d="{{ tl.barsRsu }}" fill="#5cc8ff"></path></svg>
+            <span style="position:absolute;left:0;right:0;top:38px;border-top:1px solid rgba(90,255,220,0.3)"></span>
+            <sc-for list="{{ tl.ticks5 }}" as="t" hint-placeholder-count="37"><span style="position:absolute;top:38px;width:1px;background:rgba(90,255,220,0.45);height:{{ t.h }};left:{{ t.left }}"></span></sc-for>
+            <sc-for list="{{ tl.secs }}" as="s" hint-placeholder-count="10"><span style="position:absolute;top:46px;font-size:9.5px;color:#2f8f80;left:{{ s.left }};padding-left:3px">{{ s.label }}</span></sc-for>
+            <sc-for list="{{ b.sel.events }}" as="e" hint-placeholder-count="2"><span title="{{ e.title }}" style="position:absolute;top:-1px;width:0;height:0;margin-left:-4px;border-left:4px solid transparent;border-right:4px solid transparent;border-top:6px solid {{ e.color }};left:{{ e.left }}"></span></sc-for>
+            <span style="position:absolute;top:0;bottom:0;width:1px;background:#e6fff9;left:{{ b.playPct }}"><span style="position:absolute;top:-1px;left:4px;padding:0 4px;background:#e6fff9;color:#04060a;font-size:9.5px">{{ b.frameShort }}</span></span>
+          </div>
+          <div style="display:flex;align-items:center;gap:6px;color:#6fbfb0">
+            <span onClick="{{ b.togglePlay }}" style="padding:3px 8px;cursor:pointer;border:1px solid rgba(215,255,244,0.6);background:#d7fff4;color:#04060a">[␣] {{ b.playUpper }}</span>
+            <span onClick="{{ b.toggleLoop }}" style="padding:3px 8px;cursor:pointer;border:1px solid rgba(90,255,220,0.35);background:{{ b.loopBg }};color:{{ b.loopColor }}">[L] LOOP {{ b.loopUpper }}</span>
+            <span onClick="{{ b.prev }}" style="padding:3px 6px;cursor:pointer;border:1px solid rgba(90,255,220,0.35)">[←]</span>
+            <span onClick="{{ b.next }}" style="padding:3px 6px;cursor:pointer;border:1px solid rgba(90,255,220,0.35)">[→]</span>
+            <span onClick="{{ b.cycleSpeed }}" style="padding:3px 8px;cursor:pointer;border:1px solid rgba(90,255,220,0.35)">[S] {{ b.speedLabel }}</span>
+            <span style="margin-left:auto">BARS = OBJECTS/FRAME <span style="color:#4fe0c4">■</span> BOTH <span style="color:#ffb347">■</span> EGO <span style="color:#5cc8ff">■</span> RSU · ▼ {{ b.sel.idUpper }} CHANGES · {{ tl.droppedCount }} RSU FRM DROPPED</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 1c CINEMA -->
+    <div id="1c" style="display:flex;flex-direction:column;gap:14px">
+      <div style="display:flex;align-items:baseline;gap:12px">
+        <span style="font-family:'Geist Mono',monospace;font-size:12px;padding:3px 8px;border-radius:6px;background:#2c2c2e;color:#f5f5f7">1c</span>
+        <span style="font-size:18px;font-weight:600">Cinema</span>
+        <span style="font-size:13px;color:#8e8e93">The scene fills the window. Glass panels float over it; the camera drifts slowly while playing.</span>
+      </div>
+      <div onPointerDown="{{ c.focus }}" style="width:1280px;height:800px;position:relative;border-radius:14px;overflow:hidden;border:1px solid rgba(255,255,255,0.1);box-shadow:0 30px 80px rgba(0,0,0,0.6);background:#06070a;color:#f5f5f7;font-size:12.5px">
+        <canvas ref="{{ c.mainRef }}" onPointerDown="{{ c.down }}" style="position:absolute;inset:0;width:100%;height:100%;cursor:grab;touch-action:none;display:block"></canvas>
+        <div style="position:absolute;inset:0;pointer-events:none;background:radial-gradient(ellipse at 50% 45%,transparent 55%,rgba(0,0,0,0.55) 100%)"></div>
+
+        <div style="position:absolute;top:14px;left:14px;display:flex;align-items:center;gap:14px;padding:8px 14px 8px 12px;border-radius:14px;background:rgba(28,30,38,0.55);backdrop-filter:blur(18px) saturate(1.4);border:1px solid rgba(255,255,255,0.1)">
+          <div style="display:flex;gap:8px"><span style="width:12px;height:12px;border-radius:50%;background:#ff5f57"></span><span style="width:12px;height:12px;border-radius:50%;background:#febc2e"></span><span style="width:12px;height:12px;border-radius:50%;background:#28c840"></span></div>
+          <span style="width:1px;height:18px;background:rgba(255,255,255,0.14)"></span>
+          <span style="color:rgba(255,255,255,0.7);cursor:pointer">‹</span>
+          <span style="display:flex;flex-direction:column;line-height:1.25"><span style="font-weight:600;font-family:'Geist Mono',monospace;font-size:12.5px">2021_08_18_23_23_19</span><span style="font-size:11px;color:rgba(255,255,255,0.6)">V2XSET train · 4 of 33</span></span>
+          <span style="color:rgba(255,255,255,0.7);cursor:pointer">›</span>
+        </div>
+
+        <div style="position:absolute;top:18px;left:50%;transform:translateX(-50%);display:flex;gap:2px;padding:3px;border-radius:12px;background:rgba(28,30,38,0.55);backdrop-filter:blur(18px) saturate(1.4);border:1px solid rgba(255,255,255,0.1)">
+          <sc-for list="{{ c.views }}" as="v" hint-placeholder-count="4">
+            <span onClick="{{ v.pick }}" style="padding:5px 14px;border-radius:9px;cursor:pointer;white-space:nowrap;font-weight:500;transition:background .25s,color .25s;background:{{ v.bg }};color:{{ v.color }}">{{ v.label }}</span>
+          </sc-for>
+        </div>
+
+        <div style="position:absolute;top:14px;right:14px;display:flex;align-items:center;gap:10px;padding:8px 10px 8px 14px;border-radius:14px;background:rgba(28,30,38,0.55);backdrop-filter:blur(18px) saturate(1.4);border:1px solid rgba(255,255,255,0.1)">
+          <span style="display:flex;align-items:center;gap:6px;font-size:11.5px;color:rgba(255,255,255,0.7)"><span style="width:6px;height:6px;border-radius:50%;background:#3fb950"></span>HPC</span>
+          <span style="padding:4px 10px;border-radius:8px;background:rgba(255,255,255,0.1);cursor:pointer" style-hover="background:rgba(255,255,255,0.18)">Export</span>
+          <span style="width:26px;height:26px;display:grid;place-items:center;border-radius:8px;cursor:pointer;color:rgba(255,255,255,0.8)" style-hover="background:rgba(255,255,255,0.1)">⚙︎</span>
+        </div>
+
+        <div style="position:absolute;top:50%;left:14px;transform:translateY(-62%);display:flex;flex-direction:column;gap:2px;padding:8px;border-radius:14px;background:rgba(28,30,38,0.5);backdrop-filter:blur(18px) saturate(1.4);border:1px solid rgba(255,255,255,0.1);width:156px">
+          <span style="padding:2px 8px 6px;font-size:11px;color:rgba(255,255,255,0.55)">Layers</span>
+          <sc-for list="{{ c.layers }}" as="l" hint-placeholder-count="5">
+            <div onClick="{{ l.toggle }}" style="display:flex;align-items:center;justify-content:space-between;gap:8px;padding:6px 8px;border-radius:9px;cursor:pointer" style-hover="background:rgba(255,255,255,0.08)">
+              <span style="color:{{ l.cineColor }}">{{ l.label }}</span>
+              <span style="width:26px;height:16px;border-radius:8px;position:relative;transition:background .2s;background:{{ l.trackBg }}"><span style="position:absolute;top:2px;width:12px;height:12px;border-radius:50%;background:#fff;transition:left .2s;left:{{ l.knobLeft }}"></span></span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="position:absolute;top:72px;right:14px;width:268px;display:flex;flex-direction:column;gap:12px;padding:16px;border-radius:16px;background:rgba(28,30,38,0.55);backdrop-filter:blur(18px) saturate(1.4);border:1px solid rgba(255,255,255,0.1)">
+          <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font-family:'Geist Mono',monospace;font-size:13px;font-weight:500">{{ c.sel.id }}</span><span style="font-size:11.5px;color:rgba(255,255,255,0.6)">{{ c.sel.clsLabel }}</span></div>
+          <div style="display:flex;align-items:baseline;gap:6px"><span style="font-size:40px;font-weight:600;letter-spacing:-0.03em;font-variant-numeric:tabular-nums;line-height:1">{{ c.sel.dist }}</span><span style="color:rgba(255,255,255,0.6)">m from ego</span></div>
+          <div style="display:flex;gap:16px;font-variant-numeric:tabular-nums;color:rgba(255,255,255,0.85)"><span>{{ c.sel.speed }} <span style="color:rgba(255,255,255,0.5)">km/h</span></span><span>{{ c.sel.hdg }}°</span><span style="color:rgba(255,255,255,0.6)">{{ c.sel.size }} m</span></div>
+          <div style="display:flex;gap:6px">
+            <span style="flex:1;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:9px;background:{{ c.sel.egoTile }};color:{{ c.sel.egoColor }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ c.sel.egoColor }}"></span>Ego {{ c.sel.egoWord }}</span>
+            <span style="flex:1;display:flex;align-items:center;gap:6px;padding:6px 8px;border-radius:9px;background:{{ c.sel.rsuTile }};color:{{ c.sel.rsuColor }}"><span style="width:8px;height:8px;border-radius:50%;background:{{ c.sel.rsuColor }}"></span>RSU {{ c.sel.rsuWord }}</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:5px">
+            <div style="position:relative;height:6px;border-radius:3px;overflow:hidden;background:rgba(255,255,255,0.08)">
+              <svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="position:absolute;inset:0;width:100%;height:100%;display:block"><path d="{{ c.sel.pBoth }}" fill="rgba(255,255,255,0.85)"></path><path d="{{ c.sel.pEgo }}" fill="#ffa24d"></path><path d="{{ c.sel.pRsu }}" fill="#6fb0ff"></path></svg>
+            </div>
+            <span style="font-size:11.5px;color:rgba(255,255,255,0.6)">Ego alone sees it {{ c.sel.egoPct }} of the scene; with RSU 2, {{ c.sel.coopPct }}.</span>
+          </div>
+        </div>
+
+        <div style="position:absolute;left:14px;bottom:124px;display:flex;gap:12px;padding:6px 12px;border-radius:10px;background:rgba(28,30,38,0.5);backdrop-filter:blur(18px);border:1px solid rgba(255,255,255,0.08);font-size:11.5px;color:rgba(255,255,255,0.8);font-variant-numeric:tabular-nums">
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:rgba(255,255,255,0.9)"></span>Both {{ c.cnt.both }}</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:#ffa24d"></span>Ego only {{ c.cnt.ego }}</span>
+          <span style="display:flex;align-items:center;gap:6px"><span style="width:8px;height:8px;border-radius:2px;background:#6fb0ff"></span>RSU only {{ c.cnt.rsu }}</span>
+        </div>
+
+        <div style="position:absolute;right:14px;bottom:116px;display:flex;align-items:flex-end;gap:8px">
+          <div style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;padding:6px 10px;border-radius:10px;background:rgba(28,30,38,0.5);backdrop-filter:blur(18px);border:1px solid rgba(255,255,255,0.08)">
+            <span style="display:flex;align-items:center;gap:6px;font-size:11.5px"><span style="width:7px;height:7px;border-radius:2px;background:{{ c.agentColor }}"></span>{{ c.agentName }}</span>
+            <span onClick="{{ c.switchAgent }}" style="font-size:11px;color:#8ec5ff;cursor:pointer">Switch</span>
+          </div>
+          <sc-for list="{{ c.cams }}" as="m" hint-placeholder-count="4">
+            <div onClick="{{ m.pick }}" style="position:relative;width:150px;height:84px;border-radius:10px;overflow:hidden;cursor:pointer;background:#07080b;transition:transform .2s,box-shadow .2s;box-shadow:0 0 0 1.5px {{ m.border }},0 10px 24px rgba(0,0,0,0.45);transform:{{ m.lift }}">
+              <canvas ref="{{ m.ref }}" style="position:absolute;inset:0;width:100%;height:100%;display:block"></canvas>
+              <span style="position:absolute;left:7px;bottom:5px;font-size:10.5px;font-weight:500;color:rgba(255,255,255,0.9);text-shadow:0 1px 3px rgba(0,0,0,0.8)">{{ m.short }}</span>
+            </div>
+          </sc-for>
+        </div>
+
+        <div style="position:absolute;left:14px;right:14px;bottom:14px;height:88px;display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;align-items:center;gap:18px;padding:0 20px 0 16px;border-radius:20px;background:rgba(28,30,38,0.6);backdrop-filter:blur(22px) saturate(1.4);border:1px solid rgba(255,255,255,0.1)">
+          <span onClick="{{ c.togglePlay }}" title="Play / pause (Space)" style="width:52px;height:52px;border-radius:50%;display:grid;place-items:center;background:#f5f5f7;cursor:pointer;box-shadow:0 6px 20px rgba(0,0,0,0.35)" style-hover="transform:scale(1.05)">
+            <sc-if value="{{ c.isPaused }}" hint-placeholder-val="{{ false }}"><span style="width:0;height:0;margin-left:4px;border-left:16px solid #111;border-top:10px solid transparent;border-bottom:10px solid transparent"></span></sc-if>
+            <sc-if value="{{ c.isPlaying }}" hint-placeholder-val="{{ true }}"><span style="display:flex;gap:5px"><span style="width:5px;height:18px;border-radius:2px;background:#111"></span><span style="width:5px;height:18px;border-radius:2px;background:#111"></span></span></sc-if>
+          </span>
+          <div style="display:flex;flex-direction:column;gap:2px;min-width:92px">
+            <span style="font-size:22px;font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:-0.02em">{{ c.timecode }}</span>
+            <span style="font-size:11px;color:rgba(255,255,255,0.55);font-variant-numeric:tabular-nums">of 9.20 s · frame {{ c.frameShort }}</span>
+          </div>
+          <div onClick="{{ c.seek }}" style="position:relative;height:52px;cursor:pointer">
+            <svg viewBox="0 0 1000 100" preserveAspectRatio="none" style="position:absolute;left:0;right:0;top:4px;width:100%;height:26px;display:block;opacity:0.9"><path d="{{ tl.stackBoth }}" fill="rgba(255,255,255,0.22)"></path><path d="{{ tl.stackEgo }}" fill="rgba(255,162,77,0.55)"></path><path d="{{ tl.stackRsu }}" fill="rgba(111,176,255,0.6)"></path></svg>
+            <span style="position:absolute;left:0;right:0;top:34px;height:4px;border-radius:2px;background:rgba(255,255,255,0.14)"></span>
+            <span style="position:absolute;left:0;top:34px;height:4px;border-radius:2px;background:#f5f5f7;width:{{ c.playPct }}"></span>
+            <sc-for list="{{ c.sel.events }}" as="e" hint-placeholder-count="2"><span title="{{ e.title }}" style="position:absolute;top:32px;width:8px;height:8px;margin-left:-4px;border-radius:50%;border:2px solid #1c1e26;background:{{ e.color }};left:{{ e.left }}"></span></sc-for>
+            <span style="position:absolute;top:28px;width:16px;height:16px;margin-left:-8px;border-radius:50%;background:#fff;box-shadow:0 2px 8px rgba(0,0,0,0.5);left:{{ c.playPct }}"></span>
+            <span style="position:absolute;left:0;top:44px;font-size:10.5px;color:rgba(255,255,255,0.45)">Objects in view · dots mark when {{ c.sel.id }} changes visibility</span>
+          </div>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span onClick="{{ c.toggleLoop }}" title="Loop (L)" style="display:flex;align-items:center;gap:6px;padding:7px 12px;border-radius:10px;cursor:pointer;font-weight:500;transition:background .2s;background:{{ c.loopBg }};color:{{ c.loopColor }}">↻ Loop</span>
+            <span onClick="{{ c.cycleSpeed }}" style="padding:7px 10px;border-radius:10px;cursor:pointer;background:rgba(255,255,255,0.08);font-variant-numeric:tabular-nums">{{ c.speedLabel }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</section>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;autoplay&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;label&quot;:&quot;Autoplay&quot;},&quot;cinemaDrift&quot;:{&quot;editor&quot;:&quot;boolean&quot;,&quot;default&quot;:true,&quot;tsType&quot;:&quot;boolean&quot;,&quot;label&quot;:&quot;Cinema camera drift&quot;}}">
+const KS = ["a", "b", "c"];
+const VIEWS = {
+  orbit: { yaw: -0.8, pitch: 0.6, dist: 64, tx: 9, ty: -4, tz: 0, fov: 0.85 },
+  bev: { yaw: 0, pitch: 1.5, dist: 100, tx: 10, ty: -4, tz: 0, fov: 0.85 },
+  chase: { yaw: 0.05, pitch: 0.26, dist: 20, tx: 7, ty: -1.75, tz: 1.2, fov: 1.05 },
+  rsu: { yaw: 2.35, pitch: 0.5, dist: 36, tx: 16, ty: -1, tz: 0, fov: 0.95 },
+};
+const VIEW_LIST = [["orbit", "Orbit", "1", "ORBIT"], ["bev", "Bird's-eye", "2", "BEV"], ["chase", "Chase", "3", "CHASE"], ["rsu", "RSU view", "4", "RSU"]];
+const CAMS = {
+  ego: [["CAM 0 · FRONT", "Front", 0], ["CAM 1 · LEFT", "Left", 1.5708], ["CAM 2 · RIGHT", "Right", -1.5708], ["CAM 3 · REAR", "Rear", 3.1416]],
+  rsu: [["CAM 0 · NW", "North-west", 2.36], ["CAM 1 · N", "North", 1.5708], ["CAM 2 · W", "West", 3.1416], ["CAM 3 · S", "South", -1.5708]],
+};
+const LAYERS = [["points", "Points", "P", "PTS"], ["boxes", "Boxes", "B", "BOX"], ["rings", "Range rings", "R", "RNG"], ["trails", "Trajectories", "T", "TRK"], ["grid", "Grid", "G", "GRD"]];
+const VISLBL = { both: "Seen by both", ego: "Ego only", rsu: "RSU only", none: "Not seen" };
+const rgba = (c, a) => `rgba(${c[0]},${c[1]},${c[2]},${a})`;
+const SC = [[245, 138, 31], [60, 141, 255]];
+const sensorB = al => [0, 1].flatMap(s => al.map(a => rgba(SC[s], a)));
+const PAL = {
+  a: { bg: "#121214", thumbBg: "#0e0e10", grid: "rgba(255,255,255,0.05)", road: "rgba(255,255,255,0.14)", ring: "rgba(255,255,255,0.10)", ringText: "rgba(255,255,255,0.4)", font: "Geist Mono, monospace", vis: { both: "#e5e5ea", ego: "#F58A1F", rsu: "#5aa2ff", none: "rgba(255,255,255,0.28)" }, agent: ["#F58A1F", "#5aa2ff"], agentFill: ["rgba(245,138,31,0.2)"], selFill: "rgba(255,255,255,0.12)", label: "#f5f5f7", labelBg: "rgba(18,18,20,0.9)", trail: "rgba(255,255,255,0.6)" },
+  b: { bg: "#04060a", thumbBg: "#020305", grid: "rgba(90,255,220,0.07)", road: "rgba(90,255,220,0.2)", ring: "rgba(90,255,220,0.25)", ringText: "rgba(150,255,230,0.7)", ringDash: true, font: "Geist Mono, monospace", vis: { both: "#d7fff4", ego: "#ffb347", rsu: "#5cc8ff", none: "rgba(150,255,230,0.25)" }, agent: ["#ffb347", "#5cc8ff"], selFill: "rgba(215,255,244,0.10)", label: "#04060a", labelBg: "#d7fff4", trail: "rgba(215,255,244,0.65)" },
+  c: { bgGrad: ["#161a26", "#05060a"], thumbBg: "#07080b", grid: "rgba(255,255,255,0.03)", road: "rgba(255,255,255,0.09)", ring: "rgba(255,255,255,0.07)", ringText: "rgba(255,255,255,0.35)", glow: true, font: "Geist, sans-serif", vis: { both: "rgba(255,255,255,0.92)", ego: "#ffa24d", rsu: "#6fb0ff", none: "rgba(255,255,255,0.2)" }, agent: ["#ffa24d", "#6fb0ff"], agentFill: ["rgba(255,162,77,0.18)"], selFill: "rgba(255,255,255,0.14)", label: "#101114", labelBg: "rgba(255,255,255,0.94)", trail: "rgba(255,255,255,0.75)" },
+};
+const BUCKETS = {
+  a: { main: ["sensor", sensorB([0.22, 0.38, 0.55, 0.75])], thumb: ["rgba(255,226,190,0.95)", "rgba(240,180,120,0.8)", "rgba(190,150,130,0.6)", "rgba(130,125,145,0.45)", "rgba(95,100,125,0.32)"] },
+  b: { main: ["height", ["rgba(30,120,110,0.55)", "rgba(40,180,160,0.65)", "rgba(90,230,200,0.75)", "rgba(180,255,235,0.85)", "rgba(255,255,255,0.9)"]], thumb: ["rgba(230,255,248,0.95)", "rgba(150,255,230,0.8)", "rgba(70,210,185,0.6)", "rgba(40,150,135,0.45)", "rgba(25,95,90,0.35)"] },
+  c: { main: ["sensor", sensorB([0.12, 0.2, 0.3, 0.42])], thumb: ["rgba(255,255,255,0.95)", "rgba(220,230,255,0.75)", "rgba(160,185,240,0.55)", "rgba(110,140,210,0.42)", "rgba(80,100,170,0.3)"] },
+};
+const TH = {
+  a: { on: "rgba(255,255,255,0.12)", onC: "#f5f5f7", offC: "#8e8e93", vis: PAL.a.vis, ego: "#F58A1F", rsu: "#5aa2ff", dim: "rgba(255,255,255,0.12)", dimText: "#6e6e73", rowOn: "rgba(31,111,235,0.22)", rowFg: "#f5f5f7", rowOnFg: "#f5f5f7", camOn: "#f5f5f7", camOff: "rgba(255,255,255,0.08)", warn: "#e3b341", ok: "#c7c7cc" },
+  b: { on: "#d7fff4", onC: "#04060a", offC: "#6fbfb0", vis: { both: "#d7fff4", ego: "#ffb347", rsu: "#5cc8ff", none: "#2f5d56" }, ego: "#ffb347", rsu: "#5cc8ff", dim: "rgba(150,255,230,0.12)", dimText: "#2f5d56", rowOn: "#d7fff4", rowFg: "#bafff0", rowOnFg: "#04060a", camOn: "#d7fff4", camOff: "rgba(90,255,220,0.2)", warn: "#ffb347", ok: "#4fe0c4" },
+  c: { on: "rgba(255,255,255,0.92)", onC: "#101114", offC: "rgba(255,255,255,0.75)", vis: { both: "rgba(255,255,255,0.92)", ego: "#ffa24d", rsu: "#6fb0ff", none: "rgba(255,255,255,0.3)" }, ego: "#ffa24d", rsu: "#6fb0ff", dim: "rgba(255,255,255,0.14)", dimText: "rgba(255,255,255,0.4)", rowOn: "rgba(255,255,255,0.12)", rowFg: "#f5f5f7", rowOnFg: "#f5f5f7", camOn: "rgba(255,255,255,0.9)", camOff: "rgba(255,255,255,0.14)", warn: "#ffc861", ok: "#f5f5f7" },
+};
+const SPEEDS = [0.25, 0.5, 1, 2];
+const p2 = n => String(n).padStart(2, "0");
+const COMPASS = { 0: "N", 45: "NE", 90: "E", 135: "SE", 180: "S", 225: "SW", 270: "W", 315: "NW" };
+
+class Component extends DCLogic {
+  state = (() => {
+    const mk = (layers) => ({ playing: true, loop: true, view: "orbit", sel: "car_0113", agent: "ego", cam: 0, speed: 1, layers });
+    return { o: { a: mk({ points: true, boxes: true, rings: true, trails: true, grid: false }), b: mk({ points: true, boxes: true, rings: true, trails: true, grid: true }), c: mk({ points: true, boxes: true, rings: false, trails: true, grid: false }) }, tick: 0 };
+  })();
+  T = { a: 2.4, b: 2.4, c: 2.4 };
+  lf = { a: -1, b: -1, c: -1 };
+  user = { a: { yaw: 0, pitch: 0 }, b: { yaw: 0, pitch: 0 }, c: { yaw: 0, pitch: 0 } };
+  cur = { a: { ...VIEWS.orbit }, b: { ...VIEWS.orbit }, c: { ...VIEWS.orbit } };
+  hits = {};
+  visCache = {};
+  R = Object.fromEntries(KS.map(k => [k, { main: React.createRef(), cams: [0, 1, 2, 3].map(() => React.createRef()) }]));
+
+  componentDidMount() {
+    if (this.props.autoplay === false) KS.forEach(k => (this.state.o[k].playing = false));
+    const boot = () => {
+      if (!window.CPScene) { this.bootT = setTimeout(boot, 40); return; }
+      this.S = window.CPScene.series(); this.buildTL();
+      this.forceUpdate(() => KS.forEach(k => { this.drawMain(k); this.drawThumbs(k); }));
+      this.raf = requestAnimationFrame(this.loop);
+      this.iv = setInterval(() => { if (document.hidden || performance.now() - (this.lastTick || 0) > 250) this.tick(performance.now()); }, 100);
+    };
+    boot();
+    this.onMove = e => {
+      const d = this.drag; if (!d) return;
+      const sc = d.cw / d.rect.width, dx = (e.clientX - d.x) * sc, dy = (e.clientY - d.y) * sc;
+      if (Math.abs(dx) + Math.abs(dy) > 4) d.moved = true;
+      this.user[d.k].yaw = d.yaw - dx * 0.006; this.user[d.k].pitch = d.pitch + dy * 0.004;
+    };
+    this.onUp = e => {
+      const d = this.drag; if (!d) return; this.drag = null;
+      if (d.moved) return;
+      const sc = d.cw / d.rect.width, x = (e.clientX - d.rect.left) * sc, y = (e.clientY - d.rect.top) * sc;
+      let best = null, bd = 34;
+      (this.hits[d.k] || []).forEach(h => { const dd = Math.hypot(h.x - x, h.y - y); if (dd < bd) { bd = dd; best = h.id; } });
+      if (best) this.setO(d.k, { sel: best });
+    };
+    this.onKey = e => {
+      const tag = (e.target && e.target.tagName || "").toLowerCase();
+      if (tag === "input" || tag === "textarea" || e.metaKey || e.ctrlKey) return;
+      const k = this.focusK || "a", st = this.state.o[k], key = e.key.toLowerCase();
+      if (key === " ") { e.preventDefault(); this.setO(k, { playing: !st.playing }); }
+      else if (key === "l") this.setO(k, { loop: !st.loop });
+      else if (key === "arrowleft" || key === "arrowright") { e.preventDefault(); this.step(k, key === "arrowright" ? 1 : -1); }
+      else if (["1", "2", "3", "4"].includes(key)) this.pickView(k, VIEW_LIST[+key - 1][0]);
+      else if (key === "a") this.setO(k, { agent: st.agent === "ego" ? "rsu" : "ego", cam: 0 });
+      else { const L = LAYERS.find(l => l[2].toLowerCase() === key); if (L) this.setO(k, { layers: { ...st.layers, [L[0]]: !st.layers[L[0]] } }); }
+    };
+    window.addEventListener("pointermove", this.onMove);
+    window.addEventListener("pointerup", this.onUp);
+    window.addEventListener("keydown", this.onKey);
+  }
+  componentWillUnmount() {
+    cancelAnimationFrame(this.raf); clearTimeout(this.bootT); clearInterval(this.iv);
+    window.removeEventListener("pointermove", this.onMove); window.removeEventListener("pointerup", this.onUp); window.removeEventListener("keydown", this.onKey);
+  }
+
+  setO(k, patch) { this.setState(s => ({ o: { ...s.o, [k]: { ...s.o[k], ...patch } } })); }
+  frameOf(k) { const C = window.CPScene; return Math.min(C.NF - 1, Math.max(0, Math.floor((this.T[k] / C.DUR) * C.NF))); }
+  step(k, d) { const C = window.CPScene; const f = (this.frameOf(k) + d + C.NF) % C.NF; this.T[k] = ((f + 0.5) / C.NF) * C.DUR; this.setO(k, { playing: false }); }
+  pickView(k, v) { this.user[k] = { yaw: 0, pitch: 0 }; this.setO(k, { view: v }); }
+  target(k) { const b = VIEWS[this.state.o[k].view], u = this.user[k]; return { ...b, yaw: b.yaw + u.yaw, pitch: Math.max(0.08, Math.min(1.54, b.pitch + u.pitch)) }; }
+
+  componentDidUpdate() { if (this.S && !this.inTick) KS.forEach(k => { this.drawMain(k); this.drawThumbs(k); }); }
+  loop = now => { this.raf = requestAnimationFrame(this.loop); this.tick(now); };
+  tick(now) {
+    this.lastTick = now;
+    const C = window.CPScene; if (!C || !this.S) return;
+    const dt = Math.min(0.1, (now - (this.last || now)) / 1000); this.last = now; this.n = (this.n || 0) + 1;
+    let ui = false;
+    for (const k of KS) {
+      const st = this.state.o[k];
+      if (st.playing) {
+        this.T[k] += dt * st.speed;
+        if (this.T[k] >= C.DUR) { if (st.loop) this.T[k] %= C.DUR; else { this.T[k] = C.DUR - 1e-3; this.setO(k, { playing: false }); } }
+      }
+      const f = this.frameOf(k); if (f !== this.lf[k]) { this.lf[k] = f; ui = true; }
+      if (k === "c" && st.playing && st.view === "orbit" && !(this.drag && this.drag.k === "c") && this.props.cinemaDrift !== false) this.user.c.yaw += dt * 0.05;
+      const tgt = this.target(k), cur = this.cur[k], a = Math.min(1, dt * 5);
+      if (k === "b" && Math.abs(tgt.yaw - cur.yaw) > 0.003) ui = true;
+      for (const p of ["yaw", "pitch", "dist", "tx", "ty", "tz", "fov"]) cur[p] += (tgt[p] - cur[p]) * a;
+    }
+    if (this.n % 2 === 0) KS.forEach(k => this.drawMain(k));
+    if (this.n % 8 === 1) KS.forEach(k => this.drawThumbs(k));
+    if (ui && now - (this.lastUi || 0) > 90) { this.lastUi = now; this.inTick = true; this.setState(s => ({ tick: s.tick + 1 }), () => (this.inTick = false)); }
+  }
+
+  fit(cv, cap) {
+    const dpr = Math.min(cap, window.devicePixelRatio || 1), w = cv.clientWidth, h = cv.clientHeight;
+    if (!w || !h) return 0;
+    const W = Math.round(w * dpr), H = Math.round(h * dpr);
+    if (cv.width !== W || cv.height !== H) { cv.width = W; cv.height = H; }
+    return dpr;
+  }
+  drawMain(k) {
+    const cv = this.R[k].main.current; if (!cv) return;
+    const dpr = this.fit(cv, 2); if (!dpr) return;
+    const st = this.state.o[k], [colorBy, buckets] = BUCKETS[k].main;
+    this.hits[k] = window.CPScene.draw(cv.getContext("2d"), cv.width, cv.height, this.cur[k], this.T[k], { pal: PAL[k], layers: st.layers, colorBy, buckets, pointScale: 0.03, sel: st.sel, dpr, labels: k === "b" ? "all" : "sel" });
+  }
+  drawThumbs(k) {
+    const C = window.CPScene, st = this.state.o[k], s = C.SENSORS[st.agent === "ego" ? 0 : 1];
+    CAMS[st.agent].forEach(([, , yaw], i) => {
+      const cv = this.R[k].cams[i].current; if (!cv) return;
+      const dpr = this.fit(cv, 1.5); if (!dpr) return;
+      C.draw(cv.getContext("2d"), cv.width, cv.height, { eye: [s.x, s.y, st.agent === "ego" ? 1.7 : s.z], yaw, pitch: st.agent === "ego" ? 0.05 : 0.28, fov: 1.45 }, this.T[k], { pal: PAL[k], layers: { points: true, boxes: true }, colorBy: "depth", buckets: BUCKETS[k].thumb, pointScale: 0.05, sel: st.sel, dpr, thumb: true, step: 2 });
+    });
+  }
+
+  buildTL() {
+    const C = window.CPScene, S = this.S, N = C.NF, X = i => ((i / N) * 1000).toFixed(1), W = (1000 / N).toFixed(2);
+    const both = S.counts.map(c => c.both), be = S.counts.map(c => c.both + c.ego), all = S.counts.map(c => c.both + c.ego + c.rsu);
+    const mx = Math.max(...all, 1), Y = v => (100 - (v / mx) * 96).toFixed(1);
+    const area = (lo, hi) => { let d = ""; for (let i = 0; i < N; i++) d += (i ? "L" : "M") + X(i) + "," + Y(hi[i]); d += "L1000," + Y(hi[N - 1]) + "L1000," + Y(lo[N - 1]); for (let i = N - 1; i >= 0; i--) d += "L" + X(i) + "," + Y(lo[i]); return d + "Z"; };
+    const zero = both.map(() => 0);
+    const bars = (lo, hi) => { let d = ""; const bw = ((1000 / N) * 0.62).toFixed(2); for (let i = 0; i < N; i++) if (hi[i] > lo[i]) d += `M${X(i)},${Y(lo[i])}h${bw}V${Y(hi[i])}h-${bw}Z`; return d; };
+    let lat = ""; S.lat.forEach((l, i) => (lat += (i ? "L" : "M") + X(i) + "," + (100 - (Math.min(l, 200) / 200) * 100).toFixed(1)));
+    const over = S.lat.map((l, i) => (l > 100 ? i : -1)).filter(i => i >= 0);
+    let rsu = "", run = -1;
+    for (let i = 0; i <= N; i++) { const ok = i < N && !S.dropped[i]; if (ok && run < 0) run = i; if (!ok && run >= 0) { rsu += `M${X(run)},0H${X(i)}V100H${X(run)}Z`; run = -1; } }
+    this.TL = {
+      stackBoth: area(zero, both), stackEgo: area(both, be), stackRsu: area(be, all),
+      barsBoth: bars(zero, both), barsEgo: bars(both, be), barsRsu: bars(be, all),
+      latPath: lat, spikeLeft: over.length ? (over[0] / N) * 100 + "%" : "0%", spikeWidth: over.length ? ((over[over.length - 1] - over[0] + 1) / N) * 100 + "%" : "0%",
+      rsuFrames: rsu, drops: S.dropped.map((d, i) => (d ? { left: ((i + 0.5) / N) * 100 + "%" } : null)).filter(Boolean),
+      droppedCount: S.dropped.filter(Boolean).length,
+      secs: Array.from({ length: 10 }, (_, s) => ({ label: s + "s", left: (s / C.DUR) * 100 + "%" })),
+      ticks5: Array.from({ length: Math.ceil(N / 5) }, (_, i) => ({ left: ((i * 5) / N) * 100 + "%", h: (i * 5) % 20 === 0 ? "7px" : "3px" })),
+    };
+  }
+  visPaths(id) {
+    if (this.visCache[id]) return this.visCache[id];
+    const C = window.CPScene, v = this.S.vis[id], N = C.NF, X = i => ((i / N) * 1000).toFixed(1);
+    const out = { both: "", ego: "", rsu: "", none: "" }, ev = [];
+    let s = 0;
+    for (let i = 1; i <= N; i++) if (i === N || v[i] !== v[s]) { out[v[s]] += `M${X(s)},0H${X(i)}V100H${X(s)}Z`; if (i < N) ev.push({ f: i, to: v[i] }); s = i; }
+    const egoPct = Math.round((v.filter(x => x === "both" || x === "ego").length / N) * 100), coopPct = Math.round((v.filter(x => x !== "none").length / N) * 100);
+    return (this.visCache[id] = { ...out, ev, egoPct: egoPct + "%", coopPct: coopPct + "%" });
+  }
+
+  ov(k) {
+    const C = window.CPScene, S = this.S, st = this.state.o[k], th = TH[k];
+    const f = this.frameOf(k), tq = ((f + 0.5) / C.NF) * C.DUR, T = this.T[k];
+    const objs = C.objectsAt(tq);
+    const cnt = { both: 0, ego: 0, rsu: 0, none: 0 }; objs.forEach(o => cnt[o.vis]++);
+    const seenN = cnt.both + cnt.ego + cnt.rsu || 1;
+    const rows = objs.slice().sort((p, q) => p.dist - q.dist).map(o => {
+      const on = o.id === st.sel;
+      return { id: o.id, dist: o.dist.toFixed(1), speed: String(Math.round(o.speed)), mark: on ? "▸" : " ",
+        visColor: th.vis[o.vis], egoC: o.seen[0] ? th.ego : th.dim, rsuC: o.seen[1] ? th.rsu : th.dim,
+        egoBg: o.seen[0] ? (on && k === "b" ? "#04060a" : th.ego) : "transparent", egoFg: o.seen[0] ? (on && k === "b" ? th.ego : "#04060a") : th.dimText,
+        rsuBg: o.seen[1] ? (on && k === "b" ? "#04060a" : th.rsu) : "transparent", rsuFg: o.seen[1] ? (on && k === "b" ? th.rsu : "#04060a") : th.dimText,
+        opacity: o.vis === "none" && !on ? 0.45 : 1, bg: on ? th.rowOn : "transparent", fg: on ? th.rowOnFg : th.rowFg,
+        select: () => this.setO(k, { sel: o.id }) };
+    });
+    const so = objs.find(o => o.id === st.sel) || objs[0];
+    const vp = this.visPaths(so.id);
+    const hdg = ((90 - (so.yaw * 180) / Math.PI) % 360 + 360) % 360;
+    const evText = { both: "seen by both", ego: "ego only", rsu: "hidden from ego, RSU sees it", none: "out of view" };
+    const sel = {
+      id: so.id, idUpper: so.id.toUpperCase(), short: so.id.replace("car_", "#"), clsLabel: so.cls === "truck" ? "Truck" : "Car", dist: so.dist.toFixed(1), speed: String(Math.round(so.speed)),
+      hdg: String(Math.round(hdg)).padStart(3, "0"), size: `${so.l} × ${so.w} × ${so.h}`,
+      visLabel: VISLBL[so.vis], visUpper: VISLBL[so.vis].toUpperCase(), visColor: th.vis[so.vis],
+      egoBorder: so.seen[0] ? th.ego : th.dim, egoColor: so.seen[0] ? th.ego : th.dimText, rsuBorder: so.seen[1] ? th.rsu : th.dim, rsuColor: so.seen[1] ? th.rsu : th.dimText,
+      egoTile: so.seen[0] ? "rgba(255,162,77,0.16)" : "rgba(255,255,255,0.05)", rsuTile: so.seen[1] ? "rgba(111,176,255,0.16)" : "rgba(255,255,255,0.05)",
+      egoWord: so.seen[0] ? "sees it" : "blind", rsuWord: so.seen[1] ? "sees it" : "blind",
+      pBoth: vp.both, pEgo: vp.ego, pRsu: vp.rsu, egoPct: vp.egoPct, coopPct: vp.coopPct,
+      events: vp.ev.map(e => ({ left: (e.f / C.NF) * 100 + "%", color: th.vis[e.to], text: "→ " + evText[e.to], title: `${(e.f / C.HZ).toFixed(2)} s · ${so.id} ${evText[e.to]}` })),
+    };
+    const gainText = cnt.rsu ? `RSU 2 adds ${cnt.rsu} object${cnt.rsu > 1 ? "s" : ""} the ego can't see. ${cnt.both} are seen by both.` : `The ego sees everything RSU 2 sees right now.`;
+    const lat = S.lat[f], ledN = Math.round((Math.min(lat, 200) / 200) * 20);
+    const bearing = ((90 - (this.cur[k].yaw * 180) / Math.PI) % 360 + 360) % 360;
+    const ticks = [], tickLabels = [];
+    if (k === "b") for (let d = 0; d < 360; d += 5) {
+      const rel = ((d - bearing + 540) % 360) - 180; if (Math.abs(rel) > 60) continue;
+      const left = 50 + (rel / 120) * 100 + "%";
+      ticks.push({ left, h: d % 45 === 0 ? "12px" : d % 15 === 0 ? "8px" : "4px" });
+      if (d % 15 === 0) tickLabels.push({ left, label: COMPASS[d] || String(d), color: COMPASS[d] ? "#e6fff9" : "#2f8f80" });
+    }
+    const agentS = st.agent === "ego" ? 0 : 1;
+    return {
+      focus: () => (this.focusK = k),
+      down: e => { this.focusK = k; this.drag = { k, x: e.clientX, y: e.clientY, yaw: this.user[k].yaw, pitch: this.user[k].pitch, moved: false, rect: e.currentTarget.getBoundingClientRect(), cw: e.currentTarget.clientWidth }; },
+      seek: e => { const r = e.currentTarget.getBoundingClientRect(); this.T[k] = Math.max(0, Math.min(0.9999, (e.clientX - r.left) / r.width)) * C.DUR; this.lf[k] = -1; this.forceUpdate(); },
+      mainRef: this.R[k].main,
+      timecode: `${p2(Math.floor(tq))}.${p2(Math.floor((tq % 1) * 100))}`, timecode3: `${p2(Math.floor(tq))}.${String(Math.floor((tq % 1) * 1000)).padStart(3, "0")}`,
+      frameLabel: `${String(f + 1).padStart(3, "0")} / ${C.NF}`, frameShort: String(f + 1).padStart(3, "0"),
+      playPct: (T / C.DUR) * 100 + "%",
+      isPlaying: st.playing, isPaused: !st.playing, playUpper: st.playing ? "PAUSE" : "PLAY",
+      togglePlay: () => this.setO(k, { playing: !st.playing }), toggleLoop: () => this.setO(k, { loop: !st.loop }),
+      loopBg: st.loop ? (k === "b" ? "#d7fff4" : k === "c" ? "rgba(255,255,255,0.9)" : "rgba(10,132,255,0.25)") : (k === "c" ? "rgba(255,255,255,0.08)" : "transparent"),
+      loopColor: st.loop ? (k === "b" ? "#04060a" : k === "c" ? "#101114" : "#8ec5ff") : th.offC, loopUpper: st.loop ? "ON" : "OFF",
+      prev: () => this.step(k, -1), next: () => this.step(k, 1),
+      speedLabel: st.speed + "×", cycleSpeed: () => this.setO(k, { speed: SPEEDS[(SPEEDS.indexOf(st.speed) + 1) % SPEEDS.length] }),
+      views: VIEW_LIST.map(([v, label, key, upper]) => ({ label, key, upper, bg: st.view === v ? th.on : "transparent", color: st.view === v ? th.onC : th.offC, pick: () => this.pickView(k, v) })),
+      layers: LAYERS.map(([l, label, key, short]) => { const on = st.layers[l]; return { label, key, short, check: on ? "✓" : "", box: on ? "#0a84ff" : "rgba(255,255,255,0.25)", fill: on ? "#0a84ff" : "transparent", color: on ? "#f5f5f7" : "#8e8e93",
+        hudBg: on ? "#d7fff4" : "transparent", hudFg: on ? "#04060a" : "#6fbfb0", cineColor: on ? "#f5f5f7" : "rgba(255,255,255,0.5)", trackBg: on ? "#34c759" : "rgba(255,255,255,0.18)", knobLeft: on ? "12px" : "2px",
+        toggle: () => this.setO(k, { layers: { ...st.layers, [l]: !on } }) }; }),
+      rows, rowCount: rows.length, sel, cnt,
+      gain: { wBoth: (cnt.both / seenN) * 100 + "%", wEgo: (cnt.ego / seenN) * 100 + "%", wRsu: (cnt.rsu / seenN) * 100 + "%", text: gainText },
+      latNow: Math.round(lat) + " ms", latColor: lat > 100 ? th.warn : th.ok,
+      leds: Array.from({ length: 20 }, (_, i) => ({ c: i < ledN ? (i >= 10 ? th.warn : "#4fe0c4") : "rgba(90,255,220,0.1)" })),
+      bearing: String(Math.round(bearing) % 360).padStart(3, "0"), ticks, tickLabels,
+      agentName: st.agent === "ego" ? "Ego · car 641" : "RSU 2", agentUpper: st.agent === "ego" ? "EGO · CAR 641" : "RSU 2", agentColor: agentS ? th.rsu : th.ego,
+      switchAgent: () => this.setO(k, { agent: st.agent === "ego" ? "rsu" : "ego", cam: 0 }),
+      cams: CAMS[st.agent].map(([label, short], i) => ({ ref: this.R[k].cams[i], label, short, border: i === st.cam ? th.camOn : th.camOff, lift: i === st.cam ? "translateY(-4px)" : "none", pick: () => this.setO(k, { cam: i }) })),
+    };
+  }
+
+  renderVals() {
+    if (!window.CPScene || !this.S) return { a: {}, b: {}, c: {}, tl: {} };
+    return { a: this.ov("a"), b: this.ov("b"), c: this.ov("c"), tl: this.TL };
+  }
+}
+</script>
+</body>
+</html>
