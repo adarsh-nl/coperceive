@@ -33,7 +33,7 @@ from coperceive.evaluation.predictions import list_runs, read_run_meta
 from coperceive.model import Scene
 from coperceive.models.batch import RunOptions, select_agents
 from coperceive.models.inputs import raw_files, selected_sensors
-from coperceive.models.spec import Manifest, ModelSpec
+from coperceive.models.spec import Manifest, ModelSpec, check_options
 from coperceive.repro.environment import environment_capture_lines
 from coperceive.viewdata import pose_times
 
@@ -288,6 +288,46 @@ class SlurmPlan:
     command: tuple[str, ...]
     script: str
     estimate_source: str
+    # (option name, absolute source path, staged shell path) for a model whose checkpoint is
+    # a file named by an option. `checkpoint: {option: NAME}` in the manifest.
+    checkpoints: tuple[tuple[str, str, str], ...] = ()
+
+
+def checkpoint_files(
+    manifest: Manifest, spec: ModelSpec, options: RunOptions
+) -> tuple[tuple[str, str, str], ...]:
+    """The checkpoint file a model's `checkpoint` key names, staged for scratch.
+
+    Returns ``(option name, absolute source path, staged shell path)``. The staged path is a
+    shell word under ``$SCRATCH/checkpoints/<option>/``; the inner command's
+    ``--option <name>=<staged>`` points at it. A model without the key stages nothing.
+    """
+    checkpoint = spec.checkpoint
+    if checkpoint is None:
+        return ()
+    for member in manifest.models.values():
+        if member is not spec and member.checkpoint is not None:
+            raise SlurmError(
+                f"model {member.key} declares a checkpoint option, but only the requested "
+                f"model's checkpoint is staged; run {member.key} as its own --slurm job"
+            )
+    effective = check_options(spec, options.options)
+    value = effective.get(checkpoint.option)
+    if not isinstance(value, str) or not value:
+        raise SlurmError(
+            f"model {spec.key} needs --option {checkpoint.option}=FILE (declared by "
+            f"models.{spec.key}.checkpoint); it is staged into the job's scratch"
+        )
+    source = Path(value).expanduser()
+    if not source.is_file():
+        raise SlurmError(f"--option {checkpoint.option}={value!r} is not a file to stage")
+    name = source.name
+    if not name or any(ch.isspace() or ch in "\"'`$&;|<>()" for ch in name):
+        raise SlurmError(
+            f"checkpoint file name {name!r} has characters a shell word cannot carry safely"
+        )
+    staged = f"$SCRATCH/checkpoints/{checkpoint.option}/{name}"
+    return ((checkpoint.option, str(source.resolve()), staged),)
 
 
 def plan_sbatch(
@@ -360,8 +400,16 @@ def plan_sbatch(
     partition = validate_partition(partition)
     job_name = f"model-{manifest.name}-{run_id}"
     slurm_dir = out_root.resolve() / SLURM_DIR
+    checkpoints = checkpoint_files(manifest, spec, options)
+    staged_checkpoints = {option: staged for option, _source, staged in checkpoints}
     command = _run_command(
-        manifest, spec, run_id=run_id, options=options, python=python, raw=bool(raw)
+        manifest,
+        spec,
+        run_id=run_id,
+        options=options,
+        python=python,
+        raw=bool(raw),
+        staged_checkpoints=staged_checkpoints,
     )
     lines: list[str] = [
         "#!/bin/bash",
@@ -427,6 +475,12 @@ def plan_sbatch(
             f"rsync -a --files-from={shlex.quote(str(slurm_dir / f'{run_id}.raw.txt'))} "
             f'{shlex.quote(str(options.raw_root.resolve()) + "/")} "$SCRATCH/raw/"'
         )
+    if checkpoints:
+        lines.append("# The checkpoint archive is staged with the inputs; the run below reads it")
+        lines.append("# from scratch through the rewritten --option, never from the shared path.")
+        for option, source, _staged in checkpoints:
+            lines.append(f'mkdir -p "$SCRATCH/checkpoints/{option}"')
+            lines.append(f"rsync -a {shlex.quote(source)} " + f'"$SCRATCH/checkpoints/{option}/"')
     lines.append("STAGING=$((SECONDS - STAGE_START))  # rsync wall time -> timings.staging_s")
     lines.append("")
     results = results_dir.resolve()
@@ -484,6 +538,7 @@ def plan_sbatch(
         command=tuple(command),
         script="\n".join(lines),
         estimate_source=source,
+        checkpoints=checkpoints,
     )
 
 
@@ -495,8 +550,13 @@ def _run_command(
     options: RunOptions,
     python: Path,
     raw: bool,
+    staged_checkpoints: Mapping[str, str] | None = None,
 ) -> list[str]:
-    """The same ``model run`` against the staged copy; never ``--slurm``."""
+    """The same ``model run`` against the staged copy; never ``--slurm``.
+
+    An option in ``staged_checkpoints`` is rendered as its staged path under ``$SCRATCH``
+    (double-quoted so the job expands it); other option values are quoted as usual.
+    """
     assert manifest.source is not None
     argv: list[str] = [
         shlex.quote(str(python)),
@@ -533,8 +593,12 @@ def _run_command(
         argv.extend(["--artifacts", shlex.quote(str(options.artifacts_dir.resolve()))])
     if not options.auto_dependencies:
         argv.append("--no-auto-dependencies")
+    staged = staged_checkpoints or {}
     for key, value in options.options.items():
-        argv.extend(["--option", shlex.quote(f"{key}={value}")])
+        if key in staged:
+            argv.extend(["--option", f'"{key}={staged[key]}"'])
+        else:
+            argv.extend(["--option", shlex.quote(f"{key}={value}")])
     if options.frame_timeout_s is not None:
         argv.extend(["--frame-timeout", f"{options.frame_timeout_s:g}"])
     if options.run_timeout_s is not None:
@@ -589,6 +653,7 @@ __all__ = [
     "work_copy_filter",
     "SlurmError",
     "SlurmPlan",
+    "checkpoint_files",
     "coperceive_root",
     "estimate_from_runs",
     "interpreter_module",

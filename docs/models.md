@@ -242,6 +242,38 @@ All metrics are pooled across the 10 val scenes, within 50 m range, operating po
 | `vehicle · fused` (instance) | `0.071 / 0.057` (model: `0.141 / 0.114`) | `0.132 / 0.088` | `0.114 / 0.102 / 0.081 / 0.062` (model: `0.229 / 0.203 / 0.162 / 0.123`) | `0.309 / 0.247 / 0.159 / 0.099` |
 | `vehicle · fused` (early) | `0.081 / 0.062` (model: `0.163 / 0.124`) | `0.180 / 0.108` | `0.118 / 0.113 / 0.101 / 0.077` (model: `0.236 / 0.226 / 0.203 / 0.153`) | `0.378 / 0.365 / 0.302 / 0.146` |
 
+## OpenCOOD plugin (`plugins/opencood/`)
+
+The OpenCOOD plugin (`coperceive-opencood-model`) runs an OpenCOOD checkpoint — first model:
+`cobevt-lidar-v2xset`, CoBEVT LiDAR intermediate fusion on the V2XSet/OPV2V release layout —
+over schema-1 scenes. Unlike Griffin, the checkpoint is **not pinned in the manifest**: pass
+it at run time and the worker reads the checkpoint's own `config.yaml` for the architecture,
+fusion method, voxel size, anchor range, box order and score threshold.
+
+```bash
+coperceive model run opencood \
+  --scenes /path/to/staged-scenes --out /path/to/predictions --run-id opencood-cobevt \
+  --option checkpoint=/path/to/cobevt_lidar.zip
+```
+
+- The worker runs in the user's own OpenCOOD conda environment (`environment: {conda: opencood}`)
+  and imports OpenCOOD from it at runtime: OpenCOOD is a runtime dependency, not vendored.
+  **Its licence is the UCLA Academic Software License, not Apache-2.0** (the plugin's own code
+  is Apache-2.0); see [the OpenCOOD model page](models/opencood.md#licence).
+- `--slurm` stages the checkpoint archive into the job's scratch and rewrites the inner
+  `--option checkpoint=…` to the staged copy; the shared path is not read by the compute node.
+- Fused rows are attributed to the first vehicle in the scene's agent order (`outputs.agent:
+  vehicle`), `source: fused`, category `vehicle`; a frame whose ego has no lidar gives no
+  boxes. Options: `checkpoint` (required), `checkpoint_config`/`checkpoint_weights` (when the
+  archive is ambiguous), `score_threshold`, `device`.
+- Fusion is limited to the checkpoint environment's `COM_RANGE` and the checkpoint config's
+  `max_cav`; the mapping from schema 1 (inverse ADR 0012 reflection, OpenCOOD `x_to_world`)
+  is unit-tested and marked for a cluster check.
+- Setup on the cluster (login node, no internet on compute nodes), the archive's unverified
+  contents, the read-only `unzip -l`/`unzip -p` checks and the run/eval commands are in
+  [the OpenCOOD model page](models/opencood.md). Expected AP is **to be measured**: no
+  published number is a claim about this archive's exact epoch/config.
+
 ## Perturbations
 
 `coperceive model run ... --perturb latency_frames=2,pose_noise_xy=0.2,seed=7` delays, drops, or jitters every agent except the ego before the frame is sent. Ground truth is unchanged. The spec is stored in `provenance.perturbation` and in `perturbation.json`. The definitions and the order are in [Perturbations](spec/perturbations.md). `coperceive model perturb-inputs` writes the same inputs for a script that is not a plugin.
@@ -258,6 +290,7 @@ Live mode (`coperceive serve --model <plugin>` streaming per-frame matches over 
 - `tests/test_model_cache.py` and `tests/test_model_dependencies.py` test cache hits without starting a child, on-disk checkpoint re-hashing when bytes change, `depends_on` automatic `<run_id>-<model>` runs, `--artifacts`, and `transient_artifacts` exclusion.
 - `tests/test_model_check.py`, `tests/test_model_cli.py`, `tests/test_model_slurm.py` and `tests/test_model_end_to_end.py` test all ten conformance rules, CLI exit codes, Slurm script generation (`bash -n`, dependency closure, `rsync` filter), and the full chain from `model run` through `eval run`, `/api/scenes/{id}/predictions`, `eval compare` and `--slurm`.
 - On the HPC (NVIDIA A40), `griffin25m-vehicle-plugin` (job 629288) reproduced job 627093's `boxes.parquet` byte-for-byte across all 10 val scenes (7,930 boxes, `+0.000` across all four evaluation configs).
+- The OpenCOOD plugin is covered by `tests/test_opencood_convert.py` (inverse ADR 0012 reflection, `x_to_world`, per-CAV batch mapping, both box formats including the `hwl` 7-vector reorder, order-independent corners), `tests/test_opencood_checkpoint.py` (archive hash/extraction/discovery, relative and absolute checkpoint resolution) and `tests/test_opencood_plugin.py` (manifest, no vendored OpenCOOD, `model check` skip without a checkpoint, engine conversion of the injected frame to the ndarray types the real dataset needs, the full `model run` → `eval run` chain against a fake OpenCOOD whose dataset/corner writer transcribe upstream, sbatch with the checkpoint staged into scratch). The real OpenCOOD run, the archive's contents and AP are unverified here.
 
 ## Custom pipelines on a cluster (the smoke example)
 

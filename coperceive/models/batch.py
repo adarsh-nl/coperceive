@@ -296,6 +296,45 @@ def _source(spec: ModelSpec, requested: str | None) -> str:
     return requested
 
 
+def resolve_checkpoint_option(spec: ModelSpec, effective: dict[str, object]) -> str | None:
+    """Make the declared checkpoint option an absolute path, in place, and return it.
+
+    The child's cwd is its work directory, so a relative ``--option checkpoint=FILE`` is
+    resolved against the parent's cwd here and the child receives the absolute path.
+    Returns ``None`` for a model without a ``checkpoint:`` key or an unset option.
+    """
+    checkpoint = spec.checkpoint
+    if checkpoint is None:
+        return None
+    value = effective.get(checkpoint.option)
+    if not isinstance(value, str) or not value:
+        return None
+    resolved = str(Path(value).expanduser().resolve())
+    effective[checkpoint.option] = resolved
+    return resolved
+
+
+def require_checkpoint(spec: ModelSpec, effective: dict[str, object]) -> str | None:
+    """Resolve and check the declared checkpoint option; ``None`` when the model declares none.
+
+    The value is a path to the file the worker hashes at ``hello``; an empty value would
+    start a child that cannot report a checkpoint digest, so it is a user error here.
+    """
+    checkpoint = spec.checkpoint
+    if checkpoint is None:
+        return None
+    value = effective.get(checkpoint.option)
+    if not isinstance(value, str) or not value:
+        raise BatchError(
+            f"model {spec.key} needs --option {checkpoint.option}=FILE (declared by "
+            f"models.{spec.key}.checkpoint in the manifest)"
+        )
+    resolved = resolve_checkpoint_option(spec, effective)
+    if resolved is None or not Path(resolved).is_file():
+        raise BatchError(f"model {spec.key}: --option {checkpoint.option}={value!r} is not a file")
+    return resolved
+
+
 class _Stop(Exception):
     """Ends the run: the child is gone, misbehaved, or the run timed out."""
 
@@ -339,6 +378,7 @@ def run_batch(
     check_run_id(run_id)
     spec = select_model(manifest, options.model)
     effective = check_options(spec, options.options)
+    declared_checkpoint = require_checkpoint(spec, effective)
     source = _source(spec, options.source)
     if manifest.environment.kind == "container":
         raise BatchError("environment.container is not implemented in this version")
@@ -465,10 +505,13 @@ def run_batch(
                     work_dir=work_dir,
                     parent_env=env,
                     hello_timeout_s=frame_timeout,
+                    options=effective,
                 )
                 environment = child.hello.environment
                 git_commit = child.hello.git_commit
-                checkpoint = _check_hello_checkpoint(child, checkpoint)
+                checkpoint = _check_hello_checkpoint(
+                    child, checkpoint, expected=declared_checkpoint
+                )
                 hit = lookup(scene)
             meta = meta_now("complete", None)
             if hit is not None:
@@ -745,12 +788,29 @@ def _verified_environment(
 
 
 def _check_hello_checkpoint(
-    child: PluginProcess, previous: CheckpointInfo | None
+    child: PluginProcess, previous: CheckpointInfo | None, *, expected: str | None = None
 ) -> CheckpointInfo | None:
-    """The parent hashes the file the child names and refuses a digest that disagrees."""
+    """Hash the file the child names, and refuse a wrong file or digest.
+
+    When the manifest declares ``checkpoint: {option: NAME}`` the child *must* report the
+    absolute path it hashed (``expected``); a hello without it would bypass digest
+    verification and the cache key, so it is a protocol violation. Models without the key
+    may omit it.
+    """
     path = child.hello.environment.get("checkpoint_path")
+    if expected is not None and not path:
+        child.close(grace_s=1.0)
+        raise RunnerError(
+            "protocol violation: hello.environment.checkpoint_path is required because the "
+            "model declares checkpoint: {option: NAME}"
+        )
     if not path:
         return None
+    if expected is not None and Path(path).expanduser().resolve() != Path(expected).resolve():
+        child.close(grace_s=1.0)
+        raise RunnerError(
+            f"protocol violation: hello names checkpoint {path!r} but --option names {expected!r}"
+        )
     try:
         info = checkpoint_info(Path(path), previous.as_json() if previous else None)
     except CacheError as exc:
@@ -912,6 +972,8 @@ __all__ = [
     "SceneOutcome",
     "TimedResult",
     "provenance_json",
+    "require_checkpoint",
+    "resolve_checkpoint_option",
     "run_batch",
     "run_meta_for",
     "select_agents",
