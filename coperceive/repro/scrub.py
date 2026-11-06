@@ -49,7 +49,9 @@ def _runtime_markers() -> tuple[str, ...]:
         value = os.environ.get(name)
         if value:
             values.append(value)
-    return tuple(value for value in dict.fromkeys(values) if len(value) >= 2)
+    return tuple(
+        sorted((value for value in dict.fromkeys(values) if len(value) >= 2), key=len, reverse=True)
+    )
 
 
 # sha256 and git commits are hex, not hostnames. Package versions like 1.26.4
@@ -208,3 +210,27 @@ def file_name(path: str) -> str | None:
     if _SECRET_KEY.search(name) or _TOKEN_VALUE.search(name):
         return None
     return name
+
+
+def scrub_text(text: str) -> str:
+    """Remove runtime/personal identifiers and secret-shaped values from plain text."""
+    out = text
+    for marker in _runtime_markers():
+        out = out.replace(marker, "[redacted]")
+    out = _PERSONAL_IDENTIFIER.sub("[redacted]", out)
+    out = _TOKEN_VALUE.sub("[redacted]", out)
+    out = _USER_AT.sub("[redacted]", out)
+    out = _HOSTNAME.sub("[redacted]", out)
+    out = _HOME_PATH.sub(" [redacted] ", out)
+    return out
+
+
+def scrub_json(value: object) -> object:
+    """Scrub a decoded JSON value, including keys/strings in arbitrary schemas."""
+    if isinstance(value, str):
+        return scrub_text(value)
+    if isinstance(value, list):
+        return [scrub_json(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): scrub_json(item) for key, item in value.items()}
+    return value

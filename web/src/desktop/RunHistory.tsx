@@ -25,6 +25,8 @@ import {
   type SubmitOptions,
 } from "./runPlan";
 import { errorText } from "./errors";
+import BundlePanel from "./BundlePanel";
+import { openBundle, pickBundleFile } from "./local";
 import {
   Facts,
   GridTable,
@@ -110,6 +112,9 @@ export default function RunHistory() {
   const [confirmCancel, setConfirmCancel] = useState<string | null>(null);
   const [opened, setOpened] = useState("");
   const [savedCard, setSavedCard] = useState("");
+  const [bundleOpen, setBundleOpen] = useState(false);
+  const [openedBundle, setOpenedBundle] = useState("");
+  const [bundleError, setBundleError] = useState("");
   const [repro, setRepro] = useState<{
     planId: string;
     included: string[];
@@ -221,6 +226,18 @@ export default function RunHistory() {
       setRerun({ ...rerun, error: errorText(e) });
     } finally {
       setBusy(null);
+    }
+  };
+
+  const openBundleFile = async () => {
+    setBundleError("");
+    try {
+      const file = await pickBundleFile();
+      if (!file) return;
+      const opened = await openBundle(file);
+      setOpenedBundle(`${opened.manifest.title || opened.manifest.run_id} (read-only) at ${opened.root}`);
+    } catch (e) {
+      setBundleError(errorText(e));
     }
   };
 
@@ -363,6 +380,9 @@ export default function RunHistory() {
         ) : (
           <span className="c-step-note">The saved plan is no longer on the server, so this run cannot be repeated.</span>
         )}
+        <button type="button" className="c-secondary" disabled={busy !== null} onClick={() => setBundleOpen(true)}>
+          Export bundle…
+        </button>
         {selected.active ? (
           confirmCancel === selected.job_id ? (
             <div style={{ display: "flex", gap: "8px" }}>
@@ -380,6 +400,7 @@ export default function RunHistory() {
           )
         ) : null}
       </InspectorSection>
+      {bundleOpen && selected ? <BundlePanel runId={selected.plan_id} onClose={() => setBundleOpen(false)} /> : null}
       {repro ? (
         <InspectorSection title="Repro card">
           <span className="c-step-note">
@@ -479,6 +500,9 @@ export default function RunHistory() {
             ))}
           </select>
         ) : null}
+        <button type="button" className="c-secondary" onClick={() => void openBundleFile()}>
+          Open bundle…
+        </button>
         {profiles.length === 0 ? null : <div role="group" aria-label="Filter runs by state" className="c-chips">
           {FILTERS.map((item) => {
             const count = (entries ?? []).filter(item.match).length;
@@ -502,6 +526,12 @@ export default function RunHistory() {
         <p role="alert" className="c-page-note" style={{ color: "var(--danger)" }}>
           {error}
         </p>
+      ) : null}
+      {bundleError ? (
+        <p role="alert" className="c-page-note" style={{ color: "var(--danger)" }}>{bundleError}</p>
+      ) : null}
+      {openedBundle ? (
+        <p role="status" className="c-page-note" style={{ color: "var(--ok)" }}>{openedBundle}</p>
       ) : null}
       {opened ? (
         <p role="status" className="c-page-note" style={{ color: "var(--ok)" }}>

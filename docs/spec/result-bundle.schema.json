@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coperceive.dev/spec/result-bundle.schema.json",
+  "title": "Coperceive result bundle manifest",
+  "type": "object",
+  "required": ["schema", "schema_version", "created_utc", "app_version", "title", "run_id", "contents"],
+  "properties": {
+    "schema": {"const": "coperceive-result-bundle"},
+    "schema_version": {"type": "integer", "minimum": 1},
+    "created_utc": {"type": "string"},
+    "app_version": {"type": "string"},
+    "title": {"type": "string"},
+    "run_id": {"type": "string"},
+    "contents": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path", "sha256", "size", "kind"],
+        "properties": {
+          "path": {"type": "string"},
+          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+          "size": {"type": "integer", "minimum": 0},
+          "kind": {"type": "string"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "licences": {"type": "array"},
+    "privacy": {"type": "object"}
+  },
+  "additionalProperties": false
+}
