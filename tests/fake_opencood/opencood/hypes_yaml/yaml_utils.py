@@ -1,3 +1,6 @@
+# pyright: basic
+# This package doubles for an untyped third-party dependency in tests (the real OpenCOOD
+# has no annotations either); strict-mode Unknown-type diagnostics do not apply here.
 # SPDX-License-Identifier: Apache-2.0
 """``opencood.hypes_yaml.yaml_utils.load_yaml`` as the plugin's engine calls it."""
 

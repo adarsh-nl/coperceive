@@ -1,3 +1,6 @@
+# pyright: basic
+# This package doubles for an untyped third-party dependency in tests (the real OpenCOOD
+# has no annotations either); strict-mode Unknown-type diagnostics do not apply here.
 # SPDX-License-Identifier: Apache-2.0
 """``opencood.tools.train_utils`` stand-in: a model object with the calls the engine makes."""
 
