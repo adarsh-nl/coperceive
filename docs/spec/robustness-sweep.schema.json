@@ -1,0 +1,282 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://coperceive.dev/spec/robustness-sweep.schema.json",
+  "title": "coperceive robustness sweep",
+  "description": "Version 1 output of `coperceive robustness sweep`. One cell is one seeded perturbation of the model's inputs: a `model run --perturb` over the scene split, evaluated under every eval config. A cell's `mAP` values are the pooled AP that `eval report` prints as its headline (the `mAP@<t> all` column of `metrics.json`), named with that column. `aggregates` holds mean, sample standard deviation (n-1, 0 with one seed) and count over the seeds of one perturbation combination. `charts` holds mAP against one axis with every other swept axis at its neutral value 0; `max_agents` never appears as a chart axis because its valid range starts at 1, so it has no neutral value. The document has no timestamp: the same command on the same inputs writes the same bytes.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "format_version",
+    "model",
+    "dataset",
+    "eval",
+    "grid",
+    "cells",
+    "aggregates",
+    "charts"
+  ],
+  "properties": {
+    "format": {"type": "string", "const": "coperceive-robustness-sweep"},
+    "format_version": {"type": "integer", "const": 1},
+    "model": {"$ref": "#/$defs/model"},
+    "dataset": {"$ref": "#/$defs/dataset"},
+    "eval": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/evalChoice"}},
+    "grid": {"$ref": "#/$defs/grid"},
+    "cells": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/cell"}},
+    "aggregates": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/aggregate"}},
+    "charts": {"type": "array", "items": {"$ref": "#/$defs/chart"}}
+  },
+  "$defs": {
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plugin", "model", "manifest", "manifest_sha256"],
+      "properties": {
+        "plugin": {"type": "string", "minLength": 1},
+        "model": {"type": "string", "minLength": 1},
+        "manifest": {"type": "string", "minLength": 1},
+        "manifest_sha256": {"type": "string", "minLength": 64}
+      }
+    },
+    "dataset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["scenes_root", "scene_ids"],
+      "properties": {
+        "scenes_root": {"type": "string", "minLength": 1},
+        "scene_ids": {
+          "type": ["array", "null"],
+          "items": {"type": "string", "minLength": 1}
+        }
+      }
+    },
+    "evalConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "criterion",
+        "thresholds",
+        "display_threshold",
+        "class_thresholds",
+        "ignore_gt_visibility_below",
+        "max_range_m",
+        "score_threshold",
+        "gt_class_map"
+      ],
+      "properties": {
+        "criterion": {"type": "string", "enum": ["iou_bev", "centre"]},
+        "thresholds": {"type": "array", "minItems": 1, "items": {"type": "number"}},
+        "display_threshold": {"type": "number"},
+        "class_thresholds": {
+          "type": "object",
+          "additionalProperties": {"type": "array", "items": {"type": "number"}}
+        },
+        "ignore_gt_visibility_below": {"type": ["number", "null"]},
+        "max_range_m": {"type": ["number", "null"]},
+        "score_threshold": {"type": "number"},
+        "gt_class_map": {"type": "object", "additionalProperties": {"type": "string"}}
+      }
+    },
+    "evalChoice": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "path", "config"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "path": {"type": ["string", "null"]},
+        "config": {"$ref": "#/$defs/evalConfig"}
+      }
+    },
+    "axis": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "unit", "values"],
+      "properties": {
+        "name": {
+          "type": "string",
+          "enum": [
+            "latency_frames",
+            "latency_ms",
+            "packet_loss",
+            "pose_noise_xy",
+            "pose_noise_yaw",
+            "max_agents",
+            "agent_dropout"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["frames", "ms", "fraction", "m", "deg", "agents"]
+        },
+        "values": {"type": "array", "minItems": 1, "items": {"type": "number"}}
+      }
+    },
+    "grid": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["axes", "seeds", "combinations", "cells"],
+      "properties": {
+        "axes": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/axis"}},
+        "seeds": {"type": "array", "minItems": 1, "items": {"type": "integer", "minimum": 0}},
+        "combinations": {"type": "integer", "minimum": 1},
+        "cells": {"type": "integer", "minimum": 1}
+      }
+    },
+    "perturbation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "seed",
+        "latency_frames",
+        "latency_ms",
+        "packet_loss",
+        "pose_noise_xy",
+        "pose_noise_yaw",
+        "max_agents",
+        "agent_dropout"
+      ],
+      "properties": {
+        "seed": {"type": ["integer", "null"], "minimum": 0},
+        "latency_frames": {"type": ["integer", "null"], "minimum": 0},
+        "latency_ms": {"type": ["number", "null"], "minimum": 0},
+        "packet_loss": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "pose_noise_xy": {"type": ["number", "null"], "minimum": 0},
+        "pose_noise_yaw": {"type": ["number", "null"], "minimum": 0},
+        "max_agents": {"type": ["integer", "null"], "minimum": 1},
+        "agent_dropout": {"type": ["number", "null"], "minimum": 0, "maximum": 1}
+      }
+    },
+    "stats": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mean", "std", "n"],
+      "properties": {
+        "mean": {"type": ["number", "null"]},
+        "std": {"type": ["number", "null"]},
+        "n": {"type": "integer", "minimum": 0}
+      }
+    },
+    "cellEval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criterion", "thresholds", "mAP", "mAP_display"],
+      "properties": {
+        "criterion": {"type": "string", "enum": ["iou_bev", "centre"]},
+        "thresholds": {"type": "array", "minItems": 1, "items": {"type": "number"}},
+        "mAP": {"type": "object", "additionalProperties": {"type": ["number", "null"]}},
+        "mAP_display": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["threshold", "field", "value"],
+          "properties": {
+            "threshold": {"type": "number"},
+            "field": {"type": "string", "minLength": 1},
+            "value": {"type": ["number", "null"]}
+          }
+        }
+      }
+    },
+    "aggregateEval": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["criterion", "thresholds", "mAP", "mAP_display"],
+      "properties": {
+        "criterion": {"type": "string", "enum": ["iou_bev", "centre"]},
+        "thresholds": {"type": "array", "minItems": 1, "items": {"type": "number"}},
+        "mAP": {"type": "object", "additionalProperties": {"$ref": "#/$defs/stats"}},
+        "mAP_display": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["threshold", "field", "mean", "std", "n"],
+          "properties": {
+            "threshold": {"type": "number"},
+            "field": {"type": "string", "minLength": 1},
+            "mean": {"type": ["number", "null"]},
+            "std": {"type": ["number", "null"]},
+            "n": {"type": "integer", "minimum": 0}
+          }
+        }
+      }
+    },
+    "cell": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "run_id", "canonical", "spec", "eval"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "run_id": {"type": "string", "minLength": 1},
+        "canonical": {"type": "string", "minLength": 1},
+        "spec": {"$ref": "#/$defs/perturbation"},
+        "eval": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/cellEval"}
+        }
+      }
+    },
+    "aggregate": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["index", "spec", "eval"],
+      "properties": {
+        "index": {"type": "integer", "minimum": 0},
+        "spec": {"$ref": "#/$defs/perturbation"},
+        "eval": {
+          "type": "object",
+          "additionalProperties": {"$ref": "#/$defs/aggregateEval"}
+        }
+      }
+    },
+    "chart": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["axis", "unit", "eval", "metric", "values", "baseline", "points"],
+      "properties": {
+        "axis": {
+          "type": "string",
+          "enum": [
+            "latency_frames",
+            "latency_ms",
+            "packet_loss",
+            "pose_noise_xy",
+            "pose_noise_yaw",
+            "agent_dropout"
+          ]
+        },
+        "unit": {
+          "type": "string",
+          "enum": ["frames", "ms", "fraction", "m", "deg", "agents"]
+        },
+        "eval": {"type": "string", "minLength": 1},
+        "metric": {"type": "string", "minLength": 1},
+        "values": {"type": "array", "minItems": 1, "items": {"type": "number"}},
+        "baseline": {
+          "type": ["object", "null"],
+          "additionalProperties": false,
+          "required": ["threshold", "field", "mean", "std", "n"],
+          "properties": {
+            "threshold": {"type": "number"},
+            "field": {"type": "string", "minLength": 1},
+            "mean": {"type": ["number", "null"]},
+            "std": {"type": ["number", "null"]},
+            "n": {"type": "integer", "minimum": 0}
+          }
+        },
+        "points": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["value", "mean", "std", "n"],
+            "properties": {
+              "value": {"type": "number"},
+              "mean": {"type": ["number", "null"]},
+              "std": {"type": ["number", "null"]},
+              "n": {"type": "integer", "minimum": 0}
+            }
+          }
+        }
+      }
+    }
+  }
+}
