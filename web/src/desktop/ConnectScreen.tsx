@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   LocalExecutionTarget,
   cancelImport,
+  ensureDemoScene,
   getPersistentState,
   getStorageInfo,
   inspectFolder,
@@ -141,6 +142,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
   const recentColumns = folderColumns(folderChecks);
 
   // Import dialog state
+  const [getDataTarget, setGetDataTarget] = useState<{ datasetId?: string; presetId?: string } | null>(null);
   const [importOpen, setImportOpen] = useState<boolean>(false);
   const [importSource, setImportSource] = useState<string>("");
   const [importDest, setImportDest] = useState<string>("");
@@ -267,6 +269,23 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     let unlistenHpcWorkspace: (() => void) | undefined;
     let unlistenToggleSidebar: (() => void) | undefined;
     let unlistenSettings: (() => void) | undefined;
+    let unlistenOpenDemo: (() => void) | undefined;
+
+    const triggerOpenDemo = async () => {
+      setBusy(true);
+      setError("");
+      setStatus("Opening demo scene…");
+      try {
+        const res = await ensureDemoScene();
+        setBusy(false);
+        setStatus("");
+        await handleConnectLocal(res.path);
+      } catch (err) {
+        setBusy(false);
+        setStatus("");
+        setError(errorText(err));
+      }
+    };
 
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
@@ -293,7 +312,15 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       unlistenSettings = await listen("open-settings", () => {
         setSettingsOpen(true);
       });
+      unlistenOpenDemo = await listen("coperceive-open-demo", () => {
+        void triggerOpenDemo();
+      });
     })();
+
+    const handleOpenDemoCustom = () => {
+      void triggerOpenDemo();
+    };
+    window.addEventListener("coperceive-open-demo", handleOpenDemoCustom);
 
     const handleOpenEval = () => {
       setActiveTab("remote");
@@ -308,6 +335,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
       window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
       window.removeEventListener("coperceive-open-evaluation", handleOpenEval);
+      window.removeEventListener("coperceive-open-demo", handleOpenDemoCustom);
       window.removeEventListener("keydown", handleKeyDown);
       unlistenImport?.();
       unlistenGetData?.();
@@ -316,6 +344,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       unlistenHpcWorkspace?.();
       unlistenToggleSidebar?.();
       unlistenSettings?.();
+      unlistenOpenDemo?.();
     };
   }, []);
 
@@ -798,7 +827,10 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             <LibraryScreen
               key={libraryKey}
               onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
-              onNavigateGetData={() => setActiveTab("get_data")}
+              onNavigateGetData={(datasetId, presetId) => {
+                setGetDataTarget(datasetId ? { datasetId, presetId } : null);
+                setActiveTab("get_data");
+              }}
               onNavigateOpenFolder={() => setActiveTab("local")}
               onNavigateServers={() => navigateHpcSection("servers")}
             />
@@ -808,6 +840,8 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             <GetDataScreen
               onOpenScene={(scenePath) => void handleConnectLocal(scenePath)}
               onOpenLibrary={() => setActiveTab("library")}
+              initialDatasetId={getDataTarget?.datasetId}
+              initialPresetId={getDataTarget?.presetId}
               onOpenImportFolder={(folder) => {
                 if (folder) setImportSource(folder);
                 setImportOpen(true);

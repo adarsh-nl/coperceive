@@ -62,6 +62,18 @@ APP_SIZE=$(du -sh "${APP_BUNDLE}" | awk '{print $1}')
 APP_SIZE_BYTES=$(du -sk "${APP_BUNDLE}" | awk '{print $1 * 1024}')
 echo "Coperceive.app size: ${APP_SIZE} (${APP_SIZE_BYTES} bytes)"
 
+# Measure demo generation time and size with bundled Python
+echo ""
+echo "--- Demo Scene Generation & Measurement ---"
+DEMO_TEST_DIR=$(mktemp -d /tmp/coperceive-demo-measure-XXXXXX)
+DEMO_T0=$(python3 -c 'import time; print(time.time())')
+"${PYTHON_BIN}" -m coperceive demo create "${DEMO_TEST_DIR}/demo"
+DEMO_T1=$(python3 -c 'import time; print(time.time())')
+DEMO_ELAPSED=$(python3 -c "print(f'{${DEMO_T1} - ${DEMO_T0}:.2f}')")
+DEMO_SIZE_BYTES=$(du -sk "${DEMO_TEST_DIR}/demo" | awk '{print $1 * 1024}')
+echo "Measured demo generation time on macOS: ${DEMO_ELAPSED} s (${DEMO_SIZE_BYTES} bytes)"
+rm -rf "${DEMO_TEST_DIR}"
+
 FOUND_DMG=""
 if [ -f "${DMG_FILE}" ]; then
     FOUND_DMG="${DMG_FILE}"
@@ -303,9 +315,20 @@ if [ "${FRAME_TIME}" -ne 0 ]; then
 fi
 echo "Verified: frame endpoint returned valid frame data at time_us 0."
 
-# Wait up to 10 seconds to verify process stability and let the viewer webview fetch scenes
-echo "Waiting 10 seconds to verify viewer stability..."
-sleep 10
+# Poll until viewer webview is responsive
+echo "Polling for viewer readiness via controller..."
+CTRL_PORT=$(sed -n '4p' "${MARKER_FILE}" || echo "0")
+CTRL_SECRET=$(sed -n '5p' "${MARKER_FILE}" || echo "")
+if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
+    for i in {1..50}; do
+        RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"script":"Boolean(window.__COPERCEIVE_DESKTOP__)"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+        if echo "${RESP}" | grep -q '"result":true'; then
+            echo "Verified: Viewer webview responded to controller eval probe."
+            break
+        fi
+        sleep 0.2
+    done
+fi
 
 # Capture native window screenshot on macOS
 SCREENSHOT_DIR="/tmp/e2e-shots"
@@ -314,6 +337,21 @@ echo "Capturing desktop application window screenshot..."
 screencapture -x "${SCREENSHOT_DIR}/desktop-app-window.png" 2>/dev/null || true
 if [ -f "${SCREENSHOT_DIR}/desktop-app-window.png" ]; then
     echo "Verified: screenshot captured at ${SCREENSHOT_DIR}/desktop-app-window.png ($(stat -f %z "${SCREENSHOT_DIR}/desktop-app-window.png" 2>/dev/null || wc -c < "${SCREENSHOT_DIR}/desktop-app-window.png") bytes)"
+fi
+
+if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
+    echo "Showing Library and capturing welcome card screenshot..."
+    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:${CTRL_PORT}/show-library" >/dev/null || true
+    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"window":"main","script":"window.dispatchEvent(new CustomEvent(\"coperceive-test-library-seed\", { detail: { scenes: [], serverCount: 0, welcomeCardDismissed: false } })); true;"}' "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || true
+    for i in {1..30}; do
+        RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"window":"main","script":"Boolean(document.querySelector(\".welcome-card\"))"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+        if echo "${RESP}" | grep -q '"result":true'; then
+            echo "Verified: Welcome card is rendered in empty library."
+            break
+        fi
+        sleep 0.2
+    done
+    screencapture -x "${SCREENSHOT_DIR}/welcome_card.png" 2>/dev/null || true
 fi
 
 if ! kill -0 "${APP_PID}" 2>/dev/null; then

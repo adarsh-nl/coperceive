@@ -5,10 +5,14 @@ import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   deleteLibraryScene,
+  dismissWelcomeCard,
   downloadTownMap,
+  ensureDemoScene,
   getLibraryScenes,
+  getPersistentState,
   getStorageInfo,
   libraryThumbnail,
+  listServerProfiles,
   moveLibraryRoot,
   onTownMapProgress,
   pickDataRoot,
@@ -40,7 +44,7 @@ function formatBytes(bytes: number): string {
 
 interface Props {
   onOpenScene: (scenePath: string) => void;
-  onNavigateGetData: () => void;
+  onNavigateGetData: (initialDatasetId?: string, initialPresetId?: string) => void;
   onNavigateOpenFolder?: () => void;
   onNavigateServers?: () => void;
 }
@@ -89,6 +93,126 @@ function ValidationBadge({ status }: { status: "valid" | "invalid" | "checking" 
   );
 }
 
+export function WelcomeCard({
+  generatingDemo,
+  demoElapsedSec,
+  demoError,
+  onOpenDemo,
+  onTrySample,
+  onDismiss,
+}: {
+  generatingDemo: boolean;
+  demoElapsedSec: number;
+  demoError: string | null;
+  onOpenDemo: () => void;
+  onTrySample: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      className="welcome-card"
+      role="region"
+      aria-label="Welcome to Coperceive"
+      style={{
+        maxWidth: "600px",
+        margin: "0 auto",
+        padding: "24px 28px",
+        background: "var(--panel)",
+        border: "1px solid var(--line)",
+        borderRadius: "10px",
+        boxShadow: "var(--shadow)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "18px",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: "12px" }}>
+        <div>
+          <h2 style={{ margin: 0, fontSize: "17px", fontWeight: 600, color: "var(--text)" }}>
+            Welcome to Coperceive
+          </h2>
+          <p style={{ margin: "6px 0 0", fontSize: "13px", color: "var(--text-subtle)", lineHeight: 1.45 }}>
+            Explore multi-agent cooperative perception, inspect multi-vehicle & roadside LiDAR and cameras,
+            and evaluate connected vehicle detections.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={onDismiss}
+          aria-label="Dismiss welcome card"
+          title="Dismiss welcome card"
+          className="ghost"
+          style={{
+            fontSize: "16px",
+            lineHeight: 1,
+            padding: "4px 8px",
+            color: "var(--muted)",
+            cursor: "pointer",
+            flexShrink: 0,
+          }}
+        >
+          ✕
+        </button>
+      </div>
+
+      <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+        <button
+          type="button"
+          className="c-primary-wide"
+          disabled={generatingDemo}
+          onClick={onOpenDemo}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            padding: "12px 16px",
+            gap: "2px",
+            textAlign: "left",
+          }}
+        >
+          <span style={{ fontWeight: 600, fontSize: "13.5px" }}>
+            {generatingDemo
+              ? `Generating demo scene… (8.2 MB) ${demoElapsedSec}s`
+              : "Open the demo"}
+          </span>
+          <span style={{ fontSize: "11.5px", opacity: 0.85 }}>
+            Works offline · No download needed (~8.2 MB synthetic junction)
+          </span>
+        </button>
+
+        <button
+          type="button"
+          className="ghost"
+          onClick={onTrySample}
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-start",
+            padding: "10px 16px",
+            gap: "2px",
+            textAlign: "left",
+            border: "1px solid var(--line)",
+            borderRadius: "6px",
+          }}
+        >
+          <span style={{ fontWeight: 550, fontSize: "13px", color: "var(--text)" }}>
+            Try a real sample (Griffin, MIT licence)
+          </span>
+          <span style={{ fontSize: "11.5px", color: "var(--text-subtle)" }}>
+            Dev sample · 143 MB download from Hugging Face
+          </span>
+        </button>
+      </div>
+
+      {demoError && (
+        <div style={{ fontSize: "12px", color: "var(--danger)" }}>
+          Failed to generate demo scene: {demoError}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function LibraryScreen({
   onOpenScene,
   onNavigateGetData,
@@ -111,6 +235,11 @@ export default function LibraryScreen({
   >({});
   const [filterQuery, setFilterQuery] = useState<string>("");
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [welcomeCardDismissed, setWelcomeCardDismissed] = useState<boolean>(false);
+  const [serverCount, setServerCount] = useState<number>(0);
+  const [generatingDemo, setGeneratingDemo] = useState<boolean>(false);
+  const [demoElapsedSec, setDemoElapsedSec] = useState<number>(0);
+  const [demoError, setDemoError] = useState<string | null>(null);
   const [clusterProgress, setClusterProgress] = useState<DatasetJobs | null>(() => datasetJobs()[0] ?? null);
   useEffect(() => subscribeDatasetJobs(() => setClusterProgress(datasetJobs()[0] ?? null)), []);
   const applyScenes = (list: LibrarySceneInfo[]) => {
@@ -135,9 +264,17 @@ export default function LibraryScreen({
       const custom = event as CustomEvent<{
         scenes?: LibrarySceneInfo[];
         storage?: StorageStats | null;
+        welcomeCardDismissed?: boolean;
+        serverCount?: number;
       }>;
       if (custom.detail?.storage !== undefined) {
         setStorage(custom.detail.storage);
+      }
+      if (custom.detail?.welcomeCardDismissed !== undefined) {
+        setWelcomeCardDismissed(custom.detail.welcomeCardDismissed);
+      }
+      if (custom.detail?.serverCount !== undefined) {
+        setServerCount(custom.detail.serverCount);
       }
       if (custom.detail?.scenes) {
         applyScenes(custom.detail.scenes);
@@ -226,17 +363,50 @@ export default function LibraryScreen({
     }
   };
 
+  const handleOpenDemo = async () => {
+    setGeneratingDemo(true);
+    setDemoElapsedSec(0);
+    setDemoError(null);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      setDemoElapsedSec(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    try {
+      const outcome = await ensureDemoScene();
+      clearInterval(timer);
+      setGeneratingDemo(false);
+      onOpenScene(outcome.path);
+    } catch (err) {
+      clearInterval(timer);
+      setGeneratingDemo(false);
+      setDemoError(errorText(err));
+    }
+  };
+
+  const handleDismissWelcomeCard = async () => {
+    setWelcomeCardDismissed(true);
+    await dismissWelcomeCard();
+  };
+
   const loadData = async () => {
     setLoading(true);
     setLoadError(null);
     try {
-      const stats = await getStorageInfo();
+      const [stats, list, pState, servers] = await Promise.all([
+        getStorageInfo().catch(() => null),
+        getLibraryScenes().catch(() => []),
+        getPersistentState().catch(() => null),
+        listServerProfiles().catch(() => []),
+      ]);
       setStorage(stats);
       if (stats && stats.is_configured === false) {
         setShowFirstRunModal(true);
       }
-      const list = await getLibraryScenes();
       applyScenes(list);
+      if (pState?.welcome_card_dismissed) {
+        setWelcomeCardDismissed(true);
+      }
+      setServerCount(servers.length);
     } catch (err) {
       setLoadError(errorText(err));
     } finally {
@@ -351,7 +521,7 @@ export default function LibraryScreen({
           .join(" · ")
       : undefined,
     actions: (
-      <button type="button" className="c-header-action has-plus" onClick={onNavigateGetData}>
+      <button type="button" className="c-header-action has-plus" onClick={() => onNavigateGetData?.()}>
         Add scenes
       </button>
     ),
@@ -641,13 +811,24 @@ export default function LibraryScreen({
         )}
         {!loading && !loadError && scenes.length === 0 && (
           <div style={{ padding: "24px" }}>
-            <PanelState
-              kind="empty"
-              title={PANEL_DEFINITIONS.library.empty.title}
-              description={PANEL_DEFINITIONS.library.empty.description}
-              actionLabel={PANEL_DEFINITIONS.library.empty.actionLabel}
-              onAction={onNavigateGetData}
-            />
+            {serverCount === 0 && !welcomeCardDismissed ? (
+              <WelcomeCard
+                generatingDemo={generatingDemo}
+                demoElapsedSec={demoElapsedSec}
+                demoError={demoError}
+                onOpenDemo={() => void handleOpenDemo()}
+                onTrySample={() => onNavigateGetData("griffin", "dev")}
+                onDismiss={() => void handleDismissWelcomeCard()}
+              />
+            ) : (
+              <PanelState
+                kind="empty"
+                title={PANEL_DEFINITIONS.library.empty.title}
+                description={PANEL_DEFINITIONS.library.empty.description}
+                actionLabel={PANEL_DEFINITIONS.library.empty.actionLabel}
+                onAction={() => onNavigateGetData()}
+              />
+            )}
           </div>
         )}
 
@@ -668,7 +849,7 @@ export default function LibraryScreen({
             Add more scenes
           </div>
           <div className="c-add-cards">
-            <button type="button" className="c-add-card" onClick={onNavigateGetData}>
+            <button type="button" className="c-add-card" onClick={() => onNavigateGetData?.()}>
               <span className="c-add-title">Download from catalog →</span>
               <span className="c-add-note">Datasets with a recorded licence, measured before you download</span>
             </button>

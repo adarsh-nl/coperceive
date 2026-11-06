@@ -6,6 +6,7 @@ import { dryRunFailureText } from "./dryRun";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import {
   datasetDryRun,
+  ensureDemoScene,
   startDatasetJob,
   cancelDatasetJob,
   pauseDatasetJob,
@@ -39,6 +40,8 @@ interface Props {
   onOpenImportFolder?: (folderPath?: string) => void;
   /** "Free up space" goes to the Library, where scenes can be removed. */
   onOpenLibrary?: () => void;
+  initialDatasetId?: string;
+  initialPresetId?: string;
 }
 
 const datasetKey = (ds: CatalogDataset) => ds.id;
@@ -95,9 +98,18 @@ function DiskFit({ need, free }: { need: number; free: number }) {
   );
 }
 
-export default function GetDataScreen({ onOpenScene, onOpenImportFolder, onOpenLibrary }: Props) {
+export default function GetDataScreen({
+  onOpenScene,
+  onOpenImportFolder,
+  onOpenLibrary,
+  initialDatasetId,
+  initialPresetId,
+}: Props) {
   const [clusterJobs, setClusterJobs] = useState<readonly DatasetJobs[]>(() => datasetJobs());
   useEffect(() => subscribeDatasetJobs(() => setClusterJobs(datasetJobs())), []);
+  const [generatingDemo, setGeneratingDemo] = useState(false);
+  const [demoElapsedSec, setDemoElapsedSec] = useState(0);
+  const [demoError, setDemoError] = useState<string | null>(null);
   const [catalog, setCatalog] = useState<CatalogDataset[]>([]);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
@@ -230,6 +242,36 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder, onOpenL
       unlisten?.();
     };
   }, [jobError, onOpenScene]);
+
+  const handleOpenDemo = async () => {
+    setGeneratingDemo(true);
+    setDemoElapsedSec(0);
+    setDemoError(null);
+    const start = Date.now();
+    const timer = setInterval(() => {
+      setDemoElapsedSec(Math.floor((Date.now() - start) / 1000));
+    }, 1000);
+    try {
+      const outcome = await ensureDemoScene();
+      clearInterval(timer);
+      setGeneratingDemo(false);
+      onOpenScene(outcome.path);
+    } catch (err) {
+      clearInterval(timer);
+      setGeneratingDemo(false);
+      setDemoError(errorText(err));
+    }
+  };
+
+  useEffect(() => {
+    if (initialDatasetId && catalog.length > 0) {
+      const ds = catalog.find((row) => row.id === initialDatasetId);
+      if (ds) {
+        setInspectId(ds.id);
+        void handleSelectPreset(ds, initialPresetId || "dev");
+      }
+    }
+  }, [initialDatasetId, initialPresetId, catalog]);
 
   const handleSelectPreset = async (ds: CatalogDataset, presetId: string) => {
     setSelectedDataset(ds);
@@ -572,6 +614,45 @@ export default function GetDataScreen({ onOpenScene, onOpenImportFolder, onOpenL
               rowHeight={52}
               rowClassName={(ds) => (ds.status === "planned" ? "is-muted" : undefined)}
             />
+            <div
+              className="c-demo-card"
+              role="region"
+              aria-label="Offline demo"
+              style={{
+                margin: "12px 24px 0",
+                padding: "14px 18px",
+                background: "var(--sunken)",
+                borderRadius: "8px",
+                border: "1px solid var(--line)",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "16px",
+              }}
+            >
+              <div>
+                <div style={{ fontWeight: 600, fontSize: "13px", color: "var(--text)" }}>
+                  Offline demo scene
+                </div>
+                <div style={{ fontSize: "12px", color: "var(--text-subtle)", marginTop: "2px" }}>
+                  Deterministic synthetic cooperative scene with 3 agents (LiDAR & cameras) and simulated predictions (~8.2 MB).
+                </div>
+                {demoError && (
+                  <div style={{ fontSize: "11.5px", color: "var(--danger)", marginTop: "4px" }}>
+                    Failed to generate demo scene: {demoError}
+                  </div>
+                )}
+              </div>
+              <button
+                type="button"
+                className="c-primary"
+                disabled={generatingDemo}
+                onClick={() => void handleOpenDemo()}
+                style={{ flexShrink: 0 }}
+              >
+                {generatingDemo ? `Generating… ${demoElapsedSec}s` : "Open the demo"}
+              </button>
+            </div>
             <p className="c-page-note">
               {libraryRoot ? `Downloads go to ${libraryRoot}. ` : ""}
               Datasets without a recorded licence can only be imported from a copy you already have — the app never

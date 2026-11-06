@@ -74,6 +74,24 @@ if [ -z "${COPERCEIVE_PYTHON:-}" ] && [ ! -d "${ROOT_DIR}/src-tauri/resources/py
     fi
 fi
 
+# Measure demo scene generation time on Linux
+echo ""
+echo "--- Demo Scene Generation & Measurement ---"
+DEMO_TEST_DIR=$(mktemp -d /tmp/coperceive-linux-demo-XXXXXX)
+DEMO_PYTHON="${COPERCEIVE_PYTHON:-python3}"
+DEMO_T0=$(python3 -c 'import time; print(time.time())')
+"${DEMO_PYTHON}" -m coperceive demo create "${DEMO_TEST_DIR}/demo"
+DEMO_T1=$(python3 -c 'import time; print(time.time())')
+DEMO_ELAPSED=$(python3 -c "print(f'{${DEMO_T1} - ${DEMO_T0}:.2f}')")
+DEMO_SIZE_BYTES=$(du -sk "${DEMO_TEST_DIR}/demo" | awk '{print $1 * 1024}')
+echo "Measured demo generation time on Linux: ${DEMO_ELAPSED} s (${DEMO_SIZE_BYTES} bytes)"
+if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+    echo "### Demo Mode Generation" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Generation time**: ${DEMO_ELAPSED} s" >> "${GITHUB_STEP_SUMMARY}"
+    echo "- **Total size**: ${DEMO_SIZE_BYTES} bytes" >> "${GITHUB_STEP_SUMMARY}"
+fi
+rm -rf "${DEMO_TEST_DIR}"
+
 echo "Starting coperceive-desktop with auto-connect fixture..."
 COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
 COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
@@ -155,22 +173,43 @@ capture_screenshot() {
     fi
 }
 
-echo "Capturing viewer screenshot..."
-sleep 2
-capture_screenshot "viewer"
-
 CTRL_PORT=$(sed -n '4p' "${MARKER_FILE}" || true)
 CTRL_SECRET=$(sed -n '5p' "${MARKER_FILE}" || true)
 
+echo "Capturing viewer screenshot..."
 if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
-    echo "Showing Library and capturing screenshot..."
+    for i in {1..30}; do
+        RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"script":"Boolean(window.__COPERCEIVE_DESKTOP__)"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+        if echo "${RESP}" | grep -q '"result":true'; then
+            break
+        fi
+        sleep 0.2
+    done
+fi
+capture_screenshot "viewer"
+
+if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
+    echo "Showing Library and capturing welcome card screenshot..."
     curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:${CTRL_PORT}/show-library" >/dev/null || true
-    sleep 2
-    capture_screenshot "library"
+    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"window":"main","script":"window.dispatchEvent(new CustomEvent(\"coperceive-test-library-seed\", { detail: { scenes: [], serverCount: 0, welcomeCardDismissed: false } })); true;"}' "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || true
+    for i in {1..30}; do
+        RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"window":"main","script":"Boolean(document.querySelector(\".welcome-card\"))"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+        if echo "${RESP}" | grep -q '"result":true'; then
+            break
+        fi
+        sleep 0.2
+    done
+    capture_screenshot "welcome_card"
 
     echo "Navigating to Dataset View and capturing screenshot..."
-    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{\"script\":\"window.location.hash='#/connect?tab=hpc';\"}" "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || true
-    sleep 2
+    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{\"window\":\"main\",\"script\":\"window.location.hash='#/connect?tab=hpc'; true;\"}" "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || true
+    for i in {1..20}; do
+        RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"window":"main","script":"Boolean(window.location.hash.includes(\"hpc\"))"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+        if echo "${RESP}" | grep -q '"result":true'; then
+            break
+        fi
+        sleep 0.2
+    done
     capture_screenshot "dataset_view"
 fi
 

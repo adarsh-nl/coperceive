@@ -36,6 +36,20 @@ if (-not $env:COPERCEIVE_PYTHON -and -not (Test-Path "src-tauri\resources\python
     }
 }
 
+# Measure demo scene generation time on Windows
+Write-Host "Measuring demo scene generation time on Windows..."
+$demoDir = Join-Path $TempDir "demo-test"
+$swDemo = [System.Diagnostics.Stopwatch]::StartNew()
+$demoProc = Start-Process -FilePath $env:COPERCEIVE_PYTHON -ArgumentList "-m coperceive demo create `"$demoDir`"" -Wait -PassThru -NoNewWindow
+$swDemo.Stop()
+$demoSec = [math]::Round($swDemo.Elapsed.TotalSeconds, 2)
+Write-Host "Measured demo generation time on Windows: $demoSec s"
+if ($env:GITHUB_STEP_SUMMARY) {
+    Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "### Demo Mode Generation"
+    Add-Content -Path $env:GITHUB_STEP_SUMMARY -Value "- **Generation time**: $demoSec s"
+}
+Remove-Item -Path $demoDir -Recurse -Force -ErrorAction SilentlyContinue
+
 $StdOutFile = Join-Path $TempDir "app_stdout.log"
 $StdErrFile = Join-Path $TempDir "app_stderr.log"
 
@@ -121,7 +135,23 @@ function Capture-ScreenShot([string]$filename) {
 }
 
 Write-Host "Capturing viewer screenshot..."
-Start-Sleep -Seconds 2
+if ($ctrlPort -ne 0 -and $ctrlSecret) {
+    $headers = @{
+        "Authorization" = "Bearer $ctrlSecret"
+        "Content-Type"  = "application/json"
+    }
+
+    $waited = 0
+    while ($waited -lt 30) {
+        try {
+            $evalBody = @{ script = "Boolean(window.__COPERCEIVE_DESKTOP__)" } | ConvertTo-Json
+            $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $headers -Body $evalBody
+            if ($resp.result -eq $true) { break }
+        } catch {}
+        Start-Sleep -Milliseconds 200
+        $waited++
+    }
+}
 Capture-ScreenShot "viewer.png"
 
 if ($ctrlPort -ne 0 -and $ctrlSecret) {
@@ -130,11 +160,27 @@ if ($ctrlPort -ne 0 -and $ctrlSecret) {
         "Content-Type"  = "application/json"
     }
 
-    Write-Host "Showing Library and capturing screenshot..."
+    Write-Host "Showing Library and capturing welcome card screenshot..."
     try {
-        $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/show-library" -Method Post -Headers $headers -Body "{}"
-        Start-Sleep -Seconds 2
-        Capture-ScreenShot "library.png"
+        $null = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/show-library" -Method Post -Headers $headers -Body "{}"
+        $seedBody = @{
+            window = "main"
+            script = "window.dispatchEvent(new CustomEvent('coperceive-test-library-seed', { detail: { scenes: [], serverCount: 0, welcomeCardDismissed: false } })); true;"
+        } | ConvertTo-Json
+        $null = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $headers -Body $seedBody
+
+        $waited = 0
+        while ($waited -lt 30) {
+            $checkBody = @{
+                window = "main"
+                script = "Boolean(document.querySelector('.welcome-card'))"
+            } | ConvertTo-Json
+            $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $headers -Body $checkBody
+            if ($resp.result -eq $true) { break }
+            Start-Sleep -Milliseconds 200
+            $waited++
+        }
+        Capture-ScreenShot "welcome_card.png"
     } catch {
         Write-Warning "show-library request failed: $_"
     }
@@ -142,10 +188,22 @@ if ($ctrlPort -ne 0 -and $ctrlSecret) {
     Write-Host "Navigating to Dataset View and capturing screenshot..."
     try {
         $evalBody = @{
-            script = "window.location.hash = '#/connect?tab=hpc';"
+            window = "main"
+            script = "window.location.hash = '#/connect?tab=hpc'; true;"
         } | ConvertTo-Json
         $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $headers -Body $evalBody
-        Start-Sleep -Seconds 2
+
+        $waited = 0
+        while ($waited -lt 20) {
+            $checkBody = @{
+                window = "main"
+                script = "Boolean(window.location.hash.includes('hpc'))"
+            } | ConvertTo-Json
+            $resp = Invoke-RestMethod -Uri "http://127.0.0.1:$ctrlPort/eval" -Method Post -Headers $headers -Body $checkBody
+            if ($resp.result -eq $true) { break }
+            Start-Sleep -Milliseconds 200
+            $waited++
+        }
         Capture-ScreenShot "dataset_view.png"
     } catch {
         Write-Warning "eval dataset view request failed: $_"

@@ -464,6 +464,10 @@ pub struct AppPersistentState {
     /// it off while the OS asks for reduced motion.
     #[serde(default = "default_true")]
     pub cinema_drift: bool,
+
+    /// Whether the first-run welcome card was dismissed. Off (false) by default.
+    #[serde(default)]
+    pub welcome_card_dismissed: bool,
 }
 
 /// The values "Group scenes" may hold; anything else is ignored.
@@ -613,6 +617,7 @@ impl Default for AppPersistentState {
             camera_strip: default_camera_strip(),
             viewer_style: default_viewer_style(),
             cinema_drift: true,
+            welcome_card_dismissed: false,
         }
     }
 }
@@ -971,6 +976,7 @@ pub mod tests {
             camera_strip: "agent".into(),
             viewer_style: "cinema".into(),
             cinema_drift: false,
+            welcome_card_dismissed: true,
         };
 
         let json = serde_json::to_string(&state).expect("serialize");
@@ -1431,5 +1437,20 @@ pub mod tests {
         let serialized = serde_json::to_string(&layout).unwrap();
         let deserialized: LayoutSizes = serde_json::from_str(&serialized).unwrap();
         assert_eq!(deserialized, layout);
+    }
+
+    #[test]
+    fn test_welcome_card_dismissed_persistence() {
+        assert!(!AppPersistentState::default().welcome_card_dismissed);
+        let old: AppPersistentState = serde_json::from_str("{}").expect("old state");
+        assert!(!old.welcome_card_dismissed, "missing field falls back to false");
+
+        let dismissed: AppPersistentState =
+            serde_json::from_str(r#"{"welcome_card_dismissed": true}"#).expect("parse dismissed");
+        assert!(dismissed.welcome_card_dismissed);
+
+        let json = serde_json::to_string(&dismissed).expect("serialize");
+        let round_trip: AppPersistentState = serde_json::from_str(&json).expect("deserialize");
+        assert!(round_trip.welcome_card_dismissed);
     }
 }
