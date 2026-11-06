@@ -562,6 +562,12 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             if let Some(strip) = val.get("camera_strip").and_then(state::camera_strip_from) {
                 persistent.camera_strip = strip;
             }
+            if let Some(style) = val.get("viewer_style").and_then(state::viewer_style_from) {
+                persistent.viewer_style = style;
+            }
+            if let Some(drift) = val.get("cinema_drift").and_then(|v| v.as_bool()) {
+                persistent.cinema_drift = drift;
+            }
             if let Some(vis) = val.get("agent_visibility") {
                 if let Ok(map) = serde_json::from_value::<HashMap<String, bool>>(vis.clone()) {
                     persistent.agent_visibility = Some(map);

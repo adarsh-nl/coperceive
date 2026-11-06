@@ -1,0 +1,162 @@
+/* Viewer styles. Classic keeps the app theme. The other three set their own tokens. */
+
+.viewer-style-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.viewer-style-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 6px;
+  text-align: left;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  min-width: 0;
+}
+.viewer-style-card[data-selected="true"] {
+  border-color: var(--accent, #1f6feb);
+  box-shadow: 0 0 0 1px var(--accent, #1f6feb);
+}
+.viewer-style-card:focus-visible {
+  outline: 2px solid var(--accent, #1f6feb);
+  outline-offset: 2px;
+}
+.viewer-style-preview {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  border-radius: 4px;
+  display: block;
+  background: #141414;
+}
+.viewer-style-name {
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.viewer-style-blurb {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text-secondary, #3a3a3c);
+}
+
+.viewer[data-viewer-style="studio"],
+.viewer[data-viewer-style="instrument"],
+.viewer[data-viewer-style="cinema"] {
+  color-scheme: dark;
+  --bg: var(--viewer-bg);
+  --panel: var(--viewer-panel);
+  --text: var(--viewer-text);
+  --text-secondary: var(--viewer-text-secondary);
+  --text-tertiary: var(--viewer-text-secondary);
+  --muted: var(--viewer-text-secondary);
+  --line: rgba(255, 255, 255, 0.1);
+  --line-subtle: rgba(255, 255, 255, 0.06);
+  background: var(--viewer-bg);
+  color: var(--viewer-text);
+  font-family: var(--viewer-font);
+}
+
+.viewer[data-viewer-style="studio"] {
+  --viewer-bg: #161618;
+  --viewer-panel: #1a1a1c;
+  --viewer-text: #f5f5f7;
+  --viewer-text-secondary: #c7c7cc;
+  --viewer-font: Geist, sans-serif;
+}
+.viewer[data-viewer-style="instrument"] {
+  --viewer-bg: #04060a;
+  --viewer-panel: #071016;
+  --viewer-text: #e6fff9;
+  --viewer-text-secondary: #9be7d6;
+  --viewer-font: "Geist Mono", ui-monospace, monospace;
+  letter-spacing: 0.01em;
+}
+.viewer[data-viewer-style="cinema"] {
+  --viewer-bg: #06070a;
+  --viewer-panel: #1c1e26;
+  --viewer-text: #f5f5f7;
+  --viewer-text-secondary: #d0d0d4;
+  --viewer-font: Geist, sans-serif;
+}
+
+/* Instrument and Cinema: the stage fills the window and the panels float.
+   They stay in separate corners so they do not cover each other. */
+.viewer[data-viewer-style="instrument"] .workspace,
+.viewer[data-viewer-style="cinema"] .workspace {
+  position: relative;
+}
+.viewer[data-viewer-style="instrument"] .workspace > .stage,
+.viewer[data-viewer-style="cinema"] .workspace > .stage {
+  position: absolute;
+  inset: 0;
+}
+.viewer[data-viewer-style="instrument"] .panel-resizer,
+.viewer[data-viewer-style="cinema"] .panel-resizer {
+  display: none;
+}
+.viewer[data-viewer-style="instrument"] .workspace > .panel,
+.viewer[data-viewer-style="cinema"] .workspace > .panel {
+  position: absolute;
+  z-index: 4;
+  top: 8px;
+  /* vh, not a percentage of the workspace: the dock (strip + timeline) sits
+     at the bottom of the window and the panel must stop above it. */
+  max-height: calc(100vh - 400px);
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--viewer-panel) 88%, transparent);
+}
+.viewer[data-viewer-style="instrument"] .workspace > .panel:not(.panel-right),
+.viewer[data-viewer-style="cinema"] .workspace > .panel:not(.panel-right) {
+  left: 8px;
+}
+.viewer[data-viewer-style="instrument"] .workspace > .panel-right,
+.viewer[data-viewer-style="cinema"] .workspace > .panel-right {
+  right: 8px;
+}
+.viewer[data-viewer-style="cinema"] .workspace > .panel {
+  border-radius: 14px;
+  background: rgba(28, 30, 38, 0.72);
+  backdrop-filter: blur(16px);
+}
+
+.viewer[data-overlay="sparse"] .legend {
+  opacity: 0.92;
+}
+.viewer[data-overlay="dense"] .stage-chips,
+.viewer[data-overlay="dense"] .legend,
+.viewer[data-overlay="dense"] .status-line {
+  font-variant-numeric: tabular-nums;
+}
+
+.seen-swatch {
+  width: 14px;
+  height: 9px;
+  box-sizing: border-box;
+  display: inline-block;
+  border-radius: 1px;
+}
+.seen-swatch.both {
+  background: var(--seen-both, #e5e5ea);
+}
+.seen-swatch.ego {
+  border: 1.5px solid var(--seen-ego, #f58a1f);
+  background: repeating-linear-gradient(
+    135deg,
+    var(--seen-ego, #f58a1f) 0 2px,
+    transparent 2px 4px
+  );
+}
+.seen-swatch.other {
+  border: 1.5px dotted var(--seen-other, #5aa2ff);
+  background: radial-gradient(circle, var(--seen-other, #5aa2ff) 0.8px, transparent 1.2px);
+  background-size: 4px 4px;
+}

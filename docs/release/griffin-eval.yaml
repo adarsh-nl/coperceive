@@ -1,0 +1,5 @@
+# The evaluation config used for the Griffin acceptance table in docs/models.md:236.
+# The code default (DEFAULT_CONFIG) is the viewer default, 0.30 / no range limit;
+# this file pins the documented operating point for the reproduction run.
+max_range_m: 50
+score_threshold: 0.4

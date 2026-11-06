@@ -50,6 +50,45 @@ pub fn resolve_update_endpoint_override(override_url_opt: Option<&str>) -> Optio
     )
 }
 
+pub const DEB_UPDATE_NOTICE: &str = "In-app updates are supported when running from AppImage. On Debian/Ubuntu (.deb), update using your package manager or download the latest .deb from GitHub Releases.";
+
+/// Checks whether an in-app update check on Linux should be bypassed because the
+/// application is running from an installed package (.deb) rather than a portable AppImage.
+///
+/// When running from a Debian/Ubuntu `.deb` package (i.e. `APPIMAGE` is not set):
+/// - A manual check (`is_manual = true`) reports an error directing the user to `apt` / GitHub Releases.
+/// - A background check (`is_manual = false`) reports `UpToDate` with the bundle version, so no update card is shown.
+/// - If `APPIMAGE` is set or if running in test environment, returns `None` to allow the normal updater to run.
+pub fn linux_deb_check_outcome(
+    is_manual: bool,
+    appimage_var: Option<&std::ffi::OsStr>,
+    test_env: bool,
+    bundle_version: &impl std::fmt::Display,
+) -> Option<UpdateCheckOutcome> {
+    if test_env || appimage_var.is_some() {
+        return None;
+    }
+    if is_manual {
+        Some(UpdateCheckOutcome::Error {
+            error: DEB_UPDATE_NOTICE.to_string(),
+            is_network: false,
+        })
+    } else {
+        Some(UpdateCheckOutcome::UpToDate {
+            current_version: app_version(bundle_version),
+        })
+    }
+}
+
+/// Checks whether an in-app update install on Linux should be prevented because the
+/// application is running from an installed package (.deb) rather than a portable AppImage.
+pub fn linux_deb_install_prevented(
+    appimage_var: Option<&std::ffi::OsStr>,
+    test_env: bool,
+) -> bool {
+    !test_env && appimage_var.is_none()
+}
+
 pub fn resolve_update_endpoint_override_with_env(
     override_url_opt: Option<&str>,
     test_env_active: bool,
@@ -172,5 +211,45 @@ mod tests {
         let json_err = serde_json::to_value(&error).unwrap();
         assert_eq!(json_err["status"], "error");
         assert_eq!(json_err["is_network"], true);
+    }
+
+    #[test]
+    fn test_linux_deb_update_decision() {
+        let version = "0.1.1";
+
+        // APPIMAGE unset on Linux plus a manual check gives the .deb error message
+        let manual_deb = linux_deb_check_outcome(true, None, false, &version);
+        assert_eq!(
+            manual_deb,
+            Some(UpdateCheckOutcome::Error {
+                error: DEB_UPDATE_NOTICE.to_string(),
+                is_network: false,
+            })
+        );
+
+        // APPIMAGE unset plus a background check gives up to date, so no card
+        let bg_deb = linux_deb_check_outcome(false, None, false, &version);
+        assert_eq!(
+            bg_deb,
+            Some(UpdateCheckOutcome::UpToDate {
+                current_version: "0.1.1".to_string(),
+            })
+        );
+
+        // APPIMAGE set takes the normal path (returns None)
+        let appimage_val = std::ffi::OsStr::new("/tmp/Coperceive.AppImage");
+        let appimage_manual = linux_deb_check_outcome(true, Some(appimage_val), false, &version);
+        assert_eq!(appimage_manual, None);
+        let appimage_bg = linux_deb_check_outcome(false, Some(appimage_val), false, &version);
+        assert_eq!(appimage_bg, None);
+
+        // Test environment active also takes the normal path (returns None)
+        assert_eq!(linux_deb_check_outcome(true, None, true, &version), None);
+        assert_eq!(linux_deb_check_outcome(false, None, true, &version), None);
+
+        // Install prevention decision
+        assert!(linux_deb_install_prevented(None, false));
+        assert!(!linux_deb_install_prevented(Some(appimage_val), false));
+        assert!(!linux_deb_install_prevented(None, true));
     }
 }

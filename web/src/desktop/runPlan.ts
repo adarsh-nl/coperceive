@@ -52,6 +52,9 @@ export interface RunPlanRequest {
   values: Record<string, unknown>;
   checkpoint: string;
   split: string;
+  model: string;
+  raw_root: string;
+  media_root: string;
   environment_override: EnvironmentSetup | null;
 }
 
@@ -91,6 +94,11 @@ export interface RunPlan {
   environment_note: string;
   checkpoint: PlanArtifact;
   split: PlanArtifact;
+  model: string;
+  raw_root: PlanArtifact;
+  media_root: PlanArtifact;
+  work_dir: string;
+  staging_seconds: number | null;
   output_dir: string;
   scratch_dir: string;
   /** Model-evaluation GPU default, e.g. gpu:lovelace:1; null for CPU-only. */

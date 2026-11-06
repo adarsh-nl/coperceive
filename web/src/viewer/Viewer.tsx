@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { downloadTownMap, onTownMapProgress, isTauriEnvironment } from "../desktop/local";
 import * as THREE from "three";
@@ -23,6 +23,8 @@ import { BLOOM_LAYER, createBloom, enableBloom, type BloomRig } from "./bloom";
 import CameraStrip, { CameraSplit, loadImage } from "./cameras";
 import { createFrameCache, isAbortError, type FrameCache } from "./cache";
 import { EyeToggle, IconMoon, IconSun, Menu, Segmented, Slider, SwatchToggle } from "./controls";
+import { otherSeenLabel, seenDash, seenKind, type SeenKind } from "./seenBy";
+import { effectiveCinemaDrift, useViewerStyle, VIEWER_STYLE_TOKENS, type ViewerStyle } from "./viewerStyle";
 import { createImagePlane, disposeImageTextures, FRUSTUM_DEPTH, FRUSTUM_TEXTURE, textureForBitmap } from "./frustumImages";
 import { boxCenter, followPick, type PickRecord } from "./inspect";
 import { pickFromObject, syncFrustumPicks, syncPicks } from "./picks";
@@ -139,6 +141,7 @@ type Stage = {
   renderNow: () => void;
   captureView: (width: number, height: number) => string;
   setTheme: (theme: Appearance["theme"]) => void;
+  setBackground: (hex: number) => void;
   bloom: BloomRig;
   labelRenderer: CSS2DRenderer;
   trails: THREE.Group;
@@ -162,6 +165,12 @@ type Stage = {
   predictionPicks: THREE.Group;
   /** Ground-truth wires a shown prediction matched, at 40% opacity. */
   dimmedBoxes: THREE.LineSegments;
+  /** Ego-only wires (dashed) and other-agent wires (dotted) when colouring by who sees the box. */
+  egoBoxes: THREE.LineSegments;
+  otherBoxes: THREE.LineSegments;
+  seenEnabled: boolean;
+  seenEgo: string | null;
+  seenColors: { both: string; ego: string; other: string; unknown: string };
   /** The sample the drawn point cloud and boxes come from; they must always agree. */
   shownTimes: { points: number | null; boxes: number | null };
 };
@@ -641,7 +650,19 @@ function fillWire(positions: Float32Array, colors: Float32Array, cursor: number,
   return cursor + box.lines.length;
 }
 
-/** Ground-truth wires and solids. A box in `dimmed` (matched by a shown prediction) goes to the 40% layer. */
+function seenWire(stage: Stage, appearance: Appearance, box: FrameBox, frame: FrameDocument): SeenKind | null {
+  if (appearance.colorBy !== "seen" || !stage.seenEnabled) return null;
+  return seenKind(box, frame.boxes, stage.seenEgo);
+}
+
+function paintColor(stage: Stage, appearance: Appearance, box: FrameBox, types: Map<string, string>, frame: FrameDocument): THREE.Color {
+  const kind = seenWire(stage, appearance, box, frame);
+  if (kind) return new THREE.Color(stage.seenColors[kind]);
+  return new THREE.Color(boxColor(box, types, appearance));
+}
+
+/** Ground-truth wires and solids. A box in `dimmed` (matched by a shown prediction) goes to the 40% layer.
+ *  Seen-by draws ego-only boxes dashed and the other agent's boxes dotted. */
 function drawBoxes(
   stage: Stage,
   frame: FrameDocument,
@@ -654,33 +675,37 @@ function drawBoxes(
   const keys = dimmed && dimmed.timeUs === frame.time_us && dimmed.keys.size > 0 ? dimmed.keys : null;
   const shown = frame.boxes.filter((box) => boxShown(box, hidden, appearance) && Array.isArray(box.lines));
   const dims = shown.map((box) => keys !== null && keys.has(frameGtKey(box)));
-  let boxFloats = 0;
-  let dimFloats = 0;
+  const bucketOf = (box: FrameBox, index: number): "solid" | "dim" | "ego" | "other" => {
+    if (dims[index]) return "dim";
+    const kind = seenWire(stage, appearance, box, frame);
+    const dash = kind ? seenDash(kind) : "solid";
+    if (dash === "dashed") return "ego";
+    if (dash === "dotted") return "other";
+    return "solid";
+  };
+  const floats = { solid: 0, dim: 0, ego: 0, other: 0 };
   shown.forEach((box, index) => {
-    if (dims[index]) {
-      dimFloats += box.lines.length;
-    } else {
-      boxFloats += box.lines.length;
-    }
+    floats[bucketOf(box, index)] += box.lines.length;
   });
-  const boxPositions = new Float32Array(boxFloats);
-  const boxColors = new Float32Array(boxFloats);
-  const dimPositions = new Float32Array(dimFloats);
-  const dimColors = new Float32Array(dimFloats);
-  let boxCursor = 0;
-  let dimCursor = 0;
+  const buffers = {
+    solid: { positions: new Float32Array(floats.solid), colors: new Float32Array(floats.solid), cursor: 0 },
+    dim: { positions: new Float32Array(floats.dim), colors: new Float32Array(floats.dim), cursor: 0 },
+    ego: { positions: new Float32Array(floats.ego), colors: new Float32Array(floats.ego), cursor: 0 },
+    other: { positions: new Float32Array(floats.other), colors: new Float32Array(floats.other), cursor: 0 },
+  };
   shown.forEach((box, index) => {
-    const color = new THREE.Color(boxColor(box, types, appearance));
-    if (dims[index]) {
-      dimCursor = fillWire(dimPositions, dimColors, dimCursor, box, color);
-    } else {
-      boxCursor = fillWire(boxPositions, boxColors, boxCursor, box, color);
-    }
+    const bucket = buffers[bucketOf(box, index)];
+    bucket.cursor = fillWire(bucket.positions, bucket.colors, bucket.cursor, box, paintColor(stage, appearance, box, types, frame));
   });
-  replaceColored(stage.boxes.geometry, boxPositions, boxColors);
-  replaceColored(stage.dimmedBoxes.geometry, dimPositions, dimColors);
-  stage.boxes.visible = boxPositions.length > 0;
-  stage.dimmedBoxes.visible = dimPositions.length > 0;
+  const commit = (line: THREE.LineSegments, positions: Float32Array, colors: Float32Array) => {
+    replaceColored(line.geometry, positions, colors);
+    line.computeLineDistances();
+    line.visible = positions.length > 0;
+  };
+  commit(stage.boxes, buffers.solid.positions, buffers.solid.colors);
+  commit(stage.dimmedBoxes, buffers.dim.positions, buffers.dim.colors);
+  commit(stage.egoBoxes, buffers.ego.positions, buffers.ego.colors);
+  commit(stage.otherBoxes, buffers.other.positions, buffers.other.colors);
 
   clearGroup(stage.solids);
   if (appearance.boxStyle === "solid") {
@@ -695,7 +720,7 @@ function drawBoxes(
       const mesh = new THREE.Mesh(
         new THREE.BoxGeometry(length, width, height),
         new THREE.MeshBasicMaterial({
-          color: boxColor(box, types, appearance),
+          color: paintColor(stage, appearance, box, types, frame),
           transparent: true,
           opacity: dims[index] ? 0.28 * 0.4 : 0.28,
           depthWrite: false,
@@ -1841,6 +1866,12 @@ export default function Viewer({
   }, [summary, capabilities]);
 
   const reduceMotionRef = useRef(false);
+  const viewerStyle = useViewerStyle();
+  const styleRef = useRef<ViewerStyle>(viewerStyle.style);
+  const driftRef = useRef(false);
+  styleRef.current = viewerStyle.style;
+  driftRef.current = effectiveCinemaDrift(viewerStyle.drift, viewerStyle.reducedMotion);
+  const styleDistance = useRef(VIEWER_STYLE_TOKENS[viewerStyle.style].distanceScale);
   const lengthRef = useRef(0);
   const loopRef = useRef(loop);
   loopRef.current = loop;
@@ -1949,6 +1980,55 @@ export default function Viewer({
     return () => media.removeEventListener("change", apply);
   }, []);
 
+  const seenByAvailable = summary?.seen_by?.available === true;
+  const seenEgoId = summary?.agents.find((agent) => agent.agent_type === "vehicle")?.agent_id ?? summary?.agents[0]?.agent_id ?? null;
+  if (stageRef.current) {
+    stageRef.current.seenEnabled = seenByAvailable;
+    stageRef.current.seenEgo = seenEgoId;
+    stageRef.current.seenColors = VIEWER_STYLE_TOKENS[viewerStyle.style].seen;
+  }
+  useEffect(() => {
+    if (appearance.colorBy === "seen" && !seenByAvailable) {
+      setAppearance((current) => ({ ...current, colorBy: "agent" }));
+    }
+  }, [appearance.colorBy, seenByAvailable]);
+
+  const appliedStyle = useRef<ViewerStyle | null>(null);
+  useEffect(() => {
+    if (appliedStyle.current === viewerStyle.style) return;
+    const previous = appliedStyle.current;
+    appliedStyle.current = viewerStyle.style;
+    const tokens = VIEWER_STYLE_TOKENS[viewerStyle.style];
+    const stage = stageRef.current;
+    if (stage) {
+      stage.seenColors = tokens.seen;
+      stage.setBackground(
+        viewerStyle.style === "classic" ? 0x141414 : Number.parseInt(tokens.background.slice(1), 16),
+      );
+      if (modeRef.current === "orbit" && previous !== null) {
+        const offset = stage.camera.position.clone().sub(stage.controls.target);
+        const length = offset.length();
+        if (length > 1 && styleDistance.current > 0) {
+          offset.setLength((length * tokens.distanceScale) / styleDistance.current);
+          stage.camera.position.copy(stage.controls.target).add(offset);
+          stage.camera.lookAt(stage.controls.target);
+        }
+        stage.camera.fov = tokens.fov;
+        stage.camera.updateProjectionMatrix();
+        styleDistance.current = tokens.distanceScale;
+        stage.requestRender();
+      }
+    }
+    // A saved Classic layout stays as the user left it. Choosing a style sets its widths.
+    if (previous !== null || viewerStyle.style !== "classic") {
+      setLayout((current) => ({
+        ...current,
+        left_px: tokens.leftPx ?? DEFAULT_LEFT_PX,
+        right_px: tokens.rightPx ?? DEFAULT_RIGHT_PX,
+      }));
+    }
+  }, [viewerStyle.style]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) {
@@ -1966,7 +2046,9 @@ export default function Viewer({
       return;
     }
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x141414);
+    scene.background = new THREE.Color(
+      styleRef.current === "classic" ? 0x141414 : VIEWER_STYLE_TOKENS[styleRef.current].background,
+    );
     const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 5000);
     camera.up.set(0, 0, 1);
     camera.position.set(40, -40, 25);
@@ -1984,8 +2066,18 @@ export default function Viewer({
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ vertexColors: true }),
     );
+    const egoBoxes = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineDashedMaterial({ vertexColors: true, dashSize: 0.45, gapSize: 0.22 }),
+    );
+    const otherBoxes = new THREE.LineSegments(
+      new THREE.BufferGeometry(),
+      new THREE.LineDashedMaterial({ vertexColors: true, dashSize: 0.12, gapSize: 0.16 }),
+    );
     enableBloom(points);
     enableBloom(boxes);
+    enableBloom(egoBoxes);
+    enableBloom(otherBoxes);
     const dimmedBoxes = new THREE.LineSegments(
       new THREE.BufferGeometry(),
       new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, opacity: 0.4, depthWrite: false }),
@@ -2040,7 +2132,7 @@ export default function Viewer({
     const trailLines = new Map<string, THREE.Line>();
     const leaderLines = new Map<string, THREE.Line>();
     const labelNodes = new Map<string, CSS2DObject>();
-    scene.add(grid, mapLines, points, boxes, dimmedBoxes, predictions, solids, frustums, images, picks, predictionPicks, frustumPicks, highlight, agents, trails, leaders, labels);
+    scene.add(grid, mapLines, points, boxes, egoBoxes, otherBoxes, dimmedBoxes, predictions, solids, frustums, images, picks, predictionPicks, frustumPicks, highlight, agents, trails, leaders, labels);
     const clock = new THREE.Clock();
     let frameId = 0;
     let sizedWidth = 0;
@@ -2083,7 +2175,19 @@ export default function Viewer({
         if (!dragging && damp > 0) {
           damp -= 1;
         }
-        easing = dragging || damp > 0;
+        const drifting =
+          styleRef.current === "cinema" &&
+          driftRef.current &&
+          !reduceMotionRef.current &&
+          playingRef.current &&
+          !dragging;
+        if (drifting) {
+          const offset = camera.position.clone().sub(controls.target);
+          offset.applyAxisAngle(new THREE.Vector3(0, 0, 1), dt * 0.05);
+          camera.position.copy(controls.target).add(offset);
+          camera.lookAt(controls.target);
+        }
+        easing = dragging || damp > 0 || drifting;
       } else if (goal) {
         controls.enabled = false;
         const arrived = reduceMotionRef.current
@@ -2228,6 +2332,10 @@ export default function Viewer({
       scene.background = new THREE.Color(theme === "light" || theme === "dark" ? 0x141414 : 0x141414);
       requestRender();
     };
+    const setBackground = (hex: number) => {
+      scene.background = new THREE.Color(hex);
+      requestRender();
+    };
     const clearMotion = () => {
       trailLog.clear();
       for (const line of trailLines.values()) {
@@ -2260,6 +2368,7 @@ export default function Viewer({
       renderNow,
       captureView,
       setTheme,
+      setBackground,
       bloom,
       labelRenderer,
       trails,
@@ -2279,6 +2388,11 @@ export default function Viewer({
       predictions,
       predictionPicks,
       dimmedBoxes,
+      egoBoxes,
+      otherBoxes,
+      seenEnabled: false,
+      seenEgo: null,
+      seenColors: VIEWER_STYLE_TOKENS.classic.seen,
     };
     const isTestOrDesktopEnv =
       typeof window !== "undefined" &&
@@ -2990,6 +3104,13 @@ export default function Viewer({
       });
       if (framedScene.current !== summary.scene_id) {
         const home = orbitGoal(drawn.positions, drawn.anchor);
+        const tokens = VIEWER_STYLE_TOKENS[styleRef.current];
+        if (tokens.distanceScale !== 1) {
+          const offset = home.position.clone().sub(home.target).multiplyScalar(tokens.distanceScale);
+          home.position.copy(home.target).add(offset);
+        }
+        home.fov = tokens.fov;
+        styleDistance.current = tokens.distanceScale;
         orbitHomeRef.current = home;
         const snap = goalFor(modeRef.current, body, types, cameraKeyRef.current, home) ?? home;
         applyGoal(stage.camera, stage.controls.target, snap);
@@ -4474,7 +4595,12 @@ export default function Viewer({
   );
 
   return (
-    <div className={poster ? "viewer viewer-poster" : "viewer"}>
+    <div
+      className={poster ? "viewer viewer-poster" : "viewer"}
+      data-viewer-style={viewerStyle.style}
+      data-overlay={VIEWER_STYLE_TOKENS[viewerStyle.style].overlay}
+      style={{ fontFamily: VIEWER_STYLE_TOKENS[viewerStyle.style].font }}
+    >
       {datasetError && (
         <div className="dataset-error-banner" role="alert">
           <div className="dataset-error-content">
@@ -4695,13 +4821,17 @@ export default function Viewer({
             <div className="stack">
               <Segmented
                 label="Colour by"
-                value={appearance.colorBy}
+                value={appearance.colorBy === "seen" && !seenByAvailable ? "agent" : appearance.colorBy}
                 options={[
                   { value: "agent", label: "Agent" },
                   { value: "class", label: "Class" },
+                  ...(seenByAvailable ? [{ value: "seen", label: "Seen by" }] : []),
                 ]}
                 onChange={(value) =>
-                  setAppearance((current) => ({ ...current, colorBy: value === "class" ? "class" : "agent" }))
+                  setAppearance((current) => ({
+                    ...current,
+                    colorBy: value === "class" || (value === "seen" && seenByAvailable) ? value : "agent",
+                  }))
                 }
               />
               <Segmented
@@ -4892,12 +5022,36 @@ export default function Viewer({
               </ul>
             ) : null}
             </div>
-            <div className="glass legend" aria-label="Legend">
-              {legendTypes.map((kind) => (
-                <span key={kind}>
-                  <i style={{ background: AGENT_INK[kind] ?? "#b7b1a6" }} /> {LEGEND_LABELS[kind] ?? kind}
-                </span>
-              ))}
+            <div
+              className="glass legend"
+              aria-label="Legend"
+              style={
+                {
+                  "--seen-both": VIEWER_STYLE_TOKENS[viewerStyle.style].seen.both,
+                  "--seen-ego": VIEWER_STYLE_TOKENS[viewerStyle.style].seen.ego,
+                  "--seen-other": VIEWER_STYLE_TOKENS[viewerStyle.style].seen.other,
+                } as CSSProperties
+              }
+            >
+              {appearance.colorBy === "seen" && seenByAvailable ? (
+                <>
+                  <span>
+                    <i className="seen-swatch both" /> Both
+                  </span>
+                  <span>
+                    <i className="seen-swatch ego" /> Ego only
+                  </span>
+                  <span>
+                    <i className="seen-swatch other" /> {otherSeenLabel(summary?.agents.map((agent) => agent.agent_type) ?? [])}
+                  </span>
+                </>
+              ) : (
+                legendTypes.map((kind) => (
+                  <span key={kind}>
+                    <i style={{ background: AGENT_INK[kind] ?? "#b7b1a6" }} /> {LEGEND_LABELS[kind] ?? kind}
+                  </span>
+                ))
+              )}
               <span>
                 <i style={{ background: "#c6f3dc" }} /> Lane
               </span>

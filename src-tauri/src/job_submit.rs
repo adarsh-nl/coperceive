@@ -170,6 +170,16 @@ pub fn render_run_script(
     if !plan.nothing_submitted {
         return Err("This plan records a submission; it cannot be submitted again.".to_string());
     }
+    if plan.pipeline.source == "builtin"
+        && (plan.model.trim().is_empty()
+            || plan.raw_root.path.trim().is_empty()
+            || plan.media_root.path.trim().is_empty())
+    {
+        return Err(
+            "This saved plan predates the model/raw/media fields. Rebuild this plan before submitting."
+                .to_string(),
+        );
+    }
     validate_plan_id(&plan.id)?;
     profile.validate()?;
     plan.environment.validate()?;
@@ -581,6 +591,11 @@ mod tests {
             environment: profile.environment.clone(),
             environment_from_override: false,
             environment_note: "test".to_string(),
+            model: String::new(),
+            raw_root: crate::run_plan::PlanArtifact::default(),
+            media_root: crate::run_plan::PlanArtifact::default(),
+            work_dir: String::new(),
+            staging_seconds: None,
             checkpoint: crate::run_plan::PlanArtifact {
                 path: "/data/code/checkpoints/model.pt".to_string(),
                 sha256: Some("a".repeat(64)),
@@ -770,6 +785,19 @@ mod tests {
         };
         let error = render_run_script(&profile, &plan, &options).expect_err("bad time");
         assert!(error.contains("Walltime"), "{error}");
+    }
+
+    #[test]
+    fn an_old_builtin_plan_asks_for_a_rebuild_instead_of_submitting() {
+        let profile = profile("ps");
+        let mut plan = plan(&profile);
+        plan.pipeline.source = "builtin".to_string();
+        plan.model = String::new();
+        plan.raw_root = crate::run_plan::PlanArtifact::default();
+        plan.media_root = crate::run_plan::PlanArtifact::default();
+        let error = render_run_script(&profile, &plan, &SubmitOptions::default())
+            .expect_err("old plan");
+        assert!(error.contains("Rebuild this plan"), "{error}");
     }
 
     #[test]

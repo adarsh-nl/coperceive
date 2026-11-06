@@ -81,17 +81,77 @@ def test_a_release_tag_becomes_the_bundle_version_and_names_latest_json(tmp_path
     assert _synced_version(work, GITHUB_REF_TYPE="tag", GITHUB_REF_NAME="v0.1.1") == "0.1.1"
     assets = tmp_path / "assets"
     assets.mkdir()
-    (assets / "Coperceive.app.tar.gz").write_bytes(b"archive")
-    (assets / "Coperceive.app.tar.gz.sig").write_text("c2ln\n")
+    (assets / "Coperceive_aarch64.app.tar.gz").write_bytes(b"archive-arm64")
+    (assets / "Coperceive_aarch64.app.tar.gz.sig").write_text("c2lnLWFybTY0\n")
+    (assets / "Coperceive_x64.app.tar.gz").write_bytes(b"archive-intel")
+    (assets / "Coperceive_x64.app.tar.gz.sig").write_text("c2lnLWludGVs\n")
+    (assets / "Coperceive_0.1.1_x64-setup.exe").write_bytes(b"archive-win")
+    (assets / "Coperceive_0.1.1_x64-setup.exe.sig").write_text("c2lnLXdpbg==\n")
+    (assets / "Coperceive_0.1.1_amd64.AppImage").write_bytes(b"archive-linux")
+    (assets / "Coperceive_0.1.1_amd64.AppImage.sig").write_text("c2lnLWxpbng=\n")
     out = tmp_path / "latest.json"
-    argv = ["--conf", str(work / "src-tauri" / "tauri.conf.json"), "--tag", "v0.1.1",
-            "--assets", str(assets), "--repo", REPO, "--out", str(out)]  # fmt: skip
+    argv = [
+        "--conf",
+        str(work / "src-tauri" / "tauri.conf.json"),
+        "--tag",
+        "v0.1.1",
+        "--assets",
+        str(assets),
+        "--repo",
+        REPO,
+        "--out",
+        str(out),
+        "--require-all",
+    ]
     assert wlj.main(argv) == 0
     manifest = json.loads(out.read_text())
     assert manifest["version"] == "0.1.1"
+    assert set(manifest["platforms"].keys()) == {
+        "darwin-aarch64",
+        "darwin-x86_64",
+        "windows-x86_64",
+        "linux-x86_64",
+    }
     assert manifest["platforms"]["darwin-aarch64"]["url"] == (
-        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive.app.tar.gz"
+        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_aarch64.app.tar.gz"
     )
+    assert manifest["platforms"]["darwin-aarch64"]["signature"] == "c2lnLWFybTY0"
+    assert manifest["platforms"]["darwin-x86_64"]["url"] == (
+        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_x64.app.tar.gz"
+    )
+    assert manifest["platforms"]["darwin-x86_64"]["signature"] == "c2lnLWludGVs"
+    assert manifest["platforms"]["windows-x86_64"]["url"] == (
+        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_0.1.1_x64-setup.exe"
+    )
+    assert manifest["platforms"]["windows-x86_64"]["signature"] == "c2lnLXdpbg=="
+    assert manifest["platforms"]["linux-x86_64"]["url"] == (
+        f"https://github.com/{REPO}/releases/download/v0.1.1/Coperceive_0.1.1_amd64.AppImage"
+    )
+    assert manifest["platforms"]["linux-x86_64"]["signature"] == "c2lnLWxpbng="
+
+
+@pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
+def test_require_all_fails_when_a_platform_is_missing(tmp_path: Path) -> None:
+    work = _checkout(tmp_path, "v0.1.1")
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    (assets / "Coperceive_aarch64.app.tar.gz").write_bytes(b"archive-arm64")
+    (assets / "Coperceive_aarch64.app.tar.gz.sig").write_text("c2lnLWFybTY0\n")
+    out = tmp_path / "latest.json"
+    argv = [
+        "--conf",
+        str(work / "src-tauri" / "tauri.conf.json"),
+        "--tag",
+        "v0.1.1",
+        "--assets",
+        str(assets),
+        "--repo",
+        REPO,
+        "--out",
+        str(out),
+        "--require-all",
+    ]
+    assert wlj.main(argv) != 0
 
 
 @pytest.mark.skipif(shutil.which("git") is None, reason="needs git")
@@ -147,11 +207,29 @@ def test_the_app_polls_the_file_the_release_uploads() -> None:
 def test_the_release_runs_the_tests_before_it_builds() -> None:
     """Gap G4: a tag on a commit whose tests fail must not become a release."""
     workflow = RELEASE_YML.read_text()
-    checks = workflow[workflow.index("  checks:") : workflow.index("  build-release:")]
+    checks = workflow[workflow.index("  checks:") : workflow.index("  build-macos:")]
     steps = ("ruff check", "ruff format --check", "pyright", "pytest", "npx tsc -b", "npm test")
     for step in steps:
         assert step in checks, step
-    build = workflow[workflow.index("  build-release:") :]
-    assert "needs: checks" in build.split("steps:", 1)[0]
+    for job in ("build-macos", "build-windows", "build-linux"):
+        build = workflow[workflow.index(f"  {job}:") :]
+        assert "needs: checks" in build.split("steps:", 1)[0]
+    publish = workflow[workflow.index("  publish-release:") :]
+    publish_header = publish.split("steps:", 1)[0]
+    assert "needs: [checks, build-macos, build-windows, build-linux]" in publish_header
     # The checks job runs the repository's tests: it must not get write access.
     assert "permissions:\n      contents: read" in checks.split("steps:", 1)[0]
+
+
+def test_the_release_publish_step_requires_tag_ref() -> None:
+    """A manual dispatch or push from a branch must never publish a release."""
+    workflow = RELEASE_YML.read_text()
+    publish = workflow[workflow.index("  publish-release:") :]
+    create_step = publish[publish.index("- name: Create GitHub Release") :]
+    if_line = [line.strip() for line in create_step.splitlines() if line.strip().startswith("if:")][
+        0
+    ]
+    assert "github.ref_type == 'tag'" in if_line
+    # workflow_dispatch dry_run must default to true so accidental clicks never publish
+    dispatch_input = workflow[workflow.index("  workflow_dispatch:") : workflow.index("jobs:")]
+    assert "default: true" in dispatch_input

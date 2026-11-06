@@ -14,6 +14,7 @@ import { Button } from "./components/Button";
 import { IconButton } from "./components/IconButton";
 import { useDatasetGrouping } from "./hpc/groupingSetting";
 import { useCameraStripMode, type CameraStripMode } from "../viewer/cameraStripSetting";
+import { ViewerStyleSettings } from "../viewer/ViewerStyleSettings";
 import type { DatasetGrouping } from "./hpc/grouping";
 import { getRevealLabel } from "./platform";
 
@@ -228,6 +229,7 @@ export function DesktopPreferences() {
             onChange={handleAutoNextToggle}
           />
         </div>
+        <ViewerStyleSettings />
         <div
           role="radiogroup"
           aria-label="Camera strip"

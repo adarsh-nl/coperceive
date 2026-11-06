@@ -444,6 +444,7 @@ def plan_sbatch(
             "",
             "set -euo pipefail",
             f'SCRATCH="{scratch_template}"',
+            f"RUN_ID={shlex.quote(run_id)}",
             'mkdir -p "$SCRATCH"',
             "trap 'rm -rf \"$SCRATCH\"' EXIT",
             'export TMPDIR="$SCRATCH/tmp"',
@@ -494,9 +495,9 @@ def plan_sbatch(
             "set -e",
             'echo "model run exit $RC"',
             "",
-            f'mkdir -p "$SCRATCH/out/"{shlex.quote(run_id)}',
+            'mkdir -p "$SCRATCH/out/$RUN_ID"',
             *environment_capture_lines(
-                f'"$SCRATCH/out/"{shlex.quote(run_id)}"/environment.json"',
+                '"$SCRATCH/out/$RUN_ID/environment.json"',
                 python=shlex.quote(str(python)),
             ),
             "",
@@ -506,7 +507,7 @@ def plan_sbatch(
             "rsync -a " + " ".join(work_copy_filter(transient)) + " "
             f'"$SCRATCH/work/" {shlex.quote(str(results))}/"$SLURM_JOB_ID"/work/',
             f"mkdir -p {shlex.quote(str(target))}",
-            f'rsync -a "$SCRATCH/out/{run_id}/" {shlex.quote(str(target))}/',
+            f'rsync -a "$SCRATCH/out/$RUN_ID/" {shlex.quote(str(target))}/',
             *[
                 line
                 for member in closure
