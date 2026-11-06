@@ -10,6 +10,8 @@ import hmac
 import io
 import json
 import re
+import threading
+import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
 
@@ -19,6 +21,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
+from starlette.datastructures import Headers
 
 from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
 from coperceive.camera_images import served_candidates
@@ -48,6 +51,7 @@ from coperceive.plot import (
 )
 from coperceive.remote_view.client import StreamRefused, StreamUnavailable
 from coperceive.remote_view.scenes import RemoteScenes
+from coperceive.remote_view.stats import DEFAULT_CAPACITY, SampleStats
 from coperceive.rerun_export import RerunUnavailable, export_rerun
 from coperceive.seen_by import adapter_name, seen_by_for_scene
 from coperceive.sequence_export import (
@@ -79,6 +83,164 @@ _IMAGE_TYPES = {
 
 _STATIC = Path(__file__).resolve().parent / "static"
 _THUMBNAIL_WIDTH_MAX = 1280
+
+# The viewer's stream timing: bounded samples (a ring per statistic) and exact
+# counters, so a long session does not grow memory. The schema string versions
+# the additive JSON of GET /api/stream-stats.
+_STREAM_STATS_SCHEMA = "coperceive-stream-stats-1"
+_STREAM_STATS_CAPACITY = DEFAULT_CAPACITY
+_STREAM_ENDPOINTS = ("frame", "points", "image")
+# How often the async points endpoint checks whether the browser went away; a
+# disconnected viewer cancels the remote read it no longer needs. The read is
+# then given a moment to finish so no worker is left behind a closed request.
+_DISCONNECT_POLL_S = 0.05
+_DISCONNECT_CANCEL_WAIT_S = 1.0
+_EMPTY_TIMING: dict[str, float | int] = {"count": 0, "p50": 0.0, "p95": 0.0, "max": 0.0}
+
+
+_CSRF_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+
+class _AuthAndCsrfMiddleware:
+    """Bearer-token and CSRF checks for ``/api`` as plain ASGI middleware.
+
+    The token is fixed when the middleware is constructed, not read back from
+    ``scope["app"]``: a request must never be able to make the guard skip
+    authentication by presenting a scope without that state. Constructing the
+    middleware without a token and without ``allow_anonymous`` fails closed with
+    a 500 for every ``/api`` request. ``allow_anonymous`` is the explicit
+    loopback-only mode ``create_app`` opts into when it has no token; the CSRF
+    check still runs in both modes.
+    """
+
+    def __init__(
+        self,
+        app: object,
+        token: str | None = None,
+        *,
+        allow_anonymous: bool = False,
+    ) -> None:
+        self.app = app
+        self.token = token
+        self.allow_anonymous = allow_anonymous
+
+    async def __call__(self, scope: dict[str, object], receive: object, send: object) -> None:
+        if scope.get("type") != "http" or scope.get("method") == "OPTIONS":
+            await self.app(scope, receive, send)  # type: ignore[operator]
+            return
+        if not str(scope.get("path", "")).startswith("/api/"):
+            await self.app(scope, receive, send)  # type: ignore[operator]
+            return
+        headers = Headers(scope=scope)  # type: ignore[arg-type]
+        if not self.token:
+            if not self.allow_anonymous:
+                await _json_error(500, "server authentication is not configured")(
+                    scope, receive, send
+                )
+                return
+        else:
+            header = headers.get("authorization", "")
+            prefix = "Bearer "
+            if not (
+                header.startswith(prefix) and hmac.compare_digest(header[len(prefix) :], self.token)
+            ):
+                await _json_error(401, "bearer token required")(scope, receive, send)
+                return
+        if scope.get("method") in _CSRF_METHODS and headers.get(CSRF_HEADER) != "1":
+            await _json_error(403, f"missing {CSRF_HEADER}: 1")(scope, receive, send)
+            return
+        await self.app(scope, receive, send)  # type: ignore[operator]
+
+
+class _StreamHttpStats:
+    """Bounded, thread-safe timings for the viewer's stream-backed HTTP requests.
+
+    ``http_ms`` is the viewer-side start→done time of ``/frame``, ``/points``
+    and ``/image`` (with the bytes each served); ``queue_ms``/``read_ms``/
+    ``transfer_ms`` come from the StreamClient, one sample per stream request it
+    answered. Counters are exact; the sample rings hold the last
+    ``_STREAM_STATS_CAPACITY`` values.
+    """
+
+    def __init__(self, capacity: int = _STREAM_STATS_CAPACITY) -> None:
+        self._lock = threading.Lock()
+        self._http_ms = SampleStats(capacity)
+        self._requests = 0
+        self._bytes = 0
+        self._active = 0
+        self._cancelled = 0
+        self._endpoint_http = {name: SampleStats(capacity) for name in _STREAM_ENDPOINTS}
+        self._endpoint_requests = dict.fromkeys(_STREAM_ENDPOINTS, 0)
+        self._endpoint_bytes = dict.fromkeys(_STREAM_ENDPOINTS, 0)
+
+    def begin(self) -> None:
+        with self._lock:
+            self._active += 1
+
+    def finish(
+        self, endpoint: str, started: float, nbytes: int = 0, *, cancelled: bool = False
+    ) -> None:
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        with self._lock:
+            self._active = max(0, self._active - 1)
+            self._requests += 1
+            self._bytes += max(0, nbytes)
+            if cancelled:
+                self._cancelled += 1
+            if endpoint in self._endpoint_http:
+                self._endpoint_requests[endpoint] += 1
+                self._endpoint_bytes[endpoint] += max(0, nbytes)
+                self._endpoint_http[endpoint].add(elapsed_ms)
+        self._http_ms.add(elapsed_ms)
+
+    def snapshot(self, client: object | None) -> dict[str, object]:
+        client_stats: dict[str, object] = {}
+        if client is not None:
+            stats_reader = getattr(client, "stats", None)
+            if callable(stats_reader):
+                try:
+                    loaded = stats_reader()
+                except Exception:  # stats must never break the endpoint
+                    loaded = None
+                if isinstance(loaded, dict):
+                    client_stats = loaded
+        with self._lock:
+            by_endpoint = {
+                name: {
+                    "requests": self._endpoint_requests[name],
+                    "bytes": self._endpoint_bytes[name],
+                    "http_ms": (
+                        self._endpoint_http[name].snapshot()
+                        if len(self._endpoint_http[name])
+                        else dict(_EMPTY_TIMING)
+                    ),
+                }
+                for name in _STREAM_ENDPOINTS
+            }
+            active = self._active
+            cancelled = self._cancelled
+            requests = self._requests
+            bytes_served = self._bytes
+            http_ms = self._http_ms.snapshot() if len(self._http_ms) else dict(_EMPTY_TIMING)
+
+        def timing(key: str) -> object:
+            return client_stats.get(key) or dict(_EMPTY_TIMING)
+
+        return {
+            "schema": _STREAM_STATS_SCHEMA,
+            "requests": requests,
+            "bytes": bytes_served,
+            "queue_ms": timing("queue_ms"),
+            "read_ms": timing("read_ms"),
+            "transfer_ms": timing("transfer_ms"),
+            "active": active,
+            "queued": int(client_stats.get("outstanding") or 0),
+            "samples": len(self._http_ms),
+            "cancelled": cancelled,
+            "http_ms": http_ms,
+            "by_endpoint": by_endpoint,
+            "remote": client_stats,
+        }
 
 
 @functools.lru_cache(maxsize=256)
@@ -230,30 +392,35 @@ def create_app(
     # A cluster dataset viewed over SSH: `root` is the local mirror, the scenes
     # and their point sweeps and images come from `remote` (docs/datasets/cluster-datasets.md).
     app.state.remote = remote
+    # Bounded per-request timings for the viewer (GET /api/stream-stats); the
+    # data plane is the sidecar -> StreamClient -> streamer, not Rust.
+    app.state.stream_stats = _StreamHttpStats()
     static_dir = _STATIC if static is None else Path(static).resolve()
 
-    @app.middleware("http")
-    async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
-        if request.method == "OPTIONS":
-            return await call_next(request)
-        if request.url.path.startswith("/api/"):
-            expected = request.app.state.token
-            if expected:
-                header = request.headers.get("authorization", "")
-                prefix = "Bearer "
-                if not (
-                    header.startswith(prefix)
-                    and hmac.compare_digest(header[len(prefix) :], expected)
-                ):
-                    return _json_error(401, "bearer token required")
-            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
-                if request.headers.get(CSRF_HEADER) != "1":
-                    return _json_error(403, f"missing {CSRF_HEADER}: 1")
-        return await call_next(request)
+    # A pure ASGI guard, not BaseHTTPMiddleware: that wrapper hides the receive
+    # channel, so downstream request.is_disconnected() never sees a browser
+    # that went away (the points endpoint relies on it to cancel a remote read).
+    # The token is passed in at construction so the guard cannot fail open; with
+    # no token this app is the loopback-only mode (`coperceive serve` refuses a
+    # non-loopback host without a token), and the guard still enforces CSRF.
+    app.add_middleware(_AuthAndCsrfMiddleware, token=token, allow_anonymous=token is None)
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "root_path": root_path}
+
+    @app.get("/api/stream-stats")
+    def stream_stats() -> dict[str, object]:
+        """Versioned, bounded timings for streamed viewing (frame/points/image).
+
+        The data plane is webview -> this Python sidecar -> StreamClient -> one
+        SSH pipe -> the Python streamer; Rust only spawns the sidecar. The
+        queue/read/transfer percentiles are the streamer's and client's own
+        timings, so the viewer can show where a frame's time went.
+        """
+        remote = app.state.remote
+        client = None if remote is None else remote.client
+        return app.state.stream_stats.snapshot(client)
 
     @app.get("/api/jobs")
     def jobs() -> list[dict[str, object]]:
@@ -307,14 +474,20 @@ def create_app(
 
     @app.get("/api/scenes/{scene_id}/frame")
     def scene_frame(scene_id: str, time_us: int) -> dict[str, object]:
-        document = frame_document(_cached_scene(app, scene_id), time_us)
-        if app.state.remote is not None:
-            document["point_sensors"] = [
-                {"agent_id": sweep.agent_id, "sensor_id": sweep.sensor_id, "count": sweep.count}
-                for sweep in _remote_call(lambda: app.state.remote.sweeps(scene_id)).values()
-                if sweep.time_us == time_us
-            ]
-        return document
+        stats = app.state.stream_stats
+        stats.begin()
+        started = time.perf_counter()
+        try:
+            document = frame_document(_cached_scene(app, scene_id), time_us)
+            if app.state.remote is not None:
+                document["point_sensors"] = [
+                    {"agent_id": sweep.agent_id, "sensor_id": sweep.sensor_id, "count": sweep.count}
+                    for sweep in _remote_call(lambda: app.state.remote.sweeps(scene_id)).values()
+                    if sweep.time_us == time_us
+                ]
+            return document
+        finally:
+            stats.finish("frame", started)
 
     @app.get("/api/scenes/{scene_id}/map")
     def scene_map(scene_id: str, refresh: bool = False) -> dict[str, object]:
@@ -373,6 +546,28 @@ def create_app(
         width: int | None = None,
         full: bool = False,
     ) -> Response:
+        stats = app.state.stream_stats
+        stats.begin()
+        started = time.perf_counter()
+        response: Response | None = None
+        try:
+            response = _scene_image_response(
+                scene_id, time_us, agent_id, sensor_id, width=width, full=full
+            )
+            return response
+        finally:
+            body = getattr(response, "body", b"")
+            stats.finish("image", started, len(body) if isinstance(body, (bytes, bytearray)) else 0)
+
+    def _scene_image_response(
+        scene_id: str,
+        time_us: int,
+        agent_id: str,
+        sensor_id: str,
+        *,
+        width: int | None,
+        full: bool,
+    ) -> Response:
         scene = _cached_scene(app, scene_id)
         relative = image_path(scene, time_us, agent_id, sensor_id)
         if relative is None:
@@ -414,22 +609,34 @@ def create_app(
         return FileResponse(target, media_type=media)
 
     @app.get("/api/scenes/{scene_id}/points")
-    def scene_points(scene_id: str, time_us: int, agent_id: str, sensor_id: str) -> Response:
-        scene = _cached_scene(app, scene_id)
-        if app.state.remote is not None:
-            remote = app.state.remote
-            sweep = _remote_call(lambda: remote.sweeps(scene_id)).get(
-                (agent_id, sensor_id, time_us)
-            )
-            if sweep is None:
-                return Response(content=b"", media_type="application/octet-stream")
-            data = _remote_call(lambda: remote.sweep_bytes(scene_id, sweep))
-            cloud = PointCloud(agent_id, sensor_id, time_us, sweep.count, data)
-            return Response(
-                content=world_points(scene, cloud), media_type="application/octet-stream"
-            )
-        blob = frame_points(scene, time_us, agent_id, sensor_id)
-        return Response(content=blob, media_type="application/octet-stream")
+    async def scene_points(
+        scene_id: str, time_us: int, agent_id: str, sensor_id: str, request: Request
+    ) -> Response:
+        remote = app.state.remote
+        stats = app.state.stream_stats
+        stats.begin()
+        started = time.perf_counter()
+        served = 0
+        cancelled = False
+        try:
+            if remote is not None:
+                payload = await _remote_points(
+                    app, remote, scene_id, time_us, agent_id, sensor_id, request
+                )
+                if payload is None:
+                    # The browser went away mid-read: stop waiting for bytes that
+                    # would only be dropped. The streamer finishes the read and
+                    # sends no reply for it.
+                    cancelled = True
+                    return Response(status_code=499)
+                served = len(payload)
+                return Response(content=payload, media_type="application/octet-stream")
+            scene = await asyncio.to_thread(_cached_scene, app, scene_id)
+            blob = frame_points(scene, time_us, agent_id, sensor_id)
+            served = len(blob)
+            return Response(content=blob, media_type="application/octet-stream")
+        finally:
+            stats.finish("points", started, served, cancelled=cancelled)
 
     @app.post("/api/scenes/{scene_id}/export/rerun")
     def scene_rerun(scene_id: str) -> dict[str, object]:
@@ -641,6 +848,52 @@ def create_app(
             return HTMLResponse(_MISSING_VIEWER_PAGE)
 
     return app
+
+
+async def _remote_points(
+    app: FastAPI,
+    remote: RemoteScenes,
+    scene_id: str,
+    time_us: int,
+    agent_id: str,
+    sensor_id: str,
+    request: Request,
+) -> bytes | None:
+    """The remote sweep as world points; None when the browser disconnected mid-read."""
+    token = remote.client.token()
+
+    def read() -> bytes:
+        # One thread hop for the whole request: the scene is cached after the
+        # first frame, so the sweep read dominates and is the part cancellable.
+        scene = _cached_scene(app, scene_id)
+        sweep = _remote_call(lambda: remote.sweeps(scene_id)).get((agent_id, sensor_id, time_us))
+        if sweep is None:
+            return b""
+        data = _remote_call(lambda: remote.sweep_bytes(scene_id, sweep, token=token))
+        cloud = PointCloud(agent_id, sensor_id, time_us, sweep.count, data)
+        return world_points(scene, cloud)
+
+    worker: asyncio.Future[bytes] = asyncio.ensure_future(asyncio.to_thread(read))
+    while True:
+        done, _ = await asyncio.wait({worker}, timeout=_DISCONNECT_POLL_S)
+        if worker in done:
+            return worker.result()
+        if await request.is_disconnected():
+            # Best effort: the queued read is skipped, an in-flight one finishes
+            # on the cluster side but its reply is dropped.
+            token.cancel()
+            retired, _ = await asyncio.wait({worker}, timeout=_DISCONNECT_CANCEL_WAIT_S)
+            if worker not in retired:
+                worker.add_done_callback(_consume_worker)
+            elif not worker.cancelled():
+                worker.exception()  # not served: retire it without logging
+            return None
+
+
+def _consume_worker(future: asyncio.Future[bytes]) -> None:
+    """Read a not-served worker's exception so it is not reported as unretrieved."""
+    if not future.cancelled():
+        future.exception()
 
 
 def _images_staged(app: FastAPI, scene: Scene, scene_dir: Path) -> bool | None:

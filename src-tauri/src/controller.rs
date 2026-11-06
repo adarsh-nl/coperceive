@@ -562,6 +562,21 @@ pub fn handle_client<R: Read, W: Write, F: Fn() + Send + 'static>(
             if let Some(strip) = val.get("camera_strip").and_then(state::camera_strip_from) {
                 persistent.camera_strip = strip;
             }
+            if let Some(seconds) = val
+                .get("buffer_target_seconds")
+                .and_then(state::buffer_target_seconds_from)
+            {
+                persistent.buffer_target_seconds = seconds;
+            }
+            if let Some(bytes) = val
+                .get("client_memory_limit_bytes")
+                .and_then(state::client_memory_limit_bytes_from)
+            {
+                persistent.client_memory_limit_bytes = bytes;
+            }
+            if let Some(show) = val.get("show_stream_stats").and_then(|v| v.as_bool()) {
+                persistent.show_stream_stats = show;
+}
             if let Some(style) = val.get("viewer_style").and_then(state::viewer_style_from) {
                 persistent.viewer_style = style;
             }
@@ -1018,6 +1033,56 @@ pub mod tests {
         assert_eq!(loaded.last_scene_id, Some("synth_001".into()));
         assert_eq!(loaded.last_sample_index, Some(3));
         assert_eq!(loaded.last_timestamp_us, Some(300000));
+
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_streaming_settings_saved_and_invalid_values_ignored() {
+        let temp_dir = std::env::temp_dir().join(format!("cp-stream-state-test-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&temp_dir);
+        let state_file = temp_dir.join("state.json");
+
+        let mut config = make_test_config();
+        config.state_path = Some(state_file.clone());
+
+        let payload = r#"{"buffer_target_seconds":5,"client_memory_limit_bytes":268435456,"show_stream_stats":true}"#;
+        let header = format!(
+            "POST /state HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n",
+            payload.len()
+        );
+        let mut reader = Cursor::new([header.as_bytes(), payload.as_bytes()].concat());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let resp = String::from_utf8(writer).unwrap();
+        assert!(resp.starts_with("HTTP/1.1 200 OK"), "got: {}", resp);
+        let loaded = state::load_state_from_path(&state_file);
+        assert_eq!(loaded.buffer_target_seconds, 5);
+        assert_eq!(loaded.client_memory_limit_bytes, 268435456);
+        assert!(loaded.show_stream_stats);
+
+        // A hand-edited or stale value is ignored, never stored.
+        let payload = r#"{"buffer_target_seconds":60,"client_memory_limit_bytes":8192}"#;
+        let header = format!(
+            "POST /state HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: http://127.0.0.1:8000\r\n\
+             Authorization: Bearer secret-token-test-123\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n",
+            payload.len()
+        );
+        let mut reader = Cursor::new([header.as_bytes(), payload.as_bytes()].concat());
+        let mut writer = Vec::new();
+        handle_client(&mut reader, &mut writer, &config, &|| {}).unwrap();
+        let loaded = state::load_state_from_path(&state_file);
+        assert_eq!(loaded.buffer_target_seconds, 5);
+        assert_eq!(loaded.client_memory_limit_bytes, 268435456);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
     }

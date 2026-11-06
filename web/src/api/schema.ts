@@ -21,6 +21,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/stream-stats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Stream Stats
+         * @description Versioned, bounded timings for streamed viewing (frame/points/image).
+         *
+         *     The data plane is webview -> this Python sidecar -> StreamClient -> one
+         *     SSH pipe -> the Python streamer; Rust only spawns the sidecar. The
+         *     queue/read/transfer percentiles are the streamer's and client's own
+         *     timings, so the viewer can show where a frame's time went.
+         */
+        get: operations["stream_stats_api_stream_stats_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/jobs": {
         parameters: {
             query?: never;
@@ -575,6 +600,28 @@ export interface operations {
                 content: {
                     "application/json": {
                         [key: string]: string;
+                    };
+                };
+            };
+        };
+    };
+    stream_stats_api_stream_stats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": {
+                        [key: string]: unknown;
                     };
                 };
             };

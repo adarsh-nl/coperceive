@@ -14,6 +14,11 @@ import { Button } from "./components/Button";
 import { IconButton } from "./components/IconButton";
 import { useDatasetGrouping } from "./hpc/groupingSetting";
 import { useCameraStripMode, type CameraStripMode } from "../viewer/cameraStripSetting";
+import {
+  BUFFER_TARGET_CHOICES,
+  MEMORY_LIMIT_CHOICES_MB,
+  useStreamingSettings,
+} from "../viewer/streamingSettings";
 import { ViewerStyleSettings } from "../viewer/ViewerStyleSettings";
 import type { DatasetGrouping } from "./hpc/grouping";
 import { getRevealLabel } from "./platform";
@@ -70,6 +75,7 @@ const CAMERA_STRIP_CHOICES: ReadonlyArray<readonly [CameraStripMode, string, str
 export function DesktopPreferences() {
   const [grouping, setGrouping] = useDatasetGrouping();
   const [cameraStrip, setCameraStrip] = useCameraStripMode();
+  const [streaming, setStreaming] = useStreamingSettings();
   const [reopenLast, setReopenLast] = useState<boolean>(true);
   const [autoUpdate, setAutoUpdate] = useState<boolean>(true);
   const [autoNextScene, setAutoNextScene] = useState<boolean>(false);
@@ -250,6 +256,68 @@ export function DesktopPreferences() {
               onChange={() => setCameraStrip(value)}
             />
           ))}
+        </div>
+        <div
+          role="radiogroup"
+          aria-label="Streaming buffer"
+          style={{ borderTop: "1px solid var(--line-subtle)", display: "flex", flexDirection: "column" }}
+        >
+          <div style={{ padding: "8px 0 2px", fontSize: "13px", fontWeight: 500, color: "var(--text)" }}>
+            Streaming buffer
+          </div>
+          {BUFFER_TARGET_CHOICES.map((seconds) => (
+            <SettingRow
+              key={seconds}
+              type="radio"
+              name="buffer-target"
+              value={String(seconds)}
+              checked={streaming.bufferTargetSeconds === seconds}
+              title={`${seconds} s ahead`}
+              description={
+                seconds === 3
+                  ? "Default. Playback pauses and says Buffering… rather than stuttering when the link falls behind."
+                  : seconds === 1
+                    ? "Less memory for buffering; playback rebuffers sooner on a slow link."
+                    : "Extra headroom for a slow link; fills for longer before playback starts."
+              }
+              onChange={() => setStreaming({ bufferTargetSeconds: seconds })}
+            />
+          ))}
+        </div>
+        <div
+          role="radiogroup"
+          aria-label="Client memory limit"
+          style={{ borderTop: "1px solid var(--line-subtle)", display: "flex", flexDirection: "column" }}
+        >
+          <div style={{ padding: "8px 0 2px", fontSize: "13px", fontWeight: 500, color: "var(--text)" }}>
+            Client memory limit
+          </div>
+          {MEMORY_LIMIT_CHOICES_MB.map((megabytes) => (
+            <SettingRow
+              key={megabytes}
+              type="radio"
+              name="client-memory-limit"
+              value={String(megabytes)}
+              checked={streaming.memoryLimitBytes === megabytes * 1024 * 1024}
+              title={`${megabytes} MB`}
+              description={
+                megabytes === 512
+                  ? "Default. Cached frame documents and point clouds are evicted oldest-first to stay under this."
+                  : megabytes === 256
+                    ? "Less memory; the buffer target may not be reached on dense scenes."
+                    : "More memory for the buffer on dense scenes."
+              }
+              onChange={() => setStreaming({ memoryLimitBytes: megabytes * 1024 * 1024 })}
+            />
+          ))}
+        </div>
+        <div style={{ borderTop: "1px solid var(--line-subtle)" }}>
+          <SettingRow
+            checked={streaming.showStreamStats}
+            title="Show streaming stats"
+            description="A small line under the status line: buffer ahead, MB/s and frame-load p50/p95."
+            onChange={(checked) => setStreaming({ showStreamStats: checked })}
+          />
         </div>
       </SettingsGroup>
 
