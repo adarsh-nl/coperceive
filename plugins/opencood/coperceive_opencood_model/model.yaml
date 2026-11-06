@@ -1,0 +1,112 @@
+# The OpenCOOD model plugin (ADR 0011). The worker runs in the user's OpenCOOD conda
+# environment (default name `opencood`) and drives the OpenCOOD checkout that is installed
+# there; OpenCOOD is a runtime dependency and is not vendored into Coperceive. The checkpoint
+# is never hard-coded: --option checkpoint=FILE names the archive, and `checkpoint:` below
+# makes `model run` require it and `model run --slurm` stage it into the job's scratch.
+spec_version: 1
+name: opencood
+version: "0.1.0"
+licence:
+  # The plugin's own code only; the runtime dependency is separately licensed (see notice).
+  spdx: Apache-2.0
+  notice: >-
+    This plugin's own code is Apache-2.0. OpenCOOD is a runtime dependency imported from the
+    user's own environment; it is not vendored, installed or redistributed by this plugin.
+    OpenCOOD is NOT Apache-2.0: its LICENSE is the "Academic Software License (c) 2021 UCLA
+    Mobility Lab" (academic/nonprofit use only, no transfer, commercial licensing via
+    jiaqima@ucla.edu) and its source files carry a TDG-Attribution-NonCommercial-NoDistrib
+    header. See https://github.com/DerrickXuNu/OpenCOOD/blob/main/LICENSE (checked
+    2026-11-06). Check the licence of your own OpenCOOD checkout and of the checkpoint
+    archive before use; commercial or redistributed use needs a licence review.
+  citation: >-
+    Chen et al., CoBEVT: Cooperative Bird's Eye View Semantic Segmentation with Sparse
+    Transformers, CoRL 2022, arXiv:2207.02202; Xu et al., OpenCOOD and OPV2V, ICRA 2022,
+    arXiv:2109.07644; Xu et al., V2X-ViT, ECCV 2022, arXiv:2203.10638.
+environment:
+  # The interpreter of the user's OpenCOOD environment: it is found by name (or prefix) and
+  # used directly, so no conda activation line is needed on a compute node. Compute nodes
+  # have no internet; build the environment on the login node (docs/models/opencood.md).
+  conda: opencood
+  inherit_ld_library_path: true
+  # If this cluster's OpenCOOD environment needs CUDA modules on compute nodes, add them
+  # here; the Slurm emitter writes one `module load` per entry. None are pinned here because
+  # the environment's CUDA stack has not been checked from this repository.
+models:
+  cobevt-lidar-v2xset:
+    description: >-
+      CoBEVT LiDAR intermediate fusion (OpenCOOD `point_pillar_cobevt`) over every CAV's
+      lidar sweep, for V2XSet (and the same OpenCOOD layout from OPV2V); fusion method,
+      voxel sizes, anchor ranges, box order and score threshold come from the checkpoint's
+      own config.yaml, never from this manifest.
+    inputs:
+      modalities: [lidar]
+      # Vehicles and the V2XSet roadside unit both contribute a sweep; the fused rows are
+      # attributed to the ego vehicle (outputs.agent below). See docs/models/opencood.md.
+      agents: [vehicle, infrastructure]
+      frames: single
+    outputs:
+      categories: [vehicle] # the OPV2V/V2XSet releases annotate vehicles only
+      score_note: >-
+        classification probability of the checkpoint's post-processor after its own score
+        threshold (config postprocess.target_args.score_threshold); override with
+        --option score_threshold=F. Boxes are the checkpoint's ego-frame predictions
+        converted to schema 1 world-frame boxes through the inverse ADR 0012 reflection.
+      sources:
+        fused: "CoBEVT LiDAR intermediate fusion of every CAV's sweep, ego vehicle's frame"
+      agent: vehicle
+    resources:
+      gpu: true
+      cpus: 8
+      memory_gb: 16
+      # ESTIMATES, not measurements: inference, checkpoint staging and model loading have not
+      # been timed on the cluster from this repository. The Slurm --time estimate uses them
+      # only until a run under --out reports provenance.timings (spec §Provenance), and
+      # docs/models/opencood.md repeats that they are unverified.
+      seconds_per_sample: 0.08   # ESTIMATE: one fused LiDAR frame per Sample after load
+      staging_seconds: 180       # ESTIMATE: rsync of the staged scenes' points.bin
+      conversion_seconds: 60     # ESTIMATE: zip extraction + config parse + model load
+      frame_timeout_s: 600
+    options:
+      checkpoint:
+        type: str
+        default: ""
+        description: >-
+          path of the OpenCOOD checkpoint archive (.zip) holding config.yaml and the weights;
+          required for every run and staged into scratch by --slurm
+      checkpoint_config:
+        type: str
+        default: ""
+        description: >-
+          path of the config YAML inside the archive, when the archive holds more than one
+          (the worker lists the candidates in its error otherwise)
+      checkpoint_weights:
+        type: str
+        default: ""
+        description: >-
+          path of the weights file inside the archive, when the archive holds more than one
+      score_threshold:
+        type: float
+        default: -1.0
+        description: >-
+          drop boxes below this score; negative means the checkpoint config's own threshold
+      device:
+        type: str
+        default: ""
+        description: torch device; empty means the parent's choice (cuda:0 when it exposes a GPU)
+    checkpoint: {option: checkpoint}
+commands:
+  # {option:checkpoint} reaches the worker before `configure`, so `hello` can report the
+  # archive's MD5 (the cache key) and the parent can verify it by hashing the same file.
+  batch:
+    [
+      "{python}",
+      "{plugin_dir}/worker.py",
+      "--model",
+      "{model}",
+      "--checkpoint",
+      "{option:checkpoint}",
+    ]
+notes: >-
+  OpenCOOD checkout commit, checkpoint archive contents, config names, and AP numbers are
+  unverified from this repository; docs/models/opencood.md lists the read-only cluster checks
+  (unzip -l, config head) and keeps AP "to be measured" until a cluster run exists.
