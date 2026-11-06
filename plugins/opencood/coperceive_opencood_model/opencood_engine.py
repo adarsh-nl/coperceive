@@ -23,6 +23,12 @@ float32 ``(n, 4)`` ndarray (as upstream ``pcd_utils.pcd_to_np`` returns) and the
 matrices are float64 ndarrays (as ``x_to_world``/``np.eye`` produce); lists fail the
 dataset's first ``lidar_np.shape``/``shuffle_points`` call.
 
+Weight loading is strict by default: a state dict whose keys do not match the model exactly
+raises an EngineError naming the manifest option ``allow_partial_weights`` (only then is a
+non-strict retry allowed and logged). The ``weights_only=True`` safe unpickler is tried
+first; the legacy pickle loader, which executes code embedded in a user-supplied checkpoint,
+runs only with ``trust_checkpoint_pickle=true`` and its use is logged.
+
 Priors sent with every frame are the CoBEVT/V2XSet-era defaults, because schema 1 stores no
 speeds or asynchronous delays: ``ego_speed = 0.0``, ``time_delay = 0.0`` and an identity
 ``spatial_correction_matrix``. Configs that consume ``wild_setting``/spatial correction
@@ -143,8 +149,17 @@ def _fusion_of(config: dict[str, object]) -> str:
     return str(method)
 
 
-def _load_weights(torch, path: str) -> dict[str, object]:
-    """Load a state dict, preferring the safe unpickler and falling back to the old one."""
+def _load_weights(torch, path: str, *, trust_pickle: bool = False) -> dict[str, object]:
+    """Load a state dict, preferring the safe unpickler; the pickle fallback is opt-in.
+
+    ``weights_only=True`` (torch >= 2.0) refuses globals other than tensors, which many
+    older checkpoints need (numpy scalars, small helper objects). Falling back to the legacy
+    pickle loader would execute code embedded in a user-supplied file, so it is only used
+    when ``trust_pickle`` is set (manifest option ``trust_checkpoint_pickle=true``); the
+    default is a clear error that names that option. torch older than 2.0 has no
+    ``weights_only`` argument at all, so every load there goes through the legacy loader and
+    the same opt-in applies.
+    """
     # Defensive repeats of the archive guards: the seam must not hand a link, a directory or
     # an empty file to torch.load even if it is constructed directly.
     if os.path.islink(path):
@@ -155,14 +170,26 @@ def _load_weights(torch, path: str) -> dict[str, object]:
         raise EngineError(f"weights {path!r} is empty")
     try:
         state = torch.load(path, map_location="cpu", weights_only=True)
-    except TypeError:  # torch older than 2.0 has no weights_only argument
+    except TypeError:
+        if not trust_pickle:
+            raise EngineError(
+                f"this torch ({getattr(torch, '__version__', 'unknown')}) has no weights_only "
+                f"argument, so loading {path} would use the legacy pickle loader, which "
+                "executes code embedded in the file; pass --option trust_checkpoint_pickle=true "
+                "only if you trust this checkpoint"
+            ) from None
         try:
             state = torch.load(path, map_location="cpu")
         except Exception as exc:  # noqa: BLE001 - a bad file is reported to the parent
             raise EngineError(f"cannot load weights {path}: {exc}") from None
-    except Exception:
-        # Checkpoints saved by an old torch often carry numpy scalars or other globals the
-        # safe unpickler refuses; a user-supplied checkpoint is trusted either way.
+    except Exception as safe_error:  # noqa: BLE001 - the safe unpickler could not read it
+        if not trust_pickle:
+            raise EngineError(
+                f"cannot load weights {path} with torch.load(weights_only=True): {safe_error}. "
+                "The checkpoint probably needs the legacy pickle loader, which executes code "
+                "embedded in the file; pass --option trust_checkpoint_pickle=true only if you "
+                "trust this checkpoint"
+            ) from None
         try:
             state = torch.load(path, map_location="cpu", weights_only=False)
         except Exception as exc:  # noqa: BLE001 - a bad file is reported to the parent
@@ -257,6 +284,8 @@ class OpenCOODEngine:
         work_dir: str,
         device: str = "",
         score_threshold: float = -1.0,
+        allow_partial_weights: bool = False,
+        trust_checkpoint_pickle: bool = False,
         log=None,
     ) -> None:
         self._log = log or (lambda text: None)
@@ -331,22 +360,35 @@ class OpenCOODEngine:
             self.model = self._train_utils.create_model(config)
         except Exception as exc:  # noqa: BLE001 - model construction errors are the env's
             raise EngineError(f"cannot build the model from the checkpoint config: {exc}") from None
-        state = _load_weights(self._torch, weights_path)
+        self.allow_partial_weights = bool(allow_partial_weights)
+        self.trust_checkpoint_pickle = bool(trust_checkpoint_pickle)
+        state = _load_weights(self._torch, weights_path, trust_pickle=self.trust_checkpoint_pickle)
         try:
-            result = self.model.load_state_dict(state, strict=False)
-        except Exception as exc:  # noqa: BLE001 - shape/key mismatches are reported with counts
-            raise EngineError(f"the weights do not fit the model: {exc}") from None
-        missing = list(getattr(result, "missing_keys", []) or [])
-        unexpected = list(getattr(result, "unexpected_keys", []) or [])
-        if len(unexpected) == len(state):
-            raise EngineError(
-                "none of the checkpoint's parameter names matches the model; the config and "
-                "the weights are probably from different experiments"
-            )
-        if missing or unexpected:
+            self.model.load_state_dict(state, strict=True)
+            self.partial_weights = False
+        except Exception as strict_error:  # noqa: BLE001 - the strict loader names the keys
+            if not self.allow_partial_weights:
+                raise EngineError(
+                    "the checkpoint's tensors do not match the model exactly "
+                    f"({strict_error}); pass --option allow_partial_weights=true to load it "
+                    "non-strictly and log the skipped tensors"
+                ) from None
+            try:
+                result = self.model.load_state_dict(state, strict=False)
+            except Exception as exc:  # noqa: BLE001 - shape mismatches are still fatal
+                raise EngineError(f"the weights do not fit the model: {exc}") from None
+            missing = list(getattr(result, "missing_keys", []) or [])
+            unexpected = list(getattr(result, "unexpected_keys", []) or [])
+            if len(unexpected) == len(state):
+                raise EngineError(
+                    "none of the checkpoint's parameter names matches the model; the config "
+                    "and the weights are probably from different experiments"
+                ) from None
+            self.partial_weights = True
             self._log(
-                f"loaded {len(state) - len(unexpected)} of {len(state)} checkpoint tensors; "
-                f"{len(missing)} model tensors without weights, {len(unexpected)} unused"
+                "loaded non-strictly (allow_partial_weights=true): "
+                f"{len(state) - len(unexpected)} of {len(state)} checkpoint tensors used, "
+                f"{len(missing)} model tensors without weights, {len(unexpected)} skipped"
             )
         try:
             self.model.to(self.device)
@@ -419,4 +461,6 @@ class OpenCOODEngine:
                 "checkpoint config" if self.score_threshold < 0.0 else f"{self.score_threshold:g}"
             ),
             "device": self.device,
+            "weights": "partial allowed" if self.partial_weights else "strict",
+            "pickle_fallback": "allowed" if self.trust_checkpoint_pickle else "refused",
         }

@@ -55,7 +55,12 @@ from:
   orders. `corner_to_center` recovers the centre as the mean of corners `0,3,5,6`, the two
   horizontal sizes from the `0-3` and `1-0` edges, the height from `4-0` (z), and the heading
   from the `0-3` edge — likewise order-independent. `project_box3d` projects corners with a
-  4×4 matrix.
+  4×4 matrix. The **7-vector's yaw is in radians**:
+  `VoxelPostprocessor.generate_anchor_box` builds anchor headings with `math.radians(r)` from
+  the config's degree list (`r: [0, 90]`), `delta_to_boxes3d` decodes
+  `yaw = delta + anchor_heading`, and `boxes_to_corners_3d` rotates with that radian value.
+  The plugin converts a 7-vector yaw to degrees; the corner path is geometry and needs no
+  conversion.
   <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/utils/box_utils.py>
 - **Inference call pattern.** `opencood/tools/inference_utils.py::inference_intermediate_fusion`
   is `inference_early_fusion`: `output_dict['ego'] = model(batch_data['ego'])`, then
@@ -175,9 +180,30 @@ is never modified, and a multi-GB extraction does not stay under `<out>/.work` o
 (in a Slurm job the temporary directory is on the job's scratch and disappears with it).
 
 Other options: `score_threshold` (float, negative means the checkpoint config's own value),
-`device` (torch device; empty uses the parent's choice, `cuda:0` when it exposes a GPU), and
+`device` (torch device; empty uses the parent's choice, `cuda:0` when it exposes a GPU),
 `ego_agent` (agent id to attribute the fused rows to; empty uses the first vehicle, see
-[How the input is built](#how-the-input-is-built)).
+[How the input is built](#how-the-input-is-built)), and the weights/archive options below.
+
+### Weights loading and archive limits
+
+- **Weights are strict by default.** The state dict must match the model's tensors exactly;
+  a missing or unexpected key is an error that names `--option allow_partial_weights=true`.
+  With that option the worker retries non-strictly and writes what it skipped (counts) to
+  `<work_dir>/plugin.log`; `plugin.log` also says `weights=partial allowed` versus `strict`.
+  Use it only when the checkpoint/config pairing is known to be a partial match.
+- **The pickle fallback is opt-in.** The worker first loads with
+  `torch.load(..., weights_only=True)`, which refuses globals other than tensors. Many older
+  checkpoints carry numpy scalars or helper objects and need the **legacy pickle loader**;
+  that loader **executes code embedded in a user-supplied file**, so it only runs with
+  `--option trust_checkpoint_pickle=true` and the use is recorded in `plugin.log`. Without
+  the option the worker stops with an error naming the option instead of loading. On a
+  torch older than 2.0 there is no `weights_only` argument at all, so every load is through
+  the legacy loader and the same opt-in applies.
+- **Archive size cap.** Before extracting anything, the worker sums the ZIP headers'
+  declared uncompressed sizes; over the cap (default 20 GiB,
+  `--option max_checkpoint_bytes=<bytes>`) the archive is refused with the declared total
+  and its largest members, so a zip bomb or a wrong file is never unpacked. Raise the cap
+  only for a trusted checkpoint.
 
 ## How the input is built
 
@@ -227,13 +253,12 @@ Prediction boxes come back as upstream ego-frame corners. The config's `postproc
 reorders only the 7-vector form (`hwl` = `[h, w, l]`); the corner form is order-independent
 (upstream reorders the 7-vector before writing corners and always uses the l, w, h template),
 so an `hwl` checkpoint cannot swap a car's length and height on the corner path. The worker
-parses corners with the l, w, h template and only the 7-vector path applies the order mapping.
-
-For the output side, with `S = diag(1, -1, 1)` and `T` the schema ego pose, an OpenCOOD
-ego-frame box maps to the scene as `p_scene = T · S · p_ego` and
-`yaw_world = yaw_ego_schema - yaw_ego_carla` (the OpenCOOD/carla heading changes sign under
-the reflection). Both are asserted against a hand calculation in the tests; the existing
-reflection tests stay.
+parses corners with the l, w, h template and only the 7-vector path applies the order mapping
+(and converts its radian yaw to degrees, as above). For the output side, with
+`S = diag(1, -1, 1)` and `T` the schema ego pose, an OpenCOOD ego-frame box maps to the scene
+as `p_scene = T · S · p_ego` and `yaw_world = yaw_ego_schema - yaw_ego_carla` (the
+OpenCOOD/carla heading changes sign under the reflection). Both are asserted against a hand
+calculation in the tests; the existing reflection tests stay.
 
 ## Run
 
@@ -412,7 +437,11 @@ checkpoint bytes in the repository).
    ```
 
    If the archives' boxes are mirrored relative to the ground truth, the convention in
-   `opencood_convert.py` is the thing to revisit, not the adapter. After the run, the work directory
+   `opencood_convert.py` is the thing to revisit, not the adapter. The first configure loads
+   the weights strictly with the safe unpickler; if it stops naming
+   `allow_partial_weights`/`trust_checkpoint_pickle`, record the exact error and decide with
+   the checkpoint's owner whether to opt in (both are logged) rather than passing them by
+   default. After the run, the work directory
    must hold no extracted checkpoint tree (`<out>/.work/<run-id>/` outside a Slurm job): the
    extraction is a temporary directory removed once the model is loaded, and `plugin.log`
    names the config and weights files it used.
@@ -442,12 +471,14 @@ Checked by this repository's tests:
   `x_to_world` elementary rotations, the per-CAV batch mapping round trip (hand-computed
   `x1_to_x2`, CAV selection), both box formats, a transcription of upstream's hwl reorder +
   l/w/h template (a `[h=1.5, w=2, l=4]` hwl box must come back as `size_lwh (4, 2, 1.5)`, not
-  `(1.5, 2, 4)`), order-independent corner parsing, and the positive corner-order volume.
+  `(1.5, 2, 4)`), order-independent corner parsing, the positive corner-order volume, and
+  the 7-vector path's radian-to-degree yaw conversion.
 - `tests/test_opencood_checkpoint.py`: archive MD5, safe extraction (zip-slip refused),
   config/weights discovery, ambiguity and hint errors, a config that is not named
   `config.yaml` refused with the YAML list + `--option checkpoint_config` hint (and accepted
-  when hinted), symlinked/empty/non-regular config and weights refused, and the engine's
-  defensive weights guards.
+  when hinted), symlinked/empty/non-regular config and weights refused, the engine's
+  defensive weights guards, and the declared-uncompressed-size cap (a patched-header archive
+  is refused before anything is written).
 - `tests/test_opencood_plugin.py`: the manifest and its licence wording, that the plugin
   imports neither coperceive nor OpenCOOD statically and holds no cluster path, the
   `model check` skip without a checkpoint, the engine's ndarray conversion of the injected
@@ -455,9 +486,13 @@ Checked by this repository's tests:
   way upstream does, so a list-shaped batch fails), the zero `score_threshold` case, the ego
   rule (RSU listed first still yields the first vehicle; `--option ego_agent` pins an agent
   listed later and its rows are attributed to it; an unknown pinned agent is an
-  `unsupported` error), the full `model run` → `eval run` chain against `tests/fake_opencood`
-  (a stand-in package whose corner writer transcribes upstream, no GPU), and the emitted
-  sbatch (`bash -n`, checkpoint staged to scratch before the run, inner `--option` rewritten
-  to the staged path, never a copy-home target, `points.bin` staged for this lidar model).
+  `unsupported` error), strict weights (mismatch is an error unless
+  `allow_partial_weights=true`, which logs the skipped tensors), the opt-in pickle fallback
+  (default refusal names `trust_checkpoint_pickle`; opted-in path loads; the old-torch
+  no-`weights_only` path needs the same opt-in), a missing work directory refused with a
+  clear `configure_failed`, the full `model run` → `eval run` chain against
+  `tests/fake_opencood` (a stand-in package whose corner writer transcribes upstream, no
+  GPU), the emitted sbatch fragments, and a **whole-script golden** (normalised machine paths,
+  committed under `tests/fixtures/opencood/`) covering the same script end to end.
 - **Not checked here** (the [unverified list](#what-is-unverified-until-the-cluster-run)):
   the real OpenCOOD run, the real archive, the real numeric boxes and AP.

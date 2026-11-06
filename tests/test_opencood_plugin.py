@@ -26,6 +26,7 @@ from tests.opencood_plugin import (
     FAKE_OPENCOOD_PARENT,
     MANIFEST,
     PLUGIN_DIR,
+    config_bytes,
     copy_plugin_for_tests,
     load,
     torch_weights_bytes,
@@ -369,6 +370,127 @@ def test_unknown_pinned_ego_is_an_unsupported_error(
     assert "not a listed agent" in cast(str, errors[0]["message"])
 
 
+def _new_engine(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, state: dict[str, object], **kwargs: object
+):  # noqa: ANN201 - the engine object, unittest style
+    """An OpenCOODEngine over the fake OpenCOOD with ``state`` saved as its weights."""
+    torch = pytest.importorskip("torch")
+    monkeypatch.syspath_prepend(  # pyright: ignore[reportUnknownMemberType]
+        str(FAKE_OPENCOOD_PARENT)
+    )
+    engine = load("engine")
+    config_path = tmp_path / "config.yaml"
+    config_path.write_bytes(config_bytes())
+    weights_path = tmp_path / "weights.pth"
+    torch.save({"model": state}, weights_path)
+    return engine.OpenCOODEngine(
+        str(config_path), str(weights_path), work_dir=str(tmp_path), **kwargs
+    )
+
+
+def test_engine_weights_are_strict_by_default(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Missing/unexpected keys must be a clear EngineError unless partial weights are opted in."""
+    torch = pytest.importorskip("torch")
+    engine = load("engine")
+    with pytest.raises(engine.EngineError, match="allow_partial_weights"):
+        _new_engine(monkeypatch, tmp_path, {"bogus.weight": torch.zeros(1)})
+    logs: list[str] = []
+    loaded = _new_engine(
+        monkeypatch,
+        tmp_path,
+        {"fake.weight": torch.zeros(1), "bogus.weight": torch.zeros(1)},
+        allow_partial_weights=True,
+        log=logs.append,
+    )
+    assert loaded.partial_weights is True
+    assert any("skipped" in line for line in logs)
+    assert loaded.describe()["weights"] == "partial allowed"
+
+
+def test_engine_pickle_fallback_is_opt_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The legacy pickle loader executes code: refused by default, named option to allow."""
+    import pathlib
+
+    torch = pytest.importorskip("torch")
+    engine = load("engine")
+    state: dict[str, object] = {"fake.weight": pathlib.PurePosixPath("/tmp/not-a-tensor")}
+    with pytest.raises(engine.EngineError, match="trust_checkpoint_pickle"):
+        _new_engine(monkeypatch, tmp_path, state)
+    loaded = _new_engine(monkeypatch, tmp_path, state, trust_checkpoint_pickle=True)
+    assert loaded.trust_checkpoint_pickle is True
+    assert loaded.describe()["pickle_fallback"] == "allowed"
+    assert torch is not None  # the import above is the real torch.load under test
+
+
+def test_old_torch_without_weights_only_needs_the_pickle_opt_in(tmp_path: Path) -> None:
+    """torch < 2.0 has no weights_only argument, so the legacy loader is the same opt-in."""
+    engine = load("engine")
+    weights = tmp_path / "weights.pth"
+    weights.write_bytes(b"placeholder; the fake torch below never parses it")
+
+    class _OldTorch:
+        __version__: str = "1.9.1"
+
+        def load(
+            self, path: str, map_location: object = None, weights_only: object = None
+        ) -> object:
+            if weights_only is not None:
+                raise TypeError("load() got an unexpected keyword argument 'weights_only'")
+            return {"model": {"fake.weight": object()}}
+
+    with pytest.raises(engine.EngineError, match="trust_checkpoint_pickle"):
+        engine._load_weights(_OldTorch(), str(weights))  # noqa: SLF001 - the loader under test
+    state = engine._load_weights(_OldTorch(), str(weights), trust_pickle=True)  # noqa: SLF001
+    assert list(state) == ["fake.weight"]
+
+
+def test_configure_without_a_work_dir_is_a_clear_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """No "." fallback: the worker refuses to extract/scratch into an arbitrary directory."""
+    worker_module = load("worker")
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(worker_module, "_emit", _capturing_emitter(emitted))
+    monkeypatch.delenv("COPERCEIVE_MODEL_WORK", raising=False)
+    worker = worker_module.Worker("cobevt-lidar-v2xset", "")
+    worker._configure(  # noqa: SLF001 - the worker's protocol step
+        {
+            "type": "configure",
+            "protocol": 1,
+            "model": "cobevt-lidar-v2xset",
+            "scene_id": "no-work-dir",
+            "agents": [{"agent_id": "650", "agent_type": "vehicle"}],
+            "source": "fused",
+            "options": {"checkpoint": "ck.zip"},
+            "dev": "no work_dir here",
+            "sensors": [
+                {
+                    "agent_id": "650",
+                    "sensor_id": "lidar",
+                    "modality": "lidar",
+                    "body_from_sensor": {
+                        "qw": 1.0,
+                        "qx": 0.0,
+                        "qy": 0.0,
+                        "qz": 0.0,
+                        "tx": 0.0,
+                        "ty": 0.0,
+                        "tz": 0.0,
+                    },
+                }
+            ],
+            "samples": [],
+        }
+    )
+    errors = [payload for payload in emitted if payload.get("type") == "error"]
+    assert len(errors) == 1
+    assert errors[0]["code"] == "configure_failed"
+    message = cast(str, errors[0]["message"])
+    assert "work_dir" in message and "COPERCEIVE_MODEL_WORK" in message
+
+
 def test_frame_seed_is_stable_per_scene_and_time() -> None:
     """Two model check passes reseed the same shuffle; different frames do not collide."""
     engine = load("engine")
@@ -557,6 +679,57 @@ def test_slurm_golden_stages_the_checkpoint_and_rewrites_the_option(tmp_path: Pa
     if shutil.which("bash") is not None:
         done = subprocess.run(["bash", "-n", str(sbatch_path)], capture_output=True, text=True)
         assert done.returncode == 0, done.stderr
+
+
+# -- full-script golden (normalised machine paths) --------------------------------------------
+
+GOLDEN_SBATCH = Path(__file__).parent / "fixtures" / "opencood" / "cobevt-lidar-v2xset-r1.sbatch"
+
+
+def _normalised_sbatch(script: str, tmp_path: Path) -> str:
+    """Replace machine/temp specifics so the whole script can be a committed golden.
+
+    Same idea as the repo's other script goldens: substitute the temp root, the chosen
+    interpreter, the checkout path and the home directory with placeholders, then compare
+    the entire script, not fragments.
+    """
+    normalised = script.replace(str(tmp_path.resolve()), "<tmp>")
+    normalised = normalised.replace(str(tmp_path), "<tmp>")
+    normalised = normalised.replace("/opt/venv/bin/python", "<python>")
+    normalised = normalised.replace("/opt/coperceive-checkout", "<repo>")
+    normalised = normalised.replace(str(Path.home()), "<home>")
+    return normalised.replace("\r\n", "\n")
+
+
+def _golden_plan(tmp_path: Path):  # noqa: ANN201 - a coperceive SlurmPlan
+    scene = replace(cooperative_scene(), scene_id=SCENE_ID)
+    scenes = tmp_path / "scenes"
+    write_scene(scene, scenes / SCENE_ID)
+    checkpoint = write_checkpoint(tmp_path / "cobevt_lidar.zip")
+    manifest = load_manifest(MANIFEST)
+    return plan_sbatch(
+        manifest,
+        select_model(manifest, MODEL),
+        scenes_root=scenes,
+        scenes={SCENE_ID: scene},
+        run_id="r1",
+        out_root=tmp_path / "predictions",
+        options=RunOptions(options={"checkpoint": str(checkpoint)}),
+        python=Path("/opt/venv/bin/python"),
+        logs_dir=tmp_path / "logs",
+        results_dir=tmp_path / "results",
+        partition="test-partition",
+        scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+        repo_root=Path("/opt/coperceive-checkout"),
+    )
+
+
+def test_full_sbatch_matches_the_normalised_golden(tmp_path: Path) -> None:
+    """The whole emitted script equals the committed golden after path normalisation."""
+    plan = _golden_plan(tmp_path)
+    actual = _normalised_sbatch(plan.script, tmp_path)
+    expected = GOLDEN_SBATCH.read_text(encoding="utf-8").replace("\r\n", "\n")
+    assert actual == expected
 
 
 def test_slurm_run_requires_the_checkpoint_option(

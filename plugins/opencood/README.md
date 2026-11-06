@@ -66,6 +66,13 @@ Add `--slurm` (and `--slurm-partition`, `--slurm-scratch-template`, …) to get 
 script; the checkpoint archive is staged into the job's scratch and the inner `--option`
 is rewritten to the staged copy.
 
+Weights are loaded strictly and with torch's safe `weights_only` loader by default; the
+manifest options `allow_partial_weights` and `trust_checkpoint_pickle` are explicit opt-ins
+(the second runs the legacy pickle loader, which executes code embedded in the checkpoint;
+it is logged), and `max_checkpoint_bytes` (default 20 GiB, declared uncompressed size) caps
+the archive before extraction. See `docs/models/opencood.md` → "Weights loading and archive
+limits".
+
 ## Unverified from this repository
 
 - the checkpoint archive's contents and names (config file name, epoch, fusion method,

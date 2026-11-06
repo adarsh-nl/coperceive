@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import struct
 import zipfile
 from pathlib import Path
 
@@ -192,3 +193,34 @@ def test_engine_weights_loader_defensively_refuses_bad_files(tmp_path: Path) -> 
         engine._load_weights(object(), str(link))  # noqa: SLF001
     with pytest.raises(engine.EngineError, match="not a regular file"):
         engine._load_weights(object(), str(tmp_path / "missing.pth"))  # noqa: SLF001
+
+
+def _patch_central_declared_size(archive: Path, declared: int) -> None:
+    """Rewrite each central-directory entry's declared uncompressed size (no data written)."""
+    data = bytearray(archive.read_bytes())
+    offset = 0
+    while True:
+        offset = data.find(b"PK\x01\x02", offset)
+        if offset < 0:
+            break
+        struct.pack_into("<I", data, offset + 24, declared)
+        offset += 4
+    archive.write_bytes(bytes(data))
+
+
+def test_archive_declared_size_cap_refuses_before_extraction(tmp_path: Path) -> None:
+    """A zip bomb / wrong file is refused from the headers, before anything is written."""
+    assert checkpoint.DEFAULT_MAX_CHECKPOINT_BYTES == 20 * 1024**3
+    archive = write_checkpoint(tmp_path / "cobevt_lidar.zip")
+    _patch_central_declared_size(archive, 3 * 1024**3)  # two members -> 6 GiB declared
+    destination = tmp_path / "out"
+    with pytest.raises(checkpoint.CheckpointError, match="uncompressed bytes") as caught:
+        checkpoint.prepare(str(archive), str(destination), max_bytes=5 * 1024**3)
+    message = str(caught.value)
+    assert "6442450944" in message  # the declared total, 6 GiB
+    assert "max_checkpoint_bytes" in message
+    assert "config.yaml" in message and "largest members" in message
+    assert not destination.exists()  # nothing extracted
+    # A cap above the declared total lets the same archive through (the data is really small).
+    config_path, _, _ = checkpoint.prepare(str(archive), str(destination), max_bytes=11 * 1024**3)
+    assert config_path.endswith("config.yaml")

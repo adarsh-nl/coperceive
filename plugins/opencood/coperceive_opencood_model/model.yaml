@@ -100,6 +100,26 @@ models:
           schema agent id to attribute the fused boxes to; empty means the first vehicle in
           the scene's agent order (OpenCOOD's own rule: CAVs sorted, first non-negative id is
           the ego, the V2XSet roadside unit -1 last). Must be a listed agent of the scene.
+      allow_partial_weights:
+        type: bool
+        default: false
+        description: >-
+          allow a checkpoint whose state dict has tensors the model lacks (or extra ones);
+          the worker logs what it skipped in plugin.log. Default false makes any mismatch a
+          clear error naming this option.
+      trust_checkpoint_pickle:
+        type: bool
+        default: false
+        description: >-
+          allow torch.load's legacy pickle loader when the safe weights_only=True loader
+          cannot read the checkpoint (old torch, numpy scalars, helper objects). That loader
+          executes code embedded in the file: only enable for a checkpoint you trust.
+      max_checkpoint_bytes:
+        type: int
+        default: 21474836480
+        description: >-
+          refuse an archive whose declared uncompressed size exceeds this many bytes
+          (default 20 GiB) before extracting anything; raise only for a trusted checkpoint.
     checkpoint: {option: checkpoint}
 commands:
   # {option:checkpoint} reaches the worker before `configure`, so `hello` can report the

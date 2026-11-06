@@ -18,6 +18,10 @@ import os
 import shutil
 import zipfile
 
+# Refuse an archive whose declared uncompressed size is larger than this before extracting
+# anything (the manifest's max_checkpoint_bytes option overrides it). 20 GiB is far above a
+# LiDAR checkpoint; it is a zip-bomb / wrong-file guard, not a quota.
+DEFAULT_MAX_CHECKPOINT_BYTES = 20 * 1024**3
 CONFIG_SUFFIXES = (".yaml", ".yml")
 # The only names the plugin accepts from discovery: an OpenCOOD checkpoint directory's own
 # "config.yaml" (train.py/setup_train writes that name). A differently named YAML is accepted
@@ -85,11 +89,22 @@ def _pick(
     )
 
 
-def extract(archive: str, destination: str) -> list[str]:
+def extract(
+    archive: str,
+    destination: str,
+    *,
+    max_bytes: int = DEFAULT_MAX_CHECKPOINT_BYTES,
+) -> list[str]:
     """Extract a zip archive under ``destination``, refusing members that escape it.
 
-    Returns the virtual paths written. Only regular members are written; nothing is executed.
+    Before writing anything, the archive's declared uncompressed size (the sum of the ZIP
+    headers' ``file_size`` values) is checked against ``max_bytes``; an archive over the cap
+    is refused with its declared total and largest members, so a zip bomb or a wrong file is
+    never extracted. Returns the virtual paths written. Only regular members are written;
+    nothing is executed.
     """
+    if not isinstance(max_bytes, int) or isinstance(max_bytes, bool) or max_bytes <= 0:
+        raise CheckpointError(f"max_checkpoint_bytes must be a positive integer, got {max_bytes!r}")
     if not os.path.isfile(archive):
         raise CheckpointError(f"checkpoint {archive!r} is not a file")
     if not archive.lower().endswith(".zip"):
@@ -102,7 +117,23 @@ def extract(archive: str, destination: str) -> list[str]:
     written: list[str] = []
     try:
         with zipfile.ZipFile(archive) as bundle:
-            for member in bundle.infolist():
+            members = bundle.infolist()
+            declared = sum(member.file_size for member in members if not member.is_dir())
+            if declared > max_bytes:
+                largest = sorted(
+                    (member for member in members if not member.is_dir()),
+                    key=lambda member: member.file_size,
+                    reverse=True,
+                )[:3]
+                listed = ", ".join(
+                    f"{member.filename} ({member.file_size} bytes)" for member in largest
+                )
+                raise CheckpointError(
+                    f"{archive}: the archive declares {declared} uncompressed bytes, over the "
+                    f"cap of {max_bytes} bytes; largest members: {listed}. Raise the cap only "
+                    "for a checkpoint you trust (--option max_checkpoint_bytes=<bytes>)."
+                )
+            for member in members:
                 name = member.filename.replace("\\", "/")
                 parts = [part for part in name.split("/") if part]
                 if not parts or name.endswith("/"):
@@ -162,10 +193,15 @@ def discover(root: str, *, config_hint: str = "", weights_hint: str = "") -> tup
 
 
 def prepare(
-    archive: str, destination: str, *, config_hint: str = "", weights_hint: str = ""
+    archive: str,
+    destination: str,
+    *,
+    config_hint: str = "",
+    weights_hint: str = "",
+    max_bytes: int = DEFAULT_MAX_CHECKPOINT_BYTES,
 ) -> tuple[str, str, list[str]]:
     """Extract ``archive`` under ``destination`` and return config, weights and written names."""
-    written = extract(archive, destination)
+    written = extract(archive, destination, max_bytes=max_bytes)
     config_path, weights_path = discover(
         destination, config_hint=config_hint, weights_hint=weights_hint
     )

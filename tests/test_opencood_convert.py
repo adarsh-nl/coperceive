@@ -249,13 +249,20 @@ def test_points_in_body_applies_the_sensor_extrinsic() -> None:
 
 
 def test_centre_box_in_hwl_and_lwh_orders() -> None:
-    lwh = convert.boxes_from_opencood([[8.0, 2.0, -1.5, 4.0, 2.0, 1.5, 90.0]], "lwh", [0.9])
-    hwl = convert.boxes_from_opencood([[8.0, 2.0, -1.5, 1.5, 2.0, 4.0, 90.0]], "hwl", [0.9])
+    """The 7-vector yaw is radians (upstream VoxelPostprocessor); we publish degrees."""
+    yaw = math.radians(90.0)
+    lwh = convert.boxes_from_opencood([[8.0, 2.0, -1.5, 4.0, 2.0, 1.5, yaw]], "lwh", [0.9])
+    hwl = convert.boxes_from_opencood([[8.0, 2.0, -1.5, 1.5, 2.0, 4.0, yaw]], "hwl", [0.9])
     for parsed in (lwh[0], hwl[0]):
         assert parsed["center"] == pytest.approx([8.0, 2.0, -1.5])
         assert parsed["size_lwh"] == pytest.approx([4.0, 2.0, 1.5])
         assert parsed["heading"] == pytest.approx(90.0)
         assert parsed["score"] == pytest.approx(0.9)
+    # 45° as radians -> 45° out; a raw degree value would have been misread.
+    parsed = convert.boxes_from_opencood(
+        [[0.0, 0.0, 0.0, 4.0, 2.0, 1.5, math.radians(45.0)]], "lwh", [0.5]
+    )[0]
+    assert parsed["heading"] == pytest.approx(45.0)
 
 
 @pytest.mark.parametrize("order", ["lwh", "hwl"])

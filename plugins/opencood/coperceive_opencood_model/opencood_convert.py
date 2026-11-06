@@ -323,10 +323,19 @@ def _corner_rows(corners: object) -> list[tuple[float, float, float]]:
 
 
 def _center7(center7: object, order: str) -> tuple[list[float], list[float], float]:
+    """``([x, y, z], [l, w, h], heading_deg)`` from a 7-vector in the config's order.
+
+    The 7-vector **yaw is in radians**, not degrees: OpenCOOD's
+    ``VoxelPostprocessor.delta_to_boxes3d`` computes ``yaw = delta + anchor_heading`` where
+    ``generate_anchor_box`` made the anchor headings ``math.radians(r)`` for the config's
+    degree list ``r: [0, 90]``, and ``boxes_to_corners_3d`` rotates with that radian value.
+    This converts it to the protocol's degrees. (The corner path needs no conversion: it is
+    geometry.) See ``opencood/data_utils/post_processor/voxel_postprocessor.py``.
+    """
     if not isinstance(center7, (list, tuple)) or len(center7) != 7:
         raise ConvertError("a centre box is [x, y, z, d0, d1, d2, yaw]")
     values = [float(value) for value in center7]
-    return values[:3], _centre_size_lwh(values, order), values[6]
+    return values[:3], _centre_size_lwh(values, order), math.degrees(values[6])
 
 
 def boxes_from_opencood(
@@ -336,7 +345,8 @@ def boxes_from_opencood(
 
     ``boxes`` is a sequence of ``(N, 8, 3)`` corners or ``(N, 7)`` centre boxes; ``order``
     is the checkpoint config's ``postprocess.order`` and applies only to the 7-vector sizes
-    (the upstream corner template is always l, w, h). The score list, when given, matches
+    (the upstream corner template is always l, w, h). A 7-vector's yaw is in radians and is
+    converted to degrees here; corners are pure geometry. The score list, when given, matches
     ``boxes``.
     """
     if not isinstance(boxes, (list, tuple)) or len(boxes) == 0:

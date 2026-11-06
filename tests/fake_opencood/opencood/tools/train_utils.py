@@ -8,12 +8,22 @@ from __future__ import annotations
 
 
 class _IncompatibleKeys:
-    missing_keys: list[str] = []
-    unexpected_keys: list[str] = []
+    def __init__(self, missing: list[str], unexpected: list[str]) -> None:
+        self.missing_keys = missing
+        self.unexpected_keys = unexpected
+
+
+_EXPECTED_KEYS = frozenset({"fake.weight"})
 
 
 class FakeModel:
-    """Records what the engine asked of it; forwards like an OpenCOOD model would."""
+    """Records what the engine asked of it; forwards like an OpenCOOD model would.
+
+    ``load_state_dict`` behaves like ``torch.nn.Module``: with ``strict=True`` a state dict
+    whose keys do not match the expected parameter set raises, with ``strict=False`` the
+    skipped keys are reported. The expected set is the one fixture checkpoint the chain test
+    saves.
+    """
 
     def __init__(self, config):  # noqa: ANN001 - an untyped config dict
         self.config = config
@@ -24,7 +34,14 @@ class FakeModel:
 
     def load_state_dict(self, state, strict=False):  # noqa: ANN001, ANN201
         self.loaded_state = state
-        return _IncompatibleKeys()
+        missing = sorted(_EXPECTED_KEYS - set(state))
+        unexpected = sorted(set(state) - _EXPECTED_KEYS)
+        if strict and (missing or unexpected):
+            raise RuntimeError(
+                "Error(s) in loading state_dict: missing keys "
+                f"{missing}; unexpected keys {unexpected}"
+            )
+        return _IncompatibleKeys(missing, unexpected)
 
     def to(self, device):  # noqa: ANN001, ANN201
         self.device = device

@@ -70,6 +70,24 @@ def _option(message: dict, key: str, default: object = "") -> object:
     return default if value is None else value
 
 
+def _bool_option(message: dict, key: str, default: bool = False) -> bool:
+    """A boolean option value from configure; anything that is not a bool falls back."""
+    value = _option(message, key, default)
+    return value if isinstance(value, bool) else default
+
+
+def _positive_int_option(message: dict, key: str, default: int) -> int:
+    """A positive integer option value from configure; anything else falls back."""
+    value = _option(message, key, default)
+    if isinstance(value, bool):
+        return default
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 def _score_threshold(message: dict) -> float:
     """``score_threshold`` from configure: a negative value (or absent) means the config's own.
 
@@ -262,9 +280,19 @@ class Worker:
         _emit(configured)
 
     def _load_engine(self, message: dict, option_path: str) -> None:
-        work_dir = str(message.get("work_dir") or os.environ.get("COPERCEIVE_MODEL_WORK") or ".")
+        work_dir = str(message.get("work_dir") or os.environ.get("COPERCEIVE_MODEL_WORK") or "")
+        if not work_dir:
+            # No "." fallback: the extraction and the engine's scratch roots go here, and a
+            # child started with cwd=work_dir would otherwise write into an arbitrary place.
+            raise engine.EngineError(
+                "configure has no work_dir and COPERCEIVE_MODEL_WORK is unset; the parent "
+                "must give the worker a work directory"
+            )
         config_hint = str(_option(message, "checkpoint_config", "") or "")
         weights_hint = str(_option(message, "checkpoint_weights", "") or "")
+        max_bytes = _positive_int_option(
+            message, "max_checkpoint_bytes", checkpoint.DEFAULT_MAX_CHECKPOINT_BYTES
+        )
         _progress("extracting the checkpoint archive", 0.1)
         # Extract under the work directory (the Slurm job's scratch), and remove the
         # extraction as soon as the config is parsed and the weights are in memory: a
@@ -277,6 +305,7 @@ class Worker:
                 destination,
                 config_hint=config_hint,
                 weights_hint=weights_hint,
+                max_bytes=max_bytes,
             )
             self._config_rel = os.path.relpath(config_path, destination)
             self._weights_rel = os.path.relpath(weights_path, destination)
@@ -293,6 +322,8 @@ class Worker:
                 work_dir=work_dir,
                 device=device,
                 score_threshold=score_threshold,
+                allow_partial_weights=_bool_option(message, "allow_partial_weights"),
+                trust_checkpoint_pickle=_bool_option(message, "trust_checkpoint_pickle"),
                 log=_log,
             )
         finally:
