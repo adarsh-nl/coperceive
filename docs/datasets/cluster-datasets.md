@@ -353,9 +353,16 @@ read-only streamer on the login node:
     ssh <the profile's options and host> <coperceive argv> dataset stream \
         --root <cache split directory> --root <dataset raw root>
 
-- **One connection, pipelined.** Requests are JSON lines on the streamer's
-  stdin, each with an id; replies are a JSON header line and the bytes. Several
-  reads are in flight at once, so round trips overlap. The SSH options are the
+- **One connection, pipelined; concurrency is protocol 2.** Requests are JSON
+  lines on the streamer's stdin, each with an id; replies are a JSON header
+  line and the bytes, and every header carries its request's id. A request
+  that opts into protocol 2 is answered on a small bounded pool (four workers,
+  at most 32 accepted-but-unanswered requests), so a large point-sweep read
+  does not hold up the small manifest/stat replies queued behind it; its replies
+  may arrive out of order. A request without the field keeps the old behaviour
+  exactly: it is answered one at a time, in request order, so raw legacy
+  consumers that read one reply per request (the cluster-dataset app e2e) keep
+  working byte for byte. The SSH options are the
   app's usual ones (`BatchMode`, `ControlMaster=auto`, `ControlPersist`). Every
   remote argument is shell-quoted; file paths only travel on stdin, never
   through a shell.
@@ -364,6 +371,20 @@ read-only streamer on the login node:
   images). It refuses absolute paths, `..`, NUL, and anything whose `realpath`
   leaves the roots, symlinks included. It never writes. Requires
   `cluster-datasets-5`.
+- **Cancellation.** A client may send `{"op":"cancel","id":N}` (no reply of its
+  own; unknown ids are harmless). A request still queued is skipped; an
+  in-flight read may finish on the cluster, but its reply — header and bytes —
+  is dropped, so the link is not spent on data the viewer no longer waits for.
+  The viewer cancels a point-sweep read when the browser disconnects mid-read,
+  and the player can cancel prefetched point clouds on a seek.
+- **Protocol 2 is additive; protocol 1 clients are unchanged.** A request may
+  carry `"protocol": 2`; its reply then adds `protocol`, `queue_ms` (time from
+  the streamer reading the line to a worker handling it), `read_ms` (handler
+  time) and `bytes` (payload length). A request without the field gets exactly
+  the old reply, field for field. The new client also works against a streamer
+  too old to know the field — the timing fields are then absent. The aggregate
+  `{"op":"stats","id":N}` op returns the streamer's counters and p50/p95 queue
+  and read times.
 - **What crosses the link.** Each scene's small files (manifest and tables) are
   mirrored on first open; point sweeps and camera images are read as byte
   ranges on demand, prefetched ahead of playback (as in "Buffering…"), and kept
@@ -377,9 +398,83 @@ read-only streamer on the login node:
   server and its connection, and points the open viewer at the scene
   (`#/viewer?scene=…`). Opening another dataset or a local folder stops it.
 
-Measured with `scripts/bench/remote_view_bench.py` (a 2-agent OPV2V-sized
-scene, 56 000 points per sweep, 10 Hz; `scripts/bench/link.py` adds half the
-round trip each way and caps the bandwidth):
+### Per-request timing and `GET /api/stream-stats`
+
+Timing is measured in Python on both ends of the SSH pipe: the streamer reports
+its own queue wait and read time, the viewer's `StreamClient` records the local
+write→reply transfer time and bytes, and the app's viewer server times each
+`/api/scenes/{id}/frame|points|image` request around its remote work. The Rust
+side (`src-tauri`) only spawns and manages the sidecar that runs this Python
+viewer server — there is no Rust data path, so there is nothing to time there
+beyond sidecar startup and health.
+
+`GET /api/stream-stats` is additive to the HTTP contract and returns a
+versioned document with exact counters and the last 512 samples of each
+statistic (bounded memory, built under a lock, safe for a long session):
+
+```json
+{
+  "schema": "coperceive-stream-stats-1",
+  "requests": 120,
+  "bytes": 81920000,
+  "queue_ms": {"count": 512, "p50": 0.4, "p95": 2.1, "max": 9.0},
+  "read_ms": {"count": 512, "p50": 0.8, "p95": 5.3, "max": 32.0},
+  "transfer_ms": {"count": 512, "p50": 19.8, "p95": 61.2, "max": 240.0},
+  "active": 1,
+  "queued": 4,
+  "samples": 512,
+  "cancelled": 3,
+  "http_ms": {"count": 512, "p50": 12.0, "p95": 90.0, "max": 300.0},
+  "by_endpoint": {"frame": {}, "points": {}, "image": {}},
+  "remote": {"requests": 120, "bytes": 81920000, "cancelled": 3, "outstanding": 4}
+}
+```
+
+`active` is stream-backed requests being served now, `queued` is the client's
+outstanding stream requests, and `remote` is the `StreamClient`'s own snapshot.
+`by_endpoint` and `remote` are additive and safe for the viewer to ignore. The
+points endpoint is an `async` route that runs the remote read in a worker
+thread and polls `request.is_disconnected()`; when the browser has gone it
+cancels the read and answers 499 with no body, so the request never waits for
+bytes with no reader. That polling needs the raw receive channel, so the API
+auth guard is plain ASGI middleware rather than Starlette's
+`BaseHTTPMiddleware` (which wraps `receive` and makes `is_disconnected()`
+always false). The HTTP contract of the other routes is unchanged.
+
+### Benchmarks
+
+`scripts/bench/remote_view_bench.py` (unchanged) measures playback;
+`scripts/bench/stream_bench.py` replays the same synthetic 2-agent
+OPV2V-sized scene through the real viewer server and streamer over
+`scripts/bench/link.py` (half the round trip each way, bandwidth cap; no
+`tc`, no real SSH). It reports playback (fps, frame p50/p95, "Buffering…"
+stalls, buffered-ahead seconds) plus the per-request queue/read/transfer
+statistics from `/api/stream-stats`, head-of-line blocking (small `stat`
+replies submitted behind a 16 MB sweep read) and the bytes a cancelled
+prefetch avoids:
+
+    .venv/bin/python scripts/bench/stream_bench.py --rtt 20 --mbps 12 --frames 40
+    .venv/bin/python scripts/bench/stream_bench.py --smoke   # tiny fixed case, runs in CI
+
+The JSON document is printed on stdout (the schema is
+`coperceive-stream-bench-1`) and a small table on stderr. `--hol-only` runs
+just the head-of-line probe; it only uses streamer/client calls that already
+existed before protocol 2, so a before/after pair can be taken on the same
+machine: unpack the previous release with
+`git archive <sha> | tar -x -C /tmp/base`, copy `scripts/bench/stream_bench.py`
+there, and run it with `PYTHONPATH=/tmp/base`.
+
+### Measured (synthetic data, fake link, local Mac)
+
+These are not cluster numbers: the scene is synthetic (2 agents, 56 000
+points per sweep, 10 Hz), the "network" is `scripts/bench/link.py`, and the
+runs were on a shared, heavily loaded Mac (load average 40–55 during some
+runs). Wall-clock playback is noisy under that load; the head-of-line and
+cancellation comparisons do not depend on absolute speed and are the durable
+result.
+
+Playback through the release's serial streamer (before this branch), measured
+with `scripts/bench/remote_view_bench.py`:
 
 | link | playback (first time) | median frame | "Buffering…" frames | from the local cache |
 | --- | --- | --- | --- | --- |
@@ -392,6 +487,47 @@ round trip each way and caps the bandwidth):
 Opening the scene took 0.6–1.9 s; 60 frames moved about 102 MB (1.7 MB per
 frame), so below about 18 MB/s the first pass is bandwidth-bound and buffers;
 once cached it plays at full rate.
+
+Playback through this branch's concurrent streamer, same synthetic scene and
+fake link, measured with `scripts/bench/stream_bench.py` (40 frames per run;
+"before" is `remote_view_bench.py` on the release commit):
+
+| link | playback before → after | median frame before → after | "Buffering…" before → after |
+| --- | --- | --- | --- |
+| 20 ms, 25 MB/s | 9.3 → 9.3 fps | 169 → 273 ms | 0 → 1 of 40 |
+| 20 ms, 12 MB/s | 6.8 → 6.3 fps | 689 → 705 ms | 21 → 22 of 40 |
+| 40 ms, 10 MB/s | 5.0 → 5.5 fps | 866 → 821 ms (p95 1136 → 989) | 18 → 13 of 40 |
+
+Playback is unchanged within the noise: above about 18 MB/s both play at
+10 Hz, and below it both sit at the bandwidth ceiling (1.7 MB per frame is
+~7 fps at 12 MB/s and ~5.9 fps at 10 MB/s). That is expected: one request at a
+time or concurrent, the same bytes cross the link. An interleaved A/B on the
+same machine and load (20-frame runs, base and branch alternating) showed no
+regression either; e.g. 20 ms / 50 MB/s first-pass playback was 9.37 fps
+(base) and 9.40 fps (branch) in the first pair.
+
+When the shared machine became quieter (load average 7–11), a same-load paired
+run (20 frames, base commit then branch, `remote_view_bench.py`) showed
+playback parity: at 20 ms / 50 MB/s, first pass 9.71 fps (127 ms median) before
+and 9.28 fps (122 ms) after, and from the local cache 10.2 vs 10.2 fps (20.6 vs
+13.0 ms median); at 20 ms / 12 MB/s, first pass 6.75 fps (621 ms) before and
+6.54 fps (627 ms) after, both at the ~7 fps bandwidth ceiling, with stalls
+varying between runs (9 vs 5). No playback regression.
+
+What does change, under the same benchmark:
+
+| measurement (synthetic, fake link) | before | after |
+| --- | --- | --- |
+| three `stat` replies submitted behind a 16 MB sweep read, 20 ms / 12 MB/s | 1385, 1367, 5364 ms — the read's own time, one run each | 27, 28, 27 ms — one one-way RTT, independent of read size |
+| seek: 8 prefetched sweeps (7.2 MB) fetched vs cancelled, 20 ms / 12–25 MB/s | no cancel op, so 7.2 MB always crosses | 0.9 MB crosses; 87.5% of the prefetch does not |
+| seek: the same at 40 ms / 10 MB/s | 7.2 MB | 1.8 MB; 75% does not cross |
+| per-request visibility (`GET /api/stream-stats`, 40 frames, 20 ms / 25 MB/s) | none | queue p95 0.8 ms, read p95 2.7 ms, transfer p95 165 ms, HTTP p95 171 ms |
+
+An in-flight read (up to the four workers) may finish on the cluster before a
+cancel arrives, which is why one or two of the eight prefetched sweeps still
+cross the link; the reply is dropped either way. The runs were at load average
+40–55 on the shared Mac, so treat absolute playback milliseconds as noise and
+the paired comparisons as the result. No real-cluster measurement is claimed.
 
 ## Camera-image settings and previews (desktop)
 

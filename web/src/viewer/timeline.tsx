@@ -70,6 +70,10 @@ type TimelineProps = {
   playing: boolean;
   /** Playback is holding on a sample until its point clouds arrive. */
   buffering?: boolean;
+  /** Media time (µs) buffered ahead of the playhead, for the buffer bar. */
+  bufferedAheadUs?: number;
+  /** Media time (µs) the buffer target asks for, for the buffer bar's tooltip. */
+  bufferTargetUs?: number;
   speed: Speed;
   loop: boolean;
   disabled: boolean;
@@ -96,6 +100,8 @@ export default function Timeline({
   times,
   playing,
   buffering = false,
+  bufferedAheadUs = 0,
+  bufferTargetUs = 0,
   speed,
   loop,
   disabled,
@@ -140,6 +146,22 @@ export default function Timeline({
     }
   }
   const bars = histogram(boxes, 120);
+  // The Netflix-style buffer bar: from the playhead to the end of what is loaded
+  // ahead, as a fraction of the whole timeline. The tooltip names the seconds.
+  const bufferedAhead = Math.max(0, bufferedAheadUs);
+  // Both are media time; the tooltip speaks in playback seconds like the clock.
+  const playbackSeconds = bufferedAhead / 1_000_000 / speed;
+  const targetPlaybackSeconds = bufferTargetUs / 1_000_000 / speed;
+  // The track maps samples to equal widths, so the bar ends at the last sample in
+  // the buffered media run (its own recorded gaps, not an assumed frame rate).
+  let bufferedEnd = Math.min(index, last);
+  let bufferedMedi = 0;
+  while (bufferedEnd < last && bufferedMedi < bufferedAhead) {
+    const gap = (times[bufferedEnd + 1] ?? 0) - (times[bufferedEnd] ?? 0);
+    bufferedMedi += gap > 0 ? gap : 100_000;
+    bufferedEnd += 1;
+  }
+  const bufferedPercent = length > 1 ? (bufferedEnd / last) * 100 : 0;
   const total = times.length > 0 ? formatClock(times[times.length - 1] ?? 0) : "0.0 s";
   const speedChoices = SPEEDS.filter((item) => item <= 2 || item === speed);
 
@@ -301,6 +323,30 @@ export default function Timeline({
             }}
           >
             <span className="track-fill" style={{ width: `${place}%` }} />
+            {length > 1 ? (
+              <span
+                className="track-buffered"
+                data-buffered-us={Math.round(bufferedAhead)}
+                data-target-us={Math.round(bufferTargetUs)}
+                data-buffered-fraction={(
+                  Math.min(1, bufferTargetUs > 0 ? bufferedAhead / bufferTargetUs : 0)
+                ).toFixed(3)}
+                title={`${playbackSeconds.toFixed(1)} s buffered ahead${
+                  bufferTargetUs > 0 ? ` of ${targetPlaybackSeconds.toFixed(1)} s` : ""
+                }`}
+                aria-label={`${playbackSeconds.toFixed(1)} s buffered ahead`}
+                style={{
+                  position: "absolute",
+                  left: `${place}%`,
+                  top: "6px",
+                  height: "2px",
+                  width: `${Math.min(100 - place, bufferedPercent)}%`,
+                  borderRadius: "1px",
+                  background: "color-mix(in srgb, var(--muted) 70%, transparent)",
+                  pointerEvents: "none",
+                }}
+              />
+            ) : null}
             {markers.map((marker) => (
               <span
                 key={`${marker.index}-${marker.label}`}
