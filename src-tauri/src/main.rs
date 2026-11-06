@@ -860,6 +860,17 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     let check_handle = app_handle.clone();
     let check_state = app_state.clone();
     cfg.updater_checker = Some(Arc::new(move |_is_manual: bool, override_url_opt: Option<String>| {
+        #[cfg(target_os = "linux")]
+        {
+            if let Some(outcome) = coperceive_desktop::updater::linux_deb_check_outcome(
+                _is_manual,
+                std::env::var_os("APPIMAGE").as_deref(),
+                coperceive_desktop::test_seams::test_env_active(),
+                &check_handle.package_info().version,
+            ) {
+                return Ok(serde_json::to_value(&outcome).unwrap_or_default());
+            }
+        }
         {
             use tauri_plugin_updater::UpdaterExt;
             let effective_url = coperceive_desktop::updater::resolve_update_endpoint_override(override_url_opt.as_deref());
@@ -930,6 +941,15 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     let install_handle = app_handle.clone();
     let install_state = app_state.clone();
     cfg.updater_installer = Some(Arc::new(move |override_url_opt: Option<String>| {
+        #[cfg(target_os = "linux")]
+        {
+            if coperceive_desktop::updater::linux_deb_install_prevented(
+                std::env::var_os("APPIMAGE").as_deref(),
+                coperceive_desktop::test_seams::test_env_active(),
+            ) {
+                return Err(coperceive_desktop::updater::DEB_UPDATE_NOTICE.to_string());
+            }
+        }
         {
             let update_opt = {
                 let lock = install_state.pending_update.lock().map_err(|e| e.to_string())?;

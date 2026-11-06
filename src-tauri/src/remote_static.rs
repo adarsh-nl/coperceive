@@ -426,17 +426,6 @@ fn prepare_remote_static_with(
 mod tests {
     use super::*;
 
-    fn write_script(path: &Path, body: &str) {
-        fs::write(path, body).expect("write script");
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            let mut perms = fs::metadata(path).expect("metadata").permissions();
-            perms.set_mode(0o755);
-            fs::set_permissions(path, perms).expect("permissions");
-        }
-    }
-
     fn write_static(root: &Path) {
         let assets = root.join("assets");
         fs::create_dir_all(&assets).expect("assets");
@@ -446,60 +435,6 @@ mod tests {
         )
         .expect("index");
         fs::write(assets.join("app.js"), "console.log('viewer')\n").expect("js");
-    }
-
-    fn fake_ssh_script(remote_root: &Path, log: &Path) -> String {
-        format!(
-            r#"#!/usr/bin/env bash
-set -u
-remote="${{!#}}"
-printf 'call\n' >> "{log}"
-version="${{remote##* }}"; version="${{version#\'}}"; version="${{version%\'}}"
-case "$remote" in
-  *"coperceive-static-verify"*)
-      HOME="{root}/home" bash -c "$remote"
-      exit $?
-      ;;
-  *"mkdir -p -- \"\$HOME/.cache/coperceive/static/\$1\""*)
-      mkdir -p "{root}/home/.cache/coperceive/static/$version"
-      exit 0
-      ;;
-  *"cat > \"\$HOME/.cache/coperceive/static/\$1/.coperceive-static-manifest\""*)
-      mkdir -p "{root}/home/.cache/coperceive/static/$version"
-      cat > "{root}/home/.cache/coperceive/static/$version/.coperceive-static-manifest"
-      exit 0
-      ;;
-esac
-echo "fake ssh: unsupported: $remote" >&2
-exit 1
-"#,
-            log = log.display(),
-            root = remote_root.display(),
-        )
-    }
-
-    fn fake_scp_script(remote_root: &Path, log: &Path) -> String {
-        format!(
-            r#"#!/usr/bin/env bash
-set -u
-printf '%s\n' "$*" >> "{log}"
-src="${{@: -2:1}}"
-dst="${{@: -1:1}}"
-case "$src" in
-  *:*)
-      rel="${{src#*:}}"
-      cp "{root}/home/$rel" "$dst"
-      ;;
-  *)
-      rel="${{dst#*:}}"
-      mkdir -p "{root}/home/$rel"
-      cp -R "$src" "{root}/home/$rel/"
-      ;;
-esac
-"#,
-            log = log.display(),
-            root = remote_root.display(),
-        )
     }
 
     fn temp_root(label: &str) -> PathBuf {
@@ -520,6 +455,7 @@ esac
 
     #[test]
     fn uploads_once_then_skips_a_complete_cache() {
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let (root, local, remote, ssh, scp, ssh_log, scp_log) = setup_with_logs("complete");
         let first = prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
             .expect("first upload");
@@ -553,6 +489,7 @@ esac
 
     #[test]
     fn concurrent_starts_each_keep_their_own_fetched_manifest() {
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         // Each start fetches the remote manifest into a temporary file. Starts in
         // one process at the same moment must not share it: with a pid+clock name
         // (whole microseconds on macOS) one start deleted another's fetched
@@ -598,6 +535,7 @@ esac
 
     #[test]
     fn a_partial_cache_is_uploaded_again() {
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
         let (root, local, remote, ssh, scp, _ssh_log, scp_log) = setup_with_logs("partial");
         prepare_remote_static_with("cluster-a", "0.1.0", &local, ssh.to_str().unwrap(), scp.to_str().unwrap())
             .expect("upload");
@@ -644,8 +582,10 @@ esac
         let scp = root.join("fake_scp.sh");
         let ssh_log = root.join("ssh.log");
         let scp_log = root.join("scp.log");
-        write_script(&ssh, &fake_ssh_script(&remote, &ssh_log));
-        write_script(&scp, &fake_scp_script(&remote, &scp_log));
+        let fixture_ssh = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_static_ssh.sh");
+        let fixture_scp = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_static_scp.sh");
+        std::os::unix::fs::symlink(fixture_ssh, &ssh).expect("symlink ssh");
+        std::os::unix::fs::symlink(fixture_scp, &scp).expect("symlink scp");
         (root, local, remote, ssh, scp, ssh_log, scp_log)
     }
 
