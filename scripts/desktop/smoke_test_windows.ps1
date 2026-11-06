@@ -29,18 +29,44 @@ $env:COPERCEIVE_AUTOCONNECT_ROOT = $FixtureRoot
 $env:COPERCEIVE_TEST_MARKER_FILE = $MarkerFile
 $env:COPERCEIVE_STATE_DIR = $StateDir
 
-if (-not $env:COPERCEIVE_PYTHON -and -not (Test-Path "src-tauri\resources\python")) {
-    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
-    if ($pyCmd) {
-        $env:COPERCEIVE_PYTHON = $pyCmd.Source
+$pyExe = $env:COPERCEIVE_PYTHON
+if (-not $pyExe) {
+    $appDir = Split-Path -Parent $AppExe
+    $candidates = @(
+        (Join-Path $appDir "resources\python\python.exe"),
+        (Join-Path $appDir "resources\python\install\python.exe"),
+        (Join-Path $appDir "python\python.exe"),
+        "src-tauri\resources\python\python.exe",
+        "src-tauri\resources\python\install\python.exe"
+    )
+    foreach ($cand in $candidates) {
+        if (Test-Path $cand) {
+            $pyExe = (Resolve-Path $cand).Path
+            break
+        }
     }
 }
+if (-not $pyExe) {
+    $pyCmd = Get-Command python -ErrorAction SilentlyContinue
+    if ($pyCmd) {
+        $pyExe = $pyCmd.Source
+    } else {
+        $pyCmd = Get-Command py -ErrorAction SilentlyContinue
+        if ($pyCmd) {
+            $pyExe = $pyCmd.Source
+        }
+    }
+}
+if (-not $pyExe) {
+    $pyExe = "python"
+}
+$env:COPERCEIVE_PYTHON = $pyExe
 
 # Measure demo scene generation time on Windows
-Write-Host "Measuring demo scene generation time on Windows..."
+Write-Host "Measuring demo scene generation time on Windows using $pyExe..."
 $demoDir = Join-Path $TempDir "demo-test"
 $swDemo = [System.Diagnostics.Stopwatch]::StartNew()
-$demoProc = Start-Process -FilePath $env:COPERCEIVE_PYTHON -ArgumentList "-m coperceive demo create `"$demoDir`"" -Wait -PassThru -NoNewWindow
+$demoProc = Start-Process -FilePath $pyExe -ArgumentList "-m coperceive demo create `"$demoDir`"" -Wait -PassThru -NoNewWindow
 $swDemo.Stop()
 $demoSec = [math]::Round($swDemo.Elapsed.TotalSeconds, 2)
 Write-Host "Measured demo generation time on Windows: $demoSec s"
