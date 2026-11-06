@@ -48,10 +48,14 @@ from:
   <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/utils/transformation_utils.py>
 - **Box formats.** `opencood/utils/box_utils.py::boxes_to_corners_3d` writes the eight corners
   in the template order `(+,-,-), (+,+,-), (-,+,-), (-,-,-), (+,-,+), (+,+,+), (-,+,+), (-,-,+)`
-  (`/2` on the box dimensions, then `Rz(heading)`, then the centre), and
-  `corner_to_center` recovers the centre as the mean of corners `0,3,5,6`, the sizes from the
-  edges, and the heading from the `0-3` edge. `project_box3d` projects corners with a 4×4
-  matrix.
+  (`/2` on the box dimensions, then `Rz(heading)`, then the centre). For a `postprocess.order`
+  of `hwl` it **first reorders the 7-vector** with `boxes3d[:, [0, 1, 2, 5, 4, 3, 6]]` (so
+  `[x, y, z, h, w, l, yaw]` becomes `[x, y, z, l, w, h, yaw]`) and then always uses the
+  **l, w, h** corner template; the corner output is therefore the same geometry for both
+  orders. `corner_to_center` recovers the centre as the mean of corners `0,3,5,6`, the two
+  horizontal sizes from the `0-3` and `1-0` edges, the height from `4-0` (z), and the heading
+  from the `0-3` edge — likewise order-independent. `project_box3d` projects corners with a
+  4×4 matrix.
   <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/utils/box_utils.py>
 - **Inference call pattern.** `opencood/tools/inference_utils.py::inference_intermediate_fusion`
   is `inference_early_fusion`: `output_dict['ego'] = model(batch_data['ego'])`, then
@@ -72,14 +76,20 @@ from:
   (`IntermediateFusionDataset` and `EarlyFusionDataset` are the ones this plugin supports;
   late fusion and the `V2` classes are refused with a clear error).
   <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/data_utils/datasets/__init__.py>
-- **Dataset input/output shape.** `opencood/data_utils/datasets/intermediate_fusion_dataset.py`
-  consumes `retrieve_base_data`'s `{cav: {ego, time_delay, lidar_np, params}}` dict and
-  `collate_batch_test` sets the identity `transformation_matrix`; its post-processor
-  (`opencood/data_utils/post_processor/voxel_postprocessor.py`) returns
-  `(pred_box_tensor, scores)` with `pred_box_tensor` as `(N, 8, 3)` **ego-frame corners** after
-  NMS and range filtering.
+- **Dataset input/output shape and types.**
+  `opencood/data_utils/datasets/intermediate_fusion_dataset.py` consumes
+  `retrieve_base_data`'s `{cav: {ego, time_delay, lidar_np, params}}` dict; `lidar_np` is a
+  **float32 `(n, 4)` ndarray** (that is what `opencood/utils/pcd_utils.py::pcd_to_np` returns)
+  and the three 4×4 matrices in `params` are **ndarrays** (float64 from `x_to_world`/`np.eye`);
+  `shuffle_points` does `np.random.permutation(lidar_np.shape[0])` and
+  `project_points_by_matrix_torch`/`project_box3d` take ndarrays. The dataset's
+  `collate_batch_test` sets the identity `transformation_matrix`, and `dataset.post_process`
+  returns **three values** `(pred_box_tensor, pred_score, gt_box_tensor)`; the first two come
+  from `opencood/data_utils/post_processor/voxel_postprocessor.py`, with `pred_box_tensor` as
+  `(N, 8, 3)` **ego-frame corners** after NMS and range filtering.
   <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/data_utils/datasets/intermediate_fusion_dataset.py>
   <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/data_utils/post_processor/voxel_postprocessor.py>
+  <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/utils/pcd_utils.py>
 - **A public CoBEVT/V2XSet config exists**, `opencood/hypes_yaml/point_pillar_cobevt.yaml`
   (`model.core_method: point_pillar_cobevt`, `fusion.core_method: IntermediateFusionDataset`,
   `preprocess: SpVoxelPreprocessor` with `voxel_size [0.4, 0.4, 4]`,
@@ -148,7 +158,8 @@ archive's own `config.yaml` fixes the model architecture, fusion method, voxel s
 range, box order and score threshold: the plugin reads those from the checkpoint and never
 assumes them. Inside a `--slurm` job the archive is staged into the job's scratch
 (`$SCRATCH/checkpoints/checkpoint/<archive name>`) and the inner `--option` points at the
-staged copy; the shared path is not read by the compute node.
+staged copy. The job's `rsync` on the compute node reads the shared path once to stage
+it; the inner `model run`/inference process never reads it.
 
 **The expected archive shape is unverified.** The working assumption is one `.zip` holding a
 `config.yaml` (name unknown) and one weights file (`.pth`/`.pt`/`.ckpt`, name unknown, possibly
@@ -197,9 +208,19 @@ Per frame:
   corners through the ego pose and the reflection. Score is the checkpoint's classification
   probability after its own score threshold.
 
-Not stored in schema 1 and therefore fixed: `ego_speed` is sent as `0` (the model's prior
-encoding may use it; CoBEVT's configured model does not appear to, but this is unverified),
-and camera images are not used at all (the first model is LiDAR-only).
+Not stored in schema 1 and therefore fixed — the engine sends the CoBEVT/V2XSet-era
+priors: `ego_speed = 0.0`, `time_delay = 0.0` and an identity
+`spatial_correction_matrix` (schema 1 stores no speeds or asynchronous delays). Configs that
+consume `wild_setting`/spatial correction (V2X-ViT/Where2comm style) are **not supported or
+tested**; CoBEVT does not use them, but a checkpoint whose model does would be run with those
+priors fixed at their defaults. Camera images are not used at all (the first model is
+LiDAR-only).
+
+Prediction boxes come back as upstream ego-frame corners. The config's `postprocess.order`
+reorders only the 7-vector form (`hwl` = `[h, w, l]`); the corner form is order-independent
+(upstream reorders the 7-vector before writing corners and always uses the l, w, h template),
+so an `hwl` checkpoint cannot swap a car's length and height on the corner path. The worker
+parses corners with the l, w, h template and only the 7-vector path applies the order mapping.
 
 ## Run
 
@@ -363,23 +384,29 @@ checkpoint bytes in the repository).
 
 Verified from the upstream public source on 2026-11-06 (list and file links above):
 `x_to_world`/`x1_to_x2`, the `boxes_to_corners_3d` template and `corner_to_center`,
-the `model(batch['ego'])` → `dataset.post_process(...)` call pattern, `create_model`'s import
-rule, `load_yaml`'s `yaml_parser` application, `COM_RANGE = 70`, the dataset's CAV dict shape
-and the ego-frame corner output.
+the `model(batch['ego'])` → `dataset.post_process(...)` three-value call pattern,
+`create_model`'s import rule, `load_yaml`'s `yaml_parser` application, `COM_RANGE = 70`, the dataset's CAV dict
+shape, its ndarray input types (`lidar_np` float32 `(n, 4)`, float64 4x4 matrices) and the
+three-value `post_process` returning ego-frame corners.
 
 Checked by this repository's tests:
 
 - `tests/test_opencood_convert.py`: the inverse reflection against hand-computed `M R M`
   matrices, OpenCOOD's `x_to_world` elementary rotations, the per-CAV batch mapping
-  round trip (hand-computed `x1_to_x2`, CAV selection), and both box formats including the
-  corner-order positive volume.
+  round trip (hand-computed `x1_to_x2`, CAV selection), both box formats, a transcription of
+  upstream's hwl reorder + l/w/h template (a `[h=1.5, w=2, l=4]` hwl box must come back as
+  `size_lwh (4, 2, 1.5)`, not `(1.5, 2, 4)`), order-independent corner parsing, and the
+  positive corner-order volume.
 - `tests/test_opencood_checkpoint.py`: archive MD5, safe extraction (zip-slip refused),
   config/weights discovery, ambiguity and hint errors.
 - `tests/test_opencood_plugin.py`: the manifest and its licence wording, that the plugin
   imports neither coperceive nor OpenCOOD statically and holds no cluster path, the
-  `model check` skip without a checkpoint, the full `model run` → `eval run` chain against
-  `tests/fake_opencood` (a stand-in package, no GPU), and the emitted sbatch (`bash -n`,
-  checkpoint staged to scratch before the run, inner `--option` rewritten to the staged path,
-  never a copy-home target, `points.bin` staged for this lidar model).
+  `model check` skip without a checkpoint, the engine's ndarray conversion of the injected
+  frame (float32 `lidar_np`, float64 4×4 matrices — the fake `__getitem__` consumes them the
+  way upstream does, so a list-shaped batch fails), the zero `score_threshold` case, the full
+  `model run` → `eval run` chain against `tests/fake_opencood` (a stand-in package whose
+  corner writer transcribes upstream, no GPU), and the emitted sbatch (`bash -n`, checkpoint
+  staged to scratch before the run, inner `--option` rewritten to the staged path, never a
+  copy-home target, `points.bin` staged for this lidar model).
 - **Not checked here** (the [unverified list](#what-is-unverified-until-the-cluster-run)):
   the real OpenCOOD run, the real archive, the real numeric boxes and AP.

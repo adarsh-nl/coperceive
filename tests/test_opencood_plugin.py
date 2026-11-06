@@ -11,6 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
+import numpy as np
 import pytest
 from coperceive.cli import main
 from coperceive.evaluation.predictions import BoxFrame, read_boxes, read_run_meta
@@ -101,6 +102,71 @@ def test_plugin_code_imports_neither_coperceive_nor_opencood_statically() -> Non
         text = path.read_text(encoding="utf-8")
         assert "/datasets/" not in text, path.name
         assert "eemcs" not in text, path.name
+
+
+def test_engine_converts_the_injected_frame_to_numpy() -> None:
+    """The real dataset needs ndarrays: lidar float32 (n, 4) and float64 4x4 matrices."""
+    engine = load("engine")
+    identity = [
+        [1.0, 0.0, 0.0, 0.0],
+        [0.0, 1.0, 0.0, 0.0],
+        [0.0, 0.0, 1.0, 0.0],
+        [0.0, 0.0, 0.0, 1.0],
+    ]
+    frame = engine.dataset_frame(
+        {
+            "0": {
+                "ego": True,
+                "time_delay": 0.0,
+                "lidar_np": [[1.0, 2.0, 3.0, 0.5], [4.0, 5.0, 6.0, 0.0]],
+                "params": {
+                    "lidar_pose": [1.0, 2.0, 3.0, 0.0, 0.0, 0.0],
+                    "transformation_matrix": identity,
+                    "gt_transformation_matrix": identity,
+                    "spatial_correction_matrix": identity,
+                    "vehicles": {},
+                },
+            }
+        }
+    )
+    cav = cast(dict[str, object], frame["0"])
+    lidar = cast(np.ndarray, cav["lidar_np"])
+    params = cast(dict[str, object], cav["params"])
+    assert isinstance(lidar, np.ndarray) and lidar.dtype == np.float32
+    assert lidar.shape == (2, 4)
+    for key in ("transformation_matrix", "gt_transformation_matrix", "spatial_correction_matrix"):
+        matrix = cast(np.ndarray, params[key])
+        assert isinstance(matrix, np.ndarray) and matrix.dtype == np.float64
+        assert matrix.shape == (4, 4)
+    assert params["lidar_pose"] == [1.0, 2.0, 3.0, 0.0, 0.0, 0.0]
+    assert params["vehicles"] == {}
+    with pytest.raises(engine.EngineError, match="lidar_np"):
+        engine.dataset_frame({"0": {"lidar_np": [[1.0, 2.0]], "params": {"lidar_pose": [0.0] * 6}}})
+    with pytest.raises(engine.EngineError, match="transformation_matrix"):
+        engine.dataset_frame(
+            {
+                "0": {
+                    "lidar_np": [[1.0, 2.0, 3.0, 0.0]],
+                    "params": {
+                        "lidar_pose": [0.0] * 6,
+                        "transformation_matrix": [[1.0]],
+                        "gt_transformation_matrix": identity,
+                        "spatial_correction_matrix": identity,
+                    },
+                }
+            }
+        )
+
+
+def test_worker_keeps_a_zero_score_threshold() -> None:
+    """--option score_threshold=0 is a real override, not the falsy 'use the config' case."""
+    worker = load("worker")
+    assert worker._score_threshold({"options": {}}) == -1.0  # noqa: SLF001 - the parse helper
+    assert worker._score_threshold({"options": {"score_threshold": 0.0}}) == 0.0  # noqa: SLF001
+    assert worker._score_threshold({"options": {"score_threshold": 0.25}}) == 0.25  # noqa: SLF001
+    assert worker._score_threshold({"options": {"score_threshold": -1.0}}) == -1.0  # noqa: SLF001
+    assert worker._score_threshold({"options": {"score_threshold": None}}) == -1.0  # noqa: SLF001
+    assert worker._score_threshold({"options": {"score_threshold": True}}) == -1.0  # noqa: SLF001
 
 
 def test_frame_seed_is_stable_per_scene_and_time() -> None:

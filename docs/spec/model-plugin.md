@@ -144,10 +144,12 @@ commands:
 
 ### Checkpoint staging
 
-A model can name its checkpoint with `checkpoint: {option: checkpoint}`: the option's value is a path to the file the model loads. The declared option must be of type `str`. Two rules follow from the key:
+A model can name its checkpoint with `checkpoint: {option: checkpoint}`: the option's value is a path to the file the model loads. The declared option must be of type `str`. Rules that follow from the key:
 
 - `model run` refuses a run whose declared checkpoint option is empty or is not a file (exit 1) before a child starts; the message names the option and `--option <name>=FILE`.
-- `model run --slurm` stages that file into the job's scratch under `$SCRATCH/checkpoints/<option>/<file name>` with `rsync` before the run, and writes the inner `model run` with `--option <option>=$SCRATCH/checkpoints/<option>/<file name>`. The shared path the user passed is not read by the compute node; the checkpoint never appears in the copy-home `rsync` targets, only in the staged inputs. `coperceive model inspect` shows the key as part of the manifest.
+- The option value is resolved to an absolute path against the parent's working directory before the child starts (the child's `cwd` is its work directory), and the effective option value in `configure`, `run.json` `provenance.options` and the cache key is that absolute path.
+- Once a model declares the key, `hello.environment.checkpoint_path` is required: the parent hashes that file and refuses a `hello` that omits it, names a different file than the declared option, or reports a digest that disagrees (§Protocol; a protocol violation, exit 3). A model without the key may omit it.
+- `model run --slurm` stages that file into the job's scratch under `$SCRATCH/checkpoints/<option>/<file name>` with `rsync` before the run, and writes the inner `model run` with `--option <option>=$SCRATCH/checkpoints/<option>/<file name>`. The job's `rsync` on the compute node reads the shared path once to stage it; the inner `model run`/inference process never reads it, and the checkpoint never appears in the copy-home `rsync` targets, only in the staged inputs. `coperceive model inspect` shows the key as part of the manifest.
 
 The file is the checkpoint the worker hashes: `hello.environment.checkpoint_path` names it and `checkpoint_md5` is its MD5 (the parent hashes it too, §Protocol), so the cache key changes when the file changes. A model without the key is staged exactly as before.
 

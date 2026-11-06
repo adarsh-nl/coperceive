@@ -10,6 +10,7 @@ about a directory outside ``pyright include``.
 from __future__ import annotations
 
 import importlib
+import importlib.util
 import io
 import json
 import shutil
@@ -39,13 +40,31 @@ _MODULES = {
 }
 
 
+def _load_by_file(module_name: str, path: Path) -> Any:
+    """Load a module under a unique name so a generic top-level name cannot collide."""
+    spec = importlib.util.spec_from_file_location(module_name, path)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
 def load(name: str) -> Any:
     """Import one of the plugin package's modules (``convert``, ``batch``, …) by file."""
     if name not in _LOADED:
         directory = str(PLUGIN_DIR)
         if directory not in sys.path:
             sys.path.insert(0, directory)
-        _LOADED[name] = importlib.import_module(_MODULES.get(name, name))
+        if name == "worker":
+            # worker.py is a script the manifest runs by path; import it under a unique name
+            # so this test process can never pick up another plugin's ``worker`` module
+            # (plugins/griffin/tests/test_convert.py puts its own plugin directory on
+            # sys.path during collection, and both plugins have a worker.py).
+            _LOADED[name] = _load_by_file("coperceive_opencood_worker", PLUGIN_DIR / "worker.py")
+        else:
+            _LOADED[name] = importlib.import_module(_MODULES.get(name, name))
     return _LOADED[name]
 
 

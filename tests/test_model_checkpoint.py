@@ -17,7 +17,12 @@ import yaml
 from coperceive.cli import main
 from coperceive.evaluation.predictions import read_run_meta
 from coperceive.model import Scene
-from coperceive.models.batch import BatchError, RunOptions, run_batch
+from coperceive.models.batch import (
+    BatchError,
+    RunOptions,
+    resolve_checkpoint_option,
+    run_batch,
+)
 from coperceive.models.slurm import (
     SlurmError,
     checkpoint_files,
@@ -45,6 +50,11 @@ def _payload() -> dict[str, Any]:
     payload = cast(dict[str, Any], yaml.safe_load(FAKE.read_text(encoding="utf-8")))
     payload["models"] = {"default": payload["models"]["default"]}
     return payload
+
+
+def _checkpoint_payload() -> dict[str, Any]:
+    """The fake manifest with the checkpoint option and key (tests/fake_model_plugin)."""
+    return cast(dict[str, Any], yaml.safe_load(CHECKPOINT_MANIFEST.read_text(encoding="utf-8")))
 
 
 def _parse(payload: dict[str, Any], source: Path = FAKE) -> Any:
@@ -217,6 +227,21 @@ def test_model_run_requires_the_checkpoint_option(
     assert "--option checkpoint=FILE" in captured.err + captured.out
 
 
+def test_resolve_checkpoint_option_makes_it_absolute(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The helper both check and run use: relative -> absolute, in place; None without a key."""
+    monkeypatch.chdir(tmp_path)
+    archive = tmp_path / "ck.zip"
+    archive.write_bytes(b"x")
+    with_checkpoint = select_model(load_manifest(CHECKPOINT_MANIFEST), None)
+    effective: dict[str, object] = {"checkpoint": "ck.zip"}
+    assert resolve_checkpoint_option(with_checkpoint, effective) == str(archive.resolve())
+    assert effective["checkpoint"] == str(archive.resolve())
+    without = select_model(load_manifest(FAKE), None)
+    assert resolve_checkpoint_option(without, {}) is None
+
+
 def test_model_run_hashes_the_checkpoint_file(
     roots: tuple[Path, Path, Scene], checkpoint: Path
 ) -> None:
@@ -257,6 +282,128 @@ def test_checkpoint_must_exist_before_the_child_starts(
             created_utc=CREATED,
             parent_env=_env(),
         )
+
+
+def test_relative_checkpoint_option_is_absolute_before_the_child(
+    roots: tuple[Path, Path, Scene], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The child's cwd is its work dir, so the parent resolves the path it passes in argv."""
+    scenes, out, _ = roots
+    checkpoint = tmp_path / "relative-ckpt.zip"
+    checkpoint.write_bytes(b"PK\x03\x04 a fake archive the fake worker only hashes")
+    monkeypatch.chdir(tmp_path)
+    report = run_batch(
+        _manifest(),
+        scenes,
+        out,
+        "r1",
+        RunOptions(options={"checkpoint": checkpoint.name}),
+        created_utc=CREATED,
+        parent_env=_env(),
+    )
+    assert report.status == "complete"
+    meta = read_run_meta(out, "r1")
+    assert meta.provenance is not None
+    record = cast(Mapping[str, Any], meta.provenance["checkpoint"])
+    assert record["path"] == str(checkpoint.resolve())
+    options = cast(Mapping[str, object], meta.provenance["options"])
+    assert options["checkpoint"] == str(checkpoint.resolve())
+
+
+def test_a_declared_checkpoint_requires_hello_checkpoint_path(
+    roots: tuple[Path, Path, Scene], tmp_path: Path
+) -> None:
+    """A hello without checkpoint_path would bypass digest verification: protocol violation."""
+    scenes, out, _ = roots
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    (plugin / "silent.py").write_text(
+        "import json, sys\n"
+        "print(json.dumps({\n"
+        '    "type": "hello", "protocol": 1, "plugin": "fake", "version": "0.0.1",\n'
+        '    "models": ["default"],\n'
+        '    "capabilities": {"live": False, "cancel": False, "max_inflight": 1},\n'
+        '    "environment": {"checkpoint_md5": "0" * 32},\n'
+        "}), flush=True)\n"
+        "sys.stdin.read()\n",
+        encoding="utf-8",
+    )
+    checkpoint = tmp_path / "declared.zip"
+    checkpoint.write_bytes(b"PK\x03\x04 a fake archive the silent worker never opens")
+    payload = _checkpoint_payload()
+    payload["environment"] = {"current": True}
+    payload["commands"]["batch"] = [
+        "{python}",
+        "{plugin_dir}/silent.py",
+        "--model",
+        "{model}",
+        "--checkpoint",
+        "{option:checkpoint}",
+    ]
+    manifest_path = plugin / "model.yaml"
+    manifest_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    report = run_batch(
+        load_manifest(manifest_path),
+        scenes,
+        out,
+        "r1",
+        RunOptions(options={"checkpoint": str(checkpoint)}),
+        created_utc=CREATED,
+        parent_env=_env(),
+    )
+    assert report.status == "partial"
+    assert report.reason is not None and "checkpoint_path is required" in report.reason
+    assert report.exit_code == 3
+
+
+def test_hello_checkpoint_path_must_be_the_declared_file(
+    roots: tuple[Path, Path, Scene], tmp_path: Path
+) -> None:
+    """A child that hashes a different file than --option names is a protocol violation."""
+    scenes, out, _ = roots
+    plugin = tmp_path / "plugin"
+    plugin.mkdir()
+    other = tmp_path / "other.zip"
+    other.write_bytes(b"PK\x03\x04 another file")
+    declared = tmp_path / "declared.zip"
+    declared.write_bytes(b"PK\x03\x04 the declared file")
+    other_digest = hashlib.md5(other.read_bytes()).hexdigest()  # noqa: S324 - the protocol digest
+    hello = {
+        "type": "hello",
+        "protocol": 1,
+        "plugin": "fake",
+        "version": "0.0.1",
+        "models": ["default"],
+        "capabilities": {"live": False, "cancel": False, "max_inflight": 1},
+        "environment": {"checkpoint_md5": other_digest, "checkpoint_path": str(other)},
+    }
+    (plugin / "wrong.py").write_text(
+        f"import json, sys\nprint(json.dumps({hello!r}), flush=True)\nsys.stdin.read()\n",
+        encoding="utf-8",
+    )
+    payload = _checkpoint_payload()
+    payload["environment"] = {"current": True}
+    payload["commands"]["batch"] = [
+        "{python}",
+        "{plugin_dir}/wrong.py",
+        "--model",
+        "{model}",
+        "--checkpoint",
+        "{option:checkpoint}",
+    ]
+    manifest_path = plugin / "model.yaml"
+    manifest_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    report = run_batch(
+        load_manifest(manifest_path),
+        scenes,
+        out,
+        "r1",
+        RunOptions(options={"checkpoint": str(declared)}),
+        created_utc=CREATED,
+        parent_env=_env(),
+    )
+    assert report.status == "partial"
+    assert report.reason is not None and "hello names checkpoint" in report.reason
 
 
 # -- `--slurm` staging ------------------------------------------------------------------------

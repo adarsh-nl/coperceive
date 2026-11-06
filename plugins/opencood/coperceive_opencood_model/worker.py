@@ -70,6 +70,21 @@ def _option(message: dict, key: str, default: object = "") -> object:
     return default if value is None else value
 
 
+def _score_threshold(message: dict) -> float:
+    """``score_threshold`` from configure: a negative value (or absent) means the config's own.
+
+    ``0`` is a real override (drop boxes below score 0, like the checkpoint config can), so
+    it must not be treated as falsy and replaced by -1.
+    """
+    value = _option(message, "score_threshold", -1.0)
+    if isinstance(value, bool):
+        return -1.0
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return -1.0
+
+
 def _as_str_list(value: object) -> list[dict[str, str]]:
     """The ``agents`` list of a configure message as ``{agent_id, agent_type}`` dicts."""
     if not isinstance(value, list):
@@ -248,10 +263,7 @@ class Worker:
                 f"{self._config_rel}, weights {self._weights_rel}"
             )
             device = str(_option(message, "device", "") or "") or str(message.get("device") or "")
-            try:
-                score_threshold = float(_option(message, "score_threshold", -1.0) or -1.0)
-            except (TypeError, ValueError):
-                score_threshold = -1.0
+            score_threshold = _score_threshold(message)
             _progress("loading the OpenCOOD model from the checkpoint config", 0.5)
             self.engine = engine.OpenCOODEngine(
                 config_path,

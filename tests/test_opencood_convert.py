@@ -260,21 +260,67 @@ def test_centre_box_in_hwl_and_lwh_orders() -> None:
 
 @pytest.mark.parametrize("order", ["lwh", "hwl"])
 def test_corner_box_round_trip_keeps_positive_volume(order: str) -> None:
-    """Corners -> centre box gives the same box and a positive volume in either order."""
+    """The corner template is always l, w, h, so the parser is order-independent.
+
+    Upstream ``boxes_to_corners_3d`` reorders the 7-vector for ``hwl`` and then always uses
+    the l, w, h corner template, and ``corner_to_center`` takes the two horizontal edges and
+    the height from z for both orders. ``postprocess.order`` therefore cannot swap length
+    and height on the corner path.
+    """
     center = (8.0, 2.0, -1.5)
     size = (4.0, 2.0, 1.5)
-    corners = convert.opencood_corners(center, size, 30.0, order)
-    parsed = convert.boxes_from_opencood([corners], order, [0.5])[0]
-    assert parsed["center"] == pytest.approx(center, abs=1e-12)
-    assert parsed["size_lwh"] == pytest.approx(size, abs=1e-12)
-    assert parsed["heading"] == pytest.approx(30.0, abs=1e-9)
-    length, width, height = cast(list[float], parsed["size_lwh"])
-    assert length > 0.0 and width > 0.0 and height > 0.0
-    assert length * width * height == pytest.approx(4.0 * 2.0 * 1.5)
-    # The order is part of the format: reading 'hwl' corners as 'lwh' swaps length and height.
-    if order == "hwl":
-        wrong = convert.boxes_from_opencood([corners], "lwh", [0.5])[0]
-        assert cast(list[float], wrong["size_lwh"]) == pytest.approx([1.5, 2.0, 4.0])
+    corners = convert.opencood_corners(center, size, 30.0)
+    for some_order in ("lwh", "hwl"):
+        parsed = convert.boxes_from_opencood([corners], some_order, [0.5])[0]
+        assert parsed["center"] == pytest.approx(center, abs=1e-12)
+        assert parsed["size_lwh"] == pytest.approx(size, abs=1e-12)
+        assert parsed["heading"] == pytest.approx(30.0, abs=1e-9)
+        length, width, height = cast(list[float], parsed["size_lwh"])
+        assert length > 0.0 and width > 0.0 and height > 0.0
+        assert length * width * height == pytest.approx(4.0 * 2.0 * 1.5)
+
+
+def _upstream_hwl_corners(box7: list[float]) -> list[list[float]]:
+    """A transcription of upstream ``boxes_to_corners_3d`` for a hwl 7-vector.
+
+    ``box7`` is ``[x, y, z, h, w, l, yaw]``; upstream reorders it with
+    ``[:, [0, 1, 2, 5, 4, 3, 6]]`` to ``[x, y, z, l, w, h, yaw]`` and then uses the l, w, h
+    template, ``Rz(yaw)`` and the centre. Written out here so a test does not depend on the
+    plugin's own corner helper.
+    """
+    x, y, z, height, width, length, yaw = box7
+    cy, sy = math.cos(math.radians(yaw)), math.sin(math.radians(yaw))
+    signs = (
+        (1.0, -1.0, -1.0),
+        (1.0, 1.0, -1.0),
+        (-1.0, 1.0, -1.0),
+        (-1.0, -1.0, -1.0),
+        (1.0, -1.0, 1.0),
+        (1.0, 1.0, 1.0),
+        (-1.0, 1.0, 1.0),
+        (-1.0, -1.0, 1.0),
+    )
+    out: list[list[float]] = []
+    for sx, sy_, sz in signs:
+        lx, ly, lz = sx * length / 2.0, sy_ * width / 2.0, sz * height / 2.0
+        out.append([x + cy * lx - sy * ly, y + sy * lx + cy * ly, z + lz])
+    return out
+
+
+def test_hwl_corners_carry_length_and_height_apart() -> None:
+    """The audit bug: hwl must not publish size_lwh=(h, w, l) (a 1.56 m long, 3.9 m high car)."""
+    # A long, low car in upstream's hwl 7-vector order [x, y, z, h, w, l, yaw].
+    corners = _upstream_hwl_corners([8.0, 2.0, -1.5, 1.5, 2.0, 4.0, 90.0])
+    center, size, heading = convert.center_from_corners(corners)
+    assert center == pytest.approx([8.0, 2.0, -1.5], abs=1e-12)
+    assert size == pytest.approx([4.0, 2.0, 1.5], abs=1e-12)
+    assert heading == pytest.approx(90.0, abs=1e-9)
+    parsed = convert.boxes_from_opencood([corners], "hwl", [0.9])[0]
+    assert cast(list[float], parsed["size_lwh"]) == pytest.approx([4.0, 2.0, 1.5])
+    # The 7-vector path keeps the order mapping: the same box read as 'lwh' is h=1.5, w=2,
+    # l=4 in the vector, so its size_lwh is (1.5, 2.0, 4.0) -- that path is order-dependent.
+    from_centre7 = convert.boxes_from_opencood([[8.0, 2.0, -1.5, 1.5, 2.0, 4.0, 90.0]], "hwl")
+    assert cast(list[float], from_centre7[0]["size_lwh"]) == pytest.approx([4.0, 2.0, 1.5])
 
 
 def test_corner_box_degenerate_is_refused() -> None:

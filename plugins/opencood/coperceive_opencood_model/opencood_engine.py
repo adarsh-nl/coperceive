@@ -18,6 +18,16 @@ we provide for the current frame:
 - ``dataset.collate_batch_test`` / ``model(batch['ego'])`` / ``dataset.post_process`` are the
   same three calls OpenCOOD's own inference loop makes.
 
+The injected CAV dicts are converted to the types the real dataset uses: ``lidar_np`` is a
+float32 ``(n, 4)`` ndarray (as upstream ``pcd_utils.pcd_to_np`` returns) and the three 4×4
+matrices are float64 ndarrays (as ``x_to_world``/``np.eye`` produce); lists fail the
+dataset's first ``lidar_np.shape``/``shuffle_points`` call.
+
+Priors sent with every frame are the CoBEVT/V2XSet-era defaults, because schema 1 stores no
+speeds or asynchronous delays: ``ego_speed = 0.0``, ``time_delay = 0.0`` and an identity
+``spatial_correction_matrix``. Configs that consume ``wild_setting``/spatial correction
+(V2X-ViT/Where2comm style) are **not supported or tested**; CoBEVT does not use them.
+
 Ground truth is never fetched: ``params['vehicles']`` is empty, so the label generation that
 the dataset runs on a test item yields empty targets. ``COM_RANGE``, ``max_cav`` and the box
 order come from the OpenCOOD environment and the checkpoint config, never from constants
@@ -36,6 +46,7 @@ import os
 import shutil
 import tempfile
 
+import numpy as np
 from opencood_convert import ConvertError, boxes_from_opencood
 
 SUPPORTED_FUSION = ("IntermediateFusionDataset", "EarlyFusionDataset")
@@ -133,12 +144,21 @@ def _fusion_of(config: dict[str, object]) -> str:
 
 
 def _load_weights(torch, path: str) -> dict[str, object]:
+    """Load a state dict, preferring the safe unpickler and falling back to the old one."""
     try:
-        state = torch.load(path, map_location="cpu", weights_only=False)
-    except TypeError:  # torch older than 2.0 has no weights_only and does not execute it
-        state = torch.load(path, map_location="cpu")
-    except Exception as exc:  # noqa: BLE001 - a bad file is reported to the parent
-        raise EngineError(f"cannot load weights {path}: {exc}") from None
+        state = torch.load(path, map_location="cpu", weights_only=True)
+    except TypeError:  # torch older than 2.0 has no weights_only argument
+        try:
+            state = torch.load(path, map_location="cpu")
+        except Exception as exc:  # noqa: BLE001 - a bad file is reported to the parent
+            raise EngineError(f"cannot load weights {path}: {exc}") from None
+    except Exception:
+        # Checkpoints saved by an old torch often carry numpy scalars or other globals the
+        # safe unpickler refuses; a user-supplied checkpoint is trusted either way.
+        try:
+            state = torch.load(path, map_location="cpu", weights_only=False)
+        except Exception as exc:  # noqa: BLE001 - a bad file is reported to the parent
+            raise EngineError(f"cannot load weights {path}: {exc}") from None
     if not isinstance(state, dict):
         raise EngineError(f"weights file {path} does not hold a state dict")
     for key in ("model", "state_dict", "model_state_dict", "net"):
@@ -163,6 +183,59 @@ def _to_list(value: object) -> list:
     if hasattr(value, "tolist"):
         return list(value.tolist())  # type: ignore[union-attr]
     return list(value)  # type: ignore[arg-type]
+
+
+def dataset_frame(base_data: object) -> dict[str, object]:
+    """The injected frame in the types the real OpenCOOD dataset consumes.
+
+    ``lidar_np`` becomes a float32 ``(n, 4)`` ndarray (the dtype ``pcd_utils.pcd_to_np``
+    returns) and ``transformation_matrix``/``gt_transformation_matrix``/
+    ``spatial_correction_matrix`` become float64 ``(4, 4)`` ndarrays (what ``x_to_world`` and
+    ``np.eye`` produce upstream). ``lidar_pose`` stays a 6-float list and ``vehicles`` a dict,
+    as upstream keeps them. Converting here, once per frame, means a list-shaped batch fails
+    with a clear EngineError instead of a TypeError deep inside the dataset.
+    """
+    if not isinstance(base_data, dict):
+        raise EngineError(f"the injected frame must be a dict, got {type(base_data).__name__}")
+    frame: dict[str, object] = {}
+    for cav_id, cav in base_data.items():
+        if not isinstance(cav, dict):
+            raise EngineError(f"CAV {cav_id!r}: the CAV content must be a dict")
+        params = cav.get("params")
+        if not isinstance(params, dict):
+            raise EngineError(f"CAV {cav_id!r}: params must be a dict")
+        try:
+            lidar = np.asarray(cav.get("lidar_np"), dtype=np.float32)
+        except (TypeError, ValueError) as exc:
+            raise EngineError(f"CAV {cav_id!r}: lidar_np is not a numeric array: {exc}") from None
+        if lidar.ndim != 2 or lidar.shape[1] != 4:
+            raise EngineError(
+                f"CAV {cav_id!r}: lidar_np must be (n, 4) [x, y, z, intensity], "
+                f"got shape {lidar.shape}"
+            )
+        converted = dict(params)
+        for key in (
+            "transformation_matrix",
+            "gt_transformation_matrix",
+            "spatial_correction_matrix",
+        ):
+            try:
+                matrix = np.asarray(converted.get(key), dtype=np.float64)
+            except (TypeError, ValueError) as exc:
+                raise EngineError(f"CAV {cav_id!r}: {key} is not a numeric matrix: {exc}") from None
+            if matrix.shape != (4, 4):
+                raise EngineError(
+                    f"CAV {cav_id!r}: {key} must be a 4x4 matrix, got shape {matrix.shape}"
+                )
+            converted[key] = matrix
+        pose = converted.get("lidar_pose")
+        if not isinstance(pose, (list, tuple)) or len(pose) != 6:
+            raise EngineError(f"CAV {cav_id!r}: lidar_pose must be [x, y, z, roll, yaw, pitch]")
+        converted["lidar_pose"] = [float(value) for value in pose]
+        if not isinstance(converted.get("vehicles"), dict):
+            converted["vehicles"] = {}
+        frame[cav_id] = {**cav, "lidar_np": lidar, "params": converted}
+    return frame
 
 
 class OpenCOODEngine:
@@ -293,7 +366,7 @@ class OpenCOODEngine:
         seed = frame_seed(scene_id, time_us)
         self._numpy.random.seed(seed)
         self._torch.manual_seed(seed)
-        self._injected["frame"] = base_data
+        self._injected["frame"] = dataset_frame(base_data)
         try:
             item = self._dataset[0]
             batch = self._dataset.collate_batch_test([item])

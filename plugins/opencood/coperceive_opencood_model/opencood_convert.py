@@ -232,12 +232,18 @@ def points_to_carla(points: object, where: str = "points") -> list[list[float]]:
 # -- OpenCOOD -> schema ---------------------------------------------------------------------
 
 
-def _corners_order_axes(order: str) -> tuple[int, int, int]:
-    """Which of (length, width, height) each corner-template axis carries."""
+def _centre_size_lwh(values: list[float], order: str) -> list[float]:
+    """``[length, width, height]`` from a 7-vector's three sizes in the config's order.
+
+    ``postprocess.order`` reorders only the 7-vector: ``hwl`` stores ``[h, w, l]``, ``lwh``
+    stores ``[l, w, h]``. (The corner format is order-independent; upstream reorders the
+    7-vector before writing corners and always uses the l/w/h template, see
+    ``opencood_corners``.)
+    """
     if order == "lwh":
-        return (0, 1, 2)
+        return [values[3], values[4], values[5]]
     if order == "hwl":
-        return (2, 1, 0)
+        return [values[5], values[4], values[3]]
     raise ConvertError(f"postprocess order must be lwh or hwl, got {order!r}")
 
 
@@ -245,16 +251,15 @@ def opencood_corners(
     center: tuple[float, float, float],
     size_lwh: tuple[float, float, float],
     heading_deg: float,
-    order: str,
 ) -> list[tuple[float, float, float]]:
-    """The eight corners an OpenCOOD post-processor's ``boxes_to_corners_3d`` writes.
+    """The eight corners upstream ``boxes_to_corners_3d`` writes for an l/w/h box.
 
-    ``order`` selects which box axis the first corner-template axis carries (``hwl`` puts
-    the height on the template's x axis, which is what OpenCOOD's postprocessor does).
+    Upstream's corner template is always length, width, height on its x, y, z axes; the
+    ``order`` config key only reorders the 7-vector *before* this step
+    (``boxes3d[:, [0, 1, 2, 5, 4, 3, 6]]`` for ``hwl``). The corner output is therefore the
+    same geometry for both orders, which is what ``center_from_corners`` inverts.
     """
-    axes = _corners_order_axes(order)
-    halves = [size_lwh[0] / 2.0, size_lwh[1] / 2.0, size_lwh[2] / 2.0]
-    dims = [halves[axes[0]], halves[axes[1]], halves[axes[2]]]
+    dims = [size_lwh[0] / 2.0, size_lwh[1] / 2.0, size_lwh[2] / 2.0]
     cy, sy = math.cos(heading_deg * DEG), math.sin(heading_deg * DEG)
     signs = (
         (1.0, -1.0, -1.0),
@@ -279,8 +284,13 @@ def opencood_corners(
     return corners
 
 
-def center_from_corners(corners: object, order: str) -> tuple[list[float], list[float], float]:
-    """``([cx, cy, cz], [l, w, h], heading_deg)`` from eight OpenCOOD ego-frame corners."""
+def center_from_corners(corners: object) -> tuple[list[float], list[float], float]:
+    """``([cx, cy, cz], [l, w, h], heading_deg)`` from eight OpenCOOD ego-frame corners.
+
+    The corner template is always l, w, h (upstream ``corner_to_center`` takes the two
+    sizes from the horizontal edges and the height from z for both config orders), so no
+    order argument is involved and an ``hwl`` config cannot swap length and height here.
+    """
     rows = _corner_rows(corners)
     center = [
         sum(row[0] for row in rows) / 8.0,
@@ -297,12 +307,8 @@ def center_from_corners(corners: object, order: str) -> tuple[list[float], list[
     if first == 0.0 or second == 0.0 or third == 0.0:
         raise ConvertError("degenerate prediction box: a corner edge has zero length")
     heading = math.degrees(math.atan2(rows[0][1] - rows[3][1], rows[0][0] - rows[3][0]))
-    axes = _corners_order_axes(order)
-    # axes says which size each template axis carries; invert it to get length, width, height.
-    size = [0.0, 0.0, 0.0]
-    for template_axis, size_index in enumerate(axes):
-        size[size_index] = edges[template_axis]
-    return center, size, heading
+    # Template axis 0 is length, 1 is width, 2 is height, for both config orders.
+    return center, [first, second, third], heading
 
 
 def _corner_rows(corners: object) -> list[tuple[float, float, float]]:
@@ -320,11 +326,7 @@ def _center7(center7: object, order: str) -> tuple[list[float], list[float], flo
     if not isinstance(center7, (list, tuple)) or len(center7) != 7:
         raise ConvertError("a centre box is [x, y, z, d0, d1, d2, yaw]")
     values = [float(value) for value in center7]
-    axes = _corners_order_axes(order)
-    size = [0.0, 0.0, 0.0]
-    for template_axis, size_index in enumerate(axes):
-        size[size_index] = values[3 + template_axis]
-    return values[:3], size, values[6]
+    return values[:3], _centre_size_lwh(values, order), values[6]
 
 
 def boxes_from_opencood(
@@ -332,8 +334,10 @@ def boxes_from_opencood(
 ) -> list[dict[str, object]]:
     """``[{center, size_lwh, heading, score}]`` from ego-frame corners or centre boxes.
 
-    ``boxes`` is a sequence of ``(N, 8, 3)`` corners or ``(N, 7)`` centre boxes in the
-    checkpoint config's ``postprocess.order``; the score list, when given, matches ``boxes``.
+    ``boxes`` is a sequence of ``(N, 8, 3)`` corners or ``(N, 7)`` centre boxes; ``order``
+    is the checkpoint config's ``postprocess.order`` and applies only to the 7-vector sizes
+    (the upstream corner template is always l, w, h). The score list, when given, matches
+    ``boxes``.
     """
     if not isinstance(boxes, (list, tuple)) or len(boxes) == 0:
         return []
@@ -341,9 +345,9 @@ def boxes_from_opencood(
     if not isinstance(first, (list, tuple)):
         raise ConvertError("each box must be a list or tuple")
     if len(first) == 8:
-        kind, extract = "corners", center_from_corners
+        kind = "corners"
     elif len(first) == 7:
-        kind, extract = "centres", _center7
+        kind = "centres"
     else:
         raise ConvertError(f"each box has 7 (centre) or 8 (corners) values, got {len(first)}")
     if scores is None:
@@ -352,7 +356,10 @@ def boxes_from_opencood(
         raise ConvertError("scores must match the boxes")
     out: list[dict[str, object]] = []
     for index, box in enumerate(boxes):
-        center, size, heading = extract(box, order)
+        if kind == "corners":
+            center, size, heading = center_from_corners(box)
+        else:
+            center, size, heading = _center7(box, order)
         score = scores[index]
         if score is None:
             out.append({"kind": kind, "center": center, "size_lwh": size, "heading": heading})
