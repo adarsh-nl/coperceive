@@ -27,6 +27,7 @@ use coperceive_desktop::job_report::{
     self as job_report, ImportedPredictions, MetricsReport, PredictionTail,
 };
 use coperceive_desktop::job_history::{self as job_history, RunHistoryEntry};
+use coperceive_desktop::remote_static;
 use coperceive_desktop::server_profiles::{self, ServerEntry, SshHostSettings};
 use coperceive_desktop::remote::{
     RemoteClient, RemoteSessionManager, RemoteStartOptions, RemoteStatusResponse,
@@ -107,6 +108,7 @@ fn resolve_python_binary(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
 
     if let Ok(res_dir) = app.path().resource_dir() {
+        remote_static::set_resource_dir(res_dir.clone());
         // Pinned python-build-standalone inside Tauri resources
         let candidates = platform::resolve_python_candidates(&res_dir);
         for candidate in &candidates {

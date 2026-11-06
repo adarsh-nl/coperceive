@@ -16,6 +16,10 @@
 
 use std::path::Path;
 
+/// Crate-wide mutex for tests that run `fake_ssh.sh` or configure
+/// process-wide fake SSH environment variables (`FAKE_SSH_LOG`, `FAKE_REMOTE_ROOT`).
+pub static FAKE_SSH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// True when the app was launched by the real-app e2e harness.
 pub fn test_env_active() -> bool {
     std::env::var_os("COPERCEIVE_TEST_ENV").is_some()

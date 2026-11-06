@@ -1074,13 +1074,18 @@ mod tests {
 
     struct FakeSsh {
         bin: String,
+        _guard: std::sync::MutexGuard<'static, ()>,
     }
 
     impl FakeSsh {
         fn create() -> Self {
+            let guard = crate::test_seams::FAKE_SSH_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             let path = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
             Self {
                 bin: path.to_string(),
+                _guard: guard,
             }
         }
     }

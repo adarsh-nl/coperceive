@@ -29,7 +29,7 @@ $env:COPERCEIVE_AUTOCONNECT_ROOT = $FixtureRoot
 $env:COPERCEIVE_TEST_MARKER_FILE = $MarkerFile
 $env:COPERCEIVE_STATE_DIR = $StateDir
 
-if (-not $env:COPERCEIVE_PYTHON) {
+if (-not $env:COPERCEIVE_PYTHON -and -not (Test-Path "src-tauri\resources\python")) {
     $pyCmd = Get-Command python -ErrorAction SilentlyContinue
     if ($pyCmd) {
         $env:COPERCEIVE_PYTHON = $pyCmd.Source
@@ -91,6 +91,13 @@ if ($sceneCount -lt 1) {
 }
 
 Write-Host "Verified: /api/scenes returned $sceneCount scene(s) with HTTP 200 OK."
+
+Write-Host "Checking GET $origin/healthz..."
+try {
+    $null = Invoke-RestMethod -Uri "$origin/healthz" -Headers $headers -Method Get
+} catch {
+    Write-Warning "GET /healthz endpoint returned non-200: $_"
+}
 
 $ScreenshotDir = if ($env:RUNNER_TEMP) { Join-Path $env:RUNNER_TEMP "e2e-shots" } else { Join-Path $env:TEMP "e2e-shots" }
 New-Item -ItemType Directory -Path $ScreenshotDir -Force | Out-Null

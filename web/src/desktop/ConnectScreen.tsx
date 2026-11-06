@@ -29,7 +29,7 @@ import { errorText } from "./errors";
 import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
-import { isTitlebarOverlay, getModifierKey, getSshConfigLabel } from "./platform";
+import { isTitlebarOverlay, getModifierKey, getSshConfigLabel, formatShortcut } from "./platform";
 import type { ServerEntry } from "./hpc";
 import {
   GridTable,
@@ -519,7 +519,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <button
                 type="button"
-                aria-label="Settings (⌘,)"
+                aria-label={`Settings (${formatShortcut("⌘,")})`}
                 onClick={() => setSettingsOpen(true)}
                 className="c-sidebar-item"
                 style={{
@@ -550,7 +550,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                     fontFamily: "'Geist Mono', monospace",
                   }}
                 >
-                  ⌘,
+                  ({formatShortcut("⌘,")})
                 </span>
               </button>
             </div>

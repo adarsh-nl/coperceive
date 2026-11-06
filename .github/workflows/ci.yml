@@ -294,20 +294,81 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libappindicator3-dev librsvg2-dev patchelf xvfb dbus-x11 imagemagick
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libsoup-3.0-dev libappindicator3-dev librsvg2-dev patchelf xvfb dbus-x11 imagemagick libfuse2 squashfs-tools
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
           shared-key: "linux-tauri"
+      - name: Cache bundled Python runtime and pip downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/coperceive-desktop
+            ~/.cache/pip
+          key: bundled-python-${{ runner.os }}-${{ hashFiles('scripts/desktop/requirements-linux-x86_64.lock') }}
+          restore-keys: |
+            bundled-python-${{ runner.os }}-
+      - name: Bundle Python Standalone Runtime
+        run: python3 scripts/desktop/bundle_python.py --target x86_64-unknown-linux-gnu --skip-web-build
       - name: Run Rust unit tests
-        run: cargo test --lib --verbose --color=never
-        working-directory: src-tauri
-      - name: Build coperceive-desktop binary
-        run: cargo build --bin coperceive-desktop
-        working-directory: src-tauri
-      - name: Run Linux Smoke Test
-        run: xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/desktop/smoke_test_linux.sh src-tauri/target/debug/coperceive-desktop
+        run: |
+          for i in $(seq 20); do
+            echo "=== Rust unit tests run ${i}/20 ==="
+            cargo test --manifest-path src-tauri/Cargo.toml -q || exit 1
+          done
+      - name: Sync Desktop Bundle Version
+        run: bash scripts/desktop/sync_version.sh
+      - name: Build Tauri Desktop (AppImage and deb)
+        run: ( cd web && npm run tauri build -- --bundles appimage,deb --verbose )
+      - name: Verify packaged app ships the viewer bundle
+        run: |
+          DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
+          test -n "${DEB_FILE}" || { echo "No .deb package found" >&2; exit 1; }
+          python3 scripts/check_bundle_assets.py --app "${DEB_FILE}"
+      - name: Inspect Linux Package Sizes and Top Paths
+        run: |
+          DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
+          APPIMAGE_FILE=$(find src-tauri/target -iname "*.AppImage" -type f | head -n 1)
+          echo "=== Debian Package Size ==="
+          ls -lh "${DEB_FILE}"
+          echo "=== Top 25 Largest Files in .deb ==="
+          (dpkg-deb -c "${DEB_FILE}" | sort -k3 -n -r || true) | head -n 25
+          echo "=== AppImage Package Size ==="
+          ls -lh "${APPIMAGE_FILE}"
+          echo "=== Top 25 Largest Files in Bundled Python ==="
+          (find src-tauri/resources/python -type f -exec ls -la {} + | sort -k5 -n -r || true) | head -n 25
+      - name: Run Linux Smoke Test on Installed Debian Package
+        run: |
+          DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
+          test -n "${DEB_FILE}" || { echo "No .deb package found" >&2; exit 1; }
+          DEB_ABS="$(readlink -f "${DEB_FILE}")"
+          echo "Installing ${DEB_ABS} via apt-get..."
+          sudo apt-get install -y "${DEB_ABS}"
+          INSTALLED_BIN="/usr/bin/coperceive-desktop"
+          test -x "${INSTALLED_BIN}" || { echo "Installed binary not found at ${INSTALLED_BIN}" >&2; exit 1; }
+          xvfb-run -a -s "-screen 0 1920x1080x24" bash scripts/desktop/smoke_test_linux.sh "${INSTALLED_BIN}"
+          echo "Removing installed Debian package..."
+          PKG_NAME="$(dpkg-deb -f "${DEB_ABS}" Package 2>/dev/null || echo coperceive)"
+          sudo dpkg -r "${PKG_NAME}" || sudo apt-get remove -y "${PKG_NAME}"
+      - name: Locate Built Linux Packages
+        run: |
+          DEB_FILE=$(find src-tauri/target -iname "*.deb" -type f | head -n 1)
+          APPIMAGE_FILE=$(find src-tauri/target -iname "*.AppImage" -type f | head -n 1)
+          echo "DEB_FILE=${DEB_FILE}" >> $GITHUB_ENV
+          echo "APPIMAGE_FILE=${APPIMAGE_FILE}" >> $GITHUB_ENV
+          echo "Located Debian package at: ${DEB_FILE}"
+          echo "Located AppImage package at: ${APPIMAGE_FILE}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coperceive-desktop-linux-deb
+          path: ${{ env.DEB_FILE }}
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coperceive-desktop-linux-appimage
+          path: ${{ env.APPIMAGE_FILE }}
+          if-no-files-found: error
       - name: Upload Linux screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -342,15 +403,99 @@ jobs:
         with:
           workspaces: src-tauri
           shared-key: "windows-tauri"
+      - name: Cache bundled Python runtime and pip downloads
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~\AppData\Local\coperceive-desktop
+            ~\AppData\Local\pip\Cache
+          key: bundled-python-${{ runner.os }}-${{ hashFiles('scripts/desktop/requirements-windows-x86_64.lock') }}
+          restore-keys: |
+            bundled-python-${{ runner.os }}-
+      - name: Bundle Python Standalone Runtime
+        shell: bash
+        run: python scripts/desktop/bundle_python.py --target x86_64-pc-windows-msvc --skip-web-build
       - name: Run Rust unit tests
         run: cargo test --lib --verbose --color=never
         working-directory: src-tauri
-      - name: Build coperceive-desktop binary
-        run: cargo build --bin coperceive-desktop
-        working-directory: src-tauri
-      - name: Run Windows Smoke Test
+      - name: Sync Desktop Bundle Version
+        shell: bash
+        run: bash scripts/desktop/sync_version.sh
+      - name: Build Tauri Desktop (NSIS installer)
+        shell: bash
+        run: |
+          cd web && npm run tauri build -- --bundles nsis --verbose
+      - name: Verify packaged app ships the viewer bundle
         shell: pwsh
-        run: pwsh scripts/desktop/smoke_test_windows.ps1 src-tauri\target\debug\coperceive-desktop.exe
+        run: |
+          $installer = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*.exe | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "No NSIS installer found"
+            exit 1
+          }
+          $extractDir = Join-Path $env:RUNNER_TEMP "nsis-extract"
+          7z x $installer.FullName -o"$extractDir"
+          python scripts/check_bundle_assets.py --app $extractDir
+      - name: Run Windows Smoke Test on Installed NSIS Package
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*.exe | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "No NSIS installer found"
+            exit 1
+          }
+          Write-Host "Installing NSIS package silently: $($installer.FullName)"
+          Start-Process -FilePath $installer.FullName -ArgumentList "/S" -Wait
+          Start-Sleep -Seconds 3
+
+          $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "coperceive-desktop.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $installedExe) {
+            $installedExe = Get-ChildItem -Path $env:LOCALAPPDATA -Filter "Coperceive.exe" -Recurse -ErrorAction SilentlyContinue | Select-Object -First 1
+          }
+          if (-not $installedExe) {
+            Write-Host "Falling back to search across LOCALAPPDATA and PROGRAMFILES..."
+            $installedExe = Get-ChildItem -Path @($env:LOCALAPPDATA, $env:ProgramFiles) -Filter "*coperceive*.exe" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Name -notmatch "uninstall" } | Select-Object -First 1
+          }
+          if (-not $installedExe) {
+            Write-Error "Could not locate installed coperceive executable after silent install"
+            exit 1
+          }
+          Write-Host "Found installed application at $($installedExe.FullName)"
+          $installDir = $installedExe.DirectoryName
+
+          # Run smoke test against the INSTALLED executable
+          pwsh scripts/desktop/smoke_test_windows.ps1 $installedExe.FullName
+
+          # Silent uninstall
+          $uninstaller = Get-ChildItem -Path $installDir -Filter "*uninstall*.exe" | Select-Object -First 1
+          if (-not $uninstaller) {
+            Write-Error "Could not find uninstaller in $installDir"
+            exit 1
+          }
+          Write-Host "Uninstalling silently: $($uninstaller.FullName)"
+          Start-Process -FilePath $uninstaller.FullName -ArgumentList "/S _?=$installDir" -Wait
+          Start-Sleep -Seconds 3
+
+          if (Test-Path $installedExe.FullName) {
+            Write-Error "Installed exe $($installedExe.FullName) still exists after silent uninstall!"
+            exit 1
+          }
+          Write-Host "Uninstall verified: $installDir is removed."
+      - name: Locate Built Windows Installer
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem -Path src-tauri\target\release\bundle\nsis\*.exe | Select-Object -First 1
+          if (-not $installer) {
+            Write-Error "No NSIS installer found"
+            exit 1
+          }
+          Write-Host "Located NSIS installer at $($installer.FullName)"
+          "INSTALLER_PATH=$($installer.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coperceive-desktop-windows-x86_64
+          path: ${{ env.INSTALLER_PATH }}
+          if-no-files-found: error
       - name: Upload Windows screenshots
         if: always()
         uses: actions/upload-artifact@v4
@@ -381,7 +526,7 @@ jobs:
         working-directory: web
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin
+          targets: aarch64-apple-darwin, x86_64-apple-darwin
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
@@ -418,7 +563,7 @@ jobs:
         # fails with "Resource busy" on the macOS runners (runner-images#7522,
         # XProtectBehaviorService locking a freshly created image). The script
         # only retries that exact signature and logs hdiutil state each attempt.
-        run: bash scripts/desktop/build_dmg.sh
+        run: bash scripts/desktop/build_dmg.sh aarch64-apple-darwin
       - name: Report Tauri Build Failure
         if: failure()
         run: |
@@ -526,14 +671,17 @@ jobs:
             done || true
           fi
 
-      - name: Locate and Measure Single Built DMG
+      - name: Locate and Measure arm64 DMG
         run: |
-          DMG_FILE=$(find src-tauri/target -iname "*.dmg" -type f 2>/dev/null | head -n 1)
+          DMG_FILE=$(find src-tauri/target -iname "*aarch64*.dmg" -o -iname "*arm64*.dmg" 2>/dev/null | head -n 1)
+          if [ -z "${DMG_FILE}" ]; then
+            DMG_FILE=$(find src-tauri/target -iname "*.dmg" -type f 2>/dev/null | head -n 1)
+          fi
           if [ -z "${DMG_FILE}" ]; then
             DMG_FILE=$(find . -iname "*.dmg" -type f 2>/dev/null | head -n 1)
           fi
           if [ -z "${DMG_FILE}" ] || [ ! -f "${DMG_FILE}" ]; then
-            echo "Error: Could not locate built .dmg file!" >&2
+            echo "Error: Could not locate built arm64 .dmg file!" >&2
             exit 1
           fi
           DMG_ABS="$(cd "$(dirname "${DMG_FILE}")" && pwd)/$(basename "${DMG_FILE}")"
@@ -542,15 +690,65 @@ jobs:
           echo "DMG_PATH=${DMG_ABS}" >> $GITHUB_ENV
           echo "DMG_BYTES=${DMG_BYTES}" >> $GITHUB_ENV
           echo "DMG_HUMAN=${DMG_HUMAN}" >> $GITHUB_ENV
-          echo "Located single DMG at: ${DMG_ABS} (${DMG_HUMAN}, ${DMG_BYTES} bytes)"
-          echo "::notice title=DMG::$(basename "${DMG_ABS}") ${DMG_BYTES} bytes"
-          echo "### Desktop DMG Artifact" >> $GITHUB_STEP_SUMMARY
+          echo "Located arm64 DMG at: ${DMG_ABS} (${DMG_HUMAN}, ${DMG_BYTES} bytes)"
+          echo "::notice title=DMG-arm64::$(basename "${DMG_ABS}") ${DMG_BYTES} bytes"
+          echo "### Desktop macOS (arm64) DMG Artifact" >> $GITHUB_STEP_SUMMARY
           echo "- **File**: \`$(basename "${DMG_ABS}")\`" >> $GITHUB_STEP_SUMMARY
           echo "- **Size**: ${DMG_HUMAN} (${DMG_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
       - uses: actions/upload-artifact@v4
         with:
           name: coperceive-desktop-macos-arm64
           path: ${{ env.DMG_PATH }}
+          if-no-files-found: error
+      - name: Bundle Python Standalone Runtime for Intel Mac
+        run: python3 scripts/desktop/bundle_python.py --target x86_64-apple-darwin --skip-web-build
+      - name: Build Tauri Desktop Intel DMG
+        run: bash scripts/desktop/build_dmg.sh x86_64-apple-darwin
+      - name: Locate and Measure Intel DMG
+        run: |
+          DMG_INTEL=$(find src-tauri/target -iname "*x64*.dmg" -o -iname "*x86_64*.dmg" 2>/dev/null | head -n 1)
+          if [ -z "${DMG_INTEL}" ]; then
+            DMG_INTEL=$(find src-tauri/target/x86_64-apple-darwin -iname "*.dmg" -type f 2>/dev/null | head -n 1)
+          fi
+          if [ -z "${DMG_INTEL}" ] || [ ! -f "${DMG_INTEL}" ]; then
+            echo "Error: Could not locate built Intel .dmg file!" >&2
+            exit 1
+          fi
+          DMG_INTEL_ABS="$(cd "$(dirname "${DMG_INTEL}")" && pwd)/$(basename "${DMG_INTEL}")"
+          DMG_INTEL_BYTES=$(stat -f %z "${DMG_INTEL_ABS}" 2>/dev/null || wc -c < "${DMG_INTEL_ABS}")
+          DMG_INTEL_HUMAN=$(ls -lh "${DMG_INTEL_ABS}" | awk '{print $5}')
+          echo "DMG_INTEL_PATH=${DMG_INTEL_ABS}" >> $GITHUB_ENV
+          echo "Located Intel DMG at: ${DMG_INTEL_ABS} (${DMG_INTEL_HUMAN}, ${DMG_INTEL_BYTES} bytes)"
+          echo "::notice title=DMG-Intel::$(basename "${DMG_INTEL_ABS}") ${DMG_INTEL_BYTES} bytes"
+          echo "### Desktop macOS (Intel x86_64) DMG Artifact" >> $GITHUB_STEP_SUMMARY
+          echo "- **File**: \`$(basename "${DMG_INTEL_ABS}")\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Size**: ${DMG_INTEL_HUMAN} (${DMG_INTEL_BYTES} bytes)" >> $GITHUB_STEP_SUMMARY
+      - name: Verify Intel Mac App Bundle Under Rosetta
+        run: |
+          if arch -x86_64 /usr/bin/true 2>/dev/null; then
+            echo "Rosetta 2 is available on arm64 runner: executing Intel x86_64 verification"
+            APP_INTEL="$(find src-tauri/target/x86_64-apple-darwin -type d -name Coperceive.app | head -n 1)"
+            if [ -z "${APP_INTEL}" ]; then
+              APP_INTEL="$(find src-tauri/target -type d -name Coperceive.app | head -n 1)"
+            fi
+            echo "Intel App path: ${APP_INTEL}"
+            PY_INTEL="${APP_INTEL}/Contents/Resources/resources/python/bin/python3"
+            if [ ! -x "${PY_INTEL}" ]; then
+              echo "Error: Bundled Intel python3 not found or not executable at ${PY_INTEL}" >&2
+              exit 1
+            fi
+            echo "Testing bundled Intel python3 under Rosetta:"
+            arch -x86_64 "${PY_INTEL}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
+            echo "Running smoke test on Intel .app under Rosetta:"
+            arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
+            echo "::notice title=Rosetta-Test::Intel Mac build verified under Rosetta 2"
+          else
+            echo "::notice title=Rosetta-Test::Rosetta 2 is not available on this runner (arch -x86_64 returned non-zero)"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: coperceive-desktop-macos-x86_64
+          path: ${{ env.DMG_INTEL_PATH }}
           if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()

@@ -150,7 +150,7 @@ def test_the_update_card_sits_above_settings_and_installs(
         # No top banner any more.
         assert page.locator("[role=banner][aria-label='Update ready']").count() == 0
         # At the bottom of the sidebar, just above Settings.
-        settings = page.locator(".c-sidebar button[aria-label='Settings (⌘,)']")
+        settings = page.locator(".c-sidebar button[aria-label^='Settings (']")
         card_box, settings_box = card.bounding_box(), settings.bounding_box()
         assert card_box and settings_box
         assert card_box["y"] + card_box["height"] <= settings_box["y"] + 0.5, (

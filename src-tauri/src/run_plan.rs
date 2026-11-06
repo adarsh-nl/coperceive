@@ -3304,6 +3304,10 @@ mod tests {
     fn real_fake_ssh_builds_and_saves_a_plan_without_submitting() {
         use crate::ssh::SshTarget;
 
+        let _turn = crate::test_seams::FAKE_SSH_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+
         struct EnvGuard;
         impl Drop for EnvGuard {
             fn drop(&mut self) {

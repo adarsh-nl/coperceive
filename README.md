@@ -1,4 +1,9 @@
-# Coperceive
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-outlined.svg">
+    <img alt="Coperceive" src="assets/brand/wordmark-light-outlined.svg" width="320">
+  </picture>
+</p>
 
 A fast, native desktop application and multi-agent perception data library for collaborative autonomous driving research.
 
@@ -11,7 +16,9 @@ A fast, native desktop application and multi-agent perception data library for c
 Get the latest release for your platform from [GitHub Releases](https://github.com/adarsh-nl/coperceive/releases/latest):
 
 - **macOS Apple Silicon (arm64 `.dmg`)**: Available now in [v0.1.0](https://github.com/adarsh-nl/coperceive/releases/tag/v0.1.0).
-- **Windows & Linux**: Coming in **v0.1.1** (build foundation merged).
+- **Windows, Linux & Intel Mac**: Coming in **v0.1.1** (packaged installers and bundled Python runtimes merged).
+
+*Note for Windows users:* Unsigned release builds trigger Windows SmartScreen on first run. Click **More info** → **Run anyway** to launch the installer.
 
 ---
 
@@ -41,6 +48,8 @@ Get the latest release for your platform from [GitHub Releases](https://github.c
 ## Release Notes
 
 ### v0.1.1 (in development)
+- **Installers across 3 operating systems**: Windows NSIS installer (`.exe`) with silent install/uninstall, Linux Debian package (`.deb`) and AppImage, and macOS Apple Silicon (`arm64`) and Intel (`x86_64`) disk images (`.dmg`) with bundled standalone Python runtime (#134). The Intel Mac build is cross-compiled and tested under Rosetta 2 emulation in CI, but remains untested on bare-metal Intel Mac hardware until verified.
+- **V2V4Real 10 Hz playback & optional cameras**: V2V4Real plays at 10 Hz (0.1 s per frame) and camera records are optional per manifest for LiDAR-only dataset validation (#132).
 - **Windows & Linux platform behaviour**: Native window decorations on Windows and Linux, application menu with `Ctrl` shortcuts, dynamic reveal in file manager ("Show in Explorer", "Show in folder", "Show in Finder"), Windows OpenSSH support (`ControlMaster=no`), pause/resume for download jobs on Windows, strict ACL checks on credentials and state files, and pure Rust zip diagnostics export (#129).
 - **Security & dependency updates**: Upgraded to Pillow 13.0.0 in `uv.lock` and tokio 1.54.1, restricted image decoding to PNG/JPEG, and dropped Python 3.10 support (minimum Python is 3.11) following Pillow 13's deprecation (#130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
 - **Dataset adapters & detection**: Built-in adapters and directory detection for real-world V2V4Real (LiDAR-only test split, box angles in degrees `[roll, yaw, pitch]`, #126, #131) and DAIR-V2X-C cooperative formats (#126).

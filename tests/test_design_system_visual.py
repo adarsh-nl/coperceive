@@ -761,7 +761,7 @@ def test_visual_revamp_screens_and_traffic_lights_no_overlap(
                         page.wait_for_selector("text=Scene · start time", timeout=5000)
                         page.wait_for_timeout(200)
                     elif screen == "settings":
-                        page.locator("button[aria-label='Settings (⌘,)']").click()
+                        page.locator("button[aria-label^='Settings (']").click()
                         page.wait_for_selector(
                             "div[role=dialog][aria-label='Settings']", timeout=5000
                         )
