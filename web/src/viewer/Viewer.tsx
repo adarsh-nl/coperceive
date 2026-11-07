@@ -4469,7 +4469,11 @@ export default function Viewer({
       {isDesktop && !datasetAbout && (
         <div className="dataset-badge" title={dataRoot || undefined}>
           <span className="dataset-folder-icon" aria-hidden="true">📁</span>
-          <span className="dataset-name">{dataBasename || "Dataset"}</span>
+          <span className="dataset-name">
+            {sceneId === "demo-junction" || dataBasename === "demo-junction" || dataBasename === "Demo (synthetic)"
+              ? "Demo (synthetic)"
+              : (dataBasename || "Dataset")}
+          </span>
           <button
             type="button"
             className="btn-open-dataset"

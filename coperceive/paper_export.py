@@ -43,7 +43,7 @@ CARD_ID = re.compile(r"^card-[a-f0-9]{12}$")
 # Alphanumeric keys. Hyphens and spaces are stripped before the check, so
 # "V2X-Set" and "v2xset" are the same refusal.
 FORBIDDEN_DATASETS = frozenset({"opv2v", "v2xset", "v2v4real"})
-DEFAULT_ALLOW = frozenset({"fixture", "synthetic"})
+DEFAULT_ALLOW = frozenset({"fixture", "synthetic", "demosynthetic"})
 OPT_IN_DATASETS = frozenset({"griffin", "carla"})
 
 METRIC_NAMES = ("precision", "recall", "ap", "recovered", "lost_by_fusion")
@@ -216,8 +216,17 @@ def resolve_dataset_id(scene_dir: Path) -> str:
     if "fixture" in note or "synthetic" in note:
         return "fixture"
     scene_id = document.get("scene_id")
-    if isinstance(scene_id, str) and scene_id.lower().startswith("synth"):
-        return "fixture"
+    if isinstance(scene_id, str):
+        resolved_dir = scene_dir.resolve()
+        if (
+            scene_id == "demo-junction"
+            and resolved_dir.name == "demo-junction"
+            and resolved_dir.parent.name == "scenes"
+            and resolved_dir.parent.parent.name == "demo"
+        ):
+            return "Demo (synthetic)"
+        if scene_id.lower().startswith("synth"):
+            return "fixture"
     return "unknown"
 
 

@@ -98,6 +98,11 @@ pub fn get_log_dir() -> PathBuf {
 }
 
 pub fn default_library_root() -> PathBuf {
+    if let Some(dir) = std::env::var_os("COPERCEIVE_STATE_DIR") {
+        if !dir.is_empty() {
+            return PathBuf::from(dir).join("coperceive-data");
+        }
+    }
     if let Ok(home) = std::env::var("HOME") {
         PathBuf::from(home).join("coperceive-data")
     } else {
@@ -107,7 +112,9 @@ pub fn default_library_root() -> PathBuf {
 
 pub fn get_state_file_path() -> PathBuf {
     if let Some(dir) = std::env::var_os("COPERCEIVE_STATE_DIR") {
-        return PathBuf::from(dir).join("state.json");
+        if !dir.is_empty() {
+            return PathBuf::from(dir).join("state.json");
+        }
     }
     if let Some(home) = std::env::var_os("HOME") {
         return PathBuf::from(home)

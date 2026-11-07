@@ -290,10 +290,18 @@ fn open_viewer_window(
         return Ok(());
     }
 
-    let basename = Path::new(data_root)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .unwrap_or(data_root);
+    let is_demo = coperceive_desktop::demo::is_demo_path(Path::new(data_root));
+    let (basename, window_title) = if is_demo {
+        ("Demo (synthetic)".to_string(), "coperceive — Demo (synthetic) — demo-junction".to_string())
+    } else {
+        let base = Path::new(data_root)
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or(data_root)
+            .to_string();
+        let title = format!("coperceive — {base}");
+        (base, title)
+    };
 
     let escaped_origin = origin.replace('\\', "\\\\").replace('"', "\\\"");
     let escaped_token = token.replace('\\', "\\\\").replace('"', "\\\"");
@@ -353,7 +361,7 @@ fn open_viewer_window(
         "viewer",
         tauri::WebviewUrl::External(parsed_url),
     )
-    .title(format!("coperceive — {}", basename))
+    .title(&window_title)
     .min_inner_size(900.0, 600.0)
     .resizable(true)
     .initialization_script(&init_script);
@@ -486,11 +494,18 @@ async fn switch_data_root(
     };
 
     let python_bin = resolve_python_binary(app);
-    let mut new_session = SidecarSession::spawn_with_maps(
+    let mut extra_args = Vec::new();
+    if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&new_path) {
+        extra_args.push("--predictions".to_string());
+        extra_args.push(pred_dir.to_string_lossy().into_owned());
+    }
+
+    let mut new_session = SidecarSession::spawn_with_args(
         &python_bin,
         &new_path,
         library_maps_root().as_deref(),
         current_viewer_origin.as_deref(),
+        &extra_args,
     )
         .map_err(|e| format!("Failed to spawn new sidecar: {}", e))?;
 
@@ -786,7 +801,12 @@ fn start_desktop_controller(app_handle: tauri::AppHandle, app_state: Arc<AppStat
     cfg.viewer_titler = Some(Arc::new(move |scene: String| {
         use tauri::Manager;
         if let Some(viewer) = handle_title.get_webview_window("viewer") {
-            let _ = viewer.set_title(&format!("coperceive — {scene}"));
+            let title = if scene == "demo-junction" {
+                "coperceive — Demo (synthetic) — demo-junction".to_string()
+            } else {
+                format!("coperceive — {scene}")
+            };
+            let _ = viewer.set_title(&title);
         }
     }));
     let handle_prepare = app_handle.clone();
@@ -1138,6 +1158,8 @@ fn build_app_menu(
             .separator();
     }
     let help_submenu = help_builder
+        .item(&MenuItem::with_id(app, "open_demo", "Open the Demo", true, None::<&str>)?)
+        .separator()
         .item(&MenuItem::with_id(app, "check_updates", "Check for Updates…", true, None::<&str>)?)
         .separator()
         .item(&MenuItem::with_id(app, "help_logs", "Show Logs", true, None::<&str>)?)
@@ -1220,8 +1242,14 @@ async fn start_local_session(
     }
 
     let python_bin = resolve_python_binary(app);
+    let mut extra_args = Vec::new();
+    if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&root_path) {
+        extra_args.push("--predictions".to_string());
+        extra_args.push(pred_dir.to_string_lossy().into_owned());
+    }
+
     let mut session =
-        SidecarSession::spawn_with_maps(&python_bin, &root_path, library_maps_root().as_deref(), None)
+        SidecarSession::spawn_with_args(&python_bin, &root_path, library_maps_root().as_deref(), None, &extra_args)
         .map_err(|e| format!("Failed to spawn local sidecar: {}", e))?;
 
     let origin = format!("http://127.0.0.1:{}", session.port);
@@ -1309,6 +1337,29 @@ async fn start_local_session(
     {
         let mut lock = state.current_root.lock().map_err(|e| e.to_string())?;
         *lock = Some(data_root);
+    }
+
+    if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
+        let log_path = {
+            let lock = state.sidecar.lock().ok();
+            lock.and_then(|s| s.as_ref().map(|sess| sess.log_path.clone()))
+                .unwrap_or_default()
+        };
+        let ctrl_secret = state
+            .ctrl_secret
+            .lock()
+            .ok()
+            .and_then(|s| s.clone())
+            .unwrap_or_default();
+        let content = format!(
+            "{}\n{}\n{}\n{}\n{}\n",
+            payload.origin,
+            payload.token,
+            log_path.display(),
+            ctrl_port,
+            ctrl_secret,
+        );
+        let _ = std::fs::write(&marker_path, content);
     }
 
     Ok(payload)
@@ -1735,9 +1786,24 @@ fn get_library_scenes(
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     let cache = p.validation_cache.unwrap_or_default();
-    let scenes = coperceive_desktop::library::scan_library_scenes_with_cache(Path::new(&root), &cache);
+    let mut scenes = coperceive_desktop::library::scan_library_scenes_with_cache(Path::new(&root), &cache);
+    if coperceive_desktop::demo::is_demo_valid() {
+        if let Ok(demo_scene) = coperceive_desktop::demo::demo_scene_path() {
+            if let Some(mut info) = coperceive_desktop::library::parse_scene_info_with_cache(
+                &demo_scene,
+                &cache,
+                demo_scene.parent().unwrap_or(Path::new("")),
+            ) {
+                info.dataset = "Demo (synthetic)".to_string();
+                info.is_valid = Some(true);
+                scenes.push(info);
+            }
+        }
+    }
+    scenes.sort_by(|a, b| a.scene_id.cmp(&b.scene_id));
     let pending = scenes
         .iter()
+        .filter(|scene| !coperceive_desktop::demo::is_demo_path(Path::new(&scene.path)))
         .map(|scene| (scene.path.clone(), scene.is_valid.is_some()))
         .collect();
     spawn_library_validation(app, pending);
@@ -1745,9 +1811,60 @@ fn get_library_scenes(
 }
 
 #[tauri::command]
-fn delete_library_scene(scene_path: String) -> Result<(), String> {
-    coperceive_desktop::library::delete_scene_to_trash(Path::new(&scene_path))
-        .map_err(|e| format!("Failed to delete scene: {e}"))
+async fn delete_library_scene(scene_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&scene_path);
+        if coperceive_desktop::demo::is_demo_path(path) {
+            return coperceive_desktop::demo::delete_demo();
+        }
+        coperceive_desktop::library::delete_scene_to_trash(path)
+            .map_err(|e| format!("Failed to delete scene: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Task execution failed: {e}"))?
+}
+
+#[tauri::command]
+async fn ensure_demo_scene(app: tauri::AppHandle) -> Result<coperceive_desktop::demo::DemoOutcome, String> {
+    use tauri::Emitter;
+    let python = resolve_python_binary(&app);
+    let app_for_progress = app.clone();
+    let outcome = tauri::async_runtime::spawn_blocking(move || {
+        coperceive_desktop::demo::ensure_demo_with_progress(&python, |stage, elapsed_seconds| {
+            let _ = app_for_progress.emit(
+                "coperceive-demo-progress",
+                serde_json::json!({
+                    "stage": stage,
+                    "elapsed_seconds": elapsed_seconds,
+                }),
+            );
+        })
+    })
+    .await
+    .map_err(|e| format!("Task execution failed: {e}"))??;
+
+    println!(
+        "COPERCEIVE_DEMO_OUTCOME: python={} elapsed_s={:.2} bytes={} cached={} path={}",
+        outcome.python_path,
+        outcome.elapsed_seconds,
+        outcome.bytes,
+        outcome.cached,
+        outcome.path
+    );
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    Ok(outcome)
+}
+
+#[tauri::command]
+fn cancel_demo_scene() -> Result<(), String> {
+    coperceive_desktop::demo::cancel_demo()
+}
+
+#[tauri::command]
+fn dismiss_welcome_card() -> Result<(), String> {
+    let mut p = state::load_state();
+    p.welcome_card_dismissed = true;
+    state::save_state(&p)
 }
 
 #[tauri::command]
@@ -3642,6 +3759,9 @@ fn main() {
             set_library_root,
             move_library_root,
             get_library_scenes,
+            ensure_demo_scene,
+            cancel_demo_scene,
+            dismiss_welcome_card,
             download_town_map,
             list_carla_maps,
             install_carla_map,
@@ -4388,10 +4508,30 @@ fn main() {
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.show();
                     }
+                    if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
+                        let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+                        let ctrl_secret = state
+                            .ctrl_secret
+                            .lock()
+                            .ok()
+                            .and_then(|s| s.clone())
+                            .unwrap_or_default();
+                        let _ = std::fs::write(&marker_path, format!("\n\n\n{}\n{}\n", ctrl_port, ctrl_secret));
+                    }
                 }
             } else {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.show();
+                }
+                if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
+                    let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+                    let ctrl_secret = state
+                        .ctrl_secret
+                        .lock()
+                        .ok()
+                        .and_then(|s| s.clone())
+                        .unwrap_or_default();
+                    let _ = std::fs::write(&marker_path, format!("\n\n\n{}\n{}\n", ctrl_port, ctrl_secret));
                 }
             }
 
@@ -4584,6 +4724,15 @@ fn main() {
                 "help_share_diagnostics" => {
                     if let Some(viewer) = app.get_webview_window("viewer") {
                         let _ = viewer.eval("window.dispatchEvent(new CustomEvent('coperceive-open-diagnostics'))");
+                    }
+                }
+                "open_demo" => {
+                    use tauri::Emitter;
+                    if let Some(main) = app.get_webview_window("main") {
+                        let _ = main.unminimize();
+                        let _ = main.show();
+                        let _ = main.set_focus();
+                        let _ = main.emit("coperceive-open-demo", ());
                     }
                 }
                 "help_diagnostics" => {
