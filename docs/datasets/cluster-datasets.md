@@ -363,11 +363,16 @@ read-only streamer on the login node:
   exactly: it is answered one at a time, in request order, so raw legacy
   consumers that read one reply per request (the cluster-dataset app e2e) keep
   working byte for byte. A slot is held until the writer has written that
-  request's reply, so on a slow link finished replies are bounded by the same
-  32-request cap and the reader is backpressured instead of buffering sweeps
-  in memory on the (shared) login node. A second concurrent protocol-2 request
-  reusing an id that is still in flight is refused with a clear error, so a
-  `cancel` never names two requests. The SSH options are the
+  request's reply — for protocol-1 replies too — so on a slow link finished
+  replies are bounded by the same 32-request cap and the reader is backpressured
+  instead of buffering sweeps in memory on the (shared) login node. If stdout
+  breaks (a dropped SSH session), the streamer releases the queued slots and
+  exits instead of blocking forever on a slot nobody would free, so there is no
+  orphaned streamer left behind. A second concurrent protocol-2 request reusing
+  an id that is still in flight is refused with a `duplicate_of` error whose
+  `id` is `null` (so a client cannot mistake it for the original request's
+  reply), and an id is retired only after its reply is written, so it cannot be
+  reused in the gap. The SSH options are the
   app's usual ones (`BatchMode`, `ControlMaster=auto`, `ControlPersist`). Every
   remote argument is shell-quoted; file paths only travel on stdin, never
   through a shell.

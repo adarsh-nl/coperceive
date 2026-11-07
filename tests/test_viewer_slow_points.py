@@ -148,11 +148,10 @@ def test_points_and_boxes_stay_on_the_same_sample_while_playing_over_a_slow_link
     # what makes the link slow enough to hold on a sample.
     page.goto(f"{slow_url}/#/viewer", wait_until="domcontentloaded")
     session.wait_status(SCENE)
-    # The first sweep competes with the scheduler's initial prefetch on the
-    # serialized 600 ms link; allow for that rather than a fixed 10 s.
-    session.wait_for(
-        lambda: "64 points" in session.status(), "the first sweep to draw", timeout_s=30.0
-    )
+    # The scheduler asks for the current sweep before prefetching ahead (see
+    # streamBuffer.test.ts), so on the serialized 600 ms link the first draw
+    # waits a little over one sweep; the default 10 s is ample.
+    session.wait_for(lambda: "64 points" in session.status(), "the first sweep to draw")
     page.locator("button[aria-label=Loop]").click()  # play once, stop on the last sample
 
     # The slow link (~1.7 sweeps/s against 10 samples/s playback) must run the
@@ -232,11 +231,10 @@ def test_the_buffer_bar_fills_and_playback_buffers_then_resumes(
     # background, so the network stays busy for as long as the prefetch runs.
     page.goto(f"{slow_url}/#/viewer", wait_until="domcontentloaded")
     session.wait_status(SCENE)
-    # The first sweep competes with the scheduler's initial prefetch on the
-    # serialized 600 ms link; allow for that rather than a fixed 10 s.
-    session.wait_for(
-        lambda: "64 points" in session.status(), "the first sweep to draw", timeout_s=30.0
-    )
+    # The scheduler asks for the current sweep before prefetching ahead (see
+    # streamBuffer.test.ts), so on the serialized 600 ms link the first draw
+    # waits a little over one sweep; the default 10 s is ample.
+    session.wait_for(lambda: "64 points" in session.status(), "the first sweep to draw")
 
     # The stats line is on through the initial state, and the buffer bar is part
     # of the timeline track (it starts empty and fills as sweeps arrive).

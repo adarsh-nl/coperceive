@@ -99,6 +99,39 @@ def _parse_replies(data: bytes) -> list[tuple[dict[str, object], bytes]]:
     return replies
 
 
+def _complete_replies(data: bytes) -> list[tuple[dict[str, object], bytes]]:
+    """Parse the complete replies at the start of a still-growing byte buffer."""
+    replies: list[tuple[dict[str, object], bytes]] = []
+    offset = 0
+    while offset < len(data):
+        end = data.find(b"\n", offset)
+        if end < 0:
+            break
+        header = cast(dict[str, object], json.loads(data[offset:end]))
+        size = int(cast(int, header.get("size") or 0))
+        start = end + 1
+        if start + size > len(data):
+            break
+        replies.append((header, data[start : start + size]))
+        offset = start + size
+    return replies
+
+
+def _written_replies(
+    stdout: _BlockingStdout, count: int, timeout: float = 10.0
+) -> list[tuple[dict[str, object], bytes]]:
+    data = b""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        with stdout.lock:
+            data = bytes(stdout.written)
+        replies = _complete_replies(data)
+        if len(replies) >= count:
+            return replies
+        time.sleep(0.01)
+    raise AssertionError(f"only {len(_complete_replies(data))} of {count} replies were written")
+
+
 class PipeServer:
     """A real ``StreamServer`` in a thread, requests and replies as OS pipes."""
 
@@ -296,6 +329,105 @@ def test_slow_writer_applies_backpressure_instead_of_buffering_replies(
         server.close()
 
 
+class _FailingStdout:
+    """A stdout whose writes always fail, for the writer-failure path."""
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+
+    def write(self, data: bytes) -> int:
+        raise self.error
+
+    def flush(self) -> None:
+        return
+
+
+@pytest.mark.parametrize(
+    "error",
+    [BrokenPipeError("broken pipe"), ValueError("header cannot be serialized")],
+    ids=["oserror", "not-an-oserror"],
+)
+def test_broken_stdout_stops_the_streamer_without_hanging(
+    small_root: Path, error: Exception
+) -> None:
+    """A dead writer must not leave the reader blocked on a slot nobody frees.
+
+    This was the reviewer's orphaned-streamer case: a fake stdout that raises,
+    nine protocol-2 reads, then stdin closed. The server used to keep every queued
+    reply's slot, so the read loop blocked in ``_slots.acquire()`` forever and
+    ``run()`` never returned.
+    """
+    (small_root / "big.bin").write_bytes(b"x" * 4096)
+    server = PipeServer(small_root, stdout=_FailingStdout(error), workers=2, max_queued=3)
+    for request_id in range(1, 10):
+        server.send({"id": request_id, "op": "read", "path": "big.bin", "protocol": 2})
+    started = time.monotonic()
+    server.close(timeout=5.0)  # closes stdin; must not block on a held slot
+    assert time.monotonic() - started < 5.0
+
+
+def test_legacy_replies_are_backpressured_too(small_root: Path) -> None:
+    """Protocol-1 replies hold a slot as well, so they cannot queue unbounded."""
+    (small_root / "big.bin").write_bytes(b"x" * 4096)
+    stdout = _BlockingStdout()
+    max_queued = 3
+    server = PipeServer(small_root, stdout=stdout, workers=2, max_queued=max_queued)
+    try:
+        for request_id in range(1, max_queued + 4):
+            server.send({"id": request_id, "op": "read", "path": "big.bin"})
+        assert stdout.blocked.wait(timeout=20)
+        requested = 0
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline:
+            requested = int(cast(int, server.server.counters.snapshot()["requests"]))
+            if requested >= max_queued + 1:
+                break
+            time.sleep(0.01)
+        assert requested == max_queued + 1, requested
+        deadline = time.monotonic() + 5
+        while server.server._replies.qsize() == 0 and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert 0 < server.server._replies.qsize() <= max_queued
+        time.sleep(0.2)
+        assert server.server._replies.qsize() <= max_queued
+        assert int(cast(int, server.server.counters.snapshot()["requests"])) == requested
+        stdout.gate.set()
+        server.close()
+        replies = _parse_replies(bytes(stdout.written))
+        assert len(replies) == max_queued + 3, [reply[0].get("id") for reply in replies]
+        assert [header["id"] for header, _ in replies] == list(range(1, max_queued + 4))
+        assert all(header["ok"] for header, _ in replies), replies
+        assert all(len(payload) == 4096 for _, payload in replies)
+    finally:
+        stdout.gate.set()
+        server.close()
+
+
+def test_duplicate_id_stays_refused_until_the_reply_is_written(small_root: Path) -> None:
+    """An id may not be reused in the gap between the read and the write."""
+    stdout = _BlockingStdout()
+    server = PipeServer(small_root, stdout=stdout, workers=2, max_queued=3)
+    try:
+        server.send({"id": 1, "op": "read", "path": "a.bin", "protocol": 2})
+        assert stdout.blocked.wait(timeout=20)  # the reply is queued, not written
+        server.send({"id": 1, "op": "read", "path": "a.bin", "protocol": 2})
+        time.sleep(0.2)  # let the read loop process the duplicate while the writer is stuck
+        stdout.gate.set()
+        replies = _written_replies(stdout, 2)
+        (first, first_payload), (refusal, refusal_payload) = replies[:2]
+        assert (first["ok"], first["id"], first_payload) == (True, 1, b"abcdef")
+        assert refusal["ok"] is False and refusal["id"] is None
+        assert refusal["duplicate_of"] == 1 and refusal_payload == b""
+        # Once the reply was written the id is retired and may be reused.
+        server.send({"id": 1, "op": "read", "path": "a.bin", "protocol": 2})
+        replies = _written_replies(stdout, 3)
+        again, again_payload = replies[2]
+        assert (again["ok"], again["id"], again_payload) == (True, 1, b"abcdef")
+    finally:
+        stdout.gate.set()
+        server.close()
+
+
 def test_duplicate_protocol_2_request_id_is_refused_while_in_flight(
     small_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -319,7 +451,9 @@ def test_duplicate_protocol_2_request_id_is_refused_while_in_flight(
         server.send({"id": 1, "op": "read", "path": "a.bin", "protocol": 2})
         header, payload = server.read_reply()
         assert header["ok"] is False
-        assert header["id"] == 1
+        # The refusal must not be routable as the original request's reply.
+        assert header["id"] is None
+        assert header["duplicate_of"] == 1
         assert "duplicate request id 1" in str(header["error"]), header
         assert payload == b""
         # Only the original request answers for id 1.

@@ -640,9 +640,19 @@ export function createStreamBuffer(options: {
     }
     const plan = planNow();
     const slots = maxConcurrent - requests.size;
+    // On a paused first load, the current sample is not drawable yet: queue no
+    // ahead sweeps behind it. On a narrow link (one serialized sweep at a time)
+    // that would put the first frame's own point cloud at the back of the
+    // prefetch, delaying the first paint by seconds. The current sample's task
+    // (priority 1) and its camera images (2) may start; prefetch waits until it
+    // is ready. Playing keeps the full prefetch: it is no longer a cold start.
+    const holdPrefetch = !playing && !frameReady(states.get(index));
     let used = 0;
     for (const task of plan.tasks) {
       if (used >= slots) {
+        break;
+      }
+      if (holdPrefetch && task.priority > 2) {
         break;
       }
       const started = start(task, slots - used);

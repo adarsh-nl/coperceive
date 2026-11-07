@@ -52,7 +52,7 @@ import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from queue import Queue
+from queue import Empty, Queue
 from typing import BinaryIO, cast
 
 from coperceive.remote_view.stats import DEFAULT_CAPACITY, SampleStats
@@ -65,6 +65,13 @@ MAX_QUEUED = 32
 
 class StreamError(ValueError):
     """A request the streamer refuses (outside the roots, malformed)."""
+
+
+_NO_ID = object()
+
+
+class _WriterStopped(Exception):
+    """The reply writer failed; the read loop must stop instead of waiting for slots."""
 
 
 class Roots:
@@ -238,7 +245,9 @@ class StreamServer:
     interleave. ``max_queued`` caps the accepted-but-not-yet-written requests:
     a slot is held until the writer has written that reply, so a slow link
     cannot let finished replies pile up in memory, and when the client outruns
-    the writer the read loop blocks instead of growing a queue.
+    the writer the read loop blocks instead of growing a queue. If the writer
+    fails (stdout broken, a header that cannot be serialised), the server
+    releases the queue and stops instead of waiting on slots nobody will free.
     """
 
     def __init__(
@@ -257,6 +266,10 @@ class StreamServer:
         )
         self._pool = ThreadPoolExecutor(max_workers=max(1, workers), thread_name_prefix="stream")
         self._slots = threading.Semaphore(max(1, max_queued))
+        # Set when the writer cannot write any more (broken stdout, bad header):
+        # the reader then stops instead of blocking forever on a slot that will
+        # never be released.
+        self._stopping = threading.Event()
         self._lock = threading.Lock()
         # Ids accepted but not yet answered; a cancel for one of them is honoured.
         self._outstanding: set[int] = set()
@@ -275,6 +288,8 @@ class StreamServer:
         try:
             for line in stdin:
                 self._accept(line)
+        except _WriterStopped:
+            pass
         finally:
             self._shutdown()
 
@@ -314,19 +329,41 @@ class StreamServer:
                 # client read one reply per request; raw consumers such as the
                 # cluster-dataset e2e rely on that). Concurrency and out-of-order
                 # replies are the additive protocol-2 behaviour only.
+                self._acquire_slot()
+                release = self._slots.release
                 read_started = time.perf_counter()
                 try:
                     header, payload = handle(self.roots, request)
                 except (StreamError, OSError) as exc:
                     header, payload = _error_header(exc), b""
-                self._publish(header, payload, request_id, request, queued_at, read_started)
+                self._publish(
+                    header, payload, request_id, request, queued_at, read_started, release
+                )
                 return
             key = _cancel_key(request_id)
             if key is not None:
                 with self._lock:
-                    if key in self._outstanding:
-                        raise StreamError(f"duplicate request id {key}: it is still in flight")
-            self._slots.acquire()
+                    duplicate = key in self._outstanding
+                if duplicate:
+                    # The refusal must not look like the original request's reply:
+                    # a client routes by id, so this one carries no id and names the
+                    # request it duplicates instead.
+                    refusal: dict[str, object] = {
+                        "ok": False,
+                        "error": f"duplicate request id {key}: it is still in flight",
+                        "duplicate_of": key,
+                    }
+                    self._publish(
+                        refusal,
+                        b"",
+                        request_id,
+                        request,
+                        queued_at,
+                        queued_at,
+                        header_id=None,
+                    )
+                    return
+            self._acquire_slot()
             with self._lock:
                 if key is not None:
                     self._outstanding.add(key)
@@ -339,6 +376,31 @@ class StreamServer:
             self._publish(
                 _error_header(exc), b"", request_id, {}, time.perf_counter(), time.perf_counter()
             )
+
+    def _acquire_slot(self) -> None:
+        """Take an accepted-request slot, unless the writer has stopped."""
+        while not self._stopping.is_set():
+            if self._slots.acquire(timeout=0.05):
+                return
+        raise _WriterStopped
+
+    def _retire(self, key: int | None) -> None:
+        """A reply has been written: free its slot and its id, in that order."""
+        self._slots.release()
+        if key is not None:
+            with self._lock:
+                self._outstanding.discard(key)
+
+    def _writer_failed(self) -> None:
+        """The writer cannot continue: stop accepting and release queued slots."""
+        self._stopping.set()
+        while True:
+            try:
+                item = self._replies.get_nowait()
+            except Empty:
+                return
+            if item is not None and item[2] is not None:
+                item[2]()
 
     def _cancel(self, request_id: object) -> None:
         """Cancel a queued/in-flight request: no reply of its own, unknown ids harmless."""
@@ -362,15 +424,15 @@ class StreamServer:
             self._outstanding.discard(key)
             return True
 
-    def _finish(self, key: int | None) -> bool:
-        """Retire a request; False when it was cancelled while it ran."""
+    def _take_cancelled_after_read(self, key: int | None) -> bool:
+        """True when the request was cancelled while it read; retire it, drop the reply."""
         if key is None:
-            return True
+            return False
         with self._lock:
-            self._outstanding.discard(key)
-            if key in self._cancelled:
-                self._cancelled.discard(key)
+            if key not in self._cancelled:
                 return False
+            self._cancelled.discard(key)
+            self._outstanding.discard(key)
             return True
 
     # -- workers -----------------------------------------------------------------
@@ -388,15 +450,27 @@ class StreamServer:
                 header, payload = handle(self.roots, request)
             except (StreamError, OSError) as exc:  # one bad request must not stop the rest
                 header, payload = _error_header(exc), b""
-            if not self._finish(key):
+            if self._take_cancelled_after_read(key):
                 return  # cancelled while reading: finish the read, drop the reply
-            # The slot stays held until the writer has written the bytes: a slow
-            # link must not let finished replies accumulate in memory.
-            self._publish(header, payload, request_id, request, queued_at, read_started, release)
+            # The slot and the id stay held until the writer has written the bytes:
+            # a slow link must not let finished replies accumulate in memory, and
+            # an id may not be reused while its reply is still queued.
+            self._publish(
+                header,
+                payload,
+                request_id,
+                request,
+                queued_at,
+                read_started,
+                lambda: self._retire(key),
+            )
             handed_to_writer = True
         finally:
             if not handed_to_writer:
                 release()
+                if key is not None:
+                    with self._lock:
+                        self._outstanding.discard(key)
 
     # -- replies -----------------------------------------------------------------
 
@@ -409,11 +483,12 @@ class StreamServer:
         queued_at: float,
         read_started: float,
         release: Callable[[], None] | None = None,
+        header_id: object = _NO_ID,
     ) -> None:
         now = time.perf_counter()
         queue_ms = (read_started - queued_at) * 1000.0
         read_ms = (now - read_started) * 1000.0
-        header["id"] = request_id
+        header["id"] = request_id if header_id is _NO_ID else header_id
         header.setdefault("size", len(payload))
         if wants_protocol_2(request):
             header["protocol"] = PROTOCOL
@@ -436,11 +511,13 @@ class StreamServer:
                 if payload:
                     self._stdout.write(payload)
                 self._stdout.flush()
-            except OSError:
-                return
-            finally:
+            except Exception:  # broken stdout, unserialisable header: stop, don't hang
                 if release is not None:
                     release()
+                self._writer_failed()
+                return
+            if release is not None:
+                release()
 
 
 def serve(roots: Roots, stdin: BinaryIO, stdout: BinaryIO) -> None:

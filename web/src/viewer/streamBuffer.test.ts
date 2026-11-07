@@ -303,6 +303,60 @@ test("the scheduler fills the buffer to the time target and dedupes its requests
   buffer.dispose();
 });
 
+test("a paused first load asks for the current sample before prefetching ahead", async () => {
+  // A narrow link serializes sweeps; if ahead-previews were queued first the
+  // current frame's own point cloud would wait behind them.
+  const calls: string[] = [];
+  let releaseFrame: (() => void) | null = null;
+  let releasePoints: (() => void) | null = null;
+  const source = {
+    frame: (index: number) =>
+      new Promise<FrameInfo>((resolve) => {
+        calls.push(`frame:${index}`);
+        releaseFrame = () =>
+          resolve({
+            timeUs: HZ10[index],
+            pointSensors: index === 0 ? [sensor(0)] : [],
+            cameras: [],
+          });
+      }),
+    points: (index: number) =>
+      new Promise<void>((resolve) => {
+        calls.push(`points:${index}`);
+        releasePoints = () => resolve();
+      }),
+  };
+  const buffer = createStreamBuffer({ source, maxConcurrent: 6 });
+  buffer.configure({
+    sceneId: "a",
+    epoch: 0,
+    times: HZ10,
+    targetSeconds: 1,
+    speed: 1,
+    memoryLimitBytes: 1024 ** 3,
+    cachedBytes: () => 0,
+    bytesPerFrame: 1_000_000,
+    wantsImages: false,
+  });
+  buffer.pump();
+  assert.deepEqual(calls, ["frame:0"], "only the current frame is asked while it is missing");
+  assert.ok(releaseFrame);
+  releaseFrame();
+  for (let tick = 0; tick < 100 && calls.length < 2; tick += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.deepEqual(calls, ["frame:0", "points:0"], "no ahead sweep is queued yet");
+  assert.ok(releasePoints);
+  releasePoints();
+  for (let tick = 0; tick < 100 && calls.length < 3; tick += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(calls[0], "frame:0");
+  assert.equal(calls[1], "points:0");
+  assert.ok(calls.includes("frame:1") || calls.includes("points:1"), calls);
+  buffer.dispose();
+});
+
 test("a cache epoch change rebuilds the loaded set from scratch", async () => {
   const infoFor = (index: number): FrameInfo => ({
     timeUs: HZ10[index],
@@ -369,12 +423,19 @@ test("a seek aborts the requests the new position no longer wants", async () => 
     bytesPerFrame: 1_000_000,
     wantsImages: false,
   });
-  assert.deepEqual(started.map((item) => item.index).sort((a, b) => a - b), [0, 1, 2, 3]);
-  // Seek to sample 10: samples 1 and 2 are now behind the playhead and were
-  // cancelled; the request for the new current sample starts.
+  // A paused cold start asks for the current frame first; the prefetch follows
+  // once that sample is drawable (see the first-load test above).
+  const resolveFirst = resolvers.get(0);
+  assert.ok(resolveFirst);
+  resolveFirst({ timeUs: HZ10[0], pointSensors: [], cameras: [] });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.deepEqual(started.map((item) => item.index).sort((a, b) => a - b), [0, 1, 2, 3, 4]);
+  // Seek to sample 10: the paused cold start had the ahead frames in flight;
+  // they are now behind the playhead and were cancelled, and the request for
+  // the new current sample starts.
   buffer.setIndex(10);
   const aborted = started.filter((item) => item.signal.aborted).map((item) => item.index).sort((a, b) => a - b);
-  assert.deepEqual(aborted, [0, 1, 2, 3]);
+  assert.deepEqual(aborted, [1, 2, 3, 4]);
   assert.ok(started.some((item) => item.index === 10), started.map((item) => item.index));
   const fresh = started.find((item) => item.index === 10);
   assert.equal(fresh?.signal.aborted, false);
