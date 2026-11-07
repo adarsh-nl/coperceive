@@ -68,15 +68,14 @@ export WEBKIT_FORCE_SANDBOX=0
 export LIBGL_ALWAYS_SOFTWARE=1
 export APPIMAGE_EXTRACT_AND_RUN=1
 
-# Require bundled Python in installed package or unpacked resources; never fall back to system python
+# Require bundled Python in installed package; never fall back to repo or system python
 PYTHON_BIN=""
 for candidate in \
     "/usr/lib/Coperceive/resources/python/bin/python3" \
     "/usr/lib/coperceive-desktop/resources/python/bin/python3" \
     "/usr/lib/coperceive/resources/python/bin/python3" \
     "$(dirname "${APP_EXE}")/../lib/Coperceive/resources/python/bin/python3" \
-    "$(dirname "${APP_EXE}")/../lib/coperceive-desktop/resources/python/bin/python3" \
-    "${ROOT_DIR}/src-tauri/resources/python/bin/python3"; do
+    "$(dirname "${APP_EXE}")/../lib/coperceive-desktop/resources/python/bin/python3"; do
     if [ -x "${candidate}" ]; then
         PYTHON_BIN="$(readlink -f "${candidate}")"
         break
@@ -153,8 +152,8 @@ if [ "${SCENE_COUNT}" -lt 1 ]; then
     exit 5
 fi
 
-echo "Checking GET ${APP_ORIGIN}/healthz..."
-curl -s -f -H "Authorization: Bearer ${APP_TOKEN}" "${APP_ORIGIN}/healthz" >/dev/null || true
+echo "Checking GET ${APP_ORIGIN}/api/health..."
+curl -s -f -H "Authorization: Bearer ${APP_TOKEN}" "${APP_ORIGIN}/api/health" >/dev/null
 
 echo "Verified: /api/scenes returned ${SCENE_COUNT} scene(s) with HTTP 200 OK."
 
@@ -175,32 +174,44 @@ capture_screenshot() {
 
 CTRL_PORT=$(sed -n '4p' "${MARKER_FILE}" || true)
 CTRL_SECRET=$(sed -n '5p' "${MARKER_FILE}" || true)
+if [ -z "${CTRL_PORT}" ] || [ "${CTRL_PORT}" = "0" ] || [ -z "${CTRL_SECRET}" ]; then
+    echo "Error: Controller port/secret missing in ${MARKER_FILE}!" >&2
+    exit 6
+fi
 
 echo "Capturing viewer screenshot..."
-if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
-    for i in {1..30}; do
-        RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"script":"Boolean(window.__COPERCEIVE_DESKTOP__)"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
-        if echo "${RESP}" | grep -q '"result":true'; then
-            break
-        fi
-        sleep 0.2
-    done
+VIEWER_READY=0
+for i in {1..50}; do
+    RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"script":"Boolean(window.__COPERCEIVE_DESKTOP__)"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+    if echo "${RESP}" | grep -q '"result":true'; then
+        VIEWER_READY=1
+        break
+    fi
+    sleep 0.2
+done
+if [ "${VIEWER_READY}" -ne 1 ]; then
+    echo "Error: Viewer webview did not respond to controller eval probe within timeout!" >&2
+    exit 6
 fi
 capture_screenshot "viewer"
 
-if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
-    echo "Navigating to Dataset View and capturing screenshot..."
-    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:${CTRL_PORT}/show-library" >/dev/null || true
-    curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{\"window\":\"main\",\"script\":\"window.location.hash='#/connect?tab=hpc'; true;\"}" "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || true
-    for i in {1..20}; do
-        RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"window":"main","script":"Boolean(window.location.hash.includes(\"hpc\"))"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
-        if echo "${RESP}" | grep -q '"result":true'; then
-            break
-        fi
-        sleep 0.2
-    done
-    capture_screenshot "dataset_view"
+echo "Navigating to Dataset View and capturing screenshot..."
+curl -s -f -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{}" "http://127.0.0.1:${CTRL_PORT}/show-library" >/dev/null
+curl -s -f -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d "{\"window\":\"main\",\"script\":\"window.location.hash='#/connect?tab=hpc'; true;\"}" "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null
+HPC_READY=0
+for i in {1..30}; do
+    RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"window":"main","script":"Boolean(window.location.hash.includes(\"hpc\"))"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+    if echo "${RESP}" | grep -q '"result":true'; then
+        HPC_READY=1
+        break
+    fi
+    sleep 0.2
+done
+if [ "${HPC_READY}" -ne 1 ]; then
+    echo "Error: Main window did not navigate to HPC tab within timeout!" >&2
+    exit 7
 fi
+capture_screenshot "dataset_view"
 
 echo "Terminating auto-connect app process..."
 kill -TERM "${APP_PID}" 2>/dev/null || true
@@ -253,7 +264,44 @@ if [ -z "${DEMO_CTRL_PORT}" ] || [ "${DEMO_CTRL_PORT}" = "0" ] || [ -z "${DEMO_C
 fi
 echo "Controller ready on port ${DEMO_CTRL_PORT}"
 
-echo "Polling for first-run Welcome Card on empty state dir (no injected seed)..."
+echo "Polling for first-run library location prompt on empty state dir..."
+PROMPT_READY=0
+for i in {1..120}; do
+    RESP=$(curl -s -f -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"main","script":"Boolean(Array.from(document.querySelectorAll(\"button\")).find(b => (b.textContent || \"\").includes(\"Use default\")))"}' \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+    if echo "${RESP}" | grep -q '"result":true'; then
+        PROMPT_READY=1
+        break
+    fi
+    sleep 0.25
+done
+
+if [ "${PROMPT_READY}" -ne 1 ]; then
+    PAGE_STATE=$(curl -s -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"main","script":"document.body ? document.body.innerText : \"<no body>\""}' \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "<eval failed>")
+    echo "Error: First-run library location prompt ('Use default') did not appear within timeout!" >&2
+    echo "Main window page content: ${PAGE_STATE}" >&2
+    cat "${DEMO_STDERR}" >&2
+    exit 21
+fi
+echo "Verified: First-run library location prompt appeared. Clicking 'Use default'..."
+USE_DEFAULT_RESP=$(curl -s -f -X POST \
+    -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"window":"main","script":"(() => { const btn = Array.from(document.querySelectorAll(\"button\")).find(b => (b.textContent || \"\").includes(\"Use default\")); if (!btn) return \"missing\"; btn.click(); return \"clicked\"; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
+if ! echo "${USE_DEFAULT_RESP}" | grep -q '"clicked"'; then
+    echo "Error: Failed to click 'Use default' button: ${USE_DEFAULT_RESP}" >&2
+    exit 21
+fi
+
+echo "Polling for first-run Welcome Card after confirming library location (no injected seed)..."
 WELCOME_READY=0
 for i in {1..120}; do
     RESP=$(curl -s -f -X POST \
@@ -294,7 +342,7 @@ if ! echo "${CLICK_RESP}" | grep -q '"clicked"'; then
 fi
 
 echo "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
-VIEWER_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const title = (document.querySelector(\".dataset-badge .dataset-name\")?.textContent || \"\").trim(); const points = [...document.querySelectorAll(\".agent-points\")].reduce((s, el) => s + (parseInt((el.getAttribute(\"title\") || \"0\").split(\" \")[0], 10) || 0), 0); const cameras = [...document.querySelectorAll(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb canvas\")].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector(\"button.eye[aria-label=\\\"Boxes\\\"] .eye-meta\")?.textContent || \"0\").trim(), 10) || 0; const ready = title === \"Demo (synthetic)\" && points > 0 && cameras >= 1 && boxes > 0; return { ready, title, points, cameras, boxes }; })()"}'
+VIEWER_CHECK_SCRIPT='{"window":"viewer","script":"(() => { document.querySelector(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb\")?.scrollIntoView?.(); const title = (document.querySelector(\".dataset-badge .dataset-name\")?.textContent || \"\").trim(); const points = [...document.querySelectorAll(\".agent-points\")].reduce((s, el) => s + (parseInt((el.getAttribute(\"title\") || \"0\").split(\" \")[0], 10) || 0), 0); const cameras = [...document.querySelectorAll(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb canvas\")].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector(\"button.eye[aria-label=\\\"Boxes\\\"] .eye-meta\")?.textContent || \"0\").trim(), 10) || 0; const ready = title === \"Demo (synthetic)\" && points > 0 && cameras >= 1 && boxes > 0; return { ready, title, points, cameras, boxes }; })()"}'
 
 DEMO_LOADED=0
 LAST_VIEWER_STATE=""
@@ -331,8 +379,8 @@ if [ "${DEMO_LOADED}" -ne 1 ]; then
 fi
 echo "Verified viewer loaded demo scene: ${LAST_VIEWER_STATE}"
 
-echo "Opening comparison/predictions view and verifying 'synthetic predictions' run..."
-COMPARE_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const runBtn = document.querySelector(\"#prediction-run\"); const compareBtn = document.querySelector(\"#prediction-compare\"); if (compareBtn) compareBtn.click(); const predRun = (runBtn?.textContent || \"\").trim(); const evalHead = (document.querySelector(\".eval-head\")?.textContent || \"\").trim(); const ok = predRun.includes(\"synthetic predictions\") && evalHead.includes(\"synthetic predictions\"); return { ok, predRun, evalHead }; })()"}'
+echo "Opening #prediction-output menu, selecting 'cav-b · noisy', and verifying 'synthetic predictions' evaluation view..."
+COMPARE_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const runBtn = document.querySelector(\"#prediction-run\"); const outBtn = document.querySelector(\"#prediction-output\"); const list = document.querySelector(\"ul.menu-list[aria-labelledby=\\\"prediction-output\\\"]\"); const curOut = (outBtn?.textContent || \"\").trim(); if (!curOut.includes(\"cav-b\")) { if (!list && outBtn) { outBtn.click(); } else if (list) { const opt = [...list.querySelectorAll(\"button[role=\\\"option\\\"]\")].find(b => (b.textContent || \"\").includes(\"cav-b\")); if (opt) opt.click(); } } const predRun = (runBtn?.textContent || \"\").trim(); const evalHead = (document.querySelector(\".eval-head\")?.textContent || \"\").trim(); const ok = predRun.includes(\"synthetic predictions\") && evalHead.includes(\"cav-b\") && evalHead.includes(\"synthetic predictions\"); return { ok, predRun, output: (outBtn?.textContent || \"\").trim(), evalHead }; })()"}'
 
 COMPARE_OK=0
 LAST_COMPARE_STATE=""
@@ -353,11 +401,11 @@ for i in {1..60}; do
 done
 
 if [ "${COMPARE_OK}" -ne 1 ]; then
-    echo "Error: Predictions/comparison view did not show 'synthetic predictions'!" >&2
-    echo "Last comparison state: ${LAST_COMPARE_STATE}" >&2
+    echo "Error: Predictions/evaluation view did not show 'synthetic predictions' for selected output!" >&2
+    echo "Last predictions state: ${LAST_COMPARE_STATE}" >&2
     exit 24
 fi
-echo "Verified comparison/predictions view: ${LAST_COMPARE_STATE}"
+echo "Verified predictions/evaluation view: ${LAST_COMPARE_STATE}"
 capture_screenshot "demo_viewer"
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
@@ -367,7 +415,21 @@ if [ -z "${DEMO_OUTCOME_LINE}" ]; then
     exit 25
 fi
 echo "${DEMO_OUTCOME_LINE}"
-echo "DEMO_SMOKE_VERIFIED: os=linux viewer=${LAST_VIEWER_STATE} comparison=${LAST_COMPARE_STATE} outcome=\"${DEMO_OUTCOME_LINE}\""
+OUTCOME_PYTHON=$(echo "${DEMO_OUTCOME_LINE}" | sed -n 's/.*python=\([^ ]*\).*/\1/p')
+case "${OUTCOME_PYTHON}" in
+    /usr/lib/Coperceive/resources/python/*|/usr/lib/coperceive-desktop/resources/python/*|/usr/lib/coperceive/resources/python/*)
+        if [ ! -x "${OUTCOME_PYTHON}" ]; then
+            echo "Error: Outcome python is not executable: ${OUTCOME_PYTHON}" >&2
+            exit 25
+        fi
+        ;;
+    *)
+        echo "Error: Demo did not run with the installed package's bundled Python! Expected under /usr/lib/Coperceive/resources/python/, got '${OUTCOME_PYTHON}'" >&2
+        exit 25
+        ;;
+esac
+echo "Verified: Demo ran with bundled Python inside installed package: ${OUTCOME_PYTHON}"
+echo "DEMO_SMOKE_VERIFIED: os=linux viewer=${LAST_VIEWER_STATE} predictions=${LAST_COMPARE_STATE} outcome=\"${DEMO_OUTCOME_LINE}\""
 
 if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
     echo "### Demo Mode Smoke Verification (Linux)" >> "${GITHUB_STEP_SUMMARY}"

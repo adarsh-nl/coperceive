@@ -67,11 +67,8 @@ pub fn resolved_state_dir() -> Result<PathBuf, String> {
 }
 
 /// Returns the path to the app's demo root directory (`<state_dir>/demo`).
-pub fn demo_dir() -> PathBuf {
-    match resolved_state_dir() {
-        Ok(dir) => dir.join("demo"),
-        Err(_) => std::env::temp_dir().join("coperceive-invalid-state").join("demo"),
-    }
+pub fn demo_dir() -> Result<PathBuf, String> {
+    Ok(resolved_state_dir()?.join("demo"))
 }
 
 /// Validates that `root` is safe to delete as a demo directory under `state_dir`.
@@ -135,15 +132,27 @@ pub fn validate_demo_target_in_state_dir(root: &Path, state_dir: &Path) -> Resul
 }
 
 /// Returns the path to the `demo-junction` scene directory (`<state_dir>/demo/scenes/demo-junction`).
-pub fn demo_scene_path() -> PathBuf {
-    demo_dir().join("scenes").join("demo-junction")
+pub fn demo_scene_path() -> Result<PathBuf, String> {
+    Ok(demo_dir()?.join("scenes").join("demo-junction"))
 }
 
 /// Returns true if the path is inside or equals the demo directory or scene path.
 pub fn is_demo_path(path: &Path) -> bool {
-    let dir = demo_dir();
-    let scene = demo_scene_path();
+    let Ok(dir) = demo_dir() else {
+        return false;
+    };
+    let scene = dir.join("scenes").join("demo-junction");
     path == dir || path == scene || path.starts_with(&dir)
+}
+
+/// Returns `<demo_dir>/predictions` only when `path` is inside the demo directory and `predictions/` exists.
+pub fn demo_predictions_for_path(path: &Path) -> Option<PathBuf> {
+    if !is_demo_path(path) {
+        return None;
+    }
+    let dir = demo_dir().ok()?;
+    let preds = dir.join("predictions");
+    preds.is_dir().then_some(preds)
 }
 
 /// Computes the total byte size of a directory recursively.
@@ -169,7 +178,7 @@ pub fn dir_size_bytes(dir: &Path) -> u64 {
 
 /// Validates that the demo scene cache is intact, complete, and on the right version.
 pub fn is_demo_valid() -> bool {
-    is_demo_valid_at(&demo_dir())
+    demo_dir().map(|dir| is_demo_valid_at(&dir)).unwrap_or(false)
 }
 
 /// Validates demo scene cache at a given directory path.
@@ -215,7 +224,8 @@ pub fn is_demo_valid_at(root: &Path) -> bool {
 
 /// Deletes the demo cache directory completely, leaving user data untouched.
 pub fn delete_demo() -> Result<(), String> {
-    delete_demo_at(&demo_dir())
+    let dir = demo_dir()?;
+    delete_demo_at(&dir)
 }
 
 /// Deletes the demo cache directory at the given path after verifying it sits directly
@@ -227,7 +237,9 @@ pub fn delete_demo_at(root: &Path) -> Result<(), String> {
 
 /// Deletes the demo cache directory at `root` after verifying it sits directly under `state_dir`.
 pub fn delete_demo_in_state_dir(root: &Path, state_dir: &Path) -> Result<(), String> {
-    let _lock = DEMO_MUTEX.lock().map_err(|e| e.to_string())?;
+    let _lock = DEMO_MUTEX
+        .try_lock()
+        .map_err(|_| "Cannot delete demo while demo is being generated".to_string())?;
     validate_demo_target_in_state_dir(root, state_dir)?;
     if root.exists() {
         fs::remove_dir_all(root)
@@ -263,9 +275,20 @@ fn current_demo_stage(root: &Path) -> &'static str {
     }
 }
 
+fn read_log_tail(log_path: &Path, max_lines: usize) -> String {
+    match fs::read_to_string(log_path) {
+        Ok(content) => {
+            let lines: Vec<&str> = content.lines().collect();
+            let start = lines.len().saturating_sub(max_lines);
+            lines[start..].join("\n").trim().to_string()
+        }
+        Err(e) => format!("<failed to read log {}: {e}>", log_path.display()),
+    }
+}
+
 /// Ensures the demo scene is present and valid; generates it using bundled Python if missing or corrupt.
 pub fn ensure_demo(python_bin: &Path) -> Result<DemoOutcome, String> {
-    let root = demo_dir();
+    let root = demo_dir()?;
     ensure_demo_at(python_bin, &root)
 }
 
@@ -274,7 +297,7 @@ pub fn ensure_demo_with_progress<F: FnMut(&str, f64)>(
     python_bin: &Path,
     on_progress: F,
 ) -> Result<DemoOutcome, String> {
-    let root = demo_dir();
+    let root = demo_dir()?;
     ensure_demo_at_with_progress(python_bin, &root, on_progress)
 }
 
@@ -287,10 +310,25 @@ pub fn ensure_demo_at(python_bin: &Path, root: &Path) -> Result<DemoOutcome, Str
 pub fn ensure_demo_at_with_progress<F: FnMut(&str, f64)>(
     python_bin: &Path,
     root: &Path,
+    on_progress: F,
+) -> Result<DemoOutcome, String> {
+    let state_dir = resolved_state_dir()?;
+    ensure_demo_in_state_dir_with_progress(python_bin, root, &state_dir, on_progress)
+}
+
+/// Ensures the demo scene is present and valid at `root` under `state_dir` with progress callbacks.
+pub fn ensure_demo_in_state_dir_with_progress<F: FnMut(&str, f64)>(
+    python_bin: &Path,
+    root: &Path,
+    state_dir: &Path,
     mut on_progress: F,
 ) -> Result<DemoOutcome, String> {
-    CANCEL_DEMO.store(false, Ordering::SeqCst);
     let _lock = DEMO_MUTEX.lock().map_err(|e| e.to_string())?;
+    CANCEL_DEMO.store(false, Ordering::SeqCst);
+
+    fs::create_dir_all(state_dir)
+        .map_err(|e| format!("Failed to create state directory {}: {e}", state_dir.display()))?;
+    validate_demo_target_in_state_dir(root, state_dir)?;
 
     let scene_path = root.join("scenes").join("demo-junction");
     let python_str = python_bin.to_string_lossy().into_owned();
@@ -306,13 +344,6 @@ pub fn ensure_demo_at_with_progress<F: FnMut(&str, f64)>(
         });
     }
 
-    let parent = root
-        .parent()
-        .ok_or_else(|| format!("Invalid demo root directory '{}'", root.display()))?;
-    fs::create_dir_all(parent)
-        .map_err(|e| format!("Failed to create parent directory {}: {e}", parent.display()))?;
-    validate_demo_target_in_state_dir(root, parent)?;
-
     // Corrupt, outdated, or absent: clean up existing partial/stale directory
     if root.exists() {
         let _ = fs::remove_dir_all(root);
@@ -322,6 +353,13 @@ pub fn ensure_demo_at_with_progress<F: FnMut(&str, f64)>(
     let root_str = root.to_string_lossy().into_owned();
 
     on_progress("Starting bundled Python generator…", 0.0);
+
+    let log_path = state_dir.join("demo-generate.log");
+    let log_file = fs::File::create(&log_path)
+        .map_err(|e| format!("Failed to create demo generator log {}: {e}", log_path.display()))?;
+    let log_file_err = log_file
+        .try_clone()
+        .map_err(|e| format!("Failed to clone demo generator log handle: {e}"))?;
 
     let mut child = Command::new(python_bin)
         .args([
@@ -333,8 +371,8 @@ pub fn ensure_demo_at_with_progress<F: FnMut(&str, f64)>(
             "--seed",
             "0",
         ])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+        .stdout(Stdio::from(log_file))
+        .stderr(Stdio::from(log_file_err))
         .spawn()
         .map_err(|e| format!("Failed to run demo generator ({}): {e}", python_bin.display()))?;
 
@@ -342,7 +380,7 @@ pub fn ensure_demo_at_with_progress<F: FnMut(&str, f64)>(
         *guard = Some(child.id());
     }
 
-    loop {
+    let status = loop {
         if CANCEL_DEMO.load(Ordering::SeqCst) {
             let _ = crate::platform::terminate_process(child.id());
             let _ = child.kill();
@@ -350,18 +388,18 @@ pub fn ensure_demo_at_with_progress<F: FnMut(&str, f64)>(
             if let Ok(mut guard) = ACTIVE_DEMO_PID.lock() {
                 *guard = None;
             }
-            if validate_demo_target_in_state_dir(root, parent).is_ok() && root.exists() {
+            if validate_demo_target_in_state_dir(root, state_dir).is_ok() && root.exists() {
                 let _ = fs::remove_dir_all(root);
             }
             return Err("Demo generation cancelled".into());
         }
 
         match child.try_wait() {
-            Ok(Some(_status)) => {
+            Ok(Some(status)) => {
                 if let Ok(mut guard) = ACTIVE_DEMO_PID.lock() {
                     *guard = None;
                 }
-                break;
+                break status;
             }
             Ok(None) => {
                 let elapsed = start.elapsed().as_secs_f64();
@@ -376,27 +414,22 @@ pub fn ensure_demo_at_with_progress<F: FnMut(&str, f64)>(
                 return Err(format!("Failed while waiting for demo generator: {e}"));
             }
         }
-    }
+    };
 
-    let output = child
-        .wait_with_output()
-        .map_err(|e| format!("Failed to collect demo generator output: {e}"))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let stdout = String::from_utf8_lossy(&output.stdout);
+    if !status.success() {
         // Clean up partial failure
-        if validate_demo_target_in_state_dir(root, parent).is_ok() && root.exists() {
+        if validate_demo_target_in_state_dir(root, state_dir).is_ok() && root.exists() {
             let _ = fs::remove_dir_all(root);
         }
         if CANCEL_DEMO.load(Ordering::SeqCst) {
             return Err("Demo generation cancelled".into());
         }
+        let log_tail = read_log_tail(&log_path, 40);
         return Err(format!(
-            "Demo generation failed with exit code {:?}:\n{}\n{}",
-            output.status.code(),
-            stderr.trim(),
-            stdout.trim()
+            "Demo generation failed with exit code {:?} (log: {}):\n{}",
+            status.code(),
+            log_path.display(),
+            log_tail
         ));
     }
 
@@ -405,7 +438,7 @@ pub fn ensure_demo_at_with_progress<F: FnMut(&str, f64)>(
         .map_err(|e| format!("Failed to write demo version marker: {e}"))?;
 
     if !is_demo_valid_at(root) {
-        if validate_demo_target_in_state_dir(root, parent).is_ok() && root.exists() {
+        if validate_demo_target_in_state_dir(root, state_dir).is_ok() && root.exists() {
             let _ = fs::remove_dir_all(root);
         }
         return Err("Generated demo scene failed post-creation validation".into());
@@ -429,8 +462,8 @@ mod tests {
 
     #[test]
     fn test_demo_dir_and_scene_path_resolution() {
-        let dir = demo_dir();
-        let scene = demo_scene_path();
+        let dir = demo_dir().unwrap();
+        let scene = demo_scene_path().unwrap();
         assert_eq!(scene, dir.join("scenes").join("demo-junction"));
         assert!(is_demo_path(&dir));
         assert!(is_demo_path(&scene));

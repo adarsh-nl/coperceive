@@ -290,12 +290,7 @@ fn open_viewer_window(
         return Ok(());
     }
 
-    let is_demo = coperceive_desktop::demo::is_demo_path(Path::new(data_root))
-        || Path::new(data_root)
-            .file_name()
-            .and_then(|n| n.to_str())
-            .map(|s| s == "demo-junction")
-            .unwrap_or(false);
+    let is_demo = coperceive_desktop::demo::is_demo_path(Path::new(data_root));
     let (basename, window_title) = if is_demo {
         ("Demo (synthetic)".to_string(), "coperceive — Demo (synthetic) — demo-junction".to_string())
     } else {
@@ -499,25 +494,8 @@ async fn switch_data_root(
     };
 
     let python_bin = resolve_python_binary(app);
-    let predictions_arg = if new_path.join("predictions").is_dir() {
-        Some(new_path.join("predictions"))
-    } else if let Some(parent) = new_path.parent() {
-        if parent.join("predictions").is_dir() {
-            Some(parent.join("predictions"))
-        } else if let Some(grandparent) = parent.parent() {
-            if grandparent.join("predictions").is_dir() {
-                Some(grandparent.join("predictions"))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
     let mut extra_args = Vec::new();
-    if let Some(pred_dir) = predictions_arg {
+    if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&new_path) {
         extra_args.push("--predictions".to_string());
         extra_args.push(pred_dir.to_string_lossy().into_owned());
     }
@@ -1264,25 +1242,8 @@ async fn start_local_session(
     }
 
     let python_bin = resolve_python_binary(app);
-    let predictions_arg = if root_path.join("predictions").is_dir() {
-        Some(root_path.join("predictions"))
-    } else if let Some(parent) = root_path.parent() {
-        if parent.join("predictions").is_dir() {
-            Some(parent.join("predictions"))
-        } else if let Some(grandparent) = parent.parent() {
-            if grandparent.join("predictions").is_dir() {
-                Some(grandparent.join("predictions"))
-            } else {
-                None
-            }
-        } else {
-            None
-        }
-    } else {
-        None
-    };
     let mut extra_args = Vec::new();
-    if let Some(pred_dir) = predictions_arg {
+    if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&root_path) {
         extra_args.push("--predictions".to_string());
         extra_args.push(pred_dir.to_string_lossy().into_owned());
     }
@@ -1827,15 +1788,16 @@ fn get_library_scenes(
     let cache = p.validation_cache.unwrap_or_default();
     let mut scenes = coperceive_desktop::library::scan_library_scenes_with_cache(Path::new(&root), &cache);
     if coperceive_desktop::demo::is_demo_valid() {
-        let demo_scene = coperceive_desktop::demo::demo_scene_path();
-        if let Some(mut info) = coperceive_desktop::library::parse_scene_info_with_cache(
-            &demo_scene,
-            &cache,
-            demo_scene.parent().unwrap_or(Path::new("")),
-        ) {
-            info.dataset = "Demo (synthetic)".to_string();
-            info.is_valid = Some(true);
-            scenes.push(info);
+        if let Ok(demo_scene) = coperceive_desktop::demo::demo_scene_path() {
+            if let Some(mut info) = coperceive_desktop::library::parse_scene_info_with_cache(
+                &demo_scene,
+                &cache,
+                demo_scene.parent().unwrap_or(Path::new("")),
+            ) {
+                info.dataset = "Demo (synthetic)".to_string();
+                info.is_valid = Some(true);
+                scenes.push(info);
+            }
         }
     }
     scenes.sort_by(|a, b| a.scene_id.cmp(&b.scene_id));
@@ -1849,13 +1811,17 @@ fn get_library_scenes(
 }
 
 #[tauri::command]
-fn delete_library_scene(scene_path: String) -> Result<(), String> {
-    let path = Path::new(&scene_path);
-    if coperceive_desktop::demo::is_demo_path(path) {
-        return coperceive_desktop::demo::delete_demo();
-    }
-    coperceive_desktop::library::delete_scene_to_trash(path)
-        .map_err(|e| format!("Failed to delete scene: {e}"))
+async fn delete_library_scene(scene_path: String) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let path = Path::new(&scene_path);
+        if coperceive_desktop::demo::is_demo_path(path) {
+            return coperceive_desktop::demo::delete_demo();
+        }
+        coperceive_desktop::library::delete_scene_to_trash(path)
+            .map_err(|e| format!("Failed to delete scene: {e}"))
+    })
+    .await
+    .map_err(|e| format!("Task execution failed: {e}"))?
 }
 
 #[tauri::command]

@@ -310,6 +310,7 @@ export default function LibraryScreen({
       }>;
       if (custom.detail?.storage !== undefined) {
         setStorage(custom.detail.storage);
+        setShowFirstRunModal(custom.detail.storage?.is_configured === false);
       }
       if (custom.detail?.welcomeCardDismissed !== undefined) {
         setWelcomeCardDismissed(custom.detail.welcomeCardDismissed);
@@ -460,6 +461,9 @@ export default function LibraryScreen({
       ]);
       setStorage(stats);
       applyScenes(list);
+      if (stats && stats.is_configured === false) {
+        setShowFirstRunModal(true);
+      }
       if (pState?.welcome_card_dismissed) {
         setWelcomeCardDismissed(true);
       }
@@ -866,7 +870,7 @@ export default function LibraryScreen({
             />
           </div>
         )}
-        {!loading && !loadError && scenes.length === 0 && (
+        {!loading && !loadError && scenes.length === 0 && !showFirstRunModal && (
           <div style={{ padding: "24px" }}>
             {serverCount === 0 && !welcomeCardDismissed ? (
               <WelcomeCard

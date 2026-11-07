@@ -117,8 +117,7 @@ export default function PredictionsBlock({
 }: PredictionsBlockProps) {
   const run = runs?.find((item) => item.run_id === runId) ?? null;
   const others = (runs ?? []).filter((item) => item.run_id !== runId && item.evaluated);
-  const isDemoRun = (item: RunInfo) =>
-    item.run_id === "demo" || item.run.model === "synthetic demo" || Boolean(item.run.model?.toLowerCase().includes("synthetic"));
+  const isDemoRun = (item: RunInfo) => item.run_id === "demo";
   const runLabel = (item: RunInfo) => {
     if (isDemoRun(item)) {
       return "synthetic predictions";

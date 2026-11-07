@@ -217,7 +217,13 @@ def resolve_dataset_id(scene_dir: Path) -> str:
         return "fixture"
     scene_id = document.get("scene_id")
     if isinstance(scene_id, str):
-        if scene_id == "demo-junction" or scene_id.lower().startswith("demo"):
+        resolved_dir = scene_dir.resolve()
+        if (
+            scene_id == "demo-junction"
+            and resolved_dir.name == "demo-junction"
+            and resolved_dir.parent.name == "scenes"
+            and resolved_dir.parent.parent.name == "demo"
+        ):
             return "Demo (synthetic)"
         if scene_id.lower().startswith("synth"):
             return "fixture"
