@@ -9,7 +9,15 @@ const label = { display: "block", fontSize: "0.7rem", textTransform: "uppercase"
 const input = { width: "100%", boxSizing: "border-box" as const, padding: "0.35rem 0.5rem", fontSize: "0.8rem" };
 const button = { padding: "0.35rem 0.7rem", fontSize: "0.8rem" } as const;
 
-export default function BundlePanel({ runId, onClose }: { runId: string; onClose: () => void }) {
+export default function BundlePanel({
+  runId,
+  markers,
+  onClose,
+}: {
+  runId: string;
+  markers: string[];
+  onClose: () => void;
+}) {
   const [scenesRoot, setScenesRoot] = useState("");
   const [predictionsRoot, setPredictionsRoot] = useState("");
   const [frames, setFrames] = useState("worst:6");
@@ -26,7 +34,12 @@ export default function BundlePanel({ runId, onClose }: { runId: string; onClose
     setError("");
     setSaved("");
     try {
-      setManifest(await bundlePreview(runId, scenesRoot.trim(), predictionsRoot.trim(), frames, title, includeRaw, includeFull));
+      setManifest(
+        await bundlePreview(
+          runId, scenesRoot.trim(), predictionsRoot.trim(), frames, title,
+          includeRaw, includeFull, markers,
+        ),
+      );
     } catch (caught) {
       setError(errorText(caught));
     } finally {
@@ -41,7 +54,12 @@ export default function BundlePanel({ runId, onClose }: { runId: string; onClose
     try {
       const chosen = await pickSavePath(`${runId}.cpbundle`, "cpbundle");
       if (!chosen) return;
-      setSaved(await bundleExport(runId, scenesRoot.trim(), predictionsRoot.trim(), chosen, frames, title, includeRaw, includeFull));
+      setSaved(
+        await bundleExport(
+          runId, scenesRoot.trim(), predictionsRoot.trim(), chosen, frames, title,
+          includeRaw, includeFull, markers,
+        ),
+      );
     } catch (caught) {
       setError(errorText(caught));
     } finally {
@@ -80,6 +98,13 @@ export default function BundlePanel({ runId, onClose }: { runId: string; onClose
         <div style={{ marginTop: "0.6rem", fontSize: "0.8rem" }}>
           <div>{manifest.contents.length} files, {manifest.total_bytes ?? 0} bytes total</div>
           <div>Scrubber redacted {String(manifest.privacy?.redacted_files ?? 0)} file(s).</div>
+          {Array.isArray(manifest.privacy?.redactions) ? (
+            <ul>
+              {(manifest.privacy.redactions as Array<{ file: string; kind: string }>).map((item) => (
+                <li key={item.file}>{item.file} — {item.kind} identifiers removed</li>
+              ))}
+            </ul>
+          ) : null}
           {manifest.licences && manifest.licences.length > 0 ? <div>Licence notes: {JSON.stringify(manifest.licences)}</div> : <div>No raw data included.</div>}
           <ul style={{ maxHeight: "10rem", overflow: "auto", paddingLeft: "1rem" }}>
             {manifest.contents.map((item) => <li key={item.path}>{item.path} — {item.size} B</li>)}

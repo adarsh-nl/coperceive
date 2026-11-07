@@ -2,8 +2,8 @@
 
 A result bundle is **one file** a researcher can send a colleague. It holds the
 repro card, the score report and config, the run's boxes for the included
-frames, rendered frame previews with boxes/ground truth, and optionally paper
-figures and raw sensor files. The recipient opens it **read-only**, with no
+frames, rendered frame previews with boxes/ground truth, and optionally raw
+sensor files. The recipient opens it **read-only**, with no
 dataset and no cluster access.
 
 Bundles are zip files with a versioned `bundle.json` manifest. Every listed file
@@ -16,7 +16,7 @@ anything is extracted.
 coperceive bundle export <run-id> \
   --root <scenes> --predictions <predictions-root> \
   -o results.cpbundle [--title "…"] [--frames worst:6] \
-  [--include-raw] [--include-full-predictions] [--compare <run>] [--config eval.yaml]
+  [--include-raw] [--include-full-predictions] [--marker VALUE]
 ```
 
 By default only the selected frames' predictions are included (six frames, or
@@ -26,8 +26,13 @@ the CLI shows their size. Raw LiDAR/camera files are **not** included by default
 dataset licence note. **Check the dataset licence before sharing raw data.**
 
 The app's Run history has an **Export bundle…** action with the same review:
-every file with size, the total, what the scrubber removed, and licence notes.
-Nothing is uploaded anywhere.
+every file with size, the total, what the scrubber removed per file, and licence
+notes. Nothing is uploaded anywhere. `--compare` and paper `figures/` are not
+part of this version.
+
+Size caps are set from Python with `coperceive.bundle.open.OpenLimits`
+(`max_files`, `max_file_bytes`, `max_total_bytes`); the CLI uses the defaults:
+20,000 files, 512 MiB per file and 2 GiB total.
 
 ## Privacy
 

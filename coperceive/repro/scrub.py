@@ -212,6 +212,19 @@ def file_name(path: str) -> str | None:
     return name
 
 
+_ABS_POSIX = re.compile(r"(?<![A-Za-z0-9:/])/(?:[^\s\"'<>|]+/)*[^\s\"'<>|/]+")
+_ABS_WINDOWS = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:\\[^\s\"'<>|]+")
+_UNC = re.compile(r"\\\\[^\s\"'<>|]+\\[^\s\"'<>|]+")
+
+
+def _redact_path(match: re.Match[str]) -> str:
+    value = match.group(0)
+    parts = [part for part in value.replace("\\", "/").split("/") if part]
+    if not parts:
+        return "<path>"
+    return "<path>/" + "/".join(parts[-2:])
+
+
 def scrub_text(text: str, markers: tuple[str, ...] = ()) -> str:
     """Remove runtime/personal identifiers and secret-shaped values from plain text."""
     out = text
@@ -222,9 +235,9 @@ def scrub_text(text: str, markers: tuple[str, ...] = ()) -> str:
     out = _USER_AT.sub("[redacted]", out)
     out = _HOSTNAME.sub("[redacted]", out)
     out = _HOME_PATH.sub(" [redacted] ", out)
-    out = re.sub(r"/scratch/[A-Za-z0-9._-]+", "[redacted-scratch]", out)
-    out = re.sub(r"[A-Za-z]:\\Users\\[^\\\s]+", "[redacted-home]", out)
-    out = re.sub(r"\b[a-z0-9-]+\.(?:hpc\.)?cluster\b", "[redacted-host]", out, flags=re.I)
+    out = _ABS_POSIX.sub(_redact_path, out)
+    out = _ABS_WINDOWS.sub(_redact_path, out)
+    out = _UNC.sub(_redact_path, out)
     return out
 
 

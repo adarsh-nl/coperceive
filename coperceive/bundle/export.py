@@ -55,6 +55,7 @@ class _Staging:
     licences: list[dict[str, str]] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
     redactions: int = 0
+    redaction_details: list[dict[str, object]] = field(default_factory=list)
 
 
 def _safe_scene_id(value: object) -> str:
@@ -149,8 +150,9 @@ def _write_frame(
     staging.files[target] = "frame-json"
 
 
-def _scrub_work(work: Path, markers: tuple[str, ...]) -> int:
+def _scrub_work(work: Path, markers: tuple[str, ...]) -> tuple[int, list[dict[str, object]]]:
     redactions = 0
+    details: list[dict[str, object]] = []
     for path in work.rglob("*"):
         if not path.is_file():
             continue
@@ -162,6 +164,7 @@ def _scrub_work(work: Path, markers: tuple[str, ...]) -> int:
                 after_text = scrub_text(before, markers)
                 if after_text != before:
                     redactions += 1
+                    details.append({"file": path.relative_to(work).as_posix(), "kind": "text"})
                 path.write_text(after_text, encoding="utf-8")
                 continue
             before = json.dumps(payload, sort_keys=True)
@@ -169,12 +172,14 @@ def _scrub_work(work: Path, markers: tuple[str, ...]) -> int:
             after = json.dumps(after_doc, sort_keys=True)
             if after != before:
                 redactions += 1
+                details.append({"file": path.relative_to(work).as_posix(), "kind": "json"})
             path.write_text(json.dumps(after_doc, indent=2) + "\n", encoding="utf-8")
-        elif path.suffix.lower() in {".txt", ".log", ".md", ".yaml", ".yml"}:
+        elif path.suffix.lower() in {".txt", ".log", ".md", ".yaml", ".yml", ".csv"}:
             before = path.read_text(encoding="utf-8", errors="replace")
             after_text = scrub_text(before, markers)
             if after_text != before:
                 redactions += 1
+                details.append({"file": path.relative_to(work).as_posix(), "kind": "text"})
             path.write_text(after_text, encoding="utf-8")
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -197,8 +202,9 @@ def _scrub_work(work: Path, markers: tuple[str, ...]) -> int:
                 columns.append(column)
         if changed:
             redactions += 1
+            details.append({"file": path.relative_to(work).as_posix(), "kind": "parquet"})
             pq.write_table(pa.table(dict(zip(table.column_names, columns, strict=True))), path)
-    return redactions
+    return redactions, details
 
 
 def export_bundle(request: BundleExportRequest) -> Path:
@@ -299,7 +305,7 @@ def export_bundle(request: BundleExportRequest) -> Path:
                         "note": "raw files included; check the dataset licence before sharing",
                     }
                 )
-        staging.redactions = _scrub_work(work, request.extra_markers)
+        staging.redactions, staging.redaction_details = _scrub_work(work, request.extra_markers)
         # manifest over every file except itself
         contents: list[Content] = []
         for rel in sorted(staging.files):
@@ -323,6 +329,7 @@ def export_bundle(request: BundleExportRequest) -> Path:
                 "raw_sensor_data": request.include_raw,
                 "scrubbed": True,
                 "redacted_files": staging.redactions,
+                "redactions": staging.redaction_details,
             },
         )
         (work / MANIFEST).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")

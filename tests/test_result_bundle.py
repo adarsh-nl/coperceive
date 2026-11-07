@@ -214,7 +214,7 @@ def test_case_duplicate_and_prefix_clash_are_refused(bundle: Path, tmp_path: Pat
         return json.dumps(payload).encode()
 
     bad = _rewrite(bundle, tmp_path / "case.cpbundle", mutate)
-    with pytest.raises(BundleError):
+    with pytest.raises(BundleError, match="case-insensitive"):
         open_bundle(bad, data_root=tmp_path / "data")
 
 
@@ -257,7 +257,69 @@ def test_invalid_json_is_scrubbed_as_text(tmp_path: Path) -> None:
     work.mkdir()
     path = work / "bad.json"
     path.write_text('{"owner": "zoe", not-json /home/zoe', encoding="utf-8")
-    redactions = _scrub_work(work, ("zoe",))
+    redactions, _details = _scrub_work(work, ("zoe",))
     text = path.read_text()
     assert redactions >= 1
     assert "zoe" not in text
+
+
+def test_file_directory_clash_is_a_bundle_error(bundle: Path, tmp_path: Path) -> None:
+    def mutate(name: str, data: bytes) -> bytes:
+        if name != "bundle.json":
+            return data
+        payload = json.loads(data)
+        payload["contents"].append(
+            {"path": "frames/frame-01.json/extra", "sha256": "a" * 64, "size": 1, "kind": "x"}
+        )
+        return json.dumps(payload).encode()
+
+    bad = _rewrite(bundle, tmp_path / "clash.cpbundle", mutate)
+    with pytest.raises(BundleError, match="clashes"):
+        open_bundle(bad, data_root=tmp_path / "data")
+
+
+def test_schema_file_and_validator_agree_on_required_keys(bundle: Path) -> None:
+    from coperceive.bundle.format import validate_manifest
+
+    schema = json.loads(
+        (Path(__file__).resolve().parents[1] / "docs/spec/result-bundle.schema.json").read_text()
+    )
+    with zipfile.ZipFile(bundle) as archive:
+        manifest = json.loads(archive.read("bundle.json"))
+    validate_manifest(manifest)
+    for key in schema["required"]:
+        broken = dict(manifest)
+        del broken[key]
+        with pytest.raises(BundleError):
+            validate_manifest(broken)
+
+
+def test_planted_markers_in_log_config_parquet_csv_key_and_path_are_removed(tmp_path: Path) -> None:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from coperceive.bundle.export import _scrub_work
+
+    work = tmp_path / "work"
+    work.mkdir()
+    markers = ("/projects/zz9999/run", "node042.cluster.example", "E:\\work\\qq", "qqsecret")
+    (work / "run.log").write_text(
+        "at /projects/zz9999/run on node042.cluster.example E:\\work\\qq\n"
+    )
+    (work / "eval").mkdir()
+    (work / "eval/config.json").write_text(
+        json.dumps({"note": "/projects/zz9999/run", "qqsecret": "x"})
+    )
+    (work / "frames").mkdir()
+    (work / "frames/frame.csv").write_text("path,owner\nE:\\work\\qq,qqsecret\n")
+    pq.write_table(
+        pa.table({"note": ["/projects/zz9999/run", "ok"]}), work / "frames/table.parquet"
+    )
+    redactions, details = _scrub_work(work, markers)
+    assert redactions >= 4 and details
+    for path in work.rglob("*"):
+        if path.is_file() and path.suffix != ".parquet":
+            text = path.read_text(errors="replace")
+            for marker in markers:
+                assert marker not in text, (path, marker)
+    table = pq.read_table(work / "frames/table.parquet")
+    assert "/projects/zz9999/run" not in table.column("note").to_pylist()

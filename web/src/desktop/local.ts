@@ -737,13 +737,14 @@ export async function bundlePreview(
   title = "",
   includeRaw = false,
   includeFullPredictions = false,
+  markers: string[] = [],
 ): Promise<BundleManifest> {
   if (typeof window === "undefined" || !window.__TAURI_INTERNALS__) {
     throw new Error("Bundle export needs the desktop app.");
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<BundleManifest>("bundle_preview", {
-    runId, scenesRoot, predictionsRoot, frames, title, includeRaw, includeFullPredictions,
+    runId, scenesRoot, predictionsRoot, frames, title, includeRaw, includeFullPredictions, markers,
   });
 }
 
@@ -756,10 +757,11 @@ export async function bundleExport(
   title = "",
   includeRaw = false,
   includeFullPredictions = false,
+  markers: string[] = [],
 ): Promise<string> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("bundle_export", {
-    runId, scenesRoot, predictionsRoot, out, frames, title, includeRaw, includeFullPredictions,
+    runId, scenesRoot, predictionsRoot, out, frames, title, includeRaw, includeFullPredictions, markers,
   });
 }
 

@@ -400,7 +400,18 @@ export default function RunHistory() {
           )
         ) : null}
       </InspectorSection>
-      {bundleOpen && selected ? <BundlePanel runId={selected.plan_id} onClose={() => setBundleOpen(false)} /> : null}
+      {bundleOpen && selected ? (
+        <BundlePanel
+          runId={selected.plan_id}
+          markers={[
+            profiles.find((entry) => entry.id === profileId)?.profile.user ?? "",
+            profiles.find((entry) => entry.id === profileId)?.profile.host ?? "",
+            profiles.find((entry) => entry.id === profileId)?.profile.ssh_alias ?? "",
+            profiles.find((entry) => entry.id === profileId)?.ssh?.hostname ?? "",
+          ].filter(Boolean)}
+          onClose={() => setBundleOpen(false)}
+        />
+      ) : null}
       {repro ? (
         <InspectorSection title="Repro card">
           <span className="c-step-note">

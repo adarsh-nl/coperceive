@@ -53,6 +53,9 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_export.add_argument("--frames", default="worst:6")
     bundle_export.add_argument("--include-raw", action="store_true")
     bundle_export.add_argument("--include-full-predictions", action="store_true")
+    bundle_export.add_argument(
+        "--marker", action="append", default=[], help="Extra identifier to scrub."
+    )
     bundle_export.set_defaults(func=_bundle_export)
     bundle_preview = bundle_commands.add_parser("preview", help="Print the export review as JSON.")
     bundle_preview.add_argument("run_id")
@@ -62,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_preview.add_argument("--frames", default="worst:6")
     bundle_preview.add_argument("--include-raw", action="store_true")
     bundle_preview.add_argument("--include-full-predictions", action="store_true")
+    bundle_preview.add_argument("--marker", action="append", default=[])
     bundle_preview.set_defaults(func=_bundle_preview)
     bundle_open = bundle_commands.add_parser("open", help="Verify and open a .cpbundle read-only.")
     bundle_open.add_argument("file")
@@ -546,6 +550,7 @@ def _bundle_export(args: argparse.Namespace) -> None:
                 frames=args.frames,
                 include_raw=args.include_raw,
                 include_full_predictions=args.include_full_predictions,
+                extra_markers=tuple(args.marker),
             )
         )
     except (OSError, ValueError) as exc:
@@ -568,6 +573,7 @@ def _bundle_preview(args: argparse.Namespace) -> None:
                 frames=args.frames,
                 include_raw=args.include_raw,
                 include_full_predictions=args.include_full_predictions,
+                extra_markers=tuple(args.marker),
             )
         )
     except (OSError, ValueError) as exc:

@@ -206,6 +206,7 @@ async fn bundle_preview(
     title: String,
     include_raw: bool,
     include_full_predictions: bool,
+    markers: Vec<String>,
 ) -> Result<serde_json::Value, String> {
     let mut args = vec![
         "preview".to_string(), run_id,
@@ -219,6 +220,10 @@ async fn bundle_preview(
     }
     if include_full_predictions {
         args.push("--include-full-predictions".to_string());
+    }
+    for marker in markers {
+        args.push("--marker".to_string());
+        args.push(marker);
     }
     let stdout = run_bundle_python(&app, &args)?;
     serde_json::from_str(&stdout).map_err(|err| format!("bundle preview is not JSON: {err}"))
@@ -235,6 +240,7 @@ async fn bundle_export(
     title: String,
     include_raw: bool,
     include_full_predictions: bool,
+    markers: Vec<String>,
 ) -> Result<String, String> {
     let mut args = vec![
         "export".to_string(), run_id,
@@ -249,6 +255,10 @@ async fn bundle_export(
     }
     if include_full_predictions {
         args.push("--include-full-predictions".to_string());
+    }
+    for marker in markers {
+        args.push("--marker".to_string());
+        args.push(marker);
     }
     run_bundle_python(&app, &args)?;
     Ok(out)
