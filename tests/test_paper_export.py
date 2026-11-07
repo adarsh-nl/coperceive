@@ -296,18 +296,27 @@ def test_cli_writes_a_zip_without_a_run(tmp_path: Path, capsys: pytest.CaptureFi
 def test_resolve_dataset_id_only_matches_demo_junction_under_demo_path(tmp_path: Path) -> None:
     demo_scene = tmp_path / "demo" / "scenes" / "demo-junction"
     demo_scene.mkdir(parents=True)
-    (demo_scene / "manifest.json").write_text(json.dumps({"scene_id": "demo-junction"}), encoding="utf-8")
+    (demo_scene / "manifest.json").write_text(
+        json.dumps({"scene_id": "demo-junction"}),
+        encoding="utf-8",
+    )
     assert resolve_dataset_id(demo_scene) == "Demo (synthetic)"
 
     # A scene named demo-* outside <state>/demo/scenes/demo-junction must not skip licence opt-in
     other_demo = tmp_path / "library" / "demo-custom"
     other_demo.mkdir(parents=True)
-    (other_demo / "manifest.json").write_text(json.dumps({"scene_id": "demo-custom"}), encoding="utf-8")
+    (other_demo / "manifest.json").write_text(
+        json.dumps({"scene_id": "demo-custom"}),
+        encoding="utf-8",
+    )
     assert resolve_dataset_id(other_demo) == "unknown"
 
     outside_junction = tmp_path / "library" / "demo-junction"
     outside_junction.mkdir(parents=True)
-    (outside_junction / "manifest.json").write_text(json.dumps({"scene_id": "demo-junction"}), encoding="utf-8")
+    (outside_junction / "manifest.json").write_text(
+        json.dumps({"scene_id": "demo-junction"}),
+        encoding="utf-8",
+    )
     assert resolve_dataset_id(outside_junction) == "unknown"
 
 
