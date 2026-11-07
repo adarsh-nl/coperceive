@@ -39,9 +39,17 @@ export default defineConfig(async () => ({
   build: {
     target: "es2022",
     sourcemap: false,
+    rollupOptions: {
+      input: {
+        main: "index.html",
+        tour: "tour.html",
+      },
+    },
     modulePreload: {
       resolveDependencies(_filename, deps) {
-        return deps.filter((dep) => !dep.includes("RealClip") && !dep.includes("three"));
+        return deps.filter(
+          (dep) => !dep.includes("RealClip") && !dep.includes("three") && !dep.includes("ProductTour"),
+        );
       },
     },
   },

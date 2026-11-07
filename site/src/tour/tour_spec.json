@@ -1,0 +1,875 @@
+{
+ "stage": {
+  "width": 1440,
+  "height": 900,
+  "coords": "percent of the 1440x900 screenshot"
+ },
+ "chapters": [
+  "Library & import",
+  "Every dataset",
+  "Viewer",
+  "Timeline",
+  "Evaluate & compare",
+  "HPC cluster"
+ ],
+ "timing": {
+  "camera_ease_s": 1.9,
+  "camera_curve": "cubic-bezier(.65,0,.35,1)",
+  "pointer_glide_s": 1.3,
+  "crossfade_s": 0.8,
+  "click_at_s": "min(1.3, 0.6*dur)",
+  "caption_in_s": 0.7
+ },
+ "screens": [
+  {
+   "key": "library",
+   "alt": "Library screen listing four scenes with duration, agents and validity",
+   "capture_output": "desk/library.png"
+  },
+  {
+   "key": "openfolder",
+   "alt": "Open Folder screen with a folder path and recent folders",
+   "capture_output": "desk/openfolder.png"
+  },
+  {
+   "key": "dataset",
+   "alt": "HPC workspace with an OPV2V test split being prepared on the cluster",
+   "capture_output": "desk/dataset.png"
+  },
+  {
+   "key": "neweval",
+   "alt": "New evaluation screen with the run-plan steps",
+   "capture_output": "desk/neweval.png"
+  },
+  {
+   "key": "history",
+   "alt": "Run history with one running and two completed jobs",
+   "capture_output": "desk/history.png"
+  },
+  {
+   "key": "orbit",
+   "alt": "Viewer in orbit view with the demo junction",
+   "capture_output": "vw/orbit.png"
+  },
+  {
+   "key": "bev",
+   "alt": "Viewer in bird’s-eye view",
+   "capture_output": "vw/bev.png"
+  },
+  {
+   "key": "compare",
+   "alt": "Viewer comparing two prediction runs",
+   "capture_output": "vw/compare.png"
+  },
+  {
+   "key": "scrolled",
+   "alt": "Viewer predictions panel with the compare menu",
+   "capture_output": "vw/scrolled.png"
+  },
+  {
+   "key": "loop_orbit",
+   "alt": "Viewer playing the demo scene in orbit view",
+   "capture_output": "vw/loop_orbit/f*.png (80 stepped frames)"
+  },
+  {
+   "key": "loop_chase",
+   "alt": "Viewer playing the demo scene in chase view",
+   "capture_output": "vw/loop_chase/f*.png (80 stepped frames)"
+  },
+  {
+   "key": "getdata_all",
+   "alt": "Get Data catalog listing Griffin, OPV2V, V2XSet, DAIR-V2X-C and V2V4Real",
+   "capture_output": "ds/getdata.png"
+  },
+  {
+   "key": "getdata_opv2v",
+   "alt": "Get Data with OPV2V selected",
+   "capture_output": "ds/getdata_opv2v.png"
+  },
+  {
+   "key": "getdata_v2xset",
+   "alt": "Get Data with V2XSet selected",
+   "capture_output": "ds/getdata_v2xset.png"
+  },
+  {
+   "key": "getdata_dair",
+   "alt": "Get Data with DAIR-V2X-C selected",
+   "capture_output": "ds/getdata_dair-v2x-c.png"
+  },
+  {
+   "key": "getdata_v2v4real",
+   "alt": "Get Data with V2V4Real selected",
+   "capture_output": "ds/getdata_v2v4real.png"
+  },
+  {
+   "key": "view_opv2v",
+   "alt": "Viewer on a synthetic OPV2V-style scene: three vehicles, twelve cameras",
+   "capture_output": "ds/view_opv2v.png"
+  },
+  {
+   "key": "view_v2xset",
+   "alt": "Viewer on a synthetic V2XSet-style scene: two vehicles and a roadside unit",
+   "capture_output": "ds/view_v2xset.png"
+  },
+  {
+   "key": "view_dair",
+   "alt": "Viewer on a synthetic DAIR-V2X-C-style scene: a vehicle and a roadside pole",
+   "capture_output": "ds/view_dair-v2x-c.png"
+  },
+  {
+   "key": "view_v2v4real",
+   "alt": "Viewer on a synthetic V2V4Real-style highway scene with two vehicles",
+   "capture_output": "ds/view_v2v4real.png"
+  },
+  {
+   "key": "view_griffin",
+   "alt": "Viewer on a synthetic Griffin-style scene in Drone view",
+   "capture_output": "ds/view_griffin.png"
+  },
+  {
+   "key": "stream",
+   "alt": "Viewer streaming a cluster scene over SSH from Lab GPU cluster",
+   "capture_output": "vw/stream.png"
+  }
+ ],
+ "steps": [
+  {
+   "ch": 0,
+   "dur": 3.5,
+   "screen": "library",
+   "cam": {
+    "x": 50,
+    "y": 50,
+    "s": 1
+   },
+   "ptr": {
+    "x": 60,
+    "y": 55
+   },
+   "cap": [
+    "Your library",
+    "Every scene you have, from every dataset, checked and ready to open."
+   ]
+  },
+  {
+   "ch": 0,
+   "dur": 4,
+   "cam": {
+    "x": 32,
+    "y": 18,
+    "s": 1.9
+   },
+   "ptr": {
+    "x": 21.4,
+    "y": 20.9
+   },
+   "cap": [
+    "One table, every dataset",
+    "Duration, agents, sensors and a validity check for each scene, side by side."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 0,
+   "dur": 2.4,
+   "cam": {
+    "x": 50,
+    "y": 50,
+    "s": 1
+   },
+   "ptr": {
+    "x": 8.2,
+    "y": 18.0
+   },
+   "click": true,
+   "cap": [
+    "One table, every dataset",
+    "Duration, agents, sensors and a validity check for each scene, side by side."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 0,
+   "dur": 3.5,
+   "screen": "openfolder",
+   "cam": {
+    "x": 40,
+    "y": 16,
+    "s": 1.8
+   },
+   "ptr": {
+    "x": 68.4,
+    "y": 12.3
+   },
+   "cap": [
+    "Open any folder",
+    "Point Coperceive at scenes on your disk. Recent folders are one click away."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 0,
+   "dur": 2.6,
+   "cam": {
+    "x": 62,
+    "y": 14,
+    "s": 1.6
+   },
+   "ptr": {
+    "x": 89.0,
+    "y": 9.4
+   },
+   "click": true,
+   "cap": [
+    "Open any folder",
+    "Point Coperceive at scenes on your disk. Recent folders are one click away."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 1,
+   "dur": 2.4,
+   "screen": "getdata_all",
+   "cam": {
+    "x": 50,
+    "y": 50,
+    "s": 1
+   },
+   "ptr": {
+    "x": 30,
+    "y": 30
+   },
+   "cap": [
+    "Every cooperative dataset, one place",
+    "Griffin, OPV2V, V2XSet, DAIR-V2X-C and V2V4Real in one catalog, each with its agents, sensors and licence."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 1,
+   "dur": 3.2,
+   "cam": {
+    "x": 30,
+    "y": 22,
+    "s": 1.7
+   },
+   "ptr": {
+    "x": 20,
+    "y": 10.9
+   },
+   "cap": [
+    "Every cooperative dataset, one place",
+    "Griffin, OPV2V, V2XSet, DAIR-V2X-C and V2V4Real in one catalog, each with its agents, sensors and licence."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 1,
+   "dur": 2.2,
+   "screen": "getdata_all",
+   "cam": {
+    "x": 30,
+    "y": 22,
+    "s": 1.7
+   },
+   "ptr": {
+    "x": 20,
+    "y": 16.6
+   },
+   "click": true,
+   "cap": [
+    "Every cooperative dataset, one place",
+    "Griffin, OPV2V, V2XSet, DAIR-V2X-C and V2V4Real in one catalog, each with its agents, sensors and licence."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 1,
+   "dur": 3.0,
+   "screen": "view_opv2v",
+   "cam": {
+    "x": 50,
+    "y": 48,
+    "s": 1.12
+   },
+   "ptr": {
+    "x": 50,
+    "y": 78
+   },
+   "cap": [
+    "OPV2V",
+    "Three connected vehicles with four cameras each, all in one synchronised strip. Synthetic OPV2V-style scene."
+   ]
+  },
+  {
+   "ch": 1,
+   "dur": 2.2,
+   "screen": "getdata_opv2v",
+   "cam": {
+    "x": 30,
+    "y": 22,
+    "s": 1.7
+   },
+   "ptr": {
+    "x": 20,
+    "y": 22.4
+   },
+   "click": true,
+   "cap": [
+    "V2XSet",
+    "Vehicles and a roadside unit, fused in one world frame. Synthetic V2XSet-style scene."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 1,
+   "dur": 3.0,
+   "screen": "view_v2xset",
+   "cam": {
+    "x": 50,
+    "y": 48,
+    "s": 1.12
+   },
+   "ptr": {
+    "x": 9,
+    "y": 50
+   },
+   "cap": [
+    "V2XSet",
+    "Vehicles and a roadside unit, fused in one world frame. Synthetic V2XSet-style scene."
+   ]
+  },
+  {
+   "ch": 1,
+   "dur": 2.2,
+   "screen": "getdata_v2xset",
+   "cam": {
+    "x": 30,
+    "y": 22,
+    "s": 1.7
+   },
+   "ptr": {
+    "x": 20,
+    "y": 28.2
+   },
+   "click": true,
+   "cap": [
+    "DAIR-V2X-C",
+    "A vehicle and an infrastructure pole with its own LiDAR and camera. Synthetic DAIR-V2X-C-style scene."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 1,
+   "dur": 3.0,
+   "screen": "view_dair",
+   "cam": {
+    "x": 50,
+    "y": 48,
+    "s": 1.12
+   },
+   "ptr": {
+    "x": 39.5,
+    "y": 79
+   },
+   "cap": [
+    "DAIR-V2X-C",
+    "A vehicle and an infrastructure pole with its own LiDAR and camera. Synthetic DAIR-V2X-C-style scene."
+   ]
+  },
+  {
+   "ch": 1,
+   "dur": 2.2,
+   "screen": "getdata_dair",
+   "cam": {
+    "x": 30,
+    "y": 22,
+    "s": 1.7
+   },
+   "ptr": {
+    "x": 20,
+    "y": 34.0
+   },
+   "click": true,
+   "cap": [
+    "V2V4Real",
+    "Two vehicles driving together on a highway. Synthetic V2V4Real-style scene."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 1,
+   "dur": 3.0,
+   "screen": "view_v2v4real",
+   "cam": {
+    "x": 50,
+    "y": 48,
+    "s": 1.12
+   },
+   "ptr": {
+    "x": 56,
+    "y": 52
+   },
+   "cap": [
+    "V2V4Real",
+    "Two vehicles driving together on a highway. Synthetic V2V4Real-style scene."
+   ]
+  },
+  {
+   "ch": 1,
+   "dur": 2.2,
+   "screen": "getdata_v2v4real",
+   "cam": {
+    "x": 30,
+    "y": 22,
+    "s": 1.7
+   },
+   "ptr": {
+    "x": 20,
+    "y": 10.9
+   },
+   "click": true,
+   "cap": [
+    "Griffin",
+    "A vehicle and a drone above it, with a Drone view of its own. Synthetic Griffin-style scene."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 1,
+   "dur": 3.0,
+   "screen": "view_griffin",
+   "cam": {
+    "x": 50,
+    "y": 48,
+    "s": 1.12
+   },
+   "ptr": {
+    "x": 55.6,
+    "y": 8.9
+   },
+   "cap": [
+    "Griffin",
+    "A vehicle and a drone above it, with a Drone view of its own. Synthetic Griffin-style scene."
+   ]
+  },
+  {
+   "ch": 2,
+   "dur": 3.5,
+   "screen": "orbit",
+   "cam": {
+    "x": 50,
+    "y": 50,
+    "s": 1
+   },
+   "ptr": {
+    "x": 72,
+    "y": 40
+   },
+   "cap": [
+    "Every agent, one frame",
+    "LiDAR, boxes and camera frustums from two vehicles and a roadside unit, in one right-handed world frame."
+   ]
+  },
+  {
+   "ch": 2,
+   "dur": 3.5,
+   "cam": {
+    "x": 49,
+    "y": 36,
+    "s": 1.6
+   },
+   "ptr": {
+    "x": 56,
+    "y": 40
+   },
+   "cap": [
+    "Get close",
+    "Orbit, pan and zoom through the scene. Boxes stay attached to every actor."
+   ]
+  },
+  {
+   "ch": 2,
+   "dur": 2.6,
+   "cam": {
+    "x": 52,
+    "y": 22,
+    "s": 1.5
+   },
+   "ptr": {
+    "x": 46,
+    "y": 8.9
+   },
+   "click": true,
+   "cap": [
+    "Four ways to look",
+    "Orbit, bird’s-eye, chase and camera views, each one key away."
+   ]
+  },
+  {
+   "ch": 2,
+   "dur": 2.6,
+   "screen": "bev",
+   "cam": {
+    "x": 49,
+    "y": 36,
+    "s": 1.25
+   },
+   "ptr": {
+    "x": 48,
+    "y": 14
+   },
+   "cap": [
+    "Four ways to look",
+    "Orbit, bird’s-eye, chase and camera views, each one key away."
+   ]
+  },
+  {
+   "ch": 2,
+   "dur": 2.4,
+   "cam": {
+    "x": 52,
+    "y": 22,
+    "s": 1.5
+   },
+   "ptr": {
+    "x": 52.6,
+    "y": 8.9
+   },
+   "click": true,
+   "cap": [
+    "Four ways to look",
+    "Orbit, bird’s-eye, chase and camera views, each one key away."
+   ]
+  },
+  {
+   "ch": 2,
+   "dur": 5.0,
+   "screen": "loop_chase",
+   "cam": {
+    "x": 49,
+    "y": 36,
+    "s": 1.25
+   },
+   "ptr": {
+    "x": 60,
+    "y": 45
+   },
+   "cap": [
+    "Ride along",
+    "Follow one agent at street level as the scene plays, with ground truth and predictions overlaid."
+   ]
+  },
+  {
+   "ch": 2,
+   "dur": 3.8,
+   "cam": {
+    "x": 36,
+    "y": 73,
+    "s": 2.0
+   },
+   "ptr": {
+    "x": 34.7,
+    "y": 72.2
+   },
+   "cap": [
+    "Every camera, in sync",
+    "The camera strip follows the playhead and counts the boxes each camera sees."
+   ],
+   "capSide": "right",
+   "capTop": true
+  },
+  {
+   "ch": 3,
+   "dur": 3,
+   "screen": "loop_orbit",
+   "cam": {
+    "x": 50,
+    "y": 50,
+    "s": 1
+   },
+   "ptr": {
+    "x": 60,
+    "y": 45
+   },
+   "cap": [
+    "Play it back",
+    "Step sample by sample, loop, or play at 0.25× to 2×."
+   ]
+  },
+  {
+   "ch": 3,
+   "dur": 3.5,
+   "cam": {
+    "x": 50,
+    "y": 87,
+    "s": 1.7
+   },
+   "ptr": {
+    "x": 22.6,
+    "y": 83.4
+   },
+   "click": true,
+   "cap": [
+    "Play it back",
+    "Step sample by sample, loop, or play at 0.25× to 2×."
+   ],
+   "capTop": true
+  },
+  {
+   "ch": 3,
+   "dur": 4,
+   "cam": {
+    "x": 57,
+    "y": 89,
+    "s": 1.8
+   },
+   "ptr": {
+    "x": 70,
+    "y": 92
+   },
+   "cap": [
+    "Find the bad frames",
+    "Boxes in range, precision, recall and false positives across the clip, under the playhead."
+   ],
+   "capTop": true
+  },
+  {
+   "ch": 4,
+   "dur": 4.5,
+   "screen": "orbit",
+   "cam": {
+    "x": 89,
+    "y": 28,
+    "s": 1.9
+   },
+   "ptr": {
+    "x": 86,
+    "y": 26
+   },
+   "cap": [
+    "Scores beside the scene",
+    "mAP at 0.5 and 0.7, precision, recall and per-class counts. In this demo they come from simulated predictions."
+   ]
+  },
+  {
+   "ch": 4,
+   "dur": 3,
+   "screen": "scrolled",
+   "cam": {
+    "x": 30,
+    "y": 80,
+    "s": 1.6
+   },
+   "ptr": {
+    "x": 8.5,
+    "y": 94.9
+   },
+   "click": true,
+   "cap": [
+    "Compare two runs",
+    "Pick a second run and every score shows its change against it."
+   ],
+   "capSide": "right",
+   "capTop": true
+  },
+  {
+   "ch": 4,
+   "dur": 4.5,
+   "screen": "compare",
+   "cam": {
+    "x": 85,
+    "y": 25,
+    "s": 1.8
+   },
+   "ptr": {
+    "x": 93,
+    "y": 26
+   },
+   "cap": [
+    "Compare two runs",
+    "Pick a second run and every score shows its change against it."
+   ]
+  },
+  {
+   "ch": 5,
+   "dur": 3.5,
+   "screen": "dataset",
+   "cam": {
+    "x": 18,
+    "y": 42,
+    "s": 1.8
+   },
+   "ptr": {
+    "x": 5.5,
+    "y": 40.2
+   },
+   "cap": [
+    "Bring your cluster",
+    "Connect over SSH with your existing config. Coperceive never asks for a password or key."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 5,
+   "dur": 2.4,
+   "cam": {
+    "x": 18,
+    "y": 42,
+    "s": 1.8
+   },
+   "ptr": {
+    "x": 3.6,
+    "y": 46.4
+   },
+   "click": true,
+   "cap": [
+    "Bring your cluster",
+    "Connect over SSH with your existing config. Coperceive never asks for a password or key."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 5,
+   "dur": 4,
+   "screen": "dataset",
+   "cam": {
+    "x": 42,
+    "y": 35,
+    "s": 1.45
+   },
+   "ptr": {
+    "x": 62.9,
+    "y": 43.1
+   },
+   "cap": [
+    "Prepare where the data lives",
+    "Index a dataset on the cluster and prepare its scenes with Slurm, where the data already is."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 5,
+   "dur": 2.4,
+   "cam": {
+    "x": 62,
+    "y": 24,
+    "s": 1.6
+   },
+   "ptr": {
+    "x": 74.4,
+    "y": 27.9
+   },
+   "click": true,
+   "cap": [
+    "Prepare where the data lives",
+    "Index a dataset on the cluster and prepare its scenes with Slurm, where the data already is."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 5,
+   "dur": 4.5,
+   "screen": "stream",
+   "cam": {
+    "x": 42,
+    "y": 12,
+    "s": 2.1
+   },
+   "ptr": {
+    "x": 37.9,
+    "y": 2.6
+   },
+   "cap": [
+    "Stream it, don’t copy it",
+    "Open a cluster scene straight in the viewer. Frames stream over SSH as you play, served by a small CPU job on the cluster, with no download step."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 5,
+   "dur": 3,
+   "cam": {
+    "x": 50,
+    "y": 50,
+    "s": 1
+   },
+   "ptr": {
+    "x": 60,
+    "y": 45
+   },
+   "cap": [
+    "Stream it, don’t copy it",
+    "Open a cluster scene straight in the viewer. Frames stream over SSH as you play, served by a small CPU job on the cluster, with no download step."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 5,
+   "dur": 4.5,
+   "cam": {
+    "x": 30,
+    "y": 38,
+    "s": 1.4
+   },
+   "ptr": {
+    "x": 25,
+    "y": 30
+   },
+   "cap": [
+    "Plan an evaluation",
+    "Pick a pipeline, checkpoint and split. Nothing is submitted until you have seen the full script."
+   ],
+   "capSide": "right",
+   "screen": "neweval"
+  },
+  {
+   "ch": 5,
+   "dur": 2.4,
+   "cam": {
+    "x": 50,
+    "y": 50,
+    "s": 1
+   },
+   "ptr": {
+    "x": 8.2,
+    "y": 32.4
+   },
+   "click": true,
+   "cap": [
+    "Plan an evaluation",
+    "Pick a pipeline, checkpoint and split. Nothing is submitted until you have seen the full script."
+   ],
+   "capSide": "right"
+  },
+  {
+   "ch": 5,
+   "dur": 4,
+   "screen": "history",
+   "cam": {
+    "x": 40,
+    "y": 14,
+    "s": 1.7
+   },
+   "ptr": {
+    "x": 19.6,
+    "y": 15.9
+   },
+   "cap": [
+    "Watch it run",
+    "Jobs with time used against the limit, plus re-run and cancel."
+   ]
+  },
+  {
+   "ch": 5,
+   "dur": 4.5,
+   "cam": {
+    "x": 50,
+    "y": 50,
+    "s": 1
+   },
+   "hidePtr": true,
+   "end": true
+  }
+ ]
+}

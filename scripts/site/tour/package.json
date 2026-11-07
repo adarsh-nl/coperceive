@@ -1,0 +1,7 @@
+{
+  "name": "coperceive-tour-capture",
+  "private": true,
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
