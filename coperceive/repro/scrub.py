@@ -212,25 +212,30 @@ def file_name(path: str) -> str | None:
     return name
 
 
-def scrub_text(text: str) -> str:
+def scrub_text(text: str, markers: tuple[str, ...] = ()) -> str:
     """Remove runtime/personal identifiers and secret-shaped values from plain text."""
     out = text
-    for marker in _runtime_markers():
+    for marker in (*markers, *_runtime_markers()):
         out = out.replace(marker, "[redacted]")
     out = _PERSONAL_IDENTIFIER.sub("[redacted]", out)
     out = _TOKEN_VALUE.sub("[redacted]", out)
     out = _USER_AT.sub("[redacted]", out)
     out = _HOSTNAME.sub("[redacted]", out)
     out = _HOME_PATH.sub(" [redacted] ", out)
+    out = re.sub(r"/scratch/[A-Za-z0-9._-]+", "[redacted-scratch]", out)
+    out = re.sub(r"[A-Za-z]:\\Users\\[^\\\s]+", "[redacted-home]", out)
+    out = re.sub(r"\b[a-z0-9-]+\.(?:hpc\.)?cluster\b", "[redacted-host]", out, flags=re.I)
     return out
 
 
-def scrub_json(value: object) -> object:
+def scrub_json(value: object, markers: tuple[str, ...] = ()) -> object:
     """Scrub a decoded JSON value, including keys/strings in arbitrary schemas."""
     if isinstance(value, str):
-        return scrub_text(value)
+        return scrub_text(value, markers)
     if isinstance(value, list):
-        return [scrub_json(item) for item in value]
+        return [scrub_json(item, markers) for item in value]
     if isinstance(value, dict):
-        return {str(key): scrub_json(item) for key, item in value.items()}
+        return {
+            scrub_text(str(key), markers): scrub_json(item, markers) for key, item in value.items()
+        }
     return value

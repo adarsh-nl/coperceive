@@ -77,7 +77,7 @@ def test_tampered_file_fails_hash(bundle: Path, tmp_path: Path) -> None:
         return data + b"\n" if name.endswith("frame-01.json") else data
 
     tampered = _rewrite(bundle, tmp_path / "tampered.cpbundle", mutate)
-    with pytest.raises(BundleError, match="hash or size mismatch"):
+    with pytest.raises(BundleError, match="hash or size mismatch|larger than declared"):
         open_bundle(tampered, data_root=tmp_path / "data")
 
 
@@ -179,3 +179,85 @@ def test_scrubber_handles_free_text(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "zoe" not in text
     assert "node17" not in text
     assert "/home/" not in text
+
+
+def test_run_id_path_escape_is_refused(bundle: Path, tmp_path: Path) -> None:
+    def mutate(name: str, data: bytes) -> bytes:
+        if name != "bundle.json":
+            return data
+        payload = json.loads(data)
+        payload["run_id"] = "../../../ESCAPED"
+        return json.dumps(payload).encode()
+
+    bad = _rewrite(bundle, tmp_path / "runid.cpbundle", mutate)
+    with pytest.raises(BundleError, match="run_id"):
+        open_bundle(bad, data_root=tmp_path / "data")
+    assert not (tmp_path / "ESCAPED").exists()
+
+
+@pytest.mark.parametrize("name", ["C:evil.json", "frames/CON", "frames/a.", "frames/a "])
+def test_windows_unsafe_names_are_refused(name: str) -> None:
+    from coperceive.bundle.format import safe_member
+
+    with pytest.raises(BundleError):
+        safe_member(name)
+
+
+def test_case_duplicate_and_prefix_clash_are_refused(bundle: Path, tmp_path: Path) -> None:
+    def mutate(name: str, data: bytes) -> bytes:
+        if name != "bundle.json":
+            return data
+        payload = json.loads(data)
+        payload["contents"].append(
+            dict(payload["contents"][0], path=payload["contents"][0]["path"].upper())
+        )
+        return json.dumps(payload).encode()
+
+    bad = _rewrite(bundle, tmp_path / "case.cpbundle", mutate)
+    with pytest.raises(BundleError):
+        open_bundle(bad, data_root=tmp_path / "data")
+
+
+def test_file_count_file_size_and_total_caps(bundle: Path, tmp_path: Path) -> None:
+    from coperceive.bundle.open import OpenLimits
+
+    with pytest.raises(BundleError, match="too many files"):
+        open_bundle(bundle, data_root=tmp_path / "a", limits=OpenLimits(max_files=1))
+    with pytest.raises(BundleError, match="too large"):
+        open_bundle(bundle, data_root=tmp_path / "b", limits=OpenLimits(max_file_bytes=10))
+    with pytest.raises(BundleError, match="uncompressed size cap"):
+        open_bundle(bundle, data_root=tmp_path / "c", limits=OpenLimits(max_total_bytes=10))
+
+
+def test_truncated_zip_is_a_bundle_error(bundle: Path, tmp_path: Path) -> None:
+    data = bundle.read_bytes()[: len(bundle.read_bytes()) // 2]
+    broken = tmp_path / "broken.cpbundle"
+    broken.write_bytes(data)
+    with pytest.raises(BundleError, match="cannot open bundle"):
+        open_bundle(broken, data_root=tmp_path / "data")
+
+
+def test_schema_invalid_manifest_is_refused(bundle: Path, tmp_path: Path) -> None:
+    def mutate(name: str, data: bytes) -> bytes:
+        if name != "bundle.json":
+            return data
+        payload = json.loads(data)
+        del payload["title"]
+        return json.dumps(payload).encode()
+
+    bad = _rewrite(bundle, tmp_path / "schema.cpbundle", mutate)
+    with pytest.raises(BundleError, match="missing title"):
+        open_bundle(bad, data_root=tmp_path / "data")
+
+
+def test_invalid_json_is_scrubbed_as_text(tmp_path: Path) -> None:
+    from coperceive.bundle.export import _scrub_work
+
+    work = tmp_path / "work"
+    work.mkdir()
+    path = work / "bad.json"
+    path.write_text('{"owner": "zoe", not-json /home/zoe', encoding="utf-8")
+    redactions = _scrub_work(work, ("zoe",))
+    text = path.read_text()
+    assert redactions >= 1
+    assert "zoe" not in text

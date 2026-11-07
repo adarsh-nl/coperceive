@@ -30,7 +30,7 @@ def browser() -> Iterator[Browser]:
         try:
             browser = playwright.chromium.launch(headless=True)
         except Exception as exc:  # browser binary absent in unit-test jobs
-            pytest.skip(f"Chromium cannot start: {exc}")
+            _unavailable(f"Chromium cannot start: {exc}")
         yield browser
         browser.close()
 

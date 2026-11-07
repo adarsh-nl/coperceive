@@ -16,7 +16,6 @@ from typing import cast
 
 from coperceive import __version__
 from coperceive.bundle.format import Content, manifest_document, safe_member, sha256_file
-from coperceive.evaluation.config import DEFAULT_CONFIG, load_config
 from coperceive.evaluation.predictions import (
     BOXES_FILE,
     PredictionBox,
@@ -43,13 +42,11 @@ class BundleExportRequest:
     predictions_root: Path
     out: Path
     title: str = ""
-    compare_runs: tuple[str, ...] = ()
     frames: str = "worst:6"
     include_raw: bool = False
     include_full_predictions: bool = False
-    include_figures: bool = False
     created_utc: str | None = None
-    config_path: Path | None = None
+    extra_markers: tuple[str, ...] = ()
 
 
 @dataclass
@@ -97,7 +94,7 @@ def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[st
     return out
 
 
-def _copy_scene_structure(staging: _Staging, scene_dir: Path, work: Path) -> None:
+def _copy_scene_structure(staging: _Staging, scene_dir: Path, work: Path, times: set[int]) -> None:
     for name in (
         "manifest.json",
         "COMPLETE.json",
@@ -110,7 +107,17 @@ def _copy_scene_structure(staging: _Staging, scene_dir: Path, work: Path) -> Non
         if source.is_file():
             target = f"scenes/{scene_dir.name}/{name}"
             (work / target).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, work / target)
+            if name in {"annotations.parquet", "poses.parquet"}:
+                import pyarrow.parquet as pq
+
+                table = pq.read_table(source)
+                if "time_us" in table.column_names:
+                    table = table.filter(
+                        [value in times for value in table.column("time_us").to_pylist()]
+                    )
+                pq.write_table(table, work / target)
+            else:
+                shutil.copy2(source, work / target)
             staging.files[target] = "scene-structure"
 
 
@@ -142,7 +149,7 @@ def _write_frame(
     staging.files[target] = "frame-json"
 
 
-def _scrub_work(work: Path) -> int:
+def _scrub_work(work: Path, markers: tuple[str, ...]) -> int:
     redactions = 0
     for path in work.rglob("*"):
         if not path.is_file():
@@ -151,19 +158,46 @@ def _scrub_work(work: Path) -> int:
             try:
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
+                before = path.read_text(encoding="utf-8", errors="replace")
+                after_text = scrub_text(before, markers)
+                if after_text != before:
+                    redactions += 1
+                path.write_text(after_text, encoding="utf-8")
                 continue
             before = json.dumps(payload, sort_keys=True)
-            after_doc = scrub_json(payload)
+            after_doc = scrub_json(payload, markers)
             after = json.dumps(after_doc, sort_keys=True)
             if after != before:
                 redactions += 1
             path.write_text(json.dumps(after_doc, indent=2) + "\n", encoding="utf-8")
         elif path.suffix.lower() in {".txt", ".log", ".md", ".yaml", ".yml"}:
             before = path.read_text(encoding="utf-8", errors="replace")
-            after_text = scrub_text(before)
+            after_text = scrub_text(before, markers)
             if after_text != before:
                 redactions += 1
             path.write_text(after_text, encoding="utf-8")
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    for path in work.rglob("*.parquet"):
+        table = pq.read_table(path)
+        columns = []
+        changed = False
+        for name in table.column_names:
+            column = table.column(name)
+            if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
+                values = [
+                    scrub_text(value, markers) if isinstance(value, str) else value
+                    for value in column.to_pylist()
+                ]
+                if values != column.to_pylist():
+                    changed = True
+                columns.append(pa.array(values, type=column.type))
+            else:
+                columns.append(column)
+        if changed:
+            redactions += 1
+            pq.write_table(pa.table(dict(zip(table.column_names, columns, strict=True))), path)
     return redactions
 
 
@@ -204,11 +238,21 @@ def export_bundle(request: BundleExportRequest) -> Path:
         (work / "repro").mkdir()
         (work / "repro/card.json").write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
         staging.files["repro/card.json"] = "repro-card"
-        # eval config + metrics
-        config = load_config(request.config_path) if request.config_path else DEFAULT_CONFIG
+        # The config the run actually used, from its own report; never a guess.
         (work / "eval").mkdir()
+        config_doc: object = "unknown"
+        for scene_id, _time_us in frames:
+            candidate = request.predictions_root / run_id / scene_id / "metrics.json"
+            if candidate.is_file():
+                try:
+                    payload = json.loads(candidate.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(payload, dict) and isinstance(payload.get("config"), dict):
+                    config_doc = payload["config"]
+                    break
         (work / "eval/config.json").write_text(
-            json.dumps(config_to_json(config), indent=2) + "\n", encoding="utf-8"
+            json.dumps(config_doc, indent=2) + "\n", encoding="utf-8"
         )
         staging.files["eval/config.json"] = "eval-config"
         for scene_id, _time_us in frames:
@@ -236,7 +280,7 @@ def export_bundle(request: BundleExportRequest) -> Path:
         # scenes structure + frames
         for index, (scene_id, time_us) in enumerate(frames):
             scene_dir = request.scenes_root / scene_id
-            _copy_scene_structure(staging, scene_dir, work)
+            _copy_scene_structure(staging, scene_dir, work, {t for s, t in frames if s == scene_id})
             _write_frame(staging, work, scene_dir, scene_id, time_us, index)
             if request.include_raw:
                 scene = read_scene(scene_dir)
@@ -255,7 +299,7 @@ def export_bundle(request: BundleExportRequest) -> Path:
                         "note": "raw files included; check the dataset licence before sharing",
                     }
                 )
-        staging.redactions = _scrub_work(work)
+        staging.redactions = _scrub_work(work, request.extra_markers)
         # manifest over every file except itself
         contents: list[Content] = []
         for rel in sorted(staging.files):
@@ -289,27 +333,17 @@ def export_bundle(request: BundleExportRequest) -> Path:
     return out
 
 
-def config_to_json(config: object) -> dict[str, object]:
-    from coperceive.evaluation.config import config_json as convert
-
-    return convert(config)  # type: ignore[arg-type]
-
-
 def preview_bundle(request: BundleExportRequest) -> dict[str, object]:
     """The review manifest (files, sizes, total, scrub count) without keeping an archive."""
+    from dataclasses import replace
+
     temporary = request.out.parent / f".{request.out.name}.preview"
     request.out.parent.mkdir(parents=True, exist_ok=True)
     try:
-        path = export_bundle(replace_request_out(request, temporary))
+        path = export_bundle(replace(request, out=temporary))
         with zipfile.ZipFile(path) as archive:
             manifest = json.loads(archive.read(MANIFEST))
         manifest["total_bytes"] = sum(int(item["size"]) for item in manifest["contents"])
         return manifest
     finally:
         temporary.unlink(missing_ok=True)
-
-
-def replace_request_out(request: BundleExportRequest, out: Path) -> BundleExportRequest:
-    from dataclasses import replace
-
-    return replace(request, out=out)

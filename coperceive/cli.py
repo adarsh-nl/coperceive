@@ -50,9 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_export.add_argument("--predictions", required=True, help="Predictions root.")
     bundle_export.add_argument("-o", "--out", required=True, help="Output .cpbundle path.")
     bundle_export.add_argument("--title", default="")
-    bundle_export.add_argument("--compare", action="append", default=[], metavar="RUN")
     bundle_export.add_argument("--frames", default="worst:6")
-    bundle_export.add_argument("--config", default=None, help="Eval config YAML used for the run.")
     bundle_export.add_argument("--include-raw", action="store_true")
     bundle_export.add_argument("--include-full-predictions", action="store_true")
     bundle_export.set_defaults(func=_bundle_export)
@@ -62,7 +60,6 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_preview.add_argument("--predictions", required=True)
     bundle_preview.add_argument("--title", default="")
     bundle_preview.add_argument("--frames", default="worst:6")
-    bundle_preview.add_argument("--config", default=None)
     bundle_preview.add_argument("--include-raw", action="store_true")
     bundle_preview.add_argument("--include-full-predictions", action="store_true")
     bundle_preview.set_defaults(func=_bundle_preview)
@@ -546,11 +543,9 @@ def _bundle_export(args: argparse.Namespace) -> None:
                 predictions_root=Path(args.predictions),
                 out=Path(args.out),
                 title=args.title,
-                compare_runs=tuple(args.compare),
                 frames=args.frames,
                 include_raw=args.include_raw,
                 include_full_predictions=args.include_full_predictions,
-                config_path=Path(args.config) if args.config else None,
             )
         )
     except (OSError, ValueError) as exc:
@@ -573,7 +568,6 @@ def _bundle_preview(args: argparse.Namespace) -> None:
                 frames=args.frames,
                 include_raw=args.include_raw,
                 include_full_predictions=args.include_full_predictions,
-                config_path=Path(args.config) if args.config else None,
             )
         )
     except (OSError, ValueError) as exc:
