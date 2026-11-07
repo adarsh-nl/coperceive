@@ -14,6 +14,7 @@
 
 set -euo pipefail
 SCRATCH="/scratch/$USER/$SLURM_JOB_ID"
+RUN_ID=r1
 mkdir -p "$SCRATCH"
 trap 'rm -rf "$SCRATCH"' EXIT
 export TMPDIR="$SCRATCH/tmp"
@@ -38,8 +39,8 @@ RC=$?
 set -e
 echo "model run exit $RC"
 
-mkdir -p "$SCRATCH/out/"r1
-<python> - "$SCRATCH/out/"r1"/environment.json" <<'PY' || true
+mkdir -p "$SCRATCH/out/$RUN_ID"
+<python> - "$SCRATCH/out/$RUN_ID/environment.json" <<'PY' || true
 import hashlib
 import json
 import os
@@ -127,6 +128,6 @@ rsync -a "$SCRATCH/out/" <tmp>/results/"$SLURM_JOB_ID"/
 # The work directory's logs and artefacts, not its inputs or any toolkit copy.
 rsync -a --include='*/' --include='*.log' --include='artifacts/***' --exclude='*' --prune-empty-dirs "$SCRATCH/work/" <tmp>/results/"$SLURM_JOB_ID"/work/
 mkdir -p <tmp>/predictions/r1
-rsync -a "$SCRATCH/out/r1/" <tmp>/predictions/r1/
+rsync -a "$SCRATCH/out/$RUN_ID/" <tmp>/predictions/r1/
 echo "done: <tmp>/predictions/r1 (exit $RC)"
 exit "$RC"
