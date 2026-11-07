@@ -266,13 +266,22 @@ def test_the_buffer_bar_fills_and_playback_buffers_then_resumes(
         timeout_s=20.0,
     )
     start = session.slider("aria-valuenow")
-    # Auto-resume: no click, the label clears, playback runs again.
-    session.wait_for(
-        lambda: (
+
+    def resumed() -> bool:
+        stats = page.evaluate("window.__COPERCEIVE_BUFFER_STATS__ || null")
+        if not stats or stats["stalled"] or stats["buffered_us"] < 500_000:
+            return False
+        return (
             page.locator(".clock .buffering").count() == 0
             and page.locator("button[aria-label=Pause]").count() == 1
             and session.slider("aria-valuenow") > start
-        ),
+        )
+
+    # Auto-resume: no click, the label clears and playback runs again. Check the
+    # scheduler state too: while the underrun pause is being applied the label
+    # can be hidden for a moment with no buffer yet, which is not a resume.
+    session.wait_for(
+        resumed,
         "playback to resume by itself after the buffer refills",
         timeout_s=30.0,
     )
