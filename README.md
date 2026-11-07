@@ -49,17 +49,19 @@ Get the latest release for your platform from [GitHub Releases](https://github.c
 
 ## Release Notes
 
-### v0.1.1 (in development)
-- **Installers across 3 operating systems**: Windows NSIS installer (`.exe`) with silent install/uninstall, Linux Debian package (`.deb`) and AppImage, and macOS Apple Silicon (`arm64`) and Intel (`x86_64`) disk images (`.dmg`) with bundled standalone Python runtime (#134). The Intel Mac build is cross-compiled and tested under Rosetta 2 emulation in CI, but remains untested on bare-metal Intel Mac hardware until verified.
+### v0.1.1
+- **First-run demo mode**: Empty libraries offer an offline 4-agent cooperative intersection demo scene (`demo-intersection-000`, generated on demand by the bundled Python runtime into `<state_dir>/demo/` with synthetic single-agent vs cooperative-fusion prediction runs) alongside a one-click shortcut to the Griffin sample in Get Data (#142, #152).
+- **Viewer styles & "seen by" colouring**: Choose Classic, Studio, Instrument, or Cinema in `Settings → Viewer → Style`, and colour boxes by observer (`both`, `ego only`, `other agent`) on datasets with shared cross-agent track IDs (OPV2V and Griffin) (#144).
+- **Installers & auto-updates across 3 operating systems**: Windows NSIS installer (`.exe`) with silent install/uninstall, Linux Debian package (`.deb`) and AppImage, and macOS Apple Silicon (`arm64`) and Intel (`x86_64`) disk images (`.dmg`) with bundled standalone Python runtime and a 4-target `latest.json` updater manifest (#134, #140, #148). The Intel Mac build is cross-compiled and tested under Rosetta 2 emulation in CI, but remains untested on bare-metal Intel Mac hardware until verified.
+- **Evaluation, reproducibility & paper export**: Multi-run comparison breakdowns, worst-frame failure ranking, seeded robustness perturbations (`#136`), secret-scrubbed reproducibility cards (`#137`), Overleaf `.zip` paper bundle export (`#138`), and secret-free lab server profile sharing (`#139`).
 - **V2V4Real 10 Hz playback & optional cameras**: V2V4Real plays at 10 Hz (0.1 s per frame) and camera records are optional per manifest for LiDAR-only dataset validation (#132).
 - **Windows & Linux platform behaviour**: Native window decorations on Windows and Linux, application menu with `Ctrl` shortcuts, dynamic reveal in file manager ("Show in Explorer", "Show in folder", "Show in Finder"), Windows OpenSSH support (`ControlMaster=no`), pause/resume for download jobs on Windows, strict ACL checks on credentials and state files, and pure Rust zip diagnostics export (#129).
 - **Security & dependency updates**: Upgraded to Pillow 13.0.0 in `uv.lock` and tokio 1.54.1, restricted image decoding to PNG/JPEG, and dropped Python 3.10 support (minimum Python is 3.11) following Pillow 13's deprecation (#130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
-- **Dataset adapters & detection**: Built-in adapters and directory detection for real-world V2V4Real (LiDAR-only test split, box angles in degrees `[roll, yaw, pitch]`, #126, #131) and DAIR-V2X-C cooperative formats (#126).
+- **Dataset adapters & detection**: Built-in adapters and directory detection for real-world V2V4Real (LiDAR-only test split, box angles in degrees `[roll, yaw, pitch]`, #126, #131), DAIR-V2X-C cooperative formats (#126), and generic multi-view scenes (#133).
 - **CARLA town road maps**: One-click download and alignment for CARLA OpenDRIVE HD road maps with package-verified (Town03, Town06, Town07, Town10HD) and matching public mirrors (not checked against the CARLA package: Town01, Town02, Town04, Town05) (#128).
-- **Cross-platform desktop foundation**: Windows and Linux build configurations and headless smoke test pipelines in CI (#122).
-- **Cross-platform diagnostics**: System log directories, app data paths, and clipboard integration abstracted across macOS, Windows, and Linux.
+- **Cross-platform desktop foundation & diagnostics**: Windows and Linux build configurations, headless smoke test pipelines in CI (#122), and cross-platform system log, app data, and clipboard abstractions.
 - **Hardened release packaging**: Strict asset packaging in release workflows and automated push CI triggers for `release/**` branches.
-- *Full details: [CHANGELOG.md](CHANGELOG.md)*
+- *Full details: [v0.1.1 Release Notes](docs/release/v0.1.1-notes.md) · [CHANGELOG.md](CHANGELOG.md)*
 
 ### v0.1.0 (2026-11-05)
 - **Native macOS desktop app**: Tauri-based desktop application with unified toolbar and redesigned layout.
