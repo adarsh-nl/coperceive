@@ -108,7 +108,10 @@ def encode_still(src: Path, dest: Path, quality: int) -> None:
     image.save(dest, "WEBP", quality=quality, method=6)
 
 
-def encode_loop(frames: Path, stem: Path, crf_mp4: str, crf_webm: str) -> None:
+LOOP_SIZE = (1800, 1124)
+
+
+def encode_loop(frames: Path, stem: Path, crf_mp4: str) -> None:
     import imageio_ffmpeg
     from PIL import Image
 
@@ -116,7 +119,6 @@ def encode_loop(frames: Path, stem: Path, crf_mp4: str, crf_webm: str) -> None:
     if len(pngs) != 80:
         raise SystemExit(f"{frames} has {len(pngs)} frames, expected 80")
     ffmpeg = imageio_ffmpeg.get_ffmpeg_exe()
-    even = "scale=trunc(iw/2)*2:trunc(ih/2)*2"
     subprocess.check_call(
         [
             ffmpeg,
@@ -126,7 +128,7 @@ def encode_loop(frames: Path, stem: Path, crf_mp4: str, crf_webm: str) -> None:
             "-i",
             str(frames / "f%03d.png"),
             "-vf",
-            even,
+            f"scale={LOOP_SIZE[0]}:{LOOP_SIZE[1]}",
             "-c:v",
             "libx264",
             "-pix_fmt",
@@ -139,27 +141,13 @@ def encode_loop(frames: Path, stem: Path, crf_mp4: str, crf_webm: str) -> None:
             str(stem.with_suffix(".mp4")),
         ]
     )
-    subprocess.check_call(
-        [
-            ffmpeg,
-            "-y",
-            "-framerate",
-            "10",
-            "-i",
-            str(frames / "f%03d.png"),
-            "-vf",
-            even,
-            "-c:v",
-            "libvpx-vp9",
-            "-b:v",
-            "0",
-            "-crf",
-            crf_webm,
-            "-an",
-            str(stem.with_suffix(".webm")),
-        ]
-    )
-    Image.open(pngs[0]).convert("RGB").save(stem.with_suffix(".webp"), "WEBP", quality=80, method=6)
+    poster = Image.open(pngs[0]).convert("RGB")
+    if poster.size != LOOP_SIZE:
+        poster = poster.resize(LOOP_SIZE, Image.Resampling.LANCZOS)
+    poster.save(stem.with_suffix(".webp"), "WEBP", quality=80, method=6)
+    webm = stem.with_suffix(".webm")
+    if webm.exists():
+        webm.unlink()
 
 
 def file_bytes() -> int:
@@ -261,8 +249,10 @@ def main() -> None:
         desk_root = WORK / "desk-scenes"
         desk_scene = desk_root / "demo-junction"
         if not (desk_scene / "manifest.json").is_file():
+            if desk_scene.exists():
+                shutil.rmtree(desk_scene)
             desk_root.mkdir(parents=True, exist_ok=True)
-            subprocess.check_call(["cp", "-cR", str(merged / "demo-junction"), str(desk_scene)])
+            shutil.copytree(merged / "demo-junction", desk_scene)
         start_server(
             [str(PY), "-m", "coperceive", "serve", "--root", str(desk_root), "--port", "8732"],
             WORK / "serve-8732.log",
@@ -349,7 +339,7 @@ def main() -> None:
             raise SystemExit(f"missing capture {src}")
         encode_still(src, PUBLIC / f"{key}.webp", 84)
     for key, frames in loops:
-        encode_loop(frames, PUBLIC / key, "32", "42")
+        encode_loop(frames, PUBLIC / key, "32")
 
     first_bytes = sum((PUBLIC / f"{key}.webp").stat().st_size for key in sorted(first))
     quality = 84
@@ -363,13 +353,12 @@ def main() -> None:
     if first_bytes > FIRST_BUDGET:
         raise SystemExit(f"opening chapter is {first_bytes} bytes, over {FIRST_BUDGET}")
 
-    crf_mp4, crf_webm = 32, 42
-    while file_bytes() > BUDGET and int(crf_mp4) < 40:
-        crf_mp4 = str(int(crf_mp4) + 3)
-        crf_webm = str(int(crf_webm) + 4)
-        log(f"media is over 8 MB; re-encoding loops at crf {crf_mp4}/{crf_webm}")
+    crf_mp4 = 32
+    while file_bytes() > BUDGET and crf_mp4 < 40:
+        crf_mp4 += 3
+        log(f"media is over 8 MB; re-encoding loops at crf {crf_mp4}")
         for key, frames in loops:
-            encode_loop(frames, PUBLIC / key, crf_mp4, crf_webm)
+            encode_loop(frames, PUBLIC / key, str(crf_mp4))
     still_q = 84
     while file_bytes() > BUDGET and still_q > 60:
         still_q -= 6

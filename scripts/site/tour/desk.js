@@ -6,19 +6,19 @@ const PORT = process.env.PORT || 8732;
 const SEED = `() => {
   const scenes = [
     { scene_id: "demo-junction", path: "~/coperceive-data/demo/demo-junction", dataset_name: "Demo · synthetic", town: "Junction", duration_s: 9.9, agent_count: 3, sample_count: 100, size_bytes: 104857600, has_images: "full", has_thumbnail: false, map_name: null, has_map: false, is_complete: true, is_valid: true },
-    { scene_id: "scene-0001", path: "~/coperceive-data/opv2v/scene-0001", dataset_name: "OPV2V · imported", town: "Town03", duration_s: 16.0, agent_count: 3, sample_count: 160, size_bytes: 289406976, has_images: "full", has_thumbnail: false, map_name: "Carla/Maps/Town03", has_map: true, is_complete: true, is_valid: true },
-    { scene_id: "scene-0002", path: "~/coperceive-data/v2xset/scene-0002", dataset_name: "V2XSet · imported", town: "Town05", duration_s: 19.6, agent_count: 4, sample_count: 196, size_bytes: 342884352, has_images: "full", has_thumbnail: false, map_name: "Carla/Maps/Town05", has_map: true, is_complete: true, is_valid: true },
-    { scene_id: "Town03-000", path: "~/coperceive-data/griffin/Town03-000", dataset_name: "Griffin · vehicle + drone", town: "Town03", duration_s: 24.2, agent_count: 2, sample_count: 242, size_bytes: 512753664, has_images: "full", has_thumbnail: false, map_name: null, has_map: true, is_complete: true, is_valid: true }
+    { scene_id: "scene-0001", path: "~/coperceive-data/opv2v-style/scene-0001", dataset_name: "OPV2V-style · synthetic", town: "Town03", duration_s: 16.0, agent_count: 3, sample_count: 160, size_bytes: 289406976, has_images: "full", has_thumbnail: false, map_name: "Carla/Maps/Town03", has_map: true, is_complete: true, is_valid: true },
+    { scene_id: "scene-0002", path: "~/coperceive-data/v2xset-style/scene-0002", dataset_name: "V2XSet-style · synthetic", town: "Town05", duration_s: 19.6, agent_count: 4, sample_count: 196, size_bytes: 342884352, has_images: "full", has_thumbnail: false, map_name: "Carla/Maps/Town05", has_map: true, is_complete: true, is_valid: true },
+    { scene_id: "Town03-000", path: "~/coperceive-data/griffin-style/Town03-000", dataset_name: "Griffin-style · synthetic", town: "Town03", duration_s: 24.2, agent_count: 2, sample_count: 242, size_bytes: 512753664, has_images: "full", has_thumbnail: false, map_name: null, has_map: true, is_complete: true, is_valid: true }
   ];
   const storage = { library_root: "~/coperceive-data", is_configured: true, used_bytes: 1249902592, free_bytes: 440401920000, total_bytes: 1000000000000, volume_name: "Data", scene_count: 4 };
   window.dispatchEvent(new CustomEvent("coperceive-test-library-seed", { detail: { scenes, storage } }));
   const catalog = ${catalogJson};
   window.dispatchEvent(new CustomEvent("coperceive-test-catalog-seed", { detail: { catalog, presetBytes: { "griffin:dev": 412000000, "griffin:full": 6840000000 } } }));
-  window.dispatchEvent(new CustomEvent("coperceive-test-open-folder-seed", { detail: { dataRoot: "~/coperceive-data/opv2v", recentRoots: ["~/coperceive-data/opv2v", "~/coperceive-data/v2xset", "~/coperceive-data/griffin"] } }));
+  window.dispatchEvent(new CustomEvent("coperceive-test-open-folder-seed", { detail: { dataRoot: "~/coperceive-data/opv2v-style", recentRoots: ["~/coperceive-data/opv2v-style", "~/coperceive-data/v2xset-style", "~/coperceive-data/griffin-style"] } }));
   const profile = {
     id: "lab-gpu", schema_version: 1,
     profile: { name: "Lab GPU cluster", ssh_alias: "lab-gpu", host: "hpc.example.org", user: "researcher",
-      data_roots: ["/datasets/opv2v", "/datasets/v2xset"], scratch_template: "/scratch/demo/coperceive",
+      data_roots: ["/datasets/demo-synthetic"], scratch_template: "/scratch/demo/coperceive",
       results_root: "/home/researcher/results", code_roots: ["/home/researcher/code/opencood"], scheduler: "slurm",
       defaults: { partition: "gpu", account: null, qos: "normal", gres: "gpu:a100:1", time_limit: "02:00:00", memory: "32G", cpus_per_task: 8 },
       environment: { kind: "conda", modules: ["cuda/12.1"], interpreter: "/home/researcher/miniconda3/envs/coperceive/bin/python", container_image: null, coperceive_command: ["coperceive"], wheelhouse: null, compute_has_internet: false },
@@ -38,16 +38,16 @@ const DATASET = `() => {
     const dur = 10 + (i % 5) * 2.5, agents = 2 + (i % 3), frames = Math.round(dur * 10);
     scenes.push({ scene_id: id, sample_count: frames, duration_s: dur, agent_count: agents, sensors: { sensors: agents * 5, camera_samples: frames * agents * 4, lidar_samples: frames * agents } });
     const st = i < 4 ? "ready" : (i < 7 ? "preparing" : "not_prepared");
-    statuses.push({ scene_id: id, state: st, reason: null, job_id: st === "not_prepared" ? null : "700001", prepared_unix: st === "ready" ? 1762430000 : null, scene_dir: st === "ready" ? "/scratch/researcher/coperceive-cache/opv2v/test/" + id : null, progress_percent: st === "ready" ? 100 : (st === "preparing" ? 60 - (i - 4) * 15 : 0), images: "originals" });
+    statuses.push({ scene_id: id, state: st, reason: null, job_id: st === "not_prepared" ? null : "700001", prepared_unix: st === "ready" ? 1762430000 : null, scene_dir: st === "ready" ? "/scratch/researcher/coperceive-cache/demo-synthetic/" + id : null, progress_percent: st === "ready" ? 100 : (st === "preparing" ? 60 - (i - 4) * 15 : 0), images: "originals" });
   }
   const licence = { status: "unknown", spdx: null, notice: "Check the dataset licence", links: [] };
-  const dataset = { schema: "coperceive-cluster-detect-1", path: "/datasets/opv2v/test", adapter: "opv2v", raw_root: "/datasets/opv2v", split: "test", params: { split: "test" }, licence, scene_count: 44, status: "ok", reason: null };
-  const indexDoc = { schema: "coperceive-cluster-index-1", adapter: "opv2v", raw_root: "/datasets/opv2v", split: "test", params: { split: "test" }, licence,
-    fingerprint: { algorithm: "sha1-mtime-size-v1", digest: "a1b2c3d4e5f6", entries: 44, truncated: false }, cache: { relative_path: "coperceive-cache/opv2v/a1b2c3d4e5f6/test" },
+  const dataset = { schema: "coperceive-cluster-detect-1", path: "/datasets/demo-synthetic", adapter: "demo dataset (synthetic)", raw_root: "/datasets/demo-synthetic", split: null, params: {}, licence, scene_count: 44, status: "ok", reason: null };
+  const indexDoc = { schema: "coperceive-cluster-index-1", adapter: "demo dataset (synthetic)", raw_root: "/datasets/demo-synthetic", split: null, params: {}, licence,
+    fingerprint: { algorithm: "sha1-mtime-size-v1", digest: "a1b2c3d4e5f6", entries: 44, truncated: false }, cache: { relative_path: "coperceive-cache/demo-synthetic/a1b2c3d4e5f6" },
     scene_count: 44, scenes, errors: [], truncated: false, elapsed_ms: 310, storage_estimate_bytes: 5200000000, storage_estimate_label: "~5.2 GB" };
   window.dispatchEvent(new CustomEvent("coperceive-open-dataset", { detail: { profile, dataset, indexDoc, statuses,
-    submittedJobs: [{ jobId: "700001", planId: "plan-opv2v-test", jobName: "coperceive-prepare-opv2v", scenes: "all", state: "running", reason: null }],
-    cacheRoot: "/scratch/researcher/coperceive-cache/opv2v/a1b2c3d4e5f6/test", selectedSceneId: "scene_0000" } }));
+    submittedJobs: [{ jobId: "700001", planId: "plan-demo-prepare", jobName: "coperceive-prepare-demo", scenes: "all", state: "running", reason: null }],
+    cacheRoot: "/scratch/researcher/coperceive-cache/demo-synthetic/a1b2c3d4e5f6", selectedSceneId: "scene_0000" } }));
 }`;
 
 (async () => {
@@ -117,7 +117,7 @@ const DATASET = `() => {
   const entries = [
     { job_id: "700214", plan_id: "plan-my-detector-test", state: "running", active: true, elapsed: "00:41:12", time_limit: "02:00:00", partition: "gpu", started: "2026-11-06T13:02:11", ended: null, plan_available: true },
     { job_id: "700198", plan_id: "plan-my-detector-validate", state: "completed", active: false, elapsed: "01:12:40", time_limit: "02:00:00", partition: "gpu", started: "2026-11-05T21:10:03", ended: "2026-11-05T22:22:43", plan_available: true },
-    { job_id: "700001", plan_id: "plan-opv2v-prepare", state: "completed", active: false, elapsed: "00:18:05", time_limit: "01:00:00", partition: "short", started: "2026-11-05T19:40:00", ended: "2026-11-05T19:58:05", plan_available: true } ];
+    { job_id: "700001", plan_id: "plan-demo-prepare", state: "completed", active: false, elapsed: "00:18:05", time_limit: "01:00:00", partition: "short", started: "2026-11-05T19:40:00", ended: "2026-11-05T19:58:05", plan_available: true } ];
   await p.evaluate((entries) => window.dispatchEvent(new CustomEvent("coperceive-test-run-history-seed", { detail: { profiles: [window.__TOUR_PROFILE__], entries } })), entries);
   await p.waitForTimeout(800); await shoot('history');
   await rect('history.side', p.locator('.c-sidebar button', { hasText: 'Run history' }));

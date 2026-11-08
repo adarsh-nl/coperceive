@@ -33,7 +33,7 @@
   },
   {
    "key": "dataset",
-   "alt": "HPC workspace with an OPV2V test split being prepared on the cluster",
+   "alt": "HPC workspace preparing a synthetic demo dataset on the cluster",
    "capture_output": "desk/dataset.png"
   },
   {

@@ -167,8 +167,8 @@ export function ProductTour({ chapter, controls = true, autoplay = true, record 
                       className="tour-shot"
                       src={`${mediaBase(screen.key)}.webp`}
                       alt={alt}
-                      width={1440}
-                      height={900}
+                      width={1800}
+                      height={1124}
                       style={{ opacity: on ? 1 : 0 }}
                       aria-hidden={on ? undefined : true}
                     />
@@ -182,6 +182,8 @@ export function ProductTour({ chapter, controls = true, autoplay = true, record 
                     }}
                     className="tour-shot"
                     poster={`${mediaBase(screen.key)}.webp`}
+                    width={1800}
+                    height={1124}
                     muted
                     playsInline
                     loop
@@ -190,7 +192,6 @@ export function ProductTour({ chapter, controls = true, autoplay = true, record 
                     style={{ opacity: on ? 1 : 0 }}
                     aria-hidden={on ? undefined : true}
                   >
-                    <source src={`${mediaBase(screen.key)}.webm`} type="video/webm" />
                     <source src={`${mediaBase(screen.key)}.mp4`} type="video/mp4" />
                   </video>
                 );
@@ -316,11 +317,7 @@ export function ProductTour({ chapter, controls = true, autoplay = true, record 
               </svg>
             )}
           </button>
-          <div
-            className="tour-chapters"
-            role={reduced ? "tablist" : "group"}
-            aria-label="Chapters"
-          >
+          <div className="tour-chapters" role="group" aria-label="Chapters">
             {spec.chapters.map((label, index) => {
               const current = frame.step.ch === index;
               const fill = `${Math.round(chapterProgress(tl, index, t) * 1000) / 10}%`;
@@ -329,9 +326,7 @@ export function ProductTour({ chapter, controls = true, autoplay = true, record 
                   key={label}
                   type="button"
                   className="tour-btn tour-chap"
-                  role={reduced ? "tab" : undefined}
-                  aria-selected={reduced ? current : undefined}
-                  aria-current={!reduced && current ? "step" : undefined}
+                  aria-current={current ? "step" : undefined}
                   onClick={() => seek(index)}
                 >
                   <span className="tour-chap-label" style={{ color: current ? "#F4F4F5" : "#A1A1AA" }}>

@@ -6,7 +6,7 @@ function needles() {
   const fromEnv = [process.env.TOUR_HOSTNAME, process.env.TOUR_USER, process.env.TOUR_HOME]
     .map((value) => (value || "").trim())
     .filter((value) => value.length >= 3);
-  return ["$USER", "$HOME", "tudelft", ...fromEnv];
+  return ["$USER", "$HOME", "tudelft", "utwente", "ewi.utwente.nl", "nanjaiyalatha", ...fromEnv];
 }
 
 function hitsIn(text) {
