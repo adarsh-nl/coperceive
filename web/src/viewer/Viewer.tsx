@@ -73,6 +73,15 @@ import PredictionsBlock, { LineSample } from "./predictions";
 import PanelState from "../desktop/PanelState";
 import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { useCameraStripMode } from "./cameraStripSetting";
+import { useStreamingSettings } from "./streamingSettings";
+import {
+  createStreamBuffer,
+  percentile,
+  rollingMegabytesPerSecond,
+  type FrameInfo,
+  type StreamBuffer,
+  type StreamProgress,
+} from "./streamBuffer";
 import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
 import { SPLIT_MAX, SPLIT_MIN } from "./appearance";
 import {
@@ -285,12 +294,29 @@ const VIEWPOINTS: { id: Viewpoint; label: string; shortcut: string }[] = [
   { id: "camera", label: "Camera", shortcut: "5" },
 ];
 
-const PREFETCH_FRAMES = 4;
+/**
+ * Prediction runs keep the small fixed horizon (their frames are tiny); the
+ * point-cloud/frame stream uses the time-based buffer in `streamBuffer.ts`.
+ */
+const PREDICTION_PREFETCH_FRAMES = 4;
 /**
  * A playback hold longer than this shows "Buffering…". It stays up until a sample
  * advances on time again, so a slow link reads as one steady state, not a flicker.
  */
 const BUFFERING_AFTER_MS = 60;
+/**
+ * An underrun has to persist this long before playback pauses for the buffer:
+ * a single slow frame should hold the clock (the drawn-hold logic above) but not
+ * flip Play into Pause and back.
+ */
+const UNDERRUN_GRACE_MS = 150;
+/**
+ * After an explicit Play the underrun guard stands down for this long, so a
+ * click on Play always gets the current sample drawn before a pause can win.
+ */
+const PLAY_GRACE_MS = 1000;
+/** How often the optional streaming stats line re-reads the cache and frame timings. */
+const STREAM_STATS_INTERVAL_MS = 500;
 
 function colorFor(agentType: string): number {
   return COLORS[agentType] ?? 0xb7b1a6;
@@ -751,6 +777,47 @@ function poseImagePlanes(stage: Stage, frame: FrameDocument, hidden: Record<stri
   }
 }
 
+/** The scheduler's state before the first fetch; keeps the buffer bar at zero. */
+const EMPTY_STREAM_PROGRESS: StreamProgress = {
+  sceneId: "",
+  index: 0,
+  bufferedAheadUs: 0,
+  targetUs: 0,
+  stalled: false,
+  resumable: true,
+  readyFrames: 0,
+  pending: 0,
+  lastNeeded: 0,
+  atEnd: true,
+};
+
+/** The scheduler only needs the sweeps and cameras a frame document lists. */
+function frameInfo(body: FrameDocument): FrameInfo {
+  return {
+    timeUs: body.time_us,
+    pointSensors: body.point_sensors
+      .filter((sensor) => sensor.count > 0)
+      .map((sensor) => ({ agentId: sensor.agent_id, sensorId: sensor.sensor_id, count: sensor.count })),
+    cameras: body.frustums.map((frustum) => ({
+      agentId: frustum.agent_id,
+      sensorId: frustum.sensor_id,
+      hasImage: frustum.has_image !== false,
+    })),
+  };
+}
+
+/** The optional streaming stats line (Settings → Viewer → Show streaming stats). */
+type StreamStatsLine = {
+  bufferedSeconds: number;
+  targetSeconds: number;
+  mbPerSecond: number;
+  loadP50: number | null;
+  loadP95: number | null;
+  cacheMegabytes: number;
+  readyFrames: number;
+  cancelledRequests: number;
+};
+
 async function drawFrame(
   stage: Stage,
   frame: FrameDocument,
@@ -898,41 +965,6 @@ function recordShownTimes(times: { points: number | null; boxes: number | null }
   if (list.length > 2000) list.splice(0, list.length - 2000);
 }
 
-function prefetchAhead(
-  cache: FrameCache,
-  summary: SceneSummary,
-  frameIndex: number,
-  token: string,
-  stillWanted: () => boolean,
-) {
-  const times = summary.times_us.slice(frameIndex + 1, frameIndex + 1 + PREFETCH_FRAMES);
-  for (const time of times) {
-    // Choosing another scene stops the old scene's prefetch at once: the choice changes the
-    // scene id synchronously, while the old summary lives on until the new one arrives. Without
-    // this check every frame tick between the two keeps asking for old-scene frames, and their
-    // requests queue the new scene's summary behind them.
-    if (!stillWanted()) {
-      return;
-    }
-    void cache
-      .loadFrame(summary.scene_id, time, token)
-      .then((frame) => {
-        if (!stillWanted()) {
-          return;
-        }
-        for (const sensor of frame.point_sensors) {
-          if (sensor.count === 0) {
-            continue;
-          }
-          void cache
-            .loadPoints(summary.scene_id, time, sensor.agent_id, sensor.sensor_id, token)
-            .catch(() => undefined);
-        }
-      })
-      .catch(() => undefined);
-  }
-}
-
 function syncMotion(stage: Stage, frame: FrameDocument, types: Map<string, string>, hidden: Record<string, boolean>) {
   const alive = new Set<string>();
   for (const agent of frame.agents) {
@@ -1065,6 +1097,9 @@ declare global {
         strip_px?: number;
       };
       last_loop?: boolean;
+      buffer_target_seconds?: number;
+      client_memory_limit_bytes?: number;
+      show_stream_stats?: boolean;
     };
     __COPERCEIVE_VIEWER_STATE__?: unknown;
     __COPERCEIVE_SHOW_TOAST__?: (text: string, type?: "error" | "info") => void;
@@ -1098,6 +1133,23 @@ declare global {
       frame_misses: number;
       point_hits: number;
       point_misses: number;
+      frame_bytes: number;
+      point_bytes: number;
+      total_bytes: number;
+      cancelled: number;
+      evicted: number;
+      loaded_bytes: number;
+    };
+    __COPERCEIVE_BUFFER_STATS__?: {
+      buffered_seconds: number;
+      target_seconds: number;
+      buffered_us: number;
+      target_us: number;
+      stalled: boolean;
+      resumable: boolean;
+      ready_frames: number;
+      pending: number;
+      cache_bytes: number;
     };
     __COPERCEIVE_FORCE_MOTION__?: boolean;
     __COPERCEIVE_VIEW_SETTINGS__?: () => {
@@ -1847,6 +1899,10 @@ export default function Viewer({
   // for it before moving on, so the clock never runs ahead of what is drawn.
   const drawnRef = useRef<string | null>(null);
   const [buffering, setBuffering] = useState(false);
+  // The time-based stream buffer's last report (samples ready ahead, stall state).
+  const [bufferProgress, setBufferProgress] = useState<StreamProgress>(EMPTY_STREAM_PROGRESS);
+  // The optional streaming stats line; null unless Settings → Viewer turns it on.
+  const [streamStats, setStreamStats] = useState<StreamStatsLine | null>(null);
   const orbitHomeRef = useRef<CameraGoal | null>(null);
   const settleRef = useRef(false);
   // What this scene can show, from its own data (5d): views it cannot use are
@@ -1881,6 +1937,92 @@ export default function Viewer({
   const summaryRef = useRef(summary);
   summaryRef.current = summary;
 
+  // Streaming settings (Settings → Viewer): the buffer target, the client memory
+  // limit and the stats line, kept live like the camera strip setting.
+  const [streamSettings] = useStreamingSettings();
+  const effectiveTokenRef = useRef(effectiveToken);
+  effectiveTokenRef.current = effectiveToken;
+  const speedRef = useRef<Speed>(speed);
+  speedRef.current = speed;
+  const streamProgressRef = useRef<StreamProgress>(EMPTY_STREAM_PROGRESS);
+  const progressSinkRef = useRef<(progress: StreamProgress) => void>(() => undefined);
+  const streamByteSamplesRef = useRef<{ at: number; bytes: number }[]>([]);
+  // Bumped when the cache is emptied/shrunk behind the scheduler's back, so its
+  // "loaded" model is rebuilt rather than promising samples the cache dropped.
+  const cacheEpochRef = useRef(0);
+  // Set while playback is paused by an underrun: only the refill (or the user) resumes it.
+  const stallPausedRef = useRef(false);
+  // Set when the user presses Play during an underrun: their intent beats the guard.
+  const stallOverrideRef = useRef(false);
+  // The underrun guard stands down for PLAY_GRACE_MS after an explicit Play.
+  const playGraceUntilRef = useRef(0);
+  const underrunTimerRef = useRef<number | null>(null);
+  const streamBufferRef = useRef<StreamBuffer | null>(null);
+  if (streamBufferRef.current === null) {
+    // The scheduler cannot create React state itself; it reports into this ref,
+    // whose sink the effect below installs.
+    streamBufferRef.current = createStreamBuffer({
+      source: {
+        frame: (index, options) => {
+          const sum = summaryRef.current;
+          const scene = sceneIdRef.current;
+          const time = sum?.times_us[index];
+          if (!sum || sum.scene_id !== scene || typeof time !== "number") {
+            return Promise.reject(
+              new DOMException("The scene changed while the frame was loading.", "AbortError"),
+            );
+          }
+          return cacheRef.current
+            .loadFrame(scene, time, effectiveTokenRef.current, options)
+            .then((body) => frameInfo(body));
+        },
+        points: (index, sensor, options) => {
+          const sum = summaryRef.current;
+          const scene = sceneIdRef.current;
+          const time = sum?.times_us[index];
+          if (!sum || sum.scene_id !== scene || typeof time !== "number") {
+            return Promise.reject(
+              new DOMException("The scene changed while the points were loading.", "AbortError"),
+            );
+          }
+          return cacheRef.current.loadPoints(
+            scene,
+            time,
+            sensor.agentId,
+            sensor.sensorId,
+            effectiveTokenRef.current,
+            options,
+          );
+        },
+        image: (index, camera) => {
+          const sum = summaryRef.current;
+          const scene = sceneIdRef.current;
+          const time = sum?.times_us[index];
+          if (!sum || sum.scene_id !== scene || typeof time !== "number") {
+            return Promise.reject(
+              new DOMException("The scene changed while the image was loading.", "AbortError"),
+            );
+          }
+          return loadImage(scene, time, camera.agentId, camera.sensorId, effectiveTokenRef.current).then(
+            () => undefined,
+          );
+        },
+      },
+      onProgress: (progress) => progressSinkRef.current(progress),
+    });
+  }
+
+  /** Leave the buffering state on purpose: a seek, a step or an explicit pause. */
+  const releaseStall = () => {
+    stallPausedRef.current = false;
+    stallOverrideRef.current = false;
+    if (underrunTimerRef.current !== null) {
+      window.clearTimeout(underrunTimerRef.current);
+      underrunTimerRef.current = null;
+    }
+    setBuffering(false);
+  };
+
   const handleTogglePlay = () => {
     canvasRef.current?.focus();
     const sum = summaryRef.current;
@@ -1888,6 +2030,8 @@ export default function Viewer({
       return;
     }
     if (playingRef.current) {
+      // An explicit pause wins over any underrun bookkeeping.
+      releaseStall();
       setPlaying(false);
       return;
     }
@@ -1895,6 +2039,17 @@ export default function Viewer({
       setFrameIndex(0);
       frameRef.current = 0;
     }
+    // Pressing Play during an underrun resumes at once; otherwise a fresh start
+    // gets a grace period before the underrun guard may pause it.
+    const resumingFromStall = stallPausedRef.current;
+    stallPausedRef.current = false;
+    stallOverrideRef.current = resumingFromStall;
+    if (underrunTimerRef.current !== null) {
+      window.clearTimeout(underrunTimerRef.current);
+      underrunTimerRef.current = null;
+    }
+    playGraceUntilRef.current = performance.now() + PLAY_GRACE_MS;
+    setBuffering(false);
     setPlaying(true);
   };
   const handleTogglePlayRef = useRef(handleTogglePlay);
@@ -1905,6 +2060,221 @@ export default function Viewer({
   onPickRef.current = setPick;
   const onFrustumRef = useRef<(key: string) => void>(() => undefined);
   const cameraKeysRef = useRef<string[]>([]);
+
+  // A memory-limit change evicts entries: the scheduler's loaded set must be
+  // rebuilt so it knows which samples the cache still holds.
+  useEffect(() => {
+    cacheEpochRef.current += 1;
+  }, [streamSettings.memoryLimitBytes]);
+
+  // Keep the scheduler in step with the scene, the settings and the playback
+  // clock: a new scene starts with a clean loaded set, and a settings change
+  // re-plans against the new target or memory limit.
+  useEffect(() => {
+    const stream = streamBufferRef.current;
+    const sum = summary;
+    if (!stream || !sum || sum.scene_id !== sceneId) {
+      return;
+    }
+    const time = sum.times_us[Math.min(frameRef.current, sum.times_us.length - 1)];
+    cacheRef.current.setMemoryLimit(streamSettings.memoryLimitBytes);
+    cacheRef.current.setPlayhead(typeof time === "number" ? time : 0);
+    stream.configure({
+      sceneId: sum.scene_id,
+      epoch: cacheEpochRef.current,
+      times: sum.times_us,
+      targetSeconds: streamSettings.bufferTargetSeconds,
+      speed,
+      memoryLimitBytes: streamSettings.memoryLimitBytes,
+      cachedBytes: () => cacheRef.current.bytes(),
+      bytesPerFrame: cacheRef.current.estimateFrameBytes(),
+      // Camera images stay the strip's and split pane's business: they know which
+      // thumbnails are on screen, and the 160 px thumbnails are reused from the
+      // same download. Prefetching all nine cameras per sample is exactly the
+      // bandwidth mistake the strip already fixed (see docs/viewer.md).
+      wantsImages: false,
+    });
+    stream.setIndex(frameRef.current);
+    stream.setPlaying(playingRef.current);
+  }, [
+    summary,
+    sceneId,
+    speed,
+    effectiveToken,
+    streamSettings.bufferTargetSeconds,
+    streamSettings.memoryLimitBytes,
+    appearance.stripOpen,
+  ]);
+
+  useEffect(() => {
+    const stream = streamBufferRef.current;
+    const sum = summary;
+    if (!stream || !sum || sum.scene_id !== sceneIdRef.current) {
+      return;
+    }
+    stream.setIndex(frameIndex);
+    const time = sum.times_us[Math.min(frameIndex, sum.times_us.length - 1)];
+    cacheRef.current.setPlayhead(typeof time === "number" ? time : 0);
+  }, [frameIndex, summary, sceneId]);
+
+  useEffect(() => {
+    streamBufferRef.current?.setPlaying(playing);
+  }, [playing]);
+
+  // A scene change ends any underrun pause from the old scene.
+  useEffect(() => {
+    stallPausedRef.current = false;
+    stallOverrideRef.current = false;
+    setBuffering(false);
+  }, [sceneId]);
+
+  // The scheduler reports after every fetch; render at most ten times a second
+  // (playback re-renders at its own rate; the paused fill is the case that matters).
+  useEffect(() => {
+    let timer: number | null = null;
+    let latest: StreamProgress | null = null;
+    let lastShown = "";
+    progressSinkRef.current = (progress) => {
+      streamProgressRef.current = progress;
+      const playbackSeconds = progress.bufferedAheadUs / 1_000_000 / Math.max(0.25, speedRef.current);
+      window.__COPERCEIVE_BUFFER_STATS__ = {
+        buffered_seconds: playbackSeconds,
+        target_seconds: streamSettings.bufferTargetSeconds,
+        buffered_us: progress.bufferedAheadUs,
+        target_us: progress.targetUs,
+        stalled: progress.stalled,
+        resumable: progress.resumable,
+        ready_frames: progress.readyFrames,
+        pending: progress.pending,
+        cache_bytes: cacheRef.current.stats.total_bytes,
+      };
+      // Only re-render when something the buffer bar shows changed: during
+      // steady playback the scheduler reports on every request without moving
+      // the numbers, and an extra render per report would tax the draw loop.
+      const shown = [
+        progress.bufferedAheadUs,
+        progress.targetUs,
+        progress.stalled,
+        progress.resumable,
+        progress.readyFrames,
+        progress.lastNeeded,
+        progress.atEnd,
+      ].join("|");
+      if (shown === lastShown) {
+        return;
+      }
+      lastShown = shown;
+      latest = progress;
+      if (timer === null) {
+        timer = window.setTimeout(() => {
+          timer = null;
+          if (latest) {
+            setBufferProgress(latest);
+            latest = null;
+          }
+        }, 100);
+      }
+    };
+    return () => {
+      progressSinkRef.current = () => undefined;
+      if (timer !== null) {
+        window.clearTimeout(timer);
+        timer = null;
+      }
+      delete window.__COPERCEIVE_BUFFER_STATS__;
+    };
+  }, [streamSettings.bufferTargetSeconds]);
+
+  // An underrun has to persist for UNDERRUN_GRACE_MS before playback pauses: a
+  // single slow frame holds the clock (the existing drawn-hold) without flipping
+  // Play into Pause and back. An explicit Play stands the guard down for a moment.
+  useEffect(() => {
+    const clearTimer = () => {
+      if (underrunTimerRef.current !== null) {
+        window.clearTimeout(underrunTimerRef.current);
+        underrunTimerRef.current = null;
+      }
+    };
+    if (!playing || stallOverrideRef.current || !bufferProgress.stalled) {
+      clearTimer();
+      return;
+    }
+    if (underrunTimerRef.current !== null) {
+      return;
+    }
+    const pauseForBuffer = () => {
+      underrunTimerRef.current = null;
+      if (!playingRef.current || stallOverrideRef.current) {
+        return;
+      }
+      if (!streamProgressRef.current.stalled) {
+        return;
+      }
+      const wait = playGraceUntilRef.current - performance.now();
+      if (wait > 0) {
+        underrunTimerRef.current = window.setTimeout(pauseForBuffer, wait);
+        return;
+      }
+      stallPausedRef.current = true;
+      setBuffering(true);
+      setPlaying(false);
+    };
+    underrunTimerRef.current = window.setTimeout(pauseForBuffer, UNDERRUN_GRACE_MS);
+    return clearTimer;
+  }, [playing, bufferProgress.stalled]);
+
+  // Resume a stall-pause as soon as a playback second is buffered again. Only a
+  // stall-initiated pause is resumed here; a user pause is never overridden.
+  useEffect(() => {
+    if (playing || !stallPausedRef.current || !bufferProgress.resumable) {
+      return;
+    }
+    stallPausedRef.current = false;
+    setBuffering(false);
+    setPlaying(true);
+  }, [playing, bufferProgress.resumable]);
+
+  // The optional stats line: buffer ahead, a rolling MB/s over recent fetches,
+  // and frame-load p50/p95 from the viewer's existing frame-timing log.
+  useEffect(() => {
+    if (!streamSettings.showStreamStats) {
+      setStreamStats(null);
+      return;
+    }
+    let lastLoaded = cacheRef.current.stats.loaded_bytes;
+    const sample = () => {
+      const now = performance.now();
+      const cacheStats = cacheRef.current.stats;
+      const bytes = Math.max(0, cacheStats.loaded_bytes - lastLoaded);
+      lastLoaded = cacheStats.loaded_bytes;
+      streamByteSamplesRef.current.push({ at: now, bytes });
+      while (
+        streamByteSamplesRef.current.length > 0 &&
+        now - (streamByteSamplesRef.current[0]?.at ?? 0) > 2000
+      ) {
+        streamByteSamplesRef.current.shift();
+      }
+      const records = (window.__COPERCEIVE_FRAME_STATS__ ?? [])
+        .filter((record) => record.result === "applied")
+        .slice(-60);
+      const loads = records.map((record) => record.load_ms);
+      const progress = streamProgressRef.current;
+      setStreamStats({
+        // The target is playback seconds; the buffer is media time, so divide by speed.
+        bufferedSeconds: progress.bufferedAheadUs / 1_000_000 / Math.max(0.25, speedRef.current),
+        targetSeconds: streamSettings.bufferTargetSeconds,
+        mbPerSecond: rollingMegabytesPerSecond(streamByteSamplesRef.current, now, 2000),
+        loadP50: percentile(loads, 0.5),
+        loadP95: percentile(loads, 0.95),
+        cacheMegabytes: cacheStats.total_bytes / (1024 * 1024),
+        readyFrames: progress.readyFrames,
+        cancelledRequests: cacheStats.cancelled,
+      });
+    };
+    sample();
+    const timer = window.setInterval(sample, STREAM_STATS_INTERVAL_MS);
+    return () => window.clearInterval(timer);
+  }, [streamSettings.showStreamStats, streamSettings.bufferTargetSeconds]);
 
   useEffect(() => {
     onEvalPickRef.current = setEvalPick;
@@ -2612,7 +2982,10 @@ export default function Viewer({
     return () => {
       stopped = true;
       window.clearTimeout(timeoutId);
-      setBuffering(false);
+      // A stall-pause keeps the label: playback did not move because data is late.
+      if (!stallPausedRef.current) {
+        setBuffering(false);
+      }
     };
   }, [playing, summary, speed, loop]);
 
@@ -2678,6 +3051,7 @@ export default function Viewer({
       return;
     }
     cacheRef.current.clear();
+    cacheEpochRef.current += 1;
     predCacheRef.current.clear();
     stageRef.current?.clearMotion();
     const controller = new AbortController();
@@ -3129,7 +3503,6 @@ export default function Viewer({
       setStatus(
         `${summary.scene_id} at ${time} µs. ${shown} points, ${boxes} boxes, ${frustums} frustums. ${mapNote}${holdNote(modeRef.current, body, types, cameraKeyRef.current)}`,
       );
-      prefetchAhead(cacheRef.current, summary, frameIndex, effectiveToken, () => summary.scene_id === sceneIdRef.current);
       paintWait.current?.(time);
     })().catch((error: unknown) => {
       if (!stale() && !isAbortError(error)) {
@@ -3466,7 +3839,10 @@ export default function Viewer({
         }
         setPredFrame({ sceneId, runId: id, compareId: other, frame });
         setPredNote({ key, text: "" });
-        for (const ahead of summary.times_us.slice(frameIndex + 1, frameIndex + 1 + PREFETCH_FRAMES)) {
+        for (const ahead of summary.times_us.slice(
+          frameIndex + 1,
+          frameIndex + 1 + PREDICTION_PREFETCH_FRAMES,
+        )) {
           void cache.load(sceneId, id, other, ahead, effectiveToken).catch(() => undefined);
         }
       })
@@ -5180,6 +5556,29 @@ export default function Viewer({
             </div>
           ) : null}
           <p className="status-line">{status}</p>
+          {streamSettings.showStreamStats && streamStats ? (
+            <p
+              className="stream-stats num"
+              data-testid="stream-stats"
+              style={{
+                margin: 0,
+                padding: "2px 16px 6px",
+                background: "var(--panel)",
+                color: "var(--muted)",
+                fontSize: "10.5px",
+                fontVariantNumeric: "tabular-nums",
+                whiteSpace: "nowrap",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+              }}
+            >
+              {`buffer ${streamStats.bufferedSeconds.toFixed(1)} s / ${streamStats.targetSeconds} s · ${streamStats.mbPerSecond.toFixed(1)} MB/s · frame load p50 ${
+                streamStats.loadP50 === null ? "—" : `${Math.round(streamStats.loadP50)} ms`
+              } · p95 ${streamStats.loadP95 === null ? "—" : `${Math.round(streamStats.loadP95)} ms`} · cache ${streamStats.cacheMegabytes.toFixed(
+                0,
+              )} MB · ${streamStats.readyFrames} samples ready · ${streamStats.cancelledRequests} cancelled`}
+            </p>
+          ) : null}
           <Timeline
             length={summary?.times_us.length ?? 0}
             index={Math.min(frameIndex, last)}
@@ -5187,6 +5586,8 @@ export default function Viewer({
             times={summary?.times_us ?? []}
             playing={playing}
             buffering={buffering}
+            bufferedAheadUs={bufferProgress.bufferedAheadUs}
+            bufferTargetUs={bufferProgress.targetUs}
             speed={speed}
             loop={loop}
             disabled={!summary || (summary.times_us.length < 2)}
@@ -5195,8 +5596,13 @@ export default function Viewer({
             sweepGaps={findSweepGaps(series.sweeps, (summary?.point_sweeps ?? 0) > 0 || series.sweeps.some((count) => count > 0))}
             evalSeries={evalSeries}
             evalCompare={evalCompare}
-            onIndex={(index) => setFrameIndex(index)}
+            onIndex={(index) => {
+              releaseStall();
+              setPlaying(false);
+              setFrameIndex(index);
+            }}
             onStep={(delta) => {
+              releaseStall();
               setPlaying(false);
               setFrameIndex((current) => stepIndex(current, delta, lengthRef.current, loop));
             }}
