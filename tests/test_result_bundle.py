@@ -294,32 +294,49 @@ def test_schema_file_and_validator_agree_on_required_keys(bundle: Path) -> None:
             validate_manifest(broken)
 
 
-def test_planted_markers_in_log_config_parquet_csv_key_and_path_are_removed(tmp_path: Path) -> None:
+def test_absolute_paths_and_their_parts_are_removed_without_markers(tmp_path: Path) -> None:
     import pyarrow as pa
     import pyarrow.parquet as pq
     from coperceive.bundle.export import _scrub_work
 
     work = tmp_path / "work"
     work.mkdir()
-    markers = ("/projects/zz9999/run", "node042.cluster.example", "E:\\work\\qq", "qqsecret")
     (work / "run.log").write_text(
-        "at /projects/zz9999/run on node042.cluster.example E:\\work\\qq\n"
+        "cd /scratch/zz9999/out && run\npath=/data/zz9999/x\n"
+        "D:\\zoe\n\\\\srv\\zoe\\x\nfile:///scratch/zz9999/a\n"
     )
     (work / "eval").mkdir()
     (work / "eval/config.json").write_text(
-        json.dumps({"note": "/projects/zz9999/run", "qqsecret": "x"})
+        json.dumps({"note": "C:\\Users\\zoe", "/data/zz9999/x": "x"})
     )
     (work / "frames").mkdir()
-    (work / "frames/frame.csv").write_text("path,owner\nE:\\work\\qq,qqsecret\n")
-    pq.write_table(
-        pa.table({"note": ["/projects/zz9999/run", "ok"]}), work / "frames/table.parquet"
-    )
-    redactions, details = _scrub_work(work, markers)
-    assert redactions >= 4 and details
+    (work / "frames/frame.csv").write_text("path,owner\nD:\\zoe,zz9999\n")
+    pq.write_table(pa.table({"note": ["/projects/zz9999", "ok"]}), work / "frames/table.parquet")
+    _, details = _scrub_work(work, ())
+    assert details
     for path in work.rglob("*"):
         if path.is_file() and path.suffix != ".parquet":
             text = path.read_text(errors="replace")
+            for forbidden in ("zz9999", "zoe", "qq", "Users", "\\"):
+                assert forbidden not in text, (path, forbidden)
+    table = pq.read_table(work / "frames/table.parquet")
+    assert "/projects/zz9999" not in table.column("note").to_pylist()
+
+
+def test_host_and_user_markers_are_removed_even_when_not_path_shaped(tmp_path: Path) -> None:
+    from coperceive.bundle.export import _scrub_work
+
+    work = tmp_path / "work"
+    work.mkdir()
+    markers = ("node042.cluster.example", "qqsecret")
+    (work / "run.log").write_text("node042.cluster.example qqsecret\n")
+    (work / "eval").mkdir()
+    (work / "eval/config.json").write_text(json.dumps({"qqsecret": "node042.cluster.example"}))
+    (work / "frames").mkdir()
+    (work / "frames/frame.csv").write_text("owner\nqqsecret\n")
+    _scrub_work(work, markers)
+    for path in work.rglob("*"):
+        if path.is_file():
+            text = path.read_text(errors="replace")
             for marker in markers:
                 assert marker not in text, (path, marker)
-    table = pq.read_table(work / "frames/table.parquet")
-    assert "/projects/zz9999/run" not in table.column("note").to_pylist()

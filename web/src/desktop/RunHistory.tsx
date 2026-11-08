@@ -235,7 +235,7 @@ export default function RunHistory() {
       const file = await pickBundleFile();
       if (!file) return;
       const opened = await openBundle(file);
-      setOpenedBundle(`${opened.manifest.title || opened.manifest.run_id} (read-only) at ${opened.root}`);
+      setOpenedBundle(`Bundle checked: ${opened.manifest.title || opened.manifest.run_id}. Opening in the viewer is coming in a later version.`);
     } catch (e) {
       setBundleError(errorText(e));
     }
@@ -512,7 +512,7 @@ export default function RunHistory() {
           </select>
         ) : null}
         <button type="button" className="c-secondary" onClick={() => void openBundleFile()}>
-          Open bundle…
+          Check bundle…
         </button>
         {profiles.length === 0 ? null : <div role="group" aria-label="Filter runs by state" className="c-chips">
           {FILTERS.map((item) => {

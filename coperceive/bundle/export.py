@@ -150,7 +150,9 @@ def _write_frame(
     staging.files[target] = "frame-json"
 
 
-def _scrub_work(work: Path, markers: tuple[str, ...]) -> tuple[int, list[dict[str, object]]]:
+def _scrub_work(
+    work: Path, markers: tuple[str, ...], roots: tuple[tuple[str, str], ...] = ()
+) -> tuple[int, list[dict[str, object]]]:
     redactions = 0
     details: list[dict[str, object]] = []
     for path in work.rglob("*"):
@@ -161,14 +163,14 @@ def _scrub_work(work: Path, markers: tuple[str, ...]) -> tuple[int, list[dict[st
                 payload = json.loads(path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 before = path.read_text(encoding="utf-8", errors="replace")
-                after_text = scrub_text(before, markers)
+                after_text = scrub_text(before, markers, roots)
                 if after_text != before:
                     redactions += 1
                     details.append({"file": path.relative_to(work).as_posix(), "kind": "text"})
                 path.write_text(after_text, encoding="utf-8")
                 continue
             before = json.dumps(payload, sort_keys=True)
-            after_doc = scrub_json(payload, markers)
+            after_doc = scrub_json(payload, markers, roots)
             after = json.dumps(after_doc, sort_keys=True)
             if after != before:
                 redactions += 1
@@ -176,7 +178,7 @@ def _scrub_work(work: Path, markers: tuple[str, ...]) -> tuple[int, list[dict[st
             path.write_text(json.dumps(after_doc, indent=2) + "\n", encoding="utf-8")
         elif path.suffix.lower() in {".txt", ".log", ".md", ".yaml", ".yml", ".csv"}:
             before = path.read_text(encoding="utf-8", errors="replace")
-            after_text = scrub_text(before, markers)
+            after_text = scrub_text(before, markers, roots)
             if after_text != before:
                 redactions += 1
                 details.append({"file": path.relative_to(work).as_posix(), "kind": "text"})
@@ -192,7 +194,7 @@ def _scrub_work(work: Path, markers: tuple[str, ...]) -> tuple[int, list[dict[st
             column = table.column(name)
             if pa.types.is_string(column.type) or pa.types.is_large_string(column.type):
                 values = [
-                    scrub_text(value, markers) if isinstance(value, str) else value
+                    scrub_text(value, markers, roots) if isinstance(value, str) else value
                     for value in column.to_pylist()
                 ]
                 if values != column.to_pylist():
