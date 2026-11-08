@@ -15,8 +15,10 @@ A fast, native desktop application and multi-agent perception data library for c
 
 Get the latest release for your platform from [GitHub Releases](https://github.com/adarsh-nl/coperceive/releases/latest):
 
-- **macOS Apple Silicon (arm64 `.dmg`)**: Available now in [v0.1.0](https://github.com/adarsh-nl/coperceive/releases/tag/v0.1.0).
-- **Windows, Linux & Intel Mac**: Coming in **v0.1.1** (packaged installers and bundled Python runtimes merged: Windows NSIS installer `.exe`, Linux `.deb` and `.AppImage`, and Intel Mac `.dmg`).
+- **macOS Apple Silicon (`arm64` `.dmg`)**: `Coperceive_0.1.1_aarch64.dmg`
+- **macOS Intel (`x86_64` `.dmg`)**: `Coperceive_0.1.1_x64.dmg` *(verified under Rosetta 2 emulation in CI; not yet tested on physical Intel Mac hardware)*
+- **Windows (`x86_64` NSIS `.exe`)**: `Coperceive_0.1.1_x64-setup.exe`
+- **Linux (`x86_64` `.AppImage` & `.deb`)**: `Coperceive_0.1.1_amd64.AppImage` and `Coperceive_0.1.1_amd64.deb`
 
 *Note for Linux users:* In-app updates are supported when running from the portable `.AppImage`. Debian/Ubuntu (`.deb`) installations are managed through your package manager; update via `apt` or by downloading the latest `.deb` from GitHub Releases.
 
@@ -50,7 +52,7 @@ Get the latest release for your platform from [GitHub Releases](https://github.c
 ## Release Notes
 
 ### v0.1.1
-- **First-run demo mode**: Empty libraries offer an offline 4-agent cooperative intersection demo scene (`demo-intersection-000`, generated on demand by the bundled Python runtime into `<state_dir>/demo/` with synthetic single-agent vs cooperative-fusion prediction runs) alongside a one-click shortcut to the Griffin sample in Get Data (#142, #152).
+- **First-run demo mode**: Empty libraries offer an offline 3-agent cooperative junction demo scene (`demo-junction`: `cav-a`, `cav-b`, and `rsu`, 100 frames at 10 Hz, no drone, no map, and one synthetic prediction run `demo` labelled "synthetic predictions", generated on demand by the bundled Python runtime into `<state_dir>/demo/`) alongside a one-click shortcut to the Griffin `dev` sample in Get Data (#142, #152).
 - **Viewer styles & "seen by" colouring**: Choose Classic, Studio, Instrument, or Cinema in `Settings → Viewer → Style`, and colour boxes by observer (`both`, `ego only`, `other agent`) on datasets with shared cross-agent track IDs (OPV2V and Griffin) (#144).
 - **Installers & auto-updates across 3 operating systems**: Windows NSIS installer (`.exe`) with silent install/uninstall, Linux Debian package (`.deb`) and AppImage, and macOS Apple Silicon (`arm64`) and Intel (`x86_64`) disk images (`.dmg`) with bundled standalone Python runtime and a 4-target `latest.json` updater manifest (#134, #140, #148). The Intel Mac build is cross-compiled and tested under Rosetta 2 emulation in CI, but remains untested on bare-metal Intel Mac hardware until verified.
 - **Evaluation, reproducibility & paper export**: Multi-run comparison breakdowns, worst-frame failure ranking, seeded robustness perturbations (`#136`), secret-scrubbed reproducibility cards (`#137`), Overleaf `.zip` paper bundle export (`#138`), and secret-free lab server profile sharing (`#139`).
