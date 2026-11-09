@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 import warnings
@@ -38,6 +39,40 @@ def build_parser() -> argparse.ArgumentParser:
         "capabilities", help="Print what this build supports, as JSON (for the desktop app)."
     )
     capabilities.set_defaults(func=_capabilities)
+
+    bundle = sub.add_parser("bundle", help="Export or open a shareable result bundle.")
+    bundle_commands = bundle.add_subparsers(dest="bundle_command", required=True)
+    bundle_export = bundle_commands.add_parser("export", help="Write a .cpbundle from a run.")
+    bundle_export.add_argument("run_id")
+    bundle_export.add_argument(
+        "--root", required=True, help="Scenes root the run was evaluated on."
+    )
+    bundle_export.add_argument("--predictions", required=True, help="Predictions root.")
+    bundle_export.add_argument("-o", "--out", required=True, help="Output .cpbundle path.")
+    bundle_export.add_argument("--title", default="")
+    bundle_export.add_argument("--frames", default="worst:6")
+    bundle_export.add_argument("--include-raw", action="store_true")
+    bundle_export.add_argument("--include-full-predictions", action="store_true")
+    bundle_export.add_argument(
+        "--marker", action="append", default=[], help="Extra identifier to scrub."
+    )
+    bundle_export.set_defaults(func=_bundle_export)
+    bundle_preview = bundle_commands.add_parser("preview", help="Print the export review as JSON.")
+    bundle_preview.add_argument("run_id")
+    bundle_preview.add_argument("--root", required=True)
+    bundle_preview.add_argument("--predictions", required=True)
+    bundle_preview.add_argument("--title", default="")
+    bundle_preview.add_argument("--frames", default="worst:6")
+    bundle_preview.add_argument("--include-raw", action="store_true")
+    bundle_preview.add_argument("--include-full-predictions", action="store_true")
+    bundle_preview.add_argument("--marker", action="append", default=[])
+    bundle_preview.set_defaults(func=_bundle_preview)
+    bundle_open = bundle_commands.add_parser("open", help="Verify and open a .cpbundle read-only.")
+    bundle_open.add_argument("file")
+    bundle_open.add_argument(
+        "--data-root", default=None, help="App data folder for bundles/<sha>/."
+    )
+    bundle_open.set_defaults(func=_bundle_open)
 
     demo = sub.add_parser("demo", help="Create the synthetic demo scene.")
     demo_sub = demo.add_subparsers(dest="demo_command")
@@ -499,6 +534,65 @@ def main(argv: list[str] | None = None) -> None:
         parser.print_help()
         return
     func(args)
+
+
+def _bundle_export(args: argparse.Namespace) -> None:
+    from coperceive.bundle import BundleExportRequest, export_bundle
+
+    try:
+        path = export_bundle(
+            BundleExportRequest(
+                run_id=args.run_id,
+                scenes_root=Path(args.root),
+                predictions_root=Path(args.predictions),
+                out=Path(args.out),
+                title=args.title,
+                frames=args.frames,
+                include_raw=args.include_raw,
+                include_full_predictions=args.include_full_predictions,
+                extra_markers=tuple(args.marker),
+            )
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"wrote {path}")
+
+
+def _bundle_preview(args: argparse.Namespace) -> None:
+    from coperceive.bundle import BundleExportRequest, preview_bundle
+
+    try:
+        manifest = preview_bundle(
+            BundleExportRequest(
+                run_id=args.run_id,
+                scenes_root=Path(args.root),
+                predictions_root=Path(args.predictions),
+                out=Path(".coperceive-preview.cpbundle"),
+                title=args.title,
+                frames=args.frames,
+                include_raw=args.include_raw,
+                include_full_predictions=args.include_full_predictions,
+                extra_markers=tuple(args.marker),
+            )
+        )
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(json.dumps(manifest, indent=2))
+
+
+def _bundle_open(args: argparse.Namespace) -> None:
+    from coperceive.bundle import open_bundle
+
+    data_root = Path(args.data_root) if args.data_root else Path.home() / ".coperceive"
+    try:
+        opened = open_bundle(Path(args.file), data_root=data_root)
+    except (OSError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        raise SystemExit(2) from exc
+    print(f"opened {opened.root}")
+    print(f"run {opened.manifest.get('run_id')} schema {opened.manifest.get('schema_version')}")
 
 
 def _demo_create(args: argparse.Namespace) -> None:

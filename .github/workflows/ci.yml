@@ -192,7 +192,7 @@ jobs:
         working-directory: web
       - run: npx vite build --mode test --outDir /tmp/web-dist --emptyOutDir
         working-directory: web
-      - run: pytest tests/test_viewer_browser.py tests/test_viewer_slow_points.py -q -rs
+      - run: pytest tests/test_viewer_browser.py tests/test_bundle_browser.py tests/test_viewer_slow_points.py -q -rs
         env:
           COPERCEIVE_WEB_DIST: /tmp/web-dist
           COPERCEIVE_E2E_SHOTS: /tmp/e2e-shots

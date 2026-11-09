@@ -158,6 +158,140 @@ async fn pick_data_root(app: tauri::AppHandle) -> Result<Option<String>, String>
 }
 
 #[tauri::command]
+async fn pick_bundle_file(app: tauri::AppHandle) -> Result<Option<String>, String> {
+    if let Some(path) = coperceive_desktop::test_seams::take_mock_dialog_path() {
+        return Ok(Some(path));
+    }
+    use tauri_plugin_dialog::DialogExt;
+
+    let choice = app
+        .dialog()
+        .file()
+        .add_filter("Coperceive result bundle", &["cpbundle"])
+        .blocking_pick_file();
+    Ok(choice
+        .and_then(|fp| fp.into_path().ok())
+        .map(|p| p.to_string_lossy().into_owned()))
+}
+
+fn bundle_python_args(app: &tauri::AppHandle) -> (std::path::PathBuf,) {
+    (resolve_python_binary(app),)
+}
+
+fn run_bundle_python(app: &tauri::AppHandle, args: &[String]) -> Result<String, String> {
+    let (python,) = bundle_python_args(app);
+    let output = std::process::Command::new(python)
+        .args(["-m", "coperceive.cli", "bundle"])
+        .args(args)
+        .output()
+        .map_err(|err| format!("could not start bundle command: {err}"))?;
+    if !output.status.success() {
+        let text = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if text.is_empty() {
+            "bundle command failed".to_string()
+        } else {
+            text
+        });
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+}
+
+#[tauri::command]
+async fn bundle_preview(
+    app: tauri::AppHandle,
+    run_id: String,
+    scenes_root: String,
+    predictions_root: String,
+    frames: String,
+    title: String,
+    include_raw: bool,
+    include_full_predictions: bool,
+    markers: Vec<String>,
+) -> Result<serde_json::Value, String> {
+    let mut args = vec![
+        "preview".to_string(), run_id,
+        "--root".to_string(), scenes_root,
+        "--predictions".to_string(), predictions_root,
+        "--frames".to_string(), frames,
+        "--title".to_string(), title,
+    ];
+    if include_raw {
+        args.push("--include-raw".to_string());
+    }
+    if include_full_predictions {
+        args.push("--include-full-predictions".to_string());
+    }
+    for marker in markers {
+        args.push("--marker".to_string());
+        args.push(marker);
+    }
+    let stdout = run_bundle_python(&app, &args)?;
+    serde_json::from_str(&stdout).map_err(|err| format!("bundle preview is not JSON: {err}"))
+}
+
+#[tauri::command]
+async fn bundle_export(
+    app: tauri::AppHandle,
+    run_id: String,
+    scenes_root: String,
+    predictions_root: String,
+    out: String,
+    frames: String,
+    title: String,
+    include_raw: bool,
+    include_full_predictions: bool,
+    markers: Vec<String>,
+) -> Result<String, String> {
+    let mut args = vec![
+        "export".to_string(), run_id,
+        "--root".to_string(), scenes_root,
+        "--predictions".to_string(), predictions_root,
+        "-o".to_string(), out.clone(),
+        "--frames".to_string(), frames,
+        "--title".to_string(), title,
+    ];
+    if include_raw {
+        args.push("--include-raw".to_string());
+    }
+    if include_full_predictions {
+        args.push("--include-full-predictions".to_string());
+    }
+    for marker in markers {
+        args.push("--marker".to_string());
+        args.push(marker);
+    }
+    run_bundle_python(&app, &args)?;
+    Ok(out)
+}
+
+#[tauri::command]
+async fn bundle_open(app: tauri::AppHandle, file: String) -> Result<serde_json::Value, String> {
+    use tauri::Manager;
+    let data_root = app
+        .path()
+        .app_data_dir()
+        .map_err(|err| format!("no app data folder: {err}"))?;
+    let stdout = run_bundle_python(
+        &app,
+        &[
+            "open".to_string(),
+            file,
+            "--data-root".to_string(),
+            data_root.to_string_lossy().into_owned(),
+        ],
+    )?;
+    let opened = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("opened "))
+        .ok_or_else(|| "bundle open printed no path".to_string())?;
+    let manifest = std::fs::read_to_string(std::path::Path::new(opened).join("bundle.json"))
+        .map_err(|err| format!("bundle manifest cannot be read: {err}"))?;
+    let value: serde_json::Value = serde_json::from_str(&manifest)
+        .map_err(|err| format!("bundle manifest is not JSON: {err}"))?;
+    Ok(serde_json::json!({"root": opened, "manifest": value}))
+}
+
+#[tauri::command]
 async fn pick_save_path(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -3823,6 +3957,10 @@ fn main() {
             remote_disconnect,
             remote_scan,
             pick_save_path,
+            pick_bundle_file,
+            bundle_preview,
+            bundle_export,
+            bundle_open,
             save_exported_file,
         ])
         .on_page_load(|webview, payload| {

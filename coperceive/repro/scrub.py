@@ -49,7 +49,9 @@ def _runtime_markers() -> tuple[str, ...]:
         value = os.environ.get(name)
         if value:
             values.append(value)
-    return tuple(value for value in dict.fromkeys(values) if len(value) >= 2)
+    return tuple(
+        sorted((value for value in dict.fromkeys(values) if len(value) >= 2), key=len, reverse=True)
+    )
 
 
 # sha256 and git commits are hex, not hostnames. Package versions like 1.26.4
@@ -208,3 +210,63 @@ def file_name(path: str) -> str | None:
     if _SECRET_KEY.search(name) or _TOKEN_VALUE.search(name):
         return None
     return name
+
+
+_ABS_POSIX = re.compile(r"(?<![A-Za-z0-9:/])/(?:[^\s\"'<>|]+/)*[^\s\"'<>|/]+")
+_ABS_WINDOWS = re.compile(r"(?<![A-Za-z0-9])[A-Za-z]:\\[^\s\"'<>|]+")
+_UNC = re.compile(r"\\\\[^\s\"'<>|]+\\[^\s\"'<>|]+")
+_FILE_URL = re.compile(r"file://[^\s\"'<>|]+")
+
+
+def _redact_path(value: str, roots: tuple[tuple[str, str], ...]) -> str:
+    normal = value.replace("\\", "/")
+    if normal.startswith("file://"):
+        normal = normal[len("file://") :]
+    for role, root in roots:
+        base = root.replace("\\", "/").rstrip("/")
+        if normal == base or normal.startswith(base + "/"):
+            rel = normal[len(base) :].lstrip("/")
+            return f"<{role}>/{rel}" if rel else f"<{role}>"
+    last = [part for part in normal.split("/") if part]
+    if last and "." in last[-1] and not last[-1].startswith("."):
+        return "<path>/" + last[-1]
+    return "<path>"
+
+
+def scrub_text(
+    text: str,
+    markers: tuple[str, ...] = (),
+    roots: tuple[tuple[str, str], ...] = (),
+) -> str:
+    """Remove runtime/personal identifiers and secret-shaped values from plain text."""
+    out = text
+    for marker in (*markers, *_runtime_markers()):
+        out = out.replace(marker, "[redacted]")
+    out = _PERSONAL_IDENTIFIER.sub("[redacted]", out)
+    out = _TOKEN_VALUE.sub("[redacted]", out)
+    out = _USER_AT.sub("[redacted]", out)
+    out = _HOSTNAME.sub("[redacted]", out)
+    out = _HOME_PATH.sub(" [redacted] ", out)
+    out = _FILE_URL.sub(lambda m: _redact_path(m.group(0), roots), out)
+    out = _ABS_POSIX.sub(lambda m: _redact_path(m.group(0), roots), out)
+    out = _ABS_WINDOWS.sub(lambda m: _redact_path(m.group(0), roots), out)
+    out = _UNC.sub(lambda m: _redact_path(m.group(0), roots), out)
+    return out
+
+
+def scrub_json(
+    value: object,
+    markers: tuple[str, ...] = (),
+    roots: tuple[tuple[str, str], ...] = (),
+) -> object:
+    """Scrub a decoded JSON value, including keys/strings in arbitrary schemas."""
+    if isinstance(value, str):
+        return scrub_text(value, markers, roots)
+    if isinstance(value, list):
+        return [scrub_json(item, markers, roots) for item in value]
+    if isinstance(value, dict):
+        return {
+            scrub_text(str(key), markers, roots): scrub_json(item, markers, roots)
+            for key, item in value.items()
+        }
+    return value

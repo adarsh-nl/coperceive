@@ -701,6 +701,76 @@ export async function pickSavePath(
   return null;
 }
 
+export async function pickBundleFile(): Promise<string | null> {
+  if (typeof window === "undefined" || !window.__TAURI_INTERNALS__) return null;
+  try {
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<string | null>("pick_bundle_file");
+  } catch {
+    return null;
+  }
+}
+
+export interface BundleFileRow {
+  path: string;
+  sha256: string;
+  size: number;
+  kind: string;
+}
+
+export interface BundleManifest {
+  schema: string;
+  schema_version: number;
+  title: string;
+  run_id: string;
+  app_version: string;
+  contents: BundleFileRow[];
+  total_bytes?: number;
+  licences?: Array<Record<string, string>>;
+  privacy?: Record<string, unknown>;
+}
+
+export async function bundlePreview(
+  runId: string,
+  scenesRoot: string,
+  predictionsRoot: string,
+  frames = "worst:6",
+  title = "",
+  includeRaw = false,
+  includeFullPredictions = false,
+  markers: string[] = [],
+): Promise<BundleManifest> {
+  if (typeof window === "undefined" || !window.__TAURI_INTERNALS__) {
+    throw new Error("Bundle export needs the desktop app.");
+  }
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<BundleManifest>("bundle_preview", {
+    runId, scenesRoot, predictionsRoot, frames, title, includeRaw, includeFullPredictions, markers,
+  });
+}
+
+export async function bundleExport(
+  runId: string,
+  scenesRoot: string,
+  predictionsRoot: string,
+  out: string,
+  frames = "worst:6",
+  title = "",
+  includeRaw = false,
+  includeFullPredictions = false,
+  markers: string[] = [],
+): Promise<string> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<string>("bundle_export", {
+    runId, scenesRoot, predictionsRoot, out, frames, title, includeRaw, includeFullPredictions, markers,
+  });
+}
+
+export async function openBundle(file: string): Promise<{ root: string; manifest: BundleManifest }> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<{ root: string; manifest: BundleManifest }>("bundle_open", { file });
+}
+
 export async function saveExportedFile(
   sourceRelative?: string,
   bytes?: Uint8Array,
