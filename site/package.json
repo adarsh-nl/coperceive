@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "test": "node --experimental-strip-types --test src/download/*.test.ts",
+    "test": "node --experimental-strip-types --test src/download/*.test.ts src/tour/*.test.ts",
+    "tour:capture": "bash ../scripts/site/tour/capture.sh",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
