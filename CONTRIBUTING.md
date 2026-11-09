@@ -14,7 +14,7 @@ bash scripts/dev/install-hooks.sh
 .venv/bin/pytest
 ```
 
-Python 3.10 through 3.13. Pyright is strict on `coperceive` and `tests`, except `coperceive/app`, `coperceive/griffin`, and their tests.
+Python 3.11 through 3.13. Pyright is strict on `coperceive` and `tests`, except `coperceive/app`, `coperceive/griffin`, and their tests.
 
 Docs:
 

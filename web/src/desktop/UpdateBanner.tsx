@@ -12,7 +12,7 @@ import {
 import { parseUpdateManifest } from "./updateManifest";
 import { errorText } from "./errors";
 
-const CURRENT_VERSION = "0.1.0";
+const CURRENT_VERSION = "0.1.1";
 const DEFAULT_ENDPOINT =
   "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json";
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
