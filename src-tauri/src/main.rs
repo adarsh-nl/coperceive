@@ -60,6 +60,7 @@ pub struct AppState {
     pub pending_dataset_prepare:
         Mutex<Option<coperceive_desktop::dataset_jobs::PendingPrepare>>,
     pub startup_crash: Mutex<Option<serde_json::Value>>,
+    pub validated_scenes_this_run: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Default for AppState {
@@ -82,7 +83,28 @@ impl Default for AppState {
             pending_update: Mutex::new(None),
             pending_dataset_prepare: Mutex::new(None),
             startup_crash: Mutex::new(None),
+            validated_scenes_this_run: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+}
+
+/// Disconnects any active remote session off the `state.remote` mutex in a
+/// background thread with a bounded timeout so switching to a local scene
+/// never blocks on SSH teardown.
+fn disconnect_remote_in_background(state: &AppState) {
+    let existing = state.remote.lock().ok().and_then(|mut lock| lock.take());
+    if let Ok(mut current) = state.remote_key.lock() {
+        *current = None;
+    }
+    if let Some(mut remote) = existing {
+        std::thread::spawn(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = remote.disconnect();
+                let _ = tx.send(());
+            });
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
     }
 }
 
@@ -536,7 +558,11 @@ async fn switch_data_root(
         if let Ok(mut current) = state.stream_key.lock() {
             *current = None;
         }
+        if let Ok(mut scenes) = state.dataset_scenes.lock() {
+            *scenes = serde_json::Value::Null;
+        }
     }
+    disconnect_remote_in_background(&state);
 
     if let Ok(lock) = state.controller_config.lock() {
         if let Some(ref cfg) = *lock {
@@ -551,6 +577,8 @@ async fn switch_data_root(
         persistent.last_scene_id = None;
         persistent.last_sample_index = None;
         persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
         state::add_recent_root(&mut persistent, &new_path_str);
         let _ = state::save_state(&persistent);
 
@@ -1225,6 +1253,15 @@ async fn start_local_session(
     state: &AppState,
     data_root: String,
 ) -> Result<SessionPayload, String> {
+    start_local_session_inner(app, state, data_root, false).await
+}
+
+async fn start_local_session_inner(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    data_root: String,
+    is_restore: bool,
+) -> Result<SessionPayload, String> {
     let root_path = PathBuf::from(&data_root);
     if let Err(msg) = state::validate_dataset_root(&root_path) {
         return Err(msg);
@@ -1239,7 +1276,11 @@ async fn start_local_session(
         if let Ok(mut current) = state.stream_key.lock() {
             *current = None;
         }
+        if let Ok(mut scenes) = state.dataset_scenes.lock() {
+            *scenes = serde_json::Value::Null;
+        }
     }
+    disconnect_remote_in_background(&state);
 
     let python_bin = resolve_python_binary(app);
     let mut extra_args = Vec::new();
@@ -1303,6 +1344,13 @@ async fn start_local_session(
     // Persist new root to state.json and update recent_roots
     {
         let mut persistent = state::load_state();
+        if !is_restore || persistent.last_data_root.as_deref() != Some(data_root.as_str()) {
+            persistent.last_scene_id = None;
+            persistent.last_sample_index = None;
+            persistent.last_timestamp_us = None;
+            persistent._legacy_timestamp_ns = None;
+            persistent.agent_visibility = None;
+        }
         persistent.last_data_root = Some(data_root.clone());
         state::add_recent_root(&mut persistent, &data_root);
         let _ = state::save_state(&persistent);
@@ -1801,11 +1849,29 @@ fn get_library_scenes(
         }
     }
     scenes.sort_by(|a, b| a.scene_id.cmp(&b.scene_id));
-    let pending = scenes
-        .iter()
-        .filter(|scene| !coperceive_desktop::demo::is_demo_path(Path::new(&scene.path)))
-        .map(|scene| (scene.path.clone(), scene.is_valid.is_some()))
-        .collect();
+    let pending = {
+        use tauri::Manager;
+        let app_state = app.state::<Arc<AppState>>();
+        let mut seen = app_state
+            .validated_scenes_this_run
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        scenes
+            .iter()
+            .filter(|scene| {
+                !coperceive_desktop::demo::is_demo_path(Path::new(&scene.path))
+                    || scene.duration_s.is_none()
+            })
+            .map(|scene| {
+                let needs_duration_backfill =
+                    scene.is_valid.is_some() && scene.duration_s.is_none();
+                let already_tried = needs_duration_backfill && !seen.insert(scene.path.clone());
+                let cached =
+                    scene.is_valid.is_some() && (scene.duration_s.is_some() || already_tried);
+                (scene.path.clone(), cached)
+            })
+            .collect()
+    };
     spawn_library_validation(app, pending);
     Ok(scenes)
 }
@@ -2951,12 +3017,22 @@ async fn dataset_status(
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
 }
 
+fn resolve_viewer_dataset_scenes(has_remote: bool, dataset: serde_json::Value) -> serde_json::Value {
+    if has_remote {
+        dataset
+    } else {
+        serde_json::Value::Null
+    }
+}
+
 /// The open cluster dataset's scenes (id, state) from the dataset view, so the
 /// viewer's scene list can show the ones that are not prepared yet.
 #[tauri::command]
 fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: serde_json::Value) {
+    let has_remote = state.stream_key.lock().ok().and_then(|k| k.clone()).is_some()
+        || state.remote_key.lock().ok().and_then(|k| k.clone()).is_some();
     if let Ok(mut scenes) = state.dataset_scenes.lock() {
-        *scenes = dataset;
+        *scenes = resolve_viewer_dataset_scenes(has_remote, dataset);
     }
 }
 
@@ -3116,6 +3192,15 @@ async fn dataset_open(
             _ => None,
         }
     };
+    {
+        let mut persistent = state::load_state();
+        persistent.last_scene_id = scene_id.clone();
+        persistent.last_sample_index = None;
+        persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
+        let _ = state::save_state(&persistent);
+    }
     if let Some((origin, token)) = reusable {
         if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
             open_viewer_window(&app, &origin, &token, &cache, ctrl_port, state.inner(), query.as_deref())?;
@@ -3451,6 +3536,15 @@ async fn remote_connect(
             _ => None,
         }
     };
+    {
+        let mut persistent = state::load_state();
+        persistent.last_scene_id = scene_id.clone();
+        persistent.last_sample_index = None;
+        persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
+        let _ = state::save_state(&persistent);
+    }
     if let Some((origin, token)) = reusable {
         if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
             let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
@@ -4471,7 +4565,7 @@ fn main() {
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_millis(300));
                         tauri::async_runtime::block_on(async move {
-                            match start_local_session(&h, &st, root_str).await {
+                            match start_local_session_inner(&h, &st, root_str, true).await {
                                 Ok(payload) => {
                                     println!("[auto-connect] Successfully connected: origin={}", payload.origin);
                                     let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -4953,5 +5047,26 @@ fn main() {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_viewer_dataset_scenes;
+
+    #[test]
+    fn dataset_scenes_is_cleared_when_no_remote_session_is_active() {
+        let cluster_dataset = serde_json::json!({
+            "scenes": [{ "scene_id": "train_0000", "state": "ready" }],
+            "about": { "label": "V2XSET train", "server": "HPC" }
+        });
+        assert_eq!(
+            resolve_viewer_dataset_scenes(false, cluster_dataset.clone()),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            resolve_viewer_dataset_scenes(true, cluster_dataset.clone()),
+            cluster_dataset
+        );
+    }
 }
 

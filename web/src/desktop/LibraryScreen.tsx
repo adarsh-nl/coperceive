@@ -23,6 +23,7 @@ import {
   validateScene,
 } from "./local";
 import { errorText } from "./errors";
+import { DEMO_APPROX_SIZE_LABEL, formatDemoSize, runDemoOpenFlow } from "./demoMeta";
 import { getRevealLabel } from "./platform";
 import {
   Facts,
@@ -92,6 +93,69 @@ function ValidationBadge({ status }: { status: "valid" | "invalid" | "checking" 
       <span className="c-dot" />
       {status === "checking" ? "Validating…" : status === "valid" ? "Valid ✓" : "Check failed"}
     </span>
+  );
+}
+
+export function DemoProgressBanner({
+  stage,
+  elapsedSec,
+  demoBytes,
+  onCancel,
+}: {
+  stage: string;
+  elapsedSec: number;
+  demoBytes?: number | null;
+  onCancel: () => void;
+}) {
+  const activeStage =
+    stage ||
+    (elapsedSec < 3
+      ? "Starting bundled Python generator…"
+      : elapsedSec < 8
+        ? "Synthesising LiDAR & multi-agent cameras…"
+        : "Packing LiDAR frames & scoring predictions…");
+
+  return (
+    <div
+      data-testid="demo-progress-banner"
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "12px",
+        padding: "10px 14px",
+        margin: "8px 16px",
+        background: "var(--panel)",
+        border: "1px solid var(--line)",
+        borderRadius: "8px",
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+        <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>
+          Generating demo scene… ({formatDemoSize(demoBytes)} demo cache) · {elapsedSec}s elapsed
+        </div>
+        <div style={{ fontSize: "12px", color: "var(--text-subtle)" }}>
+          {activeStage} · This can take up to 2 minutes on older Macs.
+        </div>
+      </div>
+      <button
+        type="button"
+        data-testid="demo-progress-cancel"
+        className="ghost"
+        onClick={onCancel}
+        style={{
+          padding: "5px 12px",
+          fontSize: "12px",
+          border: "1px solid var(--line)",
+          borderRadius: "6px",
+          flexShrink: 0,
+        }}
+      >
+        Cancel
+      </button>
+    </div>
   );
 }
 
@@ -187,13 +251,13 @@ export function WelcomeCard({
         >
           <span style={{ fontWeight: 600, fontSize: "13.5px" }}>
             {generatingDemo
-              ? `Generating demo scene… (8.2 MB) · ${demoElapsedSec}s elapsed`
+              ? `Generating demo scene… (${DEMO_APPROX_SIZE_LABEL}) · ${demoElapsedSec}s elapsed`
               : "Open the demo"}
           </span>
           <span style={{ fontSize: "11.5px", opacity: 0.85 }}>
             {generatingDemo
               ? `${activeStage} · This can take up to 2 minutes on older Macs.`
-              : "Works offline · No download needed (~8.2 MB synthetic junction)"}
+              : `Works offline · No download needed (${DEMO_APPROX_SIZE_LABEL} synthetic junction)`}
           </span>
         </button>
 
@@ -406,31 +470,22 @@ export default function LibraryScreen({
   };
 
   const handleOpenDemo = async () => {
-    setGeneratingDemo(true);
     setDemoElapsedSec(0);
     setDemoStage("Starting bundled Python generator…");
     setDemoError(null);
-    const start = Date.now();
-    const timer = setInterval(() => {
-      setDemoElapsedSec(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
-    const unlisten = await onDemoProgress((payload) => {
-      if (payload.stage) {
-        setDemoStage(payload.stage);
-      }
-      if (typeof payload.elapsed_seconds === "number") {
-        setDemoElapsedSec(Math.floor(payload.elapsed_seconds));
-      }
-    });
     try {
-      const outcome = await ensureDemoScene();
-      clearInterval(timer);
-      unlisten();
-      setGeneratingDemo(false);
+      const outcome = await runDemoOpenFlow({
+        ensureDemo: ensureDemoScene,
+        subscribeProgress: onDemoProgress,
+        onGeneratingStart: () => setGeneratingDemo(true),
+        onGeneratingEnd: () => setGeneratingDemo(false),
+        onProgress: (stage, elapsed) => {
+          if (stage) setDemoStage(stage);
+          setDemoElapsedSec(elapsed);
+        },
+      });
       onOpenScene(outcome.path);
     } catch (err) {
-      clearInterval(timer);
-      unlisten();
       setGeneratingDemo(false);
       const msg = errorText(err);
       if (!msg.toLowerCase().includes("cancelled")) {

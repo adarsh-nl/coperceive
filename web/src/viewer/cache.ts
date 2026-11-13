@@ -1,8 +1,38 @@
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import { isFrame, type FrameDocument } from "./types";
 
-const FRAME_LIMIT = 16;
-const POINT_LIMIT = 48;
+const FRAME_LIMIT = 256;
+export const POINT_BYTE_LIMIT = 64 * 1024 * 1024;
+
+/** Remember an ArrayBuffer in an LRU Map bounded by total `byteLimit`. */
+export function rememberPointBuffer(
+  map: Map<string, ArrayBuffer>,
+  key: string,
+  buffer: ArrayBuffer,
+  currentBytes: number,
+  byteLimit = POINT_BYTE_LIMIT,
+): number {
+  let total = currentBytes;
+  const existing = map.get(key);
+  if (existing) {
+    total -= existing.byteLength;
+    map.delete(key);
+  }
+  map.set(key, buffer);
+  total += buffer.byteLength;
+  while (total > byteLimit && map.size > 1) {
+    const oldest = map.keys().next().value;
+    if (oldest === undefined) {
+      break;
+    }
+    const oldBuf = map.get(oldest);
+    if (oldBuf) {
+      total -= oldBuf.byteLength;
+    }
+    map.delete(oldest);
+  }
+  return total;
+}
 
 export type FrameCacheStats = {
   frame_hits: number;
@@ -46,6 +76,7 @@ function remember<T>(map: Map<string, T>, key: string, value: T, limit: number) 
 export function createFrameCache(): FrameCache {
   const frames = new Map<string, FrameDocument>();
   const points = new Map<string, ArrayBuffer>();
+  let pointBytes = 0;
   const frameInflight = new Map<string, Promise<FrameDocument>>();
   const pointInflight = new Map<string, Promise<ArrayBuffer>>();
   // A scene switch clears the cache. In-flight requests for the old scene are aborted so they
@@ -71,6 +102,7 @@ export function createFrameCache(): FrameCache {
       controllers.clear();
       frames.clear();
       points.clear();
+      pointBytes = 0;
       frameInflight.clear();
       pointInflight.clear();
     },
@@ -120,7 +152,7 @@ export function createFrameCache(): FrameCache {
       const cached = points.get(key);
       if (cached) {
         stats.point_hits += 1;
-        remember(points, key, cached, POINT_LIMIT);
+        pointBytes = rememberPointBuffer(points, key, cached, pointBytes);
         return Promise.resolve(cached);
       }
       const pending = pointInflight.get(key);
@@ -144,7 +176,7 @@ export function createFrameCache(): FrameCache {
         if (mine !== generation || controller.signal.aborted) {
           throw new DOMException("The scene changed while the points were loading.", "AbortError");
         }
-        remember(points, key, buffer, POINT_LIMIT);
+        pointBytes = rememberPointBuffer(points, key, buffer, pointBytes);
         return buffer;
       })().finally(() => {
         controllers.delete(controller);

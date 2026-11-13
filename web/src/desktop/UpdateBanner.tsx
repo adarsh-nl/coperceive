@@ -12,10 +12,35 @@ import {
 import { parseUpdateManifest } from "./updateManifest";
 import { errorText } from "./errors";
 
-const CURRENT_VERSION = "0.1.1";
 const DEFAULT_ENDPOINT =
   "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json";
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+export async function readAppVersion(
+  deps: {
+    isTauri?: () => boolean;
+    getVersion?: () => Promise<string>;
+  } = {},
+): Promise<string | null> {
+  const inTauri = deps.isTauri ? deps.isTauri() : isTauriEnvironment();
+  if (inTauri) {
+    try {
+      const fn =
+        deps.getVersion ??
+        (await import("@tauri-apps/api/app")).getVersion;
+      const version = await fn();
+      return typeof version === "string" && version.trim().length > 0
+        ? version.trim()
+        : null;
+    } catch {
+      return null;
+    }
+  }
+  if (typeof window !== "undefined" && window.__COPERCEIVE_TEST_ENV__) {
+    return "0.1.0";
+  }
+  return null;
+}
 
 export interface UpdateInfo {
   version: string;
@@ -48,6 +73,7 @@ export interface Updater {
   /** Where the last error came from: a check, or installing the update. */
   errorFrom: "check" | "install";
   errorMessage: string | null;
+  currentVersion: string;
   showNotes: boolean;
   setShowNotes: (open: boolean | ((open: boolean) => boolean)) => void;
   dismiss: () => void;
@@ -67,6 +93,13 @@ export function useUpdater(): Updater {
   const [manual, setManual] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [errorFrom, setErrorFrom] = useState<"check" | "install">("check");
+  const [currentVersion, setCurrentVersion] = useState<string>("");
+
+  useEffect(() => {
+    void readAppVersion().then((v) => {
+      if (v) setCurrentVersion(v);
+    });
+  }, []);
 
   const checkForUpdates = async (isManual = false) => {
     if (!updatesAllowed()) return;
@@ -127,7 +160,14 @@ export function useUpdater(): Updater {
         throw new Error(`status ${res.status}`);
       }
       const data = await res.json();
-      const offer = parseUpdateManifest(data, CURRENT_VERSION);
+      const version = currentVersion || (await readAppVersion());
+      if (!version) {
+        setUpdate(null);
+        setCheckState("idle");
+        return;
+      }
+      setCurrentVersion(version);
+      const offer = parseUpdateManifest(data, version);
       if (offer) {
         setUpdate({
           version: offer.version,
@@ -257,6 +297,7 @@ export function useUpdater(): Updater {
     manual,
     errorFrom,
     errorMessage,
+    currentVersion,
     showNotes,
     setShowNotes,
     dismiss: () => {
@@ -282,7 +323,7 @@ function toastFor(u: Updater): JSX.Element | null {
   if (u.checkState === "uptodate" && u.manual) {
     return (
       <div role="status" aria-live="polite" className="update-status update-toast">
-        You're up to date ({CURRENT_VERSION}).
+        You're up to date{u.currentVersion && u.currentVersion !== "0.0.0" ? ` (${u.currentVersion})` : ""}.
       </div>
     );
   }
