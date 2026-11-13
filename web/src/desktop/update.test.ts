@@ -94,14 +94,50 @@ test("headroom calculation refuses if under 10% margin", () => {
   assert.strictEqual(checkHeadroom(10 * 1024 ** 3, 9 * 1024 ** 3), true);
 });
 
-test("UpdateBanner reads app version at run time via @tauri-apps/api/app getVersion()", async () => {
-  const fs = await import("node:fs");
-  const path = await import("node:path");
-  const bannerSource = fs.readFileSync(
-    path.resolve(import.meta.dirname, "UpdateBanner.tsx"),
-    "utf-8",
+test("readAppVersion returns null on failure and never offers updates without a version", async () => {
+  const { readAppVersion } = await import("./UpdateBanner.tsx");
+  assert.strictEqual(
+    await readAppVersion({ isTauri: () => true, getVersion: async () => "0.1.1" }),
+    "0.1.1",
   );
-  assert.match(bannerSource, /@tauri-apps\/api\/app/);
-  assert.match(bannerSource, /\bgetVersion\s*\(/);
-  assert.doesNotMatch(bannerSource, /\bconst CURRENT_VERSION\s*=/);
+  assert.strictEqual(
+    await readAppVersion({
+      isTauri: () => true,
+      getVersion: async () => {
+        throw new Error("IPC unavailable");
+      },
+    }),
+    null,
+  );
+  assert.strictEqual(await readAppVersion({ isTauri: () => false }), null);
+  assert.strictEqual(
+    parseUpdateManifest(
+      {
+        version: "0.2.0",
+        platforms: {
+          "darwin-aarch64": {
+            signature: "test-sig",
+            url: "https://example.invalid/Coperceive.app.tar.gz",
+          },
+        },
+      },
+      null,
+    ),
+    null,
+  );
+  assert.strictEqual(
+    parseUpdateManifest(
+      {
+        version: "0.2.0",
+        platforms: {
+          "darwin-aarch64": {
+            signature: "test-sig",
+            url: "https://example.invalid/Coperceive.app.tar.gz",
+          },
+        },
+      },
+      "",
+    ),
+    null,
+  );
 });

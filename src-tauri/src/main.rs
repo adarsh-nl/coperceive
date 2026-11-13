@@ -60,6 +60,7 @@ pub struct AppState {
     pub pending_dataset_prepare:
         Mutex<Option<coperceive_desktop::dataset_jobs::PendingPrepare>>,
     pub startup_crash: Mutex<Option<serde_json::Value>>,
+    pub validated_scenes_this_run: Mutex<std::collections::HashSet<String>>,
 }
 
 impl Default for AppState {
@@ -82,7 +83,28 @@ impl Default for AppState {
             pending_update: Mutex::new(None),
             pending_dataset_prepare: Mutex::new(None),
             startup_crash: Mutex::new(None),
+            validated_scenes_this_run: Mutex::new(std::collections::HashSet::new()),
         }
+    }
+}
+
+/// Disconnects any active remote session off the `state.remote` mutex in a
+/// background thread with a bounded timeout so switching to a local scene
+/// never blocks on SSH teardown.
+fn disconnect_remote_in_background(state: &AppState) {
+    let existing = state.remote.lock().ok().and_then(|mut lock| lock.take());
+    if let Ok(mut current) = state.remote_key.lock() {
+        *current = None;
+    }
+    if let Some(mut remote) = existing {
+        std::thread::spawn(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = remote.disconnect();
+                let _ = tx.send(());
+            });
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
     }
 }
 
@@ -540,16 +562,7 @@ async fn switch_data_root(
             *scenes = serde_json::Value::Null;
         }
     }
-    {
-        if let Ok(mut lock) = state.remote.lock() {
-            if let Some(mut existing) = lock.take() {
-                let _ = existing.disconnect();
-            }
-        }
-        if let Ok(mut current) = state.remote_key.lock() {
-            *current = None;
-        }
-    }
+    disconnect_remote_in_background(&state);
 
     if let Ok(lock) = state.controller_config.lock() {
         if let Some(ref cfg) = *lock {
@@ -1267,16 +1280,7 @@ async fn start_local_session_inner(
             *scenes = serde_json::Value::Null;
         }
     }
-    {
-        if let Ok(mut lock) = state.remote.lock() {
-            if let Some(mut existing) = lock.take() {
-                let _ = existing.disconnect();
-            }
-        }
-        if let Ok(mut current) = state.remote_key.lock() {
-            *current = None;
-        }
-    }
+    disconnect_remote_in_background(&state);
 
     let python_bin = resolve_python_binary(app);
     let mut extra_args = Vec::new();
@@ -1845,14 +1849,29 @@ fn get_library_scenes(
         }
     }
     scenes.sort_by(|a, b| a.scene_id.cmp(&b.scene_id));
-    let pending = scenes
-        .iter()
-        .filter(|scene| {
-            !coperceive_desktop::demo::is_demo_path(Path::new(&scene.path))
-                || scene.duration_s.is_none()
-        })
-        .map(|scene| (scene.path.clone(), scene.is_valid.is_some() && scene.duration_s.is_some()))
-        .collect();
+    let pending = {
+        use tauri::Manager;
+        let app_state = app.state::<Arc<AppState>>();
+        let mut seen = app_state
+            .validated_scenes_this_run
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        scenes
+            .iter()
+            .filter(|scene| {
+                !coperceive_desktop::demo::is_demo_path(Path::new(&scene.path))
+                    || scene.duration_s.is_none()
+            })
+            .map(|scene| {
+                let needs_duration_backfill =
+                    scene.is_valid.is_some() && scene.duration_s.is_none();
+                let already_tried = needs_duration_backfill && !seen.insert(scene.path.clone());
+                let cached =
+                    scene.is_valid.is_some() && (scene.duration_s.is_some() || already_tried);
+                (scene.path.clone(), cached)
+            })
+            .collect()
+    };
     spawn_library_validation(app, pending);
     Ok(scenes)
 }
@@ -3173,15 +3192,6 @@ async fn dataset_open(
             _ => None,
         }
     };
-    {
-        let mut persistent = state::load_state();
-        persistent.last_scene_id = scene_id.clone();
-        persistent.last_sample_index = None;
-        persistent.last_timestamp_us = None;
-        persistent._legacy_timestamp_ns = None;
-        persistent.agent_visibility = None;
-        let _ = state::save_state(&persistent);
-    }
     {
         let mut persistent = state::load_state();
         persistent.last_scene_id = scene_id.clone();

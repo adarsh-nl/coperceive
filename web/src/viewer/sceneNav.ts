@@ -54,7 +54,7 @@ export interface SavedPlayheadState {
   last_scene_id?: string | null;
   last_sample_index?: number | null;
   last_timestamp_us?: number | null;
-  _legacy_timestamp_ns?: number | null;
+  last_timestamp_ns?: number | null;
 }
 
 /**
@@ -73,8 +73,8 @@ export function initialSampleIndex(
     return 0;
   }
   let targetTs = init.last_timestamp_us;
-  if (typeof targetTs !== "number" && typeof init._legacy_timestamp_ns === "number") {
-    targetTs = Math.round(init._legacy_timestamp_ns / 1000);
+  if (typeof targetTs !== "number" && typeof init.last_timestamp_ns === "number") {
+    targetTs = Math.round(init.last_timestamp_ns / 1000);
   }
   if (typeof targetTs === "number") {
     const exact = timesUs.indexOf(targetTs);

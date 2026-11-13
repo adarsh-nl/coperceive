@@ -721,9 +721,10 @@ print(f"Step CD-10 verified: old coperceive (no capabilities, 'invalid choice: d
 PY
 
 # --- Flow F: remote session followed by local scene clears streaming header ---
-# First ensure a remote dataset_open session ran and saved state, then launch
-# a local library session with the same state dir and verify the viewer header
-# shows the local scene and never "Streaming over SSH".
+# In the SAME running app process: open a remote fake-SSH scene (dataset_open),
+# verify the viewer shows "Streaming over SSH", then open a local scene
+# (start_local) and verify the viewer header shows the local scene and never
+# "Streaming over SSH".
 LOCAL_ROOT="${TMP_DIR}/local-lib"
 mkdir -p "${LOCAL_ROOT}"
 "${PYTHON}" -m coperceive demo create "${TMP_DIR}/local-demo-cache" >/dev/null
@@ -732,8 +733,14 @@ cp -R "${TMP_DIR}/local-demo-cache/scenes/demo-junction" "${LOCAL_ROOT}/demo-jun
 LOCAL_MARKER="${TMP_DIR}/local-marker.txt"
 rm -f "${LOCAL_MARKER}"
 COPERCEIVE_TEST_ENV=1 \
+COPERCEIVE_E2E_REQUIRE_PREFIX=1 \
 COPERCEIVE_STATE_DIR="${TMP_DIR}/state" \
-COPERCEIVE_AUTOCONNECT_ROOT="${LOCAL_ROOT}" \
+COPERCEIVE_SSH_BIN="${FAKE_SSH}" \
+COPERCEIVE_SCP_BIN="${FAKE_SCP}" \
+FAKE_REMOTE_HOME="${REMOTE_HOME}" \
+FAKE_CLUSTER_PYTHON="${PYTHON}" \
+FAKE_SSH_LOG="${TMP_DIR}/flow-f-ssh.txt" \
+COPERCEIVE_REMOTE_VIEW_CACHE="${TMP_DIR}/remote-view" \
 COPERCEIVE_TEST_MARKER_FILE="${LOCAL_MARKER}" \
 "${APP_EXE}" >"${TMP_DIR}/remote-then-local.stdout.log" 2>"${TMP_DIR}/remote-then-local.stderr.log" &
 APP_PID=$!
@@ -752,6 +759,53 @@ for i in {1..90}; do
     sleep 0.5
 done
 [ -n "${CTRL_PORT}" ] && [ -n "${CTRL_SECRET}" ] || fail "controller port/secret missing for remote-then-local check"
+
+# Step 1: Open remote scene in the running process
+REMOTE_OPEN_PAYLOAD=$(python3 - "${DATASET_ARGS}" <<'PY'
+import json, sys
+args = json.loads("{" + sys.argv[1] + "}")
+args["sceneId"] = "scene_0000"
+js = f"window.__TAURI_INTERNALS__.invoke('dataset_open', {json.dumps(args)})"
+print(json.dumps({"window": "main", "script": js}))
+PY
+)
+curl -s -f -X POST \
+    -H "Authorization: Bearer ${CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d "${REMOTE_OPEN_PAYLOAD}" \
+    "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke dataset_open in running app"
+
+REMOTE_HEADER_OK=0
+LAST_REMOTE_HEADER=""
+for i in {1..90}; do
+    RESP=$(curl -s -X POST \
+        -H "Authorization: Bearer ${CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; const ok = body.includes(\"scene_0000\") && body.includes(\"Streaming over SSH\"); return { ok, hasScene: body.includes(\"scene_0000\"), hasStream: body.includes(\"Streaming over SSH\") }; })()"}' \
+        "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
+    if [ -n "${RESP}" ]; then
+        LAST_REMOTE_HEADER="${RESP}"
+        if echo "${RESP}" | grep -q '"ok":true'; then
+            REMOTE_HEADER_OK=1
+            break
+        fi
+    fi
+    sleep 0.5
+done
+[ "${REMOTE_HEADER_OK}" -eq 1 ] || fail "viewer did not show remote streaming header before local switch: ${LAST_REMOTE_HEADER}"
+
+# Step 2: Open local scene in the SAME running process
+LOCAL_OPEN_PAYLOAD=$(python3 - "${LOCAL_ROOT}" <<'PY'
+import json, sys
+js = f"window.__TAURI_INTERNALS__.invoke('start_local', {json.dumps({'dataRoot': sys.argv[1], 'startFresh': True})})"
+print(json.dumps({"window": "main", "script": js}))
+PY
+)
+curl -s -f -X POST \
+    -H "Authorization: Bearer ${CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d "${LOCAL_OPEN_PAYLOAD}" \
+    "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke start_local in running app"
 
 HEADER_OK=0
 LAST_HEADER=""
@@ -776,6 +830,6 @@ screencapture -x /tmp/e2e-shots/remote-then-local-header.png 2>/dev/null || true
 kill -TERM "${APP_PID}" 2>/dev/null || true
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
-echo "Step CD-19 verified: opening local scene after fake-SSH session cleared streaming header: ${LAST_HEADER}"
+echo "Step CD-19 verified: opening local scene after fake-SSH session in same process cleared streaming header: ${LAST_HEADER}"
 
 echo "E2E_DATASET_APP_MARK: cluster datasets verified through the packaged app over fake SSH"

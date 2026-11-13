@@ -7,7 +7,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
@@ -16,22 +16,22 @@ use serde::{Deserialize, Serialize};
 pub const DEMO_VERSION: &str = "1";
 
 static DEMO_MUTEX: Mutex<()> = Mutex::new(());
-static DEMO_GENERATING: AtomicBool = AtomicBool::new(false);
+static DEMO_GENERATING_COUNT: AtomicUsize = AtomicUsize::new(0);
 static CANCEL_DEMO: AtomicBool = AtomicBool::new(false);
 static ACTIVE_DEMO_PID: Mutex<Option<u32>> = Mutex::new(None);
 
-struct GeneratingGuard<'a>(&'a AtomicBool);
+struct GeneratingGuard<'a>(&'a AtomicUsize);
 
 impl<'a> GeneratingGuard<'a> {
-    fn new(flag: &'a AtomicBool) -> Self {
-        flag.store(true, Ordering::SeqCst);
-        Self(flag)
+    fn new(count: &'a AtomicUsize) -> Self {
+        count.fetch_add(1, Ordering::SeqCst);
+        Self(count)
     }
 }
 
 impl Drop for GeneratingGuard<'_> {
     fn drop(&mut self) {
-        self.0.store(false, Ordering::SeqCst);
+        self.0.fetch_sub(1, Ordering::SeqCst);
     }
 }
 
@@ -253,20 +253,20 @@ pub fn delete_demo_at(root: &Path) -> Result<(), String> {
 
 /// Deletes the demo cache directory at `root` after verifying it sits directly under `state_dir`.
 pub fn delete_demo_in_state_dir(root: &Path, state_dir: &Path) -> Result<(), String> {
-    delete_demo_in_state_dir_with(root, state_dir, &DEMO_MUTEX, &DEMO_GENERATING)
+    delete_demo_in_state_dir_with(root, state_dir, &DEMO_MUTEX, &DEMO_GENERATING_COUNT)
 }
 
 fn delete_demo_in_state_dir_with(
     root: &Path,
     state_dir: &Path,
     mutex: &Mutex<()>,
-    generating: &AtomicBool,
+    generating_count: &AtomicUsize,
 ) -> Result<(), String> {
-    if generating.load(Ordering::SeqCst) {
+    if generating_count.load(Ordering::SeqCst) > 0 {
         return Err("Cannot delete demo while demo is being generated".to_string());
     }
     let _lock = mutex.lock().map_err(|e| e.to_string())?;
-    if generating.load(Ordering::SeqCst) {
+    if generating_count.load(Ordering::SeqCst) > 0 {
         return Err("Cannot delete demo while demo is being generated".to_string());
     }
     validate_demo_target_in_state_dir(root, state_dir)?;
@@ -352,6 +352,7 @@ pub fn ensure_demo_in_state_dir_with_progress<F: FnMut(&str, f64)>(
     state_dir: &Path,
     mut on_progress: F,
 ) -> Result<DemoOutcome, String> {
+    let _generating = GeneratingGuard::new(&DEMO_GENERATING_COUNT);
     let _lock = DEMO_MUTEX.lock().map_err(|e| e.to_string())?;
     CANCEL_DEMO.store(false, Ordering::SeqCst);
 
@@ -372,8 +373,6 @@ pub fn ensure_demo_in_state_dir_with_progress<F: FnMut(&str, f64)>(
             python_path: python_str,
         });
     }
-
-    let _generating = GeneratingGuard::new(&DEMO_GENERATING);
 
     // Corrupt, outdated, or absent: clean up existing partial/stale directory
     if root.exists() {
@@ -557,7 +556,7 @@ mod tests {
 
         // Delete demo under its explicit state_dir succeeds
         let mutex = Mutex::new(());
-        let generating = AtomicBool::new(false);
+        let generating = AtomicUsize::new(0);
         delete_demo_in_state_dir_with(&root, &tmp, &mutex, &generating).unwrap();
         assert!(!root.exists());
         assert!(!is_demo_valid_at(&root));
@@ -569,7 +568,7 @@ mod tests {
         let tmp = unique_temp_dir("coperceive-test-demo-safety");
         let other = unique_temp_dir("coperceive-test-demo-other");
         let mutex = Mutex::new(());
-        let generating = AtomicBool::new(false);
+        let generating = AtomicUsize::new(0);
         fs::create_dir_all(&tmp).unwrap();
         fs::create_dir_all(&other).unwrap();
 
@@ -635,7 +634,7 @@ mod tests {
         let valid_demo = tmp.join("demo");
         fs::create_dir_all(&valid_demo).unwrap();
         let mutex = Mutex::new(());
-        let generating = AtomicBool::new(true);
+        let generating = AtomicUsize::new(1);
         let err = delete_demo_in_state_dir_with(&valid_demo, &tmp, &mutex, &generating).unwrap_err();
         assert!(err.contains("being generated"), "{err}");
         assert!(valid_demo.exists());

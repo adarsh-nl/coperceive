@@ -57,11 +57,7 @@ def assert_identical_scene_dirs(old: Path, new: Path) -> None:
     assert read_scene(old) == unnamed
     old_marker = json.loads((old / "COMPLETE.json").read_text(encoding="utf-8"))
     new_marker = json.loads((new / "COMPLETE.json").read_text(encoding="utf-8"))
-    assert isinstance(new_marker.get("start_time_us"), int)
-    assert isinstance(new_marker.get("end_time_us"), int)
-    assert new_marker["start_time_us"] <= new_marker["end_time_us"]
-    ignored = _PROVENANCE | {"start_time_us", "end_time_us"}
-    assert {k: v for k, v in new_marker.items() if k not in ignored} == old_marker
+    assert {k: v for k, v in new_marker.items() if k not in _PROVENANCE} == old_marker
 
 
 def assert_identical_trees(old_root: Path, new_root: Path) -> None:

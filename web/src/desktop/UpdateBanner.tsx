@@ -16,16 +16,30 @@ const DEFAULT_ENDPOINT =
   "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json";
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
-async function readAppVersion(): Promise<string> {
-  if (isTauriEnvironment()) {
+export async function readAppVersion(
+  deps: {
+    isTauri?: () => boolean;
+    getVersion?: () => Promise<string>;
+  } = {},
+): Promise<string | null> {
+  const inTauri = deps.isTauri ? deps.isTauri() : isTauriEnvironment();
+  if (inTauri) {
     try {
-      const { getVersion } = await import("@tauri-apps/api/app");
-      return await getVersion();
+      const fn =
+        deps.getVersion ??
+        (await import("@tauri-apps/api/app")).getVersion;
+      const version = await fn();
+      return typeof version === "string" && version.trim().length > 0
+        ? version.trim()
+        : null;
     } catch {
-      return "0.0.0";
+      return null;
     }
   }
-  return "0.0.0";
+  if (typeof window !== "undefined" && window.__COPERCEIVE_TEST_ENV__) {
+    return "0.1.0";
+  }
+  return null;
 }
 
 export interface UpdateInfo {
@@ -147,6 +161,11 @@ export function useUpdater(): Updater {
       }
       const data = await res.json();
       const version = currentVersion || (await readAppVersion());
+      if (!version) {
+        setUpdate(null);
+        setCheckState("idle");
+        return;
+      }
       setCurrentVersion(version);
       const offer = parseUpdateManifest(data, version);
       if (offer) {

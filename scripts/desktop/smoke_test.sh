@@ -570,6 +570,8 @@ PLAY_SAMPLES=0
 BUFFERING_SEEN=0
 START_FRAME=""
 END_FRAME=""
+START_WALL_S=""
+END_WALL_S=""
 for i in {1..15}; do
     sleep 0.2
     PLAY_RESP=$(curl -s -X POST \
@@ -577,13 +579,16 @@ for i in {1..15}; do
         -H "Content-Type: application/json" \
         -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; const txt = document.body ? document.body.innerText : \"\"; return { frameIndex: st.frameIndex ?? -1, playing: Boolean(st.playing), buffering: txt.includes(\"Buffering\") }; })()"}' \
         "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+    SAMPLE_WALL_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
     if [ -n "${PLAY_RESP}" ]; then
         CUR_FRAME=$(echo "${PLAY_RESP}" | sed -n 's/.*"frameIndex":\([0-9]*\).*/\1/p')
         if [ -z "${START_FRAME}" ] && [ -n "${CUR_FRAME}" ]; then
             START_FRAME="${CUR_FRAME}"
+            START_WALL_S="${SAMPLE_WALL_S}"
         fi
         if [ -n "${CUR_FRAME}" ]; then
             END_FRAME="${CUR_FRAME}"
+            END_WALL_S="${SAMPLE_WALL_S}"
         fi
         if echo "${PLAY_RESP}" | grep -q '"buffering":true'; then
             BUFFERING_SEEN=1
@@ -591,27 +596,35 @@ for i in {1..15}; do
         PLAY_SAMPLES=$((PLAY_SAMPLES + 1))
     fi
 done
-# Pause playback cleanly
-curl -s -X POST \
+# Capture per-phase playback breakdown and pause cleanly
+PLAYBACK_PERF=$(curl -s -X POST \
     -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
     -H "Content-Type: application/json" \
-    -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (st?.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return true; })()"}' \
-    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" >/dev/null 2>&1 || true
+    -d '{"window":"viewer","script":"(() => { const perf = window.__COPERCEIVE_PLAYBACK_PERF__?.() ?? null; const st = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (st?.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return perf; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+echo "Demo playback perf breakdown: ${PLAYBACK_PERF}"
 
 if [ "${BUFFERING_SEEN}" -ne 0 ]; then
     echo "Error: Demo playback showed 'Buffering' during 1x local playback!" >&2
     exit 26
 fi
-if [ -z "${START_FRAME}" ] || [ -z "${END_FRAME}" ]; then
+if [ -z "${START_FRAME}" ] || [ -z "${END_FRAME}" ] || [ -z "${START_WALL_S}" ] || [ -z "${END_WALL_S}" ]; then
     echo "Error: Could not read playback frameIndex during demo playback!" >&2
     exit 26
 fi
 FRAME_DELTA=$(( (END_FRAME - START_FRAME + 100) % 100 ))
-if [ "${FRAME_DELTA}" -lt 15 ]; then
-    echo "Error: Demo playback too slow: advanced only ${FRAME_DELTA} frames in ~3s (start=${START_FRAME}, end=${END_FRAME})!" >&2
-    exit 26
-fi
-echo "Verified demo 1x playback: advanced ${FRAME_DELTA} frames in ~3s (${START_FRAME} -> ${END_FRAME}) with no Buffering"
+python3 - "${START_FRAME}" "${END_FRAME}" "${FRAME_DELTA}" "${START_WALL_S}" "${END_WALL_S}" <<'PY' || exit 26
+import sys
+start_f, end_f, frames, t0, t1 = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
+elapsed = max(t1 - t0, 1e-6)
+expected = 10.0 * elapsed
+ratio = frames / expected
+min_required = 0.9 * expected
+print(f"Demo 1x playback: elapsed={elapsed:.2f}s frames={frames} ({start_f} -> {end_f}) ratio={ratio:.2f}x (required >= 0.90x / {min_required:.1f} frames)")
+if frames < min_required:
+    print(f"Error: Demo playback too slow: {frames} frames in {elapsed:.2f}s ({ratio:.2f}x < 0.90x)", file=sys.stderr)
+    sys.exit(26)
+PY
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
 if [ -z "${DEMO_OUTCOME_LINE}" ]; then

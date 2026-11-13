@@ -43,6 +43,7 @@ test("initialSampleIndex starts at sample 0 when opening a different scene than 
   assert.equal(initialSampleIndex({ last_scene_id: "demo-junction", last_sample_index: 2 }, "Town03-000", times), 0);
   assert.equal(initialSampleIndex({ last_scene_id: "Town03-000", last_sample_index: 2 }, "Town03-000", times), 2);
   assert.equal(initialSampleIndex({ last_scene_id: "Town03-000", last_timestamp_us: 300_000 }, "Town03-000", times), 3);
+  assert.equal(initialSampleIndex({ last_scene_id: "Town03-000", last_timestamp_ns: 200_000_000 }, "Town03-000", times), 2);
   assert.equal(initialSampleIndex({ last_scene_id: "Town03-000", last_timestamp_us: 300_000 }, "train_0000", times), 0);
 });
 

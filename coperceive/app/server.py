@@ -81,26 +81,15 @@ _STATIC = Path(__file__).resolve().parent / "static"
 _THUMBNAIL_WIDTH_MAX = 1280
 
 
-@functools.lru_cache(maxsize=64)
-def _base_rgb_image(path: str, mtime_ns: int) -> Image.Image:
-    """Decoded RGB image cached briefly so strip and frustum widths share one PNG decode."""
-    del mtime_ns
-    with open_image(path) as opened:
-        return opened.convert("RGB")
-
-
-@functools.lru_cache(maxsize=512)
+@functools.lru_cache(maxsize=256)
 def _thumbnail_bytes(path: str, mtime_ns: int, width: int) -> bytes:
     """A small JPEG for the camera strip/split pane; full resolution stays on disk."""
-    base = _base_rgb_image(path, mtime_ns)
-    if base.width <= width and base.height <= width:
-        image = base
-    else:
-        image = base.copy()
-        image.thumbnail((width, width), Image.Resampling.BILINEAR)
-    buffer = io.BytesIO()
-    image.save(buffer, format="JPEG", quality=80)
-    return buffer.getvalue()
+    with open_image(path) as opened:
+        image = opened.convert("RGB")
+        image.thumbnail((width, width), Image.Resampling.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=80)
+        return buffer.getvalue()
 
 
 _MISSING_VIEWER_PAGE = """<!doctype html>

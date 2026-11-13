@@ -96,10 +96,6 @@ def test_ingest_scene_filter_and_rebuilds_junk_partial(tmp_path: Path) -> None:
         _griffin(), raw, out, params={"subset": "25m"}, workers=1, scene_ids=["Town03-001"]
     )
     assert report.written == ("Town03-001",)
-    complete = json.loads((out / "Town03-001" / "COMPLETE.json").read_text(encoding="utf-8"))
-    assert isinstance(complete["start_time_us"], int)
-    assert isinstance(complete["end_time_us"], int)
-    assert complete["end_time_us"] >= complete["start_time_us"]
     assert not (out / "Town03-000").exists()
     assert not junk.exists()
     shutil.rmtree(out)

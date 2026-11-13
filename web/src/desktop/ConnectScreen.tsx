@@ -29,6 +29,7 @@ import { UpdateCard, UpdateDot, useUpdater } from "./UpdateBanner";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import { errorText } from "./errors";
+import { DEMO_APPROX_SIZE_LABEL, runDemoOpenFlow } from "./demoMeta";
 import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
@@ -263,33 +264,28 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     const triggerOpenDemo = async () => {
       setBusy(true);
       setError("");
-      setGeneratingDemo(true);
       setDemoElapsedSec(0);
       setDemoStage("Starting bundled Python generator…");
-      setStatus("Generating demo scene… (8.2 MB demo cache)");
-      const start = Date.now();
-      const timer = setInterval(() => {
-        setDemoElapsedSec(Math.floor((Date.now() - start) / 1000));
-      }, 1000);
-      const stopProgress = await onDemoProgress((payload) => {
-        if (payload.stage) {
-          setDemoStage(payload.stage);
-        }
-        if (typeof payload.elapsed_seconds === "number") {
-          setDemoElapsedSec(Math.floor(payload.elapsed_seconds));
-        }
-      });
       try {
-        const res = await ensureDemoScene();
-        clearInterval(timer);
-        stopProgress();
-        setGeneratingDemo(false);
+        const res = await runDemoOpenFlow({
+          ensureDemo: ensureDemoScene,
+          subscribeProgress: onDemoProgress,
+          onGeneratingStart: () => {
+            setGeneratingDemo(true);
+            setStatus(`Generating demo scene… (${DEMO_APPROX_SIZE_LABEL} demo cache)`);
+          },
+          onGeneratingEnd: () => {
+            setGeneratingDemo(false);
+          },
+          onProgress: (stage, elapsed) => {
+            if (stage) setDemoStage(stage);
+            setDemoElapsedSec(elapsed);
+          },
+        });
         setBusy(false);
         setStatus("");
         await handleConnectLocal(res.path);
       } catch (err) {
-        clearInterval(timer);
-        stopProgress();
         setGeneratingDemo(false);
         setBusy(false);
         setStatus("");

@@ -892,6 +892,45 @@ function recordFrameStat(stat: FrameRenderStat) {
   if (list.length > 1000) list.splice(0, list.length - 1000);
 }
 
+function recordFrustumStat(ms: number) {
+  if (typeof window === "undefined") return;
+  const list = window.__COPERCEIVE_FRUSTUM_STATS__ ?? (window.__COPERCEIVE_FRUSTUM_STATS__ = []);
+  list.push(ms);
+  if (list.length > 1000) list.splice(0, list.length - 1000);
+}
+
+function summarizeMs(values: number[]) {
+  if (values.length === 0) return { avg: 0, max: 0 };
+  let sum = 0;
+  let max = 0;
+  for (const v of values) {
+    sum += v;
+    if (v > max) max = v;
+  }
+  return {
+    avg: Math.round((sum / values.length) * 10) / 10,
+    max: Math.round(max * 10) / 10,
+  };
+}
+
+function summarizePlaybackPerf() {
+  if (typeof window === "undefined") return null;
+  const stats = window.__COPERCEIVE_FRAME_STATS__ ?? [];
+  const frustums = window.__COPERCEIVE_FRUSTUM_STATS__ ?? [];
+  const applied = stats.filter((s) => s.result === "applied");
+  const dropped = stats.length - applied.length;
+  return {
+    frames: stats.length,
+    applied: applied.length,
+    dropped,
+    load_ms: summarizeMs(stats.map((s) => s.load_ms)),
+    points_ms: summarizeMs(stats.flatMap((s) => (s.points_ms !== null ? [s.points_ms] : []))),
+    draw_ms: summarizeMs(stats.map((s) => s.draw_ms)),
+    render_ms: summarizeMs(stats.map((s) => s.render_ms)),
+    frustum_ms: { count: frustums.length, ...summarizeMs(frustums) },
+  };
+}
+
 /** Test-only: the points/boxes sample of every rendered frame where either changed. */
 function recordShownTimes(times: { points: number | null; boxes: number | null }, pointsVisible: boolean) {
   if (typeof window === "undefined" || !window.__COPERCEIVE_TEST_ENV__) return;
@@ -1097,6 +1136,8 @@ declare global {
     __COPERCEIVE_SCENES__?: () => string[];
     __COPERCEIVE_TEST_ENV__?: boolean;
     __COPERCEIVE_FRAME_STATS__?: FrameRenderStat[];
+    __COPERCEIVE_FRUSTUM_STATS__?: number[];
+    __COPERCEIVE_PLAYBACK_PERF__?: typeof summarizePlaybackPerf;
     __COPERCEIVE_RENDERED_TIMES__?: { at: number; points: number | null; boxes: number | null }[];
     __COPERCEIVE_CACHE_STATS__?: {
       frame_hits: number;
@@ -1910,6 +1951,19 @@ export default function Viewer({
   const frameRef = useRef(0);
   const playingRef = useRef(false);
   playingRef.current = playing;
+  const telemetryResumeWaitersRef = useRef<Set<() => void>>(new Set());
+  useEffect(() => {
+    if (!playing) {
+      for (const resolve of telemetryResumeWaitersRef.current) resolve();
+      telemetryResumeWaitersRef.current.clear();
+    }
+  }, [playing]);
+  useEffect(() => {
+    window.__COPERCEIVE_PLAYBACK_PERF__ = summarizePlaybackPerf;
+    return () => {
+      delete window.__COPERCEIVE_PLAYBACK_PERF__;
+    };
+  }, []);
   const summaryRef = useRef(summary);
   summaryRef.current = summary;
 
@@ -3224,6 +3278,7 @@ export default function Viewer({
       }
     }
     void (async () => {
+      const frustumStart = performance.now();
       await Promise.all(
         wanted.map(async (frustum) => {
           const key = cameraKey(frustum.agent_id, frustum.sensor_id);
@@ -3285,6 +3340,7 @@ export default function Viewer({
       if (cancelled) {
         return;
       }
+      recordFrustumStat(performance.now() - frustumStart);
       const nextTime = summary?.times_us[frameIndex + 1];
       if (!playingRef.current && typeof nextTime === "number") {
         for (const frustum of wanted) {
@@ -4047,6 +4103,7 @@ export default function Viewer({
       return;
     }
     const times = summary.times_us;
+    const waiters = telemetryResumeWaitersRef.current;
     const vehicleId = summary.agents.find((agent) => agent.agent_type === "vehicle")?.agent_id ?? "";
     void (async () => {
       const points: number[] = [];
@@ -4062,7 +4119,9 @@ export default function Viewer({
       let previousTime = 0;
       for (let index = 0; index < times.length; index += 1) {
         while (playingRef.current && !cancelled && stillWanted()) {
-          await new Promise((resolve) => setTimeout(resolve, 100));
+          await new Promise<void>((resolve) => {
+            waiters.add(resolve);
+          });
         }
         if (cancelled || !stillWanted()) {
           return;
@@ -4153,6 +4212,8 @@ export default function Viewer({
     })().catch(() => undefined);
     return () => {
       cancelled = true;
+      for (const resolve of waiters) resolve();
+      waiters.clear();
     };
   }, [summary, effectiveToken, hidden, appearance]);
 
