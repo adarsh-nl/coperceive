@@ -92,10 +92,10 @@ jobs:
             echo "::error title=BuiltBundleTracked::.gitignore no longer ignores coperceive/app/static/"
             exit 1
           }
-      - name: Shipped web source contains no personal identifiers
+      - name: Repository contains no personal or cluster identifiers
         run: |
-          if grep -rnE "nanjaiyalathaa|ewi\.utwente\.nl" web/src; then
-            echo "::error title=PersonalIdentifiersFound::Personal identifiers found in web/src"
+          if ! bash scripts/ci/check_identifiers.sh; then
+            echo "::error title=PersonalIdentifiersFound::Personal or cluster identifiers found (see scripts/ci/identifier_patterns.txt)"
             exit 1
           fi
 
