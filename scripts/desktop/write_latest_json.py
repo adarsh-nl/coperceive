@@ -79,9 +79,18 @@ def get_expected_filenames(version: str) -> dict[str, list[str]]:
 def find_platform_archives(assets: Path, version: str) -> dict[str, tuple[Path, Path]]:
     """Scan the assets directory for updater archives and signatures for each platform.
 
-    Enforces strict mapping from explicit filenames and ensures no two platforms
-    resolve to the same archive file.
+    Enforces strict mapping from explicit filenames, rejects any stray non-installer
+    files, and ensures no two platforms resolve to the same archive file.
     """
+    for entry in sorted(assets.iterdir()):
+        if entry.name == "latest.json":
+            continue
+        if not entry.name.lower().startswith("coperceive_"):
+            raise SystemExit(
+                f"Stray non-installer file in release assets: '{entry.name}'. "
+                "Only Coperceive_* installer and updater files may be published."
+            )
+
     expected = get_expected_filenames(version)
     platforms: dict[str, tuple[Path, Path]] = {}
 

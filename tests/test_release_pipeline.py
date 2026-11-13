@@ -180,9 +180,9 @@ def test_a_tag_that_is_not_a_version_is_refused(tmp_path: Path) -> None:
 def test_an_untagged_build_reports_the_pyproject_version(tmp_path: Path) -> None:
     """A build that is not at a tag says pyproject's version; one tag on HEAD is that tag."""
     work = _checkout(tmp_path)
-    assert _synced_version(work) == "0.1.0"
-    one_tag = _checkout(tmp_path / "tagged", "v0.1.1")
-    assert _synced_version(one_tag) == "0.1.1"
+    assert _synced_version(work) == "0.1.1"
+    one_tag = _checkout(tmp_path / "tagged", "v0.1.2")
+    assert _synced_version(one_tag) == "0.1.2"
 
 
 def test_the_app_polls_the_file_the_release_uploads() -> None:
