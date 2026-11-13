@@ -16,8 +16,24 @@ use serde::{Deserialize, Serialize};
 pub const DEMO_VERSION: &str = "1";
 
 static DEMO_MUTEX: Mutex<()> = Mutex::new(());
+static DEMO_GENERATING: AtomicBool = AtomicBool::new(false);
 static CANCEL_DEMO: AtomicBool = AtomicBool::new(false);
 static ACTIVE_DEMO_PID: Mutex<Option<u32>> = Mutex::new(None);
+
+struct GeneratingGuard<'a>(&'a AtomicBool);
+
+impl<'a> GeneratingGuard<'a> {
+    fn new(flag: &'a AtomicBool) -> Self {
+        flag.store(true, Ordering::SeqCst);
+        Self(flag)
+    }
+}
+
+impl Drop for GeneratingGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+}
 
 /// The outcome of ensuring the demo scene exists.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -237,9 +253,22 @@ pub fn delete_demo_at(root: &Path) -> Result<(), String> {
 
 /// Deletes the demo cache directory at `root` after verifying it sits directly under `state_dir`.
 pub fn delete_demo_in_state_dir(root: &Path, state_dir: &Path) -> Result<(), String> {
-    let _lock = DEMO_MUTEX
-        .try_lock()
-        .map_err(|_| "Cannot delete demo while demo is being generated".to_string())?;
+    delete_demo_in_state_dir_with(root, state_dir, &DEMO_MUTEX, &DEMO_GENERATING)
+}
+
+fn delete_demo_in_state_dir_with(
+    root: &Path,
+    state_dir: &Path,
+    mutex: &Mutex<()>,
+    generating: &AtomicBool,
+) -> Result<(), String> {
+    if generating.load(Ordering::SeqCst) {
+        return Err("Cannot delete demo while demo is being generated".to_string());
+    }
+    let _lock = mutex.lock().map_err(|e| e.to_string())?;
+    if generating.load(Ordering::SeqCst) {
+        return Err("Cannot delete demo while demo is being generated".to_string());
+    }
     validate_demo_target_in_state_dir(root, state_dir)?;
     if root.exists() {
         fs::remove_dir_all(root)
@@ -343,6 +372,8 @@ pub fn ensure_demo_in_state_dir_with_progress<F: FnMut(&str, f64)>(
             python_path: python_str,
         });
     }
+
+    let _generating = GeneratingGuard::new(&DEMO_GENERATING);
 
     // Corrupt, outdated, or absent: clean up existing partial/stale directory
     if root.exists() {
@@ -525,7 +556,9 @@ mod tests {
         assert!(root.exists());
 
         // Delete demo under its explicit state_dir succeeds
-        delete_demo_in_state_dir(&root, &tmp).unwrap();
+        let mutex = Mutex::new(());
+        let generating = AtomicBool::new(false);
+        delete_demo_in_state_dir_with(&root, &tmp, &mutex, &generating).unwrap();
         assert!(!root.exists());
         assert!(!is_demo_valid_at(&root));
         let _ = fs::remove_dir_all(&tmp);
@@ -535,18 +568,20 @@ mod tests {
     fn test_delete_demo_safety_guards() {
         let tmp = unique_temp_dir("coperceive-test-demo-safety");
         let other = unique_temp_dir("coperceive-test-demo-other");
+        let mutex = Mutex::new(());
+        let generating = AtomicBool::new(false);
         fs::create_dir_all(&tmp).unwrap();
         fs::create_dir_all(&other).unwrap();
 
         // 1. Refuse empty target or empty state_dir
         assert!(delete_demo_at(Path::new("")).is_err());
-        assert!(delete_demo_in_state_dir(Path::new(""), &tmp).is_err());
-        assert!(delete_demo_in_state_dir(&tmp.join("demo"), Path::new("")).is_err());
-        assert!(delete_demo_in_state_dir(Path::new("demo"), Path::new(".")).is_err());
-        assert!(delete_demo_in_state_dir(Path::new("/demo"), Path::new("/")).is_err());
+        assert!(delete_demo_in_state_dir_with(Path::new(""), &tmp, &mutex, &generating).is_err());
+        assert!(delete_demo_in_state_dir_with(&tmp.join("demo"), Path::new(""), &mutex, &generating).is_err());
+        assert!(delete_demo_in_state_dir_with(Path::new("demo"), Path::new("."), &mutex, &generating).is_err());
+        assert!(delete_demo_in_state_dir_with(Path::new("/demo"), Path::new("/"), &mutex, &generating).is_err());
 
         // 2. Refuse state_dir itself
-        assert!(delete_demo_in_state_dir(&tmp, &tmp).is_err());
+        assert!(delete_demo_in_state_dir_with(&tmp, &tmp, &mutex, &generating).is_err());
         if let Ok(real_state) = resolved_state_dir() {
             assert!(delete_demo_at(&real_state).is_err());
         }
@@ -555,7 +590,7 @@ mod tests {
         let wrong_name = tmp.join("user-datasets");
         fs::create_dir_all(&wrong_name).unwrap();
         fs::write(wrong_name.join("important.txt"), "keep").unwrap();
-        assert!(delete_demo_in_state_dir(&wrong_name, &tmp).is_err());
+        assert!(delete_demo_in_state_dir_with(&wrong_name, &tmp, &mutex, &generating).is_err());
         assert!(delete_demo_at(&wrong_name).is_err());
         assert!(wrong_name.join("important.txt").exists());
 
@@ -563,13 +598,13 @@ mod tests {
         let other_demo = other.join("demo");
         fs::create_dir_all(&other_demo).unwrap();
         fs::write(other_demo.join("keep.txt"), "keep").unwrap();
-        assert!(delete_demo_in_state_dir(&other_demo, &tmp).is_err());
+        assert!(delete_demo_in_state_dir_with(&other_demo, &tmp, &mutex, &generating).is_err());
         assert!(delete_demo_at(&other_demo).is_err());
         assert!(other_demo.join("keep.txt").exists());
 
         let nested_demo = tmp.join("nested").join("demo");
         fs::create_dir_all(&nested_demo).unwrap();
-        assert!(delete_demo_in_state_dir(&nested_demo, &tmp).is_err());
+        assert!(delete_demo_in_state_dir_with(&nested_demo, &tmp, &mutex, &generating).is_err());
         assert!(nested_demo.exists());
 
         // 5. Refuse symlink at <state_dir>/demo pointing elsewhere
@@ -577,7 +612,7 @@ mod tests {
         {
             let symlink_demo = tmp.join("demo");
             std::os::unix::fs::symlink(&other_demo, &symlink_demo).unwrap();
-            assert!(delete_demo_in_state_dir(&symlink_demo, &tmp).is_err());
+            assert!(delete_demo_in_state_dir_with(&symlink_demo, &tmp, &mutex, &generating).is_err());
             assert!(other_demo.join("keep.txt").exists());
             fs::remove_file(&symlink_demo).unwrap();
         }
@@ -586,11 +621,24 @@ mod tests {
         let valid_demo = tmp.join("demo");
         fs::create_dir_all(&valid_demo).unwrap();
         fs::write(valid_demo.join("marker.txt"), "demo").unwrap();
-        delete_demo_in_state_dir(&valid_demo, &tmp).unwrap();
+        delete_demo_in_state_dir_with(&valid_demo, &tmp, &mutex, &generating).unwrap();
         assert!(!valid_demo.exists());
         assert!(wrong_name.join("important.txt").exists());
 
         let _ = fs::remove_dir_all(&tmp);
         let _ = fs::remove_dir_all(&other);
+    }
+
+    #[test]
+    fn test_delete_refused_while_generating() {
+        let tmp = unique_temp_dir("coperceive-test-demo-gen");
+        let valid_demo = tmp.join("demo");
+        fs::create_dir_all(&valid_demo).unwrap();
+        let mutex = Mutex::new(());
+        let generating = AtomicBool::new(true);
+        let err = delete_demo_in_state_dir_with(&valid_demo, &tmp, &mutex, &generating).unwrap_err();
+        assert!(err.contains("being generated"), "{err}");
+        assert!(valid_demo.exists());
+        let _ = fs::remove_dir_all(&tmp);
     }
 }

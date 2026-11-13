@@ -260,28 +260,6 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
     };
     window.addEventListener("keydown", handleKeyDown);
 
-    if (!isTauriEnvironment()) {
-      return () => {
-        window.removeEventListener("coperceive-test-import", applyTestImport);
-        window.removeEventListener("coperceive-test-panel-state", handleTestPanelState);
-        window.removeEventListener("coperceive-test-open-folder-seed", handleOpenFolderSeed);
-        window.removeEventListener("coperceive-hpc-state", handleHpcState);
-        window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
-        window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
-        window.removeEventListener("coperceive-open-demo", handleOpenDemoCustom);
-        window.removeEventListener("keydown", handleKeyDown);
-      };
-    }
-
-    let unlistenImport: (() => void) | undefined;
-    let unlistenGetData: (() => void) | undefined;
-    let unlistenLibrary: (() => void) | undefined;
-    let unlistenOpenFolder: (() => void) | undefined;
-    let unlistenHpcWorkspace: (() => void) | undefined;
-    let unlistenToggleSidebar: (() => void) | undefined;
-    let unlistenSettings: (() => void) | undefined;
-    let unlistenOpenDemo: (() => void) | undefined;
-
     const triggerOpenDemo = async () => {
       setBusy(true);
       setError("");
@@ -326,6 +304,28 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       void triggerOpenDemo();
     };
     window.addEventListener("coperceive-open-demo", handleOpenDemoCustom);
+
+    if (!isTauriEnvironment()) {
+      return () => {
+        window.removeEventListener("coperceive-test-import", applyTestImport);
+        window.removeEventListener("coperceive-test-panel-state", handleTestPanelState);
+        window.removeEventListener("coperceive-test-open-folder-seed", handleOpenFolderSeed);
+        window.removeEventListener("coperceive-hpc-state", handleHpcState);
+        window.removeEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
+        window.removeEventListener("coperceive-open-dataset", handleOpenDatasetNav);
+        window.removeEventListener("coperceive-open-demo", handleOpenDemoCustom);
+        window.removeEventListener("keydown", handleKeyDown);
+      };
+    }
+
+    let unlistenImport: (() => void) | undefined;
+    let unlistenGetData: (() => void) | undefined;
+    let unlistenLibrary: (() => void) | undefined;
+    let unlistenOpenFolder: (() => void) | undefined;
+    let unlistenHpcWorkspace: (() => void) | undefined;
+    let unlistenToggleSidebar: (() => void) | undefined;
+    let unlistenSettings: (() => void) | undefined;
+    let unlistenOpenDemo: (() => void) | undefined;
 
     void (async () => {
       const { listen } = await import("@tauri-apps/api/event");
