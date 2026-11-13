@@ -188,3 +188,17 @@ def test_two_platforms_resolving_to_same_file_raises_error(tmp_path: Path) -> No
     with pytest.raises(SystemExit) as exc_info:
         wlj.find_platform_archives(assets, "0.1.0")
     assert "resolved to the same file" in str(exc_info.value)
+
+
+def test_stray_non_installer_file_in_assets_is_refused(tmp_path: Path) -> None:
+    """Stray files such as dateutil-zoneinfo.tar.gz in the assets directory must be refused."""
+    conf = tmp_path / "tauri.conf.json"
+    conf.write_text(json.dumps({"version": "0.1.1"}))
+    assets = tmp_path / "assets"
+    assets.mkdir()
+    create_mock_assets(assets, "0.1.1")
+    (assets / "dateutil-zoneinfo.tar.gz").write_bytes(b"stray-dependency-tarball")
+
+    with pytest.raises(SystemExit) as exc_info:
+        wlj.find_platform_archives(assets, "0.1.1")
+    assert "dateutil-zoneinfo.tar.gz" in str(exc_info.value)
