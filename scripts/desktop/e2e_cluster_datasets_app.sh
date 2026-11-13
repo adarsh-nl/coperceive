@@ -760,12 +760,28 @@ for i in {1..90}; do
 done
 [ -n "${CTRL_PORT}" ] && [ -n "${CTRL_SECRET}" ] || fail "controller port/secret missing for remote-then-local check"
 
-# Step 1: Open remote scene in the running process
+# Step 1: Populate active dataset metadata (like HpcWorkspace) and open remote scene in the running process
 REMOTE_OPEN_PAYLOAD=$(python3 - "${DATASET_ARGS}" <<'PY'
 import json, sys
 args = json.loads("{" + sys.argv[1] + "}")
 args["sceneId"] = "scene_0000"
-js = f"window.__TAURI_INTERNALS__.invoke('dataset_open', {json.dumps(args)})"
+dataset_meta = {
+    "dataset": {
+        "scenes": [
+            {"scene_id": "scene_0000", "state": "ready"},
+            {"scene_id": "scene_0001", "state": "ready"},
+            {"scene_id": "scene_0002", "state": "ready"},
+        ],
+        "label": "OPV2V test",
+        "server": "Dataset e2e fake cluster",
+    }
+}
+js = (
+    f"(async () => {{ "
+    f"await window.__TAURI_INTERNALS__.invoke('set_viewer_dataset_scenes', {json.dumps(dataset_meta)}); "
+    f"return await window.__TAURI_INTERNALS__.invoke('dataset_open', {json.dumps(args)}); "
+    f"}})()"
+)
 print(json.dumps({"window": "main", "script": js}))
 PY
 )
@@ -781,7 +797,7 @@ for i in {1..90}; do
     RESP=$(curl -s -X POST \
         -H "Authorization: Bearer ${CTRL_SECRET}" \
         -H "Content-Type: application/json" \
-        -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; const ok = body.includes(\"scene_0000\") && body.includes(\"Streaming over SSH\"); return { ok, hasScene: body.includes(\"scene_0000\"), hasStream: body.includes(\"Streaming over SSH\") }; })()"}' \
+        -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; const ok = body.includes(\"scene_0000\") && body.includes(\"Streaming over SSH\"); return { ok, hasScene: body.includes(\"scene_0000\"), hasStream: body.includes(\"Streaming over SSH\"), snippet: body.slice(0, 300) }; })()"}' \
         "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
     if [ -n "${RESP}" ]; then
         LAST_REMOTE_HEADER="${RESP}"
