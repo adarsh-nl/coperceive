@@ -607,15 +607,11 @@ if [ -z "${START_FRAME}" ] || [ -z "${END_FRAME}" ]; then
     exit 26
 fi
 FRAME_DELTA=$(( (END_FRAME - START_FRAME + 100) % 100 ))
-MIN_FRAMES=15
-if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null || echo 0)" = "1" ]; then
-    MIN_FRAMES=3
-fi
-if [ "${FRAME_DELTA}" -lt "${MIN_FRAMES}" ]; then
-    echo "Error: Demo playback too slow: advanced only ${FRAME_DELTA} frames (need >= ${MIN_FRAMES}, start=${START_FRAME}, end=${END_FRAME})!" >&2
+if [ "${FRAME_DELTA}" -lt 15 ]; then
+    echo "Error: Demo playback too slow: advanced only ${FRAME_DELTA} frames in ~3s (start=${START_FRAME}, end=${END_FRAME})!" >&2
     exit 26
 fi
-echo "Verified demo 1x playback: advanced ${FRAME_DELTA} frames (${START_FRAME} -> ${END_FRAME}) with no Buffering"
+echo "Verified demo 1x playback: advanced ${FRAME_DELTA} frames in ~3s (${START_FRAME} -> ${END_FRAME}) with no Buffering"
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
 if [ -z "${DEMO_OUTCOME_LINE}" ]; then
