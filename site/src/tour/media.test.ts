@@ -31,19 +31,24 @@ function webpSize(bytes: Buffer): [number, number] {
   throw new Error(`unsupported webp chunk ${chunk}`);
 }
 
-test("every tour screen has its file, and the folder stays under 8 MiB", () => {
+test("every tour screen has its file, no file is unused, and the folder stays under 8 MiB", () => {
   const names = new Set(mediaNames());
+  const expected = new Set<string>();
   for (const screen of spec.screens) {
     const loop = screen.capture_output.includes("f*.png");
     if (loop) {
       assert.ok(names.has(`${screen.key}.mp4`), `${screen.key}.mp4`);
       assert.ok(names.has(`${screen.key}.webp`), `${screen.key}.webp`);
+      expected.add(`${screen.key}.mp4`);
+      expected.add(`${screen.key}.webp`);
     } else {
       assert.ok(names.has(`${screen.key}.webp`), `${screen.key}.webp`);
+      expected.add(`${screen.key}.webp`);
     }
   }
   for (const name of names) {
     assert.equal(name.endsWith(".webm"), false, name);
+    assert.ok(expected.has(name), `unused tour media file: ${name}`);
   }
   const total = mediaNames().reduce((sum, name) => sum + statSync(new URL(name, dir)).size, 0);
   assert.ok(total <= BUDGET, `tour media is ${total} bytes`);
