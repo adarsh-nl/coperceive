@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import os
 import socket
 import threading
 import time
@@ -81,6 +82,10 @@ def test_demo_bundle_opens_read_only_and_shows_results(browser: Browser, bundle_
         body = page.locator("body").inner_text()
         assert "demo-junction" in body
         assert "mAP" in body or "Predictions" in body
+        shots = os.environ.get("COPERCEIVE_E2E_SHOTS")
+        if shots:
+            Path(shots).mkdir(parents=True, exist_ok=True)
+            page.screenshot(path=str(Path(shots) / "bundle-open-demo.png"), full_page=True)
         for editable in ("Submit", "Re-run", "Save plan"):
             assert page.get_by_role("button", name=editable, exact=True).count() == 0
     finally:
