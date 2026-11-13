@@ -33,10 +33,6 @@ _HOSTNAME = re.compile(
 _USER_AT = re.compile(r"\b[A-Za-z0-9._-]{1,32}@[A-Za-z0-9.-]+\b")
 _HOME_PATH = re.compile(r"(?:^|[\s\"'])(?:/(?:home|Users)/[A-Za-z0-9._-]+)(?:/|\b)")
 _ABS_PATH = re.compile(r"(?:^|[\s\"'])(?:~|/|/[A-Za-z0-9._-]+)(?:/[^\s\"']+)+")
-# The repository's personal-identifier list (tests/test_docs_links.py and
-# tests/test_design_system_visual.py) must never survive in a card. Runtime
-# markers are added per call, so any user's own names are covered too.
-_PERSONAL_IDENTIFIER = re.compile(r"(?i)(nanjaiyalathaa|ewi\.utwente\.nl)")
 
 
 def _runtime_markers() -> tuple[str, ...]:
@@ -88,8 +84,6 @@ def _scan(value: object, path: str, found: list[str], markers: tuple[str, ...]) 
             found.append(f"{path} contains a runtime identifier")
         if _TOKEN_VALUE.search(value):
             found.append(f"{path} looks like a credential")
-        if _PERSONAL_IDENTIFIER.search(value):
-            found.append(f"{path} contains a personal identifier")
         if _HOSTNAME.search(value) or _USER_AT.search(value):
             found.append(f"{path} contains a hostname or an account name")
         if _looks_absolute(value) or _HOME_PATH.search(value):
@@ -146,7 +140,7 @@ def _scrub_object(
 def _scrub_string(value: str, path: str, markers: tuple[str, ...]) -> tuple[object, list[str]]:
     if any(marker in value for marker in markers):
         return None, [path]
-    if _TOKEN_VALUE.search(value) or _USER_AT.search(value) or _PERSONAL_IDENTIFIER.search(value):
+    if _TOKEN_VALUE.search(value) or _USER_AT.search(value):
         return None, [path]
     if _looks_absolute(value):
         return None, [path]
@@ -242,7 +236,6 @@ def scrub_text(
     out = text
     for marker in (*markers, *_runtime_markers()):
         out = out.replace(marker, "[redacted]")
-    out = _PERSONAL_IDENTIFIER.sub("[redacted]", out)
     out = _TOKEN_VALUE.sub("[redacted]", out)
     out = _USER_AT.sub("[redacted]", out)
     out = _HOSTNAME.sub("[redacted]", out)

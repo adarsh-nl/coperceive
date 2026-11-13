@@ -257,7 +257,7 @@ export function Landing() {
         <section id="install" data-screen-label="Install" style={{ padding: "80px var(--gx) 160px", maxWidth: 1360, margin: "0 auto", display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(min(340px,100%),1fr))", gap: 64, alignItems: "center" }}>
           <div data-reveal="0" style={{ display: "flex", flexDirection: "column", gap: 24 }}>
             <h2 style={{ margin: 0, fontSize: "clamp(40px,4.6vw,72px)", lineHeight: 1, letterSpacing: "-0.04em", fontWeight: 500 }}>Three commands to your first scene.</h2>
-            <p style={{ margin: 0, fontSize: 18, lineHeight: 1.55, color: "#a1a1a6", maxWidth: 440 }}>Python 3.10–3.13. Apache-2.0. Local by default — nothing leaves your machine.</p>
+            <p style={{ margin: 0, fontSize: 18, lineHeight: 1.55, color: "#a1a1a6", maxWidth: 440 }}>Python 3.11–3.13. Apache-2.0. Local by default — nothing leaves your machine.</p>
             <DownloadPanel />
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
               <a href={DOCS} className="lm-btn-ghost">Read the docs</a>
