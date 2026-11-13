@@ -11,7 +11,7 @@
  */
 import { useEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { browseCrumbs, detectionIsCurrent, relativeBrowsePath, skippedMessages, truncatedMessage } from "./browse";
+import { browseCrumbs, detectionIsCurrent, folderCheckState, relativeBrowsePath, skippedMessages, truncatedMessage } from "./browse";
 import type { FolderInfo, ScanDocument, ServerEntry } from "./hpc";
 import { remoteScan } from "./local";
 import { datasetDetect, formatLicenceInfo, type ClusterDetectDocument } from "./clusterDatasets";
@@ -55,6 +55,9 @@ export default function HpcBrowse({
   // The folder path `detected` was read for: a detection that finished for a
   // folder the user has moved off must never open the wrong dataset.
   const [detectedFor, setDetectedFor] = useState<string | null>(null);
+  // The folder path whose check finished, whatever it found: an answered
+  // "not a dataset" must replace "Checking what this folder holds…".
+  const [checkedFor, setCheckedFor] = useState<string | null>(null);
   const [detecting, setDetecting] = useState(false);
   const [detectError, setDetectError] = useState("");
 
@@ -127,6 +130,7 @@ export default function HpcBrowse({
   useEffect(() => {
     setDetected(null);
     setDetectedFor(null);
+    setCheckedFor(null);
     setDetectError("");
     if (!folder || !recognisedOf(folder) || recognisedOf(folder)?.startsWith("Checkpoints")) {
       setDetecting(false);
@@ -139,6 +143,7 @@ export default function HpcBrowse({
       datasetDetect(profile.id, target)
         .then((result) => {
           if (!active) return;
+          setCheckedFor(target);
           if (result.status === "ok") {
             setDetected(result);
             setDetectedFor(target);
@@ -147,7 +152,10 @@ export default function HpcBrowse({
           }
         })
         .catch((e: unknown) => {
-          if (active) setDetectError(errorText(e));
+          if (active) {
+            setCheckedFor(target);
+            setDetectError(errorText(e));
+          }
         })
         .finally(() => {
           if (active) setDetecting(false);
@@ -165,6 +173,13 @@ export default function HpcBrowse({
   // Only the selected folder's own completed check may open its dataset: not
   // another folder's leftover result, and not a check still running.
   const detectedIsCurrent = detected !== null && detectionIsCurrent(detectedFor, selectedPath);
+  const checkState = folderCheckState({
+    detectedIsCurrent,
+    detecting,
+    detectError,
+    checkedFor,
+    selectedPath,
+  });
 
   const openDataset = () => {
     if (!detected || !detectedIsCurrent) return;
@@ -259,7 +274,7 @@ export default function HpcBrowse({
                   <div style={{ color: detected ? "var(--ok)" : "var(--text)", marginTop: "2px" }}>{recognisedOf(folder)}</div>
                 </div>
               ) : null}
-              {detected && detectedIsCurrent ? (
+              {checkState === "detected" && detected ? (
                 <span style={{ fontSize: "12px" }}>
                   {[
                     detected.split ? `split ${detected.split}` : null,
@@ -269,10 +284,14 @@ export default function HpcBrowse({
                     .filter(Boolean)
                     .join(" · ")}
                 </span>
-              ) : detecting || (folder && recognisedOf(folder) && !detectError) ? (
+              ) : checkState === "checking" ? (
                 <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>Checking what this folder holds…</span>
-              ) : detectError ? (
+              ) : checkState === "error" ? (
                 <span style={{ fontSize: "12px", color: "var(--danger)" }}>{detectError}</span>
+              ) : checkState === "none" ? (
+                <span style={{ fontSize: "12px", color: "var(--text-subtle)" }}>
+                  No dataset coperceive recognises in this folder.
+                </span>
               ) : null}
             </InspectorSection>
             <InspectorSection>

@@ -31,6 +31,7 @@ import {
   type CameraImagesMode,
   cameraImageChoices,
   datasetPrepareJobStatus,
+  clusterIndexRequest,
   emptyIndexExplanation,
   listenTauri,
   shareDatasetScenesWithViewer,
@@ -346,9 +347,8 @@ export default function DatasetView({
     setIndexError(null);
     setIndexNotice(null);
 
-    const adapter = dataset.adapter || "opv2v";
-    const rawRoot = dataset.raw_root || dataset.path;
-    const cached = readCachedIndex(profile.id, adapter, rawRoot, dataset.split);
+    const { adapter, rawRoot, split } = clusterIndexRequest(dataset);
+    const cached = readCachedIndex(profile.id, adapter, rawRoot, split);
     if (cached) {
       // Show the last index at once; the command below only checks for changes.
       setIndexDoc(cached.document);
@@ -360,12 +360,12 @@ export default function DatasetView({
       setCheckingIndex(false);
     }
 
-    datasetIndex(profile.id, adapter, rawRoot, dataset.split)
+    datasetIndex(profile.id, adapter, rawRoot, split)
       .then((res) => {
         if (!active) return;
         const previous = cached?.document ?? null;
         if (shouldCacheIndex(res)) {
-          writeCachedIndex(profile.id, adapter, rawRoot, dataset.split, res);
+          writeCachedIndex(profile.id, adapter, rawRoot, split, res);
         }
         const changed = previous ? indexRefreshMessage(previous, res) : null;
         setCheckingIndex(false);
@@ -396,12 +396,8 @@ export default function DatasetView({
   }, [profile.id, dataset, initialIndexDoc, indexAttempt]);
 
   const handleRetryIndex = () => {
-    forgetCachedIndex(
-      profile.id,
-      dataset.adapter || "opv2v",
-      dataset.raw_root || dataset.path,
-      dataset.split,
-    );
+    const { adapter, rawRoot, split } = clusterIndexRequest(dataset);
+    forgetCachedIndex(profile.id, adapter, rawRoot, split);
     setIndexAttempt((attempt) => attempt + 1);
   };
 

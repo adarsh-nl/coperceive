@@ -28,6 +28,7 @@ import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import { errorText } from "./errors";
 import { datasetSplits, detectForSplit, splitLabel } from "./clusterDatasets";
+import { pruneIndexCache } from "./indexCache";
 import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
@@ -214,6 +215,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
       const custom = event as CustomEvent<{ profiles?: ServerEntry[] }>;
       if (custom.detail?.profiles) {
         setHpcServers(custom.detail.profiles);
+        pruneIndexCache(custom.detail.profiles.map((entry) => entry.id));
       }
     };
     window.addEventListener("coperceive-hpc-profiles-updated", handleHpcProfilesUpdated);
@@ -239,6 +241,7 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
         const profiles = await listServerProfiles();
         if (Array.isArray(profiles) && profiles.length > 0) {
           setHpcServers(profiles);
+          pruneIndexCache(profiles.map((entry) => entry.id));
         }
       } catch {}
     })();

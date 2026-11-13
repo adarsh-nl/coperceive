@@ -95,6 +95,25 @@ export function detectForSplit(
 }
 
 /**
+ * The exact read-only index request the Dataset view sends for a detect
+ * document: the detected adapter, the dataset root detect returned (not the
+ * folder the user browsed through, which may be a split directory), and the
+ * detected split. One place, so the arguments cannot drift between the view
+ * and its retry.
+ */
+export function clusterIndexRequest(dataset: ClusterDetectDocument): {
+  adapter: string;
+  rawRoot: string;
+  split: string | null;
+} {
+  return {
+    adapter: dataset.adapter || "opv2v",
+    rawRoot: dataset.raw_root || dataset.path,
+    split: dataset.split ?? null,
+  };
+}
+
+/**
  * Only a folder the check identified can be opened. A pending or failed check
  * must not open a dataset (its scene list would contradict the browser's).
  */
@@ -568,14 +587,16 @@ export async function datasetIndex(
     });
   }
 
-  // Web / browser test fallback outside Tauri
-  const mockSplit = split ?? "test";
+  // Web / browser test fallback outside Tauri. The document's split must be
+  // the request's split (null included), or the view's cache key would never
+  // match: the cache is keyed by adapter/raw root/split.
+  const mockSplit = split ?? null;
   return {
     schema: "coperceive-cluster-index-1",
     adapter,
     raw_root: rawRoot,
     split: mockSplit,
-    params: { split: mockSplit },
+    params: mockSplit ? { split: mockSplit } : {},
     licence: {
       status: "unknown",
       spdx: null,
@@ -589,7 +610,7 @@ export async function datasetIndex(
       truncated: false,
     },
     cache: {
-      relative_path: `coperceive-cache/${adapter}/mockdigest/${mockSplit}`,
+      relative_path: `coperceive-cache/${adapter}/mockdigest/${mockSplit ?? "all"}`,
     },
     scene_count: 16,
     scenes: Array.from({ length: 16 }, (_, i) => ({

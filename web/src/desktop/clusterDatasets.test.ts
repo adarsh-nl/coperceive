@@ -3,6 +3,7 @@ import test from "node:test";
 import assert from "node:assert";
 import {
   canPrepareWholeDataset,
+  clusterIndexRequest,
   datasetSplits,
   detectForSplit,
   emptyIndexExplanation,
@@ -645,4 +646,50 @@ test("an empty index says why, never a bare 'no scenes' that contradicts the bro
   assert.strictEqual(empty.title, "No scenes in this split.");
   assert.deepStrictEqual(empty.details, []);
   assert.strictEqual(empty.retry, false);
+});
+
+
+test("the view indexes detect's raw root and split, not the browsed path", () => {
+  // The browser shows a folder that is itself a dataset root.
+  const fromRoot = detect();
+  assert.deepStrictEqual(clusterIndexRequest(fromRoot), {
+    adapter: "v2v4real",
+    rawRoot: "/datasets/opencood/v2v4real",
+    split: "test",
+  });
+  // The browser shows the split directory itself: detect returned its parent
+  // as the raw root, so index must receive the parent, not the split path.
+  const fromSplitDir = detect({ path: "/datasets/opencood/v2v4real/test" });
+  assert.deepStrictEqual(clusterIndexRequest(fromSplitDir), {
+    adapter: "v2v4real",
+    rawRoot: "/datasets/opencood/v2v4real",
+    split: "test",
+  });
+  // No split (Griffin) stays null, and a missing adapter falls back to OPV2V.
+  assert.deepStrictEqual(clusterIndexRequest(detect({ adapter: "griffin", split: null, raw_root: "/datasets/griffin" })), {
+    adapter: "griffin",
+    rawRoot: "/datasets/griffin",
+    split: null,
+  });
+  assert.deepStrictEqual(clusterIndexRequest(detect({ adapter: null, split: null, raw_root: "" })), {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opencood/v2v4real",
+    split: null,
+  });
+});
+
+test("the browser-test index mock keeps the requested null split, so the cache key matches", async () => {
+  const globals = globalThis as unknown as { window?: unknown };
+  const previous = globals.window;
+  delete globals.window;
+  try {
+    const griffin = await datasetIndex("profile-1", "griffin", "/datasets/griffin", null);
+    assert.strictEqual(griffin.split, null);
+    assert.deepStrictEqual(griffin.params, {});
+    const opv2v = await datasetIndex("profile-1", "opv2v", "/datasets/opencood/opv2v", "test");
+    assert.strictEqual(opv2v.split, "test");
+    assert.deepStrictEqual(opv2v.params, { split: "test" });
+  } finally {
+    globals.window = previous;
+  }
 });

@@ -10,10 +10,16 @@
  *   scripts/desktop/measure_workspace_open.sh [--scenes N]
  *
  * Prints one JSON document:
- *   index_ms_before      cold `dataset index` (what the view blocked on)
- *   open_ms_before       seconds-to-first-scene before (the index call)
- *   open_ms_after        seconds-to-first-scene from the cache (a storage read)
+ *   index_ms_before      cold `dataset index` on this machine (what the view blocked on)
+ *   open_ms_before       time to the scene list before (the index call)
+ *   open_ms_after        the cached document lookup that runs first on the next
+ *                        open. This is NOT time-to-screen: React's first render
+ *                        of the already-fetched row data is not measured, and on
+ *                        a real cluster the background command still runs.
  *   background_ms_after  the check-for-changes index that runs after the cache
+ *
+ * These are fake-cluster, local numbers: no SSH, Slurm, network or real dataset
+ * is involved, and the real-cluster time is unverified.
  */
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
@@ -98,6 +104,7 @@ const result = {
   scenes: cold.scene_count,
   fingerprint: cold.fingerprint,
   cluster: "fake (this machine runs the login-node command; no SSH, Slurm or network)",
+  note: "open_ms_after is the cached lookup only, not time-to-screen; real-cluster times are unverified",
   index_ms_before: coldMs,
   open_ms_before: coldMs,
   open_ms_after: hitMs,

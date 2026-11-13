@@ -13,7 +13,8 @@
 # then a second open shows the cached document and re-indexes in the background.
 #
 # Usage: scripts/desktop/measure_workspace_open.sh [--scenes N]
-# Prints a JSON document; the real-cluster time is not measured here.
+# Prints a JSON document. These are fake-cluster, local numbers; the real-cluster
+# time (about 45-60 s for an OPV2V train index on the login node) is unverified.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"

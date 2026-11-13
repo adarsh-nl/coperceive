@@ -155,4 +155,34 @@ assert all(scene["agent_count"] == 2 for scene in index["scenes"]), index["scene
 print("Step CD-8 verified: V2V4Real-shaped split -> detect v2v4real/test/9 scenes, "
       "splits lists the recognised split, index reads the same 9 scenes with no errors")
 PY
+# The reported symptom without inventing a cluster fault: the same
+# V2V4Real-shaped tree with its agent folders present but no frame files. Detect
+# counts the 9 scene directories; index can read none of them and returns 0
+# scenes plus 9 per-scene errors. On the old app this rendered exactly
+# "V2V4REAL test | 0 scenes / No scenes in this split" while the sidebar kept
+# detect's 9. The view now names the errors and offers a retry; the cluster-side
+# reason the real tree's scenes were unreadable is still unverified.
+RAW_V2V4REAL_EMPTY="${TMP_DIR}/raw/v2v4real-empty"
+"${PYTHON}" - "${RAW_V2V4REAL_EMPTY}" <<'PY'
+import sys
+from pathlib import Path
+root, split = Path(sys.argv[1]), "test"
+for index in range(9):
+    scene = root / split / f"testoutput_CAV_data_2022-03-15-09-54-{40 + index:02d}_0"
+    for agent in ("0", "1"):
+        (scene / agent).mkdir(parents=True)
+PY
+"${PYTHON}" -m coperceive.cli dataset detect --path "${RAW_V2V4REAL_EMPTY}" > "${TMP_DIR}/detect-v2v4real-empty.json"
+"${PYTHON}" -m coperceive.cli dataset index --adapter v2v4real --raw-root "${RAW_V2V4REAL_EMPTY}" --split test > "${TMP_DIR}/index-v2v4real-empty.json"
+"${PYTHON}" - "${TMP_DIR}/detect-v2v4real-empty.json" "${TMP_DIR}/index-v2v4real-empty.json" <<'PY'
+import json, sys
+detect = json.load(open(sys.argv[1]))
+index = json.load(open(sys.argv[2]))
+assert detect["status"] == "ok" and detect["scene_count"] == 9, detect
+assert index["scene_count"] == 0 and len(index["errors"]) == 9, index
+assert all("no samples found with streams.poses" in line for line in index["errors"]), index["errors"]
+print("Step CD-9 verified: V2V4Real-shaped tree with no frame files -> detect 9 scenes / "
+      "index 0 scenes + 9 per-scene errors, the detect/index disagreement the view now names "
+      "(the old view showed only 'No scenes in this split.')")
+PY
 echo "E2E_DATASET_MARK: cluster datasets backend verified"
