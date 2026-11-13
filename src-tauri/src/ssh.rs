@@ -309,7 +309,7 @@ mod tests {
     #[test]
     fn test_classify_public_key_denied() {
         let err = classify_ssh_error(
-            "alice@hpc-head1: Permission denied (publickey,gssapi-keyex,gssapi-with-mic).",
+            "alice@cluster-login: Permission denied (publickey,gssapi-keyex,gssapi-with-mic).",
         );
         match &err {
             SshErrorKind::PublicKeyAuthRequired(msg) => {

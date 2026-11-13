@@ -8,7 +8,7 @@ Coperceive provides a multi-agent cooperative perception 3D viewer (Three.js / R
 
 Users require a standalone desktop application on macOS Apple Silicon (16 GB RAM primary workstation), with support for two primary operational modes:
 1. **Local Mode**: Exploring local converted datasets using a bundled, self-contained Python runtime sidecar.
-2. **HPC over SSH Mode**: Primary research workflow accessing large dataset repositories (`/datasets/eemcs/...`) and submitting GPU evaluations to Slurm on UTwente HPC (`hpc-head1.ewi.utwente.nl`).
+2. **HPC over SSH Mode**: Primary research workflow accessing large dataset repositories (`/datasets/eemcs/...`) and submitting GPU evaluations to Slurm on UTwente HPC (`cluster-login.example.edu`).
 
 Future platforms (Linux x86_64/arm64, Windows x64) must remain viable without redesigning core abstractions.
 
@@ -60,11 +60,11 @@ Process arguments (`argv`) are visible to all users via `ps aux` on shared multi
     - `Permission denied (publickey)` or passphrase prompt required under `BatchMode`: Instructs the user to load their key into ssh-agent (`ssh-add ~/.ssh/id_...`).
     - `No route to host`, `Connection timed out`, `Could not resolve hostname`: Alerts *"Cannot reach HPC host '<alias>'. Is eduVPN connected?"*
 - **Cluster Policy Compliance & Partition Specification**:
-  - *Login-Node Policy*: "Login-node commands stay under 1 minute. Heavy work goes through sbatch" (source: user handover rules & UTwente EEMCS HPC documentation at `https://hpc.wiki.utwente.nl/eemcs-hpc`). Persistent server daemons serving point cloud queries on `hpc-head1` are prohibited.
+  - *Login-Node Policy*: "Login-node commands stay under 1 minute. Heavy work goes through sbatch" (source: user handover rules & UTwente EEMCS HPC documentation at `https://hpc.wiki.example.edu/eemcs-hpc`). Persistent server daemons serving point cloud queries on `cluster-login` are prohibited.
   - *Partitions*: `ps,main-cpu` verified via `sinfo -p ps,main-cpu` (yielding `hpc-node[11-12]` on `ps` and `spark-head[1-4],caserta,ctit087` on `main-cpu`).
 - **Remote Bind Architecture & Evidence**:
   - *Cluster Evidence*: Probing direct SSH from the login node to compute nodes (`ssh -o BatchMode=yes hpc-node11`) returns `Permission denied (publickey,password,keyboard-interactive)`. Inspection of `/etc/pam.d/slurm` shows only `pam_localuser.so, pam_unix.so, pam_limits.so`; `pam_slurm_adopt` is not installed. Thus, direct user SSH to compute nodes (and SSH `ProxyJump`) is blocked on this cluster.
-  - *Decision*: Launch `coperceive serve --host 0.0.0.0 --port <port> --token-file <path>` inside the Slurm compute job on its private internal IP (`10.20.240.x`), protected by mode 0600 token authentication. An SSH local port forward tunnels from macOS loopback through the login node (`hpc-head1`) to the allocated compute node:
+  - *Decision*: Launch `coperceive serve --host 0.0.0.0 --port <port> --token-file <path>` inside the Slurm compute job on its private internal IP (`10.20.240.x`), protected by mode 0600 token authentication. An SSH local port forward tunnels from macOS loopback through the login node (`cluster-login`) to the allocated compute node:
     `ssh -L 127.0.0.1:<local_port>:<compute_node_ip>:<serve_port> <hpc_alias> -N`
 - **Slurm Job Lifecycle Management**:
   - Submits an sbatch script with job name `coperceive-desktop-<uuid>` on `ps,main-cpu`, with a default walltime of 2 hours (configurable in connection profiles).
