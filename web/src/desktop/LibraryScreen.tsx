@@ -417,7 +417,7 @@ export default function LibraryScreen({
     try {
       const list = await getLibraryScenes();
       applyScenes(list);
-      return list.every((scene) => scene.is_valid != null && scene.duration_s != null);
+      return list.every((scene) => scene.is_valid != null);
     } catch {
       return false;
     }
