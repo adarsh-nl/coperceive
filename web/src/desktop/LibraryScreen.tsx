@@ -95,6 +95,67 @@ function ValidationBadge({ status }: { status: "valid" | "invalid" | "checking" 
   );
 }
 
+export function DemoProgressBanner({
+  stage,
+  elapsedSec,
+  onCancel,
+}: {
+  stage: string;
+  elapsedSec: number;
+  onCancel: () => void;
+}) {
+  const activeStage =
+    stage ||
+    (elapsedSec < 3
+      ? "Starting bundled Python generator…"
+      : elapsedSec < 8
+        ? "Synthesising LiDAR & multi-agent cameras…"
+        : "Packing LiDAR frames & scoring predictions…");
+
+  return (
+    <div
+      data-testid="demo-progress-banner"
+      role="status"
+      aria-live="polite"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: "12px",
+        padding: "10px 14px",
+        margin: "8px 16px",
+        background: "var(--panel)",
+        border: "1px solid var(--line)",
+        borderRadius: "8px",
+      }}
+    >
+      <div style={{ display: "flex", flexDirection: "column", gap: "2px", minWidth: 0 }}>
+        <div style={{ fontSize: "13px", fontWeight: 600, color: "var(--text)" }}>
+          Generating demo scene… (8.2 MB demo cache) · {elapsedSec}s elapsed
+        </div>
+        <div style={{ fontSize: "12px", color: "var(--text-subtle)" }}>
+          {activeStage} · This can take up to 2 minutes on older Macs.
+        </div>
+      </div>
+      <button
+        type="button"
+        data-testid="demo-progress-cancel"
+        className="ghost"
+        onClick={onCancel}
+        style={{
+          padding: "5px 12px",
+          fontSize: "12px",
+          border: "1px solid var(--line)",
+          borderRadius: "6px",
+          flexShrink: 0,
+        }}
+      >
+        Cancel
+      </button>
+    </div>
+  );
+}
+
 export function WelcomeCard({
   generatingDemo,
   demoElapsedSec,
@@ -356,7 +417,7 @@ export default function LibraryScreen({
     try {
       const list = await getLibraryScenes();
       applyScenes(list);
-      return list.every((scene) => scene.is_valid != null);
+      return list.every((scene) => scene.is_valid != null && scene.duration_s != null);
     } catch {
       return false;
     }

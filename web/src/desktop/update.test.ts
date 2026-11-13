@@ -93,3 +93,15 @@ test("headroom calculation refuses if under 10% margin", () => {
   assert.strictEqual(checkHeadroom(10 * 1024 ** 3, 9.5 * 1024 ** 3), false);
   assert.strictEqual(checkHeadroom(10 * 1024 ** 3, 9 * 1024 ** 3), true);
 });
+
+test("UpdateBanner reads app version at run time via @tauri-apps/api/app getVersion()", async () => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const bannerSource = fs.readFileSync(
+    path.resolve(import.meta.dirname, "UpdateBanner.tsx"),
+    "utf-8",
+  );
+  assert.match(bannerSource, /@tauri-apps\/api\/app/);
+  assert.match(bannerSource, /\bgetVersion\s*\(/);
+  assert.doesNotMatch(bannerSource, /\bconst CURRENT_VERSION\s*=/);
+});

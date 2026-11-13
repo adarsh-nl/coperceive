@@ -17,7 +17,7 @@ globals.IS_REACT_ACT_ENVIRONMENT = true;
 const React = await import("react");
 const { act } = React;
 const { createRoot } = await import("react-dom/client");
-const { WelcomeCard } = await import("./LibraryScreen.tsx");
+const { WelcomeCard, DemoProgressBanner } = await import("./LibraryScreen.tsx");
 const axeMod = await import("axe-core");
 const axe = (axeMod as { default?: { run: typeof axeMod.run } }).default ?? axeMod;
 
@@ -136,6 +136,37 @@ test("welcome card renders required actions, description, and handles callbacks"
   // Accessibility check via axe-core
   const axeResults = await axe.run(host);
   assert.equal(axeResults.violations.length, 0, JSON.stringify(axeResults.violations, null, 2));
+
+  root.unmount();
+});
+
+test("DemoProgressBanner renders progress, stage, older Mac timing guidance, and cancel button for Help -> Open the Demo", async () => {
+  const host = document.getElementById("root")!;
+  const root = createRoot(host);
+  let cancelled = false;
+
+  await act(async () => {
+    root.render(
+      React.createElement(DemoProgressBanner, {
+        stage: "Packing LiDAR frames & camera strip…",
+        elapsedSec: 12,
+        onCancel: () => {
+          cancelled = true;
+        },
+      }),
+    );
+  });
+
+  const banner = host.querySelector('[data-testid="demo-progress-banner"]');
+  assert.ok(banner, "demo progress banner is rendered");
+  assert.ok(banner.textContent?.includes("Packing LiDAR frames & camera strip…"));
+  assert.ok(banner.textContent?.includes("12s elapsed"));
+  assert.ok(banner.textContent?.includes("This can take up to 2 minutes on older Macs."));
+
+  const cancelBtn = host.querySelector('[data-testid="demo-progress-cancel"]') as HTMLButtonElement | null;
+  assert.ok(cancelBtn, "cancel button is rendered");
+  cancelBtn.click();
+  assert.equal(cancelled, true);
 
   root.unmount();
 });

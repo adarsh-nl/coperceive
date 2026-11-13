@@ -749,7 +749,8 @@ jobs:
             arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
             echo "::notice title=Rosetta-Test::Intel Mac build verified under Rosetta 2"
           else
-            echo "::notice title=Rosetta-Test::Rosetta 2 is not available on this runner (arch -x86_64 returned non-zero)"
+            echo "::error title=Rosetta-Test::Rosetta 2 is not available on this runner (arch -x86_64 returned non-zero)" >&2
+            exit 1
           fi
       - uses: actions/upload-artifact@v4
         with:

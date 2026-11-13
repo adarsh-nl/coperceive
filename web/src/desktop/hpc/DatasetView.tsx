@@ -517,6 +517,20 @@ export default function DatasetView({
         rawRoot: dataset.raw_root || dataset.path,
         split: dataset.split,
       });
+      if (indexDoc && !initialStatuses) {
+        await shareDatasetScenesWithViewer(
+          indexDoc.scenes.map((scene) => ({
+            scene_id: scene.scene_id,
+            state: statuses.get(scene.scene_id)?.state ?? "not_prepared",
+          })),
+          {
+            label: [(indexDoc.adapter || dataset.adapter || "dataset").toUpperCase(), indexDoc.split ?? dataset.split ?? ""]
+              .filter(Boolean)
+              .join(" "),
+            server: profile.profile.name,
+          },
+        ).catch(() => undefined);
+      }
       setViewerOpen(true, datasetKey);
     } catch (err) {
       setOpenError(errorDetails(err) || errorText(err));

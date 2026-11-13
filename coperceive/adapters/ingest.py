@@ -203,6 +203,10 @@ def ingest_one(job: _Job) -> _Result:
             stats.build_s += loaded - started
             stats.write_s += time.perf_counter() - loaded
         marker = dict(expected)
+        times_us = sorted({pose.time_us for agent in scene.agents for pose in agent.poses})
+        if times_us:
+            marker["start_time_us"] = times_us[0]
+            marker["end_time_us"] = times_us[-1]
         if variants:
             marker["label_field_counts"] = {str(w): c for w, c in variants}
         marker.update(dict(job.provenance))

@@ -558,6 +558,61 @@ fi
 echo "Verified predictions/evaluation view: ${LAST_COMPARE_STATE}"
 screencapture -x "${SCREENSHOT_DIR}/demo-viewer.png" 2>/dev/null || true
 
+echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
+PLAYBACK_START_RESP=$(curl -s -f -X POST \
+    -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
+echo "Playback started: ${PLAYBACK_START_RESP}"
+
+PLAY_SAMPLES=0
+BUFFERING_SEEN=0
+START_FRAME=""
+END_FRAME=""
+for i in {1..15}; do
+    sleep 0.2
+    PLAY_RESP=$(curl -s -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; const txt = document.body ? document.body.innerText : \"\"; return { frameIndex: st.frameIndex ?? -1, playing: Boolean(st.playing), buffering: txt.includes(\"Buffering\") }; })()"}' \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+    if [ -n "${PLAY_RESP}" ]; then
+        CUR_FRAME=$(echo "${PLAY_RESP}" | sed -n 's/.*"frameIndex":\([0-9]*\).*/\1/p')
+        if [ -z "${START_FRAME}" ] && [ -n "${CUR_FRAME}" ]; then
+            START_FRAME="${CUR_FRAME}"
+        fi
+        if [ -n "${CUR_FRAME}" ]; then
+            END_FRAME="${CUR_FRAME}"
+        fi
+        if echo "${PLAY_RESP}" | grep -q '"buffering":true'; then
+            BUFFERING_SEEN=1
+        fi
+        PLAY_SAMPLES=$((PLAY_SAMPLES + 1))
+    fi
+done
+# Pause playback cleanly
+curl -s -X POST \
+    -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (st?.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return true; })()"}' \
+    "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" >/dev/null 2>&1 || true
+
+if [ "${BUFFERING_SEEN}" -ne 0 ]; then
+    echo "Error: Demo playback showed 'Buffering' during 1x local playback!" >&2
+    exit 26
+fi
+if [ -z "${START_FRAME}" ] || [ -z "${END_FRAME}" ]; then
+    echo "Error: Could not read playback frameIndex during demo playback!" >&2
+    exit 26
+fi
+FRAME_DELTA=$(( (END_FRAME - START_FRAME + 100) % 100 ))
+if [ "${FRAME_DELTA}" -lt 15 ]; then
+    echo "Error: Demo playback too slow: advanced only ${FRAME_DELTA} frames in ~3s (start=${START_FRAME}, end=${END_FRAME})!" >&2
+    exit 26
+fi
+echo "Verified demo 1x playback: advanced ${FRAME_DELTA} frames in ~3s (${START_FRAME} -> ${END_FRAME}) with no Buffering"
+
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
 if [ -z "${DEMO_OUTCOME_LINE}" ]; then
     echo "Error: COPERCEIVE_DEMO_OUTCOME log line not found in app stdout!" >&2

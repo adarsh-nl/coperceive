@@ -12,10 +12,21 @@ import {
 import { parseUpdateManifest } from "./updateManifest";
 import { errorText } from "./errors";
 
-const CURRENT_VERSION = "0.1.1";
 const DEFAULT_ENDPOINT =
   "https://github.com/adarsh-nl/coperceive/releases/latest/download/latest.json";
 const CHECK_INTERVAL_MS = 6 * 60 * 60 * 1000;
+
+async function readAppVersion(): Promise<string> {
+  if (isTauriEnvironment()) {
+    try {
+      const { getVersion } = await import("@tauri-apps/api/app");
+      return await getVersion();
+    } catch {
+      return "0.0.0";
+    }
+  }
+  return "0.0.0";
+}
 
 export interface UpdateInfo {
   version: string;
@@ -48,6 +59,7 @@ export interface Updater {
   /** Where the last error came from: a check, or installing the update. */
   errorFrom: "check" | "install";
   errorMessage: string | null;
+  currentVersion: string;
   showNotes: boolean;
   setShowNotes: (open: boolean | ((open: boolean) => boolean)) => void;
   dismiss: () => void;
@@ -67,6 +79,13 @@ export function useUpdater(): Updater {
   const [manual, setManual] = useState<boolean>(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [errorFrom, setErrorFrom] = useState<"check" | "install">("check");
+  const [currentVersion, setCurrentVersion] = useState<string>("");
+
+  useEffect(() => {
+    void readAppVersion().then((v) => {
+      if (v) setCurrentVersion(v);
+    });
+  }, []);
 
   const checkForUpdates = async (isManual = false) => {
     if (!updatesAllowed()) return;
@@ -127,7 +146,9 @@ export function useUpdater(): Updater {
         throw new Error(`status ${res.status}`);
       }
       const data = await res.json();
-      const offer = parseUpdateManifest(data, CURRENT_VERSION);
+      const version = currentVersion || (await readAppVersion());
+      setCurrentVersion(version);
+      const offer = parseUpdateManifest(data, version);
       if (offer) {
         setUpdate({
           version: offer.version,
@@ -257,6 +278,7 @@ export function useUpdater(): Updater {
     manual,
     errorFrom,
     errorMessage,
+    currentVersion,
     showNotes,
     setShowNotes,
     dismiss: () => {
@@ -282,7 +304,7 @@ function toastFor(u: Updater): JSX.Element | null {
   if (u.checkState === "uptodate" && u.manual) {
     return (
       <div role="status" aria-live="polite" className="update-status update-toast">
-        You're up to date ({CURRENT_VERSION}).
+        You're up to date{u.currentVersion && u.currentVersion !== "0.0.0" ? ` (${u.currentVersion})` : ""}.
       </div>
     );
   }

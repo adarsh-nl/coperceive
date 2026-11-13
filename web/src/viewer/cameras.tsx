@@ -776,7 +776,11 @@ export default function CameraStrip({
       data-open={open ? "true" : "false"}
       data-mode={mode}
       aria-label="Cameras"
-      style={{ height: open && typeof heightPx === "number" ? `${heightPx}px` : undefined }}
+      style={
+        open && typeof heightPx === "number"
+          ? ({ height: `${heightPx}px`, "--strip-h": `${heightPx}px` } as React.CSSProperties)
+          : undefined
+      }
     >
       <div className="cam-strip-head">
         <button

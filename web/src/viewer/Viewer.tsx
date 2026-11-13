@@ -95,7 +95,7 @@ import {
 } from "./predictionTypes";
 import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
 import Timeline, { type Marker } from "./timeline";
-import { neighbourScene } from "./sceneNav";
+import { camerasFoldCount, initialSampleIndex, neighbourScene, resolveActiveDataset } from "./sceneNav";
 import {
   agentRole,
   boxesInView,
@@ -180,7 +180,7 @@ type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: 
 /** Which ground-truth wires to dim at which sample; stale for any other sample. */
 type Dimmed = { timeUs: number; keys: ReadonlySet<string> };
 
-const PREDICTION_FRAME_LIMIT = 16;
+const PREDICTION_FRAME_LIMIT = 256;
 
 type PredictionCache = {
   clear: () => void;
@@ -767,22 +767,27 @@ async function drawFrame(
   let pointCount = 0;
   const sweeps: { xyz: Float32Array; color: THREE.Color }[] = [];
   const pointsStarted = performance.now();
-  for (const sensor of frame.point_sensors) {
-    if (!appearance.points || hidden[sensor.agent_id] || sensor.count === 0) {
-      continue;
-    }
-    const buffer = await cache.loadPoints(
-      frame.scene_id,
-      frame.time_us,
-      sensor.agent_id,
-      sensor.sensor_id,
-      token,
-    );
-    if (stale()) {
-      (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "mid-sensor" };
-      return null;
-    }
-    const xyz = new Float32Array(buffer);
+  const activeSensors = frame.point_sensors.filter(
+    (sensor) => appearance.points && !hidden[sensor.agent_id] && sensor.count > 0,
+  );
+  const buffers = await Promise.all(
+    activeSensors.map((sensor) =>
+      cache.loadPoints(
+        frame.scene_id,
+        frame.time_us,
+        sensor.agent_id,
+        sensor.sensor_id,
+        token,
+      ),
+    ),
+  );
+  if (stale()) {
+    (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "mid-sensor" };
+    return null;
+  }
+  for (let i = 0; i < activeSensors.length; i += 1) {
+    const sensor = activeSensors[i]!;
+    const xyz = new Float32Array(buffers[i]!);
     pointCount += xyz.length / 3;
     sweeps.push({ xyz, color: new THREE.Color(colorFor(types.get(sensor.agent_id) ?? "")) });
   }
@@ -1315,7 +1320,18 @@ export default function Viewer({
   // (just prepared) is chosen once the list is read again.
   const [sceneListRev, setSceneListRev] = useState(0);
   const wantedSceneRef = useRef("");
-  const sceneOrder = datasetScenes.length > 0 ? datasetScenes : scenes;
+  const activeDataset = useMemo(
+    () =>
+      resolveActiveDataset(sceneId, scenes, {
+        scenes: datasetScenes,
+        about: datasetAbout,
+        statuses: datasetSceneStatuses,
+      }),
+    [sceneId, scenes, datasetScenes, datasetAbout, datasetSceneStatuses],
+  );
+  const activeDatasetAbout = activeDataset.about;
+  const activeDatasetStatuses = activeDataset.statuses;
+  const sceneOrder = activeDataset.scenes.length > 0 ? activeDataset.scenes : scenes;
   const readyScenes = useMemo(() => new Set(scenes), [scenes]);
   const navRef = useRef({ order: sceneOrder, ready: readyScenes, autoNext });
   navRef.current = { order: sceneOrder, ready: readyScenes, autoNext };
@@ -1327,6 +1343,8 @@ export default function Viewer({
     if (scene) {
       setPlaying(false);
       setSceneNotice(null);
+      setFrameIndex(0);
+      frameRef.current = 0;
       setSceneId(scene);
     }
   }, []);
@@ -1341,6 +1359,8 @@ export default function Viewer({
     if (continueOn && scene) {
       autoPlayRef.current = true;
       setSceneNotice(skipped.length > 0 ? { text: skippedNote.trim(), next: null, prepare: null } : null);
+      setFrameIndex(0);
+      frameRef.current = 0;
       setSceneId(scene);
       return;
     }
@@ -1406,7 +1426,13 @@ export default function Viewer({
     const pollScenes = async () => {
       try {
         const dataset = await getDatasetScenes();
-        if (stopped || !dataset) return;
+        if (stopped) return;
+        if (!dataset) {
+          setDatasetScenes([]);
+          setDatasetAbout(null);
+          setDatasetSceneStatuses({});
+          return;
+        }
         setDatasetScenes(dataset.scenes.map((scene) => scene.scene_id));
         setDatasetAbout(
           dataset.label || dataset.server ? { label: dataset.label ?? "", server: dataset.server ?? "" } : null,
@@ -1444,6 +1470,8 @@ export default function Viewer({
       if (navRef.current.ready.has(asked)) {
         setPlaying(false);
         setSceneNotice(null);
+        setFrameIndex(0);
+        frameRef.current = 0;
         setSceneId(asked);
       } else {
         wantedSceneRef.current = asked;
@@ -1658,6 +1686,10 @@ export default function Viewer({
       setDataBasename(basename);
       setDataRoot(root);
       setDatasetError(null);
+      setDatasetScenes([]);
+      setDatasetAbout(null);
+      setDatasetSceneStatuses({});
+      setViewerJob(null);
       setPlaying(false);
 
       bumpSceneDrawToken();
@@ -2696,19 +2728,10 @@ export default function Viewer({
         return;
       }
       let initialFrame = 0;
-      let initialHidden: Record<string, boolean> = { ...hidden };
+      let initialHidden: Record<string, boolean> = {};
       if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__) {
         const init = window.__COPERCEIVE_INITIAL_STATE__;
-        if (typeof init.last_sample_index === "number" && init.last_sample_index < body.times_us.length) {
-          initialFrame = init.last_sample_index;
-        } else if (typeof init.last_timestamp_us === "number") {
-          const found = body.times_us.findIndex((t) => t >= init.last_timestamp_us!);
-          if (found >= 0) initialFrame = found;
-        } else if (typeof init.last_timestamp_ns === "number") {
-          const targetUs = Math.round(init.last_timestamp_ns / 1000);
-          const found = body.times_us.findIndex((t) => t >= targetUs);
-          if (found >= 0) initialFrame = found;
-        }
+        initialFrame = initialSampleIndex(init, body.scene_id, body.times_us);
         if (init.last_viewpoint) {
           const vp = init.last_viewpoint as Viewpoint;
           if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
@@ -2724,7 +2747,7 @@ export default function Viewer({
           onTheme?.(sys);
           setAppearance((curr) => ({ ...curr, theme: sys }));
         }
-        if (init.agent_visibility) {
+        if (init.agent_visibility && (!init.last_scene_id || init.last_scene_id === body.scene_id)) {
           initialHidden = init.agent_visibility;
         }
         if (init.layer_toggles) {
@@ -3263,7 +3286,7 @@ export default function Viewer({
         return;
       }
       const nextTime = summary?.times_us[frameIndex + 1];
-      if (typeof nextTime === "number") {
+      if (!playingRef.current && typeof nextTime === "number") {
         for (const frustum of wanted) {
           void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, effectiveToken, FRUSTUM_TEXTURE).catch(() => undefined);
         }
@@ -4038,6 +4061,9 @@ export default function Viewer({
       let previous: FrameDocument | null = null;
       let previousTime = 0;
       for (let index = 0; index < times.length; index += 1) {
+        while (playingRef.current && !cancelled && stillWanted()) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
         if (cancelled || !stillWanted()) {
           return;
         }
@@ -4438,9 +4464,9 @@ export default function Viewer({
   const jobText = jobBadge(viewerJob);
   // Where the scene comes from, as the app knows it: the cluster over SSH, this
   // Mac's folder, or the server this page was loaded from.
-  const connectionText = datasetAbout?.server
-    ? `Streaming over SSH from ${datasetAbout.server}`
-    : viewerJob
+  const connectionText = activeDatasetAbout?.server
+    ? `Streaming over SSH from ${activeDatasetAbout.server}`
+    : viewerJob && activeDataset.scenes.length > 0
       ? "Streaming over SSH"
       : isDesktop
         ? `Local folder${dataBasename ? ` · ${dataBasename}` : ""}`
@@ -4487,9 +4513,9 @@ export default function Viewer({
       )}
       <span
         className="crumb-dataset"
-        title={datasetAbout?.server ? `${datasetAbout.label} on ${datasetAbout.server}` : undefined}
+        title={activeDatasetAbout?.server ? `${activeDatasetAbout.label} on ${activeDatasetAbout.server}` : undefined}
       >
-        {datasetAbout?.label || (sceneId && sceneStem !== sceneId ? sceneStem : "Scenes")}
+        {activeDatasetAbout?.label || (sceneId && sceneStem !== sceneId ? sceneStem : "Scenes")}
       </span>
       <span className="crumb-sep" aria-hidden="true">/</span>
       <span className="scene-nav">
@@ -4517,7 +4543,7 @@ export default function Viewer({
                   return { value: id, label: id };
                 }
                 // A scene of this dataset that the viewer cannot show yet.
-                const state = datasetSceneStatuses[id];
+                const state = activeDatasetStatuses[id];
                 const note = state === "preparing" ? "preparing…" : state === "failed" ? "failed" : "not prepared";
                 return { value: id, label: `${id} · ${note}` };
               })
@@ -4529,11 +4555,11 @@ export default function Viewer({
           if (!readyScenes.has(id)) {
             setSceneNotice({
               text:
-                datasetSceneStatuses[id] === "preparing"
+                activeDatasetStatuses[id] === "preparing"
                   ? `${id} is being prepared. It opens here when it is ready.`
                   : `${id} is not prepared yet.`,
               next: null,
-              prepare: datasetSceneStatuses[id] === "preparing" ? null : id,
+              prepare: activeDatasetStatuses[id] === "preparing" ? null : id,
             });
             return;
           }
@@ -4541,6 +4567,8 @@ export default function Viewer({
           // prefetching frames, and over a slow link those queue ahead of the
           // request for the chosen scene.
           setPlaying(false);
+          setFrameIndex(0);
+          frameRef.current = 0;
           setSceneId(id);
         }}
       />
@@ -4749,7 +4777,7 @@ export default function Viewer({
               <details className="cam-fold">
                 <summary>
                   Cameras
-                  <span className="num">{cameraChoices.filter((row) => showCameraImage(appearance, row.key)).length}</span>
+                  <span className="num">{camerasFoldCount(appearance, cameraChoices.map((row) => row.key))}</span>
                 </summary>
                 <div className="cam-actions">
                   <button type="button" onClick={() => setAppearance((current) => setAllFrustumImages(current))}>

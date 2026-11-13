@@ -1,8 +1,8 @@
 import { apiBase, authHeaders, errorDetail } from "../api/client";
 import { isFrame, type FrameDocument } from "./types";
 
-const FRAME_LIMIT = 16;
-const POINT_LIMIT = 48;
+const FRAME_LIMIT = 256;
+const POINT_LIMIT = 128;
 
 export type FrameCacheStats = {
   frame_hits: number;

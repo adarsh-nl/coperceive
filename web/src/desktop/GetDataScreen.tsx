@@ -659,7 +659,7 @@ export default function GetDataScreen({
                 <div style={{ fontSize: "12px", color: "var(--text-subtle)", marginTop: "2px" }}>
                   {generatingDemo
                     ? `${demoStage || "Generating demo scene…"} · ${demoElapsedSec}s elapsed · This can take up to 2 minutes on older Macs.`
-                    : "Deterministic synthetic cooperative scene with 3 agents (LiDAR & cameras) and simulated predictions (~8.2 MB)."}
+                    : "Deterministic synthetic cooperative scene with 3 agents (LiDAR & cameras) and simulated predictions (~8.2 MB demo cache in app data; 1.7 MB scene)."}
                 </div>
                 {demoError && (
                   <div style={{ fontSize: "11.5px", color: "var(--danger)", marginTop: "4px" }}>

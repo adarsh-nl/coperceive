@@ -720,4 +720,62 @@ print(f"Step CD-10 verified: old coperceive (no capabilities, 'invalid choice: d
       f"row and dataset_detect both say: {expected}")
 PY
 
+# --- Flow F: remote session followed by local scene clears streaming header ---
+# First ensure a remote dataset_open session ran and saved state, then launch
+# a local library session with the same state dir and verify the viewer header
+# shows the local scene and never "Streaming over SSH".
+LOCAL_ROOT="${TMP_DIR}/local-lib"
+mkdir -p "${LOCAL_ROOT}"
+"${PYTHON}" -m coperceive demo create "${TMP_DIR}/local-demo-cache" >/dev/null
+cp -R "${TMP_DIR}/local-demo-cache/scenes/demo-junction" "${LOCAL_ROOT}/demo-junction"
+
+LOCAL_MARKER="${TMP_DIR}/local-marker.txt"
+rm -f "${LOCAL_MARKER}"
+COPERCEIVE_TEST_ENV=1 \
+COPERCEIVE_STATE_DIR="${TMP_DIR}/state" \
+COPERCEIVE_AUTOCONNECT_ROOT="${LOCAL_ROOT}" \
+COPERCEIVE_TEST_MARKER_FILE="${LOCAL_MARKER}" \
+"${APP_EXE}" >"${TMP_DIR}/remote-then-local.stdout.log" 2>"${TMP_DIR}/remote-then-local.stderr.log" &
+APP_PID=$!
+
+CTRL_PORT=""
+CTRL_SECRET=""
+for i in {1..90}; do
+    if [ -f "${LOCAL_MARKER}" ]; then
+        CTRL_PORT=$(sed -n '4p' "${LOCAL_MARKER}")
+        CTRL_SECRET=$(sed -n '5p' "${LOCAL_MARKER}")
+        if [ -n "${CTRL_PORT}" ] && [ "${CTRL_PORT}" != "0" ] && [ -n "${CTRL_SECRET}" ]; then
+            break
+        fi
+    fi
+    kill -0 "${APP_PID}" 2>/dev/null || fail "app exited before writing local marker"
+    sleep 0.5
+done
+[ -n "${CTRL_PORT}" ] && [ -n "${CTRL_SECRET}" ] || fail "controller port/secret missing for remote-then-local check"
+
+HEADER_OK=0
+LAST_HEADER=""
+for i in {1..90}; do
+    RESP=$(curl -s -X POST \
+        -H "Authorization: Bearer ${CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; const header = document.querySelector(\"header, .viewer-header, .topbar\")?.textContent ?? \"\"; const ok = body.includes(\"demo-junction\") && !body.includes(\"Streaming over SSH\") && !body.includes(\"Dataset e2e fake cluster\"); return { ok, header, hasDemo: body.includes(\"demo-junction\"), hasStream: body.includes(\"Streaming over SSH\") }; })()"}' \
+        "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
+    if [ -n "${RESP}" ]; then
+        LAST_HEADER="${RESP}"
+        if echo "${RESP}" | grep -q '"ok":true'; then
+            HEADER_OK=1
+            break
+        fi
+    fi
+    sleep 0.5
+done
+[ "${HEADER_OK}" -eq 1 ] || fail "viewer header kept stale remote state after opening local scene: ${LAST_HEADER}"
+mkdir -p /tmp/e2e-shots
+screencapture -x /tmp/e2e-shots/remote-then-local-header.png 2>/dev/null || true
+kill -TERM "${APP_PID}" 2>/dev/null || true
+wait "${APP_PID}" 2>/dev/null || true
+APP_PID=""
+echo "Step CD-19 verified: opening local scene after fake-SSH session cleared streaming header: ${LAST_HEADER}"
+
 echo "E2E_DATASET_APP_MARK: cluster datasets verified through the packaged app over fake SSH"
