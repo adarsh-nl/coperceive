@@ -673,54 +673,8 @@ print(f"Step CD-18 verified: while prepare job {job_id} ran (others {sorted(set(
       "the job then finished")
 PY
 
-# --- Flow E: an older coperceive on the cluster --------------------------------
-# The profile's interpreter is fake_old_python.sh: no `capabilities`, no
-# `dataset detect`. Test connection and dataset_detect must both say "too old"
-# with the exact update command, never raw argparse output.
-OLD_CHECKOUT="${TMP_DIR}/old-checkout"
-mkdir -p "${OLD_CHECKOUT}/coperceive" "${OLD_CHECKOUT}/.git"
-printf '' > "${OLD_CHECKOUT}/coperceive/__init__.py"
-export FAKE_OLD_CHECKOUT="${OLD_CHECKOUT}"
-OLD_PYTHON="${ROOT_DIR}/src-tauri/tests/fixtures/datasets/fake_old_python.sh"
-NEW_SERVER="${SERVER}"
-SERVER="${TMP_DIR}/server-old.json"
-python3 - "${NEW_SERVER}" "${SERVER}" "${OLD_PYTHON}" <<'PY'
-import json, sys
-source, target, python = sys.argv[1:4]
-entry = json.load(open(source, encoding="utf-8"))
-entry["profile"]["environment"]["interpreter"] = python
-entry["profile"]["environment"]["coperceive_command"] = [python, "-m", "coperceive"]
-json.dump(entry, open(target, "w", encoding="utf-8"), indent=2)
-PY
-run_flow old "[
-  {\"command\": \"test_server_connection\", \"args\": {}},
-  {\"command\": \"dataset_detect\", \"args\": {$(profile_args), \"path\": \"${RAW}/test\"}}
-]"
-SERVER="${NEW_SERVER}"
-check old "${OLD_CHECKOUT}" "${OLD_PYTHON}" <<'PY'
-import json, sys
-result, ssh_log, tmp, raw, checkout, python = sys.argv[1:7]
-connection, detect = json.load(open(result, encoding="utf-8"))["steps"]
-update = f"git -C {checkout} pull --ff-only && {python} -m pip install -e {checkout} --no-deps"
-expected = ("coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, which "
-            "has no capabilities command, need a build with cluster-datasets-5). Update it with: " + update)
-assert not detect["ok"], detect
-assert detect["error"] == expected, detect["error"]
-assert "invalid choice" not in detect["error"] and "usage:" not in detect["error"], detect["error"]
-rows = {check["name"]: check for check in connection["value"]["checks"]}
-row = rows.get("cluster-datasets")
-assert row is not None and row["ok"] is False and row["detail"] == expected, row
-log = open(ssh_log, encoding="utf-8").read().splitlines()
-assert "dataset-detect" in log and log.count("capabilities") == 2 and "sbatch" not in log, log
-for path in (result, f"{tmp}/old-request.json"):
-    text = open(path, encoding="utf-8").read().lower()
-    for forbidden in ("password", "private_key", "secret", "bearer"):
-        assert forbidden not in text, f"{path} contains {forbidden}"
-print(f"Step CD-10 verified: old coperceive (no capabilities, 'invalid choice: detect') -> Test connection "
-      f"row and dataset_detect both say: {expected}")
-PY
-
 # --- Flow F: remote session followed by local scene clears streaming header ---
+# Must run before Flow E (`old` overwrites the saved profile in state with fake_old_python.sh).
 # In the SAME running app process: open a remote fake-SSH scene (dataset_open),
 # verify the viewer shows "Streaming over SSH", then open a local scene
 # (start_local) and verify the viewer header shows the local scene and never
@@ -760,7 +714,7 @@ for i in {1..90}; do
 done
 [ -n "${CTRL_PORT}" ] && [ -n "${CTRL_SECRET}" ] || fail "controller port/secret missing for remote-then-local check"
 
-# Step 1: Populate active dataset metadata (like HpcWorkspace) and open remote scene in the running process
+# Step 1: Open remote scene in the running process, then populate active dataset metadata (like DatasetView.tsx)
 REMOTE_OPEN_PAYLOAD=$(python3 - "${DATASET_ARGS}" <<'PY'
 import json, sys
 args = json.loads("{" + sys.argv[1] + "}")
@@ -778,8 +732,9 @@ dataset_meta = {
 }
 js = (
     f"(async () => {{ "
+    f"const r = await window.__TAURI_INTERNALS__.invoke('dataset_open', {json.dumps(args)}); "
     f"await window.__TAURI_INTERNALS__.invoke('set_viewer_dataset_scenes', {json.dumps(dataset_meta)}); "
-    f"return await window.__TAURI_INTERNALS__.invoke('dataset_open', {json.dumps(args)}); "
+    f"return r; "
     f"}})()"
 )
 print(json.dumps({"window": "main", "script": js}))
@@ -847,5 +802,52 @@ kill -TERM "${APP_PID}" 2>/dev/null || true
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
 echo "Step CD-19 verified: opening local scene after fake-SSH session in same process cleared streaming header: ${LAST_HEADER}"
+
+# --- Flow E: an older coperceive on the cluster --------------------------------
+# The profile's interpreter is fake_old_python.sh: no `capabilities`, no
+# `dataset detect`. Test connection and dataset_detect must both say "too old"
+# with the exact update command, never raw argparse output.
+OLD_CHECKOUT="${TMP_DIR}/old-checkout"
+mkdir -p "${OLD_CHECKOUT}/coperceive" "${OLD_CHECKOUT}/.git"
+printf '' > "${OLD_CHECKOUT}/coperceive/__init__.py"
+export FAKE_OLD_CHECKOUT="${OLD_CHECKOUT}"
+OLD_PYTHON="${ROOT_DIR}/src-tauri/tests/fixtures/datasets/fake_old_python.sh"
+NEW_SERVER="${SERVER}"
+SERVER="${TMP_DIR}/server-old.json"
+python3 - "${NEW_SERVER}" "${SERVER}" "${OLD_PYTHON}" <<'PY'
+import json, sys
+source, target, python = sys.argv[1:4]
+entry = json.load(open(source, encoding="utf-8"))
+entry["profile"]["environment"]["interpreter"] = python
+entry["profile"]["environment"]["coperceive_command"] = [python, "-m", "coperceive"]
+json.dump(entry, open(target, "w", encoding="utf-8"), indent=2)
+PY
+run_flow old "[
+  {\"command\": \"test_server_connection\", \"args\": {}},
+  {\"command\": \"dataset_detect\", \"args\": {$(profile_args), \"path\": \"${RAW}/test\"}}
+]"
+SERVER="${NEW_SERVER}"
+check old "${OLD_CHECKOUT}" "${OLD_PYTHON}" <<'PY'
+import json, sys
+result, ssh_log, tmp, raw, checkout, python = sys.argv[1:7]
+connection, detect = json.load(open(result, encoding="utf-8"))["steps"]
+update = f"git -C {checkout} pull --ff-only && {python} -m pip install -e {checkout} --no-deps"
+expected = ("coperceive on this server is too old for cluster datasets (found coperceive 0.0.0, which "
+            "has no capabilities command, need a build with cluster-datasets-5). Update it with: " + update)
+assert not detect["ok"], detect
+assert detect["error"] == expected, detect["error"]
+assert "invalid choice" not in detect["error"] and "usage:" not in detect["error"], detect["error"]
+rows = {check["name"]: check for check in connection["value"]["checks"]}
+row = rows.get("cluster-datasets")
+assert row is not None and row["ok"] is False and row["detail"] == expected, row
+log = open(ssh_log, encoding="utf-8").read().splitlines()
+assert "dataset-detect" in log and log.count("capabilities") == 2 and "sbatch" not in log, log
+for path in (result, f"{tmp}/old-request.json"):
+    text = open(path, encoding="utf-8").read().lower()
+    for forbidden in ("password", "private_key", "secret", "bearer"):
+        assert forbidden not in text, f"{path} contains {forbidden}"
+print(f"Step CD-10 verified: old coperceive (no capabilities, 'invalid choice: detect') -> Test connection "
+      f"row and dataset_detect both say: {expected}")
+PY
 
 echo "E2E_DATASET_APP_MARK: cluster datasets verified through the packaged app over fake SSH"
