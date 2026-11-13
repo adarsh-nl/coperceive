@@ -27,6 +27,7 @@ import { UpdateCard, UpdateDot, useUpdater } from "./UpdateBanner";
 import PanelState from "./PanelState";
 import { PANEL_DEFINITIONS } from "./panelStates";
 import { errorText } from "./errors";
+import { datasetSplits, detectForSplit, splitLabel } from "./clusterDatasets";
 import { Sidebar } from "./components/Sidebar";
 import { IconButton } from "./components/IconButton";
 import { SettingsModal } from "./SettingsView";
@@ -705,29 +706,52 @@ export default function ConnectScreen({ onConnected }: ConnectScreenProps) {
                       <span aria-hidden="true" className="c-tree-caret">{expanded ? "▾" : "▸"}</span>
                       {adapter}
                     </button>
-                    {expanded ? (
-                      <button
-                        type="button"
-                        onClick={() => navigateHpcSection("dataset")}
-                        className={`c-sidebar-item c-tree-split ${isDatasetSelected ? "active" : ""}`}
-                        aria-current={isDatasetSelected ? "page" : undefined}
-                        title={jobs ? `${jobs.ready} of ${jobs.total} scenes ready` : `${dsDoc.scene_count} scenes`}
-                      >
-                        <span>{dsDoc.split || "all"}</span>
-                        {jobs && jobs.total > 0 ? (
-                          <>
-                            <MiniBar value={jobs.ready / jobs.total} tone="ok" />
-                            <span className="c-tree-count">
-                              {jobs.ready}/{jobs.total}
-                            </span>
-                          </>
-                        ) : (
-                          <span className="c-tree-count" style={{ marginLeft: "auto" }}>
-                            {dsDoc.scene_count}
-                          </span>
-                        )}
-                      </button>
-                    ) : null}
+                    {expanded
+                      ? datasetSplits(dsDoc).map((split) => {
+                          const splitActive = hasDataset && (dsDoc.split ?? "all") === split.name;
+                          const splitJobs = splitActive ? jobs : undefined;
+                          const splitSelected = isDatasetSelected && splitActive;
+                          return (
+                            <button
+                              key={split.name}
+                              type="button"
+                              onClick={() => {
+                                navigateHpcSection("dataset");
+                                if (!splitActive) {
+                                  // Another recognised split of the same folder:
+                                  // detect already listed its adapter and count.
+                                  window.dispatchEvent(
+                                    new CustomEvent("coperceive-open-dataset", {
+                                      detail: { profile: srv, dataset: detectForSplit(dsDoc, split) },
+                                    }),
+                                  );
+                                }
+                              }}
+                              className={`c-sidebar-item c-tree-split ${splitSelected ? "active" : ""}`}
+                              aria-current={splitSelected ? "page" : undefined}
+                              title={
+                                splitJobs
+                                  ? `${splitJobs.ready} of ${splitJobs.total} scenes ready`
+                                  : `${split.scene_count} scene${split.scene_count === 1 ? "" : "s"}`
+                              }
+                            >
+                              <span>{splitLabel(split)}</span>
+                              {splitJobs && splitJobs.total > 0 ? (
+                                <>
+                                  <MiniBar value={splitJobs.ready / splitJobs.total} tone="ok" />
+                                  <span className="c-tree-count">
+                                    {splitJobs.ready}/{splitJobs.total}
+                                  </span>
+                                </>
+                              ) : (
+                                <span className="c-tree-count" style={{ marginLeft: "auto" }}>
+                                  {split.scene_count}
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })
+                      : null}
                   </>
                 ) : null}
                 <button

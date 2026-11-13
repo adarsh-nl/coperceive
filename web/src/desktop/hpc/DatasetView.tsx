@@ -31,9 +31,18 @@ import {
   type CameraImagesMode,
   cameraImageChoices,
   datasetPrepareJobStatus,
+  emptyIndexExplanation,
   listenTauri,
   shareDatasetScenesWithViewer,
 } from "../clusterDatasets";
+import {
+  forgetCachedIndex,
+  indexRefreshMessage,
+  readCachedIndex,
+  shouldCacheIndex,
+  shouldReplaceIndex,
+  writeCachedIndex,
+} from "../indexCache";
 import { SettingRow } from "../SettingRow";
 import { datasetJobs, publishDatasetJobs, setViewerOpen, subscribeDatasetJobs } from "../jobsStore";
 import { getPersistentState } from "../local";
@@ -227,6 +236,11 @@ export default function DatasetView({
   indexRef.current = indexDoc;
   const [loadingIndex, setLoadingIndex] = useState(initialIndexDoc === null);
   const [indexError, setIndexError] = useState<string | null>(null);
+  // A cached index is shown at once while the same command checks for changes.
+  const [checkingIndex, setCheckingIndex] = useState(false);
+  const [indexNotice, setIndexNotice] = useState<string | null>(null);
+  // Retry re-runs the same index effect after forgetting a stale cache.
+  const [indexAttempt, setIndexAttempt] = useState(0);
 
   const [statuses, setStatuses] = useState<Map<string, ClusterSceneStatusEntry>>(() => {
     const map = new Map<string, ClusterSceneStatusEntry>();
@@ -323,33 +337,73 @@ export default function DatasetView({
     if (initialIndexDoc !== null) {
       setIndexDoc(initialIndexDoc);
       setLoadingIndex(false);
+      setCheckingIndex(false);
       return;
     }
     let active = true;
     setIndexStartedAt(Date.now());
     setNow(Date.now());
-    setLoadingIndex(true);
     setIndexError(null);
+    setIndexNotice(null);
 
     const adapter = dataset.adapter || "opv2v";
     const rawRoot = dataset.raw_root || dataset.path;
+    const cached = readCachedIndex(profile.id, adapter, rawRoot, dataset.split);
+    if (cached) {
+      // Show the last index at once; the command below only checks for changes.
+      setIndexDoc(cached.document);
+      setLoadingIndex(false);
+      setCheckingIndex(true);
+    } else {
+      setIndexDoc(null);
+      setLoadingIndex(true);
+      setCheckingIndex(false);
+    }
 
     datasetIndex(profile.id, adapter, rawRoot, dataset.split)
       .then((res) => {
         if (!active) return;
-        setIndexDoc(res);
+        const previous = cached?.document ?? null;
+        if (shouldCacheIndex(res)) {
+          writeCachedIndex(profile.id, adapter, rawRoot, dataset.split, res);
+        }
+        const changed = previous ? indexRefreshMessage(previous, res) : null;
+        setCheckingIndex(false);
         setLoadingIndex(false);
+        if (shouldReplaceIndex(previous, res)) {
+          setIndexDoc(res);
+          setIndexError(null);
+          if (changed) setIndexNotice(changed);
+        } else {
+          // Keep the scenes already on screen and say the change check failed.
+          setIndexError(
+            `The check read no scenes this time. ${(res.errors ?? [])[0] ?? ""}`.trim(),
+          );
+        }
       })
       .catch((err: unknown) => {
         if (!active) return;
-        setIndexError(errorDetails(err) || errorText(err));
+        const message = errorDetails(err) || errorText(err);
+        setCheckingIndex(false);
+        // A failed change check keeps the cached scenes on screen and says so.
+        setIndexError(message);
         setLoadingIndex(false);
       });
 
     return () => {
       active = false;
     };
-  }, [profile.id, dataset, initialIndexDoc]);
+  }, [profile.id, dataset, initialIndexDoc, indexAttempt]);
+
+  const handleRetryIndex = () => {
+    forgetCachedIndex(
+      profile.id,
+      dataset.adapter || "opv2v",
+      dataset.raw_root || dataset.path,
+      dataset.split,
+    );
+    setIndexAttempt((attempt) => attempt + 1);
+  };
 
   const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -1006,6 +1060,28 @@ export default function DatasetView({
           </span>
         </header>
 
+        {checkingIndex ? (
+          <div role="status" className="dv-checking">
+            Cached scene list · checking for changes…
+          </div>
+        ) : null}
+        {indexNotice ? (
+          <p role="status" className="c-page-note dv-index-notice">
+            {indexNotice}{" "}
+            <button type="button" className="c-link" onClick={() => setIndexNotice(null)}>
+              Dismiss
+            </button>
+          </p>
+        ) : null}
+        {indexError && indexDoc ? (
+          <p role="alert" className="dv-index-warning">
+            Could not check for changes: {splitErrorText(indexError).line}{" "}
+            <button type="button" className="c-link" onClick={handleRetryIndex}>
+              Retry index
+            </button>
+          </p>
+        ) : null}
+
         {indexDoc ? (
           <div className="dv-progress" role="img" aria-label={`${counts.by.ready} of ${counts.total} scenes ready`}>
             {segments.map(([state, color]) =>
@@ -1227,6 +1303,19 @@ export default function DatasetView({
           </span>
         </div>
 
+        {indexDoc && indexDoc.errors.length > 0 ? (
+          <details className="dv-index-errors">
+            <summary>
+              {indexDoc.errors.length} scene{indexDoc.errors.length === 1 ? "" : "s"} could not be read
+            </summary>
+            <ul>
+              {indexDoc.errors.slice(0, 20).map((line) => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+
         {/* The scene table */}
         <div className="dv-table-scroll">
           {loadingIndex ? (
@@ -1255,9 +1344,28 @@ export default function DatasetView({
                 <span role="columnheader" aria-label="Action" />
               </div>
               {ordered.length === 0 ? (
-                <div className="dv-empty">
-                  {rows.length === 0 ? "No scenes in this split." : "No scenes match this filter."}
-                </div>
+                rows.length === 0 ? (
+                  (() => {
+                    const empty = emptyIndexExplanation(indexDoc, dataset.scene_count);
+                    return (
+                      <div className="dv-empty">
+                        <span>{empty.title}</span>
+                        {empty.details.map((line) => (
+                          <span key={line} className="dv-empty-detail">
+                            {line}
+                          </span>
+                        ))}
+                        {empty.retry ? (
+                          <button type="button" className="c-link" onClick={handleRetryIndex}>
+                            Retry index
+                          </button>
+                        ) : null}
+                      </div>
+                    );
+                  })()
+                ) : (
+                  <div className="dv-empty">No scenes match this filter.</div>
+                )
               ) : (
                 groups.map((group) => (
                   <div key={group.key} role="rowgroup" aria-label={group.label || "Scenes"}>

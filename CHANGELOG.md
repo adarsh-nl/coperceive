@@ -28,6 +28,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - System log directories, application data directories, and clipboard interactions abstracted into platform-specific implementations.
 
 ### Fixed
+- The HPC workspace reuses a dataset's scene index: opening an unchanged OPV2V train split shows the cached scene list at once and re-indexes in the background ("checking for changes…"), so the 45–60 s metadata walk no longer blocks every open. The cache is keyed by server, adapter, raw root and split, and is only trusted when the `sha1-mtime-size-v1` fingerprint still matches.
+- The Servers sidebar lists every recognised split of an open dataset, not only the one opened; clicking another split opens it from detect's own per-split adapter and scene count, without a second folder check.
+- The Servers browser only opens a dataset after the selected folder's own check completes, so a leftover or in-flight "Checking what this folder holds…" result can no longer open the wrong dataset. An index that returns no scenes now names the per-scene errors (or the detect/index disagreement) and offers a retry instead of a bare "No scenes in this split", and a failed change check keeps the scenes already on screen.
 - Diagnostics reporting and zip bundle export made cross-platform with clipboard fallback and clear missing-tool errors.
 - Release asset packaging tightened to copy only exact application bundle and DMG assets, excluding stray dependencies.
 

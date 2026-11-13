@@ -762,6 +762,50 @@ def dataset_status_document(cache_dir: str | Path, *, refresh_stale: bool = True
     }
 
 
+def _split_entries(
+    adapter_name: str,
+    raw_root: Path,
+    *,
+    max_scenes: int,
+) -> list[dict[str, object]]:
+    """Every split directory present at ``raw_root``, with its scene count.
+
+    The Servers browser and the Dataset view's sidebar show *all* the splits a
+    folder holds, not only the one detect chose (a tree with ``train`` and
+    ``test`` lists both). Each entry carries the adapter that recognises that
+    split, so the app can open it later without a second detect. Adapters
+    without split directories (Griffin, DAIR-V2X-C) return an empty list.
+
+    One listing per split directory, bounded by ``max_scenes``; no frame is
+    listed and no file is read.
+    """
+    if adapter_name not in ("opv2v", "v2xset", "v2v4real"):
+        return []
+    order: list[str] = []
+    for name in (*_SPLITS["opv2v"], *_SPLITS["v2xset"], *_SPLITS["v2v4real"]):
+        if name not in order:
+            order.append(name)
+    base = raw_root.parent if raw_root.name in order and raw_root.is_dir() else raw_root
+    entries: list[dict[str, object]] = []
+    for name in order:
+        if not (base / name).is_dir():
+            continue
+        try:
+            names = _scene_dirs(base / name, max(1, max_scenes))
+        except OSError:
+            continue
+        if _is_v2xset(base, names, name):
+            recognised = "v2xset"
+        elif is_v2v4real(base, names, name):
+            recognised = "v2v4real"
+        else:
+            recognised = "opv2v"
+        if name not in _SPLITS[recognised]:
+            recognised = "opv2v"
+        entries.append({"name": name, "scene_count": len(names), "adapter": recognised})
+    return entries
+
+
 def detect_cluster_dataset(
     path: str | Path, *, max_scenes: int = DEFAULT_MAX_SCENES
 ) -> dict[str, Any]:
@@ -776,6 +820,7 @@ def detect_cluster_dataset(
         "params": {},
         "licence": None,
         "scene_count": 0,
+        "splits": [],
         "status": "none",
         "reason": None,
     }
@@ -847,6 +892,7 @@ def detect_cluster_dataset(
             "params": params,
             "licence": _licence(adapter),
             "scene_count": min(scene_count, max_scenes),
+            "splits": _split_entries(adapter_name, raw_root, max_scenes=max_scenes),
             "status": "ok",
             "reason": None,
         }

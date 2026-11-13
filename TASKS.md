@@ -20,7 +20,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-11-02 |
+| Last updated | 2026-11-13 |
 | `main` | `19ea517` (desktop app merged via PR #51). |
 | `feat/desktop` | Merged into `main` (PR #51, 2026-10-28). |
 | `feat/m2-import` | `7ba6d88` (merge of PR #90). Includes #87 (`979b9f3`) and #90 (`7ba6d88`). |
@@ -122,6 +122,7 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~Job Monitor & Watch: watch submitted HPC run (state, logs, cancel), report, open in viewer, run history, full job names for watch (PR #61, #63, #65, #84).~~
 - [x] ~~Cluster Datasets Contract: `docs/datasets/cluster-datasets.md` JSON schemas and frozen desktop command contract; read-only `dataset_detect` and `dataset_index` Tauri commands (PR #85 `30d2a82`).~~
 - [x] ~~Cluster Datasets Backend (PR 2): atomic per-scene staging under `<cache>/.partial/<scene>`, atomic rename, `dataset.json` cache index, Slurm CPU prepare script preview with hash + confirm, status polling document (`coperceive-cluster-scene-status-1`), parallel workers, and partial-cache serving (PR #87 `979b9f3`).~~
+- [x] ~~HPC workspace bugs (`agent/deepseek-workspace-index`, PR pending): the Dataset view reuses a cached scene index keyed by server/adapter/raw root/split (`sha1-mtime-size-v1` fingerprint, re-index in the background with "checking for changes…") so an unchanged OPV2V train split no longer blocks every open; the Servers sidebar lists every recognised split, not only the opened one; and a dataset can only be opened after the selected folder's own check completes, with index errors and detect/index disagreement shown instead of a bare "0 scenes" (retry available).~~
 
 ---
 

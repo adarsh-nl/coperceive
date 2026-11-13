@@ -38,6 +38,13 @@ export interface ClusterDatasetLicence {
   links: string[];
 }
 
+export interface ClusterDetectSplit {
+  name: string;
+  scene_count: number;
+  /** The adapter that recognises this split; absent in an older server build. */
+  adapter?: string | null;
+}
+
 export interface ClusterDetectDocument {
   schema: "coperceive-cluster-detect-1" | string;
   path: string;
@@ -47,8 +54,85 @@ export interface ClusterDetectDocument {
   params: Record<string, unknown>;
   licence: ClusterDatasetLicence | null;
   scene_count: number;
+  /** Every split directory the folder holds (additive; absent from older builds). */
+  splits?: ClusterDetectSplit[] | null;
   status: "ok" | "none" | "error";
   reason: string | null;
+}
+
+/** Every split the browser can recognise in this folder, opened split first when detecting. */
+export function datasetSplits(doc: ClusterDetectDocument): ClusterDetectSplit[] {
+  const listed = (doc.splits ?? []).filter((split) => Boolean(split?.name));
+  if (listed.length > 0) return listed;
+  if (!doc.adapter) return [];
+  return [{ name: doc.split ?? "all", scene_count: doc.scene_count ?? 0, adapter: doc.adapter }];
+}
+
+/** The sidebar label for a split: its directory name, or "all" without splits. */
+export function splitLabel(split: Pick<ClusterDetectSplit, "name">): string {
+  return split.name === "all" ? "all" : split.name;
+}
+
+/**
+ * A detect document for another split of the same folder, without a second
+ * detect: the server's `splits` entries already name each split's adapter and
+ * scene count, and the side bar opens one directly.
+ */
+export function detectForSplit(
+  doc: ClusterDetectDocument,
+  split: ClusterDetectSplit,
+): ClusterDetectDocument {
+  const name = split.name === "all" ? null : split.name;
+  return {
+    ...doc,
+    adapter: split.adapter ?? doc.adapter,
+    split: name,
+    params: name ? { split: name } : {},
+    scene_count: split.scene_count,
+    status: "ok",
+    reason: null,
+  };
+}
+
+/**
+ * Only a folder the check identified can be opened. A pending or failed check
+ * must not open a dataset (its scene list would contradict the browser's).
+ */
+export function openableDetectDocument(
+  doc: ClusterDetectDocument | null | undefined,
+): doc is ClusterDetectDocument {
+  if (!doc || doc.status !== "ok") return false;
+  if (!doc.adapter) return false;
+  return Boolean(doc.raw_root || doc.path);
+}
+
+/**
+ * What an empty scene list means, in plain words: the per-scene errors if the
+ * index had any, a detect/index disagreement (a bad state the view must name,
+ * not hide as an empty split), or a genuinely empty split.
+ */
+export function emptyIndexExplanation(
+  index: ClusterIndexDocument | null,
+  detectSceneCount: number | null | undefined,
+): { title: string; details: string[]; retry: boolean } {
+  const errors = index?.errors ?? [];
+  const expected = detectSceneCount ?? 0;
+  const indexed = index?.scene_count ?? 0;
+  if (errors.length > 0) {
+    return {
+      title: `The cluster listed ${Math.max(expected, indexed)} scene${Math.max(expected, indexed) === 1 ? "" : "s"} here but could not read ${errors.length === 1 ? "one" : `${errors.length}`}.`,
+      details: errors.slice(0, 5),
+      retry: true,
+    };
+  }
+  if (expected > 0 && indexed === 0) {
+    return {
+      title: `The cluster reported ${expected} scene${expected === 1 ? "" : "s"} in this folder, but the index found none in ${index?.split ?? "this split"}.`,
+      details: ["Re-run the index; if it still finds none, the split may have moved on the cluster."],
+      retry: true,
+    };
+  }
+  return { title: "No scenes in this split.", details: [], retry: false };
 }
 
 export interface ClusterIndexSensors {

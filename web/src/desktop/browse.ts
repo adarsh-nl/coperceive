@@ -103,6 +103,19 @@ export function browseCrumbs(
   return crumbs;
 }
 
+/**
+ * Whether a finished folder check may be shown and opened for the selected
+ * folder. A check that is still running has no path yet, and one that finished
+ * for another folder is stale: opening either would show a dataset whose scene
+ * list and raw root do not belong to the folder on screen.
+ */
+export function detectionIsCurrent(
+  detectedFor: string | null,
+  selectedPath: string | null,
+): boolean {
+  return detectedFor !== null && selectedPath !== null && detectedFor === selectedPath;
+}
+
 /** The parent folder's relative path ("" at the root). */
 export function parentBrowsePath(relativePath: string): string {
   const parts = safeParts(relativePath);
