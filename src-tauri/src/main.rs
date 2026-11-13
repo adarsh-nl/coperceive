@@ -292,6 +292,21 @@ async fn bundle_open(app: tauri::AppHandle, file: String) -> Result<serde_json::
 }
 
 #[tauri::command]
+async fn bundle_open_viewer(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    file: String,
+) -> Result<serde_json::Value, String> {
+    let opened = bundle_open(app.clone(), file).await?;
+    let root = opened
+        .get("root")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "bundle open returned no root".to_string())?;
+    switch_data_root(&app, state.inner(), std::path::PathBuf::from(root)).await?;
+    Ok(opened)
+}
+
+#[tauri::command]
 async fn pick_save_path(
     app: tauri::AppHandle,
     state: tauri::State<'_, Arc<AppState>>,
@@ -3961,6 +3976,7 @@ fn main() {
             bundle_preview,
             bundle_export,
             bundle_open,
+            bundle_open_viewer,
             save_exported_file,
         ])
         .on_page_load(|webview, payload| {

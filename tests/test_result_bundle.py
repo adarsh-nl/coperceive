@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: E501
-# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportArgumentType=false, reportPrivateUsage=false, reportIndexIssue=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportGeneralTypeIssues=false, reportUnusedFunction=false
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportArgumentType=false, reportPrivateUsage=false, reportUnknownLambdaType=false, reportIndexIssue=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportGeneralTypeIssues=false, reportUnusedFunction=false
 """Result bundles: round trip and the security refusals."""
 
 from __future__ import annotations
@@ -340,3 +340,69 @@ def test_host_and_user_markers_are_removed_even_when_not_path_shaped(tmp_path: P
             text = path.read_text(errors="replace")
             for marker in markers:
                 assert marker not in text, (path, marker)
+
+
+def _schema_accepts(manifest: dict[str, object]) -> bool:
+    schema = json.loads(
+        (Path(__file__).resolve().parents[1] / "docs/spec/result-bundle.schema.json").read_text()
+    )
+    required = schema["required"]
+    props = schema["properties"]
+    if set(manifest) - set(props):
+        return False
+    if any(key not in manifest for key in required):
+        return False
+    checks = {
+        "schema": lambda v: v == "coperceive-result-bundle",
+        "schema_version": lambda v: isinstance(v, int) and v >= 1,
+        "created_utc": lambda v: isinstance(v, str),
+        "app_version": lambda v: isinstance(v, str),
+        "title": lambda v: isinstance(v, str),
+        "run_id": lambda v: (
+            isinstance(v, str)
+            and __import__("re").fullmatch(r"[A-Za-z0-9._-]+", v) is not None
+            and v not in {".", ".."}
+        ),
+        "contents": lambda v: isinstance(v, list),
+    }
+    return all(checks[key](manifest[key]) for key in checks if key in manifest)
+
+
+def test_hand_validator_and_schema_accept_the_same_samples(bundle: Path) -> None:
+    from coperceive.bundle.format import validate_manifest
+
+    with zipfile.ZipFile(bundle) as archive:
+        valid = json.loads(archive.read("bundle.json"))
+    samples = [valid]
+    for bad_id in ("../x", "/absolute", "a/b"):
+        sample = json.loads(json.dumps(valid))
+        sample["run_id"] = bad_id
+        samples.append(sample)
+    sample = json.loads(json.dumps(valid))
+    sample["title"] = 4
+    samples.append(sample)
+    sample = json.loads(json.dumps(valid))
+    sample["unknown"] = 1
+    samples.append(sample)
+    sample = json.loads(json.dumps(valid))
+    del sample["title"]
+    samples.append(sample)
+
+    for sample in samples:
+        hand = True
+        try:
+            validate_manifest(sample)
+        except BundleError:
+            hand = False
+        schema_ok = _schema_accepts(sample)
+        assert hand == schema_ok, (sample.get("run_id"), sample.get("title"), hand, schema_ok)
+
+
+def test_bundle_run_id_collision_does_not_touch_local_runs(bundle: Path, tmp_path: Path) -> None:
+    data = tmp_path / "data"
+    local = data / "predictions" / "demo" / "local.txt"
+    local.parent.mkdir(parents=True)
+    local.write_text("local", encoding="utf-8")
+    opened = open_bundle(bundle, data_root=data)
+    assert local.read_text(encoding="utf-8") == "local"
+    assert opened.root != data / "predictions"

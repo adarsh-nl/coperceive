@@ -128,6 +128,15 @@ def read_manifest(path: Path) -> dict[str, object]:
 
 
 def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
+    import re
+
+    run_id = payload.get("run_id")
+    if (
+        not isinstance(run_id, str)
+        or re.fullmatch(r"[A-Za-z0-9._-]+", run_id) is None
+        or run_id in {".", ".."}
+    ):
+        raise BundleError("bundle.json run_id is not a safe single path part")
     allowed = {
         "schema",
         "schema_version",
