@@ -3,9 +3,15 @@ import test from "node:test";
 import assert from "node:assert";
 import {
   canPrepareWholeDataset,
+  clusterIndexRequest,
+  datasetSplits,
+  detectForSplit,
+  emptyIndexExplanation,
   formatDetectBannerTitle,
   formatIndexHeader,
   indexingLabel,
+  openableDetectDocument,
+  splitLabel,
   wholeDatasetOffer,
   splitErrorText,
   formatDuration,
@@ -538,4 +544,152 @@ test("prepareEstimateLine states the time, its basis and that queueing is extra"
     prepareEstimateLine({ estimated_seconds: 720, estimate_note: "from the last run's timing on this cluster (3 scenes, 100 ms per raw file)" }),
     "Estimated time once running: ~12 min (from the last run's timing on this cluster (3 scenes, 100 ms per raw file)). Queue time comes on top.",
   );
+});
+
+
+function detect(overrides: Partial<ClusterDetectDocument> = {}): ClusterDetectDocument {
+  return {
+    schema: "coperceive-cluster-detect-1",
+    path: "/datasets/opencood/v2v4real",
+    adapter: "v2v4real",
+    raw_root: "/datasets/opencood/v2v4real",
+    split: "test",
+    params: { split: "test" },
+    licence: null,
+    scene_count: 9,
+    status: "ok",
+    reason: null,
+    ...overrides,
+  };
+}
+
+test("the sidebar lists every recognised split, and only those", () => {
+  const doc = detect({
+    splits: [
+      { name: "train", scene_count: 9, adapter: "v2v4real" },
+      { name: "test", scene_count: 9, adapter: "v2v4real" },
+    ],
+  });
+  assert.deepStrictEqual(datasetSplits(doc).map((split) => split.name), ["train", "test"]);
+  assert.deepStrictEqual(
+    datasetSplits(detect()).map((split) => [split.name, split.scene_count]),
+    [["test", 9]],
+  );
+  // An older server build has no `splits`: the opened split is still listed.
+  assert.deepStrictEqual(datasetSplits(detect({ split: null, adapter: "griffin" })), [
+    { name: "all", scene_count: 9, adapter: "griffin" },
+  ]);
+  assert.strictEqual(splitLabel({ name: "all" }), "all");
+  assert.strictEqual(splitLabel({ name: "test" }), "test");
+});
+
+test("opening another split reuses detect's adapter and count, with no second check", () => {
+  const doc = detect({
+    splits: [
+      { name: "train", scene_count: 48, adapter: "v2v4real" },
+      { name: "test", scene_count: 9, adapter: "v2v4real" },
+    ],
+  });
+  const train = detectForSplit(doc, { name: "train", scene_count: 48, adapter: "v2v4real" });
+  assert.strictEqual(train.adapter, "v2v4real");
+  assert.strictEqual(train.split, "train");
+  assert.deepStrictEqual(train.params, { split: "train" });
+  assert.strictEqual(train.scene_count, 48);
+  assert.strictEqual(train.status, "ok");
+  const all = detectForSplit(detect({ split: null, adapter: "griffin" }), { name: "all", scene_count: 1, adapter: "griffin" });
+  assert.strictEqual(all.split, null);
+});
+
+test("only an ok detection may open a dataset", () => {
+  assert.strictEqual(openableDetectDocument(detect()), true);
+  assert.strictEqual(openableDetectDocument(null), false);
+  assert.strictEqual(openableDetectDocument(undefined), false);
+  assert.strictEqual(openableDetectDocument(detect({ status: "none", adapter: null })), false);
+  assert.strictEqual(openableDetectDocument(detect({ status: "error", reason: "nope" })), false);
+  assert.strictEqual(openableDetectDocument(detect({ adapter: null })), false);
+});
+
+function indexDoc(overrides: Partial<ClusterIndexDocument> = {}): ClusterIndexDocument {
+  return {
+    schema: "coperceive-cluster-index-1",
+    adapter: "v2v4real",
+    raw_root: "/datasets/opencood/v2v4real",
+    split: "test",
+    params: { split: "test" },
+    licence: null,
+    fingerprint: { algorithm: "sha1-mtime-size-v1", digest: "abc", entries: 1, truncated: false },
+    cache: { relative_path: "coperceive-cache/v2v4real/abc/test" },
+    scene_count: 0,
+    scenes: [],
+    errors: [],
+    truncated: false,
+    elapsed_ms: 1_000,
+    ...overrides,
+  };
+}
+
+test("an empty index says why, never a bare 'no scenes' that contradicts the browser", () => {
+  const unreadable = emptyIndexExplanation(
+    indexDoc({ errors: ["testoutput_CAV_data_1: no samples found with streams.poses"] }),
+    9,
+  );
+  assert.match(unreadable.title, /9 scenes/);
+  assert.deepStrictEqual(unreadable.details, ["testoutput_CAV_data_1: no samples found with streams.poses"]);
+  assert.strictEqual(unreadable.retry, true);
+
+  const mismatch = emptyIndexExplanation(indexDoc(), 9);
+  assert.match(mismatch.title, /reported 9 scenes/);
+  assert.match(mismatch.title, /found none in test/);
+  assert.strictEqual(mismatch.retry, true);
+
+  const empty = emptyIndexExplanation(indexDoc(), 0);
+  assert.strictEqual(empty.title, "No scenes in this split.");
+  assert.deepStrictEqual(empty.details, []);
+  assert.strictEqual(empty.retry, false);
+});
+
+
+test("the view indexes detect's raw root and split, not the browsed path", () => {
+  // The browser shows a folder that is itself a dataset root.
+  const fromRoot = detect();
+  assert.deepStrictEqual(clusterIndexRequest(fromRoot), {
+    adapter: "v2v4real",
+    rawRoot: "/datasets/opencood/v2v4real",
+    split: "test",
+  });
+  // The browser shows the split directory itself: detect returned its parent
+  // as the raw root, so index must receive the parent, not the split path.
+  const fromSplitDir = detect({ path: "/datasets/opencood/v2v4real/test" });
+  assert.deepStrictEqual(clusterIndexRequest(fromSplitDir), {
+    adapter: "v2v4real",
+    rawRoot: "/datasets/opencood/v2v4real",
+    split: "test",
+  });
+  // No split (Griffin) stays null, and a missing adapter falls back to OPV2V.
+  assert.deepStrictEqual(clusterIndexRequest(detect({ adapter: "griffin", split: null, raw_root: "/datasets/griffin" })), {
+    adapter: "griffin",
+    rawRoot: "/datasets/griffin",
+    split: null,
+  });
+  assert.deepStrictEqual(clusterIndexRequest(detect({ adapter: null, split: null, raw_root: "" })), {
+    adapter: "opv2v",
+    rawRoot: "/datasets/opencood/v2v4real",
+    split: null,
+  });
+});
+
+test("the browser-test index mock keeps the requested null split, so the cache key matches", async () => {
+  const globals = globalThis as unknown as { window?: unknown };
+  const previous = globals.window;
+  delete globals.window;
+  try {
+    const griffin = await datasetIndex("profile-1", "griffin", "/datasets/griffin", null);
+    assert.strictEqual(griffin.split, null);
+    assert.deepStrictEqual(griffin.params, {});
+    const opv2v = await datasetIndex("profile-1", "opv2v", "/datasets/opencood/opv2v", "test");
+    assert.strictEqual(opv2v.split, "test");
+    assert.deepStrictEqual(opv2v.params, { split: "test" });
+  } finally {
+    globals.window = previous;
+  }
 });

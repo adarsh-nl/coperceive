@@ -112,6 +112,9 @@ user chooses per prepare, before confirming:
     "links": ["https://mobility-lab.seas.ucla.edu/opv2v/"]
   },
   "scene_count": 16,
+  "splits": [
+    {"name": "test", "scene_count": 16, "adapter": "opv2v"}
+  ],
   "status": "ok",
   "reason": null
 }
@@ -124,6 +127,14 @@ user chooses per prepare, before confirming:
   `links`.
 - The CLI exits 0 for `status:"ok"` and `"none"`. An unreadable/nonexistent path
   returns `status:"error"` and exits 1.
+- `splits` lists **every** split directory the folder holds, in the adapters'
+  split order, each with its scene-directory count (one listing per split,
+  bounded by `--max-scenes`) and the adapter that recognises it. The Dataset
+  view's sidebar shows all of them, not only the `split` detect chose; opening
+  another split uses its `adapter` and name. It is `[]` for an adapter without
+  split directories (Griffin, DAIR-V2X-C) and in a `status:"none"` document;
+  an older coperceive build omits the field, so clients fall back to the one
+  split detect returned.
 - Detection reads directory entries and the adapter's small scene index only;
   it never reads images, point clouds, parquet, or pose contents. For
   OPV2V/V2XSet it lists the split directory and one scene's agent folders; it
