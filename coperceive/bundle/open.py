@@ -345,9 +345,7 @@ def _image_bytes(scene_dir: Path, images: Sequence[object]) -> int:
     return total
 
 
-def _hydrate_scene(
-    target_scene: Path, local: Path, limits: OpenLimits
-) -> tuple[int, int]:
+def _hydrate_scene(target_scene: Path, local: Path, limits: OpenLimits) -> tuple[int, int]:
     """Copy the included frames' sensors from the recipient's scene into the bundle."""
     bundle_scene = read_scene(target_scene)
     local_scene = read_scene(local)
@@ -412,7 +410,9 @@ def _resolve_sensor_data(
     dataset_id = sensor.get("dataset_id")
     dataset_id = dataset_id if isinstance(dataset_id, str) and dataset_id else None
     dataset_label = sensor.get("dataset_label")
-    dataset_label = dataset_label if isinstance(dataset_label, str) and dataset_label else dataset_id
+    dataset_label = (
+        dataset_label if isinstance(dataset_label, str) and dataset_label else dataset_id
+    )
     display = dataset_label or "the dataset"
     adapter = sensor.get("adapter")
     adapter = adapter if isinstance(adapter, str) and adapter else None
@@ -438,7 +438,11 @@ def _resolve_sensor_data(
         frame_count = row.get("frame_count")
         frame_count = frame_count if isinstance(frame_count, int) else 0
         frames = row.get("frames_included")
-        frames = [value for value in frames if isinstance(value, int)] if isinstance(frames, list) else []
+        frames = (
+            [value for value in frames if isinstance(value, int)]
+            if isinstance(frames, list)
+            else []
+        )
         entry: dict[str, object] = {
             "scene_id": scene_id,
             "frame_count": frame_count,

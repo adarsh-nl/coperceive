@@ -173,9 +173,7 @@ def validate_sensor_data(payload: object) -> dict[str, object]:
             raise BundleError(f"sensor_data.scenes[{index}].frames_included is empty")
         for time_us in frames:
             if not isinstance(time_us, int) or isinstance(time_us, bool):
-                raise BundleError(
-                    f"sensor_data.scenes[{index}].frames_included must hold integers"
-                )
+                raise BundleError(f"sensor_data.scenes[{index}].frames_included must hold integers")
     if status == "omitted":
         if payload["bytes"] != 0:
             raise BundleError("sensor_data.bytes must be 0 when sensor data is omitted")
@@ -307,9 +305,7 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
         raise BundleError("bundle has too many files")
     if sum(item.size for item in out) > MAX_TOTAL_BYTES:
         raise BundleError("bundle is larger than the uncompressed size cap")
-    sensor_bytes = sum(
-        item.size for item in out if item.kind in {"sensor-points", "sensor-image"}
-    )
+    sensor_bytes = sum(item.size for item in out if item.kind in {"sensor-points", "sensor-image"})
     if sensor_data["status"] == "included":
         if sensor_bytes != sensor_data["bytes"]:
             raise BundleError(

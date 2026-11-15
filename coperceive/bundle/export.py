@@ -318,14 +318,18 @@ def _write_scene(
             continue
         relative = path.relative_to(work).as_posix()
         if relative in sensor_paths:
-            staging.files[relative] = SENSOR_POINTS_KIND if relative.endswith(
-                ("points.bin", "point_index.parquet")
-            ) else SENSOR_IMAGE_KIND
+            staging.files[relative] = (
+                SENSOR_POINTS_KIND
+                if relative.endswith(("points.bin", "point_index.parquet"))
+                else SENSOR_IMAGE_KIND
+            )
         else:
             staging.files[relative] = "scene-structure"
 
 
-def _write_frame(staging: _Staging, work: Path, scene: Scene, scene_id: str, time_us: int, index: int) -> None:
+def _write_frame(
+    staging: _Staging, work: Path, scene: Scene, scene_id: str, time_us: int, index: int
+) -> None:
     preview = f"frames/frame-{index + 1:02d}.png"
     (work / preview).parent.mkdir(parents=True, exist_ok=True)
     try:
