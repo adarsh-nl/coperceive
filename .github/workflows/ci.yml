@@ -746,7 +746,9 @@ jobs:
             echo "Testing bundled Intel python3 under Rosetta:"
             arch -x86_64 "${PY_INTEL}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
             echo "Running smoke test on Intel .app under Rosetta:"
-            arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
+            # v0.1.1 exception: only the Rosetta playback ratio is non-blocking (::warning::);
+            # all other checks stay blocking, and Claude Code's follow-up PR makes Rosetta playback blocking again.
+            COPERCEIVE_ROSETTA_PLAYBACK_WARN_ONLY=1 arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
             echo "::notice title=Rosetta-Test::Intel Mac build verified under Rosetta 2"
           else
             echo "::error title=Rosetta-Test::Rosetta 2 is not available on this runner (arch -x86_64 returned non-zero)" >&2
@@ -763,3 +765,28 @@ jobs:
           name: desktop-e2e-screenshots
           path: /tmp/e2e-shots/*.png
           if-no-files-found: ignore
+
+  desktop-macos-intel:
+    needs: [changes, desktop-macos]
+    if: github.event_name != 'pull_request' || needs.changes.outputs.desktop == 'true'
+    runs-on: macos-15-intel
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: coperceive-desktop-macos-x86_64
+          path: /tmp/intel-dmg
+      - name: Install x64 DMG and run smoke test on native Intel macOS
+        run: |
+          DMG_FILE="$(find /tmp/intel-dmg -maxdepth 2 -name '*.dmg' | head -n 1)"
+          if [ -z "${DMG_FILE}" ]; then
+            echo "Error: No Intel .dmg found in /tmp/intel-dmg" >&2
+            exit 1
+          fi
+          echo "Mounting ${DMG_FILE}..."
+          MOUNT_DIR="/tmp/coperceive-intel-dmg"
+          mkdir -p "${MOUNT_DIR}" /tmp/intel-app
+          hdiutil attach "${DMG_FILE}" -nobrowse -readonly -mountpoint "${MOUNT_DIR}"
+          cp -R "${MOUNT_DIR}/Coperceive.app" /tmp/intel-app/Coperceive.app
+          hdiutil detach "${MOUNT_DIR}" || true
+          bash scripts/desktop/smoke_test.sh /tmp/intel-app/Coperceive.app

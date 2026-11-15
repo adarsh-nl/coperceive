@@ -614,7 +614,7 @@ if [ -z "${START_FRAME}" ] || [ -z "${END_FRAME}" ] || [ -z "${START_WALL_S}" ] 
 fi
 FRAME_DELTA=$(( (END_FRAME - START_FRAME + 100) % 100 ))
 python3 - "${START_FRAME}" "${END_FRAME}" "${FRAME_DELTA}" "${START_WALL_S}" "${END_WALL_S}" <<'PY' || exit 26
-import sys
+import os, sys
 start_f, end_f, frames, t0, t1 = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
 elapsed = max(t1 - t0, 1e-6)
 expected = 10.0 * elapsed
@@ -622,8 +622,18 @@ ratio = frames / expected
 min_required = 0.9 * expected
 print(f"Demo 1x playback: elapsed={elapsed:.2f}s frames={frames} ({start_f} -> {end_f}) ratio={ratio:.2f}x (required >= 0.90x / {min_required:.1f} frames)")
 if frames < min_required:
-    print(f"Error: Demo playback too slow: {frames} frames in {elapsed:.2f}s ({ratio:.2f}x < 0.90x)", file=sys.stderr)
-    sys.exit(26)
+    # v0.1.1 exception (approved by Adarsh): under Rosetta 2 on arm64, record the ratio as a warning;
+    # Claude Code's follow-up PR on Intel/Rosetta playback root cause makes this blocking again.
+    if os.environ.get("COPERCEIVE_ROSETTA_PLAYBACK_WARN_ONLY") == "1":
+        msg = (
+            f"Demo playback under Rosetta 2: {frames} frames in {elapsed:.2f}s "
+            f"({ratio:.2f}x < 0.90x); non-blocking for v0.1.1 only — Claude Code's follow-up PR restores blocking check"
+        )
+        print(f"::warning title=Rosetta-Playback::{msg}")
+        print(f"Warning: {msg}", file=sys.stderr)
+    else:
+        print(f"Error: Demo playback too slow: {frames} frames in {elapsed:.2f}s ({ratio:.2f}x < 0.90x)", file=sys.stderr)
+        sys.exit(26)
 PY
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
