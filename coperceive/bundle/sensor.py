@@ -119,29 +119,47 @@ def _catalog_dataset_row(dataset_id: str) -> dict[str, object] | None:
     return row
 
 
-def sensor_data_policy(dataset_id: str | None) -> SensorPolicy:
+def sensor_data_policy(
+    dataset_id: str | None,
+    *,
+    recorded_adapter: str | None = None,
+    generator: str | None = None,
+) -> SensorPolicy:
     """The explicit allow-list decision for one dataset id.
 
     Never infers a dataset from a name: a missing id is a refusal, and the
     mapping from id to licence is this module's, not a guess from a scene id.
     """
+    if generator in {"coperceive demo", "coperceive synthetic"} and recorded_adapter == "generic":
+        allowed_id = "demo" if generator == "coperceive demo" else "synthetic"
+        return SensorPolicy(
+            dataset_id=allowed_id,
+            allowed=True,
+            licence="Apache-2.0",
+            dataset_label="Coperceive demo (synthetic)"
+            if allowed_id == "demo"
+            else "synthetic scene",
+            adapter="generic",
+        )
+    if recorded_adapter is not None and recorded_adapter != "generic":
+        return _refused(
+            dataset_id or "unknown",
+            f"the scene records adapter {recorded_adapter!r}, "
+            "so it is not a synthetic Coperceive scene",
+        )
     if dataset_id is None or not dataset_id.strip():
         return SensorPolicy(
             dataset_id=None,
             allowed=False,
-            reason="the exporter did not name a dataset, so its licence is unknown",
+            reason="the scene has no Coperceive generator marker, so its licence is unknown",
         )
     key = dataset_key(dataset_id)
     if not key:
         return _refused(dataset_id, f"the dataset id {dataset_id!r} has no letters or digits")
     if key in SYNTHETIC_DATASETS:
-        licence, label = SYNTHETIC_DATASETS[key]
-        return SensorPolicy(
-            dataset_id=dataset_id.strip(),
-            allowed=True,
-            licence=licence,
-            dataset_label=label,
-            adapter=DATASET_ADAPTERS.get(key, "generic"),
+        return _refused(
+            dataset_id,
+            "the scene has no Coperceive generator marker; a typed dataset name is not proof",
         )
     if key in CATALOG_ALLOWED:
         catalog_id, required = CATALOG_ALLOWED[key]

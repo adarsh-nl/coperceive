@@ -1210,6 +1210,9 @@ def _bundle_scene_view(app: FastAPI, scene_id: str) -> dict[str, object] | None:
             "label": row.get("label"),
             "note": row.get("note"),
             "local_copy": row.get("local_copy"),
+            "title": info.get("title"),
+            "run_id": info.get("run_id"),
+            "rerun_command": info.get("rerun_command"),
         }
     return None
 

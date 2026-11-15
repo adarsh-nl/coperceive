@@ -149,6 +149,15 @@ def validate_sensor_data(payload: object) -> dict[str, object]:
         value = payload.get(key)
         if value is not None and not isinstance(value, str):
             raise BundleError(f"sensor_data.{key} must be a string or null")
+    for key in ("dataset_id", "adapter"):
+        if payload.get(key) is not None:
+            _single_part(payload[key], key)
+    if payload.get("dataset_label") is not None:
+        label = payload["dataset_label"]
+        if not isinstance(label, str) or "/" in label or "\\" in label or label in {".", ".."}:
+            raise BundleError("sensor_data.dataset_label must not contain path separators")
+    if payload.get("reason") is None:
+        raise BundleError("sensor_data.reason is required")
     for key in ("bytes", "max_bytes"):
         value = payload.get(key)
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
@@ -320,6 +329,16 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
         if f"scenes/{scene_id}/manifest.json" not in listed:
             raise BundleError(f"sensor_data names a scene that is not in the bundle: {scene_id!r}")
     return tuple(out)
+
+
+def _is_sensor_path(path: str) -> bool:
+    """Sensor bytes by path, never by the bundle-supplied ``kind``."""
+    return (
+        path.endswith("/points.bin")
+        or path.endswith("/point_index.parquet")
+        or "/agents/" in path
+        and path.endswith((".png", ".jpg", ".jpeg", ".webp"))
+    )
 
 
 def check_zip_entry(info: zipfile.ZipInfo) -> None:

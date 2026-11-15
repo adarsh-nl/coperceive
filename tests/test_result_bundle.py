@@ -444,16 +444,25 @@ def test_demo_sensor_data_can_be_included_and_open_reports_it(
     assert list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
 
 
-def test_opv2v_shaped_bundle_ticked_still_omits_sensor_data(
+def test_opv2v_adapter_scene_ticked_still_omits_sensor_data(
     demo_root: Path, tmp_path: Path
 ) -> None:
-    bundle = _export(
-        demo_root, tmp_path / "opv2v.cpbundle", dataset_id="opv2v", include_sensor_data=True
-    )
+    complete = demo_root / "scenes/demo-junction/COMPLETE.json"
+    original = complete.read_text(encoding="utf-8")
+    marker = json.loads(original)
+    marker["adapter"] = "opv2v"
+    marker.pop("generator", None)
+    complete.write_text(json.dumps(marker), encoding="utf-8")
+    try:
+        bundle = _export(
+            demo_root, tmp_path / "opv2v.cpbundle", dataset_id="demo", include_sensor_data=True
+        )
+    finally:
+        complete.write_text(original, encoding="utf-8")
     with zipfile.ZipFile(bundle) as archive:
         manifest = json.loads(archive.read("bundle.json"))
     assert manifest["sensor_data"]["status"] == "omitted"
-    assert "OPV2V" in str(manifest["sensor_data"]["reason"])
+    assert "adapter 'opv2v'" in str(manifest["sensor_data"]["reason"])
     assert not [item for item in manifest["contents"] if item["kind"].startswith("sensor-")]
 
 

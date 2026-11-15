@@ -90,10 +90,7 @@
           ]
         },
         "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "licence": {
           "type": [
@@ -111,19 +108,22 @@
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "pattern": "^[A-Za-z0-9._-]+$"
         },
         "dataset_label": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "pattern": "^[^/\\\\]+$"
         },
         "adapter": {
           "type": [
             "string",
             "null"
-          ]
+          ],
+          "pattern": "^[A-Za-z0-9._-]+$"
         },
         "bytes": {
           "type": "integer",
@@ -145,7 +145,8 @@
             ],
             "properties": {
               "scene_id": {
-                "type": "string"
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+$"
               },
               "frame_count": {
                 "type": "integer",
@@ -153,6 +154,7 @@
               },
               "frames_included": {
                 "type": "array",
+                "minItems": 1,
                 "items": {
                   "type": "integer"
                 }
