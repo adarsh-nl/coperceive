@@ -789,4 +789,14 @@ jobs:
           hdiutil attach "${DMG_FILE}" -nobrowse -readonly -mountpoint "${MOUNT_DIR}"
           cp -R "${MOUNT_DIR}/Coperceive.app" /tmp/intel-app/Coperceive.app
           hdiutil detach "${MOUNT_DIR}" || true
-          bash scripts/desktop/smoke_test.sh /tmp/intel-app/Coperceive.app
+          bash scripts/desktop/smoke_test.sh /tmp/intel-app/Coperceive.app "${DMG_FILE}"
+      - name: Dump Intel macOS logs on failure
+        if: failure()
+        run: |
+          ls -la "$HOME/Library/Logs/Coperceive" || true
+          for f in "$HOME/Library/Logs/Coperceive"/*; do
+            if [ -f "$f" ]; then
+              echo "=== $f ==="
+              tail -n 60 "$f"
+            fi
+          done
