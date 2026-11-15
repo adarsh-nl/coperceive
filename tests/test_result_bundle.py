@@ -365,11 +365,13 @@ def _schema_accepts(manifest: dict[str, object]) -> bool:
         ),
         "contents": lambda v: isinstance(v, list),
         "rerun_command": lambda v: isinstance(v, str) and bool(v.strip()),
-        "sensor_data": lambda v: isinstance(v, dict)
-        and v.get("status") in {"included", "omitted"}
-        and isinstance(v.get("bytes"), int)
-        and isinstance(v.get("scenes"), list)
-        and bool(v.get("scenes")),
+        "sensor_data": lambda v: (
+            isinstance(v, dict)
+            and v.get("status") in {"included", "omitted"}
+            and isinstance(v.get("bytes"), int)
+            and isinstance(v.get("scenes"), list)
+            and bool(v.get("scenes"))
+        ),
     }
     return all(checks[key](manifest[key]) for key in checks if key in manifest)
 
@@ -429,7 +431,9 @@ def _export(demo_root: Path, out: Path, **kwargs: object) -> Path:
 def test_demo_sensor_data_can_be_included_and_open_reports_it(
     demo_root: Path, tmp_path: Path
 ) -> None:
-    bundle = _export(demo_root, tmp_path / "sensor.cpbundle", dataset_id="demo", include_sensor_data=True)
+    bundle = _export(
+        demo_root, tmp_path / "sensor.cpbundle", dataset_id="demo", include_sensor_data=True
+    )
     opened = open_bundle(bundle, data_root=tmp_path / "data")
     with zipfile.ZipFile(bundle) as archive:
         manifest = json.loads(archive.read("bundle.json"))
@@ -443,7 +447,9 @@ def test_demo_sensor_data_can_be_included_and_open_reports_it(
 def test_opv2v_shaped_bundle_ticked_still_omits_sensor_data(
     demo_root: Path, tmp_path: Path
 ) -> None:
-    bundle = _export(demo_root, tmp_path / "opv2v.cpbundle", dataset_id="opv2v", include_sensor_data=True)
+    bundle = _export(
+        demo_root, tmp_path / "opv2v.cpbundle", dataset_id="opv2v", include_sensor_data=True
+    )
     with zipfile.ZipFile(bundle) as archive:
         manifest = json.loads(archive.read("bundle.json"))
     assert manifest["sensor_data"]["status"] == "omitted"
@@ -451,9 +457,7 @@ def test_opv2v_shaped_bundle_ticked_still_omits_sensor_data(
     assert not [item for item in manifest["contents"] if item["kind"].startswith("sensor-")]
 
 
-def test_omitted_sensor_data_uses_matching_local_scene(
-    demo_root: Path, tmp_path: Path
-) -> None:
+def test_omitted_sensor_data_uses_matching_local_scene(demo_root: Path, tmp_path: Path) -> None:
     bundle = _export(demo_root, tmp_path / "local.cpbundle", dataset_id="demo")
     opened = open_bundle(bundle, data_root=tmp_path / "data", library_roots=[demo_root / "scenes"])
     assert opened.report["sensor_data"] == "local-copy"

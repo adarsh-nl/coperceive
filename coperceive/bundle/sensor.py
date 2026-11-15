@@ -172,7 +172,8 @@ def sensor_data_policy(dataset_id: str | None) -> SensorPolicy:
         name = REFUSED_DATASETS[key]
         return _refused(
             dataset_id,
-            f"sensor data for {name} is never redistributed (no redistributable licence is recorded)",
+            f"sensor data for {name} is never redistributed "
+            "(no redistributable licence is recorded)",
         )
     return _refused(
         dataset_id,
