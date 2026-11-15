@@ -52,6 +52,10 @@ dev = [
     "types-PyYAML>=6",
     "matplotlib>=3.8",
     "jsonschema>=4.23",
+    # tests/reference_eval only: an exact polygon overlay that shares no code with
+    # coperceive/evaluation/geometry.py (ADR 0016). Never a runtime dependency.
+    "shapely>=2.0",
+    "types-shapely>=2.0",
 ]
 
 [project.scripts]
