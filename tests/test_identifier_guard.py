@@ -40,3 +40,10 @@ def test_identifier_guard_fails_when_hit_is_planted(tmp_path: Path) -> None:
     )
     assert proc.returncode != 0, "Identifier guard must fail when a hit is planted"
     assert "leak.ts" in proc.stderr
+
+
+def test_slurm_scripts_have_no_placeholder_home_cluster_user() -> None:
+    slurm_dir = REPO_ROOT / "scripts" / "slurm"
+    for path in sorted(slurm_dir.glob("*.sh")):
+        text = path.read_text(encoding="utf-8")
+        assert "/home/cluster-user" not in text, f"{path} still references /home/cluster-user"

@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-# pyright: basic, reportAttributeAccessIssue=false, reportGeneralTypeIssues=false, reportOperatorIssue=false, reportIndexIssue=false
 """Export a compact binary clip of Town03-000 for the coperceive landing page hero animation.
 
 Reads:
@@ -367,11 +366,10 @@ def export_hero(
 
 
 if __name__ == "__main__":
+    home = Path.home()
     export_hero(
-        scene_dir=Path(
-            "/home/cluster-user/results/reference-stepb-20261020/staged-scenes/Town03-000"
-        ),
-        map_dir=Path("/home/cluster-user/results/628385/maps/Town03"),
-        out_bin=Path("/home/cluster-user/wt/landing/site/public/hero/clip.bin"),
-        out_manifest=Path("/home/cluster-user/wt/landing/site/public/hero/manifest.json"),
+        scene_dir=home / "results/reference-stepb-20261020/staged-scenes/Town03-000",
+        map_dir=home / "results/628385/maps/Town03",
+        out_bin=home / "wt/landing/site/public/hero/clip.bin",
+        out_manifest=home / "wt/landing/site/public/hero/manifest.json",
     )
