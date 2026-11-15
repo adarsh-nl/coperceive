@@ -250,7 +250,9 @@ async fn bundle_preview(
     predictions_root: String,
     frames: String,
     title: String,
-    include_raw: bool,
+    dataset_id: Option<String>,
+    include_sensor_data: bool,
+    sensor_max_bytes: Option<u64>,
     include_full_predictions: bool,
     markers: Vec<String>,
 ) -> Result<serde_json::Value, String> {
@@ -261,8 +263,16 @@ async fn bundle_preview(
         "--frames".to_string(), frames,
         "--title".to_string(), title,
     ];
-    if include_raw {
-        args.push("--include-raw".to_string());
+    if let Some(dataset_id) = dataset_id {
+        args.push("--dataset-id".to_string());
+        args.push(dataset_id);
+    }
+    if include_sensor_data {
+        args.push("--include-sensor-data".to_string());
+    }
+    if let Some(cap) = sensor_max_bytes {
+        args.push("--sensor-max-bytes".to_string());
+        args.push(cap.to_string());
     }
     if include_full_predictions {
         args.push("--include-full-predictions".to_string());
@@ -284,7 +294,9 @@ async fn bundle_export(
     out: String,
     frames: String,
     title: String,
-    include_raw: bool,
+    dataset_id: Option<String>,
+    include_sensor_data: bool,
+    sensor_max_bytes: Option<u64>,
     include_full_predictions: bool,
     markers: Vec<String>,
 ) -> Result<String, String> {
@@ -296,8 +308,16 @@ async fn bundle_export(
         "--frames".to_string(), frames,
         "--title".to_string(), title,
     ];
-    if include_raw {
-        args.push("--include-raw".to_string());
+    if let Some(dataset_id) = dataset_id {
+        args.push("--dataset-id".to_string());
+        args.push(dataset_id);
+    }
+    if include_sensor_data {
+        args.push("--include-sensor-data".to_string());
+    }
+    if let Some(cap) = sensor_max_bytes {
+        args.push("--sensor-max-bytes".to_string());
+        args.push(cap.to_string());
     }
     if include_full_predictions {
         args.push("--include-full-predictions".to_string());
@@ -311,21 +331,27 @@ async fn bundle_export(
 }
 
 #[tauri::command]
-async fn bundle_open(app: tauri::AppHandle, file: String) -> Result<serde_json::Value, String> {
+async fn bundle_open(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    file: String,
+) -> Result<serde_json::Value, String> {
     use tauri::Manager;
     let data_root = app
         .path()
         .app_data_dir()
         .map_err(|err| format!("no app data folder: {err}"))?;
-    let stdout = run_bundle_python(
-        &app,
-        &[
-            "open".to_string(),
-            file,
-            "--data-root".to_string(),
-            data_root.to_string_lossy().into_owned(),
-        ],
-    )?;
+    let mut args = vec![
+        "open".to_string(),
+        file,
+        "--data-root".to_string(),
+        data_root.to_string_lossy().into_owned(),
+    ];
+    if let Some(library) = state::load_state().library_root {
+        args.push("--library-root".to_string());
+        args.push(library);
+    }
+    let stdout = run_bundle_python(&app, &args)?;
     let opened = stdout
         .lines()
         .find_map(|line| line.strip_prefix("opened "))
@@ -343,13 +369,29 @@ async fn bundle_open_viewer(
     state: tauri::State<'_, Arc<AppState>>,
     file: String,
 ) -> Result<serde_json::Value, String> {
-    let opened = bundle_open(app.clone(), file).await?;
+    let opened = bundle_open(app.clone(), state.clone(), file).await?;
     let root = opened
         .get("root")
         .and_then(|value| value.as_str())
         .ok_or_else(|| "bundle open returned no root".to_string())?;
     switch_data_root(&app, state.inner(), std::path::PathBuf::from(root)).await?;
     Ok(opened)
+}
+
+#[tauri::command]
+async fn bundle_sensor_policy(
+    app: tauri::AppHandle,
+    dataset_id: String,
+) -> Result<serde_json::Value, String> {
+    let stdout = run_bundle_python(
+        &app,
+        &[
+            "sensor-policy".to_string(),
+            "--dataset-id".to_string(),
+            dataset_id,
+        ],
+    )?;
+    serde_json::from_str(&stdout).map_err(|err| format!("sensor policy is not JSON: {err}"))
 }
 
 fn pick_save_path_inner(
@@ -703,6 +745,10 @@ async fn switch_data_root(
     if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&new_path) {
         extra_args.push("--predictions".to_string());
         extra_args.push(pred_dir.to_string_lossy().into_owned());
+    }
+    if new_path.join("open.json").is_file() {
+        extra_args.push("--bundle-info".to_string());
+        extra_args.push(new_path.join("open.json").to_string_lossy().into_owned());
     }
 
     let mut new_session = SidecarSession::spawn_with_args(
@@ -4403,6 +4449,7 @@ fn main() {
             bundle_export,
             bundle_open,
             bundle_open_viewer,
+            bundle_sensor_policy,
             save_exported_file,
         ])
         .on_page_load(|webview, payload| {

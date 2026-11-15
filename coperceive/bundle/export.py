@@ -1,7 +1,14 @@
 # SPDX-License-Identifier: Apache-2.0
 # ruff: noqa: E501
 # pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false, reportUnknownParameterType=false, reportMissingParameterType=false, reportArgumentType=false, reportPrivateUsage=false, reportIndexIssue=false, reportAttributeAccessIssue=false, reportOptionalMemberAccess=false, reportGeneralTypeIssues=false, reportUnusedFunction=false
-"""Export one run as a shareable ``.cpbundle``."""
+"""Export one run as a shareable ``.cpbundle``.
+
+The bundle always carries the scores, the boxes (ground truth for the included
+frames plus the run's predictions), the poses, the repro card and the rerun
+command as text. LiDAR points and camera images are only carried when the
+dataset is on the redistributable allow list (see :mod:`coperceive.bundle.sensor`),
+the exporter opts in, and the selected frames fit the sensor-data cap.
+"""
 
 from __future__ import annotations
 
@@ -9,13 +16,14 @@ import json
 import shutil
 import tempfile
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import cast
 
 from coperceive import __version__
 from coperceive.bundle.format import Content, manifest_document, safe_member, sha256_file
+from coperceive.bundle.sensor import SENSOR_MAX_BYTES, SensorPolicy, sensor_data_policy
 from coperceive.evaluation.predictions import (
     BOXES_FILE,
     PredictionBox,
@@ -23,12 +31,15 @@ from coperceive.evaluation.predictions import (
     read_run_meta,
     write_run,
 )
+from coperceive.model import Scene
 from coperceive.plot import render_bev
 from coperceive.repro.export import ExportRequest, check_card, export_card
 from coperceive.repro.scrub import scrub_json, scrub_text
-from coperceive.store import read_scene
+from coperceive.store import read_scene, write_scene
 
 MANIFEST = "bundle.json"
+SENSOR_POINTS_KIND = "sensor-points"
+SENSOR_IMAGE_KIND = "sensor-image"
 
 
 class BundleExportError(ValueError):
@@ -43,8 +54,16 @@ class BundleExportRequest:
     out: Path
     title: str = ""
     frames: str = "worst:6"
-    include_raw: bool = False
     include_full_predictions: bool = False
+    #: The dataset the run was evaluated on. It is never inferred from a name:
+    #: the allow list is looked up by this id, and a missing id means no sensor
+    #: data can be included.
+    dataset_id: str | None = None
+    #: Off by default. When true and the dataset is allow-listed, the included
+    #: frames' LiDAR points and camera images travel in the bundle.
+    include_sensor_data: bool = False
+    #: Uncompressed LiDAR + camera bytes allowed for the included frames.
+    sensor_max_bytes: int = SENSOR_MAX_BYTES
     created_utc: str | None = None
     extra_markers: tuple[str, ...] = ()
 
@@ -56,6 +75,32 @@ class _Staging:
     notes: list[str] = field(default_factory=list)
     redactions: int = 0
     redaction_details: list[dict[str, object]] = field(default_factory=list)
+    sensor_bytes: int = 0
+
+
+@dataclass(frozen=True)
+class _SensorPlan:
+    status: str
+    reason: str | None
+    policy: SensorPolicy
+    adapter: str | None
+    bytes: int
+    scenes: tuple[dict[str, object], ...]
+    full_scenes: dict[str, Scene]
+
+    def document(self, max_bytes: int) -> dict[str, object]:
+        return {
+            "status": self.status,
+            "reason": self.reason,
+            "licence": self.policy.licence,
+            "licence_url": self.policy.licence_url,
+            "dataset_id": self.policy.dataset_id,
+            "dataset_label": self.policy.dataset_label,
+            "adapter": self.adapter,
+            "bytes": self.bytes,
+            "max_bytes": max_bytes,
+            "scenes": [dict(row) for row in self.scenes],
+        }
 
 
 def _safe_scene_id(value: object) -> str:
@@ -63,6 +108,38 @@ def _safe_scene_id(value: object) -> str:
     if not text or "/" in text or "\\" in text or text in {".", ".."}:
         raise BundleExportError(f"unsafe scene id {text!r}")
     return text
+
+
+def _scene_directory(scenes_root: Path, scene_id: str) -> Path:
+    candidate = scenes_root / scene_id
+    try:
+        candidate.resolve().relative_to(scenes_root.resolve())
+    except (OSError, ValueError):
+        raise BundleExportError(f"scene {scene_id!r} is outside the scenes root") from None
+    if not (candidate / "manifest.json").is_file():
+        raise BundleExportError(f"no scene {scene_id!r} under {scenes_root}")
+    return candidate
+
+
+def _safe_image_path(value: str) -> str:
+    """A recorded image path that is also a safe file path inside the bundle."""
+    try:
+        return safe_member(value)
+    except ValueError as exc:
+        raise BundleExportError(f"scene image path cannot travel in a bundle: {exc}") from None
+
+
+def _read_complete(scene_dir: Path) -> dict[str, object]:
+    try:
+        payload: object = json.loads((scene_dir / "COMPLETE.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return cast(dict[str, object], payload) if isinstance(payload, dict) else {}
+
+
+def _scene_adapter(scene_dir: Path) -> str | None:
+    value = _read_complete(scene_dir).get("adapter")
+    return value if isinstance(value, str) and value else None
 
 
 def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[str, int]]:
@@ -83,7 +160,7 @@ def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[st
         for scene_dir in sorted(
             p for p in scenes_root.iterdir() if (p / "manifest.json").is_file()
         ):
-            scene = read_scene(scene_dir)
+            scene = read_scene(scene_dir, points=False)
             times = sorted({a.time_us for a in scene.annotations})
             candidates.extend((scene.scene_id, time) for time in times)
     if spec.startswith("worst:"):
@@ -95,37 +172,160 @@ def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[st
     return out
 
 
-def _copy_scene_structure(staging: _Staging, scene_dir: Path, work: Path, times: set[int]) -> None:
-    for name in (
-        "manifest.json",
-        "COMPLETE.json",
-        "poses.parquet",
-        "annotations.parquet",
-        "objects.parquet",
-        "point_index.parquet",
-    ):
-        source = scene_dir / name
-        if source.is_file():
-            target = f"scenes/{scene_dir.name}/{name}"
-            (work / target).parent.mkdir(parents=True, exist_ok=True)
-            if name in {"annotations.parquet", "poses.parquet"}:
-                import pyarrow.parquet as pq
-
-                table = pq.read_table(source)
-                if "time_us" in table.column_names:
-                    table = table.filter(
-                        [value in times for value in table.column("time_us").to_pylist()]
-                    )
-                pq.write_table(table, work / target)
-            else:
-                shutil.copy2(source, work / target)
-            staging.files[target] = "scene-structure"
+def _frame_count(scene: Scene) -> int:
+    return len({pose.time_us for agent in scene.agents for pose in agent.poses})
 
 
-def _write_frame(
-    staging: _Staging, work: Path, scene_dir: Path, scene_id: str, time_us: int, index: int
+def _included_times(frames: list[tuple[str, int]], scene_id: str) -> list[int]:
+    return sorted({time_us for candidate, time_us in frames if candidate == scene_id})
+
+
+def _sensor_bytes(scene_dir: Path, scene: Scene, times: set[int]) -> int:
+    total = 0
+    for cloud in scene.point_clouds:
+        if cloud.time_us in times:
+            total += len(cloud.xyz_i_f32)
+    for image in scene.images:
+        if image.time_us not in times:
+            continue
+        try:
+            path = scene_dir / _safe_image_path(image.path)
+            if path.is_file():
+                total += path.stat().st_size
+        except (BundleExportError, OSError):
+            continue
+    return total
+
+
+def _plan_sensor(request: BundleExportRequest, frames: list[tuple[str, int]]) -> _SensorPlan:
+    """Decide what sensor data may travel, before anything is written."""
+    if request.sensor_max_bytes < 0:
+        raise BundleExportError("sensor_max_bytes must be zero or more")
+    policy = sensor_data_policy(request.dataset_id)
+    scene_ids: list[str] = []
+    for scene_id, _time_us in frames:
+        if scene_id not in scene_ids:
+            scene_ids.append(scene_id)
+    adapter: str | None = None
+    rows: list[dict[str, object]] = []
+    full_scenes: dict[str, Scene] = {}
+    total = 0
+    want_sensor = policy.allowed and request.include_sensor_data
+    for scene_id in scene_ids:
+        scene_dir = _scene_directory(request.scenes_root, scene_id)
+        if adapter is None:
+            adapter = _scene_adapter(scene_dir) or policy.adapter
+        times = set(_included_times(frames, scene_id))
+        structure = read_scene(scene_dir, points=False)
+        if want_sensor:
+            scene = read_scene(scene_dir)
+            full_scenes[scene_id] = scene
+            total += _sensor_bytes(scene_dir, scene, times)
+        else:
+            scene = structure
+        rows.append(
+            {
+                "scene_id": scene_id,
+                "frame_count": _frame_count(scene),
+                "frames_included": sorted(times),
+            }
+        )
+    if want_sensor:
+        if total > request.sensor_max_bytes:
+            raise BundleExportError(
+                f"the selected frames' sensor data is {total} bytes "
+                f"({total / (1024 * 1024):.1f} MiB), over the {request.sensor_max_bytes}-byte "
+                f"sensor-data cap ({request.sensor_max_bytes / (1024 * 1024):.1f} MiB). "
+                "Choose fewer frames, or raise sensor_max_bytes from Python."
+            )
+        if total == 0:
+            status = "omitted"
+            reason = "the selected frames carry no LiDAR or camera bytes"
+        else:
+            status = "included"
+            reason = None
+    elif not policy.allowed:
+        status = "omitted"
+        reason = policy.reason
+    else:
+        status = "omitted"
+        reason = "the exporter did not opt in to sensor data"
+    return _SensorPlan(
+        status=status,
+        reason=reason,
+        policy=policy,
+        adapter=adapter,
+        bytes=total if status == "included" else 0,
+        scenes=tuple(rows),
+        full_scenes=full_scenes,
+    )
+
+
+def _write_scene(
+    staging: _Staging,
+    work: Path,
+    scene_dir: Path,
+    scene: Scene,
+    times: set[int],
+    *,
+    include_sensor: bool,
 ) -> None:
-    scene = read_scene(scene_dir)
+    """Write the scene with only the included frames and only the allowed sensors."""
+    filtered = replace(
+        scene,
+        agents=tuple(
+            replace(agent, poses=tuple(pose for pose in agent.poses if pose.time_us in times))
+            for agent in scene.agents
+        ),
+        annotations=tuple(ann for ann in scene.annotations if ann.time_us in times),
+        point_clouds=(
+            tuple(cloud for cloud in scene.point_clouds if cloud.time_us in times)
+            if include_sensor
+            else ()
+        ),
+        images=tuple(image for image in scene.images if image.time_us in times)
+        if include_sensor
+        else (),
+    )
+    target = work / "scenes" / scene.scene_id
+    write_scene(filtered, target)
+    complete = scene_dir / "COMPLETE.json"
+    if complete.is_file():
+        shutil.copy2(complete, target / "COMPLETE.json")
+    sensor_paths: set[str] = set()
+    if include_sensor:
+        for image in filtered.images:
+            if image.time_us not in times:
+                continue
+            relative = _safe_image_path(image.path)
+            source = scene_dir / relative
+            if not source.is_file():
+                staging.notes.append(f"missing image for {scene.scene_id}: {image.path}")
+                continue
+            destination = target / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+            sensor_paths.add(f"scenes/{scene.scene_id}/{relative}")
+        sensor_paths.add(f"scenes/{scene.scene_id}/points.bin")
+        sensor_paths.add(f"scenes/{scene.scene_id}/point_index.parquet")
+    else:
+        # A bundle without sensor data carries no points blob at all. The empty
+        # point index that write_scene wrote would otherwise point at nothing.
+        (target / "points.bin").unlink(missing_ok=True)
+        (target / "point_index.parquet").unlink(missing_ok=True)
+    for path in sorted(target.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(work).as_posix()
+        if relative in sensor_paths:
+            staging.files[relative] = SENSOR_POINTS_KIND if relative.endswith(
+                ("points.bin", "point_index.parquet")
+            ) else SENSOR_IMAGE_KIND
+        else:
+            staging.files[relative] = "scene-structure"
+
+
+def _write_frame(staging: _Staging, work: Path, scene: Scene, scene_id: str, time_us: int, index: int) -> None:
     preview = f"frames/frame-{index + 1:02d}.png"
     (work / preview).parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -209,6 +409,11 @@ def _scrub_work(
     return redactions, details
 
 
+def rerun_command(run_id: str) -> str:
+    """The text the app shows with a copy button. It is never executed here."""
+    return f"coperceive eval run {run_id} --root scenes --predictions predictions"
+
+
 def export_bundle(request: BundleExportRequest) -> Path:
     """Write ``request.out`` and return its path. Every text file is scrubbed."""
     run_id = request.run_id
@@ -226,6 +431,9 @@ def export_bundle(request: BundleExportRequest) -> Path:
     filtered = [box for box in box_rows if (box.scene_id, box.time_us) in wanted]
     if not filtered:
         raise BundleExportError("the selected frames have no predictions")
+    # The sensor decision (allow list, opt-in, cap) is made before any file is
+    # written; an over-cap selection refuses the export rather than truncating it.
+    sensor = _plan_sensor(request, frames)
     out = request.out
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="coperceive-bundle-") as raw_work:
@@ -246,6 +454,14 @@ def export_bundle(request: BundleExportRequest) -> Path:
         (work / "repro").mkdir()
         (work / "repro/card.json").write_text(json.dumps(card, indent=2) + "\n", encoding="utf-8")
         staging.files["repro/card.json"] = "repro-card"
+        command = rerun_command(run_id)
+        (work / "repro/rerun.txt").write_text(
+            "Rerun the bundled evaluation (text only; Coperceive never runs it):\n"
+            + command
+            + "\n",
+            encoding="utf-8",
+        )
+        staging.files["repro/rerun.txt"] = "rerun-command"
         # The config the run actually used, from its own report; never a guess.
         (work / "eval").mkdir()
         config_doc: object = "unknown"
@@ -264,7 +480,6 @@ def export_bundle(request: BundleExportRequest) -> Path:
         )
         staging.files["eval/config.json"] = "eval-config"
         for scene_id, _time_us in frames:
-            scene_dir = request.scenes_root / scene_id
             metrics = request.predictions_root / run_id / scene_id / "metrics.json"
             if metrics.is_file():
                 rel = f"eval/{scene_id}/metrics.json"
@@ -272,8 +487,7 @@ def export_bundle(request: BundleExportRequest) -> Path:
                 shutil.copy2(metrics, work / rel)
                 staging.files[rel] = "eval-metrics"
         # filtered predictions
-        meta2 = meta
-        write_run(work / "predictions", run_id, meta2, filtered, force=True)
+        write_run(work / "predictions", run_id, meta, filtered, force=True)
         for path in (work / "predictions").rglob("*"):
             if path.is_file():
                 staging.files[path.relative_to(work).as_posix()] = "predictions"
@@ -285,26 +499,25 @@ def export_bundle(request: BundleExportRequest) -> Path:
                     (work / target).parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, work / target)
                     staging.files[target] = "full-predictions"
-        # scenes structure + frames
+        # scenes: structure, GT boxes and poses always; sensors only if allowed
         for index, (scene_id, time_us) in enumerate(frames):
-            scene_dir = request.scenes_root / scene_id
-            _copy_scene_structure(staging, scene_dir, work, {t for s, t in frames if s == scene_id})
-            _write_frame(staging, work, scene_dir, scene_id, time_us, index)
-            if request.include_raw:
-                scene = read_scene(scene_dir)
-                for image in scene.images:
-                    if image.time_us != time_us:
-                        continue
-                    source = scene_dir / image.path
-                    if source.is_file():
-                        target = f"raw/{scene_id}/{image.path}"
-                        (work / target).parent.mkdir(parents=True, exist_ok=True)
-                        shutil.copy2(source, work / target)
-                        staging.files[target] = "raw"
+            scene_dir = _scene_directory(request.scenes_root, scene_id)
+            scene = sensor.full_scenes.get(scene_id) or read_scene(scene_dir, points=False)
+            _write_scene(
+                staging,
+                work,
+                scene_dir,
+                scene,
+                set(_included_times(frames, scene_id)),
+                include_sensor=sensor.status == "included",
+            )
+            _write_frame(staging, work, scene, scene_id, time_us, index)
+            if sensor.status == "included":
                 staging.licences.append(
                     {
-                        "dataset": scene_id,
-                        "note": "raw files included; check the dataset licence before sharing",
+                        "dataset": str(sensor.policy.dataset_id or scene_id),
+                        "licence": str(sensor.policy.licence or ""),
+                        "note": "sensor data included under the redistributable-dataset allow list",
                     }
                 )
         staging.redactions, staging.redaction_details = _scrub_work(work, request.extra_markers)
@@ -315,11 +528,23 @@ def export_bundle(request: BundleExportRequest) -> Path:
             contents.append(
                 Content(rel, sha256_file(path), path.stat().st_size, staging.files[rel])
             )
+        staging.sensor_bytes = sum(
+            item.size for item in contents if item.kind in {SENSOR_POINTS_KIND, SENSOR_IMAGE_KIND}
+        )
+        if sensor.status == "included" and staging.sensor_bytes > request.sensor_max_bytes:
+            raise BundleExportError(
+                f"sensor data is {staging.sensor_bytes} bytes after scrubbing, over the "
+                f"{request.sensor_max_bytes}-byte sensor-data cap"
+            )
+        if sensor.status == "omitted" and staging.sensor_bytes:
+            raise BundleExportError("sensor data was omitted but sensor files were staged")
         created = request.created_utc or datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         title = scrub_text(request.title or f"{meta.run_id} results")
         licence_rows = [
             {key: scrub_text(value) for key, value in row.items()} for row in staging.licences
         ]
+        sensor_document = sensor.document(request.sensor_max_bytes)
+        sensor_document["bytes"] = staging.sensor_bytes
         document = manifest_document(
             title=title,
             app_version=__version__,
@@ -328,11 +553,14 @@ def export_bundle(request: BundleExportRequest) -> Path:
             contents=contents,
             licences=licence_rows,
             privacy={
-                "raw_sensor_data": request.include_raw,
+                "raw_sensor_data": sensor.status == "included",
+                "sensor_data": sensor.status,
                 "scrubbed": True,
                 "redacted_files": staging.redactions,
                 "redactions": staging.redaction_details,
             },
+            sensor_data=sensor_document,
+            rerun_command=command,
         )
         (work / MANIFEST).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
@@ -344,8 +572,6 @@ def export_bundle(request: BundleExportRequest) -> Path:
 
 def preview_bundle(request: BundleExportRequest) -> dict[str, object]:
     """The review manifest (files, sizes, total, scrub count) without keeping an archive."""
-    from dataclasses import replace
-
     temporary = request.out.parent / f".{request.out.name}.preview"
     request.out.parent.mkdir(parents=True, exist_ok=True)
     try:

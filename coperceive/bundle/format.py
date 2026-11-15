@@ -81,6 +81,8 @@ def manifest_document(
     contents: list[Content],
     licences: list[dict[str, str]],
     privacy: Mapping[str, object],
+    sensor_data: Mapping[str, object],
+    rerun_command: str,
 ) -> dict[str, object]:
     return {
         "schema": SCHEMA,
@@ -95,7 +97,95 @@ def manifest_document(
         ],
         "licences": licences,
         "privacy": dict(privacy),
+        "rerun_command": rerun_command,
+        "sensor_data": dict(sensor_data),
     }
+
+
+#: Keys of the ``sensor_data`` object. ``status`` is ``included`` or ``omitted``;
+#: an omitted bundle still records the dataset id, its recorded licence (when the
+#: dataset is on the allow list) and why the bytes are not there.
+SENSOR_DATA_KEYS = frozenset(
+    {
+        "status",
+        "reason",
+        "licence",
+        "licence_url",
+        "dataset_id",
+        "dataset_label",
+        "adapter",
+        "bytes",
+        "max_bytes",
+        "scenes",
+    }
+)
+
+
+def _single_part(value: object, what: str) -> str:
+    """A scene id that is one safe path part (no separators, not a dot name)."""
+    import re
+
+    if (
+        not isinstance(value, str)
+        or not value
+        or value in {".", ".."}
+        or re.fullmatch(r"[A-Za-z0-9._-]+", value) is None
+    ):
+        raise BundleError(f"sensor_data {what} is not a safe single path part")
+    return value
+
+
+def validate_sensor_data(payload: object) -> dict[str, object]:
+    """The recorded sensor-data decision, refused unless it is exactly shaped."""
+    if not isinstance(payload, dict):
+        raise BundleError("bundle.json is missing sensor_data")
+    unknown = set(payload) - SENSOR_DATA_KEYS
+    if unknown:
+        raise BundleError(f"sensor_data has unknown key {sorted(unknown)[0]!r}")
+    status = payload.get("status")
+    if status not in {"included", "omitted"}:
+        raise BundleError("sensor_data.status must be 'included' or 'omitted'")
+    for key in ("reason", "licence", "licence_url", "dataset_id", "dataset_label", "adapter"):
+        value = payload.get(key)
+        if value is not None and not isinstance(value, str):
+            raise BundleError(f"sensor_data.{key} must be a string or null")
+    for key in ("bytes", "max_bytes"):
+        value = payload.get(key)
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+            raise BundleError(f"sensor_data.{key} must be a non-negative integer")
+    scenes = payload.get("scenes")
+    if not isinstance(scenes, list) or not scenes:
+        raise BundleError("sensor_data.scenes must be a non-empty list")
+    for index, row in enumerate(scenes):
+        if not isinstance(row, dict):
+            raise BundleError(f"sensor_data.scenes[{index}] must be an object")
+        unknown_scene = set(row) - {"scene_id", "frame_count", "frames_included"}
+        if unknown_scene:
+            raise BundleError(
+                f"sensor_data.scenes[{index}] has unknown key {sorted(unknown_scene)[0]!r}"
+            )
+        _single_part(row.get("scene_id"), f"scenes[{index}].scene_id")
+        frame_count = row.get("frame_count")
+        if not isinstance(frame_count, int) or isinstance(frame_count, bool) or frame_count < 0:
+            raise BundleError(f"sensor_data.scenes[{index}].frame_count is not an integer")
+        frames = row.get("frames_included")
+        if not isinstance(frames, list) or not frames:
+            raise BundleError(f"sensor_data.scenes[{index}].frames_included is empty")
+        for time_us in frames:
+            if not isinstance(time_us, int) or isinstance(time_us, bool):
+                raise BundleError(
+                    f"sensor_data.scenes[{index}].frames_included must hold integers"
+                )
+    if status == "omitted":
+        if payload["bytes"] != 0:
+            raise BundleError("sensor_data.bytes must be 0 when sensor data is omitted")
+    else:
+        licence = payload.get("licence")
+        if not isinstance(licence, str) or not licence.strip():
+            raise BundleError("sensor_data.licence is required when sensor data is included")
+        if payload["bytes"] <= 0:
+            raise BundleError("sensor_data.bytes must be positive when sensor data is included")
+    return dict(payload)
 
 
 def read_manifest(path: Path) -> dict[str, object]:
@@ -147,6 +237,8 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
         "contents",
         "licences",
         "privacy",
+        "rerun_command",
+        "sensor_data",
     }
     unknown = set(payload) - allowed
     if unknown:
@@ -159,6 +251,8 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
         "title",
         "run_id",
         "contents",
+        "rerun_command",
+        "sensor_data",
     ):
         if key not in payload:
             raise BundleError(f"bundle.json is missing {key}")
@@ -168,6 +262,10 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
         payload.get("schema_version"), int
     ):
         raise BundleError("bundle.json app_version/schema_version have wrong types")
+    rerun = payload.get("rerun_command")
+    if not isinstance(rerun, str) or not rerun.strip() or "\x00" in rerun:
+        raise BundleError("bundle.json rerun_command must be non-empty text")
+    sensor_data = validate_sensor_data(payload.get("sensor_data"))
     if not isinstance(payload.get("licences", []), list) or not isinstance(
         payload.get("privacy", {}), dict
     ):
@@ -209,6 +307,22 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
         raise BundleError("bundle has too many files")
     if sum(item.size for item in out) > MAX_TOTAL_BYTES:
         raise BundleError("bundle is larger than the uncompressed size cap")
+    sensor_bytes = sum(
+        item.size for item in out if item.kind in {"sensor-points", "sensor-image"}
+    )
+    if sensor_data["status"] == "included":
+        if sensor_bytes != sensor_data["bytes"]:
+            raise BundleError(
+                "sensor_data.bytes does not match the listed sensor files "
+                f"({sensor_data['bytes']} != {sensor_bytes})"
+            )
+    elif sensor_bytes:
+        raise BundleError("sensor_data is omitted but the bundle lists sensor files")
+    listed = {item.path for item in out}
+    for row in sensor_data["scenes"]:  # type: ignore[index]
+        scene_id = row["scene_id"]  # type: ignore[index]
+        if f"scenes/{scene_id}/manifest.json" not in listed:
+            raise BundleError(f"sensor_data names a scene that is not in the bundle: {scene_id!r}")
     return tuple(out)
 
 

@@ -52,7 +52,24 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_export.add_argument("-o", "--out", required=True, help="Output .cpbundle path.")
     bundle_export.add_argument("--title", default="")
     bundle_export.add_argument("--frames", default="worst:6")
-    bundle_export.add_argument("--include-raw", action="store_true")
+    bundle_export.add_argument(
+        "--dataset-id",
+        default=None,
+        help="The dataset the run was evaluated on. Required for sensor data: the "
+        "redistributable allow list is looked up by this id, never inferred from a name.",
+    )
+    bundle_export.add_argument(
+        "--include-sensor-data",
+        action="store_true",
+        help="Include LiDAR points and camera images for the included frames, when the "
+        "dataset's recorded licence allows redistribution and the frames fit the cap.",
+    )
+    bundle_export.add_argument(
+        "--sensor-max-bytes",
+        type=int,
+        default=None,
+        help="Uncompressed sensor-data cap in bytes (default 50 MiB).",
+    )
     bundle_export.add_argument("--include-full-predictions", action="store_true")
     bundle_export.add_argument(
         "--marker", action="append", default=[], help="Extra identifier to scrub."
@@ -64,7 +81,9 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_preview.add_argument("--predictions", required=True)
     bundle_preview.add_argument("--title", default="")
     bundle_preview.add_argument("--frames", default="worst:6")
-    bundle_preview.add_argument("--include-raw", action="store_true")
+    bundle_preview.add_argument("--dataset-id", default=None)
+    bundle_preview.add_argument("--include-sensor-data", action="store_true")
+    bundle_preview.add_argument("--sensor-max-bytes", type=int, default=None)
     bundle_preview.add_argument("--include-full-predictions", action="store_true")
     bundle_preview.add_argument("--marker", action="append", default=[])
     bundle_preview.set_defaults(func=_bundle_preview)
@@ -73,7 +92,22 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_open.add_argument(
         "--data-root", default=None, help="App data folder for bundles/<sha>/."
     )
+    bundle_open.add_argument(
+        "--library-root",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="The recipient's library root. A bundle without sensor data uses a matching "
+        "scene from here (same scene id, adapter and frame count). Repeatable.",
+    )
     bundle_open.set_defaults(func=_bundle_open)
+    bundle_policy = bundle_commands.add_parser(
+        "sensor-policy", help="Print whether a dataset's sensor data may be included."
+    )
+    bundle_policy.add_argument(
+        "--dataset-id", required=True, help="The dataset id to look up in the allow list."
+    )
+    bundle_policy.set_defaults(func=_bundle_sensor_policy)
 
     demo = sub.add_parser("demo", help="Create the synthetic demo scene.")
     demo_sub = demo.add_subparsers(dest="demo_command")
@@ -131,6 +165,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-origin",
         default=None,
         help="Exact origin allowed for cross-origin requests.",
+    )
+    serve.add_argument(
+        "--bundle-info",
+        default=None,
+        metavar="PATH",
+        help="An opened result bundle's open.json. The scene summary then says whether "
+        "sensor frames are included, from the recipient's local copy, or omitted.",
     )
     serve.add_argument(
         "--remote-stream-argv",
@@ -540,6 +581,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def _bundle_export(args: argparse.Namespace) -> None:
     from coperceive.bundle import BundleExportRequest, export_bundle
+    from coperceive.bundle.sensor import SENSOR_MAX_BYTES
 
     try:
         path = export_bundle(
@@ -550,7 +592,11 @@ def _bundle_export(args: argparse.Namespace) -> None:
                 out=Path(args.out),
                 title=args.title,
                 frames=args.frames,
-                include_raw=args.include_raw,
+                dataset_id=args.dataset_id,
+                include_sensor_data=args.include_sensor_data,
+                sensor_max_bytes=(
+                    SENSOR_MAX_BYTES if args.sensor_max_bytes is None else args.sensor_max_bytes
+                ),
                 include_full_predictions=args.include_full_predictions,
                 extra_markers=tuple(args.marker),
             )
@@ -563,6 +609,7 @@ def _bundle_export(args: argparse.Namespace) -> None:
 
 def _bundle_preview(args: argparse.Namespace) -> None:
     from coperceive.bundle import BundleExportRequest, preview_bundle
+    from coperceive.bundle.sensor import SENSOR_MAX_BYTES
 
     try:
         manifest = preview_bundle(
@@ -573,7 +620,11 @@ def _bundle_preview(args: argparse.Namespace) -> None:
                 out=Path(".coperceive-preview.cpbundle"),
                 title=args.title,
                 frames=args.frames,
-                include_raw=args.include_raw,
+                dataset_id=args.dataset_id,
+                include_sensor_data=args.include_sensor_data,
+                sensor_max_bytes=(
+                    SENSOR_MAX_BYTES if args.sensor_max_bytes is None else args.sensor_max_bytes
+                ),
                 include_full_predictions=args.include_full_predictions,
                 extra_markers=tuple(args.marker),
             )
@@ -588,13 +639,23 @@ def _bundle_open(args: argparse.Namespace) -> None:
     from coperceive.bundle import open_bundle
 
     data_root = Path(args.data_root) if args.data_root else Path.home() / ".coperceive"
+    library_roots = tuple(Path(item) for item in args.library_root)
     try:
-        opened = open_bundle(Path(args.file), data_root=data_root)
+        opened = open_bundle(Path(args.file), data_root=data_root, library_roots=library_roots)
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
     print(f"opened {opened.root}")
     print(f"run {opened.manifest.get('run_id')} schema {opened.manifest.get('schema_version')}")
+    print(f"scenes {opened.scenes_root}")
+    print(f"predictions {opened.predictions_root}")
+    print(f"report {opened.report_path}")
+
+
+def _bundle_sensor_policy(args: argparse.Namespace) -> None:
+    from coperceive.bundle import sensor_data_policy
+
+    print(json.dumps(sensor_data_policy(args.dataset_id).as_document(), indent=2))
 
 
 def _demo_create(args: argparse.Namespace) -> None:
@@ -1226,6 +1287,7 @@ def _serve(args: argparse.Namespace) -> None:
         remote_stream_argv=stream_argv,
         remote_cache_dir=args.remote_cache_dir,
         remote_cache_bytes=args.remote_cache_bytes,
+        bundle_info=args.bundle_info,
     )
 
 
