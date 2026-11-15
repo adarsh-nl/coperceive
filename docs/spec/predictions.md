@@ -70,16 +70,16 @@ Validation (`coperceive predictions import`, `coperceive eval run`, and `write_r
 
 ```yaml
 criterion: iou_bev                   # iou_bev | centre
-thresholds: [0.5, 0.7]               # IoU for iou_bev, metres for centre; strictly increasing for iou_bev, strictly decreasing for centre
+thresholds: [0.5, 0.7]               # IoU for iou_bev, metres for centre; strictly increasing for iou_bev, strictly decreasing for centre; required with centre
 display_threshold: 0.5               # must be one of thresholds; statuses in matches.parquet use it
 class_thresholds: {}                 # class -> list, same length as thresholds, e.g. {pedestrian: [0.25, 0.5]}
 ignore_gt_visibility_below: null     # null, or a number: GT with visibility below it is ignored; GT with null visibility is kept
-max_range_m: null                    # null, or metres from the agent body origin at that time; GT and predictions farther are ignored
+max_range_m: null                    # null, or metres from the agent body origin at that time, measured horizontally; GT and predictions farther are ignored
 score_threshold: 0.3                 # operating point for statuses and per-sample counts
 gt_class_map: {}                     # optional: ground-truth class -> class, applied before matching, e.g. {truck: car, bus: car, motorcycle: bicycle}
 ```
 
-Unknown keys are errors. `display_threshold` not in `thresholds` is an error.
+Unknown keys are errors. `display_threshold` not in `thresholds` is an error. `criterion: centre` without `thresholds` is an error: the default thresholds are IoU values.
 
 ## Geometry
 
@@ -93,7 +93,7 @@ All matching is in the scene world frame. A `body` box is placed with the agent 
 
 **Horizontal centre distance** is `hypot(cx_a - cx_b, cy_a - cy_b)` in the world frame.
 
-**Yaw error** of a pair is the absolute difference of the two yaws wrapped into `[0, π]`, in degrees.
+**Yaw error** of a pair is the absolute difference of the two yaws wrapped into `[0, 180]` degrees.
 
 Normative values, all in metres:
 
@@ -111,7 +111,7 @@ Normative values, all in metres:
 Done per scene, per `(agent_id, source)` pair that appears in `boxes.parquet` (an **output**), per `time_us`, per `category`. Ground truth is the agent's own `annotations` at that time.
 
 0. Ground-truth categories are renamed through `gt_class_map` (a class not in the map keeps its name). Predictions are never renamed: a model that emits `car` for trucks is evaluated against ground truth that says `car` only when the map says so. For Griffin, the Griffin toolkit does this in code: `tools/griffin_data_converter/trans_kitti2nuscenes.py`, `obj_type_mapping` (`"truck": "car"`, `"bus": "car"`, `"motorcycle": "bicycle"`), and `projects/mmdet3d_plugin/datasets/griffin_dataset.py`, `class_names_nuscenes_mappings` (`'Truck': 'car'`, `'Bus': 'car'`), commit `9c02ba4a`.
-1. Ground-truth boxes are **ignored** when `ignore_gt_visibility_below` is a number and the box's visibility is a number below it, or when `max_range_m` is a number and the box centre is farther than that from the agent body origin at that time. Predictions farther than `max_range_m` are ignored before matching.
+1. Ground-truth boxes are **ignored** when `ignore_gt_visibility_below` is a number and the box's visibility is a number below it, or when `max_range_m` is a number and the box centre is farther than that from the agent body origin at that time. The distance is horizontal: `hypot` of the x and y differences in the world frame. A box exactly at `max_range_m` is kept. Predictions farther than `max_range_m` are ignored before matching.
 2. Predictions are sorted by `score` descending; equal scores keep file order.
 3. Each prediction in turn considers the ground-truth boxes of its category that are not yet matched, ignored ones included, and takes the best one under the criterion: the largest BEV IoU, or the smallest centre distance. The pair's threshold is the class's entry in `class_thresholds` or else the global `thresholds` entry, at the index of `display_threshold`.
    - If the best box is not ignored and passes the threshold (IoU `>=`, distance `<=`): **tp**, and the box is matched.
@@ -127,7 +127,7 @@ Normative cases, one agent, one sample, criterion `centre`, thresholds `[2.0, 1.
 - One GT car at `(0, 0)`, one prediction car at `(1.5, 0)` score 0.9: at 2.0 `tp`; at 1.0 `fp` and the GT is a `miss`.
 - One GT car, two predictions on it (0.9 at 0.2 m, 0.8 at 0.4 m): one `tp` (the 0.9) and one `fp`.
 - One GT car, one prediction `truck` on top of it: `fp` and `miss`.
-- One GT car with visibility 0.1, `ignore_gt_visibility_below: 0.5`, one prediction car on it: prediction `ignored`, GT `ignored`, counts all zero.
+- One GT car with visibility 0.1, `ignore_gt_visibility_below: 0.5`, one prediction car on it: prediction `ignored`, GT `ignored`; `tp`, `fp` and `miss` are 0 and `ignored_gt` is 1.
 - One GT car, one prediction car at 0.1 m with score 0.2: prediction `below_threshold`, GT `miss` at the operating point; AP at 2.0 is still `1.0`.
 
 ## Metrics
@@ -160,7 +160,8 @@ The AP in `metrics.json` is per scene and is a diagnostic. The headline AP of a 
 1. Take, for every evaluated scene in scene-id order, the prediction rows of the output and the category from `matches.parquet` with their `status_at_<i>` (below) for the threshold, in `boxes.parquet` row order; concatenate them. `n_gt` is the sum over those scenes of the output's non-ignored ground-truth boxes of the category (`gt` rows with a status other than `ignored`).
 2. Run steps 2–5 of **AP** once over that list: sort by score descending with a stable sort (ties keep scene order, then file order), walk, envelope, area. A class whose pooled `n_gt` is 0 has no pooled AP (`null`, rendered `n/a`); a class with ground truth and no prediction has `0.0`.
 3. The pooled **mAP** at a threshold is the mean over the classes that have a pooled AP. The classes are the union, over the pooled scenes, of the categories of their `ap` tables.
-4. Pooling over several outputs (the `all` row of `eval report`) is the same rule over the rows of every output: `n_gt` and the records are summed over outputs too.
+4. Pooling over several outputs (the `all` row of `eval report`) is the same rule over the rows of every output: `n_gt` and the records are summed over outputs too. `recovered` and `lost_by_fusion` are the exception: they belong to an agent and are the same on each of its outputs (§Cooperative views), so that row takes them once per scene and agent.
+5. Every pooled scene must have been evaluated with the same config. A run whose `metrics.json` files carry different `config` objects is refused by `eval report`, `eval compare` and the robustness sweep.
 
 Normative case: two scenes, each with one ground-truth car. Scene A has one `tp` at score 0.9; scene B one `fp` at 0.8 and one `tp` at 0.7. Pooled, `n_gt = 2` and the walk is tp, fp, tp: precisions 1, 1/2, 2/3 at recalls 1/2, 1/2, 1; the envelope is 1 at recall 1/2 and 2/3 at recall 1; AP `= 1/2 · 1 + 1/2 · 2/3 = 5/6 ≈ 0.833`. The mean of the per-scene APs (1.0 and 0.5) would be 0.75; that number is not reported anywhere.
 
