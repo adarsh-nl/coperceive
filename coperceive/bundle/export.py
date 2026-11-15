@@ -201,11 +201,18 @@ def _plan_sensor(request: BundleExportRequest, frames: list[tuple[str, int]]) ->
     """Decide what sensor data may travel, before anything is written."""
     if request.sensor_max_bytes < 0:
         raise BundleExportError("sensor_max_bytes must be zero or more")
-    policy = sensor_data_policy(request.dataset_id)
     scene_ids: list[str] = []
     for scene_id, _time_us in frames:
         if scene_id not in scene_ids:
             scene_ids.append(scene_id)
+    first_complete = _read_complete(_scene_directory(request.scenes_root, scene_ids[0]))
+    recorded_adapter = first_complete.get("adapter")
+    generator = first_complete.get("generator")
+    policy = sensor_data_policy(
+        request.dataset_id,
+        recorded_adapter=recorded_adapter if isinstance(recorded_adapter, str) else None,
+        generator=generator if isinstance(generator, str) else None,
+    )
     adapter: str | None = None
     rows: list[dict[str, object]] = []
     full_scenes: dict[str, Scene] = {}
@@ -243,7 +250,7 @@ def _plan_sensor(request: BundleExportRequest, frames: list[tuple[str, int]]) ->
             reason = "the selected frames carry no LiDAR or camera bytes"
         else:
             status = "included"
-            reason = None
+            reason = "the dataset licence allows redistribution and the exporter opted in"
     elif not policy.allowed:
         status = "omitted"
         reason = policy.reason
@@ -566,6 +573,12 @@ def export_bundle(request: BundleExportRequest) -> Path:
             sensor_data=sensor_document,
             rerun_command=command,
         )
+        document["rerun_command"] = scrub_text(
+            str(document.get("rerun_command", "")), request.extra_markers
+        )
+        sensor_doc = document.get("sensor_data")
+        if isinstance(sensor_doc, dict):
+            document["sensor_data"] = scrub_json(sensor_doc, request.extra_markers)
         (work / MANIFEST).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
             for path in sorted(work.rglob("*")):

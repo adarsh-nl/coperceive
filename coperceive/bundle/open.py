@@ -27,6 +27,7 @@ from coperceive.bundle.format import (
     MAX_FILES,
     MAX_TOTAL_BYTES,
     BundleError,
+    _is_sensor_path,
     check_zip_entry,
     read_manifest,
     safe_member,
@@ -129,10 +130,8 @@ def open_bundle(
         target = data_root / "bundles" / digest
         if target.is_dir():
             manifest = read_manifest(target / MANIFEST)
-            report = _load_report(target)
-            if report is None:
-                report = _resolve_sensor_data(target, manifest, digest, library_roots, limits)
-                _write_report(target, report)
+            report = _resolve_sensor_data(target, manifest, digest, library_roots, limits)
+            _write_report(target, report)
             return OpenedBundle(target, manifest, digest, report)
         target.parent.mkdir(parents=True, exist_ok=True)
         opened = _extract(path, target, digest, limits)
@@ -170,6 +169,12 @@ def _extract(path: Path, target: Path, digest: str, limits: OpenLimits) -> Opene
             archive.extract(MANIFEST, work)
         manifest = read_manifest(work / MANIFEST)
         contents = validate_manifest(manifest)
+        sensor_bytes = sum(item.size for item in contents if _is_sensor_path(item.path))
+        if sensor_bytes > limits.max_sensor_bytes:
+            raise BundleError(
+                f"this bundle's sensor data is {sensor_bytes} bytes, over the "
+                f"{limits.max_sensor_bytes}-byte sensor-data cap"
+            )
         expected = {item.path: item for item in contents}
         with zipfile.ZipFile(path) as archive:
             infos = archive.infolist()
@@ -302,6 +307,14 @@ def find_local_scene(
     for candidate in _candidate_directories(library_roots, dataset_id, scene_id):
         try:
             resolved = candidate.resolve()
+            roots = []
+            for library in library_roots:
+                try:
+                    roots.append(Path(library).resolve())
+                except OSError:
+                    continue
+            if not any(resolved == root or root in resolved.parents for root in roots):
+                continue
             if resolved == bundle_root.resolve() or bundle_root.resolve() in resolved.parents:
                 continue
             if not (resolved / "manifest.json").is_file():
@@ -490,6 +503,7 @@ def _resolve_sensor_data(
         "schema_version": OPEN_SCHEMA_VERSION,
         "bundle_sha256": digest,
         "run_id": manifest.get("run_id"),
+        "title": manifest.get("title"),
         "read_only": True,
         "sensor_data": overall,
         "dataset": {

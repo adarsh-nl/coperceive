@@ -468,6 +468,12 @@ def create(path: str | Path, seed: int = 0) -> DemoScene:
                 )
                 + "\n"
             )
+    complete = scenes / SCENE_ID / "COMPLETE.json"
+    if complete.is_file():
+        marker = json.loads(complete.read_text(encoding="utf-8"))
+        marker["generator"] = "coperceive demo"
+        marker["dataset_id"] = "demo"
+        complete.write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
     report = evaluate_run(
         scenes, predictions, RUN_ID, DEFAULT_CONFIG, created_utc="2026-01-01T00:00:00Z"
     )

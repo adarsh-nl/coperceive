@@ -690,7 +690,13 @@ async fn switch_data_root(
         extra_args.push("--predictions".to_string());
         extra_args.push(pred_dir.to_string_lossy().into_owned());
     }
-    if new_path.join("open.json").is_file() {
+    let is_bundle = new_path.join("open.json").is_file()
+        && app
+            .path()
+            .app_data_dir()
+            .map(|dir| new_path.starts_with(dir.join("bundles")))
+            .unwrap_or(false);
+    if is_bundle {
         extra_args.push("--bundle-info".to_string());
         extra_args.push(new_path.join("open.json").to_string_lossy().into_owned());
     }
@@ -739,8 +745,10 @@ async fn switch_data_root(
         }
     }
 
-    // Update state.json with new root and prepend to recent_roots
-    {
+    let is_bundle_root = new_path.join("open.json").is_file();
+    // Update state.json with new root and prepend to recent_roots. A shared
+    // bundle is not a library root and must not appear in Recent.
+    if !is_bundle_root {
         let mut persistent = state::load_state();
         persistent.last_data_root = Some(new_path_str.clone());
         persistent.last_scene_id = None;

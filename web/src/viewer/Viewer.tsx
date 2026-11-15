@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { createPortal } from "react-dom";
+import BundleBanner from "./BundleBanner";
 import { downloadTownMap, onTownMapProgress, isTauriEnvironment } from "../desktop/local";
 import * as THREE from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
@@ -4981,6 +4982,7 @@ export default function Viewer({
       data-overlay={VIEWER_STYLE_TOKENS[viewerStyle.style].overlay}
       style={{ fontFamily: VIEWER_STYLE_TOKENS[viewerStyle.style].font }}
     >
+      {summary?.bundle ? <BundleBanner bundle={summary.bundle} /> : null}
       {datasetError && (
         <div className="dataset-error-banner" role="alert">
           <div className="dataset-error-content">
