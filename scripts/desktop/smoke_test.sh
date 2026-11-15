@@ -123,6 +123,8 @@ SERVE_PID=$!
 
 echo "Sidecar PID: ${SERVE_PID}"
 
+SMOKE_PASSED=0
+
 # Ensure processes are killed on script exit
 cleanup_serve() {
     if [ -n "${SERVE_PID:-}" ] && kill -0 "${SERVE_PID}" 2>/dev/null; then
@@ -132,6 +134,25 @@ cleanup_serve() {
     fi
 }
 
+preserve_safe_tmp_logs() {
+    if [ -z "${COPERCEIVE_PRESERVE_LOGS_DIR:-}" ] || [ "${SMOKE_PASSED}" -eq 1 ]; then
+        return
+    fi
+    local dest="${COPERCEIVE_PRESERVE_LOGS_DIR}/tmp"
+    mkdir -p "${dest}"
+    local redact='s/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/([Tt]oken[^A-Za-z0-9]*)[:=][[:space:]]*[^[:space:]"]+/\1=[REDACTED]/g'
+    local f
+    for f in "${TMPDIR}/app_stdout.log" "${TMPDIR}/app_stderr.log" "${TMPDIR}/serve.log" "${TMPDIR}/demo_stdout.log" "${TMPDIR}/demo_stderr.log"; do
+        if [ -f "$f" ]; then
+            sed -E "$redact" "$f" > "${dest}/$(basename "$f")" 2>/dev/null || true
+        fi
+    done
+    while IFS= read -r slog; do
+        [ -n "$slog" ] || continue
+        sed -E "$redact" "$slog" > "${dest}/$(basename "$(dirname "$slog")")_$(basename "$slog")" 2>/dev/null || true
+    done < <(find "${TMPDIR}" -name 'serve-*.log' -type f 2>/dev/null || true)
+}
+
 cleanup_all() {
     if [ -n "${APP_PID:-}" ] && kill -0 "${APP_PID}" 2>/dev/null; then
         echo "Terminating app process PID ${APP_PID}..."
@@ -139,6 +160,7 @@ cleanup_all() {
         wait "${APP_PID}" 2>/dev/null || true
     fi
     cleanup_serve
+    preserve_safe_tmp_logs
     rm -rf "${TMPDIR}"
 }
 trap cleanup_all EXIT
@@ -240,12 +262,54 @@ if [ ! -d "${FIXTURE_ROOT}" ]; then
 fi
 
 MARKER_FILE="${TMPDIR}/test_marker.txt"
+CTRL_INFO_FILE="${TMPDIR}/ctrl_info.txt"
 APP_STDOUT="${TMPDIR}/app_stdout.log"
 APP_STDERR="${TMPDIR}/app_stderr.log"
 
+run_diag_eval_probe() {
+    local p_port=""
+    local p_secret=""
+    if [ -f "${CTRL_INFO_FILE}" ]; then
+        p_port=$(sed -n '1p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
+        p_secret=$(sed -n '2p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
+    elif [ -f "${MARKER_FILE}" ]; then
+        p_port=$(sed -n '4p' "${MARKER_FILE}" 2>/dev/null || echo "")
+        p_secret=$(sed -n '5p' "${MARKER_FILE}" 2>/dev/null || echo "")
+    fi
+    echo "=== Controller /eval diagnostic probe (ctrl_info_exists=$([ -f "${CTRL_INFO_FILE}" ] && echo yes || echo no), ctrl_port=${p_port:-missing}) ===" >&2
+    if [ -n "${p_port}" ] && [ "${p_port}" != "0" ] && [ -n "${p_secret}" ]; then
+        local js_probe='(() => { const out = { readyState: document.readyState, href: window.location.href, consoleErrors: window.__COPERCEIVE_CONSOLE_ERRORS__ ?? null, lastUiError: window.__COPERCEIVE_LAST_ERROR__ ?? null, autoConnectState: window.__COPERCEIVE_AUTOCONNECT_STATE__ ?? null, bodyTextLen: document.body ? document.body.innerText.length : -1 }; try { const c = document.createElement("canvas"); const gl2 = c.getContext("webgl2"); const gl = gl2 ? null : c.getContext("webgl"); const ctx = gl2 || gl; const dbg = ctx ? ctx.getExtension("WEBGL_debug_renderer_info") : null; out.webgl = { webgl2: Boolean(gl2), webgl: Boolean(gl || gl2), vendor: ctx ? ctx.getParameter(ctx.VENDOR) : null, renderer: ctx ? ctx.getParameter(ctx.RENDERER) : null, unmaskedRenderer: dbg && ctx ? ctx.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null }; } catch (e) { out.webglError = String(e); } return out; })()'
+        local win
+        for win in main viewer; do
+            local payload
+            payload=$(python3 -c 'import json, sys; print(json.dumps({"window": sys.argv[1], "script": sys.argv[2]}))' "${win}" "${js_probe}")
+            local resp
+            resp=$(curl -s --max-time 6 -X POST \
+                -H "Authorization: Bearer ${p_secret}" \
+                -H "Content-Type: application/json" \
+                -d "${payload}" \
+                "http://127.0.0.1:${p_port}/eval" 2>&1 || true)
+            echo "--- /eval window=${win} ---" >&2
+            echo "${resp:-<empty response>}" >&2
+        done
+    else
+        echo "Skipping /eval: loopback controller port/secret unavailable." >&2
+    fi
+    echo "=== Host & Bundle Environment Diagnostics ===" >&2
+    sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize 2>&1 >&2 || true
+    file "${APP_EXE}" 2>&1 >&2 || true
+    echo "--- xattr on APP_BUNDLE (first 30 lines) ---" >&2
+    xattr -lr "${APP_BUNDLE}" 2>&1 | head -n 30 >&2 || true
+    echo "--- codesign & spctl ---" >&2
+    codesign -dvv "${APP_BUNDLE}" 2>&1 | head -n 20 >&2 || true
+    spctl --assess --verbose=4 --type execute "${APP_BUNDLE}" 2>&1 || true
+}
+
 echo "Starting app binary with auto-connect fixture: ${FIXTURE_ROOT}..."
+LAUNCH_START_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
 COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
 COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
+COPERCEIVE_CTRL_INFO_FILE="${CTRL_INFO_FILE}" \
 "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
 APP_PID=$!
 echo "App process spawned with PID ${APP_PID}"
@@ -267,13 +331,35 @@ for i in {1..90}; do
 done
 
 if [ ! -f "${MARKER_FILE}" ]; then
-    echo "Error: Auto-connect marker file was not created within timeout!" >&2
+    echo "Error: Auto-connect marker file was not created within 45s timeout!" >&2
+    run_diag_eval_probe
+    extra_secs="${COPERCEIVE_INTEL_DIAG_EXTRA_WAIT_SECS:-0}"
+    if [ "${extra_secs}" -gt 0 ] 2>/dev/null; then
+        echo "Diagnostic mode: extending observation window by ${extra_secs}s to measure actual completion/failure timing..." >&2
+        extra_iters=$((extra_secs * 2))
+        for j in $(seq 1 "${extra_iters}"); do
+            if [ -f "${MARKER_FILE}" ]; then
+                marker_now_s=$(python3 -c 'import time, sys; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "${LAUNCH_START_S}")
+                echo "Diagnostic observation: marker file appeared after ${marker_now_s}s! (origin=$(sed -n '1p' "${MARKER_FILE}"))" >&2
+                run_diag_eval_probe
+                break
+            fi
+            if ! kill -0 "${APP_PID}" 2>/dev/null; then
+                died_now_s=$(python3 -c 'import time, sys; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "${LAUNCH_START_S}")
+                echo "Diagnostic observation: app process exited after ${died_now_s}s." >&2
+                break
+            fi
+            sleep 0.5
+        done
+    fi
     echo "=== App stderr ===" >&2
     cat "${APP_STDERR}" >&2
     echo "=== App stdout ===" >&2
     cat "${APP_STDOUT}" >&2
     exit 13
 fi
+MARKER_ELAPSED_S=$(python3 -c 'import time, sys; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "${LAUNCH_START_S}")
+echo "Auto-connect marker created in ${MARKER_ELAPSED_S}s."
 
 APP_ORIGIN=$(sed -n '1p' "${MARKER_FILE}")
 APP_TOKEN=$(sed -n '2p' "${MARKER_FILE}")
@@ -674,6 +760,7 @@ if kill -0 "${APP_PID}" 2>/dev/null; then
 fi
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
+SMOKE_PASSED=1
 echo "=========================================================="
 echo "Smoke test PASSED successfully!"
 echo "=========================================================="

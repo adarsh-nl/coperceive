@@ -61,6 +61,7 @@ pub struct AppState {
         Mutex<Option<coperceive_desktop::dataset_jobs::PendingPrepare>>,
     pub startup_crash: Mutex<Option<serde_json::Value>>,
     pub validated_scenes_this_run: Mutex<std::collections::HashSet<String>>,
+    pub auto_connect_state: Mutex<serde_json::Value>,
 }
 
 impl Default for AppState {
@@ -84,7 +85,30 @@ impl Default for AppState {
             pending_dataset_prepare: Mutex::new(None),
             startup_crash: Mutex::new(None),
             validated_scenes_this_run: Mutex::new(std::collections::HashSet::new()),
+            auto_connect_state: Mutex::new(serde_json::json!({ "phase": "idle" })),
         }
+    }
+}
+
+fn set_auto_connect_state(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    phase: &str,
+    detail: serde_json::Value,
+) {
+    let payload = serde_json::json!({
+        "phase": phase,
+        "elapsed_ms": state.startup_instant.elapsed().as_millis() as u64,
+        "detail": detail,
+    });
+    if let Ok(mut lock) = state.auto_connect_state.lock() {
+        *lock = payload.clone();
+    }
+    println!("[auto-connect] state={}", payload);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    if let Some(main) = app.get_webview_window("main") {
+        let json = serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string());
+        let _ = main.eval(&format!("window.__COPERCEIVE_AUTOCONNECT_STATE__ = {json};"));
     }
 }
 
@@ -1283,6 +1307,22 @@ async fn start_local_session_inner(
     disconnect_remote_in_background(&state);
 
     let python_bin = resolve_python_binary(app);
+    let maps_root = library_maps_root();
+    let cwd = std::env::current_dir().ok();
+    let path_len = std::env::var_os("PATH").map(|p| p.len()).unwrap_or(0);
+    set_auto_connect_state(
+        app,
+        state,
+        "spawning_sidecar",
+        serde_json::json!({
+            "python_bin": python_bin.display().to_string(),
+            "python_exists": python_bin.is_file(),
+            "data_root": data_root,
+            "maps_root": maps_root.as_ref().map(|p| p.display().to_string()),
+            "cwd": cwd.as_ref().map(|p| p.display().to_string()),
+            "path_len": path_len,
+        }),
+    );
     let mut extra_args = Vec::new();
     if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&root_path) {
         extra_args.push("--predictions".to_string());
@@ -1290,7 +1330,7 @@ async fn start_local_session_inner(
     }
 
     let mut session =
-        SidecarSession::spawn_with_args(&python_bin, &root_path, library_maps_root().as_deref(), None, &extra_args)
+        SidecarSession::spawn_with_args(&python_bin, &root_path, maps_root.as_deref(), None, &extra_args)
         .map_err(|e| format!("Failed to spawn local sidecar: {}", e))?;
 
     let origin = format!("http://127.0.0.1:{}", session.port);
@@ -1304,7 +1344,29 @@ async fn start_local_session_inner(
 
     // Poll until healthy (up to 60 seconds)
     let start_time = Instant::now();
+    set_auto_connect_state(
+        app,
+        state,
+        "polling_health",
+        serde_json::json!({
+            "port": session.port,
+            "alive": session.is_alive(),
+        }),
+    );
     if let Err(e) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+        let alive_after_timeout = session.is_alive();
+        set_auto_connect_state(
+            app,
+            state,
+            "error",
+            serde_json::json!({
+                "stage": "polling_health",
+                "port": session.port,
+                "alive": alive_after_timeout,
+                "poll_elapsed_ms": start_time.elapsed().as_millis() as u64,
+                "error": e,
+            }),
+        );
         // Prevent deletion of log on failed start
         session.preserve_log = true;
         let mut log_tail = String::new();
@@ -1326,11 +1388,21 @@ async fn start_local_session_inner(
             format!("Last 20 lines of server log ({}):\n{}", session.log_path.display(), log_tail)
         };
         let _ = session.stop();
-        return Err(format!("Timed out waiting for local serve: {}\n\n{}", e, tail_msg));
+        return Err(format!("Timed out waiting for local serve (alive={}): {}\n\n{}", alive_after_timeout, e, tail_msg));
     }
 
     let elapsed = start_time.elapsed();
+    set_auto_connect_state(
+        app,
+        state,
+        "health_ready",
+        serde_json::json!({
+            "port": session.port,
+            "poll_elapsed_ms": elapsed.as_millis() as u64,
+        }),
+    );
     println!("[local-serve] Local server started and became healthy in {:.2?}", elapsed);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
     {
         let log_dir = platform::get_log_dir();
         let _ = fs::create_dir_all(&log_dir);
@@ -1364,11 +1436,29 @@ async fn start_local_session_inner(
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
 
     // Open viewer window at session.origin with initialization_script
+    set_auto_connect_state(
+        app,
+        state,
+        "opening_viewer",
+        serde_json::json!({ "origin": origin }),
+    );
     if let Err(e) = open_viewer_window(app, &origin, &token, &data_root, ctrl_port, state, None) {
+        set_auto_connect_state(
+            app,
+            state,
+            "error",
+            serde_json::json!({ "stage": "opening_viewer", "error": e }),
+        );
         session.preserve_log = true;
         let _ = session.stop();
         return Err(e);
     }
+    set_auto_connect_state(
+        app,
+        state,
+        "connected",
+        serde_json::json!({ "origin": origin }),
+    );
 
     let payload = SessionPayload {
         origin,
@@ -3948,6 +4038,12 @@ fn main() {
                 .replace('"', "\\\"");
             let import_js = import_source.replace('\\', "\\\\").replace('"', "\\\"");
             let update_js = update_url.replace('\\', "\\\\").replace('"', "\\\"");
+            let auto_connect_js = state
+                .auto_connect_state
+                .lock()
+                .ok()
+                .and_then(|v| serde_json::to_string(&*v).ok())
+                .unwrap_or_else(|| "null".to_string());
             let titlebar_mode = if cfg!(target_os = "macos") { "overlay" } else { "native" };
             let os_name = if cfg!(target_os = "windows") {
                 "windows"
@@ -3967,6 +4063,7 @@ fn main() {
                 window.__COPERCEIVE_FORCE_MOTION__ = {force};
                 window.__COPERCEIVE_TEST_IMPORT_SOURCE__ = "{import_js}";
                 window.__COPERCEIVE_UPDATE_URL__ = "{update_js}";
+                window.__COPERCEIVE_AUTOCONNECT_STATE__ = {auto_connect_js};
                 window.dispatchEvent(new Event("coperceive-test-import"));
                 if ({force}) window.dispatchEvent(new Event("coperceive-force-motion"));"#,
             ));
@@ -4562,6 +4659,15 @@ fn main() {
                 } else if state::validate_dataset_root(&root_path).is_ok() {
                     let h = handle.clone();
                     let st = state.clone();
+                    set_auto_connect_state(
+                        &handle,
+                        &state,
+                        "validating_root_ok",
+                        serde_json::json!({
+                            "root": root_str,
+                            "from_saved_state": from_saved_state,
+                        }),
+                    );
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_millis(300));
                         tauri::async_runtime::block_on(async move {
@@ -4589,6 +4695,12 @@ fn main() {
                                     }
                                 }
                                 Err(err) => {
+                                    set_auto_connect_state(
+                                        &h,
+                                        &st,
+                                        "error",
+                                        serde_json::json!({ "stage": "start_local_session_inner", "error": err }),
+                                    );
                                     eprintln!("[auto-connect] Error connecting to last root: {err}");
                                     let _ = std::io::Write::flush(&mut std::io::stderr());
                                     if let Some(main) = h.get_webview_window("main") {
@@ -4599,6 +4711,12 @@ fn main() {
                         });
                     });
                 } else {
+                    set_auto_connect_state(
+                        &handle,
+                        &state,
+                        "invalid_root",
+                        serde_json::json!({ "root": root_str }),
+                    );
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.show();
                     }

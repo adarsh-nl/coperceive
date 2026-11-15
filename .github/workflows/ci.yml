@@ -777,7 +777,12 @@ jobs:
           name: coperceive-desktop-macos-x86_64
           path: /tmp/intel-dmg
       - name: Install x64 DMG and run smoke test on native Intel macOS
+        env:
+          COPERCEIVE_PRESERVE_LOGS_DIR: /tmp/intel-smoke-evidence
+          COPERCEIVE_INTEL_DIAG_EXTRA_WAIT_SECS: "45"
         run: |
+          rm -rf /tmp/intel-smoke-evidence
+          mkdir -p /tmp/intel-smoke-evidence
           DMG_FILE="$(find /tmp/intel-dmg -maxdepth 2 -name '*.dmg' | head -n 1)"
           if [ -z "${DMG_FILE}" ]; then
             echo "Error: No Intel .dmg found in /tmp/intel-dmg" >&2
@@ -790,13 +795,34 @@ jobs:
           cp -R "${MOUNT_DIR}/Coperceive.app" /tmp/intel-app/Coperceive.app
           hdiutil detach "${MOUNT_DIR}" || true
           bash scripts/desktop/smoke_test.sh /tmp/intel-app/Coperceive.app "${DMG_FILE}"
-      - name: Dump Intel macOS logs on failure
+      - name: Collect Intel macOS smoke evidence on failure
         if: failure()
         run: |
-          ls -la "$HOME/Library/Logs/Coperceive" || true
-          for f in "$HOME/Library/Logs/Coperceive"/*; do
-            if [ -f "$f" ]; then
+          mkdir -p /tmp/intel-smoke-evidence/coperceive-logs /tmp/intel-smoke-evidence/diagnostic-reports
+          if [ -d "$HOME/Library/Logs/Coperceive" ]; then
+            for f in "$HOME/Library/Logs/Coperceive"/*; do
+              [ -f "$f" ] || continue
+              case "$(basename "$f")" in
+                *token*|*secret*|*ctrl_info*|*marker*) continue ;;
+              esac
+              sed -E 's/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/([Tt]oken[^A-Za-z0-9]*)[:=][[:space:]]*[^[:space:]"]+/\1=[REDACTED]/g' "$f" > "/tmp/intel-smoke-evidence/coperceive-logs/$(basename "$f")" || true
               echo "=== $f ==="
-              tail -n 60 "$f"
-            fi
+              tail -n 60 "/tmp/intel-smoke-evidence/coperceive-logs/$(basename "$f")"
+            done
+          fi
+          for dir in "$HOME/Library/Logs/DiagnosticReports" "/Library/Logs/DiagnosticReports"; do
+            [ -d "$dir" ] || continue
+            for f in "$dir"/Coperceive* "$dir"/coperceive*; do
+              [ -f "$f" ] || continue
+              cp "$f" /tmp/intel-smoke-evidence/diagnostic-reports/ || true
+              echo "=== DiagnosticReport: $f ==="
+              head -n 40 "$f" || true
+            done
           done
+          find /tmp/intel-smoke-evidence -maxdepth 3 -type f || true
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: intel-macos-smoke-evidence
+          path: /tmp/intel-smoke-evidence
+          if-no-files-found: warn
