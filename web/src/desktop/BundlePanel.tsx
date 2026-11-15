@@ -1,7 +1,13 @@
 // SPDX-License-Identifier: Apache-2.0
 /** Export review for one result bundle. Nothing is written until Save. */
 import { useState } from "react";
-import { bundleExport, bundlePreview, pickSavePath, type BundleManifest } from "./local";
+import {
+  bundleExport,
+  bundlePreview,
+  bundleSensorPolicy,
+  pickSavePath,
+  type BundleManifest,
+} from "./local";
 import { errorText } from "./errors";
 
 const field = { marginBottom: "0.6rem" } as const;
@@ -22,7 +28,10 @@ export default function BundlePanel({
   const [predictionsRoot, setPredictionsRoot] = useState("");
   const [frames, setFrames] = useState("worst:6");
   const [title, setTitle] = useState("");
-  const [includeRaw, setIncludeRaw] = useState(false);
+  const [datasetId, setDatasetId] = useState("");
+  const [includeSensor, setIncludeSensor] = useState(false);
+  const [sensorPolicy, setSensorPolicy] = useState<{ allowed: boolean; licence: string | null; dataset_label: string | null; reason: string } | null>(null);
+  const [sensorMaxBytes, setSensorMaxBytes] = useState("");
   const [includeFull, setIncludeFull] = useState(false);
   const [manifest, setManifest] = useState<BundleManifest | null>(null);
   const [error, setError] = useState("");
@@ -37,7 +46,8 @@ export default function BundlePanel({
       setManifest(
         await bundlePreview(
           runId, scenesRoot.trim(), predictionsRoot.trim(), frames, title,
-          includeRaw, includeFull, markers,
+          datasetId.trim(), includeSensor,
+          sensorMaxBytes.trim() ? Number(sensorMaxBytes) : null, includeFull, markers,
         ),
       );
     } catch (caught) {
@@ -57,7 +67,8 @@ export default function BundlePanel({
       setSaved(
         await bundleExport(
           runId, scenesRoot.trim(), predictionsRoot.trim(), chosen, frames, title,
-          includeRaw, includeFull, markers,
+          datasetId.trim(), includeSensor,
+          sensorMaxBytes.trim() ? Number(sensorMaxBytes) : null, includeFull, markers,
         ),
       );
     } catch (caught) {
@@ -80,13 +91,25 @@ export default function BundlePanel({
       <div style={field}><label style={label}>Predictions folder</label><input style={input} value={predictionsRoot} onChange={(e) => setPredictionsRoot(e.target.value)} placeholder="/data/predictions" /></div>
       <div style={field}><label style={label}>Frames</label><input style={input} value={frames} onChange={(e) => setFrames(e.target.value)} /></div>
       <div style={field}><label style={label}>Title</label><input style={input} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+      <div style={field}>
+        <label style={label}>Dataset id (for sensor-data licence)</label>
+        <input style={input} value={datasetId} onChange={(e) => {
+          setDatasetId(e.target.value);
+          setSensorPolicy(null);
+          if (e.target.value.trim()) void bundleSensorPolicy(e.target.value.trim()).then(setSensorPolicy).catch(() => setSensorPolicy(null));
+        }} placeholder="demo, griffin (never inferred)" />
+        {sensorPolicy ? <div style={{ fontSize: "0.75rem", color: sensorPolicy.allowed ? "var(--text-subtle)" : "var(--danger)" }}>
+          {sensorPolicy.allowed ? `Licence: ${sensorPolicy.licence ?? "recorded"}` : sensorPolicy.reason}
+        </div> : null}
+      </div>
+      <label style={{ display: "flex", gap: "6px", fontSize: "0.8rem" }}>
+        <input type="checkbox" checked={includeSensor} disabled={!sensorPolicy?.allowed} onChange={(e) => setIncludeSensor(e.target.checked)} />
+        Include sensor data{sensorPolicy?.allowed && sensorPolicy.licence ? ` (licence: ${sensorPolicy.licence})` : ""}
+      </label>
       <label style={{ display: "flex", gap: "6px", fontSize: "0.8rem" }}>
         <input type="checkbox" checked={includeFull} onChange={(e) => setIncludeFull(e.target.checked)} /> Include full predictions
       </label>
-      <label style={{ display: "flex", gap: "6px", fontSize: "0.8rem" }}>
-        <input type="checkbox" checked={includeRaw} onChange={(e) => setIncludeRaw(e.target.checked)} /> Include raw sensor files for selected frames
-      </label>
-      {includeRaw ? <p style={{ color: "#d29922", fontSize: "0.8rem" }}>Check the dataset licence before sharing raw data.</p> : null}
+      <div style={field}><label style={label}>Sensor-data cap (bytes, optional)</label><input style={input} value={sensorMaxBytes} onChange={(e) => setSensorMaxBytes(e.target.value)} placeholder="default 50 MiB" /></div>
       <div style={{ display: "flex", gap: "8px" }}>
         <button type="button" style={button} disabled={busy || !scenesRoot.trim() || !predictionsRoot.trim()} onClick={() => void preview()}>
           {busy ? "Preparing…" : "Review bundle"}

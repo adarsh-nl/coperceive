@@ -364,6 +364,12 @@ def _schema_accepts(manifest: dict[str, object]) -> bool:
             and v not in {".", ".."}
         ),
         "contents": lambda v: isinstance(v, list),
+        "rerun_command": lambda v: isinstance(v, str) and bool(v.strip()),
+        "sensor_data": lambda v: isinstance(v, dict)
+        and v.get("status") in {"included", "omitted"}
+        and isinstance(v.get("bytes"), int)
+        and isinstance(v.get("scenes"), list)
+        and bool(v.get("scenes")),
     }
     return all(checks[key](manifest[key]) for key in checks if key in manifest)
 
@@ -406,3 +412,73 @@ def test_bundle_run_id_collision_does_not_touch_local_runs(bundle: Path, tmp_pat
     opened = open_bundle(bundle, data_root=data)
     assert local.read_text(encoding="utf-8") == "local"
     assert opened.root != data / "predictions"
+
+
+def _export(demo_root: Path, out: Path, **kwargs: object) -> Path:
+    return export_bundle(
+        BundleExportRequest(
+            run_id=RUN,
+            scenes_root=demo_root / "scenes",
+            predictions_root=demo_root / "predictions",
+            out=out,
+            **kwargs,  # type: ignore[arg-type]
+        )
+    )
+
+
+def test_demo_sensor_data_can_be_included_and_open_reports_it(
+    demo_root: Path, tmp_path: Path
+) -> None:
+    bundle = _export(demo_root, tmp_path / "sensor.cpbundle", dataset_id="demo", include_sensor_data=True)
+    opened = open_bundle(bundle, data_root=tmp_path / "data")
+    with zipfile.ZipFile(bundle) as archive:
+        manifest = json.loads(archive.read("bundle.json"))
+    assert manifest["sensor_data"]["status"] == "included"
+    assert manifest["sensor_data"]["licence"] == "Apache-2.0"
+    assert manifest["sensor_data"]["bytes"] > 0
+    assert opened.report["sensor_data"] == "included"
+    assert list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
+
+
+def test_opv2v_shaped_bundle_ticked_still_omits_sensor_data(
+    demo_root: Path, tmp_path: Path
+) -> None:
+    bundle = _export(demo_root, tmp_path / "opv2v.cpbundle", dataset_id="opv2v", include_sensor_data=True)
+    with zipfile.ZipFile(bundle) as archive:
+        manifest = json.loads(archive.read("bundle.json"))
+    assert manifest["sensor_data"]["status"] == "omitted"
+    assert "OPV2V" in str(manifest["sensor_data"]["reason"])
+    assert not [item for item in manifest["contents"] if item["kind"].startswith("sensor-")]
+
+
+def test_omitted_sensor_data_uses_matching_local_scene(
+    demo_root: Path, tmp_path: Path
+) -> None:
+    bundle = _export(demo_root, tmp_path / "local.cpbundle", dataset_id="demo")
+    opened = open_bundle(bundle, data_root=tmp_path / "data", library_roots=[demo_root / "scenes"])
+    assert opened.report["sensor_data"] == "local-copy"
+    assert "your local copy" in str(opened.report["scenes"][0]["label"])
+    assert list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
+
+
+def test_omitted_sensor_data_without_local_scene_shows_note(
+    demo_root: Path, tmp_path: Path
+) -> None:
+    bundle = _export(demo_root, tmp_path / "none.cpbundle", dataset_id="demo")
+    opened = open_bundle(bundle, data_root=tmp_path / "data")
+    assert opened.report["sensor_data"] == "omitted"
+    assert "Frames not included" in str(opened.report["scenes"][0]["note"])
+
+
+def test_sensor_data_cap_is_enforced_before_writing(demo_root: Path, tmp_path: Path) -> None:
+    from coperceive.bundle import BundleExportError
+
+    with pytest.raises(BundleExportError, match="sensor-data cap"):
+        _export(
+            demo_root,
+            tmp_path / "cap.cpbundle",
+            dataset_id="demo",
+            include_sensor_data=True,
+            sensor_max_bytes=1,
+        )
+    assert not (tmp_path / "cap.cpbundle").exists()

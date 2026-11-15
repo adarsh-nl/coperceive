@@ -21,9 +21,18 @@ coperceive bundle export <run-id> \
 
 By default only the selected frames' predictions are included (six frames, or
 `worst:N`, or `scene@time_us,...`). The full run's predictions are opt-in and
-the CLI shows their size. Raw LiDAR/camera files are **not** included by default;
-`--include-raw` includes only the selected frames' sensor files and records the
-dataset licence note. **Check the dataset licence before sharing raw data.**
+the CLI shows their size.
+
+Sensor data (LiDAR points and camera images for the included frames) is off by
+default and included only when **all** hold: the dataset id is named explicitly
+(`--dataset-id` or the app field), its catalog licence permits redistribution
+(demo/synthetic/generated scenes and Griffin MIT are allow-listed; OPV2V,
+V2XSet, V2V4Real, DAIR-V2X-C and generic are refused), the exporter ticks the
+opt-in, and the selected sensor bytes fit the cap (`--sensor-max-bytes`,
+default 50 MiB; Python: `BundleExportRequest.sensor_max_bytes` and
+`OpenLimits.max_sensor_bytes`). The bundle records `sensor_data` status, reason
+and licence. When omitted, opening uses a matching local scene if available,
+otherwise it shows the boxes on an empty grid with the licence note.
 
 The app's Run history has an **Export bundle…** action with the same review:
 every file with size, the total, what the scrubber removed per file, and licence
@@ -31,8 +40,9 @@ notes. Nothing is uploaded anywhere. `--compare` and paper `figures/` are not
 part of this version.
 
 Size caps are set from Python with `coperceive.bundle.open.OpenLimits`
-(`max_files`, `max_file_bytes`, `max_total_bytes`); the CLI uses the defaults:
-20,000 files, 512 MiB per file and 2 GiB total.
+(`max_files`, `max_file_bytes`, `max_total_bytes`, `max_sensor_bytes`); the CLI
+uses the defaults: 20,000 files, 512 MiB per file, 2 GiB total and 50 MiB
+sensor data.
 
 ## Privacy
 

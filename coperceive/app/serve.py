@@ -25,6 +25,7 @@ def run(
     remote_stream_argv: list[str] | None = None,
     remote_cache_dir: str | None = None,
     remote_cache_bytes: int | None = None,
+    bundle_info: str | None = None,
 ) -> None:
     remote = None
     if remote_stream_argv:
@@ -47,6 +48,7 @@ def run(
         media_roots=media_roots,
         allow_origin=allow_origin,
         remote=remote,
+        bundle_info=bundle_info,
     )
     uvicorn.run(app, host=host, port=port, root_path=root_path)
 

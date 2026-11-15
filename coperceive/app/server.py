@@ -353,6 +353,7 @@ def create_app(
     media_roots: Sequence[str | Path] = (),
     allow_origin: str | None = None,
     remote: RemoteScenes | None = None,
+    bundle_info: str | Path | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -362,6 +363,9 @@ def create_app(
     packaged page with another build directory. ``media_roots`` are directories a
     scene's image links may resolve into (a staged scene links ``<side>/camera``
     to the dataset copy); without them an image outside the scene is 400.
+    ``bundle_info`` is an opened result bundle's ``open.json``: its per-scene
+    sensor decision (included, from the recipient's local copy, or omitted with
+    the dataset-licence note) is added to the scene summary, and the viewer says so.
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
@@ -392,6 +396,7 @@ def create_app(
     # A cluster dataset viewed over SSH: `root` is the local mirror, the scenes
     # and their point sweeps and images come from `remote` (docs/datasets/cluster-datasets.md).
     app.state.remote = remote
+    app.state.bundle_info = _load_bundle_info(bundle_info)
     # Bounded per-request timings for the viewer (GET /api/stream-stats); the
     # data plane is the sidecar -> StreamClient -> streamer, not Rust.
     app.state.stream_stats = _StreamHttpStats()
@@ -470,6 +475,9 @@ def create_app(
         directory = _scene_dir(app.state.root, scene_id)
         body["images_staged"] = _images_staged(app, scene, directory)
         body["seen_by"] = seen_by_for_scene(scene, adapter_name(directory))
+        bundle = _bundle_scene_view(app, scene_id)
+        if bundle is not None:
+            body["bundle"] = bundle
         return body
 
     @app.get("/api/scenes/{scene_id}/frame")
@@ -1071,6 +1079,48 @@ def _remote_image(
         except (OSError, ValueError, Image.UnidentifiedImageError):
             pass
     return Response(content=data, media_type=_IMAGE_TYPES.get(suffix, "application/octet-stream"))
+
+
+def _load_bundle_info(path: str | Path | None) -> dict[str, object] | None:
+    """The opened bundle's ``open.json``, or None when the app is not serving a bundle.
+
+    An unreadable or older report is not a server error: the viewer simply has
+    no bundle note, which is the same as any dataset root.
+    """
+    if path is None:
+        return None
+    try:
+        payload: object = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != "coperceive-bundle-open":
+        return None
+    return dict(payload)
+
+
+def _bundle_scene_view(app: FastAPI, scene_id: str) -> dict[str, object] | None:
+    """The opened bundle's sensor decision for one scene, if it names that scene."""
+    info = getattr(app.state, "bundle_info", None)
+    if not isinstance(info, dict):
+        return None
+    dataset = info.get("dataset")
+    dataset = dataset if isinstance(dataset, dict) else {}
+    scenes = info.get("scenes")
+    if not isinstance(scenes, list):
+        return None
+    for row in scenes:
+        if not isinstance(row, dict) or row.get("scene_id") != scene_id:
+            continue
+        licence = dataset.get("licence")
+        return {
+            "sensor_data": row.get("sensor_data", "omitted"),
+            "dataset": dataset.get("label") or dataset.get("id"),
+            "licence": licence if isinstance(licence, str) else None,
+            "label": row.get("label"),
+            "note": row.get("note"),
+            "local_copy": row.get("local_copy"),
+        }
+    return None
 
 
 def _predictions_root(app: FastAPI) -> Path:

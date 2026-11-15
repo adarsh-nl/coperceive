@@ -736,7 +736,9 @@ export async function bundlePreview(
   predictionsRoot: string,
   frames = "worst:6",
   title = "",
-  includeRaw = false,
+  datasetId = "",
+  includeSensorData = false,
+  sensorMaxBytes: number | null = null,
   includeFullPredictions = false,
   markers: string[] = [],
 ): Promise<BundleManifest> {
@@ -745,7 +747,9 @@ export async function bundlePreview(
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<BundleManifest>("bundle_preview", {
-    runId, scenesRoot, predictionsRoot, frames, title, includeRaw, includeFullPredictions, markers,
+    runId, scenesRoot, predictionsRoot, frames, title,
+    datasetId: datasetId || null, includeSensorData, sensorMaxBytes,
+    includeFullPredictions, markers,
   });
 }
 
@@ -756,19 +760,33 @@ export async function bundleExport(
   out: string,
   frames = "worst:6",
   title = "",
-  includeRaw = false,
+  datasetId = "",
+  includeSensorData = false,
+  sensorMaxBytes: number | null = null,
   includeFullPredictions = false,
   markers: string[] = [],
 ): Promise<string> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("bundle_export", {
-    runId, scenesRoot, predictionsRoot, out, frames, title, includeRaw, includeFullPredictions, markers,
+    runId, scenesRoot, predictionsRoot, out, frames, title,
+    datasetId: datasetId || null, includeSensorData, sensorMaxBytes,
+    includeFullPredictions, markers,
   });
 }
 
 export async function openBundle(file: string): Promise<{ root: string; manifest: BundleManifest }> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<{ root: string; manifest: BundleManifest }>("bundle_open", { file });
+}
+
+export async function bundleSensorPolicy(datasetId: string): Promise<{
+  allowed: boolean;
+  licence: string | null;
+  dataset_label: string | null;
+  reason: string;
+}> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke("bundle_sensor_policy", { datasetId });
 }
 
 export async function openBundleViewer(file: string): Promise<{ root: string; manifest: BundleManifest }> {
