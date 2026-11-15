@@ -103,6 +103,43 @@ export function browseCrumbs(
   return crumbs;
 }
 
+/**
+ * Whether a finished folder check may be shown and opened for the selected
+ * folder. A check that is still running has no path yet, and one that finished
+ * for another folder is stale: opening either would show a dataset whose scene
+ * list and raw root do not belong to the folder on screen.
+ */
+export function detectionIsCurrent(
+  detectedFor: string | null,
+  selectedPath: string | null,
+): boolean {
+  return detectedFor !== null && selectedPath !== null && detectedFor === selectedPath;
+}
+
+/**
+ * What the selected-folder inspector shows about the folder check:
+ * - detected: the check finished for this folder and identified a dataset
+ * - checking: the check is running now
+ * - error: the check finished with an error
+ * - none: the check finished and the folder is not a dataset we recognise
+ * - idle: no check applies (no selection, or the folder cannot be checked)
+ */
+export type FolderCheckState = "detected" | "checking" | "error" | "none" | "idle";
+
+export function folderCheckState(input: {
+  detectedIsCurrent: boolean;
+  detecting: boolean;
+  detectError: string;
+  checkedFor: string | null;
+  selectedPath: string | null;
+}): FolderCheckState {
+  if (input.detectedIsCurrent) return "detected";
+  if (input.detecting) return "checking";
+  if (input.detectError) return "error";
+  if (input.checkedFor !== null && input.checkedFor === input.selectedPath) return "none";
+  return "idle";
+}
+
 /** The parent folder's relative path ("" at the root). */
 export function parentBrowsePath(relativePath: string): string {
   const parts = safeParts(relativePath);

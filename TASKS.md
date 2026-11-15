@@ -20,7 +20,7 @@ repo: https://github.com/adarsh-nl/coperceive
 ## Snapshot (update every PR)
 | | |
 |---|---|
-| Last updated | 2026-11-02 |
+| Last updated | 2026-11-13 |
 | `main` | `19ea517` (desktop app merged via PR #51). |
 | `feat/desktop` | Merged into `main` (PR #51, 2026-10-28). |
 | `feat/m2-import` | `7ba6d88` (merge of PR #90). Includes #87 (`979b9f3`) and #90 (`7ba6d88`). |
@@ -122,6 +122,7 @@ repo: https://github.com/adarsh-nl/coperceive
 - [x] ~~Job Monitor & Watch: watch submitted HPC run (state, logs, cancel), report, open in viewer, run history, full job names for watch (PR #61, #63, #65, #84).~~
 - [x] ~~Cluster Datasets Contract: `docs/datasets/cluster-datasets.md` JSON schemas and frozen desktop command contract; read-only `dataset_detect` and `dataset_index` Tauri commands (PR #85 `30d2a82`).~~
 - [x] ~~Cluster Datasets Backend (PR 2): atomic per-scene staging under `<cache>/.partial/<scene>`, atomic rename, `dataset.json` cache index, Slurm CPU prepare script preview with hash + confirm, status polling document (`coperceive-cluster-scene-status-1`), parallel workers, and partial-cache serving (PR #87 `979b9f3`).~~
+- [x] ~~HPC workspace bugs (PR #163, `agent/deepseek-workspace-index`): the Dataset view shows a cached scene index at once (labelled cached, keyed by server/adapter/raw root/split, byte-capped) while the same read-only index command re-checks the raw tree in the background with "checking for changes…"; every open still runs one index on the login node, it just no longer blocks the view. The Servers sidebar lists every recognised split, not only the opened one; a dataset opens only after the selected folder's own check completes; "Checking what this folder holds…" stops when a check is skipped or finds nothing; and an empty/partial index names its per-scene errors or the detect/index disagreement (retry available). The reported V2V4Real 0-scene root cause is unverified (a V2V4Real-shaped fixture indexes 9 scenes); the view now diagnoses the disagreement.~~
 
 ---
 

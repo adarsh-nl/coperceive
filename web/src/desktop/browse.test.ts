@@ -5,6 +5,7 @@ import {
   browseCrumbs,
   browseRows,
   childBrowsePath,
+  detectionIsCurrent,
   OPEN_BLOCKED_REASON,
   parentBrowsePath,
   relativeBrowsePath,
@@ -182,4 +183,18 @@ test("selection works but opening a scene stays blocked and says why", () => {
   assert.strictEqual(selectionIsScene(document(), "datasets"), false);
   assert.ok(OPEN_BLOCKED_REASON.includes("confirmed job-submission step"), OPEN_BLOCKED_REASON);
   assert.ok(OPEN_BLOCKED_REASON.includes("Nothing was started"), OPEN_BLOCKED_REASON);
+});
+
+
+test("a folder check only applies to the folder it finished for", () => {
+  const root = "/datasets/opencood";
+  // The selected folder's check finished: its result may open the dataset.
+  assert.equal(detectionIsCurrent(`${root}/v2v4real`, `${root}/v2v4real`), true);
+  // Still "Checking what this folder holds…": nothing to open yet.
+  assert.equal(detectionIsCurrent(null, `${root}/v2v4real`), false);
+  // The user moved to another folder while the check ran: the old result is stale.
+  assert.equal(detectionIsCurrent(`${root}/opv2v`, `${root}/v2v4real`), false);
+  // No folder is selected.
+  assert.equal(detectionIsCurrent(`${root}/v2v4real`, null), false);
+  assert.equal(detectionIsCurrent(null, null), false);
 });

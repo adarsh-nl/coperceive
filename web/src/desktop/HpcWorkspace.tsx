@@ -8,6 +8,7 @@ import DatasetView, { type SubmittedJob } from "./hpc/DatasetView";
 import type { ServerEntry } from "./hpc";
 import {
   lastClusterDataset,
+  openableDetectDocument,
   rememberClusterDataset,
   type ClusterDetectDocument,
   type ClusterIndexDocument,
@@ -92,15 +93,14 @@ export default function HpcWorkspace() {
     };
     const handleOpenDataset = (event: Event) => {
       const customEvent = event as CustomEvent<ActiveDatasetPayload>;
-      if (customEvent.detail) {
-        setActiveDatasetData(customEvent.detail);
-        setTab("dataset");
-        if (!customEvent.detail.indexDoc) {
-          void rememberClusterDataset(
-            customEvent.detail.profile.id,
-            customEvent.detail.dataset,
-          ).catch(() => undefined);
-        }
+      const detail = customEvent.detail;
+      // A folder whose check failed or was still running must not open: its
+      // "scene_count" and raw root are not what the sidebar would then show.
+      if (!detail || !openableDetectDocument(detail.dataset)) return;
+      setActiveDatasetData(detail);
+      setTab("dataset");
+      if (!detail.indexDoc) {
+        void rememberClusterDataset(detail.profile.id, detail.dataset).catch(() => undefined);
       }
     };
     window.addEventListener("coperceive-open-evaluation", handleOpenEval);
@@ -127,7 +127,7 @@ export default function HpcWorkspace() {
       <div className="c-hpc-tab" hidden={tab !== "dataset"}>
         {activeDatasetData ? (
           <DatasetView
-            key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}`}
+            key={`${activeDatasetData.profile.id}|${activeDatasetData.dataset.path}|${activeDatasetData.dataset.split ?? ""}`}
             profile={activeDatasetData.profile}
             dataset={activeDatasetData.dataset}
             onBack={() => setTab("servers")}

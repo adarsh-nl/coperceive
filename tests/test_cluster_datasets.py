@@ -25,7 +25,7 @@ from coperceive.cluster_datasets import (
 )
 
 from tests.griffin_release import write_release as write_griffin
-from tests.opencood_release import two_cav_scene
+from tests.opencood_release import AgentTrack, SceneSpec, two_cav_scene
 from tests.opencood_release import write_release as write_opencood
 
 
@@ -154,6 +154,56 @@ def _two_splits(root: Path) -> Path:
     )
     write_opencood(root, "test", [two_cav_scene("test_0001")])
     return root
+
+
+def test_detect_lists_every_split_the_folder_holds(tmp_path: Path) -> None:
+    """The sidebar lists all recognised splits, not only the one detect opened."""
+    raw = _two_splits(tmp_path / "opv2v")
+    result = detect_cluster_dataset(raw)
+    assert result["status"] == "ok"
+    assert result["split"] == "train"
+    assert result["splits"] == [
+        {"name": "train", "scene_count": 3, "adapter": "opv2v"},
+        {"name": "test", "scene_count": 1, "adapter": "opv2v"},
+    ]
+    # The split directory's own detect lists the sibling splits too.
+    from_parent = detect_cluster_dataset(raw / "test")
+    assert from_parent["split"] == "test"
+    assert from_parent["splits"] == result["splits"]
+
+
+def test_detect_split_entries_name_the_adapter_that_recognises_them(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "v2v4real"
+    scene = two_cav_scene("testoutput_CAV_data_2022-06-01-10-00-00_1")
+    write_opencood(
+        root,
+        "test",
+        [
+            SceneSpec(
+                scene.name,
+                [
+                    AgentTrack("0", scene.agents[0].poses, scene.agents[0].boxes),
+                    AgentTrack("1", scene.agents[1].poses, scene.agents[1].boxes),
+                ],
+            )
+        ],
+    )
+    result = detect_cluster_dataset(root / "test")
+    assert result["adapter"] == "v2v4real"
+    assert result["splits"] == [{"name": "test", "scene_count": 1, "adapter": "v2v4real"}]
+
+
+def test_detect_split_entries_are_bounded_and_empty_for_a_flat_release(
+    tmp_path: Path,
+) -> None:
+    raw = _two_splits(tmp_path / "opv2v")
+    bounded = detect_cluster_dataset(raw, max_scenes=1)
+    assert [entry["scene_count"] for entry in bounded["splits"]] == [1, 1]
+    griffin = tmp_path / "griffin"
+    write_griffin(griffin, {"scene-a": [0, 1]})
+    assert detect_cluster_dataset(griffin)["splits"] == []
 
 
 def test_index_with_a_split_indexes_exactly_that_split(tmp_path: Path) -> None:

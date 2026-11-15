@@ -2812,6 +2812,42 @@ main > .tab-panel:not([hidden]) {
   text-align: left;
   color: var(--danger);
 }
+.dv-empty-detail {
+  display: block;
+  margin-top: 6px;
+  font-family: "Geist Mono", ui-monospace, monospace;
+  font-size: 11.5px;
+  color: var(--text-tertiary);
+  overflow-wrap: anywhere;
+}
+.dv-checking {
+  margin: 0 24px 8px;
+  font-size: 11.5px;
+  color: var(--text-subtle);
+}
+.dv-index-notice,
+.dv-index-warning {
+  margin: 0 24px 8px;
+}
+.dv-index-warning {
+  color: var(--dv-failed);
+}
+.dv-index-errors {
+  margin: 0 24px 8px;
+  font-size: 11.5px;
+  color: var(--text-subtle);
+}
+.dv-index-errors summary {
+  cursor: pointer;
+}
+.dv-index-errors ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+.dv-index-errors li {
+  font-family: "Geist Mono", ui-monospace, monospace;
+  overflow-wrap: anywhere;
+}
 .dv-footer {
   flex-shrink: 0;
   display: flex;
