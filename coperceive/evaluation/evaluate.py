@@ -74,6 +74,8 @@ METRICS_FILE = "metrics.json"
 
 KIND_GT = "gt"
 KIND_PREDICTION = "prediction"
+# Keys of an `ap` table of metrics.json that are not classes.
+AP_MEAN_KEYS = ("mean", "mean_model")
 SOURCE_SINGLE = "single"
 SOURCE_FUSED = "fused"
 
@@ -404,6 +406,14 @@ def _ap_table(
     categories = set(meta.categories) | set(n_gt)
     for placed in output.all_preds():
         categories.add(placed.box.category)
+    for reserved in AP_MEAN_KEYS:
+        if reserved in categories:
+            # The table has one entry per class beside these two keys; a class with
+            # one of their names would be overwritten by the mean, silently.
+            raise EvaluationError(
+                f"category {reserved!r} cannot be evaluated: the name is reserved for the "
+                "mean in the `ap` table of metrics.json; rename the class"
+            )
     table: dict[str, object] = {}
     for index, threshold in enumerate(config.thresholds):
         records = output.ap_records.get(index, {})

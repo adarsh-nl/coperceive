@@ -122,6 +122,18 @@ def test_iou_thresholds_must_strictly_increase() -> None:
         parse_config({"criterion": "iou_bev", "thresholds": [0.5, 0.5]})
 
 
+def test_centre_without_thresholds_is_refused() -> None:
+    """The default thresholds are IoU values; a centre criterion has to name its metres.
+
+    Without this the default ``[0.5, 0.7]`` was read as 0.5 m and 0.7 m, an increasing
+    list the centre rule forbids, and the report still said ``mAP@0.5``.
+    """
+    with pytest.raises(ConfigError, match=r"^thresholds: .*centre"):
+        parse_config({"criterion": "centre"})
+    with pytest.raises(ConfigError, match=r"^thresholds: .*centre"):
+        parse_config({"criterion": "centre", "display_threshold": 0.5})
+
+
 def test_centre_thresholds_must_strictly_decrease() -> None:
     with pytest.raises(ConfigError, match="thresholds"):
         parse_config({"criterion": "centre", "thresholds": [1.0, 2.0], "display_threshold": 1.0})

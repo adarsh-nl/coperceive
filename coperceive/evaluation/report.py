@@ -14,6 +14,7 @@ either run, ``n/a`` where a run lacks the row, and a footer with the counts.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -24,6 +25,7 @@ from coperceive.evaluation.evaluate import (
     KIND_GT,
     KIND_PREDICTION,
     METRICS_FILE,
+    EvaluationError,
     read_matches,
     read_metrics,
     scene_output_dir,
@@ -80,6 +82,7 @@ class Row:
     run_id: str = ""
     pool: ApPool | None = None
     model_categories: tuple[str, ...] = ()
+    config: Mapping[str, object] | None = None
 
     @property
     def key(self) -> tuple[str, str, str]:
@@ -106,16 +109,31 @@ def class_ap_column(threshold: float) -> str:
 
 
 def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row, ...]:
-    """Rows of every scene under ``scenes_root`` that ``run_id`` has evaluated, in name order."""
+    """Rows of every scene under ``scenes_root`` that ``run_id`` has evaluated, in name order.
+
+    Every evaluated scene must carry the same ``config`` in its ``metrics.json``;
+    a run that mixes configs raises :class:`EvaluationError` and is not pooled.
+    """
     check_run_id(run_id)
     model_categories = tuple(read_run_meta(predictions_root, run_id).categories)
     rows: list[Row] = []
+    first_config: tuple[str, dict[str, object]] | None = None
     for scene_dir in scene_directories(scenes_root):
         directory = scene_output_dir(predictions_root, run_id, scene_dir.name)
         if not (directory / METRICS_FILE).is_file():
             continue
         metrics = read_metrics(directory)
         config = _dict(metrics.get("config"))
+        # One headline needs one rule set: `eval run --scenes ... --config ...` can leave
+        # a run whose scenes were judged under different criteria, ranges or thresholds.
+        if first_config is None:
+            first_config = (scene_dir.name, config)
+        elif config != first_config[1]:
+            raise EvaluationError(
+                f"run {run_id!r}: scenes {first_config[0]!r} and {scene_dir.name!r} were "
+                "evaluated with different configs, so their results cannot be pooled; run "
+                "`coperceive eval run` again over every scene with one config"
+            )
         thresholds = tuple(
             float(cast(float, t)) for t in cast(Sequence[object], config.get("thresholds", ()))
         )
@@ -163,6 +181,7 @@ def collect(scenes_root: Path, predictions_root: Path, run_id: str) -> tuple[Row
                     run_id=run_id,
                     pool=pool,
                     model_categories=model_categories,
+                    config=config,
                 )
             )
     return tuple(rows)
@@ -249,6 +268,28 @@ def partial_note(predictions_root: Path, rows: Sequence[Row]) -> str | None:
     return f"partial: {evaluated} of {evaluated + count} scenes"
 
 
+def config_note(a_id: str, a: Sequence[Row], b_id: str, b: Sequence[Row]) -> str | None:
+    """One line naming the config keys on which two evaluated runs differ, or ``None``.
+
+    A delta between two runs is a model difference only when both were judged by
+    the same rules. :func:`collect` guarantees one config per run, so the first row
+    of each speaks for it. Values are printed as JSON (``null``, ``50.0``).
+    """
+    left = a[0].config if a else None
+    right = b[0].config if b else None
+    if left is None or right is None or left == right:
+        return None
+    differences = [
+        f"{key}: {json.dumps(left.get(key))} vs {json.dumps(right.get(key))}"
+        for key in sorted(set(left) | set(right))
+        if left.get(key) != right.get(key)
+    ]
+    return (
+        f"note: runs {a_id!r} and {b_id!r} were evaluated with different configs "
+        f"({'; '.join(differences)}); the differences below include the effect of that"
+    )
+
+
 def outputs_of(rows: Sequence[Row]) -> list[OutputKey]:
     """The ``(agent_id, source)`` outputs of ``rows`` in first-appearance order."""
     return list(dict.fromkeys(row.output for row in rows))
@@ -285,11 +326,22 @@ def aggregate(rows: Sequence[Row], thresholds: Sequence[float]) -> dict[str, obj
     """Sums of the counts, precision and recall from the sums, and the pooled ``AP@<t>``.
 
     Each ``AP@<t>`` is the mean of :func:`pooled_ap` over the categories that have
-    a value, ``None`` when none has. A count a row lacks adds 0.
+    a value, ``None`` when none has. A count a row lacks adds 0. ``gt``,
+    ``predictions``, ``tp``, ``fp`` and ``miss`` are summed over every row;
+    ``recovered`` and ``lost_by_fusion`` once per scene and agent.
     """
     out: dict[str, object] = {}
-    for column in (*COUNT_KEYS, *COOPERATIVE_KEYS):
+    for column in COUNT_KEYS:
         out[column] = sum(_int(row.values.get(column)) for row in rows)
+    # ``recovered`` and ``lost_by_fusion`` compare an agent's ``single`` and ``fused``
+    # outputs box by box and are stored on every output of that agent (§Cooperative
+    # views). They are taken once per scene and agent: summing them per output would
+    # count each box as many times as the agent has outputs.
+    once_per_agent: dict[tuple[str, str, str], Row] = {}
+    for row in rows:
+        once_per_agent.setdefault((row.run_id, row.scene_id, row.agent_id), row)
+    for column in COOPERATIVE_KEYS:
+        out[column] = sum(_int(row.values.get(column)) for row in once_per_agent.values())
     tp, fp, gt = _int(out["tp"]), _int(out["fp"]), _int(out["gt"])
     out["precision"] = None if tp + fp == 0 else tp / (tp + fp)
     out["recall"] = None if gt == 0 else tp / gt

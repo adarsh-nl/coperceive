@@ -54,7 +54,14 @@ from coperceive.evaluation.predictions import (
     validate_boxes,
     write_run,
 )
-from coperceive.evaluation.report import Row, collect, partial_note, render_compare, render_report
+from coperceive.evaluation.report import (
+    Row,
+    collect,
+    config_note,
+    partial_note,
+    render_compare,
+    render_report,
+)
 from coperceive.model import Scene
 from coperceive.store import read_scene
 
@@ -385,6 +392,10 @@ def _compare(args: argparse.Namespace) -> None:
                 f"run {run_id!r} thresholds {list(other)} differ from "
                 f"{loaded[0][0]!r} {list(thresholds)}"
             )
+    for run_id, rows in loaded[1:]:
+        difference = config_note(loaded[0][0], loaded[0][1], run_id, rows)
+        if difference:
+            print(difference)
     if len(loaded) == 2:
         print(render_compare(loaded[0][1], loaded[1][1], thresholds), end="")
     else:

@@ -191,6 +191,50 @@ def test_eval_run_report_and_compare(tmp_path: Path, capsys: pytest.CaptureFixtu
     assert "+0.000" in out
 
 
+def test_compare_says_when_two_runs_were_evaluated_with_different_configs(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A delta between two runs is a model difference only if the rules were the same.
+
+    The same boxes under two run ids, one evaluated with the defaults and one within
+    50 m at score 0.4: the table used to print its deltas with nothing to say that
+    they came from the config. It now names the keys that differ, with both values.
+    """
+    root, jsonl = _prepare(tmp_path)
+    _import(root, jsonl)
+    main(
+        [
+            "predictions",
+            "import",
+            str(jsonl),
+            "--run",
+            "second",
+            "--root",
+            str(root),
+            "--score-note",
+            "constant",
+        ]
+    )
+    config = tmp_path / "eval.yaml"
+    config.write_text("max_range_m: 50\nscore_threshold: 0.4\n", encoding="utf-8")
+    main(["eval", "run", "synthetic", "--root", str(root)])
+    main(["eval", "run", "second", "--root", str(root), "--config", str(config)])
+    capsys.readouterr()
+
+    main(["eval", "compare", "synthetic", "second", "--root", str(root)])
+    out = capsys.readouterr().out
+    note = next(line for line in out.splitlines() if line.startswith("note:"))
+    assert "'synthetic'" in note and "'second'" in note and "different configs" in note
+    assert "max_range_m: null vs 50.0" in note
+    assert "score_threshold: 0.3 vs 0.4" in note
+    assert "criterion" not in note
+    assert "| scene |" in out
+
+    # Two runs under one config compare without a note.
+    main(["eval", "compare", "synthetic", "synthetic", "--root", str(root)])
+    assert "note:" not in capsys.readouterr().out
+
+
 def test_eval_run_with_explicit_predictions_root_config_and_scenes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

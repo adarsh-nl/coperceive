@@ -87,6 +87,14 @@ def parse_config(payload: object) -> EvalConfig:
     criterion = _choice("criterion", node.get("criterion", DEFAULT_CONFIG.criterion), CRITERIA)
     if "thresholds" in node:
         thresholds = _thresholds("thresholds", node["thresholds"], criterion, count=None)
+    elif criterion != DEFAULT_CONFIG.criterion:
+        # The default thresholds are IoU values. Read as metres they are an increasing
+        # list, which the centre rule forbids, and a table headed mAP@0.5 would be a
+        # centre-distance AP at half a metre.
+        raise ConfigError(
+            f"thresholds: required with criterion {criterion}; the default "
+            f"{list(DEFAULT_CONFIG.thresholds)} are IoU values"
+        )
     else:
         thresholds = DEFAULT_CONFIG.thresholds
     display = _number(

@@ -836,6 +836,39 @@ def _car(scene_id: str, score: float, cx: float, category: str = "car") -> Predi
     )
 
 
+@pytest.mark.parametrize("reserved", ["mean", "mean_model"])
+def test_a_class_named_like_a_key_of_the_ap_table_is_refused(reserved: str) -> None:
+    """``ap`` holds one entry per class beside ``mean`` and ``mean_model``.
+
+    A class with one of those names had its AP overwritten by the mean and then
+    entered ``mean_model`` as that mean. There is no room for it in format 1, so
+    the scene is refused and the message names the class.
+    """
+    scene = _one_car_scene("a")
+    scene = replace(scene, annotations=(replace(scene.annotations[0], category=reserved),))
+    meta = RunMeta(
+        run_id="reserved",
+        model="test",
+        score_note="constant",
+        categories=("car",),
+        sources=(("single", "own sensors"),),
+        created_utc=CREATED,
+    )
+    boxes = (_car("a", 0.9, 0.0, category=reserved),)
+    with pytest.raises(EvaluationError, match=rf"category '{reserved}' .*reserved"):
+        evaluate_scene(scene, meta, boxes, DEFAULT_CONFIG, created_utc=CREATED)
+    # The same name declared in run.json, with no box of that class, is refused too.
+    declared = replace(meta, categories=("car", reserved))
+    with pytest.raises(EvaluationError, match=rf"category '{reserved}' .*reserved"):
+        evaluate_scene(
+            _one_car_scene("a"),
+            declared,
+            (_car("a", 0.9, 0.0),),
+            DEFAULT_CONFIG,
+            created_utc=CREATED,
+        )
+
+
 def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None:
     """§Metrics, Pooled AP (the normative case). Scene a: one GT car, one tp at 0.9.
     Scene b: one GT car, one fp at 0.8 and one tp at 0.7. Pooled over n_gt = 2 the walk
@@ -955,6 +988,58 @@ def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) ->
         scene_line = next(s for s in scene_lines if s[1:3] == line[1:3])
         assert line[ap_column] == scene_line[ap_column]
         assert int(line[tp_column]) == 2 * int(scene_line[tp_column])
+
+
+def test_the_all_row_counts_a_recovered_box_once_per_agent(tmp_path: Path) -> None:
+    """``recovered`` and ``lost_by_fusion`` compare an agent's two outputs box by box.
+
+    Both outputs of the agent carry the same count (§Cooperative views), so the row
+    over every output takes it once per scene and agent. Summing it per output
+    reported 4 here for 2 recovered boxes.
+    """
+    root, scene = _scenes_root(tmp_path, "coop-a", "coop-b")
+    predictions = tmp_path / "predictions"
+    meta, _boxes = _write_fixture_run(predictions, scene, ("coop-a", "coop-b"))
+    evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    rows = collect(root, predictions, meta.run_id)
+    thresholds = DEFAULT_CONFIG.thresholds
+    per_output = {
+        output: aggregate([row for row in rows if row.output == output], thresholds)
+        for output in dict.fromkeys(row.output for row in rows)
+    }
+    # One recovered box (track 99) per scene on the vehicle; the uav has no fused output.
+    assert per_output[("vehicle", "single")]["recovered"] == 2
+    assert per_output[("vehicle", "fused")]["recovered"] == 2
+    assert per_output[("uav", "single")]["recovered"] == 0
+    total = aggregate(rows, thresholds)
+    assert total["recovered"] == 2
+    assert total["lost_by_fusion"] == 0
+    table = _table(render_report(rows, thresholds))
+    assert table[-1][:3] == ["all", "", ""]
+    assert table[-1][table[0].index("recovered")] == "2"
+
+
+def test_a_run_whose_scenes_were_evaluated_with_different_configs_is_not_pooled(
+    tmp_path: Path,
+) -> None:
+    """One headline needs one rule set.
+
+    ``eval run --scenes ... --config ...`` can re-evaluate part of a run. Pooling
+    the two halves put statuses judged at 50 m beside statuses judged without a
+    range under one ``mAP@0.5``; the report now refuses and says what to do.
+    """
+    root, scene = _scenes_root(tmp_path, "coop-a", "coop-b")
+    predictions = tmp_path / "predictions"
+    meta, _boxes = _write_fixture_run(predictions, scene, ("coop-a", "coop-b"))
+    evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    assert len(collect(root, predictions, meta.run_id)) > 0
+    other = replace(DEFAULT_CONFIG, max_range_m=50.0, score_threshold=0.4)
+    evaluate_run(root, predictions, meta.run_id, other, scene_ids=("coop-b",), created_utc=CREATED)
+    with pytest.raises(EvaluationError, match=r"coop-a.*coop-b.*different config"):
+        collect(root, predictions, meta.run_id)
+    # Evaluating every scene again with one config makes the run whole.
+    evaluate_run(root, predictions, meta.run_id, other, created_utc=CREATED)
+    assert len(collect(root, predictions, meta.run_id)) > 0
 
 
 def test_render_report_shows_a_missing_count_as_n_a() -> None:
