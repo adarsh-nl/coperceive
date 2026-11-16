@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import stat
 import sys
 import warnings
 from pathlib import Path
@@ -94,7 +95,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--token-file",
         default=None,
         metavar="PATH",
-        help="Path to a file containing the bearer token. Must be mode 0600 or 0400.",
+        help="Path to a file containing the bearer token: a regular file you own (not a "
+        "symbolic link), mode 0600 or 0400.",
     )
     serve.add_argument(
         "--root-path",
@@ -1087,50 +1089,83 @@ def _convert_griffin(args: argparse.Namespace) -> None:
     module.convert_command(args)  # type: ignore[attr-defined]
 
 
+def _token_file_error(token_file: str, problem: str) -> SystemExit:
+    print(f"--token-file {token_file} {problem}", file=sys.stderr)
+    return SystemExit(2)
+
+
+def _read_posix_token_file(token_file: str) -> str:
+    """The token file's text, checked on the open file itself.
+
+    The file must be a regular file (not a symbolic link) owned by this user
+    with no group or other permission bits: in a shared directory another user
+    could otherwise swap in a 0600 file of their own between write and read.
+    """
+    token_path = Path(token_file)
+    if token_path.is_symlink():
+        raise _token_file_error(token_file, "is a symbolic link; pass the file itself")
+    if not token_path.is_file():
+        raise _token_file_error(token_file, "is not a file")
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(token_path, flags)
+    except OSError as exc:
+        raise _token_file_error(token_file, f"cannot be read: {exc.strerror}") from exc
+    with os.fdopen(descriptor, "rb") as handle:
+        info = os.fstat(handle.fileno())
+        if not stat.S_ISREG(info.st_mode):
+            raise _token_file_error(token_file, "is not a file")
+        if info.st_uid != os.geteuid():
+            raise _token_file_error(
+                token_file, f"is owned by uid {info.st_uid}, not by you (uid {os.geteuid()})"
+            )
+        mode = info.st_mode & 0o777
+        if (mode & 0o077) != 0:
+            raise _token_file_error(
+                token_file, f"has loose permissions {oct(mode)} (must be mode 0600 or 0400)"
+            )
+        return handle.read().decode("utf-8")
+
+
+def _read_windows_token_file(token_file: str) -> str:
+    token_path = Path(token_file)
+    if not token_path.is_file():
+        raise _token_file_error(token_file, "is not a file")
+    try:
+        import subprocess
+
+        proc = subprocess.run(
+            ["icacls", str(token_path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if proc.returncode == 0:
+            out_lower = proc.stdout.lower()
+            forbidden = [
+                "everyone",
+                "builtin\\users",
+                "nt authority\\authenticated users",
+            ]
+            for f in forbidden:
+                if f in out_lower:
+                    raise _token_file_error(token_file, f"has loose permissions allowing {f}")
+    except Exception:
+        pass
+    return token_path.read_text(encoding="utf-8")
+
+
 def _resolve_token(args: argparse.Namespace) -> str | None:
     token: str | None = None
     if getattr(args, "token_file", None) is not None:
-        token_path = Path(args.token_file)
-        if not token_path.is_file():
-            print(f"--token-file {args.token_file} is not a file", file=sys.stderr)
-            raise SystemExit(2)
         if os.name != "nt":
-            mode = token_path.stat().st_mode & 0o777
-            if (mode & 0o077) != 0:
-                print(
-                    f"--token-file {args.token_file} has loose permissions {oct(mode)} "
-                    "(must be mode 0600 or 0400)",
-                    file=sys.stderr,
-                )
-                raise SystemExit(2)
+            text = _read_posix_token_file(args.token_file)
         else:
-            try:
-                import subprocess
-
-                proc = subprocess.run(
-                    ["icacls", str(token_path)],
-                    capture_output=True,
-                    text=True,
-                    check=False,
-                )
-                if proc.returncode == 0:
-                    out_lower = proc.stdout.lower()
-                    forbidden = [
-                        "everyone",
-                        "builtin\\users",
-                        "nt authority\\authenticated users",
-                    ]
-                    for f in forbidden:
-                        if f in out_lower:
-                            tf = args.token_file
-                            print(
-                                f"--token-file {tf} has loose permissions allowing {f}",
-                                file=sys.stderr,
-                            )
-                            raise SystemExit(2)
-            except Exception:
-                pass
-        token = token_path.read_text(encoding="utf-8").strip() or None
+            text = _read_windows_token_file(args.token_file)
+        token = text.strip()
+        if not token:
+            # An empty file must not turn into "no token", the anonymous mode.
+            raise _token_file_error(args.token_file, "is empty")
     elif "COPERCEIVE_TOKEN" in os.environ and os.environ["COPERCEIVE_TOKEN"].strip():
         token = os.environ["COPERCEIVE_TOKEN"].strip()
     elif getattr(args, "token", None):

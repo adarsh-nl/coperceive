@@ -1320,6 +1320,32 @@ mod tests {
     }
 
     #[test]
+    fn an_option_like_destination_is_never_handed_to_ssh() {
+        // Test connection can receive an entry that was never saved (so never
+        // validated); the destination check must still stop it before ssh runs.
+        let options = DetectOptions {
+            ssh_bin: "/nonexistent/coperceive-test-ssh".to_string(),
+        };
+        let mut alias = entry_from_fixture(CLUSTER_A);
+        alias.profile.ssh_alias = Some("-oProxyCommand=touch /tmp/coperceive-marker".to_string());
+        let mut host = entry_from_fixture(CLUSTER_A);
+        host.profile.ssh_alias = None;
+        host.profile.host = Some("-oProxyCommand=touch /tmp/coperceive-marker".to_string());
+        let mut user = entry_from_fixture(CLUSTER_A);
+        user.profile.ssh_alias = None;
+        user.profile.host = Some("login.example".to_string());
+        user.profile.user = Some("-oProxyJump=x@evil.example,y".to_string());
+        for entry in [alias, host, user] {
+            let report = detect_server(&entry, &options);
+            assert!(!report.reachable, "{:?}", report.checks);
+            assert_eq!(report.checks.len(), 1, "{:?}", report.checks);
+            assert_eq!(report.checks[0].name, "target", "{:?}", report.checks);
+            assert!(!report.checks[0].ok);
+            assert!(report.checks[0].detail.contains("'-'"), "{:?}", report.checks);
+        }
+    }
+
+    #[test]
     fn detection_report_json_never_contains_token_or_password() {
         let fake = FakeSsh::create();
         let entry = entry_from_fixture(CLUSTER_A);
