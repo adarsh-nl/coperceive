@@ -64,6 +64,15 @@
       const rr = row.getBoundingClientRect(), pr = panel.getBoundingClientRect();
       if (rr.right > pr.right + 0.5) out.push(`left panel row: ${name(row)} is wider than the panel`);
     }
+    for (const btn of panel.querySelectorAll('.seg button')) {
+      if (!visible(btn)) continue;
+      const range = document.createRange();
+      range.selectNodeContents(btn);
+      const rects = [...range.getClientRects()].filter((r) => r.width > 1 && r.height > 1);
+      if (rects.length > 1) {
+        out.push(`left panel seg button: "${(btn.textContent || '').trim()}" wrapped onto ${rects.length} lines`);
+      }
+    }
   }
   return out;
 }

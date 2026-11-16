@@ -246,6 +246,11 @@ GROUPS: dict[str, list[str]] = {
         ".cam-strip .cam-group-head > *",
         ".cam-strip-toggle > *",
     ],
+    "camera strip thumbs": [
+        ".cam-strip-head",
+        ".cam-strip .cam-group",
+        ".cam-strip .cam-thumb-wrap",
+    ],
     "timeline row": [".timeline-tools > *", ".timeline-tools .speed-seg > *"],
     "status line": [".status-line", ".cam-strip", ".timeline"],
 }

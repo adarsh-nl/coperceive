@@ -249,11 +249,5 @@ pub fn get_servers_file_path() -> PathBuf {
 }
 
 pub fn resolve_python_candidates(res_dir: &Path) -> Vec<PathBuf> {
-    vec![
-        res_dir.join("resources").join("python").join("python.exe"),
-        res_dir.join("python").join("python.exe"),
-        res_dir.join("python").join("install").join("python.exe"),
-        res_dir.join("resources").join("python").join("bin").join("python3.exe"),
-        res_dir.join("python").join("bin").join("python3.exe"),
-    ]
+    super::resolve_python_candidates_for_layout(res_dir, crate::remote_static::OsLayout::Windows)
 }
