@@ -10,10 +10,12 @@ import hmac
 import io
 import json
 import re
+import sqlite3
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -23,7 +25,15 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from starlette.datastructures import Headers
 
-from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
+from coperceive.app.jobs import (
+    CSRF_HEADER,
+    JobsDatabaseError,
+    confine,
+    confine_media,
+    list_jobs,
+    open_db,
+    run_job,
+)
 from coperceive.camera_images import served_candidates
 from coperceive.errors import CoperceiveError
 from coperceive.evaluation.predictions import predictions_root
@@ -100,6 +110,57 @@ _EMPTY_TIMING: dict[str, float | int] = {"count": 0, "p50": 0.0, "p95": 0.0, "ma
 
 _CSRF_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 
+# The names a browser on this machine uses for a loopback server. A page served
+# from any other name (a DNS-rebinding domain, a LAN name) keeps that name in
+# its Host header even when it resolves to 127.0.0.1.
+_LOOPBACK_HOSTNAMES = ("127.0.0.1", "localhost", "[::1]")
+
+
+def _route_path(scope: dict[str, object]) -> str:
+    """The path Starlette's router matches: ``scope["path"]`` without ``root_path``.
+
+    Uvicorn puts ``--root-path`` in front of the request path and the router
+    strips it again (``starlette._utils.get_route_path``, mirrored here), so the
+    guard has to decide on the same path or a prefixed request skips it.
+    """
+    path = str(scope.get("path", ""))
+    root_path = str(scope.get("root_path", "") or "")
+    if not root_path or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path) :]
+    return path
+
+
+def _is_api(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
+
+
+def _loopback_host(scope: dict[str, object], headers: Headers, port: int) -> bool:
+    """True when the one Host header names a loopback address on ``port``.
+
+    ``port`` 0 means the port the server listens on (``scope["server"]``), for a
+    server started on an ephemeral port.
+    """
+    values = headers.getlist("host")
+    if len(values) != 1:
+        return False
+    expected = port
+    if expected == 0:
+        server = scope.get("server")
+        listening = list(cast(Sequence[object], server)) if isinstance(server, tuple | list) else []
+        if len(listening) != 2 or not isinstance(listening[1], int):
+            return False
+        expected = listening[1]
+    host = values[0].strip().lower()
+    default_port = 443 if scope.get("scheme") == "https" else 80
+    for name in _LOOPBACK_HOSTNAMES:
+        if host == f"{name}:{expected}" or (expected == default_port and host == name):
+            return True
+    return False
+
 
 class _AuthAndCsrfMiddleware:
     """Bearer-token and CSRF checks for ``/api`` as plain ASGI middleware.
@@ -110,7 +171,12 @@ class _AuthAndCsrfMiddleware:
     middleware without a token and without ``allow_anonymous`` fails closed with
     a 500 for every ``/api`` request. ``allow_anonymous`` is the explicit
     loopback-only mode ``create_app`` opts into when it has no token; the CSRF
-    check still runs in both modes.
+    check still runs in both modes. Whether a request is ``/api`` is decided on
+    the route path (``root_path`` removed), the path the router serves.
+
+    ``loopback_port`` (``coperceive serve`` without a token) also refuses, with
+    a 400, every HTTP request whose Host is not 127.0.0.1, localhost or [::1] on
+    that port, so a DNS-rebinding page cannot use the token-less API.
     """
 
     def __init__(
@@ -119,19 +185,30 @@ class _AuthAndCsrfMiddleware:
         token: str | None = None,
         *,
         allow_anonymous: bool = False,
+        loopback_port: int | None = None,
     ) -> None:
         self.app = app
         self.token = token
         self.allow_anonymous = allow_anonymous
+        self.loopback_port = loopback_port
 
     async def __call__(self, scope: dict[str, object], receive: object, send: object) -> None:
-        if scope.get("type") != "http" or scope.get("method") == "OPTIONS":
-            await self.app(scope, receive, send)  # type: ignore[operator]
-            return
-        if not str(scope.get("path", "")).startswith("/api/"):
+        if scope.get("type") != "http":
             await self.app(scope, receive, send)  # type: ignore[operator]
             return
         headers = Headers(scope=scope)  # type: ignore[arg-type]
+        if self.loopback_port is not None and not _loopback_host(
+            scope, headers, self.loopback_port
+        ):
+            await _json_error(
+                400,
+                "host not allowed: without a token this server answers only "
+                "127.0.0.1, localhost or [::1] on its own port",
+            )(scope, receive, send)  # type: ignore[arg-type]
+            return
+        if scope.get("method") == "OPTIONS" or not _is_api(_route_path(scope)):
+            await self.app(scope, receive, send)  # type: ignore[operator]
+            return
         if not self.token:
             if not self.allow_anonymous:
                 await _json_error(500, "server authentication is not configured")(
@@ -353,6 +430,7 @@ def create_app(
     media_roots: Sequence[str | Path] = (),
     allow_origin: str | None = None,
     remote: RemoteScenes | None = None,
+    loopback_port: int | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -362,6 +440,9 @@ def create_app(
     packaged page with another build directory. ``media_roots`` are directories a
     scene's image links may resolve into (a staged scene links ``<side>/camera``
     to the dataset copy); without them an image outside the scene is 400.
+    ``loopback_port`` makes every request carry a loopback Host header on that
+    port (0: the listening port); ``coperceive serve`` sets it when it has no
+    token.
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
@@ -402,8 +483,14 @@ def create_app(
     # that went away (the points endpoint relies on it to cancel a remote read).
     # The token is passed in at construction so the guard cannot fail open; with
     # no token this app is the loopback-only mode (`coperceive serve` refuses a
-    # non-loopback host without a token), and the guard still enforces CSRF.
-    app.add_middleware(_AuthAndCsrfMiddleware, token=token, allow_anonymous=token is None)
+    # non-loopback host without a token, and passes loopback_port so a foreign
+    # Host is refused too), and the guard still enforces CSRF.
+    app.add_middleware(
+        _AuthAndCsrfMiddleware,
+        token=token,
+        allow_anonymous=token is None,
+        loopback_port=loopback_port,
+    )
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -424,7 +511,7 @@ def create_app(
 
     @app.get("/api/jobs")
     def jobs() -> list[dict[str, object]]:
-        conn = open_db(app.state.db_path)
+        conn = _open_jobs_db(app.state.db_path)
         try:
             return list_jobs(conn)
         finally:
@@ -432,7 +519,7 @@ def create_app(
 
     @app.post("/api/jobs")
     def create_job(body: JobRequest) -> dict[str, int]:
-        conn = open_db(app.state.db_path)
+        conn = _open_jobs_db(app.state.db_path)
         try:
             try:
                 job_id = run_job(conn, app.state.root, body.name, body.args)
@@ -444,6 +531,8 @@ def create_app(
 
     @app.get("/api/events")
     async def events() -> StreamingResponse:
+        # Refuse an unusable database before the stream starts, as a 400.
+        _open_jobs_db(app.state.db_path).close()
         return StreamingResponse(_event_stream(app.state.db_path), media_type="text/event-stream")
 
     @app.get("/api/scenes")
@@ -641,7 +730,9 @@ def create_app(
     @app.post("/api/scenes/{scene_id}/export/rerun")
     def scene_rerun(scene_id: str) -> dict[str, object]:
         scene = _cached_scene(app, scene_id)
-        relative = Path("exports") / f"{scene.scene_id}.rrd"
+        # manifest.json's scene_id comes from the scene folder, which may be
+        # someone else's: like every other export, only a plain name is used.
+        relative = Path("exports") / f"{_export_stem(scene.scene_id, scene_id)}.rrd"
         try:
             dest = confine(app.state.root, str(relative))
         except ValueError as exc:
@@ -1147,6 +1238,21 @@ def _map_summary(app: FastAPI, scene: Scene) -> dict[str, object]:
         "sample_step_m": hdmap.sample_step_m,
         "layers": counts,
     }
+
+
+def _export_stem(*names: str) -> str:
+    """The first of ``names`` that is a plain export name, else ``scene``."""
+    for name in names:
+        if _EXPORT_NAME.fullmatch(name):
+            return name
+    return "scene"
+
+
+def _open_jobs_db(path: Path) -> sqlite3.Connection:
+    try:
+        return open_db(path)
+    except JobsDatabaseError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _export_label(agent_id: str, sensor_id: str) -> str:
