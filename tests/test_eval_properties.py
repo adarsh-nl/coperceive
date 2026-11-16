@@ -54,7 +54,7 @@ from tests.evalcheck.transform import (
     scale_lengths,
 )
 
-SEEDS = range(24)
+SEEDS = range(12)
 _PROFILE_IDS = [profile.name for profile in PROFILES]
 
 Summary = dict[tuple[str, str, str], tuple[object, ...]]

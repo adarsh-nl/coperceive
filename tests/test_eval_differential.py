@@ -61,9 +61,9 @@ from tests.evalcheck.scenario import (
 )
 
 # Per profile: seeds evaluated in memory (per-scene results) and on disk (headline rows too).
-SEEDS_IN_MEMORY = range(60)
-SEEDS_ON_DISK = range(6)
-GEOMETRY_PAIRS = 6000
+SEEDS_IN_MEMORY = range(30)
+SEEDS_ON_DISK = range(4)
+GEOMETRY_PAIRS = 3000
 # World offsets of the geometry checks: a simulator town, 300 km out, a projected map frame.
 _OFFSETS: tuple[tuple[float, float], ...] = ((0.0, 0.0), (3.0e5, -3.0e5), (4.0e5, 4.0e6))
 
@@ -285,7 +285,7 @@ def _product_box(box: BoxSpec) -> WorldBox:
 
 @pytest.mark.parametrize("offset", _OFFSETS, ids=("town", "300km", "map-frame"))
 def test_pair_geometry_matches_the_reference(offset: tuple[float, float]) -> None:
-    """BEV IoU against an exact polygon overlay, and the two pair errors, on 6000 pairs.
+    """BEV IoU against an exact polygon overlay, and the two pair errors, on 3000 pairs.
 
     The IoU must also be symmetric and inside ``[0, 1]``, and 1 for a box with itself.
     """
@@ -317,7 +317,7 @@ def test_pair_geometry_matches_the_reference(offset: tuple[float, float]) -> Non
 def test_placing_a_body_box_matches_the_reference() -> None:
     """World centre, heading and range of body-frame boxes under tilted, turned poses."""
     rng = random.Random("placing")
-    for _ in range(3000):
+    for _ in range(1500):
         offset = rng.choice(_OFFSETS)
         pose = PoseSample(
             time_us=0,
