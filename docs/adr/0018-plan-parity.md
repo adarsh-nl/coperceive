@@ -25,6 +25,8 @@ On 2026-11-16 both paths were rendered for the same inputs, at this branch's bas
 
 **One CLI bug.** `slurm.py` ends the script with `echo "done: <shlex-quoted path> (exit $RC)"`. With `--out` under `te st/it's "q"`, the single-quoted word inside double quotes ends the string early, and the script fails `bash -n`. This file is not owned by another agent, so it is fixed here.
 
+**Two more defects, seen when case (c) below was rendered.** On a modules profile with no GPU discovery, the app loads only the profile's modules, so the CUDA modules Griffin's manifest needs are missing. It also requests no GPU at all, because it never reads the manifest's `gpu: true`. Both are in `run_plan.rs` and routed.
+
 **Differences that are not yet decided** include:
 
 - `#SBATCH` resources: `--time`, `--gres`, `--mem`, `--cpus-per-task`, `--constraint`, `--mail-type`.
@@ -72,9 +74,10 @@ On 2026-11-16 both paths were rendered for the same inputs, at this branch's bas
 `tests/fixtures/plan_parity/allowed_differences.json` lists, per case, each difference with a `kind`, a reason and a citation:
 
 - **`intended`**: a difference that a document decides.
-- **`defect`**: a difference that is a bug, with the owner it is routed to and the blocker number above.
+- **`defect`**: a difference that is a bug, with the owner it is routed to (and the blocker number above, where it is one).
+- **`undecided`**: a difference no document decides yet, waiting for the PM.
 
-The test fails on any difference that is **not** in the ledger. It also fails on any ledger entry that **no longer** occurs, so a fix forces the entry out and the ledger cannot go stale. Every undecided difference above goes in as `defect` until the PM decides it, and the report lists them.
+The test fails on any difference that is **not** in the ledger. It also fails on any ledger entry that **no longer** occurs, so a fix forces the entry out and the ledger cannot go stale.
 
 This keeps CI green while the blockers exist, which a red test in files this task may not edit could not do. It does not hide them, because each one is named in the ledger and in the report. See open question 1.
 

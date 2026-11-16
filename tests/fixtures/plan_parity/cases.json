@@ -1,0 +1,135 @@
+{
+  "about": "Plan parity cases (docs/adr/0018-plan-parity.md). One logical input set per case, read by src-tauri/tests/plan_parity.rs (the app's script) and tests/test_plan_parity.py (the CLI's script). Paths are logical: the app side passes them to a fake cluster as they are; the CLI side builds them under a temporary directory and maps that directory back to `root`.",
+  "run_id": "plan-1790000000-aabbccddeeff",
+  "code_root": "/opt/coperceive",
+  "manifest": "/opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml",
+  "cases": [
+    {
+      "name": "base",
+      "about": "The release doc's Griffin vehicle run (docs/release/v0.1.1-eval-pipeline-test.md), with the profile the CLI golden uses.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "media_root": true,
+      "extras": [],
+      "profile": {
+        "partition": "gpu-a40",
+        "partition_gres": "gpu:a40:4",
+        "gpu_types": ["a40"],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": ["nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"],
+        "coperceive_command": ["/opt/venv/bin/python", "-m", "coperceive"],
+        "proxy_jump": null,
+        "port": null
+      },
+      "cli_logs": "/home/tester/logs",
+      "app_scenes": "reported_as_file"
+    },
+    {
+      "name": "spaces_and_quotes",
+      "about": "Case (a): every data path and the results root hold a space, a single quote and double quotes.",
+      "root": "/data/te st/it's \"q\"",
+      "model": "vehicle-side",
+      "media_root": true,
+      "extras": [],
+      "profile": {
+        "partition": "gpu-a40",
+        "partition_gres": "gpu:a40:4",
+        "gpu_types": ["a40"],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/te st/results",
+        "modules": ["nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"],
+        "coperceive_command": ["/opt/venv/bin/python", "-m", "coperceive"],
+        "proxy_jump": null,
+        "port": null
+      },
+      "cli_logs": "/home/te st/logs",
+      "app_scenes": "reported_as_file"
+    },
+    {
+      "name": "no_media_root",
+      "about": "Case (b): the optional --media-root is left out, and there are no extra options.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "media_root": false,
+      "extras": [],
+      "profile": {
+        "partition": "gpu-a40",
+        "partition_gres": "gpu:a40:4",
+        "gpu_types": ["a40"],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": ["nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"],
+        "coperceive_command": ["/opt/venv/bin/python", "-m", "coperceive"],
+        "proxy_jump": null,
+        "port": null
+      },
+      "cli_logs": "/home/tester/logs",
+      "app_scenes": "reported_as_file"
+    },
+    {
+      "name": "proxy_jump_modules",
+      "about": "Case (c): a profile reached through a jump host on port 2222 that sets up python/3.12 with modules and has no GPU discovery (src-tauri/tests/fixtures/hpc/cluster-b.json).",
+      "root": "/data/scenes",
+      "model": "vehicle-side",
+      "media_root": true,
+      "extras": ["min_score=0.05"],
+      "profile": {
+        "partition": "main-cpu",
+        "partition_gres": null,
+        "gpu_types": [],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/data/results",
+        "modules": ["python/3.12"],
+        "coperceive_command": ["/home/bob/coperceive-app/.venv/bin/python", "-m", "coperceive"],
+        "proxy_jump": "jump.example.org",
+        "port": 2222
+      },
+      "cli_logs": "/data/results/logs",
+      "app_scenes": "reported_as_file"
+    },
+    {
+      "name": "scenes_directory",
+      "about": "The base case with the scenes folder reported truthfully as a directory, as `model run --scenes` takes it (blocker 3).",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "media_root": true,
+      "extras": [],
+      "profile": {
+        "partition": "gpu-a40",
+        "partition_gres": "gpu:a40:4",
+        "gpu_types": ["a40"],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": ["nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"],
+        "coperceive_command": ["/opt/venv/bin/python", "-m", "coperceive"],
+        "proxy_jump": null,
+        "port": null
+      },
+      "cli_logs": "/home/tester/logs",
+      "app_scenes": "directory"
+    },
+    {
+      "name": "model_list_entry_point",
+      "about": "The base case with the cluster's `coperceive model list` row as the registry prints it: an entry point, not a path (blocker 5, read from coperceive/models/registry.py).",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "media_root": true,
+      "extras": [],
+      "profile": {
+        "partition": "gpu-a40",
+        "partition_gres": "gpu:a40:4",
+        "gpu_types": ["a40"],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": ["nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"],
+        "coperceive_command": ["/opt/venv/bin/python", "-m", "coperceive"],
+        "proxy_jump": null,
+        "port": null
+      },
+      "cli_logs": "/home/tester/logs",
+      "app_scenes": "reported_as_file",
+      "app_model_list_row": "griffin  entry-point  coperceive_griffin_model:MANIFEST"
+    }
+  ]
+}

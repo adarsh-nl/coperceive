@@ -1,0 +1,395 @@
+{
+  "about": "Every difference between the app's and the CLI's job script, per case (docs/adr/0018-plan-parity.md). kind: intended (a document decides it), defect (a bug, routed to its owner), undecided (waiting for the PM). tests/test_plan_parity.py fails on a difference not listed here and on a listed one that no longer occurs.",
+  "cases": {
+    "base": {
+      "sbatch.constraint": {
+        "kind": "undecided",
+        "why": "The CLI pins an A40 with --constraint=a40 from the manifest, and the acceptance claim is A40-specific; the app pins the GPU type only through a typed GRES, and only when discovery found one.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:39-40, :114",
+        "owner": "PM decision"
+      },
+      "sbatch.cpus-per-task": {
+        "kind": "undecided",
+        "why": "Same as sbatch.mem, for the manifest's 8 CPUs.",
+        "cite": "plugins/griffin/coperceive_griffin_model/model.yaml:56; docs/adr/0015-cluster-profiles-scheduler-adapter.md:107",
+        "owner": "PM decision"
+      },
+      "sbatch.error": {
+        "kind": "undecided",
+        "why": "Same as sbatch.output.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153",
+        "owner": "PM decision"
+      },
+      "sbatch.gres": {
+        "kind": "undecided",
+        "why": "CLI gpu:1 plus --constraint=a40; app gpu:a40:1 from discovery. Both ask for one A40 by different means.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:39-40",
+        "owner": "PM decision"
+      },
+      "sbatch.job-name": {
+        "kind": "intended",
+        "why": "App jobs are named coperceive-<kind>-<id> so the app lists and manages only its own jobs; the CLI's job is not app-managed.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md:41, :107, :220"
+      },
+      "sbatch.mail-type": {
+        "kind": "undecided",
+        "why": "No document decides whether the app's job mails on END,FAIL. No effect on results.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md:107 (its list of script values has no mail-type)",
+        "owner": "PM decision"
+      },
+      "sbatch.mem": {
+        "kind": "undecided",
+        "why": "The CLI takes 64G from the manifest; ADR 0015 puts only profile and user values in the app's script, and the profile sets none, so the cluster default applies. Nothing reconciles that with Griffin's 64 GB.",
+        "cite": "plugins/griffin/coperceive_griffin_model/model.yaml:57; docs/adr/0015-cluster-profiles-scheduler-adapter.md:107",
+        "owner": "PM decision"
+      },
+      "sbatch.output": {
+        "kind": "undecided",
+        "why": "Log location: the release doc tells the user to read ~/logs/<job-name>-<job-id>.out; the app writes its logs into results_root, and a profile has no logs folder.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153",
+        "owner": "PM decision"
+      },
+      "sbatch.time": {
+        "kind": "undecided",
+        "why": "The release doc expects the review to show the CLI's estimate, 01:00:00; the app has no estimate and submits the form's default, 04:00:00. Longer is safe but not the documented value.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:44, :115",
+        "owner": "PM decision"
+      },
+      "env": {
+        "kind": "undecided",
+        "why": "The CLI exports PYTHONPATH to the checkout that emitted the job; the app does not, so the node imports whatever the cluster venv's editable install points at. No document says which is meant.",
+        "cite": "coperceive/models/slurm.py coperceive_root docstring",
+        "owner": "PM decision"
+      },
+      "capture.line": {
+        "kind": "defect",
+        "why": "The app records environment.json with the login default python3, not the interpreter that ran the model, so the repro card can name the wrong Python and packages. The two heredoc programs are identical; only the interpreter differs.",
+        "cite": "tests/test_repro_card.py keeps the capture bodies equal; coperceive/models/slurm.py environment_capture_lines",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/job_submit.rs"
+      },
+      "staging": {
+        "kind": "intended",
+        "why": "The app runs against data already on the cluster and stages nothing into scratch.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+      },
+      "rc_capture": {
+        "kind": "intended",
+        "why": "The CLI keeps the run's exit status so a partial run still comes home; the app writes to results_root directly and has nothing to copy.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+      },
+      "copy_home": {
+        "kind": "intended",
+        "why": "Output is on results_root, never in scratch, so there is no copy home.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      },
+      "contract_checks": {
+        "kind": "defect",
+        "why": "Blocker 4. The app's job fails unless predictions.jsonl and metrics.json exist; model run writes neither (it writes <out>/<run_id>/<scene>/boxes.parquet and run.json), so a successful Griffin run exits 1. The checks belong to the custom-pipeline contract.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 4; docs/spec/pipeline-output.md",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/job_submit.rs"
+      },
+      "argv.app_unparseable": {
+        "kind": "defect",
+        "why": "Blocker 1. The app adds --output-dir, which coperceive model run rejects (argparse exits 2), so the job fails at once.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 1",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs and job_submit.rs"
+      },
+      "argv.out": {
+        "kind": "intended",
+        "why": "A run's output goes under results_root, never under scratch. The CLI stages through scratch and copies home.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      },
+      "argv.work": {
+        "kind": "undecided",
+        "why": "ADR 0015 says scratch is for a job's temporary work and the release doc expects work logs under ~/results/<job-id>/work/; the app puts the work directory in results_root/runs/<id>/work.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153-154",
+        "owner": "PM decision"
+      },
+      "argv.staging_seconds": {
+        "kind": "intended",
+        "why": "Only the CLI stages, so only it times the staging (provenance timing only).",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+      },
+      "argv.option": {
+        "kind": "defect",
+        "why": "Blocker 2. The app passes the checkpoint as --option checkpoint=<path>; Griffin's vehicle-side model declares no checkpoint option.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 2",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      },
+      "argv.app_options_rejected": {
+        "kind": "defect",
+        "why": "Blocker 2, as model run reports it: check_options refuses checkpoint.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 2",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      }
+    },
+    "spaces_and_quotes": {
+      "sbatch.constraint": {
+        "kind": "undecided",
+        "why": "The CLI pins an A40 with --constraint=a40 from the manifest, and the acceptance claim is A40-specific; the app pins the GPU type only through a typed GRES, and only when discovery found one.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:39-40, :114",
+        "owner": "PM decision"
+      },
+      "sbatch.cpus-per-task": {
+        "kind": "undecided",
+        "why": "Same as sbatch.mem, for the manifest's 8 CPUs.",
+        "cite": "plugins/griffin/coperceive_griffin_model/model.yaml:56; docs/adr/0015-cluster-profiles-scheduler-adapter.md:107",
+        "owner": "PM decision"
+      },
+      "sbatch.error": {
+        "kind": "undecided",
+        "why": "Same as sbatch.output.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153",
+        "owner": "PM decision"
+      },
+      "sbatch.gres": {
+        "kind": "undecided",
+        "why": "CLI gpu:1 plus --constraint=a40; app gpu:a40:1 from discovery. Both ask for one A40 by different means.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:39-40",
+        "owner": "PM decision"
+      },
+      "sbatch.job-name": {
+        "kind": "intended",
+        "why": "App jobs are named coperceive-<kind>-<id> so the app lists and manages only its own jobs; the CLI's job is not app-managed.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md:41, :107, :220"
+      },
+      "sbatch.mail-type": {
+        "kind": "undecided",
+        "why": "No document decides whether the app's job mails on END,FAIL. No effect on results.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md:107 (its list of script values has no mail-type)",
+        "owner": "PM decision"
+      },
+      "sbatch.mem": {
+        "kind": "undecided",
+        "why": "The CLI takes 64G from the manifest; ADR 0015 puts only profile and user values in the app's script, and the profile sets none, so the cluster default applies. Nothing reconciles that with Griffin's 64 GB.",
+        "cite": "plugins/griffin/coperceive_griffin_model/model.yaml:57; docs/adr/0015-cluster-profiles-scheduler-adapter.md:107",
+        "owner": "PM decision"
+      },
+      "sbatch.output": {
+        "kind": "undecided",
+        "why": "Log location: the release doc tells the user to read ~/logs/<job-name>-<job-id>.out; the app writes its logs into results_root, and a profile has no logs folder.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153",
+        "owner": "PM decision"
+      },
+      "sbatch.time": {
+        "kind": "undecided",
+        "why": "The release doc expects the review to show the CLI's estimate, 01:00:00; the app has no estimate and submits the form's default, 04:00:00. Longer is safe but not the documented value.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:44, :115",
+        "owner": "PM decision"
+      },
+      "env": {
+        "kind": "undecided",
+        "why": "The CLI exports PYTHONPATH to the checkout that emitted the job; the app does not, so the node imports whatever the cluster venv's editable install points at. No document says which is meant.",
+        "cite": "coperceive/models/slurm.py coperceive_root docstring",
+        "owner": "PM decision"
+      },
+      "capture.line": {
+        "kind": "defect",
+        "why": "The app records environment.json with the login default python3, not the interpreter that ran the model, so the repro card can name the wrong Python and packages. The two heredoc programs are identical; only the interpreter differs.",
+        "cite": "tests/test_repro_card.py keeps the capture bodies equal; coperceive/models/slurm.py environment_capture_lines",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/job_submit.rs"
+      },
+      "staging": {
+        "kind": "intended",
+        "why": "The app runs against data already on the cluster and stages nothing into scratch.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+      },
+      "rc_capture": {
+        "kind": "intended",
+        "why": "The CLI keeps the run's exit status so a partial run still comes home; the app writes to results_root directly and has nothing to copy.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+      },
+      "copy_home": {
+        "kind": "intended",
+        "why": "Output is on results_root, never in scratch, so there is no copy home.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      },
+      "contract_checks": {
+        "kind": "defect",
+        "why": "Blocker 4. The app's job fails unless predictions.jsonl and metrics.json exist; model run writes neither (it writes <out>/<run_id>/<scene>/boxes.parquet and run.json), so a successful Griffin run exits 1. The checks belong to the custom-pipeline contract.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 4; docs/spec/pipeline-output.md",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/job_submit.rs"
+      },
+      "argv.app_unparseable": {
+        "kind": "defect",
+        "why": "Blocker 1. The app adds --output-dir, which coperceive model run rejects (argparse exits 2), so the job fails at once.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 1",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs and job_submit.rs"
+      },
+      "argv.out": {
+        "kind": "intended",
+        "why": "A run's output goes under results_root, never under scratch. The CLI stages through scratch and copies home.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      },
+      "argv.work": {
+        "kind": "undecided",
+        "why": "ADR 0015 says scratch is for a job's temporary work and the release doc expects work logs under ~/results/<job-id>/work/; the app puts the work directory in results_root/runs/<id>/work.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153-154",
+        "owner": "PM decision"
+      },
+      "argv.staging_seconds": {
+        "kind": "intended",
+        "why": "Only the CLI stages, so only it times the staging (provenance timing only).",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+      },
+      "argv.option": {
+        "kind": "defect",
+        "why": "Blocker 2. The app passes the checkpoint as --option checkpoint=<path>; Griffin's vehicle-side model declares no checkpoint option.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 2",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      },
+      "argv.app_options_rejected": {
+        "kind": "defect",
+        "why": "Blocker 2, as model run reports it: check_options refuses checkpoint.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 2",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      }
+    },
+    "no_media_root": {
+      "app_refused": {
+        "kind": "undecided",
+        "why": "The app refuses a plan with no media root; the CLI treats --media-root as optional and the release doc does not make it mandatory.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity' (the plan carries --media-root; nothing says it is required); coperceive/models/commands.py (--media-root is optional)",
+        "owner": "PM decision"
+      }
+    },
+    "proxy_jump_modules": {
+      "sbatch.constraint": {
+        "kind": "undecided",
+        "why": "The CLI pins an A40 with --constraint=a40 from the manifest, and the acceptance claim is A40-specific; the app pins the GPU type only through a typed GRES, and only when discovery found one.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:39-40, :114",
+        "owner": "PM decision"
+      },
+      "sbatch.cpus-per-task": {
+        "kind": "undecided",
+        "why": "Same as sbatch.mem, for the manifest's 8 CPUs.",
+        "cite": "plugins/griffin/coperceive_griffin_model/model.yaml:56; docs/adr/0015-cluster-profiles-scheduler-adapter.md:107",
+        "owner": "PM decision"
+      },
+      "sbatch.error": {
+        "kind": "undecided",
+        "why": "Same as sbatch.output.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153",
+        "owner": "PM decision"
+      },
+      "sbatch.gres": {
+        "kind": "defect",
+        "why": "With no GPU discovery the app requests no GPU at all: it never reads the manifest's gpu: true, so the Griffin job would run on a CPU node.",
+        "cite": "plugins/griffin/coperceive_griffin_model/model.yaml:55",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      },
+      "sbatch.job-name": {
+        "kind": "intended",
+        "why": "App jobs are named coperceive-<kind>-<id> so the app lists and manages only its own jobs; the CLI's job is not app-managed.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md:41, :107, :220"
+      },
+      "sbatch.mail-type": {
+        "kind": "undecided",
+        "why": "No document decides whether the app's job mails on END,FAIL. No effect on results.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md:107 (its list of script values has no mail-type)",
+        "owner": "PM decision"
+      },
+      "sbatch.mem": {
+        "kind": "undecided",
+        "why": "The CLI takes 64G from the manifest; ADR 0015 puts only profile and user values in the app's script, and the profile sets none, so the cluster default applies. Nothing reconciles that with Griffin's 64 GB.",
+        "cite": "plugins/griffin/coperceive_griffin_model/model.yaml:57; docs/adr/0015-cluster-profiles-scheduler-adapter.md:107",
+        "owner": "PM decision"
+      },
+      "sbatch.output": {
+        "kind": "undecided",
+        "why": "Log location: the release doc tells the user to read ~/logs/<job-name>-<job-id>.out; the app writes its logs into results_root, and a profile has no logs folder.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153",
+        "owner": "PM decision"
+      },
+      "sbatch.time": {
+        "kind": "undecided",
+        "why": "The release doc expects the review to show the CLI's estimate, 01:00:00; the app has no estimate and submits the form's default, 04:00:00. Longer is safe but not the documented value.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:44, :115",
+        "owner": "PM decision"
+      },
+      "env": {
+        "kind": "defect",
+        "why": "The app loads only the profile's modules (python/3.12); the CUDA modules the Griffin manifest requires are missing, so the model cannot load its CUDA libraries. The CLI also exports PYTHONPATH (see the base case).",
+        "cite": "plugins/griffin/coperceive_griffin_model/model.yaml:14",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      },
+      "capture.line": {
+        "kind": "defect",
+        "why": "The app records environment.json with the login default python3, not the interpreter that ran the model, so the repro card can name the wrong Python and packages. The two heredoc programs are identical; only the interpreter differs.",
+        "cite": "tests/test_repro_card.py keeps the capture bodies equal; coperceive/models/slurm.py environment_capture_lines",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/job_submit.rs"
+      },
+      "staging": {
+        "kind": "intended",
+        "why": "The app runs against data already on the cluster and stages nothing into scratch.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+      },
+      "rc_capture": {
+        "kind": "intended",
+        "why": "The CLI keeps the run's exit status so a partial run still comes home; the app writes to results_root directly and has nothing to copy.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+      },
+      "copy_home": {
+        "kind": "intended",
+        "why": "Output is on results_root, never in scratch, so there is no copy home.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      },
+      "contract_checks": {
+        "kind": "defect",
+        "why": "Blocker 4. The app's job fails unless predictions.jsonl and metrics.json exist; model run writes neither (it writes <out>/<run_id>/<scene>/boxes.parquet and run.json), so a successful Griffin run exits 1. The checks belong to the custom-pipeline contract.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 4; docs/spec/pipeline-output.md",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/job_submit.rs"
+      },
+      "argv.app_unparseable": {
+        "kind": "defect",
+        "why": "Blocker 1. The app adds --output-dir, which coperceive model run rejects (argparse exits 2), so the job fails at once.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 1",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs and job_submit.rs"
+      },
+      "argv.out": {
+        "kind": "intended",
+        "why": "A run's output goes under results_root, never under scratch. The CLI stages through scratch and copies home.",
+        "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+      },
+      "argv.work": {
+        "kind": "undecided",
+        "why": "ADR 0015 says scratch is for a job's temporary work and the release doc expects work logs under ~/results/<job-id>/work/; the app puts the work directory in results_root/runs/<id>/work.",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md:153-154",
+        "owner": "PM decision"
+      },
+      "argv.staging_seconds": {
+        "kind": "intended",
+        "why": "Only the CLI stages, so only it times the staging (provenance timing only).",
+        "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+      },
+      "argv.option": {
+        "kind": "defect",
+        "why": "Blocker 2. The app passes the checkpoint as --option checkpoint=<path>; Griffin's vehicle-side model declares no checkpoint option.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 2",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      },
+      "argv.app_options_rejected": {
+        "kind": "defect",
+        "why": "Blocker 2, as model run reports it: check_options refuses checkpoint.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 2",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      }
+    },
+    "scenes_directory": {
+      "app_refused": {
+        "kind": "defect",
+        "why": "Blocker 3. model run --scenes takes a directory of scenes; the app saves a split only when the cluster reports a sha256 for it, which a directory has not, so the plan cannot be saved.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 3",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      }
+    },
+    "model_list_entry_point": {
+      "app_refused": {
+        "kind": "defect",
+        "why": "Blocker 5. The app takes the manifest path from the last token of the cluster's model list row; the registry prints an entry point (coperceive_griffin_model:MANIFEST), so the app cannot plan Griffin. Read from the code, not observed on a live cluster.",
+        "cite": "docs/adr/0018-plan-parity.md, blocker 5; coperceive/models/registry.py:37-41",
+        "owner": "HPC owner (DeepSeek), src-tauri/src/run_plan.rs"
+      }
+    }
+  }
+}
