@@ -522,7 +522,7 @@ def run_batch(
             if hit is not None:
                 rows = _rows_of(scene, hit)
                 validate_boxes(scene, meta, rows)
-                write_run(out_root, run_id, meta, rows, force=options.force)
+                write_run(out_root, run_id, meta, rows, force=options.force, scene_ids=(scene_id,))
                 completed.append(scene_id)
                 counters["hits"] += 1
                 counters["boxes"] += len(rows)
@@ -563,7 +563,9 @@ def run_batch(
             for key, value in run.timings.items():
                 reported[key] = reported.get(key, 0.0) + value
             validate_boxes(scene, meta, run.rows)
-            write_run(out_root, run_id, meta, run.rows, force=options.force)
+            # A finished scene gets a boxes.parquet even when the model found nothing
+            # in it, so its ground truth counts (docs/eval-spec.md A.0).
+            write_run(out_root, run_id, meta, run.rows, force=options.force, scene_ids=(scene_id,))
             if cache is not None and options.cache:
                 cache.store(
                     scene,

@@ -869,6 +869,110 @@ def test_a_class_named_like_a_key_of_the_ap_table_is_refused(reserved: str) -> N
         )
 
 
+def _two_agent_scene(scene_id: str) -> Scene:
+    """Two agents, one pose at 0, each with one world-frame 4 x 2 car of its own."""
+    agents = tuple(
+        Agent(
+            agent_id=agent_id, agent_type=AgentType.VEHICLE, poses=(StampedPose(0, SE3.identity()),)
+        )
+        for agent_id in ("vehicle", "rsu")
+    )
+    cars = tuple(
+        Annotation(
+            agent_id,
+            0,
+            None,
+            "car",
+            (cx, 0.0, 0.0),
+            (4.0, 2.0, 1.5),
+            SE3.identity(),
+            None,
+            BoxFrame.WORLD,
+        )
+        for agent_id, cx in (("vehicle", 0.0), ("rsu", 20.0))
+    )
+    return Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id=scene_id,
+        world_frame="ENU",
+        clock=Clock(unit="us", scale_note="denominator test"),
+        agents=agents,
+        sensors=(),
+        annotations=cars,
+        objects=(),
+    )
+
+
+def _meta(run_id: str) -> RunMeta:
+    return RunMeta(
+        run_id=run_id,
+        model="test",
+        score_note="constant",
+        categories=("car",),
+        sources=(("single", "own sensors"),),
+        created_utc=CREATED,
+    )
+
+
+def test_a_scene_the_model_found_nothing_in_still_counts_its_ground_truth(tmp_path: Path) -> None:
+    """A covered scene with no prediction row is evaluated: its cars are misses.
+
+    Before, write_run wrote no boxes.parquet for it and eval run skipped it, so the
+    headline was computed over scene a alone: recall 1.0 and AP 1.0 for a model
+    that found one of the two cars.
+    """
+    root = tmp_path / "scenes"
+    for scene_id in ("a", "b"):
+        write_scene(_one_car_scene(scene_id), root / scene_id)
+    predictions = tmp_path / "predictions"
+    written = write_run(
+        predictions, "covered", _meta("covered"), (_car("a", 0.9, 0.0),), scene_ids=("a", "b")
+    )
+    assert written == ("a", "b")
+    assert (predictions / "covered" / "b" / "boxes.parquet").is_file()
+    report = evaluate_run(root, predictions, "covered", DEFAULT_CONFIG, created_utc=CREATED)
+    assert report.evaluated == ("a", "b") and report.errors == ()
+    rows = collect(root, predictions, "covered")
+    assert [(row.scene_id, row.output) for row in rows] == [
+        ("a", ("vehicle", "single")),
+        ("b", ("vehicle", "single")),
+    ]
+    total = aggregate(rows, DEFAULT_CONFIG.thresholds)
+    assert (total["gt"], total["tp"], total["miss"]) == (2, 1, 1)
+    assert total["recall"] == 0.5
+    assert total["mAP@0.5 all"] == pytest.approx(0.5)
+
+
+def test_an_agent_the_model_found_nothing_for_in_one_scene_still_counts(tmp_path: Path) -> None:
+    """The run's outputs are evaluated in every covered scene where their agent exists.
+
+    The rsu output has a row in scene a only. Before, scene b had no rsu output, so
+    the rsu's car in b dropped out: gt 3 instead of 4.
+    """
+    root = tmp_path / "scenes"
+    for scene_id in ("a", "b"):
+        write_scene(_two_agent_scene(scene_id), root / scene_id)
+    predictions = tmp_path / "predictions"
+    rows_in = (
+        replace(_car("a", 0.9, 0.0), agent_id="vehicle"),
+        replace(_car("a", 0.8, 20.0), agent_id="rsu"),
+        replace(_car("b", 0.9, 0.0), agent_id="vehicle"),
+    )
+    write_run(predictions, "agents", _meta("agents"), rows_in)
+    evaluate_run(root, predictions, "agents", DEFAULT_CONFIG, created_utc=CREATED)
+    rows = collect(root, predictions, "agents")
+    assert [(row.scene_id, row.output) for row in rows] == [
+        ("a", ("vehicle", "single")),
+        ("a", ("rsu", "single")),
+        ("b", ("vehicle", "single")),
+        ("b", ("rsu", "single")),
+    ]
+    rsu_b = next(row for row in rows if row.key == ("b", "rsu", "single"))
+    assert (rsu_b.values["gt"], rsu_b.values["tp"], rsu_b.values["miss"]) == (1, 0, 1)
+    total = aggregate(rows, DEFAULT_CONFIG.thresholds)
+    assert (total["gt"], total["tp"], total["miss"]) == (4, 3, 1)
+
+
 def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None:
     """§Metrics, Pooled AP (the normative case). Scene a: one GT car, one tp at 0.9.
     Scene b: one GT car, one fp at 0.8 and one tp at 0.7. Pooled over n_gt = 2 the walk

@@ -326,8 +326,17 @@ def _place_pred(scene: Scene, row: int, box: PredictionBox) -> _PlacedPred:
 # --- matching per output ----------------------------------------------------------
 
 
-def _collect_outputs(scene: Scene, boxes: Sequence[PredictionBox]) -> list[_Output]:
-    """Outputs in first-appearance order with their predictions placed, per time."""
+def _collect_outputs(
+    scene: Scene,
+    boxes: Sequence[PredictionBox],
+    run_outputs: Sequence[tuple[str, str]] = (),
+) -> list[_Output]:
+    """The outputs of a covered scene (spec A.0), with their predictions placed, per time.
+
+    First the outputs that have rows here, in first-appearance order; then the other
+    ``run_outputs`` whose agent is an agent of the scene, in run order. Those have no
+    prediction, and their ground truth counts as missed.
+    """
     outputs: dict[tuple[str, str], _Output] = {}
     for row, box in enumerate(boxes):
         key = (box.agent_id, box.source)
@@ -336,7 +345,38 @@ def _collect_outputs(scene: Scene, boxes: Sequence[PredictionBox]) -> list[_Outp
             output = _Output(agent_id=box.agent_id, source=box.source)
             outputs[key] = output
         output.preds.setdefault(box.time_us, []).append(_place_pred(scene, row, box))
+    agents = {agent.agent_id for agent in scene.agents}
+    for agent_id, source in run_outputs:
+        if (agent_id, source) not in outputs and agent_id in agents:
+            outputs[(agent_id, source)] = _Output(agent_id=agent_id, source=source)
     return list(outputs.values())
+
+
+def run_outputs(predictions_root: Path, run_id: str) -> tuple[tuple[str, str], ...]:
+    """The outputs of a run (spec A.0): ``(agent_id, source)`` in first-appearance order.
+
+    Read from the ``boxes.parquet`` of every scene the run covers, in ascending scene
+    id order, so the outputs of one scene do not depend on which scenes are evaluated.
+    """
+    run_dir = scene_output_dir(predictions_root, run_id, ".").resolve()
+    found: dict[tuple[str, str], None] = {}
+    if not run_dir.is_dir():
+        return ()
+    for child in sorted(run_dir.iterdir(), key=lambda path: path.name):
+        try:
+            check_scene_id(child.name)
+        except PredictionError:
+            continue
+        path = child / BOXES_FILE
+        if not path.is_file():
+            continue
+        try:
+            table = pq.read_table(scene_file(child, BOXES_FILE), columns=["agent_id", "source"])
+        except Exception as error:  # pyarrow error types are not in the stubs
+            raise EvaluationError(f"{path}: {error}") from error
+        for item in table.to_pylist():
+            found.setdefault((str(item["agent_id"]), str(item["source"])), None)
+    return tuple(found)
 
 
 def _match_output(
@@ -692,8 +732,12 @@ def evaluate_scene(
     config: EvalConfig,
     *,
     created_utc: str,
+    outputs: Sequence[tuple[str, str]] = (),
 ) -> SceneEvaluation:
     """Match every output of ``boxes`` against ``scene`` and build both result objects.
+
+    ``outputs`` are the outputs of the run (:func:`run_outputs`): those without a row
+    in this scene are evaluated too, with no prediction (spec A.0).
 
     ``boxes`` are the rows of ``boxes.parquet`` in file order, already checked by
     :func:`~coperceive.evaluation.predictions.validate_boxes`. Outputs are
@@ -703,7 +747,7 @@ def evaluate_scene(
     agent once every output is matched, since ``other_agent_tp`` reads another
     output's statuses.
     """
-    outputs = _collect_outputs(scene, boxes)
+    outputs = _collect_outputs(scene, boxes, run_outputs=outputs)
     by_key = {output.key: output for output in outputs}
     gt_by_agent: dict[str, dict[int, list[_PlacedGt]]] = {}
     for output in outputs:
@@ -905,6 +949,7 @@ def evaluate_run(
     # A plugin run that stopped early (model-plugin spec §Partial runs) is evaluated on its
     # finished scenes and says so in every metrics.json it writes.
     partial = (meta.provenance or {}).get("status") == "partial"
+    outputs = run_outputs(predictions_root, run_id)
     missing = [
         scene_id
         for scene_id in selected
@@ -923,7 +968,9 @@ def evaluate_run(
             scene = read_scene(scene_dir)
             boxes = read_boxes(predictions_root, run_id, scene_id)
             validate_boxes(scene, meta, boxes)
-            result = evaluate_scene(scene, meta, boxes, config, created_utc=created_utc)
+            result = evaluate_scene(
+                scene, meta, boxes, config, created_utc=created_utc, outputs=outputs
+            )
             result.metrics["run_status"] = "partial" if partial else "complete"
             if partial:
                 result.metrics["missing_scenes"] = list(missing)

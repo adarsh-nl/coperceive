@@ -250,7 +250,8 @@ def _import(args: argparse.Namespace) -> None:
         created_utc=_now_utc(),
     )
     _validate_against_scenes(root, meta, rows)
-    scene_ids = write_run(target, run_id, meta, rows, force=bool(args.force))
+    named = (str(args.scene),) if args.scene else ()
+    scene_ids = write_run(target, run_id, meta, rows, force=bool(args.force), scene_ids=named)
     print(f"wrote {target / run_id}")
     print(f"scenes {len(scene_ids)} rows {len(rows)}")
 
