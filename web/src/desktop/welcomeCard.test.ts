@@ -100,7 +100,7 @@ test("welcome card renders required actions, description, and handles callbacks"
   });
 
   const generatingBtn = [...host.querySelectorAll("button")].find((b) =>
-    b.textContent?.includes("Generating demo scene… (about 8 MB) · 4s elapsed"),
+    b.textContent?.includes("Generating demo scene… (about 8 MiB) · 4s elapsed"),
   );
   assert.ok(generatingBtn, "shows progress and size while generating");
   assert.ok(
@@ -174,9 +174,9 @@ test("DemoProgressBanner renders progress, stage, older Mac timing guidance, and
 test("runDemoOpenFlow opens cached demo without generating banner and shows progress when generating", async () => {
   const { DEMO_APPROX_BYTES, DEMO_APPROX_SIZE_LABEL, formatDemoSize, runDemoOpenFlow } =
     await import("./demoMeta.ts");
-  assert.equal(DEMO_APPROX_SIZE_LABEL, "about 8 MB");
-  assert.equal(formatDemoSize(8_218_188), "8.2 MB");
-  assert.equal(formatDemoSize(null), "about 8 MB");
+  assert.equal(DEMO_APPROX_SIZE_LABEL, "about 8 MiB");
+  assert.equal(formatDemoSize(8_218_188), "7.8 MiB");
+  assert.equal(formatDemoSize(null), "about 8 MiB");
 
   let cachedGenStarted = false;
   const cachedOutcome = await runDemoOpenFlow({
@@ -235,13 +235,25 @@ test("DEMO_APPROX_BYTES is within 20% of real coperceive demo create output", as
   const { DEMO_APPROX_BYTES } = await import("./demoMeta.ts");
 
   const repoRoot = path.resolve(import.meta.dirname, "../../..");
-  const venvPy = path.join(repoRoot, ".venv", "bin", "python");
-  if (!fs.existsSync(venvPy)) {
-    return;
-  }
+  const candidates = [
+    path.join(repoRoot, ".venv", "bin", "python"),
+    path.join(repoRoot, ".venv", "Scripts", "python.exe"),
+    "python3",
+    "python",
+  ];
+  const pythonBin = candidates.find((candidate, index) => {
+    if (index < 2 && !fs.existsSync(candidate)) return false;
+    try {
+      execFileSync(candidate, ["-c", "import coperceive"], { cwd: repoRoot, stdio: "pipe" });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  assert.ok(pythonBin, "expected a Python interpreter with importable `coperceive` package");
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "demo-size-check-"));
   try {
-    execFileSync(venvPy, ["-m", "coperceive", "demo", "create", tmpDir], {
+    execFileSync(pythonBin, ["-m", "coperceive", "demo", "create", tmpDir], {
       cwd: repoRoot,
       stdio: "pipe",
     });

@@ -746,9 +746,7 @@ jobs:
             echo "Testing bundled Intel python3 under Rosetta:"
             arch -x86_64 "${PY_INTEL}" -c "import coperceive, numpy, pyarrow, PIL; print('Intel Python loaded successfully; PIL version:', PIL.__version__)"
             echo "Running smoke test on Intel .app under Rosetta:"
-            # v0.1.1 exception: only the Rosetta playback ratio is non-blocking (::warning::);
-            # all other checks stay blocking, and Claude Code's follow-up PR makes Rosetta playback blocking again.
-            COPERCEIVE_ROSETTA_PLAYBACK_WARN_ONLY=1 arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
+            arch -x86_64 bash scripts/desktop/smoke_test.sh "${APP_INTEL}"
             echo "::notice title=Rosetta-Test::Intel Mac build verified under Rosetta 2"
           else
             echo "::error title=Rosetta-Test::Rosetta 2 is not available on this runner (arch -x86_64 returned non-zero)" >&2

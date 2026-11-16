@@ -113,8 +113,8 @@ fn set_auto_connect_state(
 }
 
 /// Disconnects any active remote session off the `state.remote` mutex in a
-/// background thread with a bounded timeout so switching to a local scene
-/// never blocks on SSH teardown.
+/// background thread with a bounded timeout that kills the SSH child process if
+/// teardown hangs, so switching to a local scene never blocks or leaks SSH.
 fn disconnect_remote_in_background(state: &AppState) {
     let existing = state.remote.lock().ok().and_then(|mut lock| lock.take());
     if let Ok(mut current) = state.remote_key.lock() {
@@ -122,12 +122,7 @@ fn disconnect_remote_in_background(state: &AppState) {
     }
     if let Some(mut remote) = existing {
         std::thread::spawn(move || {
-            let (tx, rx) = std::sync::mpsc::channel();
-            std::thread::spawn(move || {
-                let _ = remote.disconnect();
-                let _ = tx.send(());
-            });
-            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+            let _ = remote.disconnect_with_timeout(std::time::Duration::from_secs(5));
         });
     }
 }
@@ -3240,14 +3235,6 @@ async fn dataset_status(
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
 }
 
-fn resolve_viewer_dataset_scenes(has_remote: bool, dataset: serde_json::Value) -> serde_json::Value {
-    if has_remote {
-        dataset
-    } else {
-        serde_json::Value::Null
-    }
-}
-
 /// The open cluster dataset's scenes (id, state) from the dataset view, so the
 /// viewer's scene list can show the ones that are not prepared yet.
 #[tauri::command]
@@ -3255,7 +3242,7 @@ fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: se
     let has_remote = state.stream_key.lock().ok().and_then(|k| k.clone()).is_some()
         || state.remote_key.lock().ok().and_then(|k| k.clone()).is_some();
     if let Ok(mut scenes) = state.dataset_scenes.lock() {
-        *scenes = resolve_viewer_dataset_scenes(has_remote, dataset);
+        *scenes = coperceive_desktop::remote::resolve_viewer_dataset_scenes(has_remote, dataset);
     }
 }
 
@@ -5261,26 +5248,5 @@ fn main() {
             _ => {}
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::resolve_viewer_dataset_scenes;
-
-    #[test]
-    fn dataset_scenes_is_cleared_when_no_remote_session_is_active() {
-        let cluster_dataset = serde_json::json!({
-            "scenes": [{ "scene_id": "train_0000", "state": "ready" }],
-            "about": { "label": "V2XSET train", "server": "HPC" }
-        });
-        assert_eq!(
-            resolve_viewer_dataset_scenes(false, cluster_dataset.clone()),
-            serde_json::Value::Null
-        );
-        assert_eq!(
-            resolve_viewer_dataset_scenes(true, cluster_dataset.clone()),
-            cluster_dataset
-        );
-    }
 }
 
