@@ -31,7 +31,7 @@ if [ ! -d "${APP_BUNDLE}" ]; then
     fi
 fi
 
-APP_BUNDLE="$(cd "${APP_BUNDLE}" && pwd)"
+APP_BUNDLE="$(cd "${APP_BUNDLE}" && pwd -P)"
 echo "App bundle: ${APP_BUNDLE}"
 
 # Find bundled python inside the packaged .app bundle only
@@ -95,6 +95,7 @@ fi
 echo ""
 echo "--- Headless Sidecar Smoke Test ---"
 TMPDIR=$(mktemp -d /tmp/coperceive-desktop-smoke-XXXXXX)
+export TMPDIR
 trap 'rm -rf "${TMPDIR}"' EXIT
 
 TOKEN="smoke-test-secret-token-abcdef123456"
@@ -123,6 +124,8 @@ SERVE_PID=$!
 
 echo "Sidecar PID: ${SERVE_PID}"
 
+SMOKE_PASSED=0
+
 # Ensure processes are killed on script exit
 cleanup_serve() {
     if [ -n "${SERVE_PID:-}" ] && kill -0 "${SERVE_PID}" 2>/dev/null; then
@@ -132,6 +135,25 @@ cleanup_serve() {
     fi
 }
 
+preserve_safe_tmp_logs() {
+    if [ -z "${COPERCEIVE_PRESERVE_LOGS_DIR:-}" ] || [ "${SMOKE_PASSED}" -eq 1 ]; then
+        return
+    fi
+    local dest="${COPERCEIVE_PRESERVE_LOGS_DIR}/tmp"
+    mkdir -p "${dest}"
+    local redact='s/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/([Tt]oken[^A-Za-z0-9]*)[:=][[:space:]]*[^[:space:]"]+/\1=[REDACTED]/g'
+    local f
+    for f in "${TMPDIR}/app_stdout.log" "${TMPDIR}/app_stderr.log" "${TMPDIR}/serve.log" "${TMPDIR}/demo_stdout.log" "${TMPDIR}/demo_stderr.log"; do
+        if [ -f "$f" ]; then
+            sed -E "$redact" "$f" > "${dest}/$(basename "$f")" 2>/dev/null || true
+        fi
+    done
+    while IFS= read -r slog; do
+        [ -n "$slog" ] || continue
+        sed -E "$redact" "$slog" > "${dest}/$(basename "$(dirname "$slog")")_$(basename "$slog")" 2>/dev/null || true
+    done < <(find "${TMPDIR}" -name 'serve-*.log' -type f 2>/dev/null || true)
+}
+
 cleanup_all() {
     if [ -n "${APP_PID:-}" ] && kill -0 "${APP_PID}" 2>/dev/null; then
         echo "Terminating app process PID ${APP_PID}..."
@@ -139,6 +161,7 @@ cleanup_all() {
         wait "${APP_PID}" 2>/dev/null || true
     fi
     cleanup_serve
+    preserve_safe_tmp_logs
     rm -rf "${TMPDIR}"
 }
 trap cleanup_all EXIT
@@ -240,12 +263,56 @@ if [ ! -d "${FIXTURE_ROOT}" ]; then
 fi
 
 MARKER_FILE="${TMPDIR}/test_marker.txt"
+CTRL_INFO_FILE="${TMPDIR}/ctrl_info.txt"
 APP_STDOUT="${TMPDIR}/app_stdout.log"
 APP_STDERR="${TMPDIR}/app_stderr.log"
 
+run_diag_eval_probe() {
+    local p_port="${1:-}"
+    local p_secret="${2:-}"
+    if [ -z "${p_port}" ] || [ -z "${p_secret}" ]; then
+        if [ -f "${CTRL_INFO_FILE}" ]; then
+            p_port=$(sed -n '1p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
+            p_secret=$(sed -n '2p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
+        elif [ -f "${MARKER_FILE}" ]; then
+            p_port=$(sed -n '4p' "${MARKER_FILE}" 2>/dev/null || echo "")
+            p_secret=$(sed -n '5p' "${MARKER_FILE}" 2>/dev/null || echo "")
+        fi
+    fi
+    echo "=== Controller /eval diagnostic probe (ctrl_info_exists=$([ -f "${CTRL_INFO_FILE}" ] && echo yes || echo no), ctrl_port=${p_port:-missing}) ===" >&2
+    if [ -n "${p_port}" ] && [ "${p_port}" != "0" ] && [ -n "${p_secret}" ]; then
+        local js_probe='(() => { const out = { readyState: document.readyState, href: window.location.href, consoleErrors: window.__COPERCEIVE_CONSOLE_ERRORS__ ?? null, lastUiError: window.__COPERCEIVE_LAST_ERROR__ ?? null, autoConnectState: window.__COPERCEIVE_AUTOCONNECT_STATE__ ?? null, scriptCount: document.scripts ? document.scripts.length : -1, bodyTextLen: document.body ? document.body.innerText.length : -1, bodyPreview: document.body ? document.body.innerText.slice(0, 300) : "" }; try { const c = document.createElement("canvas"); const gl2 = c.getContext("webgl2"); const gl = gl2 ? null : c.getContext("webgl"); const ctx = gl2 || gl; const dbg = ctx ? ctx.getExtension("WEBGL_debug_renderer_info") : null; out.webgl = { webgl2: Boolean(gl2), webgl: Boolean(gl || gl2), vendor: ctx ? ctx.getParameter(ctx.VENDOR) : null, renderer: ctx ? ctx.getParameter(ctx.RENDERER) : null, unmaskedRenderer: dbg && ctx ? ctx.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null }; } catch (e) { out.webglError = String(e); } return out; })()'
+        local win
+        for win in main viewer; do
+            local payload
+            payload=$(python3 -c 'import json, sys; print(json.dumps({"window": sys.argv[1], "script": sys.argv[2]}))' "${win}" "${js_probe}")
+            local resp
+            resp=$(curl -s --max-time 6 -X POST \
+                -H "Authorization: Bearer ${p_secret}" \
+                -H "Content-Type: application/json" \
+                -d "${payload}" \
+                "http://127.0.0.1:${p_port}/eval" 2>&1 || true)
+            echo "--- /eval window=${win} ---" >&2
+            echo "${resp:-<empty response>}" >&2
+        done
+    else
+        echo "Skipping /eval: loopback controller port/secret unavailable." >&2
+    fi
+    echo "=== Host & Bundle Environment Diagnostics ===" >&2
+    sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize 2>&1 >&2 || true
+    file "${APP_EXE}" 2>&1 >&2 || true
+    echo "--- xattr on APP_BUNDLE (first 30 lines) ---" >&2
+    xattr -lr "${APP_BUNDLE}" 2>&1 | head -n 30 >&2 || true
+    echo "--- codesign & spctl ---" >&2
+    codesign -dvv "${APP_BUNDLE}" 2>&1 | head -n 20 >&2 || true
+    spctl --assess --verbose=4 --type execute "${APP_BUNDLE}" 2>&1 || true
+}
+
 echo "Starting app binary with auto-connect fixture: ${FIXTURE_ROOT}..."
+LAUNCH_START_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
 COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
 COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
+COPERCEIVE_CTRL_INFO_FILE="${CTRL_INFO_FILE}" \
 "${APP_EXE}" > "${APP_STDOUT}" 2> "${APP_STDERR}" &
 APP_PID=$!
 echo "App process spawned with PID ${APP_PID}"
@@ -267,13 +334,16 @@ for i in {1..90}; do
 done
 
 if [ ! -f "${MARKER_FILE}" ]; then
-    echo "Error: Auto-connect marker file was not created within timeout!" >&2
+    echo "Error: Auto-connect marker file was not created within 45s timeout!" >&2
+    run_diag_eval_probe
     echo "=== App stderr ===" >&2
     cat "${APP_STDERR}" >&2
     echo "=== App stdout ===" >&2
     cat "${APP_STDOUT}" >&2
     exit 13
 fi
+MARKER_ELAPSED_S=$(python3 -c 'import time, sys; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "${LAUNCH_START_S}")
+echo "Auto-connect marker created in ${MARKER_ELAPSED_S}s."
 
 APP_ORIGIN=$(sed -n '1p' "${MARKER_FILE}")
 APP_TOKEN=$(sed -n '2p' "${MARKER_FILE}")
@@ -312,19 +382,54 @@ if [ -z "${CTRL_PORT}" ] || [ "${CTRL_PORT}" = "0" ] || [ -z "${CTRL_SECRET}" ];
     exit 14
 fi
 VIEWER_READY=0
+EVAL_HTTP_CODE=""
 for i in {1..50}; do
-    RESP=$(curl -s -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"script":"Boolean(window.__COPERCEIVE_DESKTOP__)"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
-    if echo "${RESP}" | grep -q '"result":true'; then
-        echo "Verified: Viewer webview responded to controller eval probe."
+    RESP_WITH_CODE=$(curl -s -w '\n%{http_code}' -X POST -H "Authorization: Bearer ${CTRL_SECRET}" -H "Content-Type: application/json" -d '{"script":"Boolean(window.__COPERCEIVE_DESKTOP__)"}' "http://127.0.0.1:${CTRL_PORT}/eval" || true)
+    EVAL_HTTP_CODE=$(printf '%s\n' "${RESP_WITH_CODE}" | tail -n 1)
+    RESP=$(printf '%s\n' "${RESP_WITH_CODE}" | sed '$d')
+    if [ "${EVAL_HTTP_CODE}" = "200" ] && echo "${RESP}" | grep -q '"result":true'; then
+        echo "Verified: Viewer webview responded to controller /eval probe (HTTP 200)."
         VIEWER_READY=1
         break
     fi
     sleep 0.2
 done
 if [ "${VIEWER_READY}" -ne 1 ]; then
-    echo "Error: Viewer webview did not respond to controller eval probe within timeout!" >&2
+    echo "Error: Viewer webview did not respond with HTTP 200 to controller /eval probe within timeout (last HTTP ${EVAL_HTTP_CODE})!" >&2
     exit 14
 fi
+
+# Confirm auto-connect sidecar used the bundled Python inside the .app bundle
+STEP4_SIDECAR_PY=$(python3 - "${APP_STDOUT}" <<'PY'
+import json, sys
+py_path = ""
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    for line in f:
+        if "[auto-connect] state=" in line:
+            try:
+                payload = json.loads(line.split("state=", 1)[1])
+                detail = payload.get("detail") or {}
+                if isinstance(detail, dict) and detail.get("python_bin"):
+                    py_path = str(detail["python_bin"])
+            except Exception:
+                pass
+print(py_path)
+PY
+)
+case "${STEP4_SIDECAR_PY}" in
+    "${APP_BUNDLE}/Contents/Resources/"*)
+        if [ ! -x "${STEP4_SIDECAR_PY}" ]; then
+            echo "Error: Step 4 sidecar Python is not executable: ${STEP4_SIDECAR_PY}" >&2
+            exit 14
+        fi
+        echo "Verified: Auto-connect sidecar used bundled Python inside .app: ${STEP4_SIDECAR_PY}"
+        ;;
+    *)
+        echo "Error: Auto-connect sidecar did not use bundled Python inside '${APP_BUNDLE}/Contents/Resources/'; got '${STEP4_SIDECAR_PY}'" >&2
+        cat "${APP_STDOUT}" >&2
+        exit 14
+        ;;
+esac
 
 # Capture native window screenshot on macOS
 SCREENSHOT_DIR="/tmp/e2e-shots"
@@ -492,10 +597,32 @@ if ! echo "${CLICK_RESP}" | grep -q '"clicked"'; then
 fi
 
 echo "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
-VIEWER_CHECK_SCRIPT='{"window":"viewer","script":"(() => { document.querySelector(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb\")?.scrollIntoView?.(); const title = (document.querySelector(\".dataset-badge .dataset-name\")?.textContent || \"\").trim(); const points = [...document.querySelectorAll(\".agent-points\")].reduce((s, el) => s + (parseInt((el.getAttribute(\"title\") || \"0\").split(\" \")[0], 10) || 0), 0); const cameras = [...document.querySelectorAll(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb canvas\")].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector(\"button.eye[aria-label=\\\"Boxes\\\"] .eye-meta\")?.textContent || \"0\").trim(), 10) || 0; const ready = title === \"Demo (synthetic)\" && points > 0 && cameras >= 1 && boxes > 0; return { ready, title, points, cameras, boxes }; })()"}'
+VIEWER_CHECK_SCRIPT=$(python3 - "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" <<'PY'
+import json, sys
+expect_no_webgl = sys.argv[1] == "1"
+js = """(() => {
+  document.querySelector("section.cam-strip[data-open='true'] .cam-thumb")?.scrollIntoView?.();
+  const title = (document.querySelector(".dataset-badge .dataset-name")?.textContent || "").trim();
+  const points = [...document.querySelectorAll(".agent-points")]
+    .reduce((s, el) => s + (parseInt((el.getAttribute("title") || "0").split(" ")[0], 10) || 0), 0);
+  const cameras = [...document.querySelectorAll("section.cam-strip[data-open='true'] .cam-thumb canvas")]
+    .filter(c => c.width > 0 && c.height > 0).length;
+  const boxes = parseInt((document.querySelector('button.eye[aria-label="Boxes"] .eye-meta')?.textContent || "0").trim(), 10) || 0;
+  const notice = (document.querySelector(".webgl-missing")?.textContent || "").trim();
+  const hasWebglUnavailable =
+    notice.includes("3D view unavailable")
+    && notice.includes("Copy diagnostics");
+  const baseReady = title === "Demo (synthetic)" && points > 0 && cameras >= 1 && boxes > 0;
+  const ready = EXPECT_NO_WEBGL ? (baseReady && hasWebglUnavailable) : baseReady;
+  return { ready, title, points, cameras, boxes, hasWebglUnavailable };
+})()""".replace("EXPECT_NO_WEBGL", "true" if expect_no_webgl else "false")
+print(json.dumps({"window": "viewer", "script": js}))
+PY
+)
 
 DEMO_LOADED=0
 LAST_VIEWER_STATE=""
+LAST_VIEWER_HTTP_CODE=""
 for i in {1..480}; do
     if ! kill -0 "${APP_PID}" 2>/dev/null; then
         echo "Error: App process exited while generating/opening demo!" >&2
@@ -503,14 +630,16 @@ for i in {1..480}; do
         cat "${DEMO_STDOUT}" >&2
         exit 23
     fi
-    RESP=$(curl -s -X POST \
+    RESP_WITH_CODE=$(curl -s -w '\n%{http_code}' -X POST \
         -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
         -H "Content-Type: application/json" \
         -d "${VIEWER_CHECK_SCRIPT}" \
         "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
-    if [ -n "${RESP}" ]; then
+    if [ -n "${RESP_WITH_CODE}" ]; then
+        LAST_VIEWER_HTTP_CODE=$(printf '%s\n' "${RESP_WITH_CODE}" | tail -n 1)
+        RESP=$(printf '%s\n' "${RESP_WITH_CODE}" | sed '$d')
         LAST_VIEWER_STATE="${RESP}"
-        if echo "${RESP}" | grep -q '"ready":true'; then
+        if [ "${LAST_VIEWER_HTTP_CODE}" = "200" ] && echo "${RESP}" | grep -q '"ready":true'; then
             DEMO_LOADED=1
             break
         fi
@@ -519,15 +648,22 @@ for i in {1..480}; do
 done
 
 if [ "${DEMO_LOADED}" -ne 1 ]; then
-    echo "Error: Demo scene did not finish loading in viewer within timeout!" >&2
+    echo "Error: Demo scene did not finish loading in viewer within timeout (last /eval HTTP ${LAST_VIEWER_HTTP_CODE:-none})!" >&2
     echo "Last viewer state: ${LAST_VIEWER_STATE}" >&2
+    run_diag_eval_probe "${DEMO_CTRL_PORT}" "${DEMO_CTRL_SECRET}"
     echo "=== Demo App stdout ===" >&2
     cat "${DEMO_STDOUT}" >&2
     echo "=== Demo App stderr ===" >&2
     cat "${DEMO_STDERR}" >&2
     exit 23
 fi
-echo "Verified viewer loaded demo scene: ${LAST_VIEWER_STATE}"
+echo "Verified viewer loaded demo scene (/eval HTTP ${LAST_VIEWER_HTTP_CODE}): ${LAST_VIEWER_STATE}"
+if [ "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" = "1" ]; then
+    screencapture -x "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" 2>/dev/null || true
+    if [ -f "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" ]; then
+        echo "Verified: captured WebGL-unavailable screenshot at ${SCREENSHOT_DIR}/demo-webgl-unavailable.png ($(stat -f %z "${SCREENSHOT_DIR}/demo-webgl-unavailable.png" 2>/dev/null || wc -c < "${SCREENSHOT_DIR}/demo-webgl-unavailable.png") bytes)"
+    fi
+fi
 
 echo "Opening #prediction-output menu, selecting 'cav-b · noisy', and verifying 'synthetic predictions' evaluation view..."
 COMPARE_CHECK_SCRIPT='{"window":"viewer","script":"(() => { const runBtn = document.querySelector(\"#prediction-run\"); const outBtn = document.querySelector(\"#prediction-output\"); const list = document.querySelector(\"ul.menu-list[aria-labelledby=\\\"prediction-output\\\"]\"); const curOut = (outBtn?.textContent || \"\").trim(); if (!curOut.includes(\"cav-b\")) { if (!list && outBtn) { outBtn.click(); } else if (list) { const opt = [...list.querySelectorAll(\"button[role=\\\"option\\\"]\")].find(b => (b.textContent || \"\").includes(\"cav-b\")); if (opt) opt.click(); } } const predRun = (runBtn?.textContent || \"\").trim(); const evalHead = (document.querySelector(\".eval-head\")?.textContent || \"\").trim(); const ok = predRun.includes(\"synthetic predictions\") && evalHead.includes(\"cav-b\") && evalHead.includes(\"synthetic predictions\"); return { ok, predRun, output: (outBtn?.textContent || \"\").trim(), evalHead }; })()"}'
@@ -557,6 +693,135 @@ if [ "${COMPARE_OK}" -ne 1 ]; then
 fi
 echo "Verified predictions/evaluation view: ${LAST_COMPARE_STATE}"
 screencapture -x "${SCREENSHOT_DIR}/demo-viewer.png" 2>/dev/null || true
+
+# Verify /frame and /predictions returned HTTP 200 on the demo sidecar log, and
+# that the demo sidecar process itself ran with bundled Python inside the .app.
+DEMO_SIDECAR_LOG=$(find "${TMPDIR}/coperceive-local-${APP_PID}" -name 'serve-*.log' -type f 2>/dev/null | head -n 1 || echo "")
+if [ -z "${DEMO_SIDECAR_LOG}" ] || ! grep -q '"GET /api/scenes/demo-junction/frame' "${DEMO_SIDECAR_LOG}" || ! grep -q '/frame.*200 OK' "${DEMO_SIDECAR_LOG}" || ! grep -q '/predictions.*200 OK' "${DEMO_SIDECAR_LOG}"; then
+    echo "Error: Demo sidecar log missing HTTP 200 OK for /frame or /predictions (${DEMO_SIDECAR_LOG:-none})!" >&2
+    [ -n "${DEMO_SIDECAR_LOG}" ] && cat "${DEMO_SIDECAR_LOG}" >&2
+    exit 24
+fi
+echo "Verified: Demo sidecar served /frame and /predictions with HTTP 200 OK (${DEMO_SIDECAR_LOG})."
+
+DEMO_SIDECAR_PY=$(python3 - "${DEMO_STDOUT}" <<'PY'
+import json, sys
+py_path = ""
+with open(sys.argv[1], encoding="utf-8", errors="replace") as f:
+    for line in f:
+        if "[auto-connect] state=" in line:
+            try:
+                payload = json.loads(line.split("state=", 1)[1])
+                detail = payload.get("detail") or {}
+                if isinstance(detail, dict) and detail.get("python_bin"):
+                    py_path = str(detail["python_bin"])
+            except Exception:
+                pass
+print(py_path)
+PY
+)
+case "${DEMO_SIDECAR_PY}" in
+    "${APP_BUNDLE}/Contents/Resources/"*)
+        if [ ! -x "${DEMO_SIDECAR_PY}" ]; then
+            echo "Error: Demo sidecar Python is not executable: ${DEMO_SIDECAR_PY}" >&2
+            exit 25
+        fi
+        echo "Verified: Demo sidecar ran with bundled Python inside .app: ${DEMO_SIDECAR_PY}"
+        ;;
+    *)
+        echo "Error: Demo sidecar did not use bundled Python inside '${APP_BUNDLE}/Contents/Resources/'; got '${DEMO_SIDECAR_PY}'" >&2
+        cat "${DEMO_STDOUT}" >&2
+        exit 25
+        ;;
+esac
+
+if [ "${COPERCEIVE_INTEL_VM_NO_WEBGL:-0}" = "1" ]; then
+    # Approved native-Intel CI exception: on macos-15-intel, the headless VM's WKWebView
+    # returns null for WebGL vendor/renderer/shader precision ("webgl":{"renderer":null,
+    # "unmaskedRenderer":null,"vendor":null,"webgl":true,"webgl2":true}, console error:
+    # "THREE.WebGLRenderer: null is not an object (evaluating 'e.getShaderPrecisionFormat(e.VERTEX_SHADER,e.HIGH_FLOAT).precision')").
+    # Skip 3D rendering and 1x playback assertions here; non-WebGL panels, APIs, and the
+    # "3D view unavailable" notice remain blocking above.
+    echo "Skipping 3D playback ratio assertion on COPERCEIVE_INTEL_VM_NO_WEBGL=1 (headless VM WebGL vendor/renderer/precision=null)."
+else
+    echo "Verifying demo 1x playback advances frames smoothly without 'Buffering'..."
+    PLAYBACK_START_RESP=$(curl -s -f -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"viewer","script":"(() => { const s0 = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (s0 && !s0.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? null; })()"}' \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
+    echo "Playback started: ${PLAYBACK_START_RESP}"
+
+    PLAY_SAMPLES=0
+    BUFFERING_SEEN=0
+    START_FRAME=""
+    END_FRAME=""
+    START_WALL_S=""
+    END_WALL_S=""
+    for i in {1..15}; do
+        sleep 0.2
+        PLAY_RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; const txt = document.body ? document.body.innerText : \"\"; return { frameIndex: st.frameIndex ?? -1, playing: Boolean(st.playing), buffering: txt.includes(\"Buffering\") }; })()"}' \
+            "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+        SAMPLE_WALL_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
+        if [ -n "${PLAY_RESP}" ]; then
+            CUR_FRAME=$(echo "${PLAY_RESP}" | sed -n 's/.*"frameIndex":\([0-9]*\).*/\1/p')
+            if [ -z "${START_FRAME}" ] && [ -n "${CUR_FRAME}" ]; then
+                START_FRAME="${CUR_FRAME}"
+                START_WALL_S="${SAMPLE_WALL_S}"
+            fi
+            if [ -n "${CUR_FRAME}" ]; then
+                END_FRAME="${CUR_FRAME}"
+                END_WALL_S="${SAMPLE_WALL_S}"
+            fi
+            if echo "${PLAY_RESP}" | grep -q '"buffering":true'; then
+                BUFFERING_SEEN=1
+            fi
+            PLAY_SAMPLES=$((PLAY_SAMPLES + 1))
+        fi
+    done
+    # Capture per-phase playback breakdown and pause cleanly
+    PLAYBACK_PERF=$(curl -s -X POST \
+        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
+        -H "Content-Type: application/json" \
+        -d '{"window":"viewer","script":"(() => { const perf = window.__COPERCEIVE_PLAYBACK_PERF__?.() ?? null; const st = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (st?.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return perf; })()"}' \
+        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
+    echo "Demo playback perf breakdown: ${PLAYBACK_PERF}"
+
+    if [ "${BUFFERING_SEEN}" -ne 0 ]; then
+        echo "Error: Demo playback showed 'Buffering' during 1x local playback!" >&2
+        exit 26
+    fi
+    if [ -z "${START_FRAME}" ] || [ -z "${END_FRAME}" ] || [ -z "${START_WALL_S}" ] || [ -z "${END_WALL_S}" ]; then
+        echo "Error: Could not read playback frameIndex during demo playback!" >&2
+        exit 26
+    fi
+    FRAME_DELTA=$(( (END_FRAME - START_FRAME + 100) % 100 ))
+    python3 - "${START_FRAME}" "${END_FRAME}" "${FRAME_DELTA}" "${START_WALL_S}" "${END_WALL_S}" <<'PY' || exit 26
+import os, sys
+start_f, end_f, frames, t0, t1 = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
+elapsed = max(t1 - t0, 1e-6)
+expected = 10.0 * elapsed
+ratio = frames / expected
+min_required = 0.9 * expected
+print(f"Demo 1x playback: elapsed={elapsed:.2f}s frames={frames} ({start_f} -> {end_f}) ratio={ratio:.2f}x (required >= 0.90x / {min_required:.1f} frames)")
+if frames < min_required:
+    # v0.1.1 exception (approved by Adarsh): under Rosetta 2 on arm64, record the ratio as a warning;
+    # Claude Code's follow-up PR on Intel/Rosetta playback root cause makes this blocking again.
+    if os.environ.get("COPERCEIVE_ROSETTA_PLAYBACK_WARN_ONLY") == "1":
+        msg = (
+            f"Demo playback under Rosetta 2: {frames} frames in {elapsed:.2f}s "
+            f"({ratio:.2f}x < 0.90x); non-blocking for v0.1.1 only — Claude Code's follow-up PR restores blocking check"
+        )
+        print(f"::warning title=Rosetta-Playback::{msg}")
+        print(f"Warning: {msg}", file=sys.stderr)
+    else:
+        print(f"Error: Demo playback too slow: {frames} frames in {elapsed:.2f}s ({ratio:.2f}x < 0.90x)", file=sys.stderr)
+        sys.exit(26)
+PY
+fi
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
 if [ -z "${DEMO_OUTCOME_LINE}" ]; then
@@ -596,6 +861,7 @@ if kill -0 "${APP_PID}" 2>/dev/null; then
 fi
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
+SMOKE_PASSED=1
 echo "=========================================================="
 echo "Smoke test PASSED successfully!"
 echo "=========================================================="

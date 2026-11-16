@@ -28,7 +28,11 @@ export interface UpdateOffer {
   readonly signature?: string;
 }
 
-export function parseUpdateManifest(data: unknown, currentVersion: string): UpdateOffer | null {
+export function parseUpdateManifest(
+  data: unknown,
+  currentVersion: string | null | undefined,
+): UpdateOffer | null {
+  if (!currentVersion || currentVersion.trim().length === 0) return null;
   if (!data || typeof data !== "object") return null;
   const record = data as Record<string, unknown>;
   const version = record.version;

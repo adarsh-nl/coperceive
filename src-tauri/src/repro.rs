@@ -9,7 +9,6 @@
 //! `COPERCEIVE_TEST_REPRO_DIR` at a local fixture instead of SSH.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::hpc::ServerProfile;
@@ -63,7 +62,7 @@ pub fn card_from_profile(
     push_plain(&mut args, "--time-limit", time_limit);
     push_plain(&mut args, "--gpus", gpus);
     push_plain(&mut args, "--memory", memory);
-    let output = Command::new(python)
+    let output = crate::platform::python_command(python)
         .args(&args)
         .output()
         .map_err(|error| format!("Could not start Python to build the repro card: {error}"))?;
