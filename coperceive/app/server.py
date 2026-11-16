@@ -575,7 +575,11 @@ def create_app(
         stats.begin()
         started = time.perf_counter()
         try:
-            document = frame_document(_cached_scene(app, scene_id), time_us)
+            scene = _cached_scene(app, scene_id)
+            local = _bundle_local_scene(app, scene_id)
+            if local is not None:
+                scene = read_scene(local, points=False)
+            document = frame_document(scene, time_us)
             if app.state.remote is not None:
                 document["point_sensors"] = [
                     {"agent_id": sweep.agent_id, "sensor_id": sweep.sensor_id, "count": sweep.count}
@@ -666,12 +670,16 @@ def create_app(
         full: bool,
     ) -> Response:
         scene = _cached_scene(app, scene_id)
+        scene_dir = _scene_dir(app.state.root, scene_id)
+        local = _bundle_local_scene(app, scene_id)
+        if local is not None:
+            scene = read_scene(local, points=False)
+            scene_dir = local
         relative = image_path(scene, time_us, agent_id, sensor_id)
         if relative is None:
             raise HTTPException(status_code=404, detail="image not found")
         if app.state.remote is not None:
             return _remote_image(app, scene_id, relative, width=width, full=full)
-        scene_dir = _scene_dir(app.state.root, scene_id)
         # A cluster scene's preview falls back to its original, and `full` asks
         # for the original (docs/datasets/cluster-datasets.md, "Camera images").
         target: Path | None = None
@@ -729,6 +737,9 @@ def create_app(
                 served = len(payload)
                 return Response(content=payload, media_type="application/octet-stream")
             scene = await asyncio.to_thread(_cached_scene, app, scene_id)
+            local = _bundle_local_scene(app, scene_id)
+            if local is not None:
+                scene = await asyncio.to_thread(read_scene, local, points=True)
             blob = frame_points(scene, time_us, agent_id, sensor_id)
             served = len(blob)
             return Response(content=blob, media_type="application/octet-stream")
@@ -1215,6 +1226,23 @@ def _bundle_scene_view(app: FastAPI, scene_id: str) -> dict[str, object] | None:
             "rerun_command": info.get("rerun_command"),
         }
     return None
+
+
+def _bundle_local_scene(app: FastAPI, scene_id: str) -> Path | None:
+    """A local-copy bundle serves sensors from the recipient's own scene path."""
+    view = _bundle_scene_view(app, scene_id)
+    if view is None or view.get("sensor_data") != "local-copy":
+        return None
+    raw = view.get("local_copy")
+    if not isinstance(raw, str) or not raw:
+        return None
+    path = Path(raw)
+    try:
+        path.relative_to(path)  # resolve below
+        resolved = path.resolve()
+    except (OSError, ValueError):
+        return None
+    return resolved if (resolved / "manifest.json").is_file() else None
 
 
 def _predictions_root(app: FastAPI) -> Path:

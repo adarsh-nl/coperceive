@@ -14,11 +14,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-import shutil
 import tempfile
 import zipfile
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from coperceive.bundle.format import (
@@ -38,7 +37,7 @@ from coperceive.errors import CoperceiveError
 from coperceive.model import Scene
 from coperceive.repro.export import check_card
 from coperceive.repro.schema import validate_card as validate_repro_schema
-from coperceive.store import read_scene, write_scene
+from coperceive.store import read_scene
 
 OPEN_REPORT = "open.json"
 OPEN_SCHEMA = "coperceive-bundle-open"
@@ -205,15 +204,6 @@ def _extract(path: Path, target: Path, digest: str, limits: OpenLimits) -> Opene
             if set(seen) != {MANIFEST} | set(expected):
                 raise BundleError("bundle.json does not list every zip entry exactly once")
         _validate_json(work)
-        # The viewer reads scores from <predictions>/<run>/<scene>/metrics.json;
-        # mirror the bundled eval reports there without changing the archive.
-        for metrics in (work / "eval").glob("*/metrics.json"):
-            run_id = str(manifest.get("run_id", ""))
-            if not run_id:
-                break
-            target_metrics = work / PREDICTIONS / run_id / metrics.parent.name / "metrics.json"
-            target_metrics.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(metrics, target_metrics)
         work.rename(target)
     return OpenedBundle(target, manifest, digest, {})
 
@@ -358,41 +348,6 @@ def _image_bytes(scene_dir: Path, images: Sequence[object]) -> int:
     return total
 
 
-def _hydrate_scene(target_scene: Path, local: Path, limits: OpenLimits) -> tuple[int, int]:
-    """Copy the included frames' sensors from the recipient's scene into the bundle."""
-    bundle_scene = read_scene(target_scene)
-    local_scene = read_scene(local)
-    if local_scene.scene_id != bundle_scene.scene_id:
-        raise BundleError(
-            f"local scene id {local_scene.scene_id!r} does not match {bundle_scene.scene_id!r}"
-        )
-    times = {pose.time_us for agent in bundle_scene.agents for pose in agent.poses}
-    clouds = tuple(cloud for cloud in local_scene.point_clouds if cloud.time_us in times)
-    images = tuple(image for image in local_scene.images if image.time_us in times)
-    sensor_bytes = sum(len(cloud.xyz_i_f32) for cloud in clouds) + _image_bytes(local, images)
-    if sensor_bytes > limits.max_sensor_bytes:
-        raise BundleError(
-            f"the local copy's frames are {sensor_bytes} bytes, over the "
-            f"{limits.max_sensor_bytes}-byte sensor-data cap"
-        )
-    hydrated = replace(bundle_scene, point_clouds=clouds, images=images)
-    write_scene(hydrated, target_scene)
-    copied = 0
-    for image in images:
-        try:
-            relative = safe_member(image.path)
-        except ValueError:
-            continue
-        source = local / relative
-        if not source.is_file():
-            continue
-        destination = target_scene / relative
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, destination)
-        copied += 1
-    return sensor_bytes, copied
-
-
 def _sensor_content_bytes(manifest: dict[str, object]) -> int:
     contents = manifest.get("contents")
     if not isinstance(contents, list):
@@ -476,21 +431,11 @@ def _resolve_sensor_data(
                 bundle_root=root,
             )
             if local is not None:
-                try:
-                    sensor_bytes, _copied = _hydrate_scene(
-                        root / SCENES / scene_id, local.path, limits
-                    )
-                except (OSError, CoperceiveError, ValueError) as exc:
-                    entry["note"] = (
-                        f"Frames not included (dataset licence). Open your own copy of "
-                        f"{display} to see them. The local copy could not be used: {exc}"
-                    )
-                else:
-                    any_local = True
-                    entry["sensor_data"] = "local-copy"
-                    entry["bytes"] = sensor_bytes
-                    entry["local_copy"] = str(local.path)
-                    entry["label"] = f"Frames from your local copy of {display}"
+                any_local = True
+                entry["sensor_data"] = "local-copy"
+                entry["bytes"] = 0
+                entry["local_copy"] = str(local.path)
+                entry["label"] = f"Frames from your local copy of {display}"
             if entry["local_copy"] is None:
                 entry["note"] = (
                     f"Frames not included (dataset licence). Open your own copy of "
