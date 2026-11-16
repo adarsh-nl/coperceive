@@ -528,8 +528,6 @@ jobs:
       - run: npm ci --legacy-peer-deps
         working-directory: web
       - run: bash scripts/build_web_static.sh
-      - run: npm test
-        working-directory: web
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-apple-darwin, x86_64-apple-darwin
@@ -548,6 +546,8 @@ jobs:
             bundled-python-${{ runner.os }}-
       - name: Bundle Python Standalone Runtime
         run: bash scripts/desktop/bundle_python.sh
+      - run: npm test
+        working-directory: web
       - name: Run Rust unit tests
         run: cargo test --verbose --color=never 2>&1 | tee /tmp/cargo_test.log
         working-directory: src-tauri

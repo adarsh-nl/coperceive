@@ -235,16 +235,17 @@ test("DEMO_APPROX_BYTES is within 20% of real coperceive demo create output", as
   const { DEMO_APPROX_BYTES } = await import("./demoMeta.ts");
 
   const repoRoot = path.resolve(import.meta.dirname, "../../..");
-  const candidates = [
+  const localPythons = [
     path.join(repoRoot, ".venv", "bin", "python"),
     path.join(repoRoot, ".venv", "Scripts", "python.exe"),
-    "python3",
-    "python",
+    path.join(repoRoot, "src-tauri", "resources", "python", "bin", "python3"),
+    path.join(repoRoot, "src-tauri", "resources", "python", "python.exe"),
   ];
+  const candidates = [...localPythons, "python3", "python"];
   const pythonBin = candidates.find((candidate, index) => {
-    if (index < 2 && !fs.existsSync(candidate)) return false;
+    if (index < localPythons.length && !fs.existsSync(candidate)) return false;
     try {
-      execFileSync(candidate, ["-c", "import coperceive"], { cwd: repoRoot, stdio: "pipe" });
+      execFileSync(candidate, ["-c", "import coperceive.demo.generate"], { cwd: repoRoot, stdio: "pipe" });
       return true;
     } catch {
       return false;
