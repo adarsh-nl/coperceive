@@ -1,140 +1,82 @@
-# V2V4Real (OpenCOOD layout)
+# V2V4Real
 
-V2V4Real is a real-world vehicle-to-vehicle cooperative perception dataset
-(Xu et al., CVPR 2023, [arXiv:2303.07601](https://arxiv.org/abs/2303.07601)).
-Coperceive reads an **already extracted, OpenCOOD-style release tree**; it never
-downloads or writes into the dataset root.
+V2V4Real is a real-world vehicle-to-vehicle recording: the catalog calls the agents "vehicle + vehicle", and the adapter types each discovered directory as `vehicle`. Coperceive reads an extracted OpenCOOD-style tree, writes schema 1 scenes, and can score predictions. It does not download the recordings.
 
-## Licence
+## Overview
 
-**Unknown; not assumed.** The repository README
-([ucla-mobility/V2V4Real](https://github.com/ucla-mobility/V2V4Real)) links the
-paper and does not state a data licence. The repository
-[LICENSE](https://github.com/ucla-mobility/V2V4Real/blob/main/LICENSE) is an
-Academic Software License for the code, not a grant for the data. Terms are
-unknown as of 2026-11-05. Cite the paper. Research use on the HPC only; do not
-commit frames, crops, screenshots or derived scene files to this repository.
+| | |
+| --- | --- |
+| Paper | [arXiv:2303.07601](https://arxiv.org/abs/2303.07601) (catalog `paper_url`) |
+| Download | [ucla-mobility/V2V4Real](https://github.com/ucla-mobility/V2V4Real) (catalog `source_url`) |
+| Official code | [ucla-mobility/V2V4Real](https://github.com/ucla-mobility/V2V4Real) (same repository) |
+| Licence | not recorded (catalog `licence: unknown`). The manifest says the repository LICENSE is an academic software licence for the code, not a data grant |
+| Splits | `train`, `test` (`v2v4real.yaml` `params.split.allowed`) |
+| Adapter | `v2v4real` |
 
-## Confirmed cluster copy (test split)
+The catalog status is `local-import`.
 
-Adarsh extracted `/datasets/eemcs/ps/cv/opencood/v2v4real/test/` on 2026-11-05:
-**9 scenarios**, 7,972 files + 28 folders (the zip's 8,000 entries), 9.0 GB, so
-the split is complete. Scenario names include
-`testoutput_CAV_data_2022-03-15-09-54-40_0`; agents are `0/` and `1/`. A sample
-agent directory has 147 frames (`NNNNNN.pcd` + `NNNNNN.yaml`). **There are no
-camera images**: this release is LiDAR-only, so the adapter exposes no camera
-sensors and the viewer hides camera rows/strip through the normal capability
-rule.
+## What Coperceive reads
 
-The frame YAML has `ego_speed`, `gps` (6 float64; latitude/longitude/altitude +
-three angles, confirming real-world Columbus, Ohio data), `lidar_pose`,
-`true_ego_pos` and `vehicles`. Vehicles carry `angle`, `ass_id`, `center`,
-`extent`, and location; the sample has `angle: [0.0, 1.5, 0.0]`. The official
-loader passes that angle to `x1_to_x2` / `x_to_world`, which applies
-`np.radians` (`opencood/utils/box_utils.py`, `opencood/utils/transformation_utils.py`),
-so the order is **`[roll, yaw, pitch]` in degrees** — the 1.5 is degrees, not
-radians. Synthetic tests now use these exact keys and values.
+| | |
+| --- | --- |
+| Agents | `{split}/{scene}/{agent}/`, type `vehicle` |
+| LiDAR | `{frame:06d}.pcd`, fields `x y z`. Intensity is filled with `0.0` |
+| Cameras | No `images` stream. `camera*` records are optional. The manifest comment says the extracted release is LiDAR-only |
+| Boxes and classes | `vehicles` stored with `frame: world`. Category is filled as `vehicle` |
+| Maps | Not in the manifest. `world_frame` is `v2v4real-world`, marked unverified in the manifest |
+| Timestamps | `time_us = stem × 100000`. The scale note cites the paper's 10 Hz sampling |
 
-## Raw layout (published reference)
+## Expected folder layout
+
+From `coperceive/adapters/builtin/v2v4real.yaml`:
 
 ```text
-<root>/
-  train/
-    testoutput_CAV_data_<YYYY-MM-DD-HH-MM-SS>_<n>/
-      0/<frame>.yaml, <frame>.pcd, <frame>_cameraK.png
-      1/...
-  test/
-    testoutput_CAV_data_<YYYY-MM-DD-HH-MM-SS>_<n>/
-      0/...
-      1/...
+/data/v2v4real/
+  {split}/{scene}/{agent}/
+    {frame:06d}.yaml
+    {frame:06d}.pcd
 ```
 
-- Scenario names start with `testoutput_CAV_data_` **in both `train/` and
-  `test/`**. This prefix is intentional and is the detection cue.
-- Two vehicle agents per scenario, directories `0/` and `1/`.
-- Each frame is an OpenCOOD YAML record (`lidar_pose`, `camera0`…`camera3`,
-  `vehicles`), a PCD (x y z rgb) and camera PNGs.
-- Split names are exactly `train` and `test`. There is no `validate` split in
-  the published V2V4Real release; Coperceive rejects it rather than guessing.
-- The cluster copy is currently **zip archives only** and may be partial
-  (`test-001.zip`, `train-002.zip`, `v2vreal-…/Day20_test.zip`). Extraction is
-  Adarsh's decision and location; the adapter only consumes the root it is
-  given. Do not assume the copy is complete: the zip suffixes `-001`/`-002`
-  may be parts of a split download, not separate splits.
+`{split}` is `train` or `test`. The manifest header says scenario names start with `testoutput_CAV_data_` and the two vehicle directories are `0` and `1`.
 
-**Now verified from the cluster copy:** the split tree, 9 scenarios, agents
-0/1, 147 frames per agent in the sample, and **no camera files**. Still to
-verify: whether `Day20_test/` is an extra scenario root, the frame stem cadence
-(the manifest still uses OPV2V's assumed 0.05 s scale), and **the coordinate
-handedness/mirror** by looking at which side of the road the cars are on.
+## Open it in Coperceive
 
-## Agent roles, frames and sensors
-
-- **Agents:** two connected **vehicles** (`0`, `1`). No roadside unit, drone or
-  fixed infrastructure in V2V4Real.
-- **World frame: still unverified for the mirror.** The official V2V4Real loader
-  reads `lidar_pose` as `[x, y, z, roll, yaw, pitch]` with angles in degrees
-  (`opencood/data_utils/datasets/basedataset.py`) and builds the source-to-world
-  transform with `x_to_world` in
-  [`opencood/utils/transformation_utils.py`](https://github.com/ucla-mobility/V2V4Real/blob/main/opencood/utils/transformation_utils.py).
-  It applies **no reflection** and does not state whether the released
-  coordinates were converted to CARLA's left-handed frame; the repository says
-  only that the data is in "OPV2V format". Coperceive therefore keeps the
-  OPV2V/ADR 0012 y-reflection as a **provisional** choice, matching the
-  OPV2V-style layout, and marks the convention **unverified** until Adarsh
-  checks one real extracted scene in the viewer. If that scene is mirrored, the
-  reflection must be removed from `v2v4real.yaml`.
-  Under the provisional rule, source pose `(10, 20, 1.9)` becomes schema
-  `(10, -20, 1.9)`; the mirror test below encodes that. The manifest's
-  `world_frame` is therefore `v2v4real-world`, not `carla-map`.
-- **Poses:** `lidar_pose = [x, y, z, roll, yaw, pitch]` (degrees) in the source
-  frame for each agent; the pose stream is the agent's LiDAR frame. There is no
-  global infrastructure→vehicle calibration as in DAIR-V2X-C: each agent's own
-  `lidar_pose` is the calibration. The official loader's `x_to_world` is the
-  transform used by OpenCOOD; no reflection is applied there.
-- **Time:** real stems increase by 1 and the V2V4Real paper (CVPR 2023, §3) says
-  “We sample the frames at 10Hz”, so the step is **0.1 s**; a 147-frame scenario
-  is 14.6 s from first to last. The manifest uses `time_us = stem * 100000`.
-  This was checked on the extracted cluster copy. OPV2V/V2XSet keep their own
-  0.05 s / step-2 convention from their `data_protocol.yaml`.
-- **Cameras:** `camera0`…`camera3` records with `extrinsic` (camera→LiDAR) and
-  `intrinsic`; 800×600 PNGs. The manifest derives image size as
-  `2 × principal point`, as for OPV2V.
-- **LiDAR:** one PCD per frame per agent, `FIELDS x y z rgb`; intensity is not
-  present and is filled with `0.0`.
-- **Boxes:** `vehicles` mapping keyed by actor id with `location`, `center`
-  (box-frame offset), `extent` (half sizes), `angle = [roll, yaw, pitch]` in
-  degrees and `speed`; `category` is filled as `vehicle` because the release
-  has no class field.
-
-## Coordinate transform checks
-
-Hand-computed expectations, covered by `tests/test_adapters_v2v4real.py`:
-
-- Source lidar pose `(10, 20, 1.9)`, yaw 90 → schema translation
-  `(10, -20, 1.9)`; the box at source `(16, 30, 0)` with yaw 90 becomes schema
-  centre `(16, -30, 0.75)`.
-- The box centre offset `(0, 0, 0.75)` on a yaw-90 box points along source +y,
-  hence schema −y.
-- Applying the pose to the lidar-frame point `(10, -6, -1.15)` gives schema
-  world `(16, -30, 0.75)`, which is the same reflected centre as the box; the
-  unreflected point `(16, 30, 0.75)` must not appear.
-
-## Coperceive commands
+**Open Folder**, or the cluster browser.
 
 ```bash
-coperceive adapters check v2v4real --raw-root <root> --param split=train
-coperceive dataset detect --path <root>/train
-coperceive dataset index --adapter v2v4real --raw-root <root>/train
+coperceive adapters check v2v4real --raw-root /data/v2v4real --param split=test
+coperceive adapters ingest v2v4real --raw-root /data/v2v4real --param split=test --out /data/v2v4real-scenes
+coperceive validate /data/v2v4real-scenes
+coperceive eval run RUN_ID --root /data/v2v4real-scenes
 ```
 
-**Verified:** synthetic OpenCOOD V2V4Real-layout fixtures only (below).
-**Not yet verified:** the real cluster tree, because it is still zipped and the
-extracted listing has not been supplied. No real frames are in this repository.
+`coperceive dataset prepare --help` also lists `v2v4real` as an `--adapter` choice. Its `--split` text names OPV2V and V2XSet; this adapter's allowed values are still `train` and `test`.
 
-## Synthetic fixture
+## Known issues and conventions
 
-`tests/opencood_release.py` writes the layout without dataset bytes; the
-V2V4Real tests rename scenarios to `testoutput_CAV_data_…` and agents to
-`0`/`1`. A wrong split (`validate`) and a scenario without agent directories
-must fail with a clear message.
+- World-frame handedness: **unverified**. The adapter mirrors on a CARLA assumption. See [V4R-1](../geometry/conventions.md#v4r-1).
+- LiDAR +y: **unverified**. See [V4R-2](../geometry/conventions.md#v4r-2).
+- A published pose is a 4×4 matrix where the adapter reads six Euler numbers, and a six-value list would store pitch and roll with the wrong sign. See [V4R-4](../geometry/conventions.md#v4r-4) and [V4R-6](../geometry/conventions.md#v4r-6).
+- Boxes are annotated in the vehicle LiDAR frame and stored as world boxes. See [V4R-7](../geometry/conventions.md#v4r-7).
+- Camera data is not in the release the draft cites. Extrinsics are **unverified**. See [V4R-9](../geometry/conventions.md#v4r-9).
+- One stem per 0.1 s is not a source statement of the stem step. See [V4R-11](../geometry/conventions.md#v4r-11).
+
+## Citation
+
+Source: <https://arxiv.org/bibtex/2303.07601>
+
+```bibtex
+@misc{xu2023v2v4realrealworldlargescaledataset,
+      title={V2V4Real: A Real-world Large-scale Dataset for Vehicle-to-Vehicle Cooperative Perception},
+      author={Runsheng Xu and Xin Xia and Jinlong Li and Hanzhao Li and Shuo Zhang and Zhengzhong Tu and Zonglin Meng and Hao Xiang and Xiaoyu Dong and Rui Song and Hongkai Yu and Bolei Zhou and Jiaqi Ma},
+      year={2023},
+      eprint={2303.07601},
+      archivePrefix={arXiv},
+      primaryClass={cs.CV},
+      url={https://arxiv.org/abs/2303.07601},
+}
+```
+
+## More detail
+
+- [V2V4Real — details](v2v4real-details.md)

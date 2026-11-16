@@ -17,7 +17,7 @@ pip wheel plugins/griffin --no-deps -w ~/wheelhouse
 pip install --no-index --find-links ~/wheelhouse coperceive-griffin-model
 ```
 
-Compute nodes install nothing. A plugin that is not installed runs with `--manifest FILE`. (Adarsh, 2026-10-18.)
+Compute nodes install nothing. A plugin that is not installed runs with `--manifest FILE`. (the maintainer, 2026-10-18.)
 
 ## Manifest
 
@@ -95,7 +95,7 @@ Each entry of `models`:
 | `sources` | map str → str | yes | | `run.json` `sources`; the child may only emit these. |
 | `agent` | str | no | `request` | `request`: rows belong to the agent of the frame request; else a fixed agent type the rows are attributed to. |
 | `artifacts` | list str | no | `[]` | Names of artefacts this model writes, for `depends_on`. |
-| `transient_artifacts` | list str | no | `[]` | A subset of `artifacts` that only a dependent model of the same job consumes (Griffin's drone-side `track_query` is 11 GB for the ten val scenes): never copied into the cache and never copied home by the Slurm job. A later run gets it from `--artifacts DIR`, or by running the dependency again (Adarsh, 2026-10-19). |
+| `transient_artifacts` | list str | no | `[]` | A subset of `artifacts` that only a dependent model of the same job consumes (Griffin's drone-side `track_query` is 11 GB for the ten val scenes): never copied into the cache and never copied home by the Slurm job. A later run gets it from `--artifacts DIR`, or by running the dependency again (the maintainer, 2026-10-19). |
 | `deterministic` | bool | no | `true` | Two runs over the same inputs give identical boxes. `false` turns conformance rule 8 into `skipped`. |
 
 #### Resources
@@ -172,7 +172,7 @@ Every message has `type` (str) and `protocol` (int, `1`).
  "git_commit": "9c02ba4a"}
 ```
 
-`environment` is a flat map of strings. It must change whenever the child's outputs would change for the same inputs (framework versions, checkpoint digests); its `checkpoint_md5` key is required, must be 32 lowercase hexadecimal characters, and is part of the cache key (§Cache). A `hello` without it, or with any other form, is rejected as `bad_message` with the key path `message.environment.checkpoint_md5` (Adarsh, 2026-10-18). A model without weights reports the MD5 of whatever fixes its outputs, for instance its own worker source file; the fake plugin does that. `checkpoint_path` names that file (absolute): the parent hashes it itself and refuses a `hello` whose digest disagrees (a protocol violation), and on a rerun it recomputes the cache key from the file on disk, re-hashing only when the file's size or mtime differs from the record in the previous run's `provenance.checkpoint`; the digest in an old `run.json` is never trusted by itself (Adarsh, 2026-10-18). Without `checkpoint_path` the parent cannot verify a rerun and starts the child every time. `git_commit` is optional.
+`environment` is a flat map of strings. It must change whenever the child's outputs would change for the same inputs (framework versions, checkpoint digests); its `checkpoint_md5` key is required, must be 32 lowercase hexadecimal characters, and is part of the cache key (§Cache). A `hello` without it, or with any other form, is rejected as `bad_message` with the key path `message.environment.checkpoint_md5` (the maintainer, 2026-10-18). A model without weights reports the MD5 of whatever fixes its outputs, for instance its own worker source file; the fake plugin does that. `checkpoint_path` names that file (absolute): the parent hashes it itself and refuses a `hello` whose digest disagrees (a protocol violation), and on a rerun it recomputes the cache key from the file on disk, re-hashing only when the file's size or mtime differs from the record in the previous run's `provenance.checkpoint`; the digest in an old `run.json` is never trusted by itself (the maintainer, 2026-10-18). Without `checkpoint_path` the parent cannot verify a rerun and starts the child every time. `git_commit` is optional.
 
 **`configure`** (parent, once per scene):
 
@@ -189,7 +189,7 @@ Every message has `type` (str) and `protocol` (int, `1`).
 
 `samples` is the full ordered list of times the parent will request, so a `sequence` model can plan. `raw_root` and `artifacts` are present only when the model declares them. Ground truth is never sent.
 
-**`configured`** (child): `{"type": "configured", "protocol": 1, "scene_id": "Town03-000"}`, with an optional `timings` map of non-negative seconds the child measured while setting up, e.g. `"timings": {"conversion_s": 98.0, "inference_s": 587.0}`. `conversion_s` is one-off work before the first frame and `inference_s` the model's own time over the whole scene set; a child that sets up scene by scene reports them on the `configured` of the scene that did the work (the parent sums what it receives). A child that measures nothing omits the key (Adarsh, 2026-10-19).
+**`configured`** (child): `{"type": "configured", "protocol": 1, "scene_id": "Town03-000"}`, with an optional `timings` map of non-negative seconds the child measured while setting up, e.g. `"timings": {"conversion_s": 98.0, "inference_s": 587.0}`. `conversion_s` is one-off work before the first frame and `inference_s` the model's own time over the whole scene set; a child that sets up scene by scene reports them on the `configured` of the scene that did the work (the parent sums what it receives). A child that measures nothing omits the key (the maintainer, 2026-10-19).
 
 **`frame`** (parent):
 
@@ -276,14 +276,14 @@ The parent creates `{work_dir}` and gives it to the child in `configure.work_dir
 | `git_commit` | str or null | `hello.git_commit`. |
 | `coperceive_version` | str | `coperceive/adapters/ingest.py` `coperceive_version()`. |
 | `host` | str | `socket.gethostname()`. |
-| `gpu` | str or null | GPU model name (from `hello.environment.gpu`, or `nvidia-smi` when `CUDA_VISIBLE_DEVICES` is set); null on CPU (Adarsh, 2026-10-19). |
+| `gpu` | str or null | GPU model name (from `hello.environment.gpu`, or `nvidia-smi` when `CUDA_VISIBLE_DEVICES` is set); null on CPU (the maintainer, 2026-10-19). |
 | `started_utc`, `ended_utc` | str | ISO 8601 `Z`. |
 | `status` | str | `complete` or `partial`. |
 | `completed_scenes` | list str | Scene ids whose `boxes.parquet` was written by this invocation or found complete. |
 | `reason` | str or null | For `partial`: `timeout`, `cancelled`, `plugin_error`, with the message. |
 | `options` | map | The effective options after defaults. |
 | `cache_hits`, `frames_run` | int | Scenes served from the cache, frames the child answered, in this invocation. |
-| `timings` | map | Measured by this invocation: `staging_s`, the rsync wall time the Slurm job measured and passed as `--staging-seconds` (the parent owns staging; 0 outside a Slurm job); `conversion_s` and `inference_s`, as the child reported them in `configured` (absent when it reported none); `per_sample_s`, **inference only**: `inference_s` over the frames the child answered (a child that reports nothing gets the whole wall time over its frames, and the emitter ignores such a run); `wall_s`. The Slurm emitter of the next run of the same plugin and model reads `staging_s + conversion_s + per_sample_s × samples` from the newest run that has `inference_s`, in place of the manifest's estimates, and never the whole worker time over the samples (Adarsh, 2026-10-19). |
+| `timings` | map | Measured by this invocation: `staging_s`, the rsync wall time the Slurm job measured and passed as `--staging-seconds` (the parent owns staging; 0 outside a Slurm job); `conversion_s` and `inference_s`, as the child reported them in `configured` (absent when it reported none); `per_sample_s`, **inference only**: `inference_s` over the frames the child answered (a child that reports nothing gets the whole wall time over its frames, and the emitter ignores such a run); `wall_s`. The Slurm emitter of the next run of the same plugin and model reads `staging_s + conversion_s + per_sample_s × samples` from the newest run that has `inference_s`, in place of the manifest's estimates, and never the whole worker time over the samples (the maintainer, 2026-10-19). |
 | `dependencies` | map | `{<model>: {<artifact>: <path>}}` for every `depends_on` entry that was used; `{}` otherwise. |
 | `slurm_job_id` | str or null | `$SLURM_JOB_ID` when set. |
 
@@ -291,7 +291,7 @@ The parent creates `{work_dir}` and gives it to the child in `configure.work_dir
 
 ## Partial runs
 
-A run whose `provenance.status` is `partial` is evaluated on its finished scenes only. `eval run` writes `run_status: "partial"` and `missing_scenes` (the selected scene ids without `boxes.parquet`) into every `metrics.json` it writes for that run; `eval report` and `eval compare` print `partial: N of M scenes` under the title. A complete run writes `run_status: "complete"` and no `missing_scenes`. (Adarsh, 2026-10-18.)
+A run whose `provenance.status` is `partial` is evaluated on its finished scenes only. `eval run` writes `run_status: "partial"` and `missing_scenes` (the selected scene ids without `boxes.parquet`) into every `metrics.json` it writes for that run; `eval report` and `eval compare` print `partial: N of M scenes` under the title. A complete run writes `run_status: "complete"` and no `missing_scenes`. (the maintainer, 2026-10-18.)
 
 ## Cache
 
@@ -319,7 +319,7 @@ coperceive model cache prune --out ROOT [--run-id ID] [--plugin NAME] [--model N
 coperceive serve ... --model <plugin> [--model-name NAME] [--manifest FILE] [--eval-config FILE]
 ```
 
-`list` prints `name  source  location` per plugin, as `adapters list` does. `inspect` prints the validated manifest as YAML plus the resolved interpreter path, or the reason it cannot be resolved. `run` prints one line per scene (`scene <id>: <frames> frames, <hits> cached, <boxes> boxes`), then `wrote <out>/<run_id>` and `scenes N frames M cached C boxes B`. `--slurm` prints the sbatch path and its text; `--submit` runs `sbatch` and prints the job id. `--model` is required when the plugin has more than one model, unless one of them is keyed `default`, which is then chosen (the convention of ADR 0011 decision 1; Adarsh, 2026-10-18). For a model with `depends_on`, the dependency model is run first, as a run of its own named `<run_id>-<model>` (its own boxes and provenance) in the same work directory, and its artefacts stay under `<work_dir>/artifacts/<model>/<name>/` unless `--artifacts DIR` names an earlier run or `--no-auto-dependencies` turns the missing artefact into an error. A resumed run whose stored `provenance.manifest_sha256` differs from the current manifest is refused without `--force`. The dependency is resolved only when the run needs a child: a run served entirely from the cache runs no dependency. A path reaches the child only through `configure.artifacts` (`{model: {name: path}}`), never through a directory the two children happen to share; a cached dependency whose transient artefact is gone is run again with the cache bypassed. The Slurm emitter stages the dependency's raw files, adds its time (the sum of each model's staging, conversion and per-sample time) and keeps transient artefacts out of the copy home.
+`list` prints `name  source  location` per plugin, as `adapters list` does. `inspect` prints the validated manifest as YAML plus the resolved interpreter path, or the reason it cannot be resolved. `run` prints one line per scene (`scene <id>: <frames> frames, <hits> cached, <boxes> boxes`), then `wrote <out>/<run_id>` and `scenes N frames M cached C boxes B`. `--slurm` prints the sbatch path and its text; `--submit` runs `sbatch` and prints the job id. `--model` is required when the plugin has more than one model, unless one of them is keyed `default`, which is then chosen (the convention of ADR 0011 decision 1; the maintainer, 2026-10-18). For a model with `depends_on`, the dependency model is run first, as a run of its own named `<run_id>-<model>` (its own boxes and provenance) in the same work directory, and its artefacts stay under `<work_dir>/artifacts/<model>/<name>/` unless `--artifacts DIR` names an earlier run or `--no-auto-dependencies` turns the missing artefact into an error. A resumed run whose stored `provenance.manifest_sha256` differs from the current manifest is refused without `--force`. The dependency is resolved only when the run needs a child: a run served entirely from the cache runs no dependency. A path reaches the child only through `configure.artifacts` (`{model: {name: path}}`), never through a directory the two children happen to share; a cached dependency whose transient artefact is gone is run again with the cache bypassed. The Slurm emitter stages the dependency's raw files, adds its time (the sum of each model's staging, conversion and per-sample time) and keeps transient artefacts out of the copy home.
 
 ## Exit codes
 
@@ -333,7 +333,7 @@ coperceive serve ... --model <plugin> [--model-name NAME] [--manifest FILE] [--e
 
 ## Live session
 
-Designed in this version, built after batch mode works (Adarsh, 2026-10-18: batch only now). Nothing in this section is implemented in step B; it is here so that batch mode's protocol, cache and provenance fit it.
+Designed in this version, built after batch mode works (the maintainer, 2026-10-18: batch only now). Nothing in this section is implemented in step B; it is here so that batch mode's protocol, cache and provenance fit it.
 
 Available only when `serve` was started with `--model`. One session per server. Paths are under `/api/scenes/{scene_id}/live`; POST and DELETE need `X-Coperceive-Request: 1`; the token rule is the server's.
 
