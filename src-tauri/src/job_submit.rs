@@ -2102,9 +2102,28 @@ exit "${FAKE_EXIT:-0}"
         std::fs::remove_dir_all(&plan.output_dir).unwrap();
         let none = run_full(false, true, "0");
         assert!(none.status.success(), "{}\n{script}", String::from_utf8_lossy(&none.stderr));
-        // No run.json at all: a failed run.
+        // A run.json from an older coperceive has no provenance.boxes_written: the box count
+        // is unknown, so only model run's exit 0 and run.json count, never a missing
+        // boxes.parquet.
         std::fs::remove_dir_all(&plan.output_dir).unwrap();
         let fake = std::fs::read_to_string(&python).unwrap();
+        let older = fake.replace(
+            r#"printf '{\n  "provenance": {\n    "boxes_written": %s\n  }\n}\n' "$N""#,
+            r#"printf '{\n  "provenance": {\n    "seed": 0\n  }\n}\n'"#,
+        );
+        assert_ne!(older, fake, "the fake's run.json line moved");
+        std::fs::write(&python, &older).unwrap();
+        let unknown = run(true);
+        assert!(
+            unknown.status.success(),
+            "a run.json without boxes_written must not fail the run: {}\n{script}",
+            String::from_utf8_lossy(&unknown.stderr)
+        );
+        assert!(run_dir.join("run.json").is_file());
+        assert!(!run_dir.join("val00/boxes.parquet").exists());
+        std::fs::write(&python, &fake).unwrap();
+        // No run.json at all: a failed run.
+        std::fs::remove_dir_all(&plan.output_dir).unwrap();
         std::fs::write(&python, fake.replace("> \"$OUT/$RID/run.json\"", "> /dev/null")).unwrap();
         let missing = run(false);
         assert_eq!(missing.status.code(), Some(1), "{}", String::from_utf8_lossy(&missing.stderr));

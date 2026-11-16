@@ -1356,11 +1356,14 @@ print("SAMPLES=%d" % sum(len(pose_times(read_scene(d))) for d in scene_directori
 
 /// `$1` the python, `$2` its module (loaded first when `module` exists, as the job loads
 /// it), `$3` the scenes folder, `$4` the code: every value a positional parameter.
+/// Read-only on the login node: `-B` writes no bytecode next to the cluster's coperceive,
+/// and the code only imports and reads. It runs under `LISTING_TIMEOUT`, the limit of
+/// the other login-node probe that reads the whole scenes tree (the split listing).
 fn python_facts_script(python: &str, module: &str, scenes: &str) -> String {
     format!(
         "sh -c '# coperceive-check:plan-python\n\
          if [ -n \"$2\" ] && command -v module >/dev/null 2>&1; then module load \"$2\" >/dev/null 2>&1 || true; fi\n\
-         \"$1\" -c \"$4\" \"$3\"' sh {} {} {} {}",
+         \"$1\" -B -c \"$4\" \"$3\"' sh {} {} {} {}",
         shell_quote(python),
         shell_quote(module),
         shell_quote(scenes),
@@ -4124,6 +4127,8 @@ mod tests {
         interpreters: Vec<(String, String)>,
         /// The run's python's answer to `coperceive-check:plan-python`.
         python_facts: String,
+        /// The timeout the `plan-python` check ran under.
+        facts_timeout: Mutex<Option<Duration>>,
         calls: Mutex<Vec<String>>,
         written: Mutex<Option<String>>,
     }
@@ -4135,6 +4140,7 @@ mod tests {
                 directories: vec!["/data/scenes/val".to_string()],
                 interpreters: Vec::new(),
                 python_facts: "ROOT=/data/code/coperceive\nSAMPLES=1490\n".to_string(),
+                facts_timeout: Mutex::new(None),
                 calls: Mutex::new(Vec::new()),
                 written: Mutex::new(None),
             }
@@ -4157,7 +4163,7 @@ mod tests {
         fn run(
             &self,
             remote_cmd: &str,
-            _timeout: Duration,
+            timeout: Duration,
             stdin: Option<&str>,
         ) -> Result<CommandResult, String> {
             for forbidden in ["sbatch", "scancel", "squeue"] {
@@ -4211,6 +4217,7 @@ mod tests {
                 });
             }
             if remote_cmd.contains("coperceive-check:plan-python") {
+                *self.facts_timeout.lock().unwrap() = Some(timeout);
                 return ok(self.python_facts.clone());
             }
             if remote_cmd.contains("coperceive-check:plan-env") {
@@ -4605,6 +4612,10 @@ mod tests {
         let calls = cluster.calls.lock().unwrap();
         let facts = calls.iter().find(|call| call.contains("coperceive-check:plan-python")).unwrap();
         assert!(facts.contains(" /data/scenes/val "), "{facts}");
+        // Read-only and time-bounded on the login node: no bytecode written, and the same
+        // limit as the split listing, the other probe that reads the whole scenes tree.
+        assert!(facts.contains("\"$1\" -B -c "), "{facts}");
+        assert_eq!(*cluster.facts_timeout.lock().unwrap(), Some(LISTING_TIMEOUT));
         // A client plan's estimate is never kept: save reads the cluster again.
         drop(calls);
         let mut edited = built.clone();
