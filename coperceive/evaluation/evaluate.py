@@ -132,6 +132,16 @@ def status_at_columns(n_thresholds: int) -> list[str]:
     return [status_at_column(index) for index in range(n_thresholds)]
 
 
+def gt_row_at_column(index: int) -> str:
+    """The column holding the ground-truth row a prediction was paired with in the AP pass."""
+    return f"gt_row_at_{index}"
+
+
+def gt_row_at_columns(n_thresholds: int) -> list[str]:
+    """``gt_row_at_0`` … ``gt_row_at_<n-1>``, in the order of ``config.thresholds``."""
+    return [gt_row_at_column(index) for index in range(n_thresholds)]
+
+
 def match_schema(n_thresholds: int) -> pa.Schema:
     """:data:`MATCH_SCHEMA` followed by one nullable string ``status_at_<i>`` per threshold.
 
@@ -141,6 +151,9 @@ def match_schema(n_thresholds: int) -> pa.Schema:
     fields: list[pa.Field] = [MATCH_SCHEMA.field(name) for name in MATCH_SCHEMA.names]
     fields.extend(
         pa.field(name, pa.string(), nullable=True) for name in status_at_columns(n_thresholds)
+    )
+    fields.extend(
+        pa.field(name, pa.int64(), nullable=True) for name in gt_row_at_columns(n_thresholds)
     )
     return pa.schema(fields)
 
@@ -242,6 +255,9 @@ class _Output:
     )
     # threshold index -> prediction row -> its AP-pass status (the ``status_at_<i>`` column).
     ap_status: dict[int, dict[int, str]] = field(default_factory=dict[int, dict[int, str]])
+    # threshold index -> prediction row -> the ground-truth row it was paired with in that
+    # AP pass (the ``gt_row_at_<i>`` column); a breakdown bins a true positive by it.
+    ap_pairs: dict[int, dict[int, int]] = field(default_factory=dict[int, dict[int, int]])
 
     @property
     def key(self) -> tuple[str, str]:
@@ -404,6 +420,9 @@ def _match_output(
             )
             records = output.ap_records.setdefault(index, {})
             statuses = output.ap_status.setdefault(index, {})
+            paired = output.ap_pairs.setdefault(index, {})
+            for pair in result.pairs:
+                paired[pair.pred_row] = pair.gt_row
             for pred in preds:
                 status = result.pred_status[pred.row]
                 statuses[pred.row] = status
@@ -652,6 +671,7 @@ def _match_rows(
     rows: list[dict[str, object]] = []
     indices = range(len(config.thresholds))
     gt_status_at: dict[str, object] = {status_at_column(index): None for index in indices}
+    gt_status_at.update({gt_row_at_column(index): None for index in indices})
     for time_us, placed_gt in gt_by_time.items():
         result = output.display[time_us]
         by_gt = {pair.gt_row: pair for pair in result.pairs}
@@ -718,6 +738,10 @@ def _match_rows(
                     "other_agent_tp": None,
                     **{
                         status_at_column(index): output.ap_status[index][pred_row]
+                        for index in indices
+                    },
+                    **{
+                        gt_row_at_column(index): output.ap_pairs.get(index, {}).get(pred_row)
                         for index in indices
                     },
                 }

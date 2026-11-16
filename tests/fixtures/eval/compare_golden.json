@@ -282,6 +282,11 @@
                     "n_objects": 1,
                     "note": null,
                     "by_class": {
+                      "car": {
+                        "ap": null,
+                        "n_objects": 0,
+                        "note": "no objects"
+                      },
                       "pedestrian": {
                         "ap": 0.0,
                         "n_objects": 1,
@@ -294,6 +299,11 @@
                     "n_objects": 1,
                     "note": null,
                     "by_class": {
+                      "car": {
+                        "ap": null,
+                        "n_objects": 0,
+                        "note": "no objects"
+                      },
                       "pedestrian": {
                         "ap": 0.0,
                         "n_objects": 1,
@@ -337,12 +347,14 @@
               "0.5": {
                 "mean": 1.0,
                 "by_class": {
+                  "car": null,
                   "pedestrian": 1.0
                 }
               },
               "0.7": {
                 "mean": 1.0,
                 "by_class": {
+                  "car": null,
                   "pedestrian": 1.0
                 }
               }
@@ -358,13 +370,25 @@
                     "mean": null,
                     "n_objects": 0,
                     "note": "no objects",
-                    "by_class": {}
+                    "by_class": {
+                      "car": {
+                        "ap": null,
+                        "n_objects": 0,
+                        "note": "no objects"
+                      }
+                    }
                   },
                   "0.7": {
                     "mean": null,
                     "n_objects": 0,
                     "note": "no objects",
-                    "by_class": {}
+                    "by_class": {
+                      "car": {
+                        "ap": null,
+                        "n_objects": 0,
+                        "note": "no objects"
+                      }
+                    }
                   }
                 }
               },
@@ -389,11 +413,15 @@
             "delta_b_minus_a": {
               "0.5": {
                 "mean": null,
-                "by_class": {}
+                "by_class": {
+                  "car": null
+                }
               },
               "0.7": {
                 "mean": null,
-                "by_class": {}
+                "by_class": {
+                  "car": null
+                }
               }
             }
           },
@@ -725,71 +753,6 @@
                 "mean": 0.0,
                 "by_class": {
                   "car": 0.0
-                }
-              }
-            }
-          },
-          {
-            "bin": "unknown",
-            "runs": {
-              "det-a": {
-                "n_objects": 0,
-                "ap": {
-                  "0.5": {
-                    "mean": null,
-                    "n_objects": 0,
-                    "note": "no objects",
-                    "by_class": {
-                      "car": {
-                        "ap": null,
-                        "n_objects": 0,
-                        "note": "no objects"
-                      }
-                    }
-                  },
-                  "0.7": {
-                    "mean": null,
-                    "n_objects": 0,
-                    "note": "no objects",
-                    "by_class": {
-                      "car": {
-                        "ap": null,
-                        "n_objects": 0,
-                        "note": "no objects"
-                      }
-                    }
-                  }
-                }
-              },
-              "det-b": {
-                "n_objects": 0,
-                "ap": {
-                  "0.5": {
-                    "mean": null,
-                    "n_objects": 0,
-                    "note": "no objects",
-                    "by_class": {}
-                  },
-                  "0.7": {
-                    "mean": null,
-                    "n_objects": 0,
-                    "note": "no objects",
-                    "by_class": {}
-                  }
-                }
-              }
-            },
-            "delta_b_minus_a": {
-              "0.5": {
-                "mean": null,
-                "by_class": {
-                  "car": null
-                }
-              },
-              "0.7": {
-                "mean": null,
-                "by_class": {
-                  "car": null
                 }
               }
             }

@@ -206,6 +206,7 @@ One row per prediction and one per ground-truth box of every evaluated output, i
 | `status_single`, `status_fused`, `other_kind` | string | yes | GT only. |
 | `seen_by_other_gt`, `other_agent_tp` | bool | yes | GT only. |
 | `status_at_<i>` | string | yes | Predictions only, one column per entry of `config.thresholds` (`i` is its index: `status_at_0`, `status_at_1`, …): the prediction's status in the AP pass at `thresholds[i]` (§Matching step 7, `score_threshold` ignored): `tp`, `fp` or `ignored`. Null on GT rows. These let a reader build the pooled curve from the files without re-matching. |
+| `gt_row_at_<i>` | int64 | yes | Predictions only, one column per entry of `config.thresholds`: the `annotations.parquet` row of the ground-truth box the prediction was paired with in the AP pass at `thresholds[i]`, null when it was not a `tp` there. Null on GT rows. A breakdown bins a true positive by this box (`docs/eval-spec.md` A.11). |
 
 The spec columns above `status_at_<i>` come first and are the same for every config; a reader that asks for them alone (the viewer) sees the same table whatever `thresholds` is.
 

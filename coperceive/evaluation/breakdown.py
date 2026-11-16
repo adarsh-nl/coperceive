@@ -202,11 +202,17 @@ def _bin_block(
     per_run: dict[str, object] = {}
     cells: list[dict[str, dict[str, object]]] = []
     for run_id, records in runs:
-        gts, preds = _split(records, dimension, label, distance_edges, visibility_edges)
+        gts = [
+            record
+            for record in records
+            if record.kind == KIND_GT
+            and _bin(record, dimension, distance_edges, visibility_edges) == label
+        ]
         aps: dict[str, object] = {}
         one: dict[str, dict[str, object]] = {}
         for index, threshold in enumerate(thresholds):
-            cell = _ap_cell(gts, preds, index)
+            scored = _scored(records, dimension, label, index, distance_edges, visibility_edges)
+            cell = _ap_cell(gts, scored)
             key = threshold_key(threshold)
             aps[key] = cell
             one[key] = cell
@@ -218,26 +224,83 @@ def _bin_block(
     return {"bin": label, "runs": per_run, "delta_b_minus_a": delta}
 
 
+def _scored(
+    records: Sequence[OutcomeRecord],
+    dimension: str,
+    label: str,
+    index: int,
+    distance_edges: Sequence[float],
+    visibility_edges: Sequence[float],
+) -> list[tuple[OutcomeRecord, str]]:
+    """The predictions of bin ``label`` at threshold ``index``, with their status in it.
+
+    ``docs/eval-spec.md`` A.11: nothing is matched again. A true positive of the AP
+    pass counts as one in the bin of the ground-truth box it was paired with and is
+    ignored elsewhere; a false positive counts in the bin of its own attribute, or in
+    every bin when it has none (occlusion, agent count). Ignored predictions are left out.
+    """
+    lookup = {
+        (record.scene_id, record.agent_id, record.source, record.row): record
+        for record in records
+        if record.kind == KIND_GT
+    }
+    scored: list[tuple[OutcomeRecord, str]] = []
+    for record in records:
+        if record.kind != KIND_PREDICTION or index >= len(record.status_at):
+            continue
+        status = record.status_at[index]
+        if status == "tp":
+            if index >= len(record.gt_row_at) or record.gt_row_at[index] is None:
+                raise EvaluationError(
+                    f"{record.scene_id}: the evaluation predates per-bin pairs (no "
+                    "gt_row_at); run `coperceive eval run` again"
+                )
+            paired = lookup.get(
+                (record.scene_id, record.agent_id, record.source, record.gt_row_at[index])
+            )
+            if (
+                paired is not None
+                and _bin(paired, dimension, distance_edges, visibility_edges) == label
+            ):
+                scored.append((record, "tp"))
+        elif status == "fp":
+            own = _own_bin(record, dimension, distance_edges)
+            if own is None or own == label:
+                scored.append((record, "fp"))
+    return scored
+
+
+def _own_bin(record: OutcomeRecord, dimension: str, distance_edges: Sequence[float]) -> str | None:
+    """A prediction's own bin, or ``None`` for an attribute only ground truth has."""
+    if dimension == "distance":
+        return distance_bin(record.distance_m, distance_edges)
+    if dimension == "class":
+        return record.category
+    if dimension == "scene":
+        return record.scene_id
+    return None
+
+
 def _ap_cell(
-    gts: Sequence[OutcomeRecord], preds: Sequence[OutcomeRecord], threshold_index: int
+    gts: Sequence[OutcomeRecord], scored: Sequence[tuple[OutcomeRecord, str]]
 ) -> dict[str, object]:
     kept = [record for record in gts if record.status != "ignored"]
     n_objects = len(kept)
     categories = sorted(
         {record.category for record in kept}
-        | {record.category for record in preds if record.category}
+        | {record.category for record, _status in scored if record.category}
     )
-    ordered = sorted(preds, key=lambda record: (record.scene_id, record.row))
+    ordered = sorted(scored, key=lambda item: (item[0].scene_id, item[0].row))
     by_class: dict[str, object] = {}
     values: list[float] = []
     for category in categories:
         n_gt = sum(1 for record in kept if record.category == category)
-        scored = [
-            (record.score if record.score is not None else 0.0, record.status_at[threshold_index])
-            for record in ordered
-            if record.category == category and threshold_index < len(record.status_at)
+        walk = [
+            (record.score if record.score is not None else 0.0, status)
+            for record, status in ordered
+            if record.category == category
         ]
-        ap = average_precision(scored, n_gt)
+        ap = average_precision(walk, n_gt)
         note = NO_OBJECTS if n_gt == 0 else None
         by_class[category] = {"ap": _num(ap), "n_objects": n_gt, "note": note}
         if ap is not None:
@@ -288,55 +351,6 @@ def _subtract(left: object, right: object) -> float | None:
     return _num(float(right) - float(left))
 
 
-def _split(
-    records: Sequence[OutcomeRecord],
-    dimension: str,
-    label: str,
-    distance_edges: Sequence[float],
-    visibility_edges: Sequence[float],
-) -> tuple[list[OutcomeRecord], list[OutcomeRecord]]:
-    lookup = _pair_lookup(records)
-    gts = [
-        record
-        for record in records
-        if record.kind == KIND_GT
-        and _bin(record, dimension, distance_edges, visibility_edges) == label
-    ]
-    preds: list[OutcomeRecord] = []
-    for record in records:
-        if record.kind != KIND_PREDICTION:
-            continue
-        assigned = _assigned(record, lookup, dimension, distance_edges, visibility_edges)
-        if assigned == label:
-            preds.append(record)
-    return gts, preds
-
-
-PairKey = tuple[str, str, str, int]
-
-
-def _pair_lookup(records: Sequence[OutcomeRecord]) -> dict[PairKey, OutcomeRecord]:
-    found: dict[PairKey, OutcomeRecord] = {}
-    for record in records:
-        if record.kind == KIND_GT and record.pair_id is not None:
-            found[(record.scene_id, record.agent_id, record.source, record.pair_id)] = record
-    return found
-
-
-def _assigned(
-    record: OutcomeRecord,
-    lookup: Mapping[PairKey, OutcomeRecord],
-    dimension: str,
-    distance_edges: Sequence[float],
-    visibility_edges: Sequence[float],
-) -> str:
-    if record.pair_id is not None:
-        matched = lookup.get((record.scene_id, record.agent_id, record.source, record.pair_id))
-        if matched is not None:
-            return _bin(matched, dimension, distance_edges, visibility_edges)
-    return _bin(record, dimension, distance_edges, visibility_edges)
-
-
 def _bin(
     record: OutcomeRecord,
     dimension: str,
@@ -366,12 +380,14 @@ def _bin_names(
 ) -> tuple[str, ...]:
     seen: list[str] = []
     for _run_id, records in runs:
-        lookup = _pair_lookup(records)
         for record in records:
             if record.kind == KIND_GT:
                 label = _bin(record, dimension, distance_edges, visibility_edges)
             elif record.kind == KIND_PREDICTION:
-                label = _assigned(record, lookup, dimension, distance_edges, visibility_edges)
+                own = _own_bin(record, dimension, distance_edges)
+                if own is None:
+                    continue
+                label = own
             else:
                 continue
             if label not in seen:

@@ -282,9 +282,11 @@ def test_matches_round_trip_with_the_spec_columns(
     table = read_matches(tmp_path)
     assert table.schema.names == MATCH_COLUMNS
     assert status_at_columns(2) == ["status_at_0", "status_at_1"]
-    assert match_schema(2).names == [*MATCH_COLUMNS, "status_at_0", "status_at_1"]
+    # Then the ground-truth row each prediction was paired with in that AP pass (spec A.11).
+    extra = ["status_at_0", "status_at_1", "gt_row_at_0", "gt_row_at_1"]
+    assert match_schema(2).names == [*MATCH_COLUMNS, *extra]
     full = read_matches(tmp_path, columns=match_schema(2).names)
-    assert full.schema.names == [*MATCH_COLUMNS, "status_at_0", "status_at_1"]
+    assert full.schema.names == [*MATCH_COLUMNS, *extra]
     rows = full.to_pylist()
     assert len(rows) == len(result.matches)
     assert rows == [dict(row) for row in result.matches]
