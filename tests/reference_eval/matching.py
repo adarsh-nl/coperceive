@@ -28,16 +28,27 @@ from tests.reference_eval.geometry import (
     yaw_error_deg,
 )
 
+RANKING_PER_FRAME = "per_frame"
+RANKING_POOLED = "pooled"
+GT_SCOPE_CONNECTED_UNION = "connected_union"
+GT_SCOPE_EGO_ONLY = "ego_only"
+
 
 @dataclass(frozen=True, eq=False)
 class GtBox:
-    """One annotation of a sample's ``G`` (A.4): placed, category mapped, rule 1 applied."""
+    """One box of a sample's ground-truth set ``G`` (A.4).
+
+    Placed, category mapped, rule 1 applied (ranges from the output's agent). ``row``
+    is its annotation row index. ``added_by`` is the connected agent that added it to
+    the set of a fused output (A.4 rule 3), ``None`` for one of the agent's own boxes.
+    """
 
     row: int
     category: str
     placed: PlacedBox
     rectangle: Rectangle
     ignored: bool
+    added_by: str | None = None
 
 
 @dataclass(frozen=True, eq=False)
@@ -88,6 +99,20 @@ def validate_config(config: ConfigSpec) -> int:
     ``thresholds`` is always present (its default is refused under ``centre`` by the
     order rule).
     """
+    # The protocol keys.
+    if config.ranking_scope not in (RANKING_PER_FRAME, RANKING_POOLED):
+        raise ValueError(
+            f"ranking_scope must be {RANKING_PER_FRAME!r} or {RANKING_POOLED!r}, "
+            f"got {config.ranking_scope!r} (A.2)"
+        )
+    if config.gt_scope not in (GT_SCOPE_CONNECTED_UNION, GT_SCOPE_EGO_ONLY):
+        raise ValueError(
+            f"gt_scope must be {GT_SCOPE_CONNECTED_UNION!r} or {GT_SCOPE_EGO_ONLY!r}, "
+            f"got {config.gt_scope!r} (A.2)"
+        )
+    if not config.comm_range_m > 0.0:
+        raise ValueError(f"comm_range_m must be positive, got {config.comm_range_m!r} (A.2)")
+
     thresholds = config.thresholds
     _check_threshold_list(thresholds, config.criterion, "thresholds")
     # display_threshold must equal an entry of thresholds exactly.
@@ -160,8 +185,9 @@ def match_sample(
 ) -> SampleMatch:
     """A.4: one pass over one sample.
 
-    ``gts`` is ``G`` and ``preds`` is ``P``, both in row order. ``operating`` is true
-    for the operating-point pass and false for an AP pass.
+    ``gts`` is ``G`` in the order of the ground-truth set (an agent's own annotations
+    in row order, then the boxes connected agents added) and ``preds`` is ``P`` in row
+    order. ``operating`` is true for the operating-point pass and false for an AP pass.
     """
     use_iou = config.criterion == CRITERION_IOU_BEV
     if not use_iou and config.criterion != CRITERION_CENTRE:
@@ -189,8 +215,8 @@ def match_sample(
         if not candidates:
             pred_status[pred.row] = STATUS_FP
             continue
-        # 3.4 the best candidate; among equals the earliest in row order (strict comparison
-        # while walking the candidates in row order).
+        # 3.4 the best candidate; among equals the earliest in the order of the ground-truth
+        # set (strict comparison while walking the candidates in that order).
         best = candidates[0]
         if use_iou:
             best_value = measures.iou(pred, best)

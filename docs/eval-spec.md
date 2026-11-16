@@ -113,15 +113,15 @@ Inputs: an output `(X, s)`, one pose time `t` of `X`, a threshold index `i`, and
 - `G`: the output's **ground-truth set** at `t` (below), in its order, each box placed in the world (A.3), each with its category replaced by `gt_class_map[category]` when the category is a key of the map.
 - `P`: the prediction rows of the output with time `t`, in row order, each placed in the world.
 
-An annotation of an evaluated agent whose time is not one of that agent's pose times is an error.
+An annotation of an agent that has an output in the scene (A.0) whose time is not one of that agent's pose times is an error.
 
 **Ground-truth set.** For an output whose source is not `fused`, and for every output under `gt_scope: ego_only`, the set is the annotations of `X` at `t`, in row order.
 
 For an output `(X, fused)` under `gt_scope: connected_union`, the set is the union over the agents connected to `X`:
 
 1. *Connected agents.* `C` = the agents `Y ≠ X` of the scene, in scene order, that have a pose sample at exactly `t` and whose horizontal distance from `X` at `t` (between pose translations, as for Range in A.3) is at most `comm_range_m`.
-2. *Observed.* An annotation of a `Y` in `C` at `t` is **observed** when at least one LiDAR return recorded at `t` by `X` or by an agent of `C` lies inside its box. A return is placed in the world through its sensor's mount and its agent's pose. It is inside when its coordinates in the box frame are within half the box size on every axis, boundary included. When neither `X` nor any agent of `C` has a LiDAR sweep at `t`, every annotation of every agent of `C` counts as observed: each agent's own list stands for what it saw.
-3. *The set.* `X`'s own annotations at `t` come first, in row order, and are always in the set. Then each `Y` of `C` in turn adds its observed annotations at `t`, except those that are the same object as a box already in the set. Same object means paired by the pairing of A.9, run between the boxes already in the set (as the first agent) and `Y`'s observed boxes in row order (as the second). `Y`'s unpaired boxes are appended in row order.
+2. *Observed.* An annotation of a `Y` in `C` at `t` is **observed** when at least one LiDAR return recorded at `t` by `X` or by an agent of `C` lies inside its box. A return is placed in the world through its sensor's mount and its agent's pose. It is inside when its coordinates in the box frame are within half the box size on every axis, boundary included. When neither `X` nor any agent of `C` has a LiDAR sweep at `t`, every annotation of every agent of `C` counts as observed: each agent's own list stands for what it saw. A sweep with no returns is still a sweep, and one sweep from any agent of `X` and `C` ends the fallback for all of them.
+3. *The set.* `X`'s own annotations at `t` come first, in row order, and are always in the set. Then each `Y` of `C` in turn adds its observed annotations at `t`, except those that are the same object as a box already in the set. Same object means paired by the pairing of A.9, run between the boxes already in the set, in the set's order (as the first agent), and `Y`'s observed boxes in row order (as the second). Categories are not compared, as in A.9. `Y`'s unpaired boxes are appended in row order.
 
 A box of the set keeps its annotation row index and the agent that annotated it. Rule 1 (ignoring) applies to every box of the set, with ranges measured from `X`.
 

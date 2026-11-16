@@ -2,8 +2,9 @@
 """An independent reference evaluator for the 3D object-detection metrics.
 
 This package was written from ``docs/eval-spec.md`` Part A ("The computed
-definitions", sections A.0 to A.10) alone, without sight of the product evaluator,
-and it imports nothing from ``coperceive``. Its only inputs are that text and the
+definitions", sections A.0 to A.10; the breakdowns of A.11 and the labels of A.12
+have no field in ``RunResult``) alone, without sight of the product evaluator, and
+it imports nothing from ``coperceive``. Its only inputs are that text and the
 plain-data types of ``tests.evalcheck.scenario``; its only dependencies are the
 standard library and ``shapely`` (the footprint intersection is a GEOS overlay).
 
@@ -12,11 +13,14 @@ It exists to be an oracle: the same ``RunSpec`` is given to the product and to
 
 Where each part of Part A lives:
 
-* ``geometry``: A.1 rotations and A.3 geometry;
+* ``geometry``: A.1 rotations, A.3 geometry, and the point-in-box test of A.4;
 * ``matching``: A.2 config and A.4 matching one sample;
-* ``ap``: A.5 average precision;
+* ``gtset``: A.4 ground-truth set of a fused output (connected agents, observed
+  annotations, the union);
+* ``ap``: A.5 average precision under either ranking scope;
 * ``cooperative``: A.9 pairing of other agents' boxes and the cooperative counts;
-* ``evaluate``: A.0 outputs and samples, A.5 to A.7 per-scene tables, A.8 pooling.
+* ``evaluate``: A.0 outputs and samples, A.4 ground-truth sets per output, A.5 to
+  A.7 per-scene tables, A.8 pooling, A.9 columns.
 """
 
 from __future__ import annotations

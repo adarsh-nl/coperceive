@@ -198,6 +198,24 @@ def footprint(box: PlacedBox) -> tuple[Point2, ...]:
 # --- A.3 pair measures --------------------------------------------------------------
 
 
+def _bounds_apart(a: Rectangle, b: Rectangle) -> bool:
+    """Whether the axis-aligned bounds of two footprints are apart by more than rounding.
+
+    A footprint lies within ``centre ± (|hl.x| + |hw.x|, |hl.y| + |hw.y|)``; when the two
+    bounds are separated along x or y (with a margin of ``1e-6`` m plus ``1e-9`` relative,
+    far above the rounding of the corners), the footprints are disjoint.
+    """
+    reach_x = (
+        abs(a.half_length[0]) + abs(a.half_width[0]) + abs(b.half_length[0]) + abs(b.half_width[0])
+    )
+    reach_y = (
+        abs(a.half_length[1]) + abs(a.half_width[1]) + abs(b.half_length[1]) + abs(b.half_width[1])
+    )
+    apart_x = abs(a.centre[0] - b.centre[0]) > reach_x * (1.0 + 1e-9) + 1e-6
+    apart_y = abs(a.centre[1] - b.centre[1]) > reach_y * (1.0 + 1e-9) + 1e-6
+    return apart_x or apart_y
+
+
 def ious_of_rectangles(pairs: Sequence[tuple[Rectangle, Rectangle]]) -> list[float]:
     """A.3 "BEV IoU" of pairs of footprints, with a single call into GEOS for all of them.
 
@@ -215,6 +233,10 @@ def ious_of_rectangles(pairs: Sequence[tuple[Rectangle, Rectangle]]) -> list[flo
         if a.area == 0.0 or b.area == 0.0:
             # A footprint with a zero side is a segment or a point: it has no area to
             # share, and it is not a valid polygon to hand to the overlay.
+            continue
+        if _bounds_apart(a, b):
+            # The footprints cannot meet: their overlay is empty and its area is 0, which
+            # is what GEOS would return. Only a shortcut; it never decides an overlap.
             continue
         midpoint = ((a.centre[0] + b.centre[0]) / 2, (a.centre[1] + b.centre[1]) / 2)
         rings_a.append(corners_about(a, midpoint))
@@ -264,3 +286,80 @@ def horizontal_range_m(box: PlacedBox, origin: Vec3) -> float:
 def centre_distance_3d_m(a: PlacedBox, b: PlacedBox) -> float:
     """A.9 step 2: the 3D Euclidean distance between two world centres."""
     return math.dist(a.center, b.center)
+
+
+# --- A.4 "Observed": LiDAR returns inside a box ----------------------------------------
+
+
+def transform_points(pose: PoseSample, points: Sequence[Vec3]) -> list[Vec3]:
+    """Place LiDAR returns in the world (A.4 "Observed", A.1 item 4).
+
+    The sensor sits at the body origin with no rotation, so the mount is the identity
+    and a return is placed by its agent's pose alone: ``p_world = R(q) p_body + t``,
+    the same arithmetic as :func:`transform_point`.
+    """
+    r = rotation_matrix(pose.rotation)
+    t = pose.translation
+    return [
+        (
+            r[0][0] * p[0] + r[0][1] * p[1] + r[0][2] * p[2] + t[0],
+            r[1][0] * p[0] + r[1][1] * p[1] + r[1][2] * p[2] + t[1],
+            r[2][0] * p[0] + r[2][1] * p[1] + r[2][2] * p[2] + t[2],
+        )
+        for p in points
+    ]
+
+
+class BoxInterior:
+    """The inside of a placed box, for the point test of A.4 "Observed".
+
+    A world point ``p`` has box-frame coordinates ``R(q_w)ᵀ (p − c_w)``: the box frame
+    is ``world_from_box = (q_w, c_w)``, and the transpose is the inverse of the rotation
+    of a unit quaternion (A.1 item 6: every definition assumes unit quaternions). The
+    point is inside when each coordinate lies within half the box size on its axis,
+    boundary included: ``|p_box.x| ≤ length/2``, ``|p_box.y| ≤ width/2`` and
+    ``|p_box.z| ≤ height/2``.
+
+    ``reach`` bounds the world distance, along any axis, from the centre to a point that
+    can be inside. It only lets :class:`tests.reference_eval.gtset.Sweep` skip points
+    that are certainly outside; it never decides that a point is inside. It is
+    ``math.inf`` (no skipping) unless the quaternion is a unit one to within ``1e-6``,
+    because only then is ``R(q_w)ᵀ`` a rotation that keeps lengths (to ``O(1e-6)``,
+    covered by the margin).
+    """
+
+    def __init__(self, box: PlacedBox) -> None:
+        r = rotation_matrix(box.rotation)
+        self.centre = box.center
+        # The columns of R(q_w), that is the rows of its transpose.
+        self.axis_x = (r[0][0], r[1][0], r[2][0])
+        self.axis_y = (r[0][1], r[1][1], r[2][1])
+        self.axis_z = (r[0][2], r[1][2], r[2][2])
+        length, width, height = box.size_lwh
+        self.half = (length / 2, width / 2, height / 2)
+        w, x, y, z = box.rotation
+        norm_squared = w * w + x * x + y * y + z * z
+        reach = math.inf
+        if abs(norm_squared - 1.0) <= 3e-6:
+            reach = math.sqrt(length * length + width * width + height * height) / 2
+            reach = reach * (1.0 + 1e-5) + 1e-9
+        self.reach = reach if reach < math.inf else math.inf  # a NaN size: no skipping
+
+    def contains(self, point: Vec3) -> bool:
+        """Whether a world point lies inside the box, boundary included."""
+        dx = point[0] - self.centre[0]
+        dy = point[1] - self.centre[1]
+        dz = point[2] - self.centre[2]
+        ax, ay, az = self.axis_x
+        if not abs(ax * dx + ay * dy + az * dz) <= self.half[0]:
+            return False
+        bx, by, bz = self.axis_y
+        if not abs(bx * dx + by * dy + bz * dz) <= self.half[1]:
+            return False
+        cx, cy, cz = self.axis_z
+        return abs(cx * dx + cy * dy + cz * dz) <= self.half[2]
+
+
+def box_contains_point(box: PlacedBox, point: Vec3) -> bool:
+    """A.4 "Observed": a world point inside a placed box, boundary included."""
+    return BoxInterior(box).contains(point)

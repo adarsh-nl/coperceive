@@ -147,6 +147,8 @@ def test_the_generated_runs_reach_every_rule() -> None:
                 seen["class_thresholds set"] += 1
             if run.config.gt_class_map:
                 seen["gt_class_map set"] += 1
+            seen[f"ranking {run.config.ranking_scope}"] += 1
+            seen[f"gt scope {run.config.gt_scope}"] += 1
             if len(run.scenes) > 1:
                 seen["several scenes"] += 1
             for scene in run.scenes:
@@ -162,6 +164,10 @@ def test_the_generated_runs_reach_every_rule() -> None:
                         seen[f"other_kind {cooperative.other_kind}"] += 1
                         seen[f"other_agent_tp {cooperative.other_agent_tp}"] += 1
                     seen["recovered"] += output.cooperative.recovered
+                    seen["boxes added by a connected agent"] += sum(
+                        1 for columns in output.gt_cooperative.values() if columns.added_by
+                    )
+                    seen["outputs with no prediction"] += output.totals.predictions == 0
                     seen["lost_by_fusion"] += output.cooperative.lost_by_fusion
                     seen["only_other_agent"] += output.cooperative.only_other_agent
                     seen["nobody"] += output.cooperative.nobody
@@ -202,6 +208,12 @@ def test_the_generated_runs_reach_every_rule() -> None:
         "empty samples",
         "ap null",
         "ap number",
+        "ranking per_frame",
+        "ranking pooled",
+        "gt scope connected_union",
+        "gt scope ego_only",
+        "boxes added by a connected agent",
+        "outputs with no prediction",
     )
     missing = [name for name in wanted if seen[name] < 20]
     assert not missing, f"the generator no longer reaches: {missing} (seen: {dict(seen)})"
