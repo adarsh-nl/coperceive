@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -145,10 +146,11 @@ def test_in_process_poll_handles_wrap_and_buffering() -> None:
 
 def test_poll_subcommand_against_real_http_controller() -> None:
     calls = 0
+    started_at: float | None = None
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:  # noqa: N802
-            nonlocal calls
+            nonlocal calls, started_at
             if self.headers.get("Authorization") != "Bearer test-secret":
                 self.send_response(401)
                 self.send_header("Content-Length", "0")
@@ -160,7 +162,11 @@ def test_poll_subcommand_against_real_http_controller() -> None:
             if "__COPERCEIVE_PLAYBACK_PERF__" in body["script"]:
                 payload = {"result": {"applied": calls}}
             else:
-                idx = (97 + calls) % 100
+                now = time.monotonic()
+                if started_at is None:
+                    started_at = now
+                elapsed = max(0.0, now - started_at)
+                idx = (96 + round(elapsed * 10.0)) % 100
                 payload = {
                     "result": {
                         "frameIndex": idx,
@@ -191,9 +197,9 @@ def test_poll_subcommand_against_real_http_controller() -> None:
                 "--secret",
                 "test-secret",
                 "--polls",
-                "5",
+                "10",
                 "--interval",
-                "0.1",
+                "0.15",
             ]
         )
         assert rc == 0
