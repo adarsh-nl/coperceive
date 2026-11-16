@@ -47,7 +47,7 @@ from coperceive.evaluation.evaluate import evaluate_run
 from coperceive.evaluation.predictions import PredictionError, check_run_id
 from coperceive.evaluation.report import aggregate, ap_column, collect
 from coperceive.models.batch import BatchReport, RunOptions, run_batch, utc_now
-from coperceive.models.slurm import plan_sbatch, write_plan
+from coperceive.models.slurm import SlurmError, plan_sbatch, validate_run_id, write_plan
 from coperceive.models.spec import Manifest, ModelSpec, manifest_sha256, select_model
 from coperceive.robustness.spec import PerturbationError, PerturbationSpec
 from coperceive.store import read_scene
@@ -408,6 +408,12 @@ def emit_slurm(options: SweepOptions) -> tuple[Path, ...]:
     if options.slurm is None:
         raise SweepError("--slurm needs the site settings of SlurmSettings")
     model = _prepare(options)
+    # Each cell's run id (<run-id>-<digest>) goes into #SBATCH --job-name, a header comment
+    # and file names: Slurm mode takes the `model run` rule, not only the directory-name one.
+    try:
+        validate_run_id(options.run_id)
+    except SlurmError as error:
+        raise SweepError(f"--run-id: {error}") from None
     directories = _scene_directories(options.scenes, options.scene_ids)
     selected = _selected(directories, options.scene_ids)
     scenes = {scene_id: read_scene(directories[scene_id]) for scene_id in selected}

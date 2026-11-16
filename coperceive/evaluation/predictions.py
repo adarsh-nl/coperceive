@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import math
+import unicodedata
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -61,8 +62,12 @@ class PredictionError(CoperceiveError):
 
 
 def check_run_id(value: str) -> str:
-    """Return ``value`` when it passes the scene-id rule (§Layout)."""
-    return _check_name(value, "run_id")
+    """Return ``value`` when it passes the scene-id rule (§Layout) and holds no line break
+    or other control character: a run id is also written into job scripts and logs."""
+    name = _check_name(value, "run_id")
+    if any(unicodedata.category(ch) == "Cc" for ch in name):
+        raise PredictionError(f"run_id {value!r} has a line break or control character")
+    return name
 
 
 RESERVED_SCENE_IDS = frozenset({"cache"})  # the model-plugin cache under a run directory
