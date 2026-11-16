@@ -9,7 +9,14 @@ from pathlib import Path
 from coperceive.errors import CoperceiveError
 
 _WINDOWS_RESERVED = frozenset(
-    {"CON", "PRN", "AUX", "NUL", *(f"COM{i}" for i in range(1, 10)), *(f"LPT{i}" for i in range(1, 10))}
+    {
+        "CON",
+        "PRN",
+        "AUX",
+        "NUL",
+        *(f"COM{i}" for i in range(1, 10)),
+        *(f"LPT{i}" for i in range(1, 10)),
+    }
 )
 _SAFE = re.compile(r"^[^/\\:\x00-\x1f]+$")
 

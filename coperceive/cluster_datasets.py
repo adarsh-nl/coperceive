@@ -29,9 +29,9 @@ from coperceive.adapters.ingest import ingest
 from coperceive.adapters.prefetch import collecting
 from coperceive.adapters.readers.numpy_yaml import yaml_loader_kind
 from coperceive.adapters.registry import RegistryError, resolve_adapter
+from coperceive.adapters.scene_paths import safe_scene_id, scene_path
 from coperceive.adapters.spec import SpecError
 from coperceive.camera_images import IMAGE_MODES, stage_images
-from coperceive.adapters.scene_paths import safe_scene_id, scene_path
 from coperceive.errors import CoperceiveError
 from coperceive.remote.recognise import (
     DETECT_PROBE_SCENES,
@@ -279,8 +279,7 @@ def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
 
 def _scene_ready(cache_dir: Path, scene_id: str) -> bool:
     safe_scene_id(scene_id)
-    scene = scene_path(cache_dir, scene_id)
-    folder = cache_dir / scene_id
+    folder = scene_path(cache_dir, scene_id)
     return (folder / "manifest.json").is_file() and (folder / "COMPLETE.json").is_file()
 
 

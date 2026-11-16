@@ -7,7 +7,6 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
-
 from coperceive.adapters.build import CheckReport, SceneRef
 from coperceive.adapters.ingest import IngestError, ingest
 from coperceive.model import Scene
