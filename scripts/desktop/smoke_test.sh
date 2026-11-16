@@ -812,59 +812,11 @@ else
         "http://127.0.0.1:${DEMO_CTRL_PORT}/eval")
     echo "Playback started: ${PLAYBACK_START_RESP}"
 
-    PLAY_SAMPLES=0
-    BUFFERING_SEEN=0
-    PLAY_SAMPLES_FILE="${TMPDIR}/playback_samples.jsonl"
-    : > "${PLAY_SAMPLES_FILE}"
-    for i in {1..15}; do
-        sleep 0.2
-        PLAY_RESP=$(curl -s -X POST \
-            -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
-            -H "Content-Type: application/json" \
-            -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; const txt = document.body ? document.body.innerText : \"\"; return { frameIndex: st.frameIndex ?? -1, samples: st.samples ?? 0, playing: Boolean(st.playing), buffering: txt.includes(\"Buffering\") }; })()"}' \
-            "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
-        SAMPLE_WALL_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
-        if [ -n "${PLAY_RESP}" ]; then
-            if python3 - "${PLAY_RESP}" "${SAMPLE_WALL_S}" "${PLAY_SAMPLES_FILE}" <<'PY'
-import json, sys
-try:
-    payload = json.loads(sys.argv[1])
-except json.JSONDecodeError:
-    sys.exit(1)
-res = payload.get("result") or {}
-idx = res.get("frameIndex", -1)
-count = res.get("samples", 0)
-if isinstance(idx, int) and isinstance(count, int) and count > 0 and 0 <= idx < count:
-    with open(sys.argv[3], "a", encoding="utf-8") as f:
-        f.write(json.dumps({"frame_index": idx, "samples": count, "wall_s": float(sys.argv[2])}) + "\n")
-    sys.exit(0)
-sys.exit(1)
-PY
-            then
-                PLAY_SAMPLES=$((PLAY_SAMPLES + 1))
-            fi
-            if echo "${PLAY_RESP}" | grep -q '"buffering":true'; then
-                BUFFERING_SEEN=1
-            fi
-        fi
-    done
-    # Capture per-phase playback breakdown and pause cleanly
-    PLAYBACK_PERF=$(curl -s -X POST \
-        -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
-        -H "Content-Type: application/json" \
-        -d '{"window":"viewer","script":"(() => { const perf = window.__COPERCEIVE_PLAYBACK_PERF__?.() ?? null; const st = window.__COPERCEIVE_PLAYBACK_STATE__?.(); if (st?.playing) window.__COPERCEIVE_PLAYBACK__?.(\"toggle\"); return perf; })()"}' \
-        "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
-    echo "Demo playback perf breakdown: ${PLAYBACK_PERF}"
-
-    if [ "${BUFFERING_SEEN}" -ne 0 ]; then
-        echo "Error: Demo playback showed 'Buffering' during 1x local playback!" >&2
-        exit 26
-    fi
-    if [ "${PLAY_SAMPLES}" -lt 2 ]; then
-        echo "Error: Could not read at least 2 playback samples during demo playback!" >&2
-        exit 26
-    fi
-    python3 "${SCRIPT_DIR}/playback_metrics.py" "${PLAY_SAMPLES_FILE}" || exit 26
+    python3 "${SCRIPT_DIR}/playback_metrics.py" poll \
+        --port "${DEMO_CTRL_PORT}" \
+        --secret "${DEMO_CTRL_SECRET}" \
+        --polls 25 \
+        --interval 0.2 || exit 26
 fi
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")

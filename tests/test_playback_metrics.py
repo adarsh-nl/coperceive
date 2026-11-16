@@ -4,13 +4,17 @@
 from __future__ import annotations
 
 import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
 from scripts.desktop.playback_metrics import (
     PlaybackSample,
     count_frames_advanced,
+    eval_controller,
     evaluate_playback_samples,
+    poll_playback_samples,
 )
 from scripts.desktop.playback_metrics import (
     main as playback_main,
@@ -103,3 +107,97 @@ def test_cli_exit_codes_for_slow_and_fast_runs(tmp_path: Path) -> None:
         encoding="utf-8",
     )
     assert playback_main(["playback_metrics.py", str(slow)]) == 26
+
+
+def test_in_process_poll_handles_wrap_and_buffering() -> None:
+    frames = iter([96, 98, 0, 2, 4])
+    clock_t = iter([0.2, 0.4, 0.6, 0.8, 1.0])
+
+    samples, buffering = poll_playback_samples(
+        lambda: {
+            "result": {
+                "frameIndex": next(frames),
+                "samples": 100,
+                "playing": True,
+                "buffering": False,
+            }
+        },
+        polls=5,
+        interval_s=0.2,
+        clock_fn=lambda: next(clock_t),
+        sleep_fn=lambda _: None,
+    )
+    assert buffering is False
+    total, elapsed, ratio, _, passed = evaluate_playback_samples(samples)
+    assert total == 8
+    assert elapsed == pytest.approx(0.8)
+    assert ratio == pytest.approx(1.0)
+    assert passed is True
+
+    _, buffering_hit = poll_playback_samples(
+        lambda: {"result": {"frameIndex": 0, "samples": 100, "playing": True, "buffering": True}},
+        polls=2,
+        interval_s=0.0,
+        sleep_fn=lambda _: None,
+    )
+    assert buffering_hit is True
+
+
+def test_poll_subcommand_against_real_http_controller() -> None:
+    calls = 0
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_POST(self) -> None:  # noqa: N802
+            nonlocal calls
+            if self.headers.get("Authorization") != "Bearer test-secret":
+                self.send_response(401)
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+                return
+            length = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(length).decode("utf-8"))
+            calls += 1
+            if "__COPERCEIVE_PLAYBACK_PERF__" in body["script"]:
+                payload = {"result": {"applied": calls}}
+            else:
+                idx = (97 + calls) % 100
+                payload = {
+                    "result": {
+                        "frameIndex": idx,
+                        "samples": 100,
+                        "playing": True,
+                        "buffering": False,
+                    }
+                }
+            raw = json.dumps(payload).encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(raw)))
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def log_message(self, format: str, *args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        rc = playback_main(
+            [
+                "playback_metrics.py",
+                "poll",
+                "--port",
+                str(server.server_address[1]),
+                "--secret",
+                "test-secret",
+                "--polls",
+                "5",
+                "--interval",
+                "0.1",
+            ]
+        )
+        assert rc == 0
+        assert eval_controller(server.server_address[1], "bad-secret") is None
+    finally:
+        server.shutdown()
+        server.server_close()
