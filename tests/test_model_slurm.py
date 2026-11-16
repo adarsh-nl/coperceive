@@ -244,6 +244,47 @@ def test_script_passes_bash_n(roots: tuple[Path, Path, Scene], tmp_path: Path) -
     assert done.returncode == 0, done.stderr
 
 
+def test_paths_with_spaces_and_quotes_keep_the_script_valid(
+    roots: tuple[Path, Path, Scene], tmp_path: Path
+) -> None:
+    """Plan parity case (a): an output root under ``te st/it's "q"``.
+
+    The last line used to be ``echo "done: <shlex-quoted path> (exit $RC)"``: the
+    single-quoted word sat inside double quotes, so its ``'`` ended nothing and the
+    ``"`` of the path closed the string; ``bash -n`` failed. Every path the script
+    names must reach the shell as one word, printed back unchanged.
+    """
+    if shutil.which("bash") is None:
+        pytest.skip("no bash")
+    scenes, _out, scene = roots
+    odd = tmp_path / "te st" / 'it\'s "q"'
+    manifest = load_manifest(FAKE)
+    plan = plan_sbatch(
+        manifest,
+        select_model(manifest, "default"),
+        scenes_root=scenes,
+        scenes={"coop": scene},
+        run_id="r1",
+        out_root=odd / "out",
+        options=RunOptions(),
+        python=Path("/opt/venv/bin/python"),
+        logs_dir=odd / "logs",
+        results_dir=odd / "results",
+        partition="test-partition",
+        scratch_template="/scratch/$USER/$SLURM_JOB_ID",
+    )
+    path = write_plan(plan, odd / "out", "r1")
+    done = subprocess.run(["bash", "-n", str(path)], capture_output=True, text=True)
+    assert done.returncode == 0, done.stderr
+    echo = [line for line in plan.script.splitlines() if line.startswith("echo") and "done" in line]
+    assert len(echo) == 1
+    printed = subprocess.run(
+        ["bash", "-c", "RC=0; " + echo[0]], capture_output=True, text=True, check=True
+    )
+    target = (odd / "out").resolve() / "r1"
+    assert printed.stdout == f"done: {target} (exit 0)\n"
+
+
 def test_slurm_flag_emits_without_running(
     roots: tuple[Path, Path, Scene], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:

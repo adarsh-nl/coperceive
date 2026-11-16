@@ -518,7 +518,8 @@ def plan_sbatch(
                     f"{shlex.quote(str(out_root.resolve() / f'{run_id}-{member.key}'))}/",
                 )
             ],
-            f'echo "done: {shlex.quote(str(target))} (exit $RC)"',
+            # The path is its own shell word: a quoted word inside "..." would not be.
+            f'echo "done:" {shlex.quote(str(target))} "(exit $RC)"',
             'exit "$RC"',
             "",
         ]
