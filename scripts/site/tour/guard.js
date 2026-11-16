@@ -1,12 +1,24 @@
 // Fails the capture when a screen's page text contains an identifier.
 // The app's own metric label "mAP@" is the one "@" the viewer always shows.
 const fs = require("fs");
+const path = require("path");
+
+function patternFileNeedles() {
+  const file = path.resolve(__dirname, "../../ci/identifier_patterns.txt");
+  if (!fs.existsSync(file)) return [];
+  return fs
+    .readFileSync(file, "utf8")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"))
+    .map((line) => line.replace(/\\\./g, ".").replace(/\+$/g, ""));
+}
 
 function needles() {
   const fromEnv = [process.env.TOUR_HOSTNAME, process.env.TOUR_USER, process.env.TOUR_HOME]
     .map((value) => (value || "").trim())
     .filter((value) => value.length >= 3);
-  return ["$USER", "$HOME", "tudelft", "utwente", "ewi.utwente.nl", "nanjaiyalatha", ...fromEnv];
+  return ["$USER", "$HOME", "tudelft", "utwente", ...patternFileNeedles(), ...fromEnv];
 }
 
 function hitsIn(text) {

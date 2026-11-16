@@ -6,21 +6,21 @@
 #SBATCH --partition=ps
 #SBATCH --cpus-per-task=8
 #SBATCH --time=08:00:00
-#SBATCH --output=/home/nanjaiyalathaa/logs/%x-%j.out
-#SBATCH --error=/home/nanjaiyalathaa/logs/%x-%j.err
+#SBATCH --output=/home/%u/logs/%x-%j.out
+#SBATCH --error=/home/%u/logs/%x-%j.err
 
 set -euo pipefail
 
 SCRATCH="/local/${SLURM_JOB_ID}"
-REPORT="/home/nanjaiyalathaa/results/getdata-${SLURM_JOB_ID}"
-MAPS="/home/nanjaiyalathaa/results/628385/maps"
-mkdir -p "$SCRATCH" "$REPORT" /home/nanjaiyalathaa/logs
+REPORT="$HOME/results/getdata-${SLURM_JOB_ID}"
+MAPS="$HOME/results/628385/maps"
+mkdir -p "$SCRATCH" "$REPORT" "$HOME/logs"
 trap 'rm -rf "$SCRATCH"' EXIT
 
-cd /home/nanjaiyalathaa/wt/m2-import
+cd "$HOME/wt/m2-import"
 # shellcheck disable=SC1091
-source /home/nanjaiyalathaa/coperceive/.venv/bin/activate
-export PYTHONPATH=/home/nanjaiyalathaa/wt/m2-import
+source "$HOME/coperceive/.venv/bin/activate"
+export PYTHONPATH="$HOME/wt/m2-import"
 export PYTHONUNBUFFERED=1
 
 echo "start_epoch=$(date -u +%Y-%m-%dT%H:%M:%SZ)"

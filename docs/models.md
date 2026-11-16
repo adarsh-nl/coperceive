@@ -224,7 +224,7 @@ coperceive model run griffin --model early-fusion \
 ### Reference paths
 
 On the HPC, canonical read-only acceptance runs are preserved under:
-`/home/nanjaiyalathaa/results/reference-stepb-20261020/predictions/`
+`/home/cluster-user/results/reference-stepb-20261020/predictions/`
 
 - `griffin25m-vehicle-plugin/` (Slurm job 629288, 7,930 boxes)
 - `griffin25m-instance-plugin-drone-side/` (Slurm job 630818, 12,093 boxes)

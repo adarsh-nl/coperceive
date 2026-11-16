@@ -3268,9 +3268,9 @@ eval_js("""(() => {
 time.sleep(0.2)
 
 cases = [
-    ("hpc-user", "nanjaiyalatha"),
+    ("hpc-user", "cluster-user"),
     ("hpc-partition", "ps"),
-    ("hpc-host", "hpc-head1"),
+    ("hpc-host", "cluster-login"),
 ]
 
 for field_id, text in cases:

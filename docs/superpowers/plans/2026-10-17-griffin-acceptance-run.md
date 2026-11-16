@@ -133,7 +133,7 @@ ctit089 gpu:ampere:4(S:0-1) intel,avx,avx2,avx512,tesla,a100 250000
 `module avail 2>&1 | grep -iE "cuda|nvidia|cudnn"` (CUDA-relevant subset): `nvidia/cuda-11.0 11.1 11.2 11.3 11.5 11.6 11.7 11.8 12.4`, `nvidia/cuda-11.x_cudnn-8.6`, `nvidia/cuda-11.x_cudnn-8.8`, `nvidia/cuda-11.1_cudnn-8.2`, `nvidia/cuda-11.8_nccl-2.16`, plus `nvidia/nvhpc*`, `obsolete/nVidia/*`. `module show nvidia/cuda-11.1` → `CUDA_HOME /deepstore/software/nvidia/cuda-11.1`; `nvidia/cuda-11.8` → `/deepstore/software/nvidia/cuda-11.8`. Login-node `gcc --version` = `gcc (Ubuntu 11.4.0-1ubuntu1~22.04.3) 11.4.0`; module `gnu/gcc-7` exists.
 
 **Driver version.** No `Driver Version` header anywhere in `~/logs`; found via the apf-attention jobs, which print `nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader`:
-`grep -h -m1 ... /home/nanjaiyalathaa/apf-attention/runs/slurm/*.out | sort | uniq -c` →
+`grep -h -m1 ... /home/cluster-user/apf-attention/runs/slurm/*.out | sort | uniq -c` →
 
 > 148 NVIDIA L40S, 595.58.03, 46068 MiB
 
@@ -143,7 +143,7 @@ So the L40S nodes run driver **595.58.03** (Oct 2026 jobs). Not established for 
 
 ### D. Existing environments
 
-`conda env list`: `cosdh, dhd_env, opencood-official, thesis, v2xvit-official` under `/home/nanjaiyalathaa/.conda/envs/`, base `/software/anaconda3/2025.06`.
+`conda env list`: `cosdh, dhd_env, opencood-official, thesis, v2xvit-official` under `/home/cluster-user/.conda/envs/`, base `/software/anaconda3/2025.06`.
 `<env>/bin/python -c "import sys,torch; print(sys.version.split()[0], torch.__version__, torch.version.cuda)"` and `ls site-packages | grep -iE "^(torch|mmcv|mmdet|mmdet3d|mmengine|spconv|mmseg)"`:
 
 | env | Python | torch | CUDA | mm* packages |
@@ -158,9 +158,9 @@ So the L40S nodes run driver **595.58.03** (Oct 2026 jobs). Not established for 
 
 ### E. Disk and where an env could live
 
-`quota -s` printed nothing. `df -h /home/nanjaiyalathaa` → `hpc-storage8:/storage8/home/nanjaiyalathaa 1.0T 99G 926G 10%`. `/datasets/eemcs` → `84T 74T 11T 88%`. `du -sh ~/.conda/envs/cosdh` = `8.6G` in 20 s (full `du ~/.conda` skipped per the budget). Estimated new env: torch wheel alone is 2.04 GB download (~4 GB installed), mmcv-full ~0.5 GB, mmdet3d build + deps ~1 GB → **~6–8 GB**.
+`quota -s` printed nothing. `df -h /home/cluster-user` → `hpc-storage8:/storage8/home/cluster-user 1.0T 99G 926G 10%`. `/datasets/eemcs` → `84T 74T 11T 88%`. `du -sh ~/.conda/envs/cosdh` = `8.6G` in 20 s (full `du ~/.conda` skipped per the budget). Estimated new env: torch wheel alone is 2.04 GB download (~4 GB installed), mmcv-full ~0.5 GB, mmdet3d build + deps ~1 GB → **~6–8 GB**.
 
-Options and what `/home/nanjaiyalathaa/CLAUDE.md` says:
+Options and what `/home/cluster-user/CLAUDE.md` says:
 - `~/.conda/envs/griffin` (home): "Code, configs, small outputs. NOT for job scratch or bulk data." An env is code; the five existing envs live here; 926 GB free. **Recommended.** Rule: "Don't `pip install` into the conda `base` env. Use a project env."
 - `/datasets/eemcs/ps/cv/huggingface/griffin/...` (owned by me): CLAUDE.md lists `/datasets/eemcs/ps/cv/` as "Shared CV datasets ... Read-mostly"; filesystem is 88 % full. Not for a Python env.
 - `/local/$SLURM_JOB_ID`: "Per-job node-local scratch. Wiped after the job." Fine for the mmdet3d *build* and all data, not for a persistent env.

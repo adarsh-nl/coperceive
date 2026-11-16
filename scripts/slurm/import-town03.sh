@@ -5,20 +5,20 @@
 #SBATCH --partition=ps
 #SBATCH --cpus-per-task=4
 #SBATCH --time=01:00:00
-#SBATCH --output=/home/nanjaiyalathaa/logs/%x-%j.out
-#SBATCH --error=/home/nanjaiyalathaa/logs/%x-%j.err
+#SBATCH --output=/home/%u/logs/%x-%j.out
+#SBATCH --error=/home/%u/logs/%x-%j.err
 
 set -euo pipefail
 
-SCENE="/home/nanjaiyalathaa/results/628385/scenes/Town03-000"
+SCENE="$HOME/results/628385/scenes/Town03-000"
 GRIFFIN="/datasets/eemcs/ps/cv/huggingface/griffin/datasets/griffin_50scenes_25m/griffin_50scenes_25m/griffin-release"
-OUT="/home/nanjaiyalathaa/results/import-test/${SLURM_JOB_ID}"
+OUT="$HOME/results/import-test/${SLURM_JOB_ID}"
 
-mkdir -p "$OUT" /home/nanjaiyalathaa/logs
-cd /home/nanjaiyalathaa/wt/m2-import
+mkdir -p "$OUT" "$HOME/logs"
+cd "$HOME/wt/m2-import"
 # shellcheck disable=SC1091
-source /home/nanjaiyalathaa/coperceive/.venv/bin/activate
-export PYTHONPATH=/home/nanjaiyalathaa/wt/m2-import
+source "$HOME/coperceive/.venv/bin/activate"
+export PYTHONPATH="$HOME/wt/m2-import"
 export PYTHONUNBUFFERED=1
 
 echo "start_epoch=$(date -u +%Y-%m-%dT%H:%M:%SZ)"

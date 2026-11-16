@@ -12,13 +12,17 @@ Writes:
 
 from __future__ import annotations
 
+import argparse
 import array
 import gzip
 import json
 import struct
 import sys
+from dataclasses import dataclass
 from pathlib import Path
+from typing import NamedTuple, TypedDict, cast
 
+import pyarrow as pa
 import pyarrow.parquet as pq
 from coperceive.store import read_scene
 from coperceive.viewdata import frame_document, frame_points
@@ -36,7 +40,7 @@ START_TIME_US = 1118500000
 NUM_FRAMES = 100
 TIME_STEP_US = 100000  # 10 Hz
 
-CAT_MAP = {
+CAT_MAP: dict[str, int] = {
     "car": 0,
     "vehicle": 0,
     "truck": 0,
@@ -47,6 +51,111 @@ CAT_MAP = {
     "bicycle": 2,
     "motorcycle": 2,
 }
+
+
+class PoseDict(TypedDict):
+    qw: float
+    qx: float
+    qy: float
+    qz: float
+    tx: float
+    ty: float
+    tz: float
+
+
+@dataclass
+class TrackAccumulator:
+    track_id: str
+    category: str
+    center: tuple[float, float, float]
+    size_lwh: tuple[float, float, float]
+    pose: PoseDict
+    agents: set[str | None]
+
+
+class BoxRecord(NamedTuple):
+    num_tid: int
+    flag: int
+    cat_id: int
+    cx: float
+    cy: float
+    cz: float
+    sx: float
+    sy: float
+    sz: float
+    qx: float
+    qy: float
+    qz: float
+    qw: float
+
+
+def _as_float(value: object, name: str) -> float:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return float(value)
+    raise TypeError(f"Expected numeric {name}, got {type(value).__name__}")
+
+
+def _as_int(value: object, name: str) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    raise TypeError(f"Expected int {name}, got {type(value).__name__}")
+
+
+def _as_str(value: object, name: str) -> str:
+    if isinstance(value, str):
+        return value
+    raise TypeError(f"Expected str {name}, got {type(value).__name__}")
+
+
+def _as_object_dict(value: object, name: str) -> dict[str, object]:
+    if not isinstance(value, dict):
+        raise TypeError(f"Expected dict for {name}, got {type(value).__name__}")
+    out: dict[str, object] = {}
+    for key, item in cast(dict[object, object], value).items():
+        if not isinstance(key, str):
+            raise TypeError(f"Expected str key in {name}, got {type(key).__name__}")
+        out[key] = item
+    return out
+
+
+def _as_object_list(value: object, name: str) -> list[object]:
+    if isinstance(value, list):
+        return list(cast(list[object], value))
+    raise TypeError(f"Expected list for {name}, got {type(value).__name__}")
+
+
+def _as_vec3(value: object, name: str) -> tuple[float, float, float]:
+    items = _as_object_list(value, name)
+    if len(items) != 3:
+        raise ValueError(f"Expected 3 elements for {name}, got {len(items)}")
+    return (
+        _as_float(items[0], f"{name}[0]"),
+        _as_float(items[1], f"{name}[1]"),
+        _as_float(items[2], f"{name}[2]"),
+    )
+
+
+def _as_pose(value: object, name: str) -> PoseDict:
+    raw = _as_object_dict(value, name)
+    return PoseDict(
+        qw=_as_float(raw["qw"], f"{name}.qw"),
+        qx=_as_float(raw["qx"], f"{name}.qx"),
+        qy=_as_float(raw["qy"], f"{name}.qy"),
+        qz=_as_float(raw["qz"], f"{name}.qz"),
+        tx=_as_float(raw["tx"], f"{name}.tx"),
+        ty=_as_float(raw["ty"], f"{name}.ty"),
+        tz=_as_float(raw["tz"], f"{name}.tz"),
+    )
+
+
+def _table_rows(table: pa.Table) -> list[dict[str, object]]:
+    rows: list[dict[str, object]] = []
+    for item in table.to_pylist():
+        row: dict[str, object] = {}
+        for key, value in item.items():
+            row[key] = value
+        rows.append(row)
+    return rows
 
 
 def export_hero(
@@ -60,7 +169,7 @@ def export_hero(
 
     # Read map polylines
     map_table = pq.read_table(map_dir / "polylines.parquet")
-    map_rows = map_table.to_pydict()
+    map_rows = _table_rows(map_table)
     blob = (map_dir / "vertices.bin").read_bytes()
     values = array.array("f")
     values.frombytes(blob)
@@ -68,11 +177,11 @@ def export_hero(
         values.byteswap()
 
     selected_polylines: list[tuple[int, list[tuple[float, float, float]]]] = []
-    for i in range(len(map_rows["polyline_id"])):
-        layer_str = map_rows["layer"][i]
+    for row in map_rows:
+        layer_str = _as_str(row["layer"], "layer")
         layer_id = 1 if "lane_centre" in layer_str else 2
-        offset = map_rows["vertex_offset"][i]
-        count = map_rows["vertex_count"][i]
+        offset = _as_int(row["vertex_offset"], "vertex_offset")
+        count = _as_int(row["vertex_count"], "vertex_count")
         verts = [
             (
                 float(values[(offset + j) * 3]),
@@ -121,15 +230,24 @@ def export_hero(
     total_lidar_points = 0
     total_boxes = 0
 
-    default_pose = {"tx": 0, "ty": 0, "tz": 0, "qw": 1, "qx": 0, "qy": 0, "qz": 0}
+    default_pose: PoseDict = {
+        "tx": 0.0,
+        "ty": 0.0,
+        "tz": 0.0,
+        "qw": 1.0,
+        "qx": 0.0,
+        "qy": 0.0,
+        "qz": 0.0,
+    }
     # Frames
     for _frame_idx, t in enumerate(times):
         doc = frame_document(scene, t)
-        v_agents = [a for a in doc["agents"] if a["agent_id"] == "vehicle"]
-        d_agents = [a for a in doc["agents"] if a["agent_id"] == "drone"]
+        doc_agents = [_as_object_dict(a, "agent") for a in _as_object_list(doc["agents"], "agents")]
+        v_agents = [a for a in doc_agents if a["agent_id"] == "vehicle"]
+        d_agents = [a for a in doc_agents if a["agent_id"] == "drone"]
 
-        v_pose = v_agents[0]["pose"] if v_agents else default_pose
-        d_pose = d_agents[0]["pose"] if d_agents else default_pose
+        v_pose = _as_pose(v_agents[0]["pose"], "vehicle.pose") if v_agents else default_pose
+        d_pose = _as_pose(d_agents[0]["pose"], "drone.pose") if d_agents else default_pose
 
         # LiDAR points for vehicle
         pts_bytes = frame_points(scene, t, "vehicle", "lidar_top")
@@ -159,27 +277,31 @@ def export_hero(
         # Ground truth boxes
         # Deduplicate tracks, compute cooperative agent flag
         # flag: 1 = vehicle only, 2 = drone only, 3 = both / cooperative
-        track_map: dict[str, dict[str, object]] = {}
-        for box in doc["boxes"]:
+        track_map: dict[str, TrackAccumulator] = {}
+        doc_boxes = [_as_object_dict(b, "box") for b in _as_object_list(doc["boxes"], "boxes")]
+        for box in doc_boxes:
             tid = str(box.get("track_id", ""))
             if not tid:
                 continue
-            aid = box.get("agent_id")
+            raw_aid = box.get("agent_id")
+            aid = raw_aid if isinstance(raw_aid, str) else None
             if tid not in track_map:
-                track_map[tid] = {
-                    "track_id": tid,
-                    "category": box.get("category", "car"),
-                    "center": box["center"],
-                    "size": box["size_lwh"],
-                    "pose": box["pose"],
-                    "agents": {aid},
-                }
+                raw_cat = box.get("category", "car")
+                category = raw_cat if isinstance(raw_cat, str) else str(raw_cat)
+                track_map[tid] = TrackAccumulator(
+                    track_id=tid,
+                    category=category,
+                    center=_as_vec3(box["center"], "box.center"),
+                    size_lwh=_as_vec3(box["size_lwh"], "box.size_lwh"),
+                    pose=_as_pose(box["pose"], "box.pose"),
+                    agents={aid},
+                )
             else:
-                track_map[tid]["agents"].add(aid)
+                track_map[tid].agents.add(aid)
 
-        box_records = []
+        box_records: list[BoxRecord] = []
         for tid, tdata in track_map.items():
-            agents = tdata["agents"]
+            agents = tdata.agents
             if "vehicle" in agents and "drone" in agents:
                 flag = 3
             elif "drone" in agents:
@@ -187,17 +309,17 @@ def export_hero(
             else:
                 flag = 1
 
-            cat_id = CAT_MAP.get(str(tdata["category"]).lower(), 3)
+            cat_id = CAT_MAP.get(tdata.category.lower(), 3)
             try:
                 num_tid = int(tid)
             except ValueError:
                 num_tid = 0
 
-            center = tdata["center"]
-            size = tdata["size"]
-            pose = tdata["pose"]
+            center = tdata.center
+            size = tdata.size_lwh
+            pose = tdata.pose
             box_records.append(
-                (
+                BoxRecord(
                     num_tid,
                     flag,
                     cat_id,
@@ -261,19 +383,19 @@ def export_hero(
             buf.extend(
                 struct.pack(
                     "<iBBffffffffff",
-                    rec[0],  # num_tid
-                    rec[1],  # flag
-                    rec[2],  # cat_id
-                    rec[3],
-                    rec[4],
-                    rec[5],  # center
-                    rec[6],
-                    rec[7],
-                    rec[8],  # size
-                    rec[9],
-                    rec[10],
-                    rec[11],
-                    rec[12],  # quat (qx, qy, qz, qw)
+                    rec.num_tid,
+                    rec.flag,
+                    rec.cat_id,
+                    rec.cx,
+                    rec.cy,
+                    rec.cz,
+                    rec.sx,
+                    rec.sy,
+                    rec.sz,
+                    rec.qx,
+                    rec.qy,
+                    rec.qz,
+                    rec.qw,
                 )
             )
 
@@ -365,12 +487,42 @@ def export_hero(
     print(f"Exported manifest.json: {out_manifest.stat().st_size:,} bytes")
 
 
-if __name__ == "__main__":
-    export_hero(
-        scene_dir=Path(
-            "/home/nanjaiyalathaa/results/reference-stepb-20261020/staged-scenes/Town03-000"
-        ),
-        map_dir=Path("/home/nanjaiyalathaa/results/628385/maps/Town03"),
-        out_bin=Path("/home/nanjaiyalathaa/wt/landing/site/public/hero/clip.bin"),
-        out_manifest=Path("/home/nanjaiyalathaa/wt/landing/site/public/hero/manifest.json"),
+def main(argv: list[str] | None = None) -> None:
+    """Parse CLI paths and export the hero clip and manifest."""
+    home = Path.home()
+    parser = argparse.ArgumentParser(description="Export hero clip binary and manifest.")
+    parser.add_argument(
+        "--scene-dir",
+        type=Path,
+        default=home / "results/reference-stepb-20261020/staged-scenes/Town03-000",
     )
+    parser.add_argument(
+        "--map-dir",
+        type=Path,
+        default=home / "results/628385/maps/Town03",
+    )
+    parser.add_argument(
+        "--out-bin",
+        type=Path,
+        default=home / "wt/landing/site/public/hero/clip.bin",
+    )
+    parser.add_argument(
+        "--out-manifest",
+        type=Path,
+        default=home / "wt/landing/site/public/hero/manifest.json",
+    )
+    ns = parser.parse_args(argv)
+    scene_dir = cast(Path, ns.scene_dir)
+    map_dir = cast(Path, ns.map_dir)
+    out_bin = cast(Path, ns.out_bin)
+    out_manifest = cast(Path, ns.out_manifest)
+    export_hero(
+        scene_dir=scene_dir,
+        map_dir=map_dir,
+        out_bin=out_bin,
+        out_manifest=out_manifest,
+    )
+
+
+if __name__ == "__main__":
+    main()
