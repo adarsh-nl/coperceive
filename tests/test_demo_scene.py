@@ -15,7 +15,6 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-import warnings
 from pathlib import Path
 
 import numpy as np
@@ -36,14 +35,7 @@ def _hash_tree(root: Path) -> dict[str, str]:
 
 @pytest.fixture(scope="module")
 def demo(tmp_path_factory: pytest.TempPathFactory) -> DemoScene:
-    created = create(tmp_path_factory.mktemp("demo-scene") / "d", seed=0)
-    # CI-benchmark: appears in the pytest warnings summary, so the CI log records
-    # the generation time of this runner (the docs quote it).
-    warnings.warn(
-        f"demo generation on this runner: {created.seconds:.1f} s, {created.bytes} bytes",
-        stacklevel=2,
-    )
-    return created
+    return create(tmp_path_factory.mktemp("demo-scene") / "d", seed=0)
 
 
 def _world(scene: object, cloud: object) -> np.ndarray:
