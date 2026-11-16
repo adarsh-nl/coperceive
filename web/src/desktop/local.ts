@@ -62,6 +62,12 @@ export function isTauriEnvironment(): boolean {
 export interface AppPersistentState {
   /** After a prepare, open the viewer when the first scene is ready (default on). */
   open_first_ready_scene?: boolean;
+  /** At the end of a scene, move on to the next prepared one. */
+  auto_next_scene?: boolean;
+  /** Reopen last session on launch. */
+  reopen_last_session?: boolean;
+  /** User's loop toggle choice. */
+  last_loop?: boolean;
   /** Dataset view "Group scenes": "none" (default), "state" or "day". */
   dataset_grouping?: string;
   /** Viewer "Camera strip": "all" (filmstrip, default) or "agent". */
@@ -84,8 +90,34 @@ export interface AppPersistentState {
   welcome_card_dismissed?: boolean;
 }
 
+export interface ViewerPreferences {
+  dataset_grouping?: string;
+  camera_strip?: string;
+  viewer_style?: string;
+  cinema_drift?: boolean;
+  theme_override?: string | null;
+  last_loop?: boolean | null;
+  /** Streaming settings (Settings → Viewer); the viewer window only reads them. */
+  buffer_target_seconds?: number;
+  client_memory_limit_bytes?: number;
+  show_stream_stats?: boolean;
+}
+
+export function hasDesktopController(): boolean {
+  return typeof window !== "undefined" && Boolean(window.__COPERCEIVE_CTRL_PORT__);
+}
+
+export function isDesktopUpdateBridgeAvailable(): boolean {
+  return isTauriEnvironment() || hasDesktopController();
+}
+
+async function viewerInvoke<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return await invoke<T>(`plugin:viewer-bridge|${command}`, args);
+}
+
 export async function getPersistentState(): Promise<AppPersistentState | null> {
-  if (isTauriEnvironment()) {
+  if (isTauriEnvironment() && !isViewerWindow()) {
     try {
       const { invoke } = await import("@tauri-apps/api/core");
       return await invoke<AppPersistentState>("get_persistent_state");
@@ -93,7 +125,51 @@ export async function getPersistentState(): Promise<AppPersistentState | null> {
       return null;
     }
   }
+  if (hasDesktopController()) {
+    try {
+      return await controllerGet<AppPersistentState>("/state");
+    } catch {
+      return null;
+    }
+  }
   return null;
+}
+
+export async function getViewerPreferences(): Promise<ViewerPreferences | null> {
+  if (isTauriEnvironment()) {
+    try {
+      if (isViewerWindow()) {
+        return await viewerInvoke<ViewerPreferences>("viewer_get_preferences");
+      }
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<AppPersistentState>("get_persistent_state");
+    } catch {
+      // Fall through to controller in test mode if available.
+    }
+  }
+  if (hasDesktopController()) {
+    try {
+      return await controllerGet<ViewerPreferences>("/state");
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+export async function updatePersistentState(patch: Record<string, unknown>): Promise<void> {
+  if (isTauriEnvironment()) {
+    if (isViewerWindow()) {
+      await viewerInvoke("viewer_update_preferences", { patch });
+      return;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("update_persistent_state", { patch });
+    return;
+  }
+  if (hasDesktopController()) {
+    await controllerPost("/state", patch);
+  }
 }
 
 export async function isRemoteEnabled(): Promise<boolean> {
@@ -612,7 +688,11 @@ export interface DatasetSceneList {
 }
 
 export async function getDatasetScenes(): Promise<DatasetSceneList | null> {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+  if (isTauriEnvironment() && isViewerWindow()) {
+    const body = await viewerInvoke<{ dataset: DatasetSceneList | null }>("viewer_get_dataset_scenes");
+    return body.dataset && Array.isArray(body.dataset.scenes) ? body.dataset : null;
+  }
+  if (!hasDesktopController()) {
     return null;
   }
   const body = await controllerGet<{ dataset: DatasetSceneList | null }>("/dataset-scenes");
@@ -629,7 +709,11 @@ export interface ViewerJob {
 }
 
 export async function getViewerJob(): Promise<ViewerJob | null> {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+  if (isTauriEnvironment() && isViewerWindow()) {
+    const body = await viewerInvoke<{ session: ViewerJob | null }>("viewer_get_job");
+    return body.session ?? null;
+  }
+  if (!hasDesktopController()) {
     return null;
   }
   const body = await controllerGet<{ session: ViewerJob | null }>("/viewer-session");
@@ -638,14 +722,22 @@ export async function getViewerJob(): Promise<ViewerJob | null> {
 
 /** Name the viewer window after the scene it shows. */
 export async function setViewerTitle(scene: string): Promise<void> {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__ && window.__COPERCEIVE_VIEWER_WINDOW__) {
+  if (!isViewerWindow()) return;
+  if (isTauriEnvironment()) {
+    await viewerInvoke("viewer_set_title", { scene });
+    return;
+  }
+  if (hasDesktopController()) {
     await controllerPost("/viewer-title", { scene });
   }
 }
 
 /** Ask the main window to show the prepare preview for one scene (confirmed there). */
 export async function prepareSceneInMainWindow(sceneId: string): Promise<boolean> {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+  if (isTauriEnvironment() && isViewerWindow()) {
+    return await viewerInvoke<boolean>("viewer_prepare_scene", { sceneId });
+  }
+  if (hasDesktopController()) {
     const resp = await controllerPost<{ shown?: boolean }>("/prepare-scene", { scene_id: sceneId });
     return Boolean(resp.shown);
   }
@@ -654,21 +746,39 @@ export async function prepareSceneInMainWindow(sceneId: string): Promise<boolean
 
 /** Bring the main window forward on its Library (from the viewer window). */
 export async function showLibrary(): Promise<boolean> {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+  if (isTauriEnvironment() && isViewerWindow()) {
+    return await viewerInvoke<boolean>("viewer_show_library");
+  }
+  if (hasDesktopController()) {
     const resp = await controllerPost<{ shown?: boolean }>("/show-library", {});
     return Boolean(resp.shown);
   }
   return false;
 }
 
-export async function revealInFinder(path?: string): Promise<void> {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-    await controllerPost("/reveal-in-finder", {});
+/** Open the native dataset picker dialog from the viewer window. */
+export async function openFolderDialog(): Promise<void> {
+  if (isTauriEnvironment() && isViewerWindow()) {
+    await viewerInvoke("viewer_open_folder_dialog");
     return;
   }
+  if (hasDesktopController()) {
+    await controllerPost("/open-dialog", {});
+  }
+}
+
+export async function revealInFinder(path?: string): Promise<void> {
   if (isTauriEnvironment()) {
+    if (isViewerWindow()) {
+      await viewerInvoke("viewer_reveal_last_export");
+      return;
+    }
     const { invoke } = await import("@tauri-apps/api/core");
     await invoke("reveal_in_finder", { path: path || "" });
+    return;
+  }
+  if (hasDesktopController()) {
+    await controllerPost("/reveal-in-finder", {});
   }
 }
 
@@ -676,24 +786,30 @@ export async function pickSavePath(
   defaultName: string,
   extension: string,
 ): Promise<string | null> {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+  if (isTauriEnvironment()) {
+    try {
+      if (isViewerWindow()) {
+        return await viewerInvoke<string | null>("viewer_pick_save_path", {
+          defaultName,
+          extension,
+        });
+      }
+      const { invoke } = await import("@tauri-apps/api/core");
+      return await invoke<string | null>("pick_save_path", {
+        defaultName,
+        extension,
+      });
+    } catch {
+      return null;
+    }
+  }
+  if (hasDesktopController()) {
     try {
       const resp = await controllerPost<{ status: string; path?: string | null }>("/export-pick", {
         default_name: defaultName,
         extension,
       });
       return resp.path ?? null;
-    } catch {
-      return null;
-    }
-  }
-  if (isTauriEnvironment()) {
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      return await invoke<string | null>("pick_save_path", {
-        defaultName,
-        extension,
-      });
     } catch {
       return null;
     }
@@ -775,19 +891,25 @@ export async function saveExportedFile(
   sourceRelative?: string,
   bytes?: Uint8Array,
 ): Promise<string> {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-    const resp = await controllerPost<{ status: string; path: string }>("/export-save", {
-      source_relative: sourceRelative,
-      bytes: bytes ? Array.from(bytes) : undefined,
-    });
-    return resp.path;
-  }
   if (isTauriEnvironment()) {
+    if (isViewerWindow()) {
+      return await viewerInvoke<string>("viewer_save_exported_file", {
+        sourceRelative,
+        bytes: bytes ? Array.from(bytes) : undefined,
+      });
+    }
     const { invoke } = await import("@tauri-apps/api/core");
     return await invoke<string>("save_exported_file", {
       sourceRelative,
       bytes: bytes ? Array.from(bytes) : undefined,
     });
+  }
+  if (hasDesktopController()) {
+    const resp = await controllerPost<{ status: string; path: string }>("/export-save", {
+      source_relative: sourceRelative,
+      bytes: bytes ? Array.from(bytes) : undefined,
+    });
+    return resp.path;
   }
   throw new Error("Desktop export only available in desktop environment");
 }
@@ -1028,28 +1150,50 @@ export interface DesktopUpdateCheckResult {
   is_network?: boolean;
 }
 
-/** Checks for application updates via the loopback controller. */
+/** Checks for application updates via Tauri IPC (or the test controller in non-Tauri tests). */
 export async function checkDesktopUpdate(isManual = false, updateUrl?: string): Promise<DesktopUpdateCheckResult> {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-    const override = updateUrl || (typeof window !== "undefined" ? window.__COPERCEIVE_UPDATE_URL__ : undefined);
+  const override = updateUrl || (typeof window !== "undefined" ? window.__COPERCEIVE_UPDATE_URL__ : undefined);
+  if (isTauriEnvironment()) {
+    if (isViewerWindow()) {
+      return await viewerInvoke<DesktopUpdateCheckResult>("viewer_check_update", {
+        isManual,
+        updateUrl: override,
+      });
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    return await invoke<DesktopUpdateCheckResult>("check_desktop_update", {
+      isManual,
+      updateUrl: override,
+    });
+  }
+  if (hasDesktopController()) {
     return await controllerPost<DesktopUpdateCheckResult>("/updater-check", {
       is_manual: isManual,
       update_url: override,
     });
   }
-  throw new Error("Controller not available");
+  throw new Error("Desktop updater bridge not available");
 }
 
-/** Downloads, verifies signature and installs the pending update via the loopback controller. */
+/** Downloads, verifies signature and installs the pending update via Tauri IPC (or the test controller in non-Tauri tests). */
 export async function installDesktopUpdate(updateUrl?: string): Promise<void> {
-  if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-    const override = updateUrl || (typeof window !== "undefined" ? window.__COPERCEIVE_UPDATE_URL__ : undefined);
+  const override = updateUrl || (typeof window !== "undefined" ? window.__COPERCEIVE_UPDATE_URL__ : undefined);
+  if (isTauriEnvironment()) {
+    if (isViewerWindow()) {
+      await viewerInvoke("viewer_install_update", { updateUrl: override });
+      return;
+    }
+    const { invoke } = await import("@tauri-apps/api/core");
+    await invoke("install_desktop_update", { updateUrl: override });
+    return;
+  }
+  if (hasDesktopController()) {
     await controllerPost<{ status: string }>("/updater-install", {
       update_url: override,
     });
     return;
   }
-  throw new Error("Controller not available");
+  throw new Error("Desktop updater bridge not available");
 }
 
 
