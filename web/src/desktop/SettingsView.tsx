@@ -8,6 +8,7 @@ import {
   isViewerWindow,
   revealInFinder,
   setAutoDownloadUpdates,
+  updatePersistentState,
 } from "./local";
 import { SettingRow } from "./components/SettingRow";
 import { Button } from "./components/Button";
@@ -83,37 +84,21 @@ export function DesktopPreferences() {
   const [storageRoot, setStorageRoot] = useState<string>("");
 
   useEffect(() => {
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-      const port = window.__COPERCEIVE_CTRL_PORT__;
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      fetch(`http://127.0.0.1:${port}/state`, {
-        headers: { Authorization: `Bearer ${secret}` },
-      })
-        .then((r) => r.json())
-        .then(
-          (data: {
-            reopen_last_session?: boolean;
-            auto_next_scene?: boolean;
-            open_first_ready_scene?: boolean;
-          }) => {
-            if (data && typeof data.reopen_last_session === "boolean") {
-              setReopenLast(data.reopen_last_session);
-            }
-            if (data && typeof data.auto_next_scene === "boolean") {
-              setAutoNextScene(data.auto_next_scene);
-            }
-            if (data && typeof data.open_first_ready_scene === "boolean") {
-              setOpenFirstReady(data.open_first_ready_scene);
-            }
-          },
-        )
-        .catch(() => {});
-    }
-
     void (async () => {
       const saved = await getPersistentState();
-      if (saved && typeof saved.auto_download_updates === "boolean") {
-        setAutoUpdate(saved.auto_download_updates);
+      if (saved) {
+        if (typeof saved.reopen_last_session === "boolean") {
+          setReopenLast(saved.reopen_last_session);
+        }
+        if (typeof saved.auto_next_scene === "boolean") {
+          setAutoNextScene(saved.auto_next_scene);
+        }
+        if (typeof saved.open_first_ready_scene === "boolean") {
+          setOpenFirstReady(saved.open_first_ready_scene);
+        }
+        if (typeof saved.auto_download_updates === "boolean") {
+          setAutoUpdate(saved.auto_download_updates);
+        }
       }
       const stats = await getStorageInfo();
       if (stats?.library_root) {
@@ -124,45 +109,18 @@ export function DesktopPreferences() {
 
   const handleToggle = (checked: boolean) => {
     setReopenLast(checked);
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-      const port = window.__COPERCEIVE_CTRL_PORT__;
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      fetch(`http://127.0.0.1:${port}/state`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${secret}`,
-        },
-        body: JSON.stringify({ reopen_last_session: checked }),
-      }).catch(() => {});
-    }
+    void updatePersistentState({ reopen_last_session: checked }).catch(() => {});
   };
 
   const handleAutoNextToggle = (checked: boolean) => {
     setAutoNextScene(checked);
     window.dispatchEvent(new CustomEvent("coperceive-auto-next-scene", { detail: checked }));
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-      const port = window.__COPERCEIVE_CTRL_PORT__;
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      fetch(`http://127.0.0.1:${port}/state`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
-        body: JSON.stringify({ auto_next_scene: checked }),
-      }).catch(() => {});
-    }
+    void updatePersistentState({ auto_next_scene: checked }).catch(() => {});
   };
 
   const handleOpenFirstReadyToggle = (checked: boolean) => {
     setOpenFirstReady(checked);
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-      const port = window.__COPERCEIVE_CTRL_PORT__;
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      fetch(`http://127.0.0.1:${port}/state`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
-        body: JSON.stringify({ open_first_ready_scene: checked }),
-      }).catch(() => {});
-    }
+    void updatePersistentState({ open_first_ready_scene: checked }).catch(() => {});
   };
 
   const handleAutoUpdateToggle = (checked: boolean) => {

@@ -14,7 +14,7 @@
  * buffer for a minute or allocate gigabytes.
  */
 import { useEffect, useRef, useState } from "react";
-import { getPersistentState } from "../desktop/local";
+import { getViewerPreferences, updatePersistentState } from "../desktop/local";
 
 export type StreamingSettings = {
   /** Seconds of playback buffered ahead: 1, 3 or 5. */
@@ -76,11 +76,6 @@ export function streamingSettingsFromState(state: StreamState | null | undefined
   return settings;
 }
 
-function controller(): { port: number; secret: string } | null {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return null;
-  return { port: window.__COPERCEIVE_CTRL_PORT__, secret: window.__COPERCEIVE_CTRL_SECRET__ || "" };
-}
-
 /** What the window was opened with, before any read of state.json answers. */
 export function initialStreamingSettings(): StreamingSettings {
   if (typeof window === "undefined") return { ...DEFAULT_STREAMING_SETTINGS };
@@ -90,20 +85,11 @@ export function initialStreamingSettings(): StreamingSettings {
 
 export async function loadStreamingSettings(): Promise<StreamingSettings> {
   let settings = initialStreamingSettings();
-  const saved = (await getPersistentState().catch(() => null)) as StreamState | null;
+  // Main window: state.json over IPC; viewer window: the viewer-bridge projection;
+  // test builds without Tauri: the test controller (see getViewerPreferences).
+  const saved = (await getViewerPreferences().catch(() => null)) as StreamState | null;
   if (saved) {
     settings = { ...settings, ...streamingSettingsFromState(saved) };
-  }
-  const ctrl = controller();
-  if (ctrl) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${ctrl.port}/state`, {
-        headers: { Authorization: `Bearer ${ctrl.secret}` },
-      });
-      settings = { ...settings, ...streamingSettingsFromState((await response.json()) as StreamState) };
-    } catch {
-      // Fall back to the initial state.
-    }
   }
   return settings;
 }
@@ -120,13 +106,7 @@ function persistedPatch(patch: Partial<StreamingSettings>): StreamState {
 export function saveStreamingSettings(patch: Partial<StreamingSettings>): void {
   if (typeof window === "undefined") return;
   window.dispatchEvent(new CustomEvent(STREAMING_SETTINGS_EVENT, { detail: patch }));
-  const ctrl = controller();
-  if (!ctrl) return;
-  fetch(`http://127.0.0.1:${ctrl.port}/state`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctrl.secret}` },
-    body: JSON.stringify(persistedPatch(patch)),
-  }).catch(() => undefined);
+  void updatePersistentState(persistedPatch(patch) as Record<string, unknown>).catch(() => undefined);
 }
 
 /**

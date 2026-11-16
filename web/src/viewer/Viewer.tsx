@@ -33,11 +33,14 @@ import ExportDialog from "./ExportDialog";
 import {
   getDatasetScenes,
   getViewerJob,
+  hasDesktopController,
+  openFolderDialog,
   pickSavePath,
   prepareSceneInMainWindow,
   revealInFinder,
   setViewerTitle,
   saveExportedFile,
+  updatePersistentState,
   type ViewerJob,
 } from "../desktop/local";
 import { getRevealLabel, getModifierKey } from "../desktop/platform";
@@ -1297,19 +1300,10 @@ function writeWebLoopChoice(val: boolean) {
 }
 
 function postControllerState(body: Record<string, unknown>) {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+  if (!isTauriEnvironment() && !hasDesktopController()) {
     return;
   }
-  const port = window.__COPERCEIVE_CTRL_PORT__;
-  const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-  void fetch(`http://127.0.0.1:${port}/state`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${secret}`,
-    },
-    body: JSON.stringify(body),
-  }).catch(() => undefined);
+  void updatePersistentState(body).catch(() => undefined);
 }
 
 function savedLoopChoice(): boolean | null {
@@ -1322,7 +1316,7 @@ function savedLoopChoice(): boolean | null {
   }
   // The desktop sidecar origin changes every launch, so localStorage is not
   // the resume record there. The fixed-port web app still uses it.
-  if (window.__COPERCEIVE_DESKTOP__ || window.__COPERCEIVE_CTRL_PORT__) {
+  if (window.__COPERCEIVE_DESKTOP__ || isTauriEnvironment() || hasDesktopController()) {
     return null;
   }
   return readWebLoopChoice();
@@ -1518,9 +1512,9 @@ export default function Viewer({
   }, []);
 
   // A cluster dataset's viewer: every scene with its state (from the main
-  // window's dataset view) and the Slurm job serving it, through the controller.
+  // window's dataset view) and the Slurm job serving it, via viewer-bridge IPC (or test controller).
   useEffect(() => {
-    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+    if (!isTauriEnvironment() && !hasDesktopController()) {
       return;
     }
     let stopped = false;
@@ -1686,7 +1680,7 @@ export default function Viewer({
     loopRef.current = next;
     loopChoiceRef.current = next;
     setLoop(next);
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    if (isTauriEnvironment() || hasDesktopController()) {
       postControllerState({ loop: next });
     } else {
       writeWebLoopChoice(next);
@@ -1705,16 +1699,9 @@ export default function Viewer({
   const [datasetError, setDatasetError] = useState<string | null>(null);
 
   const triggerOpenFolder = () => {
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      fetch(`http://127.0.0.1:${window.__COPERCEIVE_CTRL_PORT__}/open-dialog`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${secret}`,
-          "Content-Type": "application/json",
-        },
-      }).catch((e) => {
-        console.error("open-dialog fetch error:", e);
+    if (isTauriEnvironment() || hasDesktopController()) {
+      void openFolderDialog().catch((e) => {
+        console.error("open-dialog error:", e);
       });
     }
   };
@@ -3337,46 +3324,37 @@ export default function Viewer({
   }, [scenes]);
 
   const sendState = useCallback(async () => {
-    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
-    const port = window.__COPERCEIVE_CTRL_PORT__;
-    const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+    if ((!isTauriEnvironment() && !hasDesktopController()) || !summary) return;
     const timeUs = summary?.times_us?.[frameIndex];
     try {
-      await fetch(`http://127.0.0.1:${port}/state`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${secret}`,
+      await updatePersistentState({
+        scene_id: sceneId || undefined,
+        sample_index: frameIndex,
+        timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
+        viewpoint,
+        theme_override: userThemeOverrideRef.current ? appearance.theme : null,
+        agent_visibility: hidden,
+        layer_toggles: {
+          points: appearance.points,
+          boxes: appearance.boxes,
+          frustums: appearance.frustums,
+          map: appearance.map,
+          axes: appearance.axes,
+          frustum_images: appearance.frustumImages,
+          frustum_opacity: appearance.frustumOpacity,
+          frustum_image_cameras: appearance.frustumImageCameras ?? undefined,
         },
-        body: JSON.stringify({
-          scene_id: sceneId || undefined,
-          sample_index: frameIndex,
-          timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
-          viewpoint,
-          theme_override: userThemeOverrideRef.current ? appearance.theme : null,
-          agent_visibility: hidden,
-          layer_toggles: {
-            points: appearance.points,
-            boxes: appearance.boxes,
-            frustums: appearance.frustums,
-            map: appearance.map,
-            axes: appearance.axes,
-            frustum_images: appearance.frustumImages,
-            frustum_opacity: appearance.frustumOpacity,
-            frustum_image_cameras: appearance.frustumImageCameras ?? undefined,
-          },
-          selected_camera: appearance.splitCamera || cameraId || undefined,
-          split_view: Boolean(appearance.splitCamera),
-          panel_collapse: {
-            camera_strip_open: appearance.stripOpen,
-          },
-          layout: {
-            left_px: layoutRef.current.left_px,
-            right_px: layoutRef.current.right_px,
-            strip_px: layoutRef.current.strip_px,
-          },
-          ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
-        }),
+        selected_camera: appearance.splitCamera || cameraId || undefined,
+        split_view: Boolean(appearance.splitCamera),
+        panel_collapse: {
+          camera_strip_open: appearance.stripOpen,
+        },
+        layout: {
+          left_px: layoutRef.current.left_px,
+          right_px: layoutRef.current.right_px,
+          strip_px: layoutRef.current.strip_px,
+        },
+        ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
       });
     } catch {}
   }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop, layout]);
@@ -3399,7 +3377,7 @@ export default function Viewer({
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
+    if ((!isTauriEnvironment() && !hasDesktopController()) || !summary) return;
     stateDebounceTimerRef.current = window.setTimeout(() => {
       stateDebounceTimerRef.current = null;
       void sendStateRef.current();

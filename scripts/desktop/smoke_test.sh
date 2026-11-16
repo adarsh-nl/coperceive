@@ -6,6 +6,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_BUNDLE="${1:-src-tauri/target/release/bundle/macos/Coperceive.app}"
 DMG_FILE="${2:-src-tauri/target/release/bundle/dmg/Coperceive_0.0.0_aarch64.dmg}"
 
@@ -144,7 +145,7 @@ preserve_safe_tmp_logs() {
     mkdir -p "${dest}"
     local redact='s/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/([Tt]oken[^A-Za-z0-9]*)[:=][[:space:]]*[^[:space:]"]+/\1=[REDACTED]/g'
     local f
-    for f in "${TMPDIR}/app_stdout.log" "${TMPDIR}/app_stderr.log" "${TMPDIR}/serve.log" "${TMPDIR}/demo_stdout.log" "${TMPDIR}/demo_stderr.log"; do
+    for f in "${TMPDIR}/app_stdout.log" "${TMPDIR}/app_stderr.log" "${TMPDIR}/serve.log" "${TMPDIR}/demo_stdout.log" "${TMPDIR}/demo_stderr.log" "${TMPDIR}/prod_stdout.log" "${TMPDIR}/prod_stderr.log"; do
         if [ -f "$f" ]; then
             sed -E "$redact" "$f" > "${dest}/$(basename "$f")" 2>/dev/null || true
         fi
@@ -256,6 +257,65 @@ if [ -z "${APP_EXE}" ] || [ ! -x "${APP_EXE}" ]; then
     ls -la "${APP_BUNDLE}/Contents/MacOS" || true
     exit 10
 fi
+
+# Test 3c: Normal (non-test) release launch must NOT start a loopback controller
+echo ""
+echo "--- Production Launch Controller Gate Check (macOS) ---"
+PROD_STATE_DIR="${TMPDIR}/prod-state"
+mkdir -p "${PROD_STATE_DIR}"
+PROD_STDOUT="${TMPDIR}/prod_stdout.log"
+PROD_STDERR="${TMPDIR}/prod_stderr.log"
+
+(
+    unset COPERCEIVE_TEST_ENV
+    unset COPERCEIVE_TEST_MARKER_FILE
+    unset COPERCEIVE_CTRL_INFO_FILE
+    unset COPERCEIVE_AUTOCONNECT_ROOT
+    unset COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT
+    unset COPERCEIVE_UPDATE_URL
+    unset COPERCEIVE_MOCK_DIALOG_FILE
+    unset COPERCEIVE_TEST_IMPORT_SOURCE
+    export COPERCEIVE_STATE_DIR="${PROD_STATE_DIR}"
+    exec "${APP_EXE}" > "${PROD_STDOUT}" 2> "${PROD_STDERR}"
+) &
+APP_PID=$!
+
+for _ in {1..8}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: Production launch exited prematurely during controller-gate check!" >&2
+        cat "${PROD_STDERR}" >&2 || true
+        cat "${PROD_STDOUT}" >&2 || true
+        exit 8
+    fi
+    sleep 0.5
+done
+
+if grep -q -E "Loopback controller listening|\\[desktop-ctrl\\]" "${PROD_STDOUT}" "${PROD_STDERR}" 2>/dev/null; then
+    echo "Security failure: loopback controller started during normal (non-test) launch!" >&2
+    cat "${PROD_STDOUT}" >&2
+    exit 8
+fi
+
+PROD_PIDS="${APP_PID}"
+CHILDREN=$(pgrep -P "${APP_PID}" 2>/dev/null || true)
+if [ -n "${CHILDREN}" ]; then
+    PROD_PIDS="${PROD_PIDS},$(printf '%s\n' "${CHILDREN}" | paste -sd, -)"
+fi
+PROD_LISTENERS=$(lsof -nP -a -p "${PROD_PIDS}" -iTCP -sTCP:LISTEN 2>/dev/null || true)
+if [ -n "${PROD_LISTENERS}" ]; then
+    echo "Security failure: unexpected listening TCP socket(s) during normal launch:" >&2
+    echo "${PROD_LISTENERS}" >&2
+    exit 8
+fi
+
+kill -TERM "${APP_PID}" 2>/dev/null || true
+sleep 1
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -9 "${APP_PID}" 2>/dev/null || true
+fi
+wait "${APP_PID}" 2>/dev/null || true
+APP_PID=""
+echo "PROD_LAUNCH_VERIFIED: os=macos listening_ports=0 ctrl_disabled=true"
 
 FIXTURE_ROOT="$(pwd)/tests/fixtures/synthetic_scene"
 if [ ! -d "${FIXTURE_ROOT}" ]; then

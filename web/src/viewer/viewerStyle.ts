@@ -6,7 +6,7 @@
  * is off while the OS asks for reduced motion.
  */
 import { useEffect, useState } from "react";
-import { getPersistentState } from "../desktop/local";
+import { getViewerPreferences, updatePersistentState } from "../desktop/local";
 import type { SeenColors } from "./seenBy.ts";
 
 export type ViewerStyle = "classic" | "studio" | "instrument" | "cinema";
@@ -124,11 +124,6 @@ export function effectiveCinemaDrift(saved: boolean, reducedMotion: boolean): bo
   return saved && !reducedMotion;
 }
 
-function controller(): { port: number; secret: string } | null {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return null;
-  return { port: window.__COPERCEIVE_CTRL_PORT__, secret: window.__COPERCEIVE_CTRL_SECRET__ || "" };
-}
-
 type StyleState = { viewer_style?: unknown; cinema_drift?: unknown };
 
 function readInitial(): { style: ViewerStyle; drift: boolean } {
@@ -149,35 +144,16 @@ export function initialCinemaDrift(): boolean {
 }
 
 async function loadSaved(): Promise<{ style: ViewerStyle; drift: boolean }> {
-  const saved = (await getPersistentState().catch(() => null)) as StyleState | null;
+  const saved = (await getViewerPreferences().catch(() => null)) as StyleState | null;
   let style = initialViewerStyle();
   let drift = initialCinemaDrift();
   if (saved && isViewerStyle(saved.viewer_style)) style = saved.viewer_style;
   if (saved && typeof saved.cinema_drift === "boolean") drift = saved.cinema_drift;
-  const ctrl = controller();
-  if (ctrl) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${ctrl.port}/state`, {
-        headers: { Authorization: `Bearer ${ctrl.secret}` },
-      });
-      const state = (await response.json()) as StyleState;
-      if (isViewerStyle(state.viewer_style)) style = state.viewer_style;
-      if (typeof state.cinema_drift === "boolean") drift = state.cinema_drift;
-    } catch {
-      // The initial state stands.
-    }
-  }
   return { style, drift };
 }
 
 function postState(body: StyleState): void {
-  const ctrl = controller();
-  if (!ctrl) return;
-  fetch(`http://127.0.0.1:${ctrl.port}/state`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctrl.secret}` },
-    body: JSON.stringify(body),
-  }).catch(() => undefined);
+  void updatePersistentState(body).catch(() => undefined);
 }
 
 export function saveViewerStyle(style: ViewerStyle): void {

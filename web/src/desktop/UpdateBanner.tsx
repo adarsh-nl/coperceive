@@ -5,6 +5,7 @@ import {
   checkDesktopUpdate,
   getPersistentState,
   installDesktopUpdate,
+  isDesktopUpdateBridgeAvailable,
   isTauriEnvironment,
   isViewerWindow,
   showLibrary,
@@ -112,8 +113,8 @@ export function useUpdater(): Updater {
     setErrorMessage(null);
     setErrorFrom("check");
 
-    // 1. If loopback controller is available, check via controller
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    // 1. If desktop updater bridge (Tauri IPC or test controller) is available
+    if (isDesktopUpdateBridgeAvailable()) {
       try {
         const resp = await checkDesktopUpdate(isManual);
         if (resp.status === "available" && resp.version) {
@@ -250,8 +251,8 @@ export function useUpdater(): Updater {
 
     setCheckState("downloading");
 
-    // If controller is available, install through controller
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    // If desktop updater bridge (Tauri IPC or test controller) is available
+    if (isDesktopUpdateBridgeAvailable()) {
       try {
         await installDesktopUpdate();
         window.__COPERCEIVE_UPDATE_RESTART__ = true;
