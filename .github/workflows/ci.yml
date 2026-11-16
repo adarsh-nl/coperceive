@@ -779,7 +779,6 @@ jobs:
       - name: Install x64 DMG and run smoke test on native Intel macOS
         env:
           COPERCEIVE_PRESERVE_LOGS_DIR: /tmp/intel-smoke-evidence
-          COPERCEIVE_INTEL_DIAG_EXTRA_WAIT_SECS: "45"
         run: |
           rm -rf /tmp/intel-smoke-evidence
           mkdir -p /tmp/intel-smoke-evidence

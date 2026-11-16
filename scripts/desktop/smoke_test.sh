@@ -333,25 +333,6 @@ done
 if [ ! -f "${MARKER_FILE}" ]; then
     echo "Error: Auto-connect marker file was not created within 45s timeout!" >&2
     run_diag_eval_probe
-    extra_secs="${COPERCEIVE_INTEL_DIAG_EXTRA_WAIT_SECS:-0}"
-    if [ "${extra_secs}" -gt 0 ] 2>/dev/null; then
-        echo "Diagnostic mode: extending observation window by ${extra_secs}s to measure actual completion/failure timing..." >&2
-        extra_iters=$((extra_secs * 2))
-        for j in $(seq 1 "${extra_iters}"); do
-            if [ -f "${MARKER_FILE}" ]; then
-                marker_now_s=$(python3 -c 'import time, sys; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "${LAUNCH_START_S}")
-                echo "Diagnostic observation: marker file appeared after ${marker_now_s}s! (origin=$(sed -n '1p' "${MARKER_FILE}"))" >&2
-                run_diag_eval_probe
-                break
-            fi
-            if ! kill -0 "${APP_PID}" 2>/dev/null; then
-                died_now_s=$(python3 -c 'import time, sys; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "${LAUNCH_START_S}")
-                echo "Diagnostic observation: app process exited after ${died_now_s}s." >&2
-                break
-            fi
-            sleep 0.5
-        done
-    fi
     echo "=== App stderr ===" >&2
     cat "${APP_STDERR}" >&2
     echo "=== App stdout ===" >&2

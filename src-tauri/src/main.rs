@@ -148,20 +148,23 @@ pub struct HealthPayload {
     pub server_version: Option<String>,
 }
 
-/// Resolves the bundled python-build-standalone interpreter from the Tauri resource directory.
-/// Falls back to dev python if running unbundled.
+/// Resolves the bundled python-build-standalone interpreter from the Tauri resource directory
+/// or, when Tauri's `resource_dir()` fails (e.g. macOS symlinked app paths), from `current_exe()`.
+/// Falls back to `COPERCEIVE_PYTHON` or dev python if running unbundled.
 fn resolve_python_binary(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
 
-    if let Ok(res_dir) = app.path().resource_dir() {
-        remote_static::set_resource_dir(res_dir.clone());
-        // Pinned python-build-standalone inside Tauri resources
-        let candidates = platform::resolve_python_candidates(&res_dir);
-        for candidate in &candidates {
-            if candidate.is_file() {
-                return candidate.clone();
-            }
-        }
+    let tauri_res_dir = app.path().resource_dir().ok();
+    let current_exe = std::env::current_exe().ok();
+    if let Some((python_bin, matched_res_dir)) = platform::resolve_bundled_python(
+        tauri_res_dir.as_deref(),
+        current_exe.as_deref(),
+    ) {
+        remote_static::set_resource_dir(matched_res_dir);
+        return python_bin;
+    }
+    if let Some(res_dir) = tauri_res_dir {
+        remote_static::set_resource_dir(res_dir);
     }
 
     if let Ok(env_py) = std::env::var("COPERCEIVE_PYTHON") {
@@ -559,7 +562,7 @@ async fn switch_data_root(
     let new_token = new_session.token.clone();
 
     // Poll until healthy
-    if let Err(e) = reqwest_like_poll(&new_origin, &new_token, Duration::from_secs(60)) {
+    if let Err(e) = new_session.wait_until_healthy(Duration::from_secs(60)) {
         new_session.preserve_log = true;
         let _ = new_session.stop();
         let err_msg = format!("Failed to start sidecar for new dataset: {}", e);
@@ -1353,7 +1356,7 @@ async fn start_local_session_inner(
             "alive": session.is_alive(),
         }),
     );
-    if let Err(e) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+    if let Err(e) = session.wait_until_healthy(Duration::from_secs(60)) {
         let alive_after_timeout = session.is_alive();
         set_auto_connect_state(
             app,
@@ -3357,7 +3360,7 @@ async fn dataset_open(
             cfg.set_allowed_origin(origin.clone());
         }
     }
-    if let Err(error) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+    if let Err(error) = session.wait_until_healthy(Duration::from_secs(60)) {
         session.preserve_log = true;
         let tail = fs::read_to_string(&session.log_path)
             .map(|content| {
@@ -3842,47 +3845,6 @@ async fn remote_scan(
     })
     .await
     .map_err(|e| format!("The folder scan could not finish: {e}"))?
-}
-
-/// Simple loopback HTTP polling using TcpStream without external HTTP client crate.
-/// Reads until headers end (\r\n\r\n) rather than assuming a single buffer read.
-fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(), String> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-
-    let port_str = origin.split(':').last().unwrap_or("8731");
-    let port: u16 = port_str.parse().unwrap_or(8731);
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
-            let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
-            let req = format!(
-                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
-                port, token
-            );
-            if stream.write_all(req.as_bytes()).is_ok() {
-                let mut resp_bytes = Vec::new();
-                let mut chunk = [0u8; 1024];
-                while let Ok(n) = stream.read(&mut chunk) {
-                    if n == 0 {
-                        break;
-                    }
-                    resp_bytes.extend_from_slice(&chunk[..n]);
-                    if resp_bytes.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let resp = String::from_utf8_lossy(&resp_bytes);
-                if resp.contains("200 OK") || resp.contains("HTTP/1.1 200") || resp.contains("HTTP/1.0 200") {
-                    return Ok(());
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
-    Err("Health check probe timed out".to_string())
 }
 
 fn handle_fatal_error(err_msg: &str) {

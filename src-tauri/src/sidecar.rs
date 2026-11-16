@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use std::fs;
-use std::io;
+use std::io::{self, Read, Write};
+use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -156,6 +157,13 @@ impl SidecarSession {
         }
     }
 
+    /// Polls `/api/health` on this sidecar until ready, exited, or timed out.
+    pub fn wait_until_healthy(&mut self, timeout: Duration) -> Result<(), String> {
+        let origin = format!("http://127.0.0.1:{}", self.port);
+        let token = self.token.clone();
+        poll_health_until(&origin, &token, timeout, || self.is_alive())
+    }
+
     /// Stops the sidecar process gracefully with SIGTERM, falling back to SIGKILL.
     pub fn stop(&mut self) -> io::Result<()> {
         let pid = self.child.id() as i32;
@@ -207,9 +215,62 @@ impl Drop for SidecarSession {
     }
 }
 
+/// Polls `<origin>/api/health` using loopback TCP until HTTP 200 OK, `!is_alive()`,
+/// or `timeout` elapses.
+pub fn poll_health_until<F>(
+    origin: &str,
+    token: &str,
+    timeout: Duration,
+    mut is_alive: F,
+) -> Result<(), String>
+where
+    F: FnMut() -> bool,
+{
+    let port_str = origin.split(':').last().unwrap_or("8731");
+    let port: u16 = port_str.parse().unwrap_or(8731);
+    let deadline = Instant::now() + timeout;
+
+    while Instant::now() < deadline {
+        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+            let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
+            let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
+            let req = format!(
+                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
+                port, token
+            );
+            if stream.write_all(req.as_bytes()).is_ok() {
+                let mut resp_bytes = Vec::new();
+                let mut chunk = [0u8; 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    resp_bytes.extend_from_slice(&chunk[..n]);
+                    if resp_bytes.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let resp = String::from_utf8_lossy(&resp_bytes);
+                if resp.contains("200 OK")
+                    || resp.contains("HTTP/1.1 200")
+                    || resp.contains("HTTP/1.0 200")
+                {
+                    return Ok(());
+                }
+            }
+        }
+        if !is_alive() {
+            return Err("Local server exited before becoming healthy".to_string());
+        }
+        std::thread::sleep(Duration::from_millis(150));
+    }
+    Err("Health check probe timed out".to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
 
     #[cfg(unix)]
     #[test]
@@ -236,5 +297,37 @@ mod tests {
         assert!(child.try_wait().unwrap().is_some(), "child should terminate on SIGTERM");
 
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn poll_health_stops_immediately_when_process_exits() {
+        let port = find_free_loopback_port().expect("free port");
+        let origin = format!("http://127.0.0.1:{port}");
+        let start = Instant::now();
+        let err = poll_health_until(&origin, "tok", Duration::from_secs(30), || false)
+            .expect_err("exited process should abort polling early");
+        assert!(err.contains("exited before becoming healthy"), "got: {err}");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "took too long: {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn poll_health_succeeds_on_200_ok() {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut buf = [0u8; 512];
+                let _ = stream.read(&mut buf);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok");
+            }
+        });
+        let origin = format!("http://127.0.0.1:{port}");
+        let res = poll_health_until(&origin, "tok", Duration::from_secs(5), || true);
+        let _ = handle.join();
+        assert!(res.is_ok(), "expected Ok(()), got: {res:?}");
     }
 }
