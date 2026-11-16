@@ -102,7 +102,7 @@ nav:
       - Add a dataset: datasets/add-a-dataset.md
       - Contributing: notes/contributing.md
       - Design decisions: notes/decisions.md
-      - Security review: notes/security.md
+      - Security review: security/review-2026-11.md
       - Updates: desktop/updates.md
       - Decisions:
           - Data model: adr/0001-data-model.md
@@ -119,3 +119,4 @@ nav:
           - Left-handed sources: adr/0012-left-handed-sources.md
           - Desktop app: adr/0014-desktop-app.md
           - Cluster profiles: adr/0015-cluster-profiles-scheduler-adapter.md
+          - Security review: adr/0019-security-review.md

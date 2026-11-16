@@ -6,5 +6,5 @@ Internal-facing notes that stay on the public site because they explain how to e
 - [Add a dataset](../datasets/add-a-dataset.md)
 - [Contributing](contributing.md)
 - [Design decisions](decisions.md)
-- [Security review](security.md) — stub until [pull request 170](https://github.com/adarsh-nl/coperceive/pull/170) merges
+- [Security review](../security/review-2026-11.md)
 - [Updates](../desktop/updates.md)

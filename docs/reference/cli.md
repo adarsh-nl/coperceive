@@ -174,7 +174,8 @@ options:
   --root ROOT  Directory the server is allowed to touch.
   --token TOKEN  Bearer token (deprecated for security; use COPERCEIVE_TOKEN or --token-
                         file).
-  --token-file PATH  Path to a file containing the bearer token. Must be mode 0600 or 0400.
+  --token-file PATH  Path to a file containing the bearer token: a regular file you own (not a
+                        symbolic link), mode 0600 or 0400.
   --root-path ROOT_PATH
                         URL prefix when the app sits behind a JupyterHub or similar proxy.
   --maps MAPS  Shared HD-map root. Defaults to ROOT/maps when that directory exists.
