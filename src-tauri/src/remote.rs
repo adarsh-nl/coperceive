@@ -870,6 +870,7 @@ mod tests {
     struct FakeSshScript {
         path: PathBuf,
         _guard: std::sync::MutexGuard<'static, ()>,
+        _port_guard: std::sync::MutexGuard<'static, ()>,
     }
 
     impl FakeSshScript {
@@ -877,10 +878,14 @@ mod tests {
             let guard = crate::test_seams::FAKE_SSH_LOCK
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
+            let port_guard = crate::test_seams::PORT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
             Self {
                 path: PathBuf::from(fixture),
                 _guard: guard,
+                _port_guard: port_guard,
             }
         }
     }
