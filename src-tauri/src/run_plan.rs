@@ -5015,6 +5015,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn the_interpreter_check_reads_pyvenv_cfg_and_the_shebang_on_a_real_shell() {
         // The check itself, run by /bin/sh on real files: a venv's bin/python (a symlink),
         // its pyvenv.cfg, and console scripts with and without a python beside them.
@@ -5028,7 +5029,6 @@ mod tests {
              version = 3.9.18\nversion_info = 3.9.18.final.0\n",
         )
         .unwrap();
-        #[cfg(unix)]
         std::os::unix::fs::symlink("/bin/sh", venv.join("bin/python")).unwrap();
         let pipx = root.join("bin");
         std::fs::create_dir_all(&pipx).unwrap();
