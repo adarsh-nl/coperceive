@@ -2,9 +2,9 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::{Duration, Instant};
 
@@ -108,7 +108,7 @@ impl SidecarSession {
             .open(&log_path)?;
         let err_file = log_file.try_clone()?;
 
-        let mut cmd = Command::new(python_bin);
+        let mut cmd = crate::platform::python_command(python_bin);
         cmd.arg("-m")
             .arg("coperceive")
             .arg("serve")
@@ -231,7 +231,11 @@ where
     let deadline = Instant::now() + timeout;
 
     while Instant::now() < deadline {
-        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
+        if !is_alive() {
+            return Err("Local server exited before becoming healthy".to_string());
+        }
+        let addr = SocketAddr::from(([127, 0, 0, 1], port));
+        if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(250)) {
             let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
             let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
             let req = format!(
@@ -271,6 +275,7 @@ where
 mod tests {
     use super::*;
     use std::net::TcpListener;
+    use std::process::Command;
 
     #[cfg(unix)]
     #[test]
@@ -306,6 +311,25 @@ mod tests {
         let start = Instant::now();
         let err = poll_health_until(&origin, "tok", Duration::from_secs(30), || false)
             .expect_err("exited process should abort polling early");
+        assert!(err.contains("exited before becoming healthy"), "got: {err}");
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "took too long: {:?}",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn poll_health_aborts_within_connect_timeout_after_process_exits() {
+        let port = find_free_loopback_port().expect("free port");
+        let origin = format!("http://127.0.0.1:{port}");
+        let mut checks = 0usize;
+        let start = Instant::now();
+        let err = poll_health_until(&origin, "tok", Duration::from_secs(30), || {
+            checks += 1;
+            checks == 1
+        })
+        .expect_err("exited process after first probe should abort early");
         assert!(err.contains("exited before becoming healthy"), "got: {err}");
         assert!(
             start.elapsed() < Duration::from_secs(2),

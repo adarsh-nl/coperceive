@@ -86,6 +86,15 @@ pub fn resolve_bundled_python_for_layout(
     None
 }
 
+/// Builds a `Command` for invoking Python with `PYTHONSAFEPATH=1` so the
+/// process's working directory cannot shadow the bundled `coperceive` package
+/// (for example when launched from a source checkout whose web bundle is unbuilt).
+pub fn python_command(python_bin: impl AsRef<std::ffi::OsStr>) -> std::process::Command {
+    let mut cmd = std::process::Command::new(python_bin);
+    cmd.env("PYTHONSAFEPATH", "1");
+    cmd
+}
+
 /// Resolves the bundled Python interpreter for the current OS layout.
 pub fn resolve_bundled_python(
     tauri_resource_dir: Option<&Path>,
@@ -192,5 +201,61 @@ mod tests {
         assert!(resolve_bundled_python_for_layout(None, Some(&unbundled_exe), OsLayout::MacOS).is_none());
 
         let _ = fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn python_command_sets_safe_path_env_and_avoids_cwd_shadowing() {
+        let cmd = python_command("python3");
+        let has_safe_path = cmd
+            .get_envs()
+            .any(|(k, v)| k == "PYTHONSAFEPATH" && v == Some(std::ffi::OsStr::new("1")));
+        assert!(has_safe_path, "python_command must set PYTHONSAFEPATH=1");
+
+        // When a Python 3.11+ interpreter is available on PATH (always true in
+        // CI and bundled environments), confirm cwd packages are not shadowed.
+        for candidate in ["python3", "python"] {
+            let probe = std::process::Command::new(candidate)
+                .args(["-c", "import sys; print(int(sys.version_info >= (3, 11)))"])
+                .output();
+            let Ok(probe) = probe else {
+                continue;
+            };
+            if !probe.status.success() || String::from_utf8_lossy(&probe.stdout).trim() != "1" {
+                continue;
+            }
+            let root = make_temp_dir("safepath");
+            let shadow_pkg = root.join("coperceive_shadow_probe");
+            fs::create_dir_all(&shadow_pkg).expect("mkdir shadow pkg");
+            fs::write(shadow_pkg.join("__init__.py"), "SHADOW = True\n")
+                .expect("write shadow pkg");
+
+            let check = "import importlib.util; print(importlib.util.find_spec('coperceive_shadow_probe') is not None)";
+            let bare = std::process::Command::new(candidate)
+                .current_dir(&root)
+                .args(["-c", check])
+                .output()
+                .expect("run bare python");
+            assert!(bare.status.success());
+            assert_eq!(
+                String::from_utf8_lossy(&bare.stdout).trim(),
+                "True",
+                "expected bare python without PYTHONSAFEPATH to see cwd package"
+            );
+
+            let safe = python_command(candidate)
+                .current_dir(&root)
+                .args(["-c", check])
+                .output()
+                .expect("run safe python");
+            assert!(safe.status.success());
+            assert_eq!(
+                String::from_utf8_lossy(&safe.stdout).trim(),
+                "False",
+                "python_command with PYTHONSAFEPATH=1 must not import from cwd"
+            );
+
+            let _ = fs::remove_dir_all(&root);
+            break;
+        }
     }
 }

@@ -1553,7 +1553,7 @@ fn import_from_folder(
 ) -> Result<(), String> {
     use coperceive_desktop::pack::scene_pack_args;
     use std::io::{BufRead, BufReader};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use tauri::Emitter;
 
     {
@@ -1577,7 +1577,7 @@ fn import_from_folder(
         griffin_root.as_deref(),
     )?;
     let python = resolve_python_binary(&app);
-    let mut child = Command::new(&python)
+    let mut child = platform::python_command(&python)
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1698,7 +1698,7 @@ async fn list_carla_maps(app: tauri::AppHandle) -> Result<serde_json::Value, Str
             .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
         let maps_root = PathBuf::from(library_root).join("maps");
         let python = resolve_python_binary(&app);
-        let output = std::process::Command::new(&python)
+        let output = platform::python_command(&python)
             .args([
                 "-m", "coperceive.cli", "maps", "list",
                 "--maps", &maps_root.to_string_lossy(),
@@ -1723,7 +1723,7 @@ async fn install_carla_map(
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{BufRead, BufReader, Read};
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         use tauri::Emitter;
         let persistent = state::load_state();
         let library_root = persistent
@@ -1734,7 +1734,7 @@ async fn install_carla_map(
             .map_err(|error| format!("Could not open the library root: {error}"))?;
         let maps_root = library_root.join("maps");
         let python = resolve_python_binary(&app);
-        let mut child = Command::new(&python)
+        let mut child = platform::python_command(&python)
             .args([
                 "-m", "coperceive.cli", "maps", "install",
                 "--town", &town,
@@ -1799,7 +1799,7 @@ async fn remove_carla_map(app: tauri::AppHandle, town: String) -> Result<(), Str
             .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
         let maps_root = PathBuf::from(library_root).join("maps");
         let python = resolve_python_binary(&app);
-        let output = std::process::Command::new(&python)
+        let output = platform::python_command(&python)
             .args([
                 "-m", "coperceive.cli", "maps", "remove",
                 "--town", &town,
@@ -1825,7 +1825,7 @@ async fn download_town_map(
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{BufRead, BufReader, Read};
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         use tauri::Emitter;
 
         let persistent = state::load_state();
@@ -1850,7 +1850,7 @@ async fn download_town_map(
         }
         let maps_root = library_root.join("maps");
         let python = resolve_python_binary(&app);
-        let mut child = Command::new(&python)
+        let mut child = platform::python_command(&python)
             .args([
                 "-m",
                 "coperceive.cli",
@@ -2037,8 +2037,6 @@ fn dataset_dry_run(
     dataset_id: String,
     preset_id: String,
 ) -> Result<serde_json::Value, String> {
-    use std::process::Command;
-
     // Test-only: the e2e cannot wait for the Hugging Face tree listing, so the
     // deterministic fake job returns the same JSON shape without network access.
     // Inert unless COPERCEIVE_TEST_FAKE_DATASET_JOB is set in test mode.
@@ -2053,7 +2051,7 @@ fn dataset_dry_run(
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     let python = resolve_python_binary(&app);
-    let output = Command::new(&python)
+    let output = platform::python_command(&python)
         .args([
             "-m",
             "coperceive.cli",
@@ -2134,7 +2132,7 @@ fn start_dataset_job(
         if accept_terms {
             cmd_args.push("--accept-terms".to_string());
         }
-        let mut command = Command::new(&python);
+        let mut command = platform::python_command(&python);
         command.args(&cmd_args);
         command
     };
@@ -2227,7 +2225,7 @@ fn resume_dataset_job() -> Result<(), String> {
 #[tauri::command]
 fn dataset_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let python = resolve_python_binary(&app);
-    let output = std::process::Command::new(&python)
+    let output = platform::python_command(&python)
         .args(["-m", "coperceive.cli", "dataset", "catalog"])
         .output()
         .map_err(|err| format!("Could not read the dataset list. Try again. {err}"))?;
@@ -2252,8 +2250,6 @@ fn run_scene_validation(
     python: &Path,
     scene_path: &str,
 ) -> Result<(bool, String, String, SceneTiming), String> {
-    use std::process::Command;
-
     let report_dir = std::env::temp_dir().join(format!(
         "coperceive-validate-{}-{}",
         std::process::id(),
@@ -2266,7 +2262,7 @@ fn run_scene_validation(
         .map_err(|err| format!("Failed to create the validation report directory: {err}"))?;
     let json_path = report_dir.join("report.json");
     let markdown_path = report_dir.join("report.md");
-    let output = Command::new(python)
+    let output = platform::python_command(python)
         .args(["-m", "coperceive.cli", "validate", scene_path])
         .arg("--json")
         .arg(&json_path)

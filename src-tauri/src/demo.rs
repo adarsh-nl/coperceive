@@ -6,7 +6,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
@@ -391,7 +391,7 @@ pub fn ensure_demo_in_state_dir_with_progress<F: FnMut(&str, f64)>(
         .try_clone()
         .map_err(|e| format!("Failed to clone demo generator log handle: {e}"))?;
 
-    let mut child = Command::new(python_bin)
+    let mut child = crate::platform::python_command(python_bin)
         .args([
             "-m",
             "coperceive",

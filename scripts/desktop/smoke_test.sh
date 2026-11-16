@@ -267,18 +267,20 @@ APP_STDOUT="${TMPDIR}/app_stdout.log"
 APP_STDERR="${TMPDIR}/app_stderr.log"
 
 run_diag_eval_probe() {
-    local p_port=""
-    local p_secret=""
-    if [ -f "${CTRL_INFO_FILE}" ]; then
-        p_port=$(sed -n '1p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
-        p_secret=$(sed -n '2p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
-    elif [ -f "${MARKER_FILE}" ]; then
-        p_port=$(sed -n '4p' "${MARKER_FILE}" 2>/dev/null || echo "")
-        p_secret=$(sed -n '5p' "${MARKER_FILE}" 2>/dev/null || echo "")
+    local p_port="${1:-}"
+    local p_secret="${2:-}"
+    if [ -z "${p_port}" ] || [ -z "${p_secret}" ]; then
+        if [ -f "${CTRL_INFO_FILE}" ]; then
+            p_port=$(sed -n '1p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
+            p_secret=$(sed -n '2p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
+        elif [ -f "${MARKER_FILE}" ]; then
+            p_port=$(sed -n '4p' "${MARKER_FILE}" 2>/dev/null || echo "")
+            p_secret=$(sed -n '5p' "${MARKER_FILE}" 2>/dev/null || echo "")
+        fi
     fi
     echo "=== Controller /eval diagnostic probe (ctrl_info_exists=$([ -f "${CTRL_INFO_FILE}" ] && echo yes || echo no), ctrl_port=${p_port:-missing}) ===" >&2
     if [ -n "${p_port}" ] && [ "${p_port}" != "0" ] && [ -n "${p_secret}" ]; then
-        local js_probe='(() => { const out = { readyState: document.readyState, href: window.location.href, consoleErrors: window.__COPERCEIVE_CONSOLE_ERRORS__ ?? null, lastUiError: window.__COPERCEIVE_LAST_ERROR__ ?? null, autoConnectState: window.__COPERCEIVE_AUTOCONNECT_STATE__ ?? null, bodyTextLen: document.body ? document.body.innerText.length : -1 }; try { const c = document.createElement("canvas"); const gl2 = c.getContext("webgl2"); const gl = gl2 ? null : c.getContext("webgl"); const ctx = gl2 || gl; const dbg = ctx ? ctx.getExtension("WEBGL_debug_renderer_info") : null; out.webgl = { webgl2: Boolean(gl2), webgl: Boolean(gl || gl2), vendor: ctx ? ctx.getParameter(ctx.VENDOR) : null, renderer: ctx ? ctx.getParameter(ctx.RENDERER) : null, unmaskedRenderer: dbg && ctx ? ctx.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null }; } catch (e) { out.webglError = String(e); } return out; })()'
+        local js_probe='(() => { const out = { readyState: document.readyState, href: window.location.href, consoleErrors: window.__COPERCEIVE_CONSOLE_ERRORS__ ?? null, lastUiError: window.__COPERCEIVE_LAST_ERROR__ ?? null, autoConnectState: window.__COPERCEIVE_AUTOCONNECT_STATE__ ?? null, scriptCount: document.scripts ? document.scripts.length : -1, bodyTextLen: document.body ? document.body.innerText.length : -1, bodyPreview: document.body ? document.body.innerText.slice(0, 300) : "" }; try { const c = document.createElement("canvas"); const gl2 = c.getContext("webgl2"); const gl = gl2 ? null : c.getContext("webgl"); const ctx = gl2 || gl; const dbg = ctx ? ctx.getExtension("WEBGL_debug_renderer_info") : null; out.webgl = { webgl2: Boolean(gl2), webgl: Boolean(gl || gl2), vendor: ctx ? ctx.getParameter(ctx.VENDOR) : null, renderer: ctx ? ctx.getParameter(ctx.RENDERER) : null, unmaskedRenderer: dbg && ctx ? ctx.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null }; } catch (e) { out.webglError = String(e); } return out; })()'
         local win
         for win in main viewer; do
             local payload
@@ -588,6 +590,7 @@ done
 if [ "${DEMO_LOADED}" -ne 1 ]; then
     echo "Error: Demo scene did not finish loading in viewer within timeout!" >&2
     echo "Last viewer state: ${LAST_VIEWER_STATE}" >&2
+    run_diag_eval_probe "${DEMO_CTRL_PORT}" "${DEMO_CTRL_SECRET}"
     echo "=== Demo App stdout ===" >&2
     cat "${DEMO_STDOUT}" >&2
     echo "=== Demo App stderr ===" >&2
