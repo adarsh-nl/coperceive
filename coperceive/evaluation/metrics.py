@@ -162,8 +162,9 @@ def cooperative_counts(
 
     The rows are the boxes of the fused ground-truth set. They count only when the
     agent has both a ``single`` and a ``fused`` output (``both_outputs``); an own box
-    also needs both statuses. "Not found alone" is ``status_single`` being ``miss``,
-    or absent because another agent added the box. ``recovery_rate`` is
+    also needs both statuses, and a box ignored under either output counts nowhere.
+    "Not found alone" is ``status_single`` being ``miss``, or absent because another
+    agent added the box. ``recovery_rate`` is
     ``recovered / (recovered + double_miss)``, ``None`` when that denominator is 0.
     """
     recovered = 0
@@ -175,6 +176,10 @@ def cooperative_counts(
         single, fused = row.status_single, row.status_fused
         added = row.added_by is not None
         if not both_outputs or fused is None or (single is None and not added):
+            continue
+        # A box ignored under either output falls in none of the counts. For an added
+        # box the single status is absent, so only the fused one can say so.
+        if IGNORED in (single, fused):
             continue
         missed_alone = single == MISS or added
         if missed_alone and fused == TP:

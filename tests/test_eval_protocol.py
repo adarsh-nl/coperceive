@@ -97,10 +97,10 @@ def _scene(*, lidar: bool, b_x: float = 30.0, b_z: float = 0.0) -> Scene:
     )
 
 
-def _box(source: str, score: float, x: float, y: float) -> PredictionBox:
+def _box(source: str, score: float, x: float, y: float, agent: str = "a") -> PredictionBox:
     return PredictionBox(
         scene_id="s",
-        agent_id="a",
+        agent_id=agent,
         source=source,
         time_us=0,
         category="car",
@@ -124,7 +124,12 @@ FUSED = (
 SINGLE = (_box("single", 0.9, 10.0, 0.0), _box("single", 0.8, 40.0, 5.0))
 
 
-def _evaluate(tmp_path: Path, scene: Scene, config: EvalConfig) -> Path:
+def _evaluate(
+    tmp_path: Path,
+    scene: Scene,
+    config: EvalConfig,
+    rows: tuple[PredictionBox, ...] = FUSED + SINGLE,
+) -> Path:
     root = tmp_path / "scenes"
     write_scene(scene, root / scene.scene_id)
     predictions = tmp_path / "predictions"
@@ -136,7 +141,7 @@ def _evaluate(tmp_path: Path, scene: Scene, config: EvalConfig) -> Path:
         sources=(("single", "own sensors"), ("fused", "cooperative")),
         created_utc=CREATED,
     )
-    write_run(predictions, "r", meta, FUSED + SINGLE)
+    write_run(predictions, "r", meta, rows)
     report = evaluate_run(root, predictions, "r", config, created_utc=CREATED)
     assert report.errors == ()
     return predictions / "r" / "s"
@@ -220,3 +225,23 @@ def test_the_range_is_horizontal_and_inclusive(tmp_path: Path) -> None:
     beyond = tmp_path / "beyond"
     directory = _evaluate(beyond, _scene(lidar=True, b_x=70.01, b_z=5.0), UNION)
     assert _totals(_output(directory, "fused")) == (1, 1, 3, 0)
+
+
+def test_an_added_box_the_fused_pass_ignores_counts_in_no_cooperative_count(
+    tmp_path: Path,
+) -> None:
+    """``max_range_m: 30``: B2, 40.3 m from a, is in the set but ignored by rule 1.
+
+    b's own single output finds B2 (11.2 m from b), so ``other_agent_tp`` is true, but a
+    box whose status is ignored under either output falls in none of the counts (A.9).
+    Found by the differential suite: ``only_other_agent`` counted it.
+    """
+    config = replace(UNION, max_range_m=30.0)
+    rows = FUSED + SINGLE + (_box("single", 0.9, 40.0, 5.0, agent="b"),)
+    directory = _evaluate(tmp_path, _scene(lidar=True), config, rows)
+    fused = _output(directory, "fused")
+    # A1 is the only kept box; every other fused prediction is beyond 30 m.
+    assert _totals(fused) == (1, 1, 0, 0)
+    cooperative = cast(dict[str, object], fused["cooperative"])
+    assert cooperative["recovered"] == 0
+    assert cooperative["only_other_agent"] == 0
