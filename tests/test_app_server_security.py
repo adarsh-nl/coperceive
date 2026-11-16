@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# pyright: reportUnknownMemberType=false, reportUnknownVariableType=false, reportUnknownArgumentType=false
 """Security regressions for ``coperceive serve`` (ADR 0019, group app-server).
 
 FOLD-02: the bearer token and CSRF header apply to every ``/api`` route whatever

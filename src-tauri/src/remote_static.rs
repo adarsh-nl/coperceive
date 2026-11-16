@@ -677,44 +677,72 @@ mod tests {
 mod scp_tests {
     use super::*;
 
-    /// A stand-in `scp` that records its arguments, one per line, next to itself.
+    /// A per-test folder under the system temp dir.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("coperceive-scp-{name}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    /// A stand-in `scp` that records its arguments, one per line, in `argv.txt` beside it.
+    /// It is written under a temporary name and renamed into place, so no handle open for
+    /// writing is left on the file that is later executed (the "Text file busy" race); the
+    /// tests also hold the crate's FAKE_SSH_LOCK, as the other fake-tool tests here do.
     #[cfg(unix)]
     fn recording_scp(dir: &Path) -> (String, PathBuf) {
         use std::os::unix::fs::PermissionsExt;
         let log = dir.join("argv.txt");
         let script = dir.join("scp");
+        let staging = dir.join("scp.tmp");
         fs::write(
-            &script,
-            format!("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '{}'\nexit 1\n", log.display()),
+            &staging,
+            format!(
+                "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '{}'\nexit 1\n",
+                log.display()
+            ),
         )
         .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::set_permissions(&staging, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::rename(&staging, &script).unwrap();
         (script.display().to_string(), log)
+    }
+
+    fn recorded(log: &Path) -> Vec<String> {
+        fs::read_to_string(log).unwrap().lines().map(String::from).collect()
     }
 
     #[cfg(unix)]
     #[test]
     fn scp_gets_double_dash_before_its_operands() {
-        let dir = std::env::temp_dir().join(format!("coperceive-scp-{}", std::process::id()));
-        fs::create_dir_all(&dir).unwrap();
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = scratch("dashes");
         let (scp, log) = recording_scp(&dir);
         let _ = fetch_remote_manifest("cluster", "rel", &dir.join("m.txt"), &scp);
-        let fetch: Vec<String> = fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
+        let fetch = recorded(&log);
         let at = fetch.iter().position(|a| a == "--").expect("-- passed to scp on fetch");
         assert!(fetch[at + 1].starts_with("cluster:"), "{fetch:?}");
+        fs::remove_file(&log).unwrap();
         let _ = upload_static("cluster", &dir, "rel", &scp);
-        let upload: Vec<String> = fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
+        let upload = recorded(&log);
         let at = upload.iter().position(|a| a == "--").expect("-- passed to scp on upload");
         assert!(upload[at + 2].starts_with("cluster:"), "{upload:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
     #[test]
     fn an_option_like_alias_never_reaches_scp() {
-        let dir = std::env::temp_dir();
-        let hostile = "-oProxyCommand=touch /tmp/coperceive-pwned";
-        // "false" would run if the alias were not refused first; either way no option is read.
-        assert!(fetch_remote_manifest(hostile, "rel", &dir.join("m.txt"), "false").is_err());
-        assert!(upload_static(hostile, &dir, "rel", "false").is_err());
+        let _turn = crate::test_seams::FAKE_SSH_LOCK.lock().unwrap_or_else(|p| p.into_inner());
+        let dir = scratch("hostile");
+        let (scp, log) = recording_scp(&dir);
+        let marker = dir.join("pwned");
+        let hostile = format!("-oProxyCommand=touch {}", marker.display());
+        assert!(fetch_remote_manifest(&hostile, "rel", &dir.join("m.txt"), &scp).is_err());
+        assert!(!log.exists(), "scp ran for a hostile alias on fetch");
+        assert!(upload_static(&hostile, &dir, "rel", &scp).is_err());
+        assert!(!log.exists(), "scp ran for a hostile alias on upload");
+        assert!(!marker.exists());
+        let _ = fs::remove_dir_all(&dir);
     }
 }
