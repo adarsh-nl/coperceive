@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import secrets
 import shutil
 import subprocess
 import time
+import unicodedata
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +19,35 @@ from typing import Any
 # No partition, account, QoS or resource default lives here: every value comes
 # from the user's per-server profile (see docs/adr/0015). Submitting without a
 # chosen partition is an error, never a guess.
+
+# A session id names files under ~/.coperceive and the Slurm job, so it is a plain
+# file name. remote_serve.sbatch applies the same rule.
+_SESSION_ID = re.compile(r"[A-Za-z0-9._-]{1,128}")
+
+
+def _session_id_error(session_uuid: str) -> dict[str, Any] | None:
+    """The error to return for a session id that is not a plain file name, else None."""
+    if _SESSION_ID.fullmatch(session_uuid):
+        return None
+    return {
+        "status": "error",
+        "error": (
+            f"That session id is not valid: {session_uuid!r}. Use at most 128 "
+            "letters, digits, '.', '_' or '-'."
+        ),
+    }
+
+
+def _has_control_char(value: str) -> bool:
+    """True if the value holds a control character (newline, escape, NEL, ...)."""
+    return any(unicodedata.category(ch) == "Cc" for ch in value)
+
+
+def _control_char_error(what: str, value: str) -> dict[str, Any]:
+    return {
+        "status": "error",
+        "error": f"The {what} contains a control character (such as a newline): {value!r}",
+    }
 
 
 def get_base_dir() -> Path:
@@ -165,6 +196,8 @@ def map_stopped_reason(sacct_state: str) -> str:
 
 def record_heartbeat(session_uuid: str) -> dict[str, Any]:
     """Records a heartbeat renewal for a session."""
+    if (invalid := _session_id_error(session_uuid)) is not None:
+        return {**invalid, "uuid": session_uuid}
     session_file = get_sessions_dir() / f"{session_uuid}.json"
     heartbeat_file = get_sessions_dir() / f"{session_uuid}.heartbeat"
     now_ts = time.time()
@@ -231,12 +264,19 @@ def start_session(
                 "(resources) and try again."
             ),
         }
+    # Checked before the token file is written: the id becomes part of its path.
+    if session_uuid and (invalid := _session_id_error(session_uuid)) is not None:
+        return invalid
+    # Every value handed to the job below is refused if it holds a control
+    # character; the job writes them into its session file and argv.
     data_root_path = Path(data_root).resolve()
     if not data_root_path.is_dir():
         return {
             "status": "error",
             "error": f"Data root directory does not exist: {data_root}",
         }
+    if _has_control_char(str(data_root_path)):
+        return _control_char_error("data root path", str(data_root_path))
 
     static_path: Path | None = None
     if static_dir is not None:
@@ -252,15 +292,26 @@ def start_session(
                     "Reconnect from the desktop app so it uploads the page again."
                 ),
             }
+        if _has_control_char(str(static_path)):
+            return _control_char_error("viewer page directory", str(static_path))
 
     # Directories the server may read camera images from (a cluster dataset's raw
-    # root). Each is passed as its own argument, never word-split by the shell.
+    # root). Each is passed as its own argument, never word-split by the shell;
+    # the list itself is newline-separated, so no root may hold a control character.
     media_paths: list[Path] = []
     for media in media_roots or []:
         media_path = Path(media).expanduser().resolve()
-        if not media_path.is_dir() or "\n" in str(media_path):
+        if not media_path.is_dir():
             return {"status": "error", "error": f"Media root is not a directory: {media}"}
+        if _has_control_char(str(media_path)):
+            return _control_char_error("media root path", str(media_path))
         media_paths.append(media_path)
+
+    if python and _has_control_char(python):
+        return _control_char_error("Python interpreter path", python)
+    for arg in extra_args or []:
+        if _has_control_char(arg):
+            return _control_char_error("extra server argument", arg)
 
     uuid_val = session_uuid or secrets.token_hex(8)
     token = generate_secure_token()
@@ -375,9 +426,17 @@ def start_session(
             last_reason = parts[1].strip() if len(parts) > 1 else "None"
 
             if last_state == "RUNNING":
-                # Check if session file has been written
+                # Check if session file has been written. Only the file this job
+                # wrote counts: one left by an earlier job with the same id would
+                # send this session's token to that job's address.
                 session = RemoteSession.from_file(session_file)
-                if session is not None and session.ip and session.port:
+                if (
+                    session is not None
+                    and session.job_id == job_id
+                    and session.uuid == uuid_val
+                    and session.ip
+                    and session.port
+                ):
                     # Probe health
                     if probe_health(session.ip, session.port, token, timeout=2.0):
                         return {
@@ -491,19 +550,33 @@ def get_status(
     health_timeout: float = 3.0,
 ) -> dict[str, Any]:
     """Inspects the state, elapsed time, walltime left, and health of a remote session."""
+    # The id names files under ~/.coperceive: the same rule as start_session.
+    if session_uuid and (invalid := _session_id_error(session_uuid)) is not None:
+        return invalid
     session_file: Path | None = None
     session: RemoteSession | None = None
 
     if session_uuid:
         session_file = get_sessions_dir() / f"{session_uuid}.json"
         session = RemoteSession.from_file(session_file)
+        # A file left by another job (the id was reused) or naming another
+        # session is not this session: its address must not get the token, and
+        # it is not removed when this job ends.
+        if session and (session.uuid != session_uuid or (job_id and session.job_id != job_id)):
+            session = None
+            session_file = None
         if session and not job_id:
             job_id = session.job_id
     elif job_id:
         # Search session file matching job_id
         for candidate in get_sessions_dir().glob("*.json"):
             s = RemoteSession.from_file(candidate)
-            if s and s.job_id == job_id:
+            if (
+                s
+                and s.job_id == job_id
+                and s.uuid == candidate.stem
+                and _session_id_error(s.uuid) is None
+            ):
                 session = s
                 session_file = candidate
                 session_uuid = s.uuid
@@ -686,6 +759,9 @@ def stop_session(
     job_id: int | None = None,
 ) -> dict[str, Any]:
     """Cancels a remote serve Slurm job and cleans up session and token files."""
+    # The id names files under ~/.coperceive: the same rule as start_session.
+    if session_uuid and (invalid := _session_id_error(session_uuid)) is not None:
+        return invalid
     session_file: Path | None = None
     token_file: Path | None = None
 

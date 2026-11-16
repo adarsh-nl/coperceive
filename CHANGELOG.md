@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+- Remote viewer: the session file is written as data (SCRIPTS-01, security review #170). The cluster job wrote its session file with an unquoted shell heredoc, so a data-root folder name could set the session's `ip` and `port`, and the login node then sent the session bearer token to that address. The job now writes the file with `json.dump` from separate arguments, 0600, through a temporary file. Session ids must be plain names (no `..`, `/` or spaces), and data roots, media roots, the viewer page folder and the interpreter path may not contain control characters. `start` and `status` use a session file only when its job id and session id match the job just submitted. **Behaviour that changes:** `coperceive remote start --uuid` refuses ids that are not 1–128 of `A-Za-z0-9._-`; the app never passes one.
+
 ## [0.1.1] - YYYY-MM-DD
 
 ### Added
