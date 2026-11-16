@@ -32,6 +32,15 @@
     "agents": "How many agents annotate the object at that time, including the annotating agent. Pairing is the cooperative gate (shared track, or a computed pair within 2 m). 2+ means the match table only recorded that another agent sees it.",
     "reference_agent": "The first agent in scene.agents."
   },
+  "protocol": {
+    "label": "ranking per_frame, ground truth connected_union (70 m)",
+    "legacy": false,
+    "criterion": "iou_bev",
+    "iou": "bev",
+    "ranking_scope": "per_frame",
+    "gt_scope": "connected_union",
+    "comm_range_m": 70.0
+  },
   "outputs": [
     {
       "agent_id": "vehicle",

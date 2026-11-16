@@ -33,6 +33,7 @@ from tests.evalcheck.scenario import (
     BoxSpec,
     ConfigSpec,
     GtSpec,
+    LidarSpec,
     PoseSample,
     PredSpec,
     Quat,
@@ -82,6 +83,8 @@ class Profile:
     centre_noise_m: tuple[float, ...] = (0.02, 0.3, 0.8, 2.5)
     size_scale: tuple[float, ...] = (1.0,)
     range_limit: bool = False  # max_range_m is set and some boxes sit exactly on it
+    p_sweep: float = 0.75  # an agent has a LiDAR sweep at a pose time
+    p_hit: float = 0.6  # a sweep holds points inside a box (its own or another agent's)
     p_fused_extra: float = 0.5  # a fused output also predicts a box its agent does not annotate
 
 
@@ -278,6 +281,43 @@ def _box(
     return BoxSpec(center, size_lwh, rotation, FRAME_WORLD)
 
 
+def _sweep(
+    rng: random.Random,
+    agent_id: str,
+    pose: PoseSample,
+    visible: list[_Object],
+    objects: list[_Object],
+) -> LidarSpec:
+    """A sweep in the agent's body frame: points inside some boxes, plus strays.
+
+    Most hits are on boxes the agent annotates; some fall inside other objects of the
+    world (an object the agent does not list but its LiDAR touches), and some boxes the
+    agent lists get no point at all. The union rule of spec A.4 tests exactly this.
+    """
+    points: list[Vec3] = []
+    pool = list(visible) + [obj for obj in objects if rng.random() < 0.3]
+    for obj in pool:
+        if rng.random() >= 0.6:
+            continue
+        for _ in range(rng.randint(1, 3)):
+            local: Vec3 = (
+                rng.uniform(-0.45, 0.45) * obj.size_lwh[0],
+                rng.uniform(-0.45, 0.45) * obj.size_lwh[1],
+                rng.uniform(-0.45, 0.45) * obj.size_lwh[2],
+            )
+            offset = quat_rotate(obj.rotation, local)
+            world = (
+                obj.center[0] + offset[0],
+                obj.center[1] + offset[1],
+                obj.center[2] + offset[2],
+            )
+            body, _rotation = to_body(pose, world, (1.0, 0.0, 0.0, 0.0))
+            points.append(body)
+    for _ in range(rng.randint(0, 4)):
+        points.append((rng.uniform(-80.0, 80.0), rng.uniform(-80.0, 80.0), rng.uniform(-2.0, 2.0)))
+    return LidarSpec(agent_id=agent_id, time_us=pose.time_us, points=tuple(points))
+
+
 def _score(rng: random.Random, mode: str) -> float:
     if mode == "constant":
         return 0.5
@@ -313,6 +353,7 @@ def _scene(
     agents = _agents(rng, profile)
     objects = _objects(rng, profile, classes)
     ground_truth: list[GtSpec] = []
+    sweeps: list[LidarSpec] = []
     # (agent, time) -> the objects that agent annotates at that time, as world boxes.
     seen: dict[tuple[str, int], list[_Object]] = {}
     for agent in agents:
@@ -349,6 +390,8 @@ def _scene(
                         )
                     )
             seen[(agent.agent_id, pose.time_us)] = visible
+            if rng.random() < profile.p_sweep:
+                sweeps.append(_sweep(rng, agent.agent_id, pose, visible, objects))
             for obj in visible:
                 row = GtSpec(
                     agent_id=agent.agent_id,
@@ -448,6 +491,7 @@ def _scene(
         ground_truth=tuple(ground_truth),
         predictions=tuple(predictions),
         shared_tracks=_shared_tracks(ground_truth),
+        lidar=tuple(sweeps),
     )
 
 
@@ -479,6 +523,9 @@ def _config(rng: random.Random, profile: Profile, classes: tuple[str, ...]) -> C
         max_range_m=max_range_m,
         score_threshold=rng.choice((0.0, 0.3, 0.3, 0.5, 0.9)),
         gt_class_map=gt_class_map,
+        ranking_scope=rng.choice(("per_frame", "per_frame", "pooled")),
+        gt_scope=rng.choice(("connected_union", "connected_union", "ego_only")),
+        comm_range_m=rng.choice((30.0, 70.0, 70.0, 200.0)),
     )
 
 

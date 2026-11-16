@@ -71,8 +71,11 @@ def add_low_false_positives(run: RunSpec) -> RunSpec:
     """Every output of every scene gains one prediction that can match nothing.
 
     The new row scores below every prediction of the run, sits 10 km beyond the
-    farthest box of its scene (in the world frame, at the first pose time of the
-    agent) and carries the category of the output's first row.
+    farthest box of its scene (in the world frame) and carries the category of the
+    output's first row. It is placed at the agent's last pose time, so it is last in
+    the AP walk under either ranking scope. (Under per_frame a false positive at an
+    earlier time comes before later frames' true positives and does lower AP: that is
+    the published protocol, docs/eval-spec.md A.5.)
     """
     scores = [pred.score for scene in run.scenes for pred in scene.predictions]
     if not scores:
@@ -98,7 +101,7 @@ def add_low_false_positives(run: RunSpec) -> RunSpec:
                 PredSpec(
                     agent_id=agent_id,
                     source=source,
-                    time_us=agents[agent_id].poses[0].time_us,
+                    time_us=agents[agent_id].poses[-1].time_us,
                     category=first.category,
                     score=low,
                     box=BoxSpec(
@@ -114,28 +117,36 @@ def add_low_false_positives(run: RunSpec) -> RunSpec:
 
 
 def perfect_predictions(run: RunSpec, seed: int) -> RunSpec:
-    """Every output predicts exactly its agent's annotations, with arbitrary scores.
+    """Every output of the run predicts exactly its agent's annotations, with arbitrary scores.
 
-    The category is the annotation's category after ``gt_class_map``. Outputs keep
-    their order of first appearance; a scene without predictions stays without.
+    The category is the annotation's category after ``gt_class_map``. Every output of
+    the run is predicted in every scene where its agent exists, because every covered
+    scene evaluates every output of the run (docs/eval-spec.md A.0); the outputs that
+    had rows in a scene keep their order of first appearance there.
     """
     rng = random.Random(seed)
     rename = run.config.gt_class_map
+    ordered = sorted(run.scenes, key=lambda item: item.scene_id)
+    run_outputs = list(
+        dict.fromkeys(
+            (pred.agent_id, pred.source) for scene in ordered for pred in scene.predictions
+        )
+    )
     scenes: list[SceneSpec] = []
     for scene in run.scenes:
+        present = {agent.agent_id for agent in scene.agents}
         outputs = list(dict.fromkeys((pred.agent_id, pred.source) for pred in scene.predictions))
+        outputs += [key for key in run_outputs if key not in outputs and key[0] in present]
         rows: list[PredSpec] = []
         for agent_id, source in outputs:
             mine = [gt for gt in scene.ground_truth if gt.agent_id == agent_id]
             if not mine:
-                # Keep the output in the scene: one row that can match nothing is not
-                # perfect, so reuse one of its own rows only when it has no ground truth.
-                rows.append(
-                    next(
-                        pred
-                        for pred in scene.predictions
-                        if (pred.agent_id, pred.source) == (agent_id, source)
-                    )
+                # No ground truth: nothing to be perfect on. Keep the output's own rows,
+                # if it has any here, so the run keeps the same outputs.
+                rows.extend(
+                    pred
+                    for pred in scene.predictions
+                    if (pred.agent_id, pred.source) == (agent_id, source)
                 )
                 continue
             for gt in mine:
@@ -227,10 +238,14 @@ def scale_lengths(run: RunSpec, factor: float) -> RunSpec:
             ),
             ground_truth=tuple(replace(gt, box=box(gt.box)) for gt in scene.ground_truth),
             predictions=tuple(replace(pred, box=box(pred.box)) for pred in scene.predictions),
+            lidar=tuple(
+                replace(sweep, points=tuple(vec(point) for point in sweep.points))
+                for sweep in scene.lidar
+            ),
         )
         for scene in run.scenes
     )
-    config = run.config
+    config = replace(run.config, comm_range_m=run.config.comm_range_m * factor)
     if config.max_range_m is not None:
         config = replace(config, max_range_m=config.max_range_m * factor)
     return replace(run, config=config, scenes=scenes)

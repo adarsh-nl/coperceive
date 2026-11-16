@@ -209,6 +209,7 @@ def test_every_bin_ap_lies_in_zero_one_and_class_bins_equal_the_pooled_ap(
             thresholds=run.config.thresholds,
             breakdowns=BREAKDOWNS,
             distance_source=origin,
+            ranking_scope=run.config.ranking_scope,
         )
         values = _every_ap(document)
         assert all(0.0 <= value <= 1.0 + 1e-9 for value in values), (seed, max(values))

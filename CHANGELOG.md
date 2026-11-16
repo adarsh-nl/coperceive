@@ -36,6 +36,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Concurrent, cancellable cluster-dataset streaming (streaming steps 1–2, backend, PR #150): the remote-view streamer answers requests on a bounded pool for protocol-2 clients (protocol-1 clients keep the old serialized, in-order replies so a large point-sweep read no longer holds up small manifest/stat replies for them), protocol 2 adds per-request `queue_ms`/`read_ms`/`bytes` timings, and a `cancel` op (queued reads are skipped; an in-flight read's reply is dropped). The viewer server exposes bounded, versioned timings at `GET /api/stream-stats` and cancels a remote point-cloud read when the browser disconnects. New `scripts/bench/stream_bench.py` measures playback, per-request timings, head-of-line blocking and seek-cancellation over a synthetic scene and fake link (`--smoke` runs in CI).
 - Time-based streaming buffer for the viewer (streaming steps 1–2, viewer, PR #150): Settings → Viewer chooses 1/3/5 s of buffered playback (default 3 s) and a 256/512/1024 MB client buffer (default 512 MB); the fixed four-frame horizon is replaced by a priority scheduler (current frame, its boxes, then prefetched sweeps), a byte-bounded cache evicts behind the playhead first, the timeline shows a buffer bar, playback pauses with "Buffering…" instead of stuttering and resumes at ≥1 s buffered, and an optional stats line shows buffer-ahead, MB/s and frame-load p50/p95.
 
+### Changed
+- AP ranks predictions frame by frame by default (`ranking_scope: per_frame`, PR #165).
+  - **Why:** OpenCOOD's documentation says its default evaluation, which the OPV2V paper reports, does not sort detection scores over the whole test set; a global sort is an opt-in flag ([OpenCOOD README](https://github.com/DerrickXuNu/OpenCOOD), "Test the model"; [PR #105](https://github.com/DerrickXuNu/OpenCOOD/pull/105); [issue #101](https://github.com/DerrickXuNu/OpenCOOD/issues/101)). That OpenCOOD's local sort is one frame is the reading in issue #101 and is **unverified** (`docs/eval-spec.md` A.5).
+  - **What changed:** the AP walk now takes a scene's predictions frame by frame, earliest first, and by score within a frame. Scenes are joined with no sort over the whole list.
+  - **Old rule:** `ranking_scope: pooled` keeps the single sort over everything, as KITTI does.
+  - **Records:** every `metrics.json` records `ranking_scope`. One without it is reported as "legacy (pooled, ego-only)".
+  - **Numbers that change:** every AP, mAP and per-class AP of `eval run`, `eval report`, `eval compare`, `eval compare --by` and the paper export. Counts, precision and recall do not change.
+  - **On the demo run** (pooled → per_frame):
+
+    | Value | AP@0.5 (BEV) | AP@0.7 (BEV) |
+    | --- | --- | --- |
+    | mAP, cav-a | 0.516 → 0.528 | 0.282 → 0.282 |
+    | mAP, cav-b | 0.567 → 0.563 | 0.282 → 0.288 |
+    | mAP, all | 0.537 → 0.537 | 0.279 → 0.281 |
+    | car, cav-a | 1.000 → 1.000 | 0.709 → 0.702 |
+    | car, cav-b | 0.990 → 0.994 | 0.726 → 0.733 |
+    | car, all | 0.995 → 0.997 | 0.714 → 0.712 |
+    | cyclist, cav-a | 0.426 → 0.448 | 0.120 → 0.124 |
+    | cyclist, cav-b | 0.570 → 0.568 | 0.104 → 0.112 |
+    | cyclist, all | 0.487 → 0.484 | 0.105 → 0.112 |
+    | pedestrian, cav-a | 0.123 → 0.134 | 0.019 → 0.021 |
+    | pedestrian, cav-b | 0.140 → 0.128 | 0.016 → 0.017 |
+    | pedestrian, all | 0.129 → 0.129 | 0.017 → 0.018 |
+    | `--by agents` "2", cav-a | 0.516 → 0.528 | 0.282 → 0.282 |
+    | `--by agents` "2", cav-b | 0.567 → 0.563 | 0.282 → 0.288 |
+    | `--by distance` 0-30m, cav-a | 0.527 → 0.536 | 0.286 → 0.281 |
+    | `--by distance` 30-50m, cav-a | 0.542 → 0.549 | 0.384 → 0.389 |
+    | `--by distance` 50m+, cav-a | 0.561 → 0.566 | 0.360 → 0.362 |
+    | `--by distance` 0-30m, cav-b | 0.558 → 0.559 | 0.285 → 0.295 |
+    | `--by distance` 30-50m, cav-b | 0.583 → 0.566 | 0.420 → 0.434 |
+    | `--by distance` 50m+, cav-b | 0.607 → 0.612 | 0.362 → 0.364 |
+- A `fused` output is scored against the ground truth of every connected agent (`gt_scope: connected_union`, PR #165).
+  - **Why:** OPV2V's evaluation targets are the vehicles hit by at least one LiDAR point from any connected vehicle, and it ignores vehicles outside the 70 m broadcast range ([OPV2V paper](https://arxiv.org/abs/2109.07644), Sec. V-B). V2X-ViT states the same rule ([V2X-ViT paper](https://arxiv.org/abs/2203.10638), Sec. 4.2).
+  - **What changed:** at each time, a `fused` output's ground truth starts with the ego's own boxes. Each agent within `comm_range_m` (70 m, horizontal) then adds the boxes that hold at least one LiDAR return from the ego or a connected agent. A box that the spec's A.9 pairing matches to one already in the set is not added again. When there is no sweep at that time, every connected agent's list counts as observed.
+  - **Unchanged:** `single` and every other output keep their own agent's boxes.
+  - **Cooperative counts:** `recovered` and `only_other_agent` now also count objects that only a connected agent annotated.
+  - **Old rule:** `gt_scope: ego_only` keeps it.
+  - **Records:** `matches.parquet` gains `gt_agent_id`, the agent that annotated each ground-truth row.
+  - **Our choices (unverified):** the range is horizontal; the ego's boxes are kept without a point test; a box two agents annotated counts once. All are listed in `docs/eval-spec.md` A.4.
+  - **Numbers that change:** for `fused` outputs only: `gt`, `tp`, `fp`, `miss`, precision, recall, every AP, `recovered`, `only_other_agent` and `recovery_rate`. Outputs of any other source are unchanged.
+  - **On the demo run:** no change; it has no `fused` output (its one source is `noisy`).
+- AP is labelled as a bird's-eye-view AP, and every report names its protocol (PR #165).
+  - **Labels:** `eval report`, `eval compare`, its `--by` breakdowns and the paper export say `mAP@0.5 (BEV)` and `AP@0.5 (BEV)`. Under `criterion: centre` they say `AP@<t> m (centre)`.
+  - **Protocol line:** `eval report` and `eval compare` open with a `protocol:` line.
+  - **Files:** `metrics.json` carries `"iou": "bev"`. `compare.json` carries a `protocol` object (optional in its schema). The paper export names the protocol in each table caption.
+  - **Refusal:** `eval compare` refuses two runs scored under different protocols, or a legacy run beside a current one.
+  - **Not yet labelled:** the app's scores view. That file is the viewer's, and the change is routed.
+  - **Numbers that change:** none. Column names and the first line of the report text change, so scripts that read `eval report` columns by name need the new names.
+  - **On the demo run:** no number changes.
+
 ### Fixed
 - The synthetic demo scene's LiDAR is written in the recording agent's body frame (GEN-6): it used to store world points where the app reads sensor-frame samples, so the viewer applied the agent pose twice and every cloud was about 25 m off (`cav-b`'s also turned 90°). The junction is also dressed for the product tour: denser LiDAR (681 points per sweep median, up from 306), buildings, trees, parked cars and richer camera renders, all still generated at runtime and deterministic. Measured for seed 0: the full demo tree is 12,986,276 bytes (12.4 MiB / 13.0 MB; the `scenes/demo-junction` folder the Library shows is 4,202,815 bytes) and generation takes 11.8 s warm on Apple Silicon, 24.7 s on a first cold run and 7.9 s on the CI runner. The welcome card's approximate demo cache size is now "about 12.4 MiB" instead of "about 8 MiB".
 - The HPC workspace waits less for a dataset index: the last scene list for a server/adapter/raw root/split is shown at once, labelled cached, while the same read-only index command re-checks the raw tree in the background ("checking for changes…"). The cache is keyed by those four values and persists across restarts; every open still runs one index on the login node (about 45–60 s on OPV2V train on the real cluster), it just no longer blocks the view. (App-state part of the V2V4Real 0-scene report; the cluster-side root cause is unverified.)

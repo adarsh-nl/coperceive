@@ -24,6 +24,8 @@ from typing import cast
 from coperceive.errors import CoperceiveError
 
 CRITERIA = ("iou_bev", "centre")
+RANKING_SCOPES = ("per_frame", "pooled")
+GT_SCOPES = ("connected_union", "ego_only")
 KEYS = (
     "criterion",
     "thresholds",
@@ -33,6 +35,9 @@ KEYS = (
     "max_range_m",
     "score_threshold",
     "gt_class_map",
+    "ranking_scope",
+    "gt_scope",
+    "comm_range_m",
 )
 
 
@@ -52,6 +57,10 @@ class EvalConfig:
     # GT class -> class, before matching. A default_factory: Python 3.11 refuses an
     # unhashable default such as a mappingproxy on a dataclass field.
     gt_class_map: Mapping[str, str] = field(default_factory=lambda: MappingProxyType({}))
+    # The protocol (docs/eval-spec.md A.2): the OPV2V/V2X-ViT defaults.
+    ranking_scope: str = "per_frame"  # per_frame | pooled: the order of the AP walk (A.5)
+    gt_scope: str = "connected_union"  # connected_union | ego_only: fused ground truth (A.4)
+    comm_range_m: float = 70.0  # communication range of connected_union
 
 
 DEFAULT_CONFIG = EvalConfig(
@@ -120,6 +129,13 @@ def parse_config(payload: object) -> EvalConfig:
         if not isinstance(value, str) or not value:
             raise ConfigError(f"gt_class_map.{name}: expected a class name, got {value!r}")
         class_map[name] = value
+    ranking = _choice(
+        "ranking_scope", node.get("ranking_scope", DEFAULT_CONFIG.ranking_scope), RANKING_SCOPES
+    )
+    gt_scope = _choice("gt_scope", node.get("gt_scope", DEFAULT_CONFIG.gt_scope), GT_SCOPES)
+    comm_range = _number("comm_range_m", node.get("comm_range_m", DEFAULT_CONFIG.comm_range_m))
+    if comm_range <= 0:
+        raise ConfigError(f"comm_range_m: expected a positive number of metres, got {comm_range!r}")
     return EvalConfig(
         criterion=criterion,
         thresholds=thresholds,
@@ -129,6 +145,9 @@ def parse_config(payload: object) -> EvalConfig:
         max_range_m=max_range,
         score_threshold=score,
         gt_class_map=MappingProxyType(class_map),
+        ranking_scope=ranking,
+        gt_scope=gt_scope,
+        comm_range_m=comm_range,
     )
 
 
@@ -145,6 +164,9 @@ def config_json(config: EvalConfig) -> dict[str, object]:
         "max_range_m": config.max_range_m,
         "score_threshold": float(config.score_threshold),
         "gt_class_map": dict(config.gt_class_map),
+        "ranking_scope": config.ranking_scope,
+        "gt_scope": config.gt_scope,
+        "comm_range_m": float(config.comm_range_m),
     }
 
 

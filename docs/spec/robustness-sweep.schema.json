@@ -75,7 +75,10 @@
         "ignore_gt_visibility_below": {"type": ["number", "null"]},
         "max_range_m": {"type": ["number", "null"]},
         "score_threshold": {"type": "number"},
-        "gt_class_map": {"type": "object", "additionalProperties": {"type": "string"}}
+        "gt_class_map": {"type": "object", "additionalProperties": {"type": "string"}},
+        "ranking_scope": {"type": "string", "enum": ["per_frame", "pooled"]},
+        "gt_scope": {"type": "string", "enum": ["connected_union", "ego_only"]},
+        "comm_range_m": {"type": "number"}
       }
     },
     "evalChoice": {

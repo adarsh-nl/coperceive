@@ -101,11 +101,25 @@ class PredSpec:
 
 
 @dataclass(frozen=True)
+class LidarSpec:
+    """One LiDAR sweep of an agent at one of its pose times.
+
+    The points are in the agent's body frame: the sensor sits at the body origin with
+    no rotation. Only their positions matter (A.4, "observed").
+    """
+
+    agent_id: str
+    time_us: int
+    points: tuple[Vec3, ...]
+
+
+@dataclass(frozen=True)
 class SceneSpec:
     """One scene: agents in scene order, annotations and predictions in file row order.
 
     ``shared_tracks`` are the track ids the dataset declares to be one object for
-    more than one agent, as ``(track_id, category)`` (A.9).
+    more than one agent, as ``(track_id, category)`` (A.9). ``lidar`` holds the
+    sweeps the scene has; an agent may have none at some or all of its times.
     """
 
     scene_id: str
@@ -113,6 +127,7 @@ class SceneSpec:
     ground_truth: tuple[GtSpec, ...]
     predictions: tuple[PredSpec, ...]
     shared_tracks: tuple[tuple[str, str], ...] = ()
+    lidar: tuple[LidarSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -129,6 +144,9 @@ class ConfigSpec:
     max_range_m: float | None = None
     score_threshold: float = 0.3
     gt_class_map: Mapping[str, str] = field(default_factory=dict[str, str])
+    ranking_scope: str = "per_frame"
+    gt_scope: str = "connected_union"
+    comm_range_m: float = 70.0
 
 
 @dataclass(frozen=True)
@@ -136,6 +154,7 @@ class RunSpec:
     """A run: the classes the model declares, the config and the scenes.
 
     ``scenes`` may be given in any order; pooling orders them by ``scene_id`` (A.8).
+    The run covers every one of its scenes (A.0), also those without a prediction.
     """
 
     categories: tuple[str, ...]
@@ -206,6 +225,7 @@ class GtCooperativeResult:
     seen_by_other_gt: bool
     other_kind: str | None
     other_agent_tp: bool | None
+    added_by: str | None = None
 
 
 @dataclass(frozen=True)
@@ -286,9 +306,9 @@ class PooledResult:
 class RunResult:
     """Per-scene results in ``scene_id`` order, then the headline rows.
 
-    ``scenes`` covers the evaluated scenes (A.8): the scenes of the run that have at
-    least one prediction row. A scene without one has no prediction file, is not
-    evaluated and appears nowhere in the result.
+    ``scenes`` covers the evaluated scenes (A.8): every scene of the run, because the
+    run covers them all (A.0), in ``scene_id`` order. A scene whose agents have no
+    output of the run has no outputs.
 
     ``pooled`` holds one row per output in first-appearance order over the evaluated
     scenes taken in ``scene_id`` order, followed by the row over every output.

@@ -21,6 +21,7 @@ from coperceive.paper_export import (
     PaperFrame,
     PaperInputs,
     PaperOptions,
+    comparison_tex,
     dataset_allowed,
     export_paper,
     metrics_tex,
@@ -74,6 +75,81 @@ _OPTIONS = PaperOptions()
 def test_metrics_table_matches_the_golden_text() -> None:
     golden = Path("tests/fixtures/paper/metrics_golden.tex").read_text(encoding="utf-8")
     assert metrics_tex([_METRICS], _OPTIONS) == golden
+
+
+def _with_config(**config: object) -> dict[str, object]:
+    return {**_METRICS, "config": config, "iou": "bev"}
+
+
+def test_metrics_caption_names_the_protocol_and_ap_columns_say_bev() -> None:
+    """docs/eval-spec.md A.12: AP@<t> (BEV) and the protocol the scene was scored under."""
+    current = _with_config(
+        criterion="iou_bev",
+        ranking_scope="per_frame",
+        gt_scope="connected_union",
+        comm_range_m=70.0,
+    )
+    text = metrics_tex([current], _OPTIONS)
+    assert "{AP@0.5 (BEV)}" in text
+    assert (
+        "\\caption{Metrics. AP is bird's-eye-view (BEV) IoU AP; "
+        "protocol: ranking per\\_frame, ground truth connected\\_union (70 m).}"
+    ) in text
+    ego = _with_config(criterion="iou_bev", ranking_scope="pooled", gt_scope="ego_only")
+    both = metrics_tex([current, {**ego, "scene_id": "synth_002"}], _OPTIONS)
+    assert "protocols differ between scenes: ranking per\\_frame" in both
+    assert "; ranking pooled, ground truth ego\\_only." in both
+
+
+def test_a_centre_distance_run_is_not_labelled_bev() -> None:
+    centre = _with_config(criterion="centre", ranking_scope="pooled", gt_scope="ego_only")
+    text = metrics_tex([centre], _OPTIONS)
+    assert "{AP@0.5 m (centre)}" in text
+    assert "(BEV)" not in text
+    assert "AP is centre-distance AP" in text
+
+
+def _compare_document(protocol: dict[str, object] | None) -> dict[str, object]:
+    document: dict[str, object] = {
+        "format": "coperceive-compare",
+        "format_version": 1,
+        "outputs": [
+            {
+                "agent_id": "vehicle",
+                "source": "fused",
+                "breakdowns": {
+                    "distance": [
+                        {
+                            "bin": "0-30m",
+                            "runs": {
+                                "det-a": {"ap": {"0.5": {"mean": 0.5}}, "n_objects": 4},
+                                "det-b": {"ap": {"0.5": {"mean": 0.75}}, "n_objects": 4},
+                            },
+                        }
+                    ]
+                },
+            }
+        ],
+    }
+    if protocol is not None:
+        document["protocol"] = protocol
+    return document
+
+
+def test_breakdown_tables_name_the_threshold_and_the_protocol() -> None:
+    text = comparison_tex(
+        _compare_document(
+            {
+                "label": "ranking per_frame, ground truth connected_union (70 m)",
+                "criterion": "iou_bev",
+            }
+        ),
+        _OPTIONS,
+    )
+    assert "{det-a AP@0.5 (BEV)} & {det-b AP@0.5 (BEV)}" in text
+    assert "protocol: ranking per\\_frame, ground truth connected\\_union (70 m).}" in text
+    # A compare.json written before the protocol object says so instead of guessing.
+    assert "protocol not recorded.}" in comparison_tex(_compare_document(None), _OPTIONS)
 
 
 def test_missing_inputs_are_plain_notes(tmp_path: Path) -> None:

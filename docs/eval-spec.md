@@ -145,7 +145,7 @@ A prediction is *out of range* when `max_range_m` is a number and its range is `
 1. If it is out of range: status `ignored`. Stop.
 2. If `operating` and `score < score_threshold`: status `below_threshold`. Stop. (A score equal to the threshold is kept.)
 3. Its candidates are the boxes of `G` that have its category and are not yet matched. Ignored boxes are candidates. If there is no candidate: status `fp`. Stop.
-4. The best candidate is the one with the largest BEV IoU (`iou_bev`) or the smallest centre distance (`centre`). Among equals, the one earliest in row order.
+4. The best candidate is the one with the largest BEV IoU (`iou_bev`) or the smallest centre distance (`centre`). Among equals, the one earliest in the order of the ground-truth set (row order for an agent's own annotations).
 5. The pair passes when `IoU ≥ threshold` (`iou_bev`) or `distance ≤ threshold` (`centre`), with the threshold of A.2 for index `i` and the prediction's category. If it does not pass: status `fp`. Stop.
 6. If the best candidate is ignored: status `ignored`. The box is **not** marked matched, so later predictions can be absorbed by it too. Stop.
 7. Otherwise: status `tp`. The box is marked matched, and the pair is recorded with its BEV IoU, centre distance and yaw error. All three are recorded under either criterion.
@@ -161,7 +161,7 @@ Two kinds of pass are run for every sample:
 - the **operating-point pass**: `i = d` (the display index), `operating = true`;
 - one **AP pass** per threshold index `i`: `operating = false`.
 
-Anchors: `coperceive/evaluation/matching.py::match_sample`, `coperceive/evaluation/matching.py::_gt_ignored`, `coperceive/evaluation/matching.py::_pred_ignored`, `coperceive/evaluation/evaluate.py::_match_output`.
+Anchors: `coperceive/evaluation/matching.py::match_sample`, `coperceive/evaluation/matching.py::_gt_ignored`, `coperceive/evaluation/matching.py::_pred_ignored`, `coperceive/evaluation/evaluate.py::_match_output`, `coperceive/evaluation/evaluate.py::_union_gt`, `coperceive/evaluation/union.py::connected_agents`, `coperceive/evaluation/union.py::lidar_points_world`, `coperceive/evaluation/union.py::holds_a_point`, `coperceive/evaluation/union.py::pair_with`.
 
 ### A.5 Average precision of one scene
 
@@ -310,11 +310,20 @@ Two parts are our choices:
 
 Before 2026-11-16 a prediction followed its ground truth into a bin only through the operating-point pair. A true positive scored under `score_threshold` was binned by its own attributes, and a distance bin could report an AP of 2.0 (CHANGELOG).
 
-Anchors: `coperceive/evaluation/breakdown.py::_split`, `coperceive/evaluation/breakdown.py::_ap_cell`.
+Anchors: `coperceive/evaluation/breakdown.py::_scored`, `coperceive/evaluation/breakdown.py::_own_bin`, `coperceive/evaluation/breakdown.py::_ap_cell`.
 
 ### A.12 Labels
 
-Under `criterion: iou_bev` every AP is a bird's-eye-view AP. `eval report`, `eval compare`, the paper export and the app label it `AP@<t> (BEV)` (and `mAP@<t> (BEV)`), and `metrics.json` carries `"iou": "bev"`. Under `centre` the label is `AP@<t> m (centre)` and `"iou"` is null. OPV2V computes its IoU on the x-y plane too ([OPV2V paper](https://arxiv.org/abs/2109.07644), Sec. V-B). The protocol (A.2) is printed with every report.
+Under `criterion: iou_bev` every AP is a bird's-eye-view AP. `metrics.json` carries `"iou": "bev"`, and `eval report`, `eval compare` (its tables and its `--by` breakdowns) and the paper export label it `AP@<t> (BEV)` (and `mAP@<t> (BEV)`). Under `centre` the label is `AP@<t> m (centre)` and `"iou"` is null. OPV2V computes its IoU on the x-y plane too ([OPV2V paper](https://arxiv.org/abs/2109.07644), Sec. V-B).
+
+The protocol of A.2 goes with every number:
+
+- `eval report` and `eval compare` print it on their first line (`protocol: ranking per_frame, ground truth connected_union (70 m)`, or `protocol: legacy (pooled, ego-only)`). `eval compare` refuses two runs scored under different protocols, or a legacy run beside a current one.
+- `compare.json` records it as its `protocol` object (`label`, `legacy`, `criterion`, `iou`, `ranking_scope`, `gt_scope`, `comm_range_m`). A file written before 2026-11-16 has none, and the paper export then says "protocol not recorded".
+- The paper export names it in the caption of every metrics and breakdown table.
+- The repro card holds each scene's `metrics.json` unchanged, config included.
+
+The app's scores view (`web/src/viewer/SidePanel.tsx`) still shows `mAP@<t>` with no label and no protocol. That file belongs to the viewer and the change is routed (PR #165).
 
 ---
 

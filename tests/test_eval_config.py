@@ -32,6 +32,9 @@ SPEC_KEYS = (
     "max_range_m",
     "score_threshold",
     "gt_class_map",
+    "ranking_scope",
+    "gt_scope",
+    "comm_range_m",
 )
 
 
@@ -228,7 +231,35 @@ def test_config_json_has_every_spec_key() -> None:
         "max_range_m": None,
         "score_threshold": 0.3,
         "gt_class_map": {},
+        "ranking_scope": "per_frame",
+        "gt_scope": "connected_union",
+        "comm_range_m": 70.0,
     }
+
+
+def test_the_protocol_defaults_follow_opv2v_and_the_old_rules_are_a_choice() -> None:
+    """docs/eval-spec.md A.2: per-frame ranking and connected-union ground truth by default."""
+    assert DEFAULT_CONFIG.ranking_scope == "per_frame"
+    assert DEFAULT_CONFIG.gt_scope == "connected_union"
+    assert DEFAULT_CONFIG.comm_range_m == 70.0
+    old = parse_config({"ranking_scope": "pooled", "gt_scope": "ego_only"})
+    assert (old.ranking_scope, old.gt_scope) == ("pooled", "ego_only")
+    assert parse_config({"comm_range_m": 50}).comm_range_m == 50.0
+
+
+@pytest.mark.parametrize(
+    ("payload", "path"),
+    [
+        ({"ranking_scope": "global"}, "ranking_scope"),
+        ({"gt_scope": "union"}, "gt_scope"),
+        ({"comm_range_m": 0}, "comm_range_m"),
+        ({"comm_range_m": -5.0}, "comm_range_m"),
+        ({"comm_range_m": None}, "comm_range_m"),
+    ],
+)
+def test_the_protocol_keys_are_checked(payload: dict[str, object], path: str) -> None:
+    with pytest.raises(ConfigError, match=rf"^{path}: "):
+        parse_config(payload)
 
 
 def test_config_json_round_trips_through_parse_config() -> None:

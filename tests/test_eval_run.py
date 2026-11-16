@@ -66,6 +66,13 @@ from tests.eval_fixture import synthetic_predictions, synthetic_run_meta
 
 CREATED = "2026-10-17T01:02:03Z"
 
+# The hand counts of this module were made under the rules of the spec before the
+# protocol keys (docs/eval-spec.md A.2): pooled ranking and ego-only ground truth. Those
+# rules remain a supported config, so the counts still hold for it. The new defaults,
+# per-frame ranking and connected-union ground truth, have tests of their own
+# (test_the_ranking_scope_orders_the_ap_walk, tests/test_eval_protocol.py).
+RULES = replace(DEFAULT_CONFIG, ranking_scope="pooled", gt_scope="ego_only")
+
 MATCH_COLUMNS = [
     "kind",
     "agent_id",
@@ -103,7 +110,7 @@ MATCH_COLUMNS = [
 def evaluated() -> tuple[Scene, RunMeta, tuple[PredictionBox, ...], SceneEvaluation]:
     scene = cooperative_scene()
     meta, boxes = synthetic_predictions(scene)
-    result = evaluate_scene(scene, meta, boxes, DEFAULT_CONFIG, created_utc=CREATED)
+    result = evaluate_scene(scene, meta, boxes, RULES, created_utc=CREATED)
     return scene, meta, boxes, result
 
 
@@ -283,7 +290,7 @@ def test_matches_round_trip_with_the_spec_columns(
     assert table.schema.names == MATCH_COLUMNS
     assert status_at_columns(2) == ["status_at_0", "status_at_1"]
     # Then the ground-truth row each prediction was paired with in that AP pass (spec A.11).
-    extra = ["status_at_0", "status_at_1", "gt_row_at_0", "gt_row_at_1"]
+    extra = ["status_at_0", "status_at_1", "gt_row_at_0", "gt_row_at_1", "gt_agent_id"]
     assert match_schema(2).names == [*MATCH_COLUMNS, *extra]
     full = read_matches(tmp_path, columns=match_schema(2).names)
     assert full.schema.names == [*MATCH_COLUMNS, *extra]
@@ -340,7 +347,7 @@ def test_status_at_columns_hold_the_ap_pass_status_per_threshold(
     assert (cone["status"], cone["status_at_0"], cone["status_at_1"]) == ("fp", "fp", "fp")
     # Under a score threshold nothing passes, the statuses say so and status_at does not.
     strict = evaluate_scene(
-        scene, meta, boxes, parse_config({"score_threshold": 0.99}), created_utc=CREATED
+        scene, meta, boxes, replace(RULES, score_threshold=0.99), created_utc=CREATED
     )
     predictions = [r for r in strict.matches if r["kind"] == "prediction"]
     assert all(r["status"] == "below_threshold" for r in predictions)
@@ -515,7 +522,7 @@ def test_metrics_json_has_no_nan_and_a_zero_ap_for_an_unpredicted_class(
     assert loaded["scene_id"] == scene.scene_id
     assert loaded["created_utc"] == CREATED
     assert isinstance(loaded["coperceive_version"], str) and loaded["coperceive_version"]
-    assert loaded["config"] == config_json(DEFAULT_CONFIG)
+    assert loaded["config"] == config_json(RULES)
     single = _output(loaded, "vehicle", "single")
     ap = cast(dict[str, dict[str, object]], single["ap"])
     assert set(ap) == {"0.5", "0.7"}
@@ -563,7 +570,7 @@ def test_metrics_json_has_no_nan_and_a_zero_ap_for_an_unpredicted_class(
 def test_ap_pass_ignores_the_score_threshold_and_statuses_do_not() -> None:
     scene = cooperative_scene()
     meta, boxes = synthetic_predictions(scene)
-    config = parse_config({"score_threshold": 0.99})
+    config = replace(RULES, score_threshold=0.99)
     result = evaluate_scene(scene, meta, boxes, config, created_utc=CREATED)
     single = _output(result.metrics, "vehicle", "single")
     totals = cast(dict[str, object], single["totals"])
@@ -588,7 +595,7 @@ def test_categories_outside_run_json_are_reported_and_a_class_without_gt_is_null
     scene = cooperative_scene()
     meta, boxes = synthetic_predictions(scene)
     bicycle = replace(_cone(100_000, (50.0, 50.0, 0.0)), category="bicycle")
-    result = evaluate_scene(scene, meta, (*boxes, bicycle), DEFAULT_CONFIG, created_utc=CREATED)
+    result = evaluate_scene(scene, meta, (*boxes, bicycle), RULES, created_utc=CREATED)
     assert result.warnings == (
         "category 'bicycle' is not in run.json categories",
         "category 'cone' is not in run.json categories",
@@ -605,7 +612,7 @@ def test_categories_outside_run_json_are_reported_and_a_class_without_gt_is_null
         assert ap[threshold]["cone"] == 0.0
     # A scene whose classes are all listed gives no warning.
     listed = replace(meta, categories=(*meta.categories, "cone"))
-    assert evaluate_scene(scene, listed, boxes, DEFAULT_CONFIG, created_utc=CREATED).warnings == ()
+    assert evaluate_scene(scene, listed, boxes, RULES, created_utc=CREATED).warnings == ()
 
 
 def _cone(time_us: int, center: tuple[float, float, float]) -> PredictionBox:
@@ -635,8 +642,8 @@ def test_ap_ties_follow_file_order_across_sample_times() -> None:
     meta = synthetic_run_meta()
     tp = _cone(200_000, (21.0, 2.0, 0.0))
     fp = _cone(100_000, (50.0, 50.0, 0.0))
-    tp_first = evaluate_scene(scene, meta, (tp, fp), DEFAULT_CONFIG, created_utc=CREATED)
-    fp_first = evaluate_scene(scene, meta, (fp, tp), DEFAULT_CONFIG, created_utc=CREATED)
+    tp_first = evaluate_scene(scene, meta, (tp, fp), RULES, created_utc=CREATED)
+    fp_first = evaluate_scene(scene, meta, (fp, tp), RULES, created_utc=CREATED)
     ap_tp_first = cast(
         dict[str, dict[str, object]], _output(tp_first.metrics, "vehicle", "single")["ap"]
     )
@@ -660,6 +667,8 @@ def test_ignored_gt_is_counted_and_not_missed() -> None:
             "thresholds": [2.0, 1.0],
             "display_threshold": 2.0,
             "ignore_gt_visibility_below": 0.5,
+            "ranking_scope": "pooled",
+            "gt_scope": "ego_only",
         }
     )
     result = evaluate_scene(scene, meta, boxes, config, created_utc=CREATED)
@@ -709,7 +718,7 @@ def test_evaluate_run_evaluates_every_scene_with_boxes_and_skips_the_rest(
     root, scene = _scenes_root(tmp_path, "coop-a", "coop-b", "coop-c")
     predictions = tmp_path / "predictions"
     meta, boxes = _write_fixture_run(predictions, scene, ("coop-a", "coop-b"))
-    report = evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    report = evaluate_run(root, predictions, meta.run_id, RULES, created_utc=CREATED)
     # The fixture's cone is in the ground truth but not in run.json categories.
     assert report == RunReport(
         evaluated=("coop-a", "coop-b"),
@@ -728,7 +737,7 @@ def test_evaluate_run_evaluates_every_scene_with_boxes_and_skips_the_rest(
         table = read_matches(directory)
         assert table.num_rows > len(boxes)
     assert not (predictions / meta.run_id / "coop-c").exists()
-    expected = evaluate_scene(scene, meta, boxes, DEFAULT_CONFIG, created_utc=CREATED)
+    expected = evaluate_scene(scene, meta, boxes, RULES, created_utc=CREATED)
     actual = read_metrics(predictions / meta.run_id / "coop-a")
     assert actual["outputs"] == expected.metrics["outputs"]
 
@@ -741,7 +750,7 @@ def test_evaluate_run_honours_scene_ids(tmp_path: Path) -> None:
         root,
         predictions,
         meta.run_id,
-        DEFAULT_CONFIG,
+        RULES,
         scene_ids=["coop-b", "coop-zz"],
         created_utc=CREATED,
     )
@@ -758,7 +767,7 @@ def test_evaluate_run_reports_a_validation_error_and_continues(tmp_path: Path) -
     bad = replace(boxes[0], scene_id="coop-a", agent_id="ghost")
     rows = (bad,) + tuple(replace(box, scene_id="coop-b") for box in boxes)
     write_run(predictions, meta.run_id, meta, rows)
-    report = evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    report = evaluate_run(root, predictions, meta.run_id, RULES, created_utc=CREATED)
     assert report.evaluated == ("coop-b",)
     assert report.skipped == ()
     assert len(report.errors) == 1
@@ -858,7 +867,7 @@ def test_a_class_named_like_a_key_of_the_ap_table_is_refused(reserved: str) -> N
     )
     boxes = (_car("a", 0.9, 0.0, category=reserved),)
     with pytest.raises(EvaluationError, match=rf"category '{reserved}' .*reserved"):
-        evaluate_scene(scene, meta, boxes, DEFAULT_CONFIG, created_utc=CREATED)
+        evaluate_scene(scene, meta, boxes, RULES, created_utc=CREATED)
     # The same name declared in run.json, with no box of that class, is refused too.
     declared = replace(meta, categories=("car", reserved))
     with pytest.raises(EvaluationError, match=rf"category '{reserved}' .*reserved"):
@@ -866,7 +875,7 @@ def test_a_class_named_like_a_key_of_the_ap_table_is_refused(reserved: str) -> N
             _one_car_scene("a"),
             declared,
             (_car("a", 0.9, 0.0),),
-            DEFAULT_CONFIG,
+            RULES,
             created_utc=CREATED,
         )
 
@@ -932,7 +941,7 @@ def test_a_scene_the_model_found_nothing_in_still_counts_its_ground_truth(tmp_pa
     )
     assert written == ("a", "b")
     assert (predictions / "covered" / "b" / "boxes.parquet").is_file()
-    report = evaluate_run(root, predictions, "covered", DEFAULT_CONFIG, created_utc=CREATED)
+    report = evaluate_run(root, predictions, "covered", RULES, created_utc=CREATED)
     assert report.evaluated == ("a", "b") and report.errors == ()
     rows = collect(root, predictions, "covered")
     assert [(row.scene_id, row.output) for row in rows] == [
@@ -961,7 +970,7 @@ def test_an_agent_the_model_found_nothing_for_in_one_scene_still_counts(tmp_path
         replace(_car("b", 0.9, 0.0), agent_id="vehicle"),
     )
     write_run(predictions, "agents", _meta("agents"), rows_in)
-    evaluate_run(root, predictions, "agents", DEFAULT_CONFIG, created_utc=CREATED)
+    evaluate_run(root, predictions, "agents", RULES, created_utc=CREATED)
     rows = collect(root, predictions, "agents")
     assert [(row.scene_id, row.output) for row in rows] == [
         ("a", ("vehicle", "single")),
@@ -973,6 +982,67 @@ def test_an_agent_the_model_found_nothing_for_in_one_scene_still_counts(tmp_path
     assert (rsu_b.values["gt"], rsu_b.values["tp"], rsu_b.values["miss"]) == (1, 0, 1)
     total = aggregate(rows, DEFAULT_CONFIG.thresholds)
     assert (total["gt"], total["tp"], total["miss"]) == (4, 3, 1)
+
+
+def _two_frame_scene(scene_id: str) -> Scene:
+    """One agent with poses at 0 and 100_000; car A at x=0 at time 0, car B at x=10 at 100_000."""
+    agent = Agent(
+        agent_id="vehicle",
+        agent_type=AgentType.VEHICLE,
+        poses=(StampedPose(0, SE3.identity()), StampedPose(100_000, SE3.identity())),
+    )
+    cars = tuple(
+        Annotation(
+            "vehicle",
+            time_us,
+            None,
+            "car",
+            (cx, 0.0, 0.0),
+            (4.0, 2.0, 1.5),
+            SE3.identity(),
+            None,
+            BoxFrame.WORLD,
+        )
+        for time_us, cx in ((0, 0.0), (100_000, 10.0))
+    )
+    return Scene(
+        schema_version=SCHEMA_VERSION,
+        scene_id=scene_id,
+        world_frame="ENU",
+        clock=Clock(unit="us", scale_note="ranking scope test"),
+        agents=(agent,),
+        sensors=(),
+        annotations=cars,
+        objects=(),
+    )
+
+
+@pytest.mark.parametrize(("scope", "expected"), [("pooled", 2 / 3), ("per_frame", 5 / 6)])
+def test_the_ranking_scope_orders_the_ap_walk(tmp_path: Path, scope: str, expected: float) -> None:
+    """docs/eval-spec.md A.5. Car A at time 0 is found at score 0.2; at time 100_000 a stray
+    box scores 0.9 and car B is found at 0.8.
+
+    pooled: fp 0.9, tp 0.8, tp 0.2. Points (1/2, 1/2), (1, 2/3); AP = 2/3.
+    per_frame: time 0 first: tp 0.2, then fp 0.9, tp 0.8. Points (1/2, 1), (1/2, 1/2),
+    (1, 2/3); envelope 1, 2/3, 2/3; AP = 1/2 + 1/2 * 2/3 = 5/6.
+    """
+    root = tmp_path / "scenes"
+    write_scene(_two_frame_scene("s"), root / "s")
+    predictions = tmp_path / "predictions"
+    rows_in = (
+        replace(_car("s", 0.2, 0.0), time_us=0),
+        replace(_car("s", 0.9, 40.0), time_us=100_000),
+        replace(_car("s", 0.8, 10.0), time_us=100_000),
+    )
+    write_run(predictions, "rank", _meta("rank"), rows_in)
+    config = replace(DEFAULT_CONFIG, ranking_scope=scope)
+    evaluate_run(root, predictions, "rank", config, created_utc=CREATED)
+    metrics = read_metrics(predictions / "rank" / "s")
+    assert metrics["config"]["ranking_scope"] == scope  # type: ignore[index]
+    scene_ap = cast(dict[str, object], metrics["outputs"])[0]["ap"]["0.5"]["car"]  # type: ignore[index]
+    assert scene_ap == pytest.approx(expected)
+    rows = collect(root, predictions, "rank")
+    assert pooled_ap(rows, DEFAULT_CONFIG.thresholds)["0.5"]["car"] == pytest.approx(expected)
 
 
 def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None:
@@ -1000,7 +1070,7 @@ def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None
         _car("b", 0.6, 60.0, category="bicycle"),  # predicted only: no ground truth anywhere
     )
     write_run(predictions, meta.run_id, meta, rows)
-    report = evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    report = evaluate_run(root, predictions, meta.run_id, RULES, created_utc=CREATED)
     assert report.errors == ()
     assert report.warnings == ("b: category 'bicycle' is not in run.json categories",)
     collected = collect(root, predictions, meta.run_id)
@@ -1017,9 +1087,11 @@ def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None
     assert total["gt"] == 2 and total["tp"] == 2 and total["fp"] == 2
 
     text = render_report(collected, DEFAULT_CONFIG.thresholds)
+    # spec A.12: the protocol the run was scored under heads every report.
+    assert text.splitlines()[0] == "protocol: ranking pooled, ground truth ego_only"
     main, per_class_table = _tables(text)
     header = main[0]
-    ap_column = header.index("mAP@0.5 all")
+    ap_column = header.index("mAP@0.5 (BEV) all")
     body = {tuple(line[:3]): line for line in main[2:]}
     assert body[("a", "vehicle", "single")][ap_column] == "1.000"
     assert body[("b", "vehicle", "single")][ap_column] == "0.500"
@@ -1027,7 +1099,7 @@ def test_headline_ap_pools_every_detection_across_scenes(tmp_path: Path) -> None
     assert body[("all", "", "")][ap_column] == "0.833"
     assert "0.750" not in body[("all", "", "")]
     assert main[-1][:3] == ["all", "", ""]
-    assert per_class_table[0] == ["agent", "source", "class", "AP@0.5", "AP@0.7"]
+    assert per_class_table[0] == ["agent", "source", "class", "AP@0.5 (BEV)", "AP@0.7 (BEV)"]
     assert per_class_table[2:] == [
         ["vehicle", "single", "bicycle", "n/a", "n/a"],
         ["vehicle", "single", "car", "0.833", "0.833"],
@@ -1042,7 +1114,7 @@ def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) ->
     root, scene = _scenes_root(tmp_path, "coop-a", "coop-b")
     predictions = tmp_path / "predictions"
     meta, boxes = _write_fixture_run(predictions, scene, ("coop-a", "coop-b"))
-    evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    evaluate_run(root, predictions, meta.run_id, RULES, created_utc=CREATED)
     rows = collect(root, predictions, meta.run_id)
     n_outputs = len({(box.agent_id, box.source) for box in boxes})
     assert len(rows) == 2 * n_outputs
@@ -1062,10 +1134,10 @@ def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) ->
         "miss",
         "precision",
         "recall",
-        "mAP@0.5 all",
-        "mAP@0.5 model",
-        "mAP@0.7 all",
-        "mAP@0.7 model",
+        "mAP@0.5 (BEV) all",
+        "mAP@0.5 (BEV) model",
+        "mAP@0.7 (BEV) all",
+        "mAP@0.7 (BEV) model",
         "recovered",
         "lost_by_fusion",
     ]
@@ -1089,7 +1161,7 @@ def test_render_report_has_the_aggregate_row_and_an_ap_column(tmp_path: Path) ->
     assert float(total[recall_column]) == pytest.approx(expected_recall, abs=5e-4)
     # Two copies of one scene pool to the per-scene values; the per-output rows and the
     # mean over outputs differ from a mean of means only in what they pool.
-    ap_column = header.index("mAP@0.5 all")
+    ap_column = header.index("mAP@0.5 (BEV) all")
     for line in output_lines:
         scene_line = next(s for s in scene_lines if s[1:3] == line[1:3])
         assert line[ap_column] == scene_line[ap_column]
@@ -1106,7 +1178,7 @@ def test_the_all_row_counts_a_recovered_box_once_per_agent(tmp_path: Path) -> No
     root, scene = _scenes_root(tmp_path, "coop-a", "coop-b")
     predictions = tmp_path / "predictions"
     meta, _boxes = _write_fixture_run(predictions, scene, ("coop-a", "coop-b"))
-    evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    evaluate_run(root, predictions, meta.run_id, RULES, created_utc=CREATED)
     rows = collect(root, predictions, meta.run_id)
     thresholds = DEFAULT_CONFIG.thresholds
     per_output = {
@@ -1137,9 +1209,9 @@ def test_a_run_whose_scenes_were_evaluated_with_different_configs_is_not_pooled(
     root, scene = _scenes_root(tmp_path, "coop-a", "coop-b")
     predictions = tmp_path / "predictions"
     meta, _boxes = _write_fixture_run(predictions, scene, ("coop-a", "coop-b"))
-    evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    evaluate_run(root, predictions, meta.run_id, RULES, created_utc=CREATED)
     assert len(collect(root, predictions, meta.run_id)) > 0
-    other = replace(DEFAULT_CONFIG, max_range_m=50.0, score_threshold=0.4)
+    other = replace(RULES, max_range_m=50.0, score_threshold=0.4)
     evaluate_run(root, predictions, meta.run_id, other, scene_ids=("coop-b",), created_utc=CREATED)
     with pytest.raises(EvaluationError, match=r"coop-a.*coop-b.*different config"):
         collect(root, predictions, meta.run_id)
@@ -1151,15 +1223,17 @@ def test_a_run_whose_scenes_were_evaluated_with_different_configs_is_not_pooled(
 def test_render_report_shows_a_missing_count_as_n_a() -> None:
     # A truncated metrics.json leaves a count out; the table says so rather than printing 0.
     row = Row(scene_id="s", agent_id="a", source="single", values={"tp": 3, "precision": 0.5})
+    # A row with no recorded config predates the protocol keys (spec A.2).
+    assert render_report([row], (0.5,)).startswith("protocol: legacy (pooled, ego-only)\n\n")
     table = _table(render_report([row], (0.5,)))
     header, body, total = table[0], table[2], table[-1]
     assert body[header.index("tp")] == "3"
     assert body[header.index("gt")] == "n/a"
     assert body[header.index("precision")] == "0.500"
-    assert body[header.index("mAP@0.5 all")] == "n/a"
+    assert body[header.index("mAP@0.5 (BEV) all")] == "n/a"
     assert total[:3] == ["all", "", ""]
     assert total[header.index("tp")] == "3"
-    assert total[header.index("mAP@0.5 all")] == "n/a"
+    assert total[header.index("mAP@0.5 (BEV) all")] == "n/a"
     compare = _table(render_compare([row], [row], (0.5,)))[2]
     assert compare[header.index("tp")] == "+0"
     assert compare[header.index("gt")] == "n/a"
@@ -1169,7 +1243,7 @@ def test_render_compare_shows_zero_deltas_for_the_same_files(tmp_path: Path) -> 
     root, scene = _scenes_root(tmp_path, "coop-a")
     predictions = tmp_path / "predictions"
     meta, _boxes = _write_fixture_run(predictions, scene, ("coop-a",))
-    evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    evaluate_run(root, predictions, meta.run_id, RULES, created_utc=CREATED)
     rows = collect(root, predictions, meta.run_id)
     text = render_compare(rows, rows, DEFAULT_CONFIG.thresholds)
     assert "+0.000" in text
@@ -1198,7 +1272,7 @@ def test_render_compare_lists_rows_of_either_run_and_counts_them() -> None:
     header = main[0]
     tp_column, ap_col, gt_column = (
         header.index("tp"),
-        header.index("mAP@0.5 all"),
+        header.index("mAP@0.5 (BEV) all"),
         header.index("gt"),
     )
     body = {line[0]: line for line in main[2:]}
@@ -1245,8 +1319,8 @@ def test_gt_class_map_renames_ground_truth_before_matching() -> None:
         box_from_rpy=truck.box_from_rpy,
         frame=truck.frame,
     )
-    plain = evaluate_scene(scene, meta, (prediction,), DEFAULT_CONFIG, created_utc=CREATED)
-    mapped_config = parse_config({"gt_class_map": {"truck": "car"}})
+    plain = evaluate_scene(scene, meta, (prediction,), RULES, created_utc=CREATED)
+    mapped_config = replace(RULES, gt_class_map={"truck": "car"})
     mapped = evaluate_scene(scene, meta, (prediction,), mapped_config, created_utc=CREATED)
 
     def uav_totals(result: SceneEvaluation) -> dict[str, object]:
@@ -1268,7 +1342,7 @@ def test_mean_model_averages_only_run_json_categories() -> None:
     cone) counts in the first and not in the second."""
     scene = cooperative_scene()
     meta, boxes = synthetic_predictions(scene)
-    result = evaluate_scene(scene, meta, boxes, DEFAULT_CONFIG, created_utc=CREATED)
+    result = evaluate_scene(scene, meta, boxes, RULES, created_utc=CREATED)
     outputs = cast(list[dict[str, object]], result.metrics["outputs"])
     output = next(o for o in outputs if o["agent_id"] == "vehicle" and o["source"] == "single")
     ap = cast(dict[str, object], cast(dict[str, object], output["ap"])["0.5"])
@@ -1285,13 +1359,13 @@ def test_report_and_compare_show_union_and_model_mean_ap(tmp_path: Path) -> None
     root, scene = _scenes_root(tmp_path, "coop-a")
     predictions = tmp_path / "predictions"
     meta, _boxes = _write_fixture_run(predictions, scene, ("coop-a",))
-    evaluate_run(root, predictions, meta.run_id, DEFAULT_CONFIG, created_utc=CREATED)
+    evaluate_run(root, predictions, meta.run_id, RULES, created_utc=CREATED)
     rows = collect(root, predictions, meta.run_id)
     assert rows[0].model_categories == tuple(meta.categories)
     text = render_report(rows, DEFAULT_CONFIG.thresholds)
     main = _tables(text)[0]
     header = main[0]
-    all_col, model_col = header.index("mAP@0.5 all"), header.index("mAP@0.5 model")
+    all_col, model_col = header.index("mAP@0.5 (BEV) all"), header.index("mAP@0.5 (BEV) model")
     total = main[-1]
     pooled = pooled_ap(rows, DEFAULT_CONFIG.thresholds)["0.5"]
     model_values = [v for k, v in pooled.items() if k in meta.categories and v is not None]
@@ -1300,4 +1374,4 @@ def test_report_and_compare_show_union_and_model_mean_ap(tmp_path: Path) -> None
     assert total[model_col] == f"{sum(model_values) / len(model_values):.3f}"
     assert total[all_col] != total[model_col]
     compare = _tables(render_compare(rows, rows, DEFAULT_CONFIG.thresholds))[0]
-    assert compare[-1][compare[0].index("mAP@0.5 model")] == "+0.000"
+    assert compare[-1][compare[0].index("mAP@0.5 (BEV) model")] == "+0.000"

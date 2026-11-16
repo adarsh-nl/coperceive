@@ -58,7 +58,12 @@ from coperceive.evaluation.report import (
     Row,
     collect,
     config_note,
+    criterion_of,
+    is_legacy,
     partial_note,
+    protocol_block,
+    protocol_label,
+    protocol_of,
     render_compare,
     render_report,
 )
@@ -393,6 +398,15 @@ def _compare(args: argparse.Namespace) -> None:
                 f"run {run_id!r} thresholds {list(other)} differ from "
                 f"{loaded[0][0]!r} {list(thresholds)}"
             )
+    first_id, first_rows = loaded[0]
+    for run_id, rows in loaded[1:]:
+        # AP under another ranking scope or ground truth is another quantity: refuse.
+        if protocol_of(rows) != protocol_of(first_rows) or is_legacy(rows) != is_legacy(first_rows):
+            raise PredictionError(
+                f"runs {first_id!r} and {run_id!r} were evaluated under different protocols "
+                f"({protocol_label(first_rows)} vs {protocol_label(rows)}), so their numbers "
+                "cannot be compared; run `coperceive eval run` again with one config"
+            )
     for run_id, rows in loaded[1:]:
         difference = config_note(loaded[0][0], loaded[0][1], run_id, rows)
         if difference:
@@ -407,7 +421,7 @@ def _compare(args: argparse.Namespace) -> None:
         document = _compare_document(args, root, predictions, loaded, thresholds, names)
         if args.by:
             print()
-            print(render_breakdowns(document), end="")
+            print(render_breakdowns(document, criterion_of(loaded[0][1])), end="")
         if isinstance(args.json, str):
             destination = Path(args.json)
             write_compare(destination, document)
@@ -543,6 +557,8 @@ def _compare_document(
         distance_edges=distance_edges,
         visibility_edges=visibility_edges,
         distance_source=distance_source,
+        ranking_scope=protocol_of(loaded[0][1])[0],
+        protocol=protocol_block(loaded[0][1]),
     )
 
 

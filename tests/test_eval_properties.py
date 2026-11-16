@@ -22,6 +22,7 @@ from __future__ import annotations
 import math
 import random
 from collections import Counter
+from dataclasses import replace
 
 import pytest
 from coperceive.evaluation.matching import FP, IGNORED, TP
@@ -131,9 +132,17 @@ def test_a_false_positive_below_every_score_cannot_change_ap(profile: Profile) -
 
 @pytest.mark.parametrize("profile", PROFILES, ids=_PROFILE_IDS)
 def test_perfect_predictions_give_ap_one(profile: Profile) -> None:
+    """Every output predicts exactly its agent's own annotations.
+
+    Under ego-only ground truth that is the whole ground truth. (A fused output under
+    connected_union is also scored against boxes other agents add; perfect for it
+    would need the union, which tests/test_eval_protocol.py covers.)
+    """
     numbers = 0
     for seed in SEEDS:
-        run = perfect_predictions(random_run(seed, profile), seed)
+        base = random_run(seed, profile)
+        base = replace(base, config=replace(base.config, gt_scope="ego_only"))
+        run = perfect_predictions(base, seed)
         for scene_id, output in _outputs(evaluate_in_memory(run)):
             where = f"seed {seed} {scene_id}/{output.agent_id}/{output.source}"
             has_gt = any(status != STATUS_IGNORED for status in output.gt_status.values())
@@ -186,10 +195,16 @@ def test_moving_the_world_into_map_coordinates_changes_nothing(profile: Profile)
 
 @pytest.mark.parametrize("profile", PROFILES, ids=_PROFILE_IDS)
 def test_doubling_every_length_leaves_an_iou_evaluation_bit_for_bit(profile: Profile) -> None:
-    """Multiplying by 2 is exact in binary, so an IoU evaluation must not move at all."""
+    """Multiplying by 2 is exact in binary, so an IoU evaluation must not move at all.
+
+    Under ego-only ground truth. Under connected_union the same-object pairing that
+    builds a fused output's ground truth has a fixed 2 m floor (docs/eval-spec.md A.9),
+    which does not scale, so doubling is not an invariance there.
+    """
     checked = 0
     for seed in SEEDS:
         run = random_run(seed, profile)
+        run = replace(run, config=replace(run.config, gt_scope="ego_only"))
         if run.config.criterion != CRITERION_IOU_BEV:
             continue
         checked += 1
@@ -207,9 +222,12 @@ def _kept_gt_per_category(run: RunSpec, scene_id: str, output: OutputResult) -> 
     scene = next(scene for scene in run.scenes if scene.scene_id == scene_id)
     rename = run.config.gt_class_map
     kept: Counter[str] = Counter()
-    for row, gt in enumerate(scene.ground_truth):
-        if gt.agent_id == output.agent_id and output.gt_status[row] != STATUS_IGNORED:
-            kept[rename.get(gt.category, gt.category)] += 1
+    # The output's ground-truth set: its agent's own rows, plus under connected_union
+    # the rows connected agents added to a fused output (docs/eval-spec.md A.4).
+    for row, status in output.gt_status.items():
+        if status != STATUS_IGNORED:
+            category = scene.ground_truth[row].category
+            kept[rename.get(category, category)] += 1
     return kept
 
 
@@ -223,7 +241,8 @@ def test_the_counts_add_up(profile: Profile) -> None:
             for scene in run.scenes
             for row, pred in enumerate(scene.predictions)
         }
-        for scene_id, output in _outputs(evaluate_in_memory(run)):
+        scenes = evaluate_in_memory(run)
+        for scene_id, output in _outputs(scenes):
             where = f"seed {seed} {scene_id}/{output.agent_id}/{output.source}"
             totals = output.totals
             predictions = Counter(output.pred_status.values())
@@ -262,16 +281,34 @@ def test_the_counts_add_up(profile: Profile) -> None:
                 assert output.pred_status == output.pred_status_at[display], where
             cooperative = output.cooperative
             assert cooperative.recovered >= 0 and cooperative.lost_by_fusion >= 0, where
+            # The boxes the counts run over (spec A.9): every box of the fused set when
+            # the agent has both outputs. An added box has no single status. The counts
+            # are the agent's, so they are read off its fused output's boxes.
+            fused = next(
+                (
+                    other
+                    for other_scene, other in _outputs(scenes)
+                    if other_scene == scene_id
+                    and (other.agent_id, other.source) == (output.agent_id, "fused")
+                ),
+                output,
+            )
             both = [
                 columns
-                for columns in output.gt_cooperative.values()
-                if columns.status_single is not None and columns.status_fused is not None
+                for columns in fused.gt_cooperative.values()
+                if columns.status_fused is not None
+                and (columns.status_single is not None or columns.added_by is not None)
             ]
-            # recovered - lost_by_fusion is the net change in true positives.
+            # recovered - lost_by_fusion is the net change in true positives over them.
             gained = sum(c.status_fused == STATUS_TP for c in both) - sum(
                 c.status_single == STATUS_TP for c in both
             )
-            assert cooperative.recovered - cooperative.lost_by_fusion == gained, where
+            keys = {(o.agent_id, o.source) for sid, o in _outputs(scenes) if sid == scene_id}
+            if {(output.agent_id, "single"), (output.agent_id, "fused")} <= keys:
+                assert cooperative.recovered - cooperative.lost_by_fusion == gained, where
+            else:
+                # Without both outputs nothing is compared: every count is 0.
+                assert (cooperative.recovered, cooperative.lost_by_fusion) == (0, 0), where
 
 
 # --- the AP walk on its own ---------------------------------------------------------

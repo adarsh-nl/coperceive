@@ -17,6 +17,7 @@ returned or wrote.
 
 from __future__ import annotations
 
+import struct
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from types import MappingProxyType
@@ -24,6 +25,7 @@ from typing import cast
 
 from coperceive.evaluation.config import EvalConfig, threshold_key
 from coperceive.evaluation.evaluate import (
+    GT_AGENT_COLUMN,
     KIND_GT,
     KIND_PREDICTION,
     evaluate_run,
@@ -51,7 +53,10 @@ from coperceive.model import (
     Annotation,
     BoxFrame,
     Clock,
+    Modality,
+    PointCloud,
     Scene,
+    Sensor,
     SharedObject,
     StampedPose,
 )
@@ -81,6 +86,7 @@ from tests.evalcheck.scenario import (
 )
 
 RUN_ID = "evalcheck"
+LIDAR_ID = "lidar"
 CREATED_UTC = "2026-11-15T00:00:00Z"
 _MEAN_KEYS = ("mean", "mean_model")
 
@@ -131,17 +137,38 @@ def product_scene(spec: SceneSpec) -> Scene:
         )
         for gt in spec.ground_truth
     )
+    with_lidar = sorted({sweep.agent_id for sweep in spec.lidar})
+    sensors = tuple(
+        Sensor(
+            sensor_id=LIDAR_ID,
+            agent_id=agent_id,
+            modality=Modality.LIDAR,
+            body_from_sensor=SE3.identity(),
+        )
+        for agent_id in with_lidar
+    )
+    clouds = tuple(
+        PointCloud(
+            agent_id=sweep.agent_id,
+            sensor_id=LIDAR_ID,
+            time_us=sweep.time_us,
+            count=len(sweep.points),
+            xyz_i_f32=b"".join(struct.pack("<4f", x, y, z, 0.0) for x, y, z in sweep.points),
+        )
+        for sweep in spec.lidar
+    )
     return Scene(
         schema_version=SCHEMA_VERSION,
         scene_id=spec.scene_id,
         world_frame="world",
         clock=Clock(unit="us", scale_note="synthetic microseconds"),
         agents=agents,
-        sensors=(),
+        sensors=sensors,
         annotations=annotations,
         objects=tuple(
             SharedObject(track_id, category) for track_id, category in spec.shared_tracks
         ),
+        point_clouds=clouds,
     )
 
 
@@ -178,6 +205,9 @@ def product_config(spec: ConfigSpec) -> EvalConfig:
         max_range_m=spec.max_range_m,
         score_threshold=spec.score_threshold,
         gt_class_map=MappingProxyType(dict(spec.gt_class_map)),
+        ranking_scope=spec.ranking_scope,
+        gt_scope=spec.gt_scope,
+        comm_range_m=spec.comm_range_m,
     )
 
 
@@ -265,12 +295,14 @@ def _output_result(
             seen = _opt_bool(row["seen_by_other_gt"])
             if seen is None:
                 raise TypeError("seen_by_other_gt is null on a gt row")
+            annotated_by = _opt_str(row.get(GT_AGENT_COLUMN))
             gt_cooperative[index] = GtCooperativeResult(
                 status_single=_opt_str(row["status_single"]),
                 status_fused=_opt_str(row["status_fused"]),
                 seen_by_other_gt=seen,
                 other_kind=_opt_str(row["other_kind"]),
                 other_agent_tp=_opt_bool(row["other_agent_tp"]),
+                added_by=None if annotated_by in (None, agent_id) else annotated_by,
             )
             if row["pair_id"] is not None:
                 gt_of_pair[_int(row["pair_id"])] = index
@@ -372,19 +404,26 @@ def _scene_result(
 
 
 def evaluate_in_memory(run: RunSpec) -> tuple[SceneResult, ...]:
-    """``evaluate_scene`` on every scene of ``run`` that has a prediction, in ``scene_id`` order.
+    """``evaluate_scene`` on every scene of ``run``, in ``scene_id`` order.
 
-    A scene without a prediction row has no ``boxes.parquet`` and is skipped by
-    ``evaluate_run``; it is skipped here too so both paths cover the same scenes.
+    The run covers every scene (spec A.0): each is evaluated with the outputs of the
+    run, as ``evaluate_run`` does with ``run_outputs``.
     """
     meta = product_meta(run)
     config = product_config(run.config)
+    ordered = sorted(run.scenes, key=lambda scene: scene.scene_id)
+    outputs = tuple(
+        dict.fromkeys((pred.agent_id, pred.source) for spec in ordered for pred in spec.predictions)
+    )
     results: list[SceneResult] = []
-    for spec in sorted(run.scenes, key=lambda scene: scene.scene_id):
-        if not spec.predictions:
-            continue
+    for spec in ordered:
         evaluation = evaluate_scene(
-            product_scene(spec), meta, product_boxes(spec), config, created_utc=CREATED_UTC
+            product_scene(spec),
+            meta,
+            product_boxes(spec),
+            config,
+            created_utc=CREATED_UTC,
+            outputs=outputs,
         )
         results.append(
             _scene_result(
@@ -434,7 +473,9 @@ def evaluate_on_disk(run: RunSpec, root: Path) -> RunResult:
         write_scene(product_scene(spec), scenes_root / spec.scene_id)
     meta = product_meta(run)
     boxes = [box for spec in run.scenes for box in product_boxes(spec)]
-    write_run(predictions_root, RUN_ID, meta, boxes)
+    write_run(
+        predictions_root, RUN_ID, meta, boxes, scene_ids=[spec.scene_id for spec in run.scenes]
+    )
     report = evaluate_run(
         scenes_root,
         predictions_root,
@@ -445,7 +486,7 @@ def evaluate_on_disk(run: RunSpec, root: Path) -> RunResult:
     if report.errors:
         raise AssertionError(f"evaluate_run reported errors: {report.errors}")
     thresholds = tuple(run.config.thresholds)
-    columns = [*read_matches_columns(), *status_at_columns(len(thresholds))]
+    columns = [*read_matches_columns(), *status_at_columns(len(thresholds)), GT_AGENT_COLUMN]
     scenes: list[SceneResult] = []
     for scene_id in sorted(report.evaluated):
         directory = scene_output_dir(predictions_root, RUN_ID, scene_id)
