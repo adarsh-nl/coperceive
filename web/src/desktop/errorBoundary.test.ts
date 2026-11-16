@@ -93,5 +93,11 @@ test("unhandledrejection is recorded and the panel still works", async () => {
   const recorded = (dom.window as unknown as { __COPERCEIVE_LAST_ERROR__?: { message: string } })
     .__COPERCEIVE_LAST_ERROR__;
   assert.equal(recorded?.message, "background promise exploded");
+
+  console.error("console diagnostic probe", 42);
+  const consoleErrors = (dom.window as unknown as { __COPERCEIVE_CONSOLE_ERRORS__?: string[] })
+    .__COPERCEIVE_CONSOLE_ERRORS__;
+  assert.ok(Array.isArray(consoleErrors));
+  assert.ok(consoleErrors.some((entry) => entry.includes("console diagnostic probe 42")));
   uninstall();
 });

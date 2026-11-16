@@ -14,7 +14,6 @@ import {
   historyStateLabel,
   historyTiming,
   reproPreviewLines,
-  reproPreviewLines,
   isJobActive,
   jobStateLabel,
   metricsRows,

@@ -141,9 +141,5 @@ pub fn get_servers_file_path() -> PathBuf {
 }
 
 pub fn resolve_python_candidates(res_dir: &Path) -> Vec<PathBuf> {
-    vec![
-        res_dir.join("resources").join("python").join("bin").join("python3"),
-        res_dir.join("python").join("bin").join("python3"),
-        res_dir.join("python").join("install").join("bin").join("python3"),
-    ]
+    super::resolve_python_candidates_for_layout(res_dir, crate::remote_static::OsLayout::MacOS)
 }

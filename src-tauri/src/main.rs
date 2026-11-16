@@ -60,6 +60,8 @@ pub struct AppState {
     pub pending_dataset_prepare:
         Mutex<Option<coperceive_desktop::dataset_jobs::PendingPrepare>>,
     pub startup_crash: Mutex<Option<serde_json::Value>>,
+    pub validated_scenes_this_run: Mutex<std::collections::HashSet<String>>,
+    pub auto_connect_state: Mutex<serde_json::Value>,
 }
 
 impl Default for AppState {
@@ -82,7 +84,51 @@ impl Default for AppState {
             pending_update: Mutex::new(None),
             pending_dataset_prepare: Mutex::new(None),
             startup_crash: Mutex::new(None),
+            validated_scenes_this_run: Mutex::new(std::collections::HashSet::new()),
+            auto_connect_state: Mutex::new(serde_json::json!({ "phase": "idle" })),
         }
+    }
+}
+
+fn set_auto_connect_state(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    phase: &str,
+    detail: serde_json::Value,
+) {
+    let payload = serde_json::json!({
+        "phase": phase,
+        "elapsed_ms": state.startup_instant.elapsed().as_millis() as u64,
+        "detail": detail,
+    });
+    if let Ok(mut lock) = state.auto_connect_state.lock() {
+        *lock = payload.clone();
+    }
+    println!("[auto-connect] state={}", payload);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
+    if let Some(main) = app.get_webview_window("main") {
+        let json = serde_json::to_string(&payload).unwrap_or_else(|_| "null".to_string());
+        let _ = main.eval(&format!("window.__COPERCEIVE_AUTOCONNECT_STATE__ = {json};"));
+    }
+}
+
+/// Disconnects any active remote session off the `state.remote` mutex in a
+/// background thread with a bounded timeout so switching to a local scene
+/// never blocks on SSH teardown.
+fn disconnect_remote_in_background(state: &AppState) {
+    let existing = state.remote.lock().ok().and_then(|mut lock| lock.take());
+    if let Ok(mut current) = state.remote_key.lock() {
+        *current = None;
+    }
+    if let Some(mut remote) = existing {
+        std::thread::spawn(move || {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                let _ = remote.disconnect();
+                let _ = tx.send(());
+            });
+            let _ = rx.recv_timeout(std::time::Duration::from_secs(5));
+        });
     }
 }
 
@@ -102,20 +148,23 @@ pub struct HealthPayload {
     pub server_version: Option<String>,
 }
 
-/// Resolves the bundled python-build-standalone interpreter from the Tauri resource directory.
-/// Falls back to dev python if running unbundled.
+/// Resolves the bundled python-build-standalone interpreter from the Tauri resource directory
+/// or, when Tauri's `resource_dir()` fails (e.g. macOS symlinked app paths), from `current_exe()`.
+/// Falls back to `COPERCEIVE_PYTHON` or dev python if running unbundled.
 fn resolve_python_binary(app: &tauri::AppHandle) -> PathBuf {
     use tauri::Manager;
 
-    if let Ok(res_dir) = app.path().resource_dir() {
-        remote_static::set_resource_dir(res_dir.clone());
-        // Pinned python-build-standalone inside Tauri resources
-        let candidates = platform::resolve_python_candidates(&res_dir);
-        for candidate in &candidates {
-            if candidate.is_file() {
-                return candidate.clone();
-            }
-        }
+    let tauri_res_dir = app.path().resource_dir().ok();
+    let current_exe = std::env::current_exe().ok();
+    if let Some((python_bin, matched_res_dir)) = platform::resolve_bundled_python(
+        tauri_res_dir.as_deref(),
+        current_exe.as_deref(),
+    ) {
+        remote_static::set_resource_dir(matched_res_dir);
+        return python_bin;
+    }
+    if let Some(res_dir) = tauri_res_dir {
+        remote_static::set_resource_dir(res_dir);
     }
 
     if let Ok(env_py) = std::env::var("COPERCEIVE_PYTHON") {
@@ -513,7 +562,7 @@ async fn switch_data_root(
     let new_token = new_session.token.clone();
 
     // Poll until healthy
-    if let Err(e) = reqwest_like_poll(&new_origin, &new_token, Duration::from_secs(60)) {
+    if let Err(e) = new_session.wait_until_healthy(Duration::from_secs(60)) {
         new_session.preserve_log = true;
         let _ = new_session.stop();
         let err_msg = format!("Failed to start sidecar for new dataset: {}", e);
@@ -536,7 +585,11 @@ async fn switch_data_root(
         if let Ok(mut current) = state.stream_key.lock() {
             *current = None;
         }
+        if let Ok(mut scenes) = state.dataset_scenes.lock() {
+            *scenes = serde_json::Value::Null;
+        }
     }
+    disconnect_remote_in_background(&state);
 
     if let Ok(lock) = state.controller_config.lock() {
         if let Some(ref cfg) = *lock {
@@ -551,6 +604,8 @@ async fn switch_data_root(
         persistent.last_scene_id = None;
         persistent.last_sample_index = None;
         persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
         state::add_recent_root(&mut persistent, &new_path_str);
         let _ = state::save_state(&persistent);
 
@@ -1225,6 +1280,15 @@ async fn start_local_session(
     state: &AppState,
     data_root: String,
 ) -> Result<SessionPayload, String> {
+    start_local_session_inner(app, state, data_root, false).await
+}
+
+async fn start_local_session_inner(
+    app: &tauri::AppHandle,
+    state: &AppState,
+    data_root: String,
+    is_restore: bool,
+) -> Result<SessionPayload, String> {
     let root_path = PathBuf::from(&data_root);
     if let Err(msg) = state::validate_dataset_root(&root_path) {
         return Err(msg);
@@ -1239,9 +1303,29 @@ async fn start_local_session(
         if let Ok(mut current) = state.stream_key.lock() {
             *current = None;
         }
+        if let Ok(mut scenes) = state.dataset_scenes.lock() {
+            *scenes = serde_json::Value::Null;
+        }
     }
+    disconnect_remote_in_background(&state);
 
     let python_bin = resolve_python_binary(app);
+    let maps_root = library_maps_root();
+    let cwd = std::env::current_dir().ok();
+    let path_len = std::env::var_os("PATH").map(|p| p.len()).unwrap_or(0);
+    set_auto_connect_state(
+        app,
+        state,
+        "spawning_sidecar",
+        serde_json::json!({
+            "python_bin": python_bin.display().to_string(),
+            "python_exists": python_bin.is_file(),
+            "data_root": data_root,
+            "maps_root": maps_root.as_ref().map(|p| p.display().to_string()),
+            "cwd": cwd.as_ref().map(|p| p.display().to_string()),
+            "path_len": path_len,
+        }),
+    );
     let mut extra_args = Vec::new();
     if let Some(pred_dir) = coperceive_desktop::demo::demo_predictions_for_path(&root_path) {
         extra_args.push("--predictions".to_string());
@@ -1249,7 +1333,7 @@ async fn start_local_session(
     }
 
     let mut session =
-        SidecarSession::spawn_with_args(&python_bin, &root_path, library_maps_root().as_deref(), None, &extra_args)
+        SidecarSession::spawn_with_args(&python_bin, &root_path, maps_root.as_deref(), None, &extra_args)
         .map_err(|e| format!("Failed to spawn local sidecar: {}", e))?;
 
     let origin = format!("http://127.0.0.1:{}", session.port);
@@ -1263,7 +1347,29 @@ async fn start_local_session(
 
     // Poll until healthy (up to 60 seconds)
     let start_time = Instant::now();
-    if let Err(e) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+    set_auto_connect_state(
+        app,
+        state,
+        "polling_health",
+        serde_json::json!({
+            "port": session.port,
+            "alive": session.is_alive(),
+        }),
+    );
+    if let Err(e) = session.wait_until_healthy(Duration::from_secs(60)) {
+        let alive_after_timeout = session.is_alive();
+        set_auto_connect_state(
+            app,
+            state,
+            "error",
+            serde_json::json!({
+                "stage": "polling_health",
+                "port": session.port,
+                "alive": alive_after_timeout,
+                "poll_elapsed_ms": start_time.elapsed().as_millis() as u64,
+                "error": e,
+            }),
+        );
         // Prevent deletion of log on failed start
         session.preserve_log = true;
         let mut log_tail = String::new();
@@ -1285,11 +1391,21 @@ async fn start_local_session(
             format!("Last 20 lines of server log ({}):\n{}", session.log_path.display(), log_tail)
         };
         let _ = session.stop();
-        return Err(format!("Timed out waiting for local serve: {}\n\n{}", e, tail_msg));
+        return Err(format!("Timed out waiting for local serve (alive={}): {}\n\n{}", alive_after_timeout, e, tail_msg));
     }
 
     let elapsed = start_time.elapsed();
+    set_auto_connect_state(
+        app,
+        state,
+        "health_ready",
+        serde_json::json!({
+            "port": session.port,
+            "poll_elapsed_ms": elapsed.as_millis() as u64,
+        }),
+    );
     println!("[local-serve] Local server started and became healthy in {:.2?}", elapsed);
+    let _ = std::io::Write::flush(&mut std::io::stdout());
     {
         let log_dir = platform::get_log_dir();
         let _ = fs::create_dir_all(&log_dir);
@@ -1303,6 +1419,13 @@ async fn start_local_session(
     // Persist new root to state.json and update recent_roots
     {
         let mut persistent = state::load_state();
+        if !is_restore || persistent.last_data_root.as_deref() != Some(data_root.as_str()) {
+            persistent.last_scene_id = None;
+            persistent.last_sample_index = None;
+            persistent.last_timestamp_us = None;
+            persistent._legacy_timestamp_ns = None;
+            persistent.agent_visibility = None;
+        }
         persistent.last_data_root = Some(data_root.clone());
         state::add_recent_root(&mut persistent, &data_root);
         let _ = state::save_state(&persistent);
@@ -1316,11 +1439,29 @@ async fn start_local_session(
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
 
     // Open viewer window at session.origin with initialization_script
+    set_auto_connect_state(
+        app,
+        state,
+        "opening_viewer",
+        serde_json::json!({ "origin": origin }),
+    );
     if let Err(e) = open_viewer_window(app, &origin, &token, &data_root, ctrl_port, state, None) {
+        set_auto_connect_state(
+            app,
+            state,
+            "error",
+            serde_json::json!({ "stage": "opening_viewer", "error": e }),
+        );
         session.preserve_log = true;
         let _ = session.stop();
         return Err(e);
     }
+    set_auto_connect_state(
+        app,
+        state,
+        "connected",
+        serde_json::json!({ "origin": origin }),
+    );
 
     let payload = SessionPayload {
         origin,
@@ -1412,7 +1553,7 @@ fn import_from_folder(
 ) -> Result<(), String> {
     use coperceive_desktop::pack::scene_pack_args;
     use std::io::{BufRead, BufReader};
-    use std::process::{Command, Stdio};
+    use std::process::Stdio;
     use tauri::Emitter;
 
     {
@@ -1436,7 +1577,7 @@ fn import_from_folder(
         griffin_root.as_deref(),
     )?;
     let python = resolve_python_binary(&app);
-    let mut child = Command::new(&python)
+    let mut child = platform::python_command(&python)
         .args(&args)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -1557,7 +1698,7 @@ async fn list_carla_maps(app: tauri::AppHandle) -> Result<serde_json::Value, Str
             .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
         let maps_root = PathBuf::from(library_root).join("maps");
         let python = resolve_python_binary(&app);
-        let output = std::process::Command::new(&python)
+        let output = platform::python_command(&python)
             .args([
                 "-m", "coperceive.cli", "maps", "list",
                 "--maps", &maps_root.to_string_lossy(),
@@ -1582,7 +1723,7 @@ async fn install_carla_map(
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{BufRead, BufReader, Read};
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         use tauri::Emitter;
         let persistent = state::load_state();
         let library_root = persistent
@@ -1593,7 +1734,7 @@ async fn install_carla_map(
             .map_err(|error| format!("Could not open the library root: {error}"))?;
         let maps_root = library_root.join("maps");
         let python = resolve_python_binary(&app);
-        let mut child = Command::new(&python)
+        let mut child = platform::python_command(&python)
             .args([
                 "-m", "coperceive.cli", "maps", "install",
                 "--town", &town,
@@ -1658,7 +1799,7 @@ async fn remove_carla_map(app: tauri::AppHandle, town: String) -> Result<(), Str
             .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
         let maps_root = PathBuf::from(library_root).join("maps");
         let python = resolve_python_binary(&app);
-        let output = std::process::Command::new(&python)
+        let output = platform::python_command(&python)
             .args([
                 "-m", "coperceive.cli", "maps", "remove",
                 "--town", &town,
@@ -1684,7 +1825,7 @@ async fn download_town_map(
 ) -> Result<serde_json::Value, String> {
     tauri::async_runtime::spawn_blocking(move || {
         use std::io::{BufRead, BufReader, Read};
-        use std::process::{Command, Stdio};
+        use std::process::Stdio;
         use tauri::Emitter;
 
         let persistent = state::load_state();
@@ -1709,7 +1850,7 @@ async fn download_town_map(
         }
         let maps_root = library_root.join("maps");
         let python = resolve_python_binary(&app);
-        let mut child = Command::new(&python)
+        let mut child = platform::python_command(&python)
             .args([
                 "-m",
                 "coperceive.cli",
@@ -1801,11 +1942,29 @@ fn get_library_scenes(
         }
     }
     scenes.sort_by(|a, b| a.scene_id.cmp(&b.scene_id));
-    let pending = scenes
-        .iter()
-        .filter(|scene| !coperceive_desktop::demo::is_demo_path(Path::new(&scene.path)))
-        .map(|scene| (scene.path.clone(), scene.is_valid.is_some()))
-        .collect();
+    let pending = {
+        use tauri::Manager;
+        let app_state = app.state::<Arc<AppState>>();
+        let mut seen = app_state
+            .validated_scenes_this_run
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        scenes
+            .iter()
+            .filter(|scene| {
+                !coperceive_desktop::demo::is_demo_path(Path::new(&scene.path))
+                    || scene.duration_s.is_none()
+            })
+            .map(|scene| {
+                let needs_duration_backfill =
+                    scene.is_valid.is_some() && scene.duration_s.is_none();
+                let already_tried = needs_duration_backfill && !seen.insert(scene.path.clone());
+                let cached =
+                    scene.is_valid.is_some() && (scene.duration_s.is_some() || already_tried);
+                (scene.path.clone(), cached)
+            })
+            .collect()
+    };
     spawn_library_validation(app, pending);
     Ok(scenes)
 }
@@ -1878,8 +2037,6 @@ fn dataset_dry_run(
     dataset_id: String,
     preset_id: String,
 ) -> Result<serde_json::Value, String> {
-    use std::process::Command;
-
     // Test-only: the e2e cannot wait for the Hugging Face tree listing, so the
     // deterministic fake job returns the same JSON shape without network access.
     // Inert unless COPERCEIVE_TEST_FAKE_DATASET_JOB is set in test mode.
@@ -1894,7 +2051,7 @@ fn dataset_dry_run(
         .library_root
         .unwrap_or_else(|| state::default_library_root().to_string_lossy().into_owned());
     let python = resolve_python_binary(&app);
-    let output = Command::new(&python)
+    let output = platform::python_command(&python)
         .args([
             "-m",
             "coperceive.cli",
@@ -1975,7 +2132,7 @@ fn start_dataset_job(
         if accept_terms {
             cmd_args.push("--accept-terms".to_string());
         }
-        let mut command = Command::new(&python);
+        let mut command = platform::python_command(&python);
         command.args(&cmd_args);
         command
     };
@@ -2068,7 +2225,7 @@ fn resume_dataset_job() -> Result<(), String> {
 #[tauri::command]
 fn dataset_catalog(app: tauri::AppHandle) -> Result<serde_json::Value, String> {
     let python = resolve_python_binary(&app);
-    let output = std::process::Command::new(&python)
+    let output = platform::python_command(&python)
         .args(["-m", "coperceive.cli", "dataset", "catalog"])
         .output()
         .map_err(|err| format!("Could not read the dataset list. Try again. {err}"))?;
@@ -2093,8 +2250,6 @@ fn run_scene_validation(
     python: &Path,
     scene_path: &str,
 ) -> Result<(bool, String, String, SceneTiming), String> {
-    use std::process::Command;
-
     let report_dir = std::env::temp_dir().join(format!(
         "coperceive-validate-{}-{}",
         std::process::id(),
@@ -2107,7 +2262,7 @@ fn run_scene_validation(
         .map_err(|err| format!("Failed to create the validation report directory: {err}"))?;
     let json_path = report_dir.join("report.json");
     let markdown_path = report_dir.join("report.md");
-    let output = Command::new(python)
+    let output = platform::python_command(python)
         .args(["-m", "coperceive.cli", "validate", scene_path])
         .arg("--json")
         .arg(&json_path)
@@ -2951,12 +3106,22 @@ async fn dataset_status(
     .map_err(|error| format!("Dataset status could not finish: {error}"))?
 }
 
+fn resolve_viewer_dataset_scenes(has_remote: bool, dataset: serde_json::Value) -> serde_json::Value {
+    if has_remote {
+        dataset
+    } else {
+        serde_json::Value::Null
+    }
+}
+
 /// The open cluster dataset's scenes (id, state) from the dataset view, so the
 /// viewer's scene list can show the ones that are not prepared yet.
 #[tauri::command]
 fn set_viewer_dataset_scenes(state: tauri::State<'_, Arc<AppState>>, dataset: serde_json::Value) {
+    let has_remote = state.stream_key.lock().ok().and_then(|k| k.clone()).is_some()
+        || state.remote_key.lock().ok().and_then(|k| k.clone()).is_some();
     if let Ok(mut scenes) = state.dataset_scenes.lock() {
-        *scenes = dataset;
+        *scenes = resolve_viewer_dataset_scenes(has_remote, dataset);
     }
 }
 
@@ -3116,6 +3281,15 @@ async fn dataset_open(
             _ => None,
         }
     };
+    {
+        let mut persistent = state::load_state();
+        persistent.last_scene_id = scene_id.clone();
+        persistent.last_sample_index = None;
+        persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
+        let _ = state::save_state(&persistent);
+    }
     if let Some((origin, token)) = reusable {
         if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
             open_viewer_window(&app, &origin, &token, &cache, ctrl_port, state.inner(), query.as_deref())?;
@@ -3182,7 +3356,7 @@ async fn dataset_open(
             cfg.set_allowed_origin(origin.clone());
         }
     }
-    if let Err(error) = reqwest_like_poll(&origin, &token, Duration::from_secs(60)) {
+    if let Err(error) = session.wait_until_healthy(Duration::from_secs(60)) {
         session.preserve_log = true;
         let tail = fs::read_to_string(&session.log_path)
             .map(|content| {
@@ -3451,6 +3625,15 @@ async fn remote_connect(
             _ => None,
         }
     };
+    {
+        let mut persistent = state::load_state();
+        persistent.last_scene_id = scene_id.clone();
+        persistent.last_sample_index = None;
+        persistent.last_timestamp_us = None;
+        persistent._legacy_timestamp_ns = None;
+        persistent.agent_visibility = None;
+        let _ = state::save_state(&persistent);
+    }
     if let Some((origin, token)) = reusable {
         if !show_scene_in_viewer(&app, state.inner(), &origin, scene_id.as_deref()) {
             let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
@@ -3660,47 +3843,6 @@ async fn remote_scan(
     .map_err(|e| format!("The folder scan could not finish: {e}"))?
 }
 
-/// Simple loopback HTTP polling using TcpStream without external HTTP client crate.
-/// Reads until headers end (\r\n\r\n) rather than assuming a single buffer read.
-fn reqwest_like_poll(origin: &str, token: &str, timeout: Duration) -> Result<(), String> {
-    use std::io::{Read, Write};
-    use std::net::TcpStream;
-
-    let port_str = origin.split(':').last().unwrap_or("8731");
-    let port: u16 = port_str.parse().unwrap_or(8731);
-    let deadline = Instant::now() + timeout;
-
-    while Instant::now() < deadline {
-        if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", port)) {
-            let _ = stream.set_read_timeout(Some(Duration::from_millis(800)));
-            let _ = stream.set_write_timeout(Some(Duration::from_millis(800)));
-            let req = format!(
-                "GET /api/health HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nAuthorization: Bearer {}\r\nConnection: close\r\n\r\n",
-                port, token
-            );
-            if stream.write_all(req.as_bytes()).is_ok() {
-                let mut resp_bytes = Vec::new();
-                let mut chunk = [0u8; 1024];
-                while let Ok(n) = stream.read(&mut chunk) {
-                    if n == 0 {
-                        break;
-                    }
-                    resp_bytes.extend_from_slice(&chunk[..n]);
-                    if resp_bytes.windows(4).any(|w| w == b"\r\n\r\n") {
-                        break;
-                    }
-                }
-                let resp = String::from_utf8_lossy(&resp_bytes);
-                if resp.contains("200 OK") || resp.contains("HTTP/1.1 200") || resp.contains("HTTP/1.0 200") {
-                    return Ok(());
-                }
-            }
-        }
-        std::thread::sleep(Duration::from_millis(150));
-    }
-    Err("Health check probe timed out".to_string())
-}
-
 fn handle_fatal_error(err_msg: &str) {
     platform::handle_fatal_error(err_msg);
 }
@@ -3854,6 +3996,12 @@ fn main() {
                 .replace('"', "\\\"");
             let import_js = import_source.replace('\\', "\\\\").replace('"', "\\\"");
             let update_js = update_url.replace('\\', "\\\\").replace('"', "\\\"");
+            let auto_connect_js = state
+                .auto_connect_state
+                .lock()
+                .ok()
+                .and_then(|v| serde_json::to_string(&*v).ok())
+                .unwrap_or_else(|| "null".to_string());
             let titlebar_mode = if cfg!(target_os = "macos") { "overlay" } else { "native" };
             let os_name = if cfg!(target_os = "windows") {
                 "windows"
@@ -3873,6 +4021,7 @@ fn main() {
                 window.__COPERCEIVE_FORCE_MOTION__ = {force};
                 window.__COPERCEIVE_TEST_IMPORT_SOURCE__ = "{import_js}";
                 window.__COPERCEIVE_UPDATE_URL__ = "{update_js}";
+                window.__COPERCEIVE_AUTOCONNECT_STATE__ = {auto_connect_js};
                 window.dispatchEvent(new Event("coperceive-test-import"));
                 if ({force}) window.dispatchEvent(new Event("coperceive-force-motion"));"#,
             ));
@@ -4468,10 +4617,19 @@ fn main() {
                 } else if state::validate_dataset_root(&root_path).is_ok() {
                     let h = handle.clone();
                     let st = state.clone();
+                    set_auto_connect_state(
+                        &handle,
+                        &state,
+                        "validating_root_ok",
+                        serde_json::json!({
+                            "root": root_str,
+                            "from_saved_state": from_saved_state,
+                        }),
+                    );
                     std::thread::spawn(move || {
                         std::thread::sleep(Duration::from_millis(300));
                         tauri::async_runtime::block_on(async move {
-                            match start_local_session(&h, &st, root_str).await {
+                            match start_local_session_inner(&h, &st, root_str, true).await {
                                 Ok(payload) => {
                                     println!("[auto-connect] Successfully connected: origin={}", payload.origin);
                                     let _ = std::io::Write::flush(&mut std::io::stdout());
@@ -4495,6 +4653,12 @@ fn main() {
                                     }
                                 }
                                 Err(err) => {
+                                    set_auto_connect_state(
+                                        &h,
+                                        &st,
+                                        "error",
+                                        serde_json::json!({ "stage": "start_local_session_inner", "error": err }),
+                                    );
                                     eprintln!("[auto-connect] Error connecting to last root: {err}");
                                     let _ = std::io::Write::flush(&mut std::io::stderr());
                                     if let Some(main) = h.get_webview_window("main") {
@@ -4505,6 +4669,12 @@ fn main() {
                         });
                     });
                 } else {
+                    set_auto_connect_state(
+                        &handle,
+                        &state,
+                        "invalid_root",
+                        serde_json::json!({ "root": root_str }),
+                    );
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.show();
                     }
@@ -4953,5 +5123,26 @@ fn main() {
             _ => {}
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::resolve_viewer_dataset_scenes;
+
+    #[test]
+    fn dataset_scenes_is_cleared_when_no_remote_session_is_active() {
+        let cluster_dataset = serde_json::json!({
+            "scenes": [{ "scene_id": "train_0000", "state": "ready" }],
+            "about": { "label": "V2XSET train", "server": "HPC" }
+        });
+        assert_eq!(
+            resolve_viewer_dataset_scenes(false, cluster_dataset.clone()),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            resolve_viewer_dataset_scenes(true, cluster_dataset.clone()),
+            cluster_dataset
+        );
+    }
 }
 
