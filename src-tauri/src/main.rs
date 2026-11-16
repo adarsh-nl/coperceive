@@ -461,9 +461,11 @@ fn open_viewer_window(
         }
     }
 
-    if let Ok(mut lock) = state.viewer_origin.lock() {
-        *lock = Some(origin.to_string());
-    }
+    coperceive_desktop::controller::sync_viewer_origin(
+        &state.viewer_origin,
+        &state.controller_config,
+        origin,
+    );
 
     let hash = match query {
         Some(query) if !query.is_empty() => format!("{}/#/viewer?{}", origin, query),
@@ -3973,6 +3975,11 @@ fn show_scene_in_viewer(app: &tauri::AppHandle, state: &AppState, origin: &str, 
     let Some(viewer) = app.get_webview_window("viewer").filter(|_| same_origin) else {
         return false;
     };
+    coperceive_desktop::controller::sync_viewer_origin(
+        &state.viewer_origin,
+        &state.controller_config,
+        origin,
+    );
     if let Some(scene) = scene_id {
         let hash = serde_json::to_string(&format!("#/viewer?scene={}", urlencoding_component(scene)))
             .unwrap_or_else(|_| "\"#/viewer\"".to_string());
