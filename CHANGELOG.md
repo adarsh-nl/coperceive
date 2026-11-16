@@ -81,7 +81,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Labels:** `eval report`, `eval compare`, its `--by` breakdowns and the paper export say `mAP@0.5 (BEV)` and `AP@0.5 (BEV)`. Under `criterion: centre` they say `AP@<t> m (centre)`.
   - **Protocol line:** `eval report` and `eval compare` open with a `protocol:` line.
   - **Files:** `metrics.json` carries `"iou": "bev"`. `compare.json` carries a `protocol` object (optional in its schema). The paper export names the protocol in each table caption.
-  - **Refusal:** `eval compare` refuses two runs scored under different protocols, or a legacy run beside a current one.
+  - **Refusal:** `eval compare` refuses two runs scored under a different ranking scope, ground-truth scope or communication range, or a legacy run beside a current one.
   - **Not yet labelled:** the app's scores view. That file is the viewer's, and the change is routed.
   - **Numbers that change:** none. Column names and the first line of the report text change, so scripts that read `eval report` columns by name need the new names.
   - **On the demo run:** no number changes.

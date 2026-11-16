@@ -59,7 +59,6 @@ from coperceive.evaluation.report import (
     collect,
     config_note,
     criterion_of,
-    is_legacy,
     partial_note,
     protocol_block,
     protocol_label,
@@ -400,8 +399,9 @@ def _compare(args: argparse.Namespace) -> None:
             )
     first_id, first_rows = loaded[0]
     for run_id, rows in loaded[1:]:
-        # AP under another ranking scope or ground truth is another quantity: refuse.
-        if protocol_of(rows) != protocol_of(first_rows) or is_legacy(rows) != is_legacy(first_rows):
+        # AP under another protocol is another quantity: refuse. The label names the
+        # ranking scope, the ground truth, its range under connected_union, and legacy.
+        if protocol_label(rows) != protocol_label(first_rows):
             raise PredictionError(
                 f"runs {first_id!r} and {run_id!r} were evaluated under different protocols "
                 f"({protocol_label(first_rows)} vs {protocol_label(rows)}), so their numbers "

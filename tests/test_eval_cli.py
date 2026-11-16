@@ -235,6 +235,59 @@ def test_compare_says_when_two_runs_were_evaluated_with_different_configs(
     assert "note:" not in capsys.readouterr().out
 
 
+def test_compare_refuses_runs_scored_under_different_protocols(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """docs/eval-spec.md A.2, A.12: ranking_scope, gt_scope and comm_range_m are the
+    protocol. AP under another protocol is another quantity, so eval compare refuses
+    it, including a different communication range, which it used to pass with a note.
+    """
+    import json
+
+    root, jsonl = _prepare(tmp_path)
+    _import(root, jsonl)
+    main(
+        [
+            "predictions",
+            "import",
+            str(jsonl),
+            "--run",
+            "second",
+            "--root",
+            str(root),
+            "--score-note",
+            "constant",
+        ]
+    )
+    main(["eval", "run", "synthetic", "--root", str(root)])
+
+    def second_with(config_text: str) -> None:
+        config = tmp_path / "eval.yaml"
+        config.write_text(config_text, encoding="utf-8")
+        main(["eval", "run", "second", "--root", str(root), "--config", str(config)])
+        capsys.readouterr()
+
+    def refused() -> str:
+        with pytest.raises(SystemExit) as caught:
+            main(["eval", "compare", "synthetic", "second", "--root", str(root)])
+        assert caught.value.code == 1
+        return capsys.readouterr().err
+
+    second_with("ranking_scope: pooled\n")
+    assert "different protocols" in refused()
+    second_with("comm_range_m: 50\n")
+    err = refused()
+    assert "connected_union (70 m)" in err and "connected_union (50 m)" in err
+    # A run evaluated before the protocol keys is legacy and is not set beside a current one.
+    second_with("")
+    for metrics in (root / "predictions" / "second").glob("*/metrics.json"):
+        document = json.loads(metrics.read_text(encoding="utf-8"))
+        for key in ("ranking_scope", "gt_scope", "comm_range_m"):
+            document["config"].pop(key)
+        metrics.write_text(json.dumps(document), encoding="utf-8")
+    assert "legacy (pooled, ego-only)" in refused()
+
+
 def test_eval_run_with_explicit_predictions_root_config_and_scenes(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
