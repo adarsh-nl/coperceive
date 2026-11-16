@@ -105,24 +105,40 @@ def _serve(bundle_root: Path) -> Generator[tuple[str, list[str]], None, None]:
 def _open_page(browser: Browser, origin: str) -> Page:
     page = browser.new_page(viewport={"width": 1400, "height": 900})
     requests: list[str] = []
+    responses: list[tuple[str, int]] = []
     page._bundle_requests = requests  # type: ignore[attr-defined]
+    page._bundle_responses = responses  # type: ignore[attr-defined]
     page.add_init_script("window.__COPERCEIVE_TEST_ENV__ = true;")
     page.on("request", lambda request: requests.append(request.url))
+    page.on("response", lambda response: responses.append((response.url, response.status)))
     page.goto(f"{origin}/#/viewer", wait_until="networkidle")
     page.wait_for_selector("#scene-id", timeout=30000)
+    birdseye = page.get_by_role("button", name="Bird's-eye")
+    if birdseye.count():
+        birdseye.click()
     page.wait_for_function(
-        "() => (window.__COPERCEIVE_RENDERED_TIMES__ || []).length > 0", timeout=30000
+        "() => { const c = window.__COPERCEIVE_SCENE_COUNTS__?.(); return Boolean(c && c.boxes > 0); }",
+        timeout=30000,
     )
     return page
 
 
-def _latest(page: Page) -> dict[str, object]:
-    stats = page.evaluate("() => window.__COPERCEIVE_RENDERED_TIMES__ || []")
-    return stats[-1] if stats else {}
+def _banner_text(page: Page) -> str:
+    banner = page.locator("[data-testid='bundle-banner']")
+    assert banner.count() == 1
+    return banner.text_content() or ""
+
+
+def _counts(page: Page) -> dict[str, int]:
+    return page.evaluate("() => window.__COPERCEIVE_SCENE_COUNTS__?.() || {}")
 
 
 def _requests(page: Page) -> list[str]:
     return list(page._bundle_requests)  # type: ignore[attr-defined]
+
+
+def _ok_responses(page: Page, needle: str) -> list[str]:
+    return [url for url, status in page._bundle_responses if needle in url and status == 200]  # type: ignore[attr-defined]
 
 
 def _screenshot(page: Page, name: str) -> None:
@@ -161,24 +177,22 @@ def test_bundle_view_included(browser: Browser, included_bundle: Path, tmp_path:
         page = _open_page(browser, origin)
         try:
             page.wait_for_function(
-                "() => (window.__COPERCEIVE_RENDERED_TIMES__ || []).some((row) => (row.points || 0) > 0)",
-                timeout=30000,
+                "() => (window.__COPERCEIVE_SCENE_COUNTS__?.().points || 0) > 0", timeout=30000
             )
-            latest = _latest(page)
-            assert int(latest.get("boxes") or 0) > 0
+            counts = _counts(page)
+            assert int(counts.get("boxes") or 0) > 0
             body = page.locator("body").inner_text()
+            banner = _banner_text(page)
             manifest = _manifest(opened.root)
-            assert "From a shared bundle" in body
-            assert "Apache-2.0" in body
-            assert str(manifest["rerun_command"]) in body
+            assert "From a shared bundle" in banner
+            assert "Apache-2.0" in banner
+            assert str(manifest["rerun_command"]) in banner
             assert page.get_by_role("button", name="Copy rerun").count() == 1
-            assert "local copy" not in body.lower()
-            assert "not included" not in body.lower()
-            image_requests = [url for url in _requests(page) if "/image" in url]
-            assert image_requests
-            page.wait_for_function(
-                "() => [...document.images].some((img) => img.naturalWidth > 0)", timeout=30000
-            )
+            assert "local copy" not in banner.lower()
+            assert "not included" not in banner.lower()
+            assert "mAP" in body
+            assert _ok_responses(page, "/image")
+            assert _ok_responses(page, "/points")
             for editable in ("Submit", "Re-run", "Save plan"):
                 assert page.get_by_role("button", name=editable, exact=True).count() == 0
             _screenshot(page, "bundle-included.png")
@@ -197,20 +211,17 @@ def test_bundle_view_local_copy(
         page = _open_page(browser, origin)
         try:
             page.wait_for_function(
-                "() => (window.__COPERCEIVE_RENDERED_TIMES__ || []).some((row) => (row.points || 0) > 0)",
-                timeout=30000,
+                "() => (window.__COPERCEIVE_SCENE_COUNTS__?.().points || 0) > 0", timeout=30000
             )
             body = page.locator("body").inner_text()
+            banner = _banner_text(page)
             label = opened.report["scenes"][0]["label"]
-            assert label in body
-            assert "local copy" in body.lower()
+            assert label in banner
+            assert "local copy" in banner.lower()
             assert page.get_by_role("button", name="Copy rerun").count() == 1
             assert "mAP" in body
-            image_requests = [url for url in _requests(page) if "/image" in url]
-            assert image_requests
-            page.wait_for_function(
-                "() => [...document.images].some((img) => img.naturalWidth > 0)", timeout=30000
-            )
+            assert _ok_responses(page, "/image")
+            assert _ok_responses(page, "/points")
             # The bundle itself never gained local sensor files.
             assert not list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
             _assert_extraction_intact(opened.root)
@@ -227,13 +238,14 @@ def test_bundle_view_not_included(browser: Browser, omitted_bundle: Path, tmp_pa
         page = _open_page(browser, origin)
         try:
             body = page.locator("body").inner_text()
+            banner = _banner_text(page)
             manifest = _manifest(opened.root)
             reason = str(manifest["sensor_data"]["reason"])
-            assert reason in body
-            assert "not included" in body.lower()
-            latest = _latest(page)
-            assert int(latest.get("points") or 0) == 0
-            assert int(latest.get("boxes") or 0) > 0
+            assert reason in banner
+            assert "not included" in banner.lower()
+            counts = _counts(page)
+            assert int(counts.get("points") or 0) == 0
+            assert int(counts.get("boxes") or 0) > 0
             assert not [url for url in _requests(page) if "/image" in url]
             assert "mAP" in body
             assert str(manifest["rerun_command"]) in body

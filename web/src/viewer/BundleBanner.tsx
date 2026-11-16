@@ -22,7 +22,7 @@ export default function BundleBanner({ bundle }: { bundle: BundleSceneInfo }) {
       ? `Sensor data included (${bundle.licence ?? "recorded licence"}).`
       : bundle.sensor_data === "local-copy"
         ? `Frames from your local copy of ${dataset}.`
-        : `Frames not included — ${bundle.note ?? "no sensor data in this bundle"}`;
+        : (bundle.note ?? `Frames not included — no sensor data in this bundle`);
   return (
     <div
       role="status"

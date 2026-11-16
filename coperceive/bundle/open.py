@@ -437,9 +437,12 @@ def _resolve_sensor_data(
                 entry["local_copy"] = str(local.path)
                 entry["label"] = f"Frames from your local copy of {display}"
             if entry["local_copy"] is None:
+                reason = str(
+                    (manifest.get("sensor_data") or {}).get("reason")
+                    or "no sensor data in this bundle"
+                )
                 entry["note"] = (
-                    f"Frames not included (dataset licence). Open your own copy of "
-                    f"{display} to see them."
+                    f"Frames not included — {reason}. Open your own copy of {display} to see them."
                 )
         report_scenes.append(entry)
     overall = "included" if any_included else ("local-copy" if any_local else "omitted")

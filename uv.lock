@@ -445,6 +445,7 @@ app = [
 dev = [
     { name = "httpx" },
     { name = "hypothesis" },
+    { name = "jsonschema" },
     { name = "matplotlib" },
     { name = "playwright" },
     { name = "pyright" },
@@ -476,6 +477,7 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'dev'", specifier = ">=0.27" },
     { name = "huggingface-hub", marker = "extra == 'griffin'", specifier = ">=0.26" },
     { name = "hypothesis", marker = "extra == 'dev'", specifier = ">=6.100" },
+    { name = "jsonschema", marker = "extra == 'dev'", specifier = ">=4.23" },
     { name = "matplotlib", marker = "extra == 'app'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'dev'", specifier = ">=3.8" },
     { name = "matplotlib", marker = "extra == 'plot'", specifier = ">=3.8" },
