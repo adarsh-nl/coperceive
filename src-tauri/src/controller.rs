@@ -827,6 +827,24 @@ pub fn ctrl_window_init_snippet(
     }
 }
 
+/// Synchronizes the tracked viewer origin and the test controller's allowed
+/// CORS origin whenever the viewer window opens on a new session origin
+/// (local sidecar, dataset stream, or remote SSH tunnel).
+pub fn sync_viewer_origin(
+    viewer_origin: &Mutex<Option<String>>,
+    controller_config: &Mutex<Option<ControllerConfig>>,
+    origin: &str,
+) {
+    if let Ok(mut lock) = viewer_origin.lock() {
+        *lock = Some(origin.to_string());
+    }
+    if let Ok(lock) = controller_config.lock() {
+        if let Some(ref cfg) = *lock {
+            cfg.set_allowed_origin(origin.to_string());
+        }
+    }
+}
+
 /// Parameters required to build the viewer window's bootstrap script.
 pub struct ViewerInitScriptParams<'a> {
     pub os_name: &'a str,
@@ -1627,5 +1645,93 @@ pub mod tests {
         assert!(!prod_script.contains("indexOf"));
         assert!(!prod_script.contains("=== \"null\""));
         assert!(prod_script.contains("window.location.origin === \"http://127.0.0.1:4700\""));
+    }
+
+    #[test]
+    fn test_open_viewer_window_updates_controller_allowed_origin_for_remote_connect() {
+        let local_origin = "http://127.0.0.1:50681";
+        let remote_origin = "http://127.0.0.1:50726";
+        let secret = "secret-token-flow-f";
+        let config = ControllerConfig::new(51234, secret.into(), Some(local_origin.to_string()));
+        let viewer_origin = Mutex::new(Some(local_origin.to_string()));
+        let controller_config = Mutex::new(Some(config.clone()));
+
+        // Switch from local viewer to remote SSH tunnel viewer: CORS allowed_origin must move to remote_origin.
+        sync_viewer_origin(&viewer_origin, &controller_config, remote_origin);
+        assert_eq!(
+            viewer_origin.lock().unwrap().as_deref(),
+            Some(remote_origin)
+        );
+
+        let preflight = |req_origin: &str| -> String {
+            let req = format!(
+                "OPTIONS /eval-result HTTP/1.1\r\n\
+                 Host: 127.0.0.1:51234\r\n\
+                 Origin: {req_origin}\r\n\
+                 Access-Control-Request-Method: POST\r\n\
+                 Access-Control-Request-Headers: authorization, content-type\r\n\r\n"
+            );
+            let mut r = Cursor::new(req.into_bytes());
+            let mut w = Vec::new();
+            handle_client(&mut r, &mut w, &config, &|| {}).unwrap();
+            String::from_utf8(w).unwrap()
+        };
+
+        let remote_preflight = preflight(remote_origin);
+        assert!(
+            remote_preflight.starts_with("HTTP/1.1 204 No Content"),
+            "remote viewer origin preflight must succeed, got: {remote_preflight}"
+        );
+        assert!(
+            remote_preflight.contains(&format!("Access-Control-Allow-Origin: {remote_origin}")),
+            "remote viewer origin must receive ACAO header, got: {remote_preflight}"
+        );
+
+        let stale_local_preflight = preflight(local_origin);
+        assert!(
+            stale_local_preflight.starts_with("HTTP/1.1 403 Forbidden"),
+            "superseded local origin must be rejected after remote_connect, got: {stale_local_preflight}"
+        );
+
+        // Verify POST /eval-result from remote_origin unblocks /eval waiting callback.
+        let (tx, rx) = std::sync::mpsc::channel();
+        config.eval_callbacks.lock().unwrap().insert(42, tx);
+        let payload = r#"{"req_id":42,"result":{"ok":true},"error":null}"#;
+        let eval_result_req = format!(
+            "POST /eval-result HTTP/1.1\r\n\
+             Host: 127.0.0.1:51234\r\n\
+             Origin: {remote_origin}\r\n\
+             Authorization: Bearer {secret}\r\n\
+             Content-Type: application/json\r\n\
+             Content-Length: {}\r\n\r\n{}",
+            payload.len(),
+            payload
+        );
+        let mut r = Cursor::new(eval_result_req.into_bytes());
+        let mut w = Vec::new();
+        handle_client(&mut r, &mut w, &config, &|| {}).unwrap();
+        let post_resp = String::from_utf8(w).unwrap();
+        assert!(post_resp.starts_with("HTTP/1.1 200 OK"), "{post_resp}");
+        let delivered = rx
+            .recv_timeout(Duration::from_millis(200))
+            .expect("eval-result from remote viewer should resolve waiting /eval");
+        assert_eq!(delivered.get("result").and_then(|v| v.get("ok")).and_then(|v| v.as_bool()), Some(true));
+
+        // Verify main.rs open_viewer_window synchronizes both viewer_origin and controller allowed_origin
+        // so callers like remote_connect cannot leave allowed_origin stale on a prior session's port.
+        let main = include_str!("main.rs");
+        let start = main
+            .find("fn open_viewer_window(")
+            .expect("open_viewer_window exists in main.rs");
+        let end = main[start..]
+            .find("fn build_viewer_bridge_plugin(")
+            .or_else(|| main[start..].find("async fn switch_data_root("))
+            .map(|rel| start + rel)
+            .expect("end of open_viewer_window block");
+        let open_fn = &main[start..end];
+        assert!(
+            open_fn.contains("controller::sync_viewer_origin("),
+            "open_viewer_window must call controller::sync_viewer_origin so remote_connect and other callers update controller allowed_origin"
+        );
     }
 }
