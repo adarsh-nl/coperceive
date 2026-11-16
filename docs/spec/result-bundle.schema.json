@@ -32,7 +32,8 @@
       "type": "string"
     },
     "run_id": {
-      "type": "string"
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$"
     },
     "contents": {
       "type": "array",
@@ -164,7 +165,36 @@
           }
         }
       },
-      "additionalProperties": false
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "included"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "licence"
+            ],
+            "properties": {
+              "licence": {
+                "type": "string",
+                "minLength": 1
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
     }
   },
   "additionalProperties": false

@@ -11,6 +11,7 @@ import io
 import json
 import re
 import sqlite3
+import tempfile
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -466,7 +467,13 @@ def create_app(
         )
     app.state.root = root_path_obj
     app.state.token = token
-    app.state.db_path = root_path_obj / "jobs.sqlite"
+    # A bundle is read-only: its viewer jobs database lives in a private temp
+    # dir, never inside the extracted bundle or the library.
+    app.state.db_path = (
+        Path(tempfile.mkdtemp(prefix="coperceive-bundle-jobs-")) / "jobs.sqlite"
+        if bundle_info is not None
+        else root_path_obj / "jobs.sqlite"
+    )
     app.state.scene_cache = _SceneCache()
     app.state.maps = _maps_root(root_path_obj, maps)
     app.state.map_cache = {}
@@ -554,6 +561,9 @@ def create_app(
     @app.get("/api/scenes/{scene_id}")
     def scene_summary(scene_id: str) -> dict[str, object]:
         scene = _cached_scene(app, scene_id)
+        local_sensor = _bundle_local_scene(app, scene_id)
+        if local_sensor is not None:
+            scene = read_scene(local_sensor, points=True)
         body = summarize(scene)
         if app.state.remote is not None:
             body["point_sweeps"] = len(_remote_call(lambda: app.state.remote.sweeps(scene_id)))
@@ -561,7 +571,7 @@ def create_app(
             mirrored = _remote_call(lambda: app.state.remote.ensure(scene_id))
             body["seen_by"] = seen_by_for_scene(scene, adapter_name(mirrored))
             return body
-        directory = _scene_dir(app.state.root, scene_id)
+        directory = local_sensor or _scene_dir(app.state.root, scene_id)
         body["images_staged"] = _images_staged(app, scene, directory)
         body["seen_by"] = seen_by_for_scene(scene, adapter_name(directory))
         bundle = _bundle_scene_view(app, scene_id)
@@ -578,7 +588,7 @@ def create_app(
             scene = _cached_scene(app, scene_id)
             local = _bundle_local_scene(app, scene_id)
             if local is not None:
-                scene = read_scene(local, points=False)
+                scene = read_scene(local, points=True)
             document = frame_document(scene, time_us)
             if app.state.remote is not None:
                 document["point_sensors"] = [

@@ -344,45 +344,30 @@ def test_host_and_user_markers_are_removed_even_when_not_path_shaped(tmp_path: P
 
 
 def _schema_accepts(manifest: dict[str, object]) -> bool:
+    from jsonschema import Draft202012Validator
+
     schema = json.loads(
         (Path(__file__).resolve().parents[1] / "docs/spec/result-bundle.schema.json").read_text()
     )
-    required = schema["required"]
-    props = schema["properties"]
-    if set(manifest) - set(props):
-        return False
-    if any(key not in manifest for key in required):
-        return False
-    checks = {
-        "schema": lambda v: v == "coperceive-result-bundle",
-        "schema_version": lambda v: isinstance(v, int) and v >= 1,
-        "created_utc": lambda v: isinstance(v, str),
-        "app_version": lambda v: isinstance(v, str),
-        "title": lambda v: isinstance(v, str),
-        "run_id": lambda v: (
-            isinstance(v, str)
-            and __import__("re").fullmatch(r"[A-Za-z0-9._-]+", v) is not None
-            and v not in {".", ".."}
-        ),
-        "contents": lambda v: isinstance(v, list),
-        "rerun_command": lambda v: isinstance(v, str) and bool(v.strip()),
-        "sensor_data": lambda v: (
-            isinstance(v, dict)
-            and v.get("status") in {"included", "omitted"}
-            and isinstance(v.get("bytes"), int)
-            and isinstance(v.get("scenes"), list)
-            and bool(v.get("scenes"))
-        ),
-    }
-    return all(checks[key](manifest[key]) for key in checks if key in manifest)
+    return Draft202012Validator(schema).is_valid(manifest)
 
 
-def test_hand_validator_and_schema_accept_the_same_samples(bundle: Path) -> None:
+def test_hand_validator_and_schema_accept_the_same_samples(
+    bundle: Path, demo_root: Path, tmp_path: Path
+) -> None:
     from coperceive.bundle.format import validate_manifest
 
     with zipfile.ZipFile(bundle) as archive:
         valid = json.loads(archive.read("bundle.json"))
-    samples = [valid]
+    included_archive = _export(
+        demo_root,
+        tmp_path / "schema-included.cpbundle",
+        dataset_id="demo",
+        include_sensor_data=True,
+    )
+    with zipfile.ZipFile(included_archive) as archive:
+        included = json.loads(archive.read("bundle.json"))
+    samples = [valid, included]
     for bad_id in ("../x", "/absolute", "a/b"):
         sample = json.loads(json.dumps(valid))
         sample["run_id"] = bad_id
@@ -395,6 +380,17 @@ def test_hand_validator_and_schema_accept_the_same_samples(bundle: Path) -> None
     samples.append(sample)
     sample = json.loads(json.dumps(valid))
     del sample["title"]
+    samples.append(sample)
+    for mutate in (
+        lambda doc: doc["sensor_data"].__setitem__("dataset_id", "../x"),
+        lambda doc: doc["sensor_data"]["scenes"][0].__setitem__("frames_included", []),
+        lambda doc: doc["sensor_data"].pop("reason"),
+    ):
+        sample = json.loads(json.dumps(included))
+        mutate(sample)
+        samples.append(sample)
+    sample = json.loads(json.dumps(included))
+    sample["sensor_data"]["licence"] = None
     samples.append(sample)
 
     for sample in samples:
