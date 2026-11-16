@@ -131,10 +131,17 @@ def check_deb(deb_path: Path) -> list[str]:
                 if size % 2 == 1:
                     f.read(1)
                 if name.startswith("data.tar"):
+                    if not hasattr(tarfile, "data_filter"):
+                        return [
+                            f"{deb_path.name}: this Python has no tarfile extraction filters "
+                            "(needs 3.11.4 or later); the deb is not unpacked without them"
+                        ]
                     with tempfile.TemporaryDirectory() as tmp:
                         tar_bytes = io.BytesIO(data)
                         with tarfile.open(fileobj=tar_bytes) as tf:
-                            tf.extractall(tmp)
+                            # "data": no absolute or '..' names, no link that leaves tmp,
+                            # no device files, no setuid bits. A refused member fails the check.
+                            tf.extractall(tmp, filter="data")
                         return check_app(Path(tmp))
         return [f"{deb_path.name}: no data.tar found in deb"]
     except Exception as exc:

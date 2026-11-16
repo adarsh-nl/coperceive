@@ -15,7 +15,8 @@ All engineering tasks and work items are tracked in **[TASKS.md](TASKS.md)** and
   - Remote HPC execution target: Slurm session manager (`coperceive remote ...`), SSH local port forward tunnel (`ssh -L`), heartbeat lease watchdog, and bounded connection tests.
 
 - **Security & Conformance**:
-  - Tokens are never passed on argv or stored in URLs. Tokens are strictly passed via `COPERCEIVE_TOKEN` or `--token-file` (file mode `0600` or `0400` enforced).
+  - Tokens are never passed on argv or stored in URLs. Tokens are strictly passed via `COPERCEIVE_TOKEN` or `--token-file` (a non-empty regular file owned by the current user, not a symbolic link, mode `0600` or `0400`: all enforced).
+  - `coperceive serve` without a token answers only a loopback Host (`127.0.0.1`, `localhost`, `[::1]`) on its own port; with a token, every `/api` route requires it whatever `--root-path` is.
   - Path confinement: all scene file loads and export destinations are strictly confined within the active dataset root (`confine()`).
 
 - **Mac Acceptance Instructions**:
@@ -439,7 +440,7 @@ Did not match the plan: four build attempts and three inference attempts before 
 
 With the map the union and model means coincide (every GT class is one of the model's three). Car AP at IoU 0.5 drops under the map (0.524 → 0.423) while precision and recall rise: trucks and buses now count as `car` ground truth, the model finds many of them within 2–4 m but not with 0.5 BEV IoU. The inference sbatch now writes the map into both configs for future runs. None of this is a comparison with the paper (no table quoted).
 
-Viewing from a laptop. The server runs on a compute node (not the login node), bound to loopback, reached through a two-hop tunnel. The `.venv`'s editable install points at `main`, so `PYTHONPATH` must name the worktree, and modules do not inherit, so load the Python module first.
+Viewing from a laptop. The server runs on a compute node (not the login node), bound to loopback, reached through a two-hop tunnel. The `.venv`'s editable install points at `main`, so `PYTHONPATH` must name the worktree, and modules do not inherit, so load the Python module first. Without a token, any other user on that node can read the root through `127.0.0.1:8731`. The loopback Host check only stops pages under other hostnames. On a shared node, set `COPERCEIVE_TOKEN` (or `--token-file`) before `coperceive serve` and enter the same token in the page. Keep the laptop end of the tunnel on the same port (`-L 8731:127.0.0.1:8731`): token-less serve refuses a Host on any other port.
 
 Terminal 1 — allocate a node and serve there:
 

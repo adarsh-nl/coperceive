@@ -425,7 +425,7 @@ def test_engine_pickle_fallback_is_opt_in(monkeypatch: pytest.MonkeyPatch, tmp_p
 
 
 def test_old_torch_without_weights_only_needs_the_pickle_opt_in(tmp_path: Path) -> None:
-    """torch < 2.0 has no weights_only argument, so the legacy loader is the same opt-in."""
+    """torch < 1.13 has no weights_only argument (and < 2.6 it is unsafe): the same opt-in."""
     engine = load("engine")
     weights = tmp_path / "weights.pth"
     weights.write_bytes(b"placeholder; the fake torch below never parses it")

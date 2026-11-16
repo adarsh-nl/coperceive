@@ -85,6 +85,8 @@ coperceive serve --root /path/to/scenes
 ```
 Open `http://127.0.0.1:8731` in your browser, or open the Coperceive desktop application.
 
+Without a token the server binds `127.0.0.1:8731` and answers only requests addressed to `127.0.0.1`, `localhost` or `[::1]` on that port, so a page under another hostname cannot reach it even when that name resolves to 127.0.0.1. That does not keep out other users of the same machine. On a shared node, behind a proxy (`--root-path`), or on any other host, set a token with `COPERCEIVE_TOKEN` or `--token-file` and enter it in the page's Bearer token field. The token file must be a regular file you own, not a symbolic link, with mode 0600 or 0400. With a token, every `/api` route requires it, whatever `--root-path` is.
+
 ### HPC over SSH
 1. In the desktop application, navigate to **Servers** (or **Settings → Servers**).
 2. Add an SSH profile with your login host, username, and SSH identity file.

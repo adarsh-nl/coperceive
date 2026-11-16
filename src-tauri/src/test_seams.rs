@@ -20,6 +20,11 @@ use std::path::Path;
 /// process-wide fake SSH environment variables (`FAKE_SSH_LOG`, `FAKE_REMOTE_ROOT`).
 pub static FAKE_SSH_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+/// Crate-wide mutex serializing unit tests that allocate or re-bind ephemeral
+/// loopback TCP ports so parallel tests do not claim a port between
+/// `find_free_loopback_port` returning and the caller binding it.
+pub static PORT_TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 /// True when the app was launched by the real-app e2e harness.
 pub fn test_env_active() -> bool {
     std::env::var_os("COPERCEIVE_TEST_ENV").is_some()

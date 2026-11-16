@@ -796,12 +796,111 @@ for i in {1..90}; do
     sleep 0.5
 done
 [ "${HEADER_OK}" -eq 1 ] || fail "viewer header kept stale remote state after opening local scene: ${LAST_HEADER}"
+
+# Step 3: Attach a full remote session (`remote_connect`) and switch to local again;
+# `disconnect_remote_in_background` must send `remote stop` over SSH (`remote-stop` in FAKE_SSH_LOG).
+REMOTE_CACHE_ROOT=$(python3 - "${CLUSTER}/results" <<'PY'
+from pathlib import Path
+import sys
+
+results_dir = Path(sys.argv[1])
+candidates = sorted(
+    p.parent.parent
+    for p in results_dir.rglob("COMPLETE.json")
+    if p.parent.name == "scene_0000" and (p.parent / "manifest.json").is_file()
+)
+if not candidates:
+    manifests = sorted(str(p) for p in results_dir.rglob("manifest.json"))
+    raise SystemExit(f"No prepared scene_0000 under {results_dir}; manifests={manifests}")
+print(candidates[0])
+PY
+) || fail "failed to locate prepared remote cache root for Flow F Step 3"
+
+REMOTE_CONNECT_PAYLOAD=$(python3 - "${PROFILE_ID}" "${REMOTE_CACHE_ROOT}" <<'PY'
+import json, sys
+
+dataset_meta = {
+    "dataset": {
+        "scenes": [
+            {"scene_id": "scene_0000", "state": "ready"},
+            {"scene_id": "scene_0001", "state": "ready"},
+            {"scene_id": "scene_0002", "state": "ready"},
+        ],
+        "label": "OPV2V test",
+        "server": "Dataset e2e fake cluster",
+    }
+}
+connect_args = {
+    "alias": "cluster-b",
+    "dataRoot": sys.argv[2],
+    "profileId": sys.argv[1],
+}
+js = (
+    "(async () => { "
+    f"const r = await window.__TAURI_INTERNALS__.invoke('remote_connect', {json.dumps(connect_args)}); "
+    f"await window.__TAURI_INTERNALS__.invoke('set_viewer_dataset_scenes', {json.dumps(dataset_meta)}); "
+    "return r; "
+    "})()"
+)
+print(json.dumps({"window": "main", "script": js}))
+PY
+)
+curl -s -f -X POST \
+    -H "Authorization: Bearer ${CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d "${REMOTE_CONNECT_PAYLOAD}" \
+    "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke remote_connect in Flow F"
+
+REMOTE_ATTACHED=0
+LAST_REMOTE_ATTACH=""
+for i in {1..90}; do
+    if grep -q "^remote-start$" "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null; then
+        RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer ${CTRL_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; const ok = body.includes(\"scene_0000\") && body.includes(\"Streaming over SSH\") && !body.includes(\"demo-junction\"); return { ok, snippet: body.slice(0, 300) }; })()"}' \
+            "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
+        if [ -n "${RESP}" ]; then
+            LAST_REMOTE_ATTACH="${RESP}"
+        fi
+        if echo "${RESP}" | grep -q '"ok":true'; then
+            REMOTE_ATTACHED=1
+            break
+        fi
+    fi
+    sleep 0.5
+done
+[ "${REMOTE_ATTACHED}" -eq 1 ] || fail "remote_connect did not attach remote viewer before second local switch (${LAST_REMOTE_ATTACH}; ssh log: $(tr '\n' ',' < "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null))"
+
+curl -s -f -X POST \
+    -H "Authorization: Bearer ${CTRL_SECRET}" \
+    -H "Content-Type: application/json" \
+    -d "${LOCAL_OPEN_PAYLOAD}" \
+    "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke second start_local in Flow F"
+
+REMOTE_STOPPED=0
+for i in {1..40}; do
+    if grep -q "^remote-stop$" "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null; then
+        RESP=$(curl -s -X POST \
+            -H "Authorization: Bearer ${CTRL_SECRET}" \
+            -H "Content-Type: application/json" \
+            -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; return { ok: body.includes(\"demo-junction\") && !body.includes(\"Streaming over SSH\") }; })()"}' \
+            "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
+        if echo "${RESP}" | grep -q '"ok":true'; then
+            REMOTE_STOPPED=1
+            break
+        fi
+    fi
+    sleep 0.5
+done
+[ "${REMOTE_STOPPED}" -eq 1 ] || fail "switching to local after remote_connect did not send remote-stop and clear header (ssh log: $(tr '\n' ',' < "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null))"
+
 mkdir -p /tmp/e2e-shots
 screencapture -x /tmp/e2e-shots/remote-then-local-header.png 2>/dev/null || true
 kill -TERM "${APP_PID}" 2>/dev/null || true
 wait "${APP_PID}" 2>/dev/null || true
 APP_PID=""
-echo "Step CD-19 verified: opening local scene after fake-SSH session in same process cleared streaming header: ${LAST_HEADER}"
+echo "Step CD-19 verified: opening local scene after fake-SSH session in same process sent remote-stop and cleared streaming header: ${LAST_HEADER}"
 
 # --- Flow E: an older coperceive on the cluster --------------------------------
 # The profile's interpreter is fake_old_python.sh: no `capabilities`, no
