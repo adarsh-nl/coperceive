@@ -5,6 +5,7 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APP_BUNDLE="${1:-src-tauri/target/release/bundle/macos/Coperceive.app}"
 DMG_FILE="${2:-src-tauri/target/release/bundle/dmg/Coperceive_0.0.0_aarch64.dmg}"
 
@@ -143,7 +144,7 @@ preserve_safe_tmp_logs() {
     mkdir -p "${dest}"
     local redact='s/Bearer [A-Za-z0-9._-]+/Bearer [REDACTED]/g; s/([Tt]oken[^A-Za-z0-9]*)[:=][[:space:]]*[^[:space:]"]+/\1=[REDACTED]/g'
     local f
-    for f in "${TMPDIR}/app_stdout.log" "${TMPDIR}/app_stderr.log" "${TMPDIR}/serve.log" "${TMPDIR}/demo_stdout.log" "${TMPDIR}/demo_stderr.log"; do
+    for f in "${TMPDIR}/app_stdout.log" "${TMPDIR}/app_stderr.log" "${TMPDIR}/serve.log" "${TMPDIR}/demo_stdout.log" "${TMPDIR}/demo_stderr.log" "${TMPDIR}/prod_stdout.log" "${TMPDIR}/prod_stderr.log"; do
         if [ -f "$f" ]; then
             sed -E "$redact" "$f" > "${dest}/$(basename "$f")" 2>/dev/null || true
         fi
@@ -255,6 +256,65 @@ if [ -z "${APP_EXE}" ] || [ ! -x "${APP_EXE}" ]; then
     ls -la "${APP_BUNDLE}/Contents/MacOS" || true
     exit 10
 fi
+
+# Test 3c: Normal (non-test) release launch must NOT start a loopback controller
+echo ""
+echo "--- Production Launch Controller Gate Check (macOS) ---"
+PROD_STATE_DIR="${TMPDIR}/prod-state"
+mkdir -p "${PROD_STATE_DIR}"
+PROD_STDOUT="${TMPDIR}/prod_stdout.log"
+PROD_STDERR="${TMPDIR}/prod_stderr.log"
+
+(
+    unset COPERCEIVE_TEST_ENV
+    unset COPERCEIVE_TEST_MARKER_FILE
+    unset COPERCEIVE_CTRL_INFO_FILE
+    unset COPERCEIVE_AUTOCONNECT_ROOT
+    unset COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT
+    unset COPERCEIVE_UPDATE_URL
+    unset COPERCEIVE_MOCK_DIALOG_FILE
+    unset COPERCEIVE_TEST_IMPORT_SOURCE
+    export COPERCEIVE_STATE_DIR="${PROD_STATE_DIR}"
+    exec "${APP_EXE}" > "${PROD_STDOUT}" 2> "${PROD_STDERR}"
+) &
+APP_PID=$!
+
+for _ in {1..8}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: Production launch exited prematurely during controller-gate check!" >&2
+        cat "${PROD_STDERR}" >&2 || true
+        cat "${PROD_STDOUT}" >&2 || true
+        exit 8
+    fi
+    sleep 0.5
+done
+
+if grep -q -E "Loopback controller listening|\\[desktop-ctrl\\]" "${PROD_STDOUT}" "${PROD_STDERR}" 2>/dev/null; then
+    echo "Security failure: loopback controller started during normal (non-test) launch!" >&2
+    cat "${PROD_STDOUT}" >&2
+    exit 8
+fi
+
+PROD_PIDS="${APP_PID}"
+CHILDREN=$(pgrep -P "${APP_PID}" 2>/dev/null || true)
+if [ -n "${CHILDREN}" ]; then
+    PROD_PIDS="${PROD_PIDS},$(printf '%s\n' "${CHILDREN}" | paste -sd, -)"
+fi
+PROD_LISTENERS=$(lsof -nP -a -p "${PROD_PIDS}" -iTCP -sTCP:LISTEN 2>/dev/null || true)
+if [ -n "${PROD_LISTENERS}" ]; then
+    echo "Security failure: unexpected listening TCP socket(s) during normal launch:" >&2
+    echo "${PROD_LISTENERS}" >&2
+    exit 8
+fi
+
+kill -TERM "${APP_PID}" 2>/dev/null || true
+sleep 1
+if kill -0 "${APP_PID}" 2>/dev/null; then
+    kill -9 "${APP_PID}" 2>/dev/null || true
+fi
+wait "${APP_PID}" 2>/dev/null || true
+APP_PID=""
+echo "PROD_LAUNCH_VERIFIED: os=macos listening_ports=0 ctrl_disabled=true"
 
 FIXTURE_ROOT="$(pwd)/tests/fixtures/synthetic_scene"
 if [ ! -d "${FIXTURE_ROOT}" ]; then
@@ -754,32 +814,38 @@ else
 
     PLAY_SAMPLES=0
     BUFFERING_SEEN=0
-    START_FRAME=""
-    END_FRAME=""
-    START_WALL_S=""
-    END_WALL_S=""
+    PLAY_SAMPLES_FILE="${TMPDIR}/playback_samples.jsonl"
+    : > "${PLAY_SAMPLES_FILE}"
     for i in {1..15}; do
         sleep 0.2
         PLAY_RESP=$(curl -s -X POST \
             -H "Authorization: Bearer ${DEMO_CTRL_SECRET}" \
             -H "Content-Type: application/json" \
-            -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; const txt = document.body ? document.body.innerText : \"\"; return { frameIndex: st.frameIndex ?? -1, playing: Boolean(st.playing), buffering: txt.includes(\"Buffering\") }; })()"}' \
+            -d '{"window":"viewer","script":"(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; const txt = document.body ? document.body.innerText : \"\"; return { frameIndex: st.frameIndex ?? -1, samples: st.samples ?? 0, playing: Boolean(st.playing), buffering: txt.includes(\"Buffering\") }; })()"}' \
             "http://127.0.0.1:${DEMO_CTRL_PORT}/eval" 2>/dev/null || echo "")
         SAMPLE_WALL_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
         if [ -n "${PLAY_RESP}" ]; then
-            CUR_FRAME=$(echo "${PLAY_RESP}" | sed -n 's/.*"frameIndex":\([0-9]*\).*/\1/p')
-            if [ -z "${START_FRAME}" ] && [ -n "${CUR_FRAME}" ]; then
-                START_FRAME="${CUR_FRAME}"
-                START_WALL_S="${SAMPLE_WALL_S}"
-            fi
-            if [ -n "${CUR_FRAME}" ]; then
-                END_FRAME="${CUR_FRAME}"
-                END_WALL_S="${SAMPLE_WALL_S}"
+            if python3 - "${PLAY_RESP}" "${SAMPLE_WALL_S}" "${PLAY_SAMPLES_FILE}" <<'PY'
+import json, sys
+try:
+    payload = json.loads(sys.argv[1])
+except json.JSONDecodeError:
+    sys.exit(1)
+res = payload.get("result") or {}
+idx = res.get("frameIndex", -1)
+count = res.get("samples", 0)
+if isinstance(idx, int) and isinstance(count, int) and count > 0 and 0 <= idx < count:
+    with open(sys.argv[3], "a", encoding="utf-8") as f:
+        f.write(json.dumps({"frame_index": idx, "samples": count, "wall_s": float(sys.argv[2])}) + "\n")
+    sys.exit(0)
+sys.exit(1)
+PY
+            then
+                PLAY_SAMPLES=$((PLAY_SAMPLES + 1))
             fi
             if echo "${PLAY_RESP}" | grep -q '"buffering":true'; then
                 BUFFERING_SEEN=1
             fi
-            PLAY_SAMPLES=$((PLAY_SAMPLES + 1))
         fi
     done
     # Capture per-phase playback breakdown and pause cleanly
@@ -794,33 +860,11 @@ else
         echo "Error: Demo playback showed 'Buffering' during 1x local playback!" >&2
         exit 26
     fi
-    if [ -z "${START_FRAME}" ] || [ -z "${END_FRAME}" ] || [ -z "${START_WALL_S}" ] || [ -z "${END_WALL_S}" ]; then
-        echo "Error: Could not read playback frameIndex during demo playback!" >&2
+    if [ "${PLAY_SAMPLES}" -lt 2 ]; then
+        echo "Error: Could not read at least 2 playback samples during demo playback!" >&2
         exit 26
     fi
-    FRAME_DELTA=$(( (END_FRAME - START_FRAME + 100) % 100 ))
-    python3 - "${START_FRAME}" "${END_FRAME}" "${FRAME_DELTA}" "${START_WALL_S}" "${END_WALL_S}" <<'PY' || exit 26
-import os, sys
-start_f, end_f, frames, t0, t1 = int(sys.argv[1]), int(sys.argv[2]), int(sys.argv[3]), float(sys.argv[4]), float(sys.argv[5])
-elapsed = max(t1 - t0, 1e-6)
-expected = 10.0 * elapsed
-ratio = frames / expected
-min_required = 0.9 * expected
-print(f"Demo 1x playback: elapsed={elapsed:.2f}s frames={frames} ({start_f} -> {end_f}) ratio={ratio:.2f}x (required >= 0.90x / {min_required:.1f} frames)")
-if frames < min_required:
-    # v0.1.1 exception (approved by Adarsh): under Rosetta 2 on arm64, record the ratio as a warning;
-    # Claude Code's follow-up PR on Intel/Rosetta playback root cause makes this blocking again.
-    if os.environ.get("COPERCEIVE_ROSETTA_PLAYBACK_WARN_ONLY") == "1":
-        msg = (
-            f"Demo playback under Rosetta 2: {frames} frames in {elapsed:.2f}s "
-            f"({ratio:.2f}x < 0.90x); non-blocking for v0.1.1 only — Claude Code's follow-up PR restores blocking check"
-        )
-        print(f"::warning title=Rosetta-Playback::{msg}")
-        print(f"Warning: {msg}", file=sys.stderr)
-    else:
-        print(f"Error: Demo playback too slow: {frames} frames in {elapsed:.2f}s ({ratio:.2f}x < 0.90x)", file=sys.stderr)
-        sys.exit(26)
-PY
+    python3 "${SCRIPT_DIR}/playback_metrics.py" "${PLAY_SAMPLES_FILE}" || exit 26
 fi
 
 DEMO_OUTCOME_LINE=$(grep "COPERCEIVE_DEMO_OUTCOME:" "${DEMO_STDOUT}" | tail -n 1 || echo "")
