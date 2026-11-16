@@ -130,5 +130,5 @@ rsync -a "$SCRATCH/out/" <HOME>/results/"$SLURM_JOB_ID"/
 rsync -a --include='*/' --include='*.log' --include='artifacts/***' --exclude='*' --prune-empty-dirs "$SCRATCH/work/" <HOME>/results/"$SLURM_JOB_ID"/work/
 mkdir -p <FIXTURE>/predictions/griffin25m-vehicle-plugin
 rsync -a "$SCRATCH/out/$RUN_ID/" <FIXTURE>/predictions/griffin25m-vehicle-plugin/
-echo "done: <FIXTURE>/predictions/griffin25m-vehicle-plugin (exit $RC)"
+echo "done:" <FIXTURE>/predictions/griffin25m-vehicle-plugin "(exit $RC)"
 exit "$RC"

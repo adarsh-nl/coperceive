@@ -31,6 +31,9 @@ pub const CONTRACT_CHECK_FRAMES: u32 = 3;
 const READ_TIMEOUT: Duration = Duration::from_secs(8);
 const ENVIRONMENT_TIMEOUT: Duration = Duration::from_secs(8);
 const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+/// The split's listing walks every file of a scenes tree (on NFS or Lustre for a real
+/// dataset), so it gets its own, longer bound than a single-path check.
+const LISTING_TIMEOUT: Duration = Duration::from_secs(120);
 const WRITE_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// One pipeline offered in the "New evaluation" panel.
@@ -49,6 +52,115 @@ pub struct PipelineEntry {
     /// Manifest path of an installed plugin (builtin).
     #[serde(default)]
     pub plugin_manifest: Option<String>,
+    /// What `coperceive model list --json` reported for an installed plugin.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub builtin: Option<BuiltinPlugin>,
+}
+
+/// One model of an installed plugin, as its manifest declares it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BuiltinModel {
+    /// `resources.gpu` of the manifest.
+    #[serde(default)]
+    pub gpu: bool,
+    /// The `--option` keys the model takes (`options:` of the manifest).
+    #[serde(default)]
+    pub options: Vec<String>,
+    /// `resources.cpus` and `resources.memory_gb`: `plan_sbatch` writes them as
+    /// `--cpus-per-task` and `--mem`. None from a listing that does not carry them.
+    #[serde(default)]
+    pub cpus: Option<u32>,
+    #[serde(default)]
+    pub memory_gb: Option<u32>,
+    /// `outputs.transient_artifacts`: artefacts that stay in the job's scratch.
+    #[serde(default)]
+    pub transient_artifacts: Vec<String>,
+    /// The models its `depends_on` entries name (run first, in the same job).
+    #[serde(default)]
+    pub depends_on: Vec<String>,
+    /// `resources.slurm_constraint`: `plan_sbatch` writes it as `#SBATCH --constraint`
+    /// (Griffin pins the A40). None from a listing that does not carry it.
+    #[serde(default)]
+    pub slurm_constraint: Option<String>,
+    /// `resources.seconds_per_sample`, `staging_seconds` and `conversion_seconds`:
+    /// `plan_sbatch`'s `--time` estimate (`time_limit`). None from an older listing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub seconds_per_sample: Option<serde_json::Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub staging_seconds: Option<serde_json::Number>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub conversion_seconds: Option<serde_json::Number>,
+}
+
+/// What a built-in model's manifest asks of the job, recorded in the plan from the
+/// cluster's `coperceive model list --json` so the submitted script can write it as
+/// `plan_sbatch` does (coperceive/models/slurm.py).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ModelResources {
+    /// `resources.gpu`: the job must request a GPU.
+    pub gpu: bool,
+    /// `--cpus-per-task` when neither the profile nor the user sets it.
+    #[serde(default)]
+    pub cpus: Option<u32>,
+    /// `--mem=<n>G` when neither the profile nor the user sets it.
+    #[serde(default)]
+    pub memory_gb: Option<u32>,
+    /// `<model>/<artifact>` of the run's model closure whose artefacts are transient: the
+    /// work copy home excludes them first, as `work_copy_filter` does.
+    #[serde(default)]
+    pub transient_artifacts: Vec<String>,
+    /// The model's `resources.slurm_constraint`, written as `#SBATCH --constraint="..."`
+    /// whatever GPU type discovery found, as `plan_sbatch` does.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constraint: Option<String>,
+}
+
+/// The interpreter that runs a built-in plan's `coperceive model run`, read on the
+/// cluster when the plan is checked and saved (a read-only check). The job loads its
+/// `python/<version>` module right after `module purge` and records `environment.json`
+/// with it, as `plan_sbatch` does for `--slurm-python` (coperceive/models/slurm.py).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct RunInterpreter {
+    /// The interpreter, or None when it cannot be known before the job runs.
+    #[serde(default)]
+    pub python: Option<String>,
+    /// How it was found: `command` (`<python> -m coperceive`), `beside` (the `python`
+    /// beside a `<dir>/coperceive` console script), `shebang` (the interpreter that
+    /// script's shebang names), `profile` (a bare `coperceive` on a conda or venv
+    /// profile) or `unknown`.
+    pub source: String,
+    /// The program the profile runs (`<python>` or the console script).
+    #[serde(default)]
+    pub program: String,
+    /// `python/<version>` from the interpreter's `pyvenv.cfg` (`interpreter_module`).
+    #[serde(default)]
+    pub module: Option<String>,
+    /// The parent of the coperceive package this interpreter imports, read on the cluster
+    /// with `python -c 'import coperceive'`: the job exports it as PYTHONPATH, as
+    /// `plan_sbatch` exports the root of the coperceive that emitted the job.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package_root: Option<String>,
+}
+
+/// The `--work` of a built-in run: the job's own scratch, as the CLI's
+/// `--work "$SCRATCH/work"`. The job script expands it; only the work directory's logs
+/// and artefacts are copied into `<output_dir>/work` afterwards.
+pub const WORK_IN_SCRATCH: &str = "$SCRATCH_DIR/work";
+
+/// One installed plugin of `coperceive model list --json` (coperceive/models/commands.py).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct BuiltinPlugin {
+    pub name: String,
+    /// The manifest file, resolved on the cluster; None when it could not be read.
+    #[serde(default)]
+    pub manifest: Option<String>,
+    #[serde(default)]
+    pub error: Option<String>,
+    /// `environment.modules` of the manifest (the CUDA modules for Griffin).
+    #[serde(default)]
+    pub modules: Vec<String>,
+    #[serde(default)]
+    pub models: BTreeMap<String, BuiltinModel>,
 }
 
 /// The user's inputs for one plan. All values are the user's choices.
@@ -92,6 +204,23 @@ pub struct PlanArtifact {
     /// Real path reported by the cluster, so symlink escapes are visible.
     #[serde(default)]
     pub real_path: Option<String>,
+    /// A folder has no single sha256: the sha256 of its listing (the relative path and
+    /// byte size of every regular file, sorted), computed by the same read-only check.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub listing_sha256: Option<String>,
+    /// How many regular files that listing holds.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub file_count: Option<u64>,
+}
+
+impl PlanArtifact {
+    /// A file with its sha256, or a non-empty folder with its listing fingerprint.
+    pub fn is_fingerprinted(&self) -> bool {
+        self.sha256.is_some()
+            || (self.kind == "folder"
+                && self.listing_sha256.is_some()
+                && self.file_count.unwrap_or(0) > 0)
+    }
 }
 
 /// One light login-node check. Failures are plain language and never abort the
@@ -159,9 +288,30 @@ pub struct RunPlan {
     /// by the job at run time).
     pub scratch_dir: String,
     /// GPU default for a model evaluation on the chosen partition, or None for a
-    /// CPU-only partition. The user can override it at submit time.
+    /// CPU-only partition. The user can override it at submit time, but not clear it for
+    /// a model whose manifest needs a GPU.
     #[serde(default)]
     pub gres: Option<String>,
+    /// A built-in model's manifest resources (None for a custom pipeline).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_resources: Option<ModelResources>,
+    /// A built-in model's interpreter and its module (None for a custom pipeline or a
+    /// container, and on plans saved before it was recorded).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_interpreter: Option<RunInterpreter>,
+    /// A built-in run's `--time` as `plan_sbatch` estimates it (`time_limit` over the
+    /// manifest's resources and the scenes' samples): the form's default walltime.
+    #[serde(default)]
+    pub time_estimate: Option<String>,
+    /// The profile partition's time limit as discovery found it; a longer walltime is
+    /// refused before the preview. None when none was discovered.
+    #[serde(default)]
+    pub partition_max_time: Option<String>,
+    /// A built-in run's Slurm log folder: `<cluster HOME>/logs`, the default of
+    /// `coperceive model run --slurm --slurm-logs` (coperceive/models/commands.py). The job
+    /// writes `<logs>/%x-%j.{out,err}` there; None for a custom pipeline (results_root).
+    #[serde(default)]
+    pub logs_dir: Option<String>,
     pub checks: Vec<PlanCheck>,
     pub contract_check_script: String,
     /// Always true in this step: the app never submits from a plan.
@@ -175,7 +325,7 @@ impl RunPlan {
     pub fn is_saveable(&self) -> bool {
         self.checks.iter().all(|check| check.ok)
             && (self.checkpoint.path.is_empty() || self.checkpoint.sha256.is_some())
-            && (self.split.path.is_empty() || self.split.sha256.is_some())
+            && (self.split.path.is_empty() || self.split.is_fingerprinted())
     }
 }
 
@@ -490,8 +640,10 @@ fn artifact_from_check_for_input(path: &str, kind: &str) -> PlanArtifact {
     }
 }
 
-/// Built-in argv for an installed model plugin (the plugin owns its checkpoint
-/// handling, so a checkpoint is passed as a model option).
+/// Built-in argv for an installed model plugin: `coperceive model run` with its own
+/// output flags (`--out`, `--run-id`, `--work`; it has no `--output-dir`). A
+/// checkpoint is passed as `--option checkpoint=<path>` only when one is given, which
+/// the callers allow only for a model whose manifest declares a `checkpoint` option.
 pub fn build_builtin_argv(
     profile: &ServerProfile,
     plugin_manifest: &str,
@@ -525,10 +677,12 @@ pub fn build_builtin_argv(
             output_dir.to_string(),
             "--run-id".to_string(),
             plan_id.to_string(),
-            "--option".to_string(),
-            format!("checkpoint={checkpoint}"),
         ],
     );
+    if !checkpoint.trim().is_empty() {
+        argv.push("--option".to_string());
+        argv.push(format!("checkpoint={}", checkpoint.trim()));
+    }
     if !model.trim().is_empty() {
         argv.push("--model".to_string());
         argv.push(model.trim().to_string());
@@ -564,10 +718,95 @@ fn coperceive_version_command(profile: &ServerProfile) -> String {
 /// Quotes argv for a shell script, keeping `$OUT_DIR` as a runtime expansion only
 /// where this function places it.
 fn quoted_command(argv: &[String]) -> String {
-    argv.iter()
-        .map(|element| shell_quote(element))
-        .collect::<Vec<_>>()
-        .join(" ")
+    quoted_command_with(argv, &[])
+}
+
+/// Quotes argv for a job script. The value after each flag of `expanded` is written as
+/// the given shell text instead (a double-quoted runtime path such as `"$OUT_DIR"`);
+/// every other element is single-quoted as needed, so nothing else expands.
+pub(crate) fn quoted_command_with(argv: &[String], expanded: &[(&str, &str)]) -> String {
+    let mut words = Vec::with_capacity(argv.len());
+    let mut replace_next: Option<&str> = None;
+    for element in argv {
+        match replace_next.take() {
+            Some(text) => words.push(text.to_string()),
+            None => {
+                replace_next = expanded
+                    .iter()
+                    .find(|(flag, _)| flag == element)
+                    .map(|(_, text)| *text);
+                words.push(shell_quote(element));
+            }
+        }
+    }
+    words.join(" ")
+}
+
+/// The environment block of a job script: a modules profile's modules, and for a
+/// built-in model on any other non-container profile the manifest's modules (Griffin's
+/// CUDA), each after `module purge` as `plan_sbatch` writes them; then a conda/venv
+/// profile's interpreter on PATH and a wheelhouse. A container brings its own.
+pub(crate) fn environment_lines(environment: &EnvironmentSetup, builtin: bool) -> Vec<String> {
+    let mut lines = Vec::new();
+    let loads_modules = match environment.kind {
+        EnvironmentKind::Modules => true,
+        EnvironmentKind::Conda | EnvironmentKind::Venv | EnvironmentKind::None => builtin,
+        EnvironmentKind::Container => false,
+    };
+    if loads_modules && !environment.modules.is_empty() {
+        lines.push("module purge".to_string());
+        for module in &environment.modules {
+            lines.push(format!("module load {}", shell_quote(module)));
+        }
+    }
+    if matches!(environment.kind, EnvironmentKind::Conda | EnvironmentKind::Venv) {
+        if let Some(interpreter) = environment
+            .interpreter
+            .as_deref()
+            .filter(|interpreter| !interpreter.is_empty())
+        {
+            lines.push(format!("export COPERCEIVE_PYTHON={}", shell_quote(interpreter)));
+            let parent = std::path::Path::new(interpreter)
+                .parent()
+                .map(|path| path.to_string_lossy().to_string())
+                .unwrap_or_default();
+            lines.push(format!("export PATH={}:$PATH", shell_quote(&parent)));
+        }
+    }
+    if let Some(wheelhouse) = environment
+        .wheelhouse
+        .as_deref()
+        .filter(|wheelhouse| !wheelhouse.is_empty())
+    {
+        lines.push(format!(
+            "export PIP_FIND_LINKS={}\nexport PIP_NO_INDEX=1",
+            shell_quote(wheelhouse)
+        ));
+    }
+    lines
+}
+
+/// The `model run` output checks: `<out>/<run_id>/run.json` and one
+/// `<out>/<run_id>/<scene>/boxes.parquet` per scene with boxes
+/// (coperceive/evaluation/predictions.py write_run, called from models/batch.py).
+///
+/// Success is `model run`'s exit 0 (checked before these lines) and a run.json. A
+/// boxes.parquet is required only when run.json says rows were written
+/// (`provenance.boxes_written` above zero, coperceive/models/batch.py): scenes without a
+/// detection write no boxes.parquet, and the CLI's job then exits 0 too.
+pub(crate) fn model_run_output_checks(out: &str, run_id: &str) -> Vec<String> {
+    let run_dir = format!("{out}/{run_id}");
+    vec![
+        format!(
+            "test -s \"{run_dir}/run.json\" || {{ echo \"coperceive model run wrote no \
+             run.json in {run_dir}.\" >&2; exit 1; }}"
+        ),
+        format!(
+            "if grep -Eq '\"boxes_written\": *[1-9]' \"{run_dir}/run.json\"; then compgen -G \
+             \"{run_dir}/*/boxes.parquet\" >/dev/null || {{ echo \"coperceive model run wrote \
+             boxes but no boxes.parquet for any scene in {run_dir}.\" >&2; exit 1; }}; fi"
+        ),
+    ]
 }
 
 /// Validates the scratch and results folders selected by the profile.
@@ -590,6 +829,7 @@ pub fn render_contract_check_script(
     environment: &EnvironmentSetup,
     argv: &[String],
     plan_id: &str,
+    builtin: bool,
 ) -> Result<String, String> {
     validate_scratch_template(&profile.scratch_template)?;
     let partition = profile
@@ -616,10 +856,17 @@ pub fn render_contract_check_script(
     let job_name = format!("coperceive-check-{safe_id}");
     let mut lines: Vec<String> = vec![
         "#!/bin/bash".to_string(),
-        format!(
-            "# Contract check for run plan {plan_id}: {CONTRACT_CHECK_FRAMES} frames through the \
-             pipeline's output contract."
-        ),
+        if builtin {
+            format!(
+                "# Contract check for run plan {plan_id}: coperceive model run over the split, \
+                 into scratch."
+            )
+        } else {
+            format!(
+                "# Contract check for run plan {plan_id}: {CONTRACT_CHECK_FRAMES} frames through \
+                 the pipeline's output contract."
+            )
+        },
         "# Rendered by Coperceive from the server profile. NOT submitted: the app shows this \
          script first."
             .to_string(),
@@ -658,51 +905,30 @@ pub fn render_contract_check_script(
     // Drop the plan's output-dir argument in either form; the contract check
     // writes to scratch.
     strip_output_dir(&mut command);
-    match environment.kind {
-        EnvironmentKind::Modules => {
-            if !environment.modules.is_empty() {
-                lines.push("module purge".to_string());
-                for module in &environment.modules {
-                    lines.push(format!("module load {}", shell_quote(module)));
-                }
-            }
-        }
-        EnvironmentKind::Conda | EnvironmentKind::Venv => {
-            if let Some(interpreter) = environment
-                .interpreter
-                .as_deref()
-                .filter(|interpreter| !interpreter.is_empty())
-            {
-                lines.push(format!(
-                    "export COPERCEIVE_PYTHON={}",
-                    shell_quote(interpreter)
-                ));
-                let parent = std::path::Path::new(interpreter)
-                    .parent()
-                    .map(|path| path.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                lines.push(format!("export PATH={}:$PATH", shell_quote(&parent)));
-            }
-        }
-        EnvironmentKind::None | EnvironmentKind::Container => {}
-    }
-    if let Some(wheelhouse) = environment
-        .wheelhouse
-        .as_deref()
-        .filter(|wheelhouse| !wheelhouse.is_empty())
-    {
-        lines.push(format!(
-            "export PIP_FIND_LINKS={}\nexport PIP_NO_INDEX=1",
-            shell_quote(wheelhouse)
-        ));
-    }
+    lines.extend(environment_lines(environment, builtin));
     lines.push(format!(
         "echo \"Contract check on $(hostname) for plan {plan_id}\""
     ));
-    let check_command = format!(
-        "{} --max-frames {CONTRACT_CHECK_FRAMES} --output-dir \"$OUT_DIR\"",
-        quoted_command(&command)
-    );
+    let check_command = if builtin {
+        // `coperceive model run` writes under its own --out/--run-id/--work; the check's
+        // copies point into this job's scratch. It has no frame limit (no --max-frames in
+        // `coperceive model run --help`; --scene-ids would need scene ids the plan does
+        // not know), so the check runs the whole split.
+        lines.push(
+            "# coperceive model run has no frame limit (its --help lists none), so this check \
+             runs the whole split."
+                .to_string(),
+        );
+        quoted_command_with(
+            &command,
+            &[("--out", "\"$OUT_DIR\""), ("--work", "\"$OUT_DIR/work\"")],
+        )
+    } else {
+        format!(
+            "{} --max-frames {CONTRACT_CHECK_FRAMES} --output-dir \"$OUT_DIR\"",
+            quoted_command(&command)
+        )
+    };
     match environment.kind {
         EnvironmentKind::Container => {
             let image = environment
@@ -720,6 +946,21 @@ pub fn render_contract_check_script(
         _ => lines.push(check_command),
     }
     lines.push(String::new());
+    if builtin {
+        let run_id = command
+            .iter()
+            .position(|word| word == "--run-id")
+            .and_then(|at| command.get(at + 1))
+            .cloned()
+            .unwrap_or_else(|| plan_id.to_string());
+        lines.extend(model_run_output_checks("$OUT_DIR", &run_id));
+        lines.push(
+            "echo \"Contract check finished: run.json and a boxes.parquet are present.\""
+                .to_string(),
+        );
+        lines.push(String::new());
+        return Ok(lines.join("\n"));
+    }
     lines.push(
         "test -s \"$OUT_DIR/predictions.jsonl\" || { echo \"The pipeline wrote no \
          predictions.jsonl; it does not meet the output contract.\" >&2; exit 1; }"
@@ -790,10 +1031,39 @@ if [ -f "$P" ]; then
   echo "SHA256=$S"
 else
   echo SHA256=
+fi
+"#;
+
+/// The test split's fingerprint, after the path check: the sha256 of the sorted list of
+/// every regular file's relative path and byte size. `find -L` follows symlinks, as the
+/// CLI's scene loader does (coperceive/viewdata.py lists scenes with `child.is_dir()`).
+/// A file that cannot be read, or a symlink loop, fails the check with an ERROR line
+/// instead of dropping out of the listing. Only the split is listed: a container
+/// sandbox image or an interpreter folder is never walked.
+const SPLIT_LISTING_BODY: &str = r#"
+# coperceive-check:plan-split
+if [ -d "$P" ]; then
+  W=$(cd -- "$P" 2>/dev/null && find -L . -type f -exec wc -c {} + 2>/dev/null) || { echo "ERROR=A file under the test split $P could not be read (or a symlink in it loops), so its listing cannot be fingerprinted. Check the folder and its permissions."; exit 0; }
+  L=$(printf "%s\n" "$W" | grep -v "^ *[0-9][0-9]* total\$" | grep -v "^\$" | sed "s/^ *//" | LC_ALL=C sort)
+  N=$(printf "%s" "$L" | grep -c "")
+  H=$(printf "%s\n" "$L" | sha256sum 2>/dev/null | cut -d" " -f1)
+  if [ -z "$H" ]; then H=$(printf "%s\n" "$L" | shasum -a 256 2>/dev/null | cut -d" " -f1); fi
+  echo "FILES=$N"
+  echo "LISTING_SHA256=$H"
 fi"#;
 
 fn path_check_script(path: &str) -> String {
     format!("sh -c '{}' sh {}", PATH_CHECK_BODY, shell_quote(path))
+}
+
+/// The path check plus the folder listing, for the test split only.
+fn split_check_script(path: &str) -> String {
+    format!(
+        "sh -c '{}{}' sh {}",
+        PATH_CHECK_BODY,
+        SPLIT_LISTING_BODY,
+        shell_quote(path)
+    )
 }
 
 /// The plain message a remote path check put in its `ERROR=` line, if any.
@@ -812,6 +1082,478 @@ printf "SINGULARITY=%s\n" "$(command -v singularity 2>/dev/null || true)"
 printf "PYTHON3=%s\n" "$(command -v python3 2>/dev/null || true)"
 printf "COPERCEIVE=%s\n" "$(command -v coperceive 2>/dev/null || true)"
 printf "HOME=%s\n" "${HOME:-}"'"#;
+
+/// Reads the interpreter that runs `coperceive model run` (read-only): `$1` is a python
+/// (`$2` = `python`) or a `<dir>/coperceive` console script (`$2` = `script`). For a
+/// script, the `python` beside it if there is one, else the first two lines of the script
+/// (its shebang, and pip's `/bin/sh` launcher line for a long path). For a python, the
+/// `home` and `version` lines of its venv's `pyvenv.cfg`, found as
+/// `interpreter_module` finds it (coperceive/models/slurm.py): `<bin>/../pyvenv.cfg` with
+/// the bin directory resolved, else beside the resolved interpreter's parent.
+const INTERPRETER_CHECK_BODY: &str = r#"# coperceive-check:plan-interpreter
+set -u
+P=$1
+if [ "$2" = script ]; then
+  B="$(dirname -- "$P")/python"
+  if [ -x "$B" ] && [ ! -d "$B" ]; then
+    echo "BESIDE=$B"
+    P=$B
+  else
+    echo "BESIDE="
+    if [ -f "$P" ] && [ -r "$P" ]; then
+      printf "SHEBANG=%s\n" "$(head -c 1024 -- "$P" 2>/dev/null | head -n 1 | tr -d "\r")"
+      printf "SHEBANG2=%s\n" "$(head -c 2048 -- "$P" 2>/dev/null | sed -n 2p | tr -d "\r")"
+    fi
+    exit 0
+  fi
+fi
+echo "PYTHON=$P"
+C=
+D=$(cd -- "$(dirname -- "$P")" 2>/dev/null && pwd -P) || D=
+if [ -n "$D" ] && [ -f "$(dirname -- "$D")/pyvenv.cfg" ]; then
+  C="$(dirname -- "$D")/pyvenv.cfg"
+else
+  R=$(realpath "$P" 2>/dev/null || readlink -f "$P" 2>/dev/null || true)
+  if [ -n "$R" ] && [ -f "$(dirname -- "$(dirname -- "$R")")/pyvenv.cfg" ]; then
+    C="$(dirname -- "$(dirname -- "$R")")/pyvenv.cfg"
+  fi
+fi
+echo "PYVENV_CFG=$C"
+if [ -n "$C" ]; then
+  grep -E "^[[:space:]]*(home|version)[[:space:]]*=" "$C" 2>/dev/null | head -n 20 | sed "s/^/PYVENV_LINE=/"
+fi
+exit 0"#;
+
+fn interpreter_check_script(program: &str, mode: &str) -> String {
+    format!(
+        "sh -c '{}' sh {} {}",
+        INTERPRETER_CHECK_BODY,
+        shell_quote(program),
+        shell_quote(mode)
+    )
+}
+
+/// `python/<version>` from the check's `PYVENV_LINE`s, by `interpreter_module`'s rule:
+/// `home = /software/python/<v>/bin` gives `python/<v>`, else the `version` line, else
+/// none (not a venv). A version that is not a plain module name is refused: it would be
+/// written into the job's `module load` line.
+fn pyvenv_module(output: &str) -> Result<Option<String>, String> {
+    let mut home: Option<String> = None;
+    let mut version: Option<String> = None;
+    for line in output.lines().filter_map(|line| line.strip_prefix("PYVENV_LINE=")) {
+        let Some((key, value)) = line.split_once('=') else {
+            continue;
+        };
+        match key.trim() {
+            "home" => home = Some(value.trim().to_string()),
+            "version" => version = Some(value.trim().to_string()),
+            _ => {}
+        }
+    }
+    let from_home = home.and_then(|home| {
+        let home = format!("{home}/");
+        home.match_indices("/software/python/").find_map(|(at, marker)| {
+            let rest = &home[at + marker.len()..];
+            let end = rest.find('/')?;
+            (end > 0).then(|| rest[..end].to_string())
+        })
+    });
+    let Some(found) = from_home.or(version.filter(|version| !version.is_empty())) else {
+        return Ok(None);
+    };
+    if !found
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '_' | '+' | '-'))
+    {
+        return Err(format!(
+            "The interpreter's pyvenv.cfg names the Python {found:?}, which is not a module \
+             name coperceive can load in the job. Check the venv's pyvenv.cfg on the cluster."
+        ));
+    }
+    Ok(Some(format!("python/{found}")))
+}
+
+/// The interpreter a console script's shebang names: `#!/abs/python [args]`, or pip's
+/// launcher for a long path (`#!/bin/sh` and `'''exec' "/abs/python" "$0" "$@"`). None
+/// for `#!/usr/bin/env python3` (resolved on PATH when the job runs) or anything else.
+fn shebang_python(line1: &str, line2: &str) -> Option<String> {
+    let first = line1.strip_prefix("#!")?.split_whitespace().next()?;
+    let python = if first == "/bin/sh" {
+        let rest = line2.trim().strip_prefix("'''exec' \"")?;
+        &rest[..rest.find('"')?]
+    } else {
+        first
+    };
+    let usable = python.starts_with('/')
+        && !python.ends_with("/env")
+        && !python.chars().any(|ch| ch.is_whitespace() || ch.is_control());
+    usable.then(|| python.to_string())
+}
+
+/// What runs `model run`, before any remote read: `(program, mode, source)`, or None when
+/// the profile's command names no interpreter (a bare `coperceive` on a modules or plain
+/// profile).
+fn interpreter_program(
+    command: &[String],
+    environment: &EnvironmentSetup,
+) -> Option<(String, &'static str, &'static str)> {
+    match command {
+        [python, dash_m, module] if dash_m == "-m" && module == "coperceive" => {
+            Some((python.clone(), "python", "command"))
+        }
+        [script] if script.starts_with('/') && script.ends_with("/coperceive") => {
+            Some((script.clone(), "script", "beside"))
+        }
+        [] => interpreter_program(&["coperceive".to_string()], environment),
+        [script]
+            if script == "coperceive"
+                && matches!(environment.kind, EnvironmentKind::Conda | EnvironmentKind::Venv) =>
+        {
+            environment
+                .interpreter
+                .as_deref()
+                .map(str::trim)
+                .filter(|python| !python.is_empty())
+                .map(|python| (python.to_string(), "python", "profile"))
+        }
+        _ => None,
+    }
+}
+
+/// Runs the interpreter check once; a cluster that does not answer stops the plan.
+fn run_interpreter_check(
+    runner: &dyn RemoteRunner,
+    program: &str,
+    mode: &str,
+) -> Result<String, String> {
+    let failed = |detail: String| {
+        format!(
+            "Could not read the interpreter that runs coperceive ({program}) on the cluster: \
+             {detail}. Check the server profile's coperceive command and try again."
+        )
+    };
+    match runner.run(&interpreter_check_script(program, mode), CHECK_TIMEOUT, None) {
+        Ok(result) if result.success => Ok(result.stdout),
+        Ok(result) => Err(failed(result.stderr.trim().to_string())),
+        Err(error) => Err(failed(error)),
+    }
+}
+
+/// The interpreter of a built-in run and its `python/<version>` module, read on the
+/// cluster: the python of `<python> -m coperceive`; for a `<dir>/coperceive` script the
+/// `python` beside it, else the interpreter its shebang names; for a bare `coperceive` on
+/// a conda or venv profile that profile's interpreter. When none of these names one, the
+/// python is None (the job records `python3`) and no module is loaded.
+fn read_run_interpreter(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    environment: &EnvironmentSetup,
+) -> Result<RunInterpreter, String> {
+    let command = &profile.environment.coperceive_command;
+    let program = if command.is_empty() {
+        "coperceive".to_string()
+    } else {
+        command.join(" ")
+    };
+    let Some((target, mode, source)) = interpreter_program(command, environment) else {
+        return Ok(RunInterpreter { python: None, source: "unknown".to_string(), program, module: None, package_root: None });
+    };
+    if target.chars().any(char::is_control) {
+        return Err(format!(
+            "The interpreter {target:?} contains a line break or another control character. \
+             Fix the server profile's coperceive command or interpreter."
+        ));
+    }
+    let program = if mode == "script" { target.clone() } else { program };
+    if !target.starts_with('/') {
+        // A relative python is resolved on PATH when the job runs; there is no venv to read.
+        return Ok(RunInterpreter { python: Some(target), source: source.to_string(), program, module: None, package_root: None });
+    }
+    let mut output = run_interpreter_check(runner, &target, mode)?;
+    let values = parse_key_values(&output);
+    let (python, source) = if mode == "script" {
+        match values.get("BESIDE").filter(|beside| !beside.is_empty()) {
+            Some(beside) => (beside.clone(), source),
+            None => {
+                let named = shebang_python(
+                    values.get("SHEBANG").map(String::as_str).unwrap_or(""),
+                    values.get("SHEBANG2").map(String::as_str).unwrap_or(""),
+                );
+                let Some(named) = named else {
+                    return Ok(RunInterpreter {
+                        python: None,
+                        source: "unknown".to_string(),
+                        program,
+                        module: None,
+                        package_root: None,
+                    });
+                };
+                output = run_interpreter_check(runner, &named, "python")?;
+                (named, "shebang")
+            }
+        }
+    } else {
+        (target, source)
+    };
+    Ok(RunInterpreter {
+        module: pyvenv_module(&output)?,
+        python: Some(python),
+        source: source.to_string(),
+        program,
+        package_root: None,
+    })
+}
+
+/// The interpreter's module goes first, right after `module purge`, as `plan_sbatch`
+/// writes it; the profile's and the manifest's modules follow, each once. Any other
+/// python module of the profile is dropped: Lmod keeps one module per name, so a
+/// `python/3.11` loaded after the interpreter's `python/3.9.18` would swap it, and
+/// `plan_sbatch` loads only the interpreter's (the job script says which were dropped,
+/// `dropped_python_modules`).
+fn with_interpreter_module(
+    mut environment: EnvironmentSetup,
+    interpreter: &RunInterpreter,
+) -> EnvironmentSetup {
+    if let Some(module) = &interpreter.module {
+        environment.modules.retain(|name| name != module && !is_python_module(name));
+        environment.modules.insert(0, module.clone());
+    }
+    environment
+}
+
+/// `python` or `python/<anything>`: the module name Lmod swaps.
+fn is_python_module(name: &str) -> bool {
+    name == "python" || name.starts_with("python/")
+}
+
+/// The profile's python modules a built-in plan does not load because the interpreter's
+/// own (`module`) replaces them (`with_interpreter_module`).
+pub(crate) fn dropped_python_modules<'a>(
+    profile_modules: &'a [String],
+    planned: &[String],
+    module: &str,
+) -> Vec<&'a str> {
+    profile_modules
+        .iter()
+        .filter(|name| is_python_module(name) && name.as_str() != module && !planned.contains(name))
+        .map(String::as_str)
+        .collect()
+}
+
+/// What the run's own python reports on the cluster (read-only): `ROOT=`, the parent of
+/// the coperceive package it imports (`coperceive_root` in coperceive/models/slurm.py
+/// resolves it the same way), and `SAMPLES=`, the pose times of every scene under the
+/// scenes folder, which `plan_sbatch` counts for its `--time` estimate.
+const PYTHON_FACTS_CODE: &str = r#"import os, sys
+import coperceive
+print("ROOT=" + os.path.dirname(os.path.dirname(os.path.realpath(coperceive.__file__))))
+sys.stdout.flush()
+from pathlib import Path
+from coperceive.store import read_scene
+from coperceive.viewdata import pose_times, scene_directories
+print("SAMPLES=%d" % sum(len(pose_times(read_scene(d))) for d in scene_directories(Path(sys.argv[1]))))
+"#;
+
+/// `$1` the python, `$2` its module (loaded first when `module` exists, as the job loads
+/// it), `$3` the scenes folder, `$4` the code: every value a positional parameter.
+fn python_facts_script(python: &str, module: &str, scenes: &str) -> String {
+    format!(
+        "sh -c '# coperceive-check:plan-python\n\
+         if [ -n \"$2\" ] && command -v module >/dev/null 2>&1; then module load \"$2\" >/dev/null 2>&1 || true; fi\n\
+         \"$1\" -c \"$4\" \"$3\"' sh {} {} {} {}",
+        shell_quote(python),
+        shell_quote(module),
+        shell_quote(scenes),
+        shell_quote(PYTHON_FACTS_CODE)
+    )
+}
+
+/// `time_limit` of coperceive/models/slurm.py: staging + conversion + per-sample x
+/// samples, rounded up to the next 600 s (at least 600), doubled, `HH:MM:SS`.
+pub(crate) fn cli_time_limit(per_sample: f64, staging: f64, conversion: f64, samples: u64) -> String {
+    let estimate = staging + conversion + per_sample * samples as f64;
+    let rounded = ((estimate / 600.0).ceil() as u64 * 600).max(600);
+    let total = rounded * 2;
+    format!("{:02}:{:02}:{:02}", total / 3600, (total % 3600) / 60, total % 60)
+}
+
+/// A Slurm time (`MM`, `MM:SS`, `HH:MM:SS`, `D-HH`, `D-HH:MM`, `D-HH:MM:SS`) in seconds;
+/// None for `UNLIMITED`/`infinite` or anything else.
+pub(crate) fn slurm_seconds(text: &str) -> Option<u64> {
+    let text = text.trim();
+    let (days, clock) = match text.split_once('-') {
+        Some((days, clock)) => (days.parse::<u64>().ok()?, clock),
+        None => (0, text),
+    };
+    let parts: Vec<u64> = clock
+        .split(':')
+        .map(|part| part.parse::<u64>().ok())
+        .collect::<Option<Vec<u64>>>()?;
+    let seconds = match (text.contains('-'), parts.as_slice()) {
+        (false, [minutes]) => minutes * 60,
+        (false, [minutes, seconds]) => minutes * 60 + seconds,
+        (_, [hours, minutes, seconds]) => hours * 3600 + minutes * 60 + seconds,
+        (true, [hours]) => hours * 3600,
+        (true, [hours, minutes]) => hours * 3600 + minutes * 60,
+        _ => return None,
+    };
+    Some(days * 86_400 + seconds)
+}
+
+/// `validate_logs_dir` of coperceive/models/slurm.py: an `#SBATCH --output`/`--error`
+/// folder is read up to the first blank, so one with a space or a control character is
+/// refused, as is one that is not absolute.
+pub(crate) fn checked_logs_dir(logs_dir: &str) -> Result<&str, String> {
+    if !logs_dir.starts_with('/')
+        || logs_dir.chars().any(|ch| ch.is_whitespace() || ch.is_control())
+    {
+        return Err(format!(
+            "The Slurm log folder {logs_dir:?} is not an absolute path without spaces or \
+             control characters; #SBATCH --output/--error cannot hold it."
+        ));
+    }
+    Ok(logs_dir)
+}
+
+/// A built-in run's log folder, as the CLI's `--slurm-logs` default: `~/logs` with the
+/// cluster's HOME (read on the login node).
+fn builtin_logs_dir(remote_home: Option<&str>) -> Result<String, String> {
+    let home = remote_home.ok_or_else(|| {
+        "The cluster did not report HOME, so the job's log folder (~/logs, where coperceive \
+         model run --slurm writes it) is unknown. Check the server and try again."
+            .to_string()
+    })?;
+    let logs = format!("{}/logs", home.trim_end_matches('/'));
+    checked_logs_dir(&logs)?;
+    Ok(logs)
+}
+
+/// The profile partition's discovered time limit, if discovery found one.
+fn partition_max_time(entry: &ServerEntry) -> Option<String> {
+    let partition = entry.profile.defaults.partition.as_deref()?.trim();
+    entry
+        .discovered
+        .as_ref()?
+        .partitions
+        .iter()
+        .find(|item| item.name == partition)?
+        .max_time
+        .clone()
+        .filter(|text| slurm_seconds(text).is_some())
+}
+
+/// Reads the run's python on the cluster for a built-in plan: sets the interpreter's
+/// `package_root` (refused with control characters) and returns the CLI's `--time`
+/// estimate (None, said in the check, when it cannot be computed), with the plan check.
+fn read_python_facts(
+    runner: &dyn RemoteRunner,
+    choice: &BuiltinChoice,
+    interpreter: &mut RunInterpreter,
+    scenes: &str,
+) -> Result<(Option<String>, PlanCheck), String> {
+    let Some(python) = interpreter.python.clone() else {
+        return Ok((
+            None,
+            check(
+                "python-facts",
+                "Time estimate and PYTHONPATH",
+                true,
+                format!(
+                    "The interpreter of {} cannot be known before the job runs, so the job \
+                     exports no PYTHONPATH and there is no --time estimate: enter the walltime.",
+                    interpreter.program
+                ),
+            ),
+        ));
+    };
+    let module = interpreter.module.clone().unwrap_or_default();
+    let result = runner
+        .run(&python_facts_script(&python, &module, scenes), LISTING_TIMEOUT, None)
+        .map_err(|error| format!("Could not run {python} on the cluster: {error}"))?;
+    let values = parse_key_values(&result.stdout);
+    let root = values.get("ROOT").map(|root| root.trim().to_string()).unwrap_or_default();
+    if root.is_empty() {
+        return Err(format!(
+            "{python} on the cluster could not import coperceive, so coperceive model run could \
+             not start with it either: {}. Check the server profile's coperceive command.",
+            result.stderr.trim()
+        ));
+    }
+    if root.chars().any(char::is_control) || !root.starts_with('/') {
+        return Err(format!(
+            "{python} reports its coperceive under {root:?}, which is not an absolute path \
+             without control characters, so it cannot be written as the job's PYTHONPATH."
+        ));
+    }
+    interpreter.package_root = Some(root.clone());
+    let samples = values.get("SAMPLES").and_then(|text| text.trim().parse::<u64>().ok());
+    let mut order: Vec<String> = Vec::new();
+    choice.visit(&choice.key, &mut Vec::new(), &mut order)?;
+    let mut sums = Some((0.0_f64, 0.0_f64, 0.0_f64));
+    for key in &order {
+        let model = if key == &choice.key { Some(&choice.model) } else { choice.models.get(key) };
+        let number = |value: Option<&serde_json::Number>| value.and_then(serde_json::Number::as_f64);
+        sums = match (sums, model) {
+            (Some((per, staging, conversion)), Some(model)) => {
+                match number(model.seconds_per_sample.as_ref()) {
+                    Some(per_sample) => Some((
+                        per + per_sample,
+                        staging + number(model.staging_seconds.as_ref()).unwrap_or(0.0),
+                        conversion + number(model.conversion_seconds.as_ref()).unwrap_or(0.0),
+                    )),
+                    None => None,
+                }
+            }
+            _ => None,
+        };
+    }
+    let estimate = match (sums, samples) {
+        (Some((per, staging, conversion)), Some(samples)) => {
+            Some((cli_time_limit(per, staging, conversion, samples), samples))
+        }
+        _ => None,
+    };
+    let detail = match &estimate {
+        Some((limit, samples)) => format!(
+            "{python} imports coperceive from {root} (the job's PYTHONPATH). --time {limit}, as \
+             coperceive model run --slurm estimates it from the manifest's resources over \
+             {samples} samples."
+        ),
+        None => format!(
+            "{python} imports coperceive from {root} (the job's PYTHONPATH). No --time estimate: \
+             {}; enter the walltime.",
+            if samples.is_none() {
+                "the scenes could not be counted on the cluster"
+            } else {
+                "the cluster's model list does not report the model's timing resources"
+            }
+        ),
+    };
+    Ok((
+        estimate.map(|(limit, _)| limit),
+        check("python-facts", "Time estimate and PYTHONPATH", true, detail),
+    ))
+}
+
+/// The plan's record of the interpreter check.
+fn interpreter_plan_check(interpreter: &RunInterpreter) -> PlanCheck {
+    let detail = match (&interpreter.python, &interpreter.module) {
+        (Some(python), Some(module)) => format!(
+            "{python} runs coperceive; its venv's pyvenv.cfg names {module}, which the job \
+             loads right after module purge."
+        ),
+        (Some(python), None) => format!(
+            "{python} runs coperceive; it is not in a venv with a pyvenv.cfg, so the job \
+             loads no python module for it."
+        ),
+        (None, _) => format!(
+            "The interpreter of {} cannot be known before the job runs; environment.json \
+             records python3.",
+            interpreter.program
+        ),
+    };
+    check("interpreter", "Interpreter and its module", true, detail)
+}
 
 fn plan_paths_script(scratch: &str, results: &str) -> String {
     format!(
@@ -881,6 +1623,14 @@ fn artifact_from_check(path: &str, values: &BTreeMap<String, String>) -> PlanArt
             .get("REALPATH")
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty()),
+        listing_sha256: values
+            .get("LISTING_SHA256")
+            .map(|value| value.trim().to_string())
+            .filter(|value| is_dir && value.len() == 64),
+        file_count: values
+            .get("FILES")
+            .filter(|_| is_dir)
+            .and_then(|value| value.trim().parse::<u64>().ok()),
     }
 }
 
@@ -1078,6 +1828,260 @@ fn required_plan_artifacts(source: &str, pipeline: &PipelineSpec) -> (bool, bool
     (checkpoint, split)
 }
 
+/// The installed plugin and model a built-in plan runs, read from the cluster.
+#[derive(Debug, Clone)]
+struct BuiltinChoice {
+    plugin: String,
+    key: String,
+    manifest: String,
+    modules: Vec<String>,
+    model: BuiltinModel,
+    /// Every model of the plugin, for the run's `depends_on` closure.
+    models: BTreeMap<String, BuiltinModel>,
+}
+
+impl BuiltinChoice {
+    fn takes_checkpoint(&self) -> bool {
+        self.model.options.iter().any(|option| option == "checkpoint")
+    }
+
+    /// Model options exactly as the manifest declares them: a checkpoint only when the
+    /// model has a `checkpoint` option, and every extra `K=V` a declared key. The CLI's
+    /// `check_options` would refuse anything else on the node, after the job queued.
+    fn check_options(
+        &self,
+        checkpoint: &str,
+        values: &BTreeMap<String, serde_json::Value>,
+    ) -> Result<(), String> {
+        let declared = if self.model.options.is_empty() {
+            "none".to_string()
+        } else {
+            self.model.options.join(", ")
+        };
+        if !self.takes_checkpoint() && !checkpoint.trim().is_empty() {
+            return Err(format!(
+                "The model {} {} has no checkpoint option in its manifest (it loads its own \
+                 weights), so it cannot take the checkpoint {}. Clear the checkpoint field and \
+                 check the plan again. Options it declares: {declared}.",
+                self.plugin,
+                self.key,
+                checkpoint.trim()
+            ));
+        }
+        if let Some(serde_json::Value::Array(extras)) = values.get("extras") {
+            for extra in extras {
+                let text = value_argv(extra);
+                let key = text.split_once('=').map(|(key, _)| key.trim()).unwrap_or("");
+                if key.is_empty() {
+                    return Err(format!("The model option {text:?} must be KEY=VALUE."));
+                }
+                if key == "checkpoint" || !self.model.options.iter().any(|option| option == key) {
+                    return Err(format!(
+                        "The model {} {} has no option {key:?} in its manifest. Options it \
+                         declares: {declared}.",
+                        self.plugin, self.key
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The GPU request, exactly as `plan_sbatch` makes it (coperceive/models/slurm.py): a
+    /// model whose manifest says `gpu: false` asks for none, one that says `gpu: true`
+    /// asks for `gpu:1`. The type is never taken from discovery: the manifest's
+    /// `--constraint` picks it, and on a partition with several types (`a100` and `a40`)
+    /// a typed GRES could contradict that constraint and fit no node. A partition
+    /// discovery found without any GPU is refused, so a GPU model never runs on a CPU
+    /// node unnoticed.
+    fn gres(&self, entry: &ServerEntry) -> Result<Option<String>, String> {
+        if !self.model.gpu {
+            return Ok(None);
+        }
+        let partition = entry.profile.defaults.partition.as_deref().unwrap_or("").trim();
+        let discovered = entry
+            .discovered
+            .as_ref()
+            .and_then(|server| server.partitions.iter().find(|item| item.name == partition));
+        match discovered {
+            Some(found)
+                if !found.gpu_types.is_empty()
+                    || found.gres.as_deref().is_some_and(|gres| gres.contains("gpu")) =>
+            {
+                Ok(Some("gpu:1".to_string()))
+            }
+            Some(_) => Err(format!(
+                "The model {} {} needs a GPU (gpu: true in its manifest), but the server's \
+                 discovery found no GPU on partition {partition:?}. Choose a GPU partition in \
+                 the server profile, or check the server again if it has GPUs now.",
+                self.plugin, self.key
+            )),
+            None => Ok(Some("gpu:1".to_string())),
+        }
+    }
+
+    /// The manifest's modules (Griffin's CUDA). `plan_sbatch` writes `module purge` and
+    /// loads them whatever the interpreter is: on a modules profile after the profile's
+    /// own modules (its interpreter's), on a conda, venv or plain profile as the only
+    /// modules (`environment_lines` writes them for a built-in model). A container
+    /// brings its own libraries and loads none.
+    fn environment(&self, mut environment: EnvironmentSetup) -> EnvironmentSetup {
+        match environment.kind {
+            EnvironmentKind::Modules => {
+                for module in &self.modules {
+                    if !environment.modules.contains(module) {
+                        environment.modules.push(module.clone());
+                    }
+                }
+            }
+            EnvironmentKind::Conda | EnvironmentKind::Venv | EnvironmentKind::None => {
+                environment.modules = self.modules.clone();
+            }
+            EnvironmentKind::Container => {}
+        }
+        environment
+    }
+
+    /// What the manifest asks of the job: the model's GPU, CPUs, memory and constraint,
+    /// and the transient artefacts of the model and of every model it depends on (each
+    /// once, dependencies first), as `plan_sbatch` and `work_copy_filter` use them. A
+    /// dependency loop is refused: `model_closure` would visit each model once, but no
+    /// order runs a loop's models after their dependencies.
+    fn resources(&self) -> Result<ModelResources, String> {
+        let mut order: Vec<String> = Vec::new();
+        self.visit(&self.key, &mut Vec::new(), &mut order)?;
+        let transient_artifacts = order
+            .iter()
+            .flat_map(|key| {
+                let model = if key == &self.key { Some(&self.model) } else { self.models.get(key) };
+                model
+                    .map(|model| model.transient_artifacts.clone())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(move |name| format!("{key}/{name}"))
+            })
+            .collect();
+        Ok(ModelResources {
+            gpu: self.model.gpu,
+            cpus: self.model.cpus,
+            memory_gb: self.model.memory_gb,
+            transient_artifacts,
+            constraint: self
+                .model
+                .slurm_constraint
+                .clone()
+                .filter(|constraint| !constraint.trim().is_empty()),
+        })
+    }
+
+    /// Depth-first over `depends_on`: `visiting` holds the models being visited, so a
+    /// model met again before it is done closes a loop.
+    fn visit(
+        &self,
+        key: &str,
+        visiting: &mut Vec<String>,
+        order: &mut Vec<String>,
+    ) -> Result<(), String> {
+        if order.iter().any(|done| done == key) {
+            return Ok(());
+        }
+        if let Some(at) = visiting.iter().position(|open| open == key) {
+            let mut cycle = visiting[at..].to_vec();
+            cycle.push(key.to_string());
+            return Err(format!(
+                "The models of the plugin {} depend on each other in a loop ({}), so no model \
+                 can run first. Fix depends_on in the plugin's manifest, then reload the \
+                 pipeline list.",
+                self.plugin,
+                cycle.join(" -> ")
+            ));
+        }
+        visiting.push(key.to_string());
+        let depends_on = if key == self.key {
+            self.model.depends_on.clone()
+        } else {
+            self.models.get(key).map(|model| model.depends_on.clone()).unwrap_or_default()
+        };
+        for dependency in &depends_on {
+            self.visit(dependency, visiting, order)?;
+        }
+        visiting.pop();
+        order.push(key.to_string());
+        Ok(())
+    }
+}
+
+/// The login node's `module` command, for a built-in model's manifest modules on a
+/// profile that is not a modules profile.
+fn manifest_modules_check(module_available: bool, modules: &[String]) -> PlanCheck {
+    with_hint(
+        check(
+            "env-manifest-modules",
+            "Model modules",
+            module_available,
+            if module_available {
+                format!("The model's manifest loads: {}.", modules.join(", "))
+            } else {
+                format!(
+                    "The model's manifest needs the modules {}, but no `module` command was \
+                     found on the login node.",
+                    modules.join(", ")
+                )
+            },
+        ),
+        "The job loads the manifest's modules (module purge, then module load), as \
+         coperceive model run --slurm does.",
+    )
+}
+
+/// Finds `plugin`'s `model` in the cluster's `coperceive model list --json`.
+fn resolve_builtin_model(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+    plugin: &str,
+    model: &str,
+) -> Result<BuiltinChoice, String> {
+    let plugins = read_builtin_plugins(runner, profile)?;
+    let found = plugins
+        .into_iter()
+        .find(|item| item.name == plugin)
+        .ok_or_else(|| {
+            format!(
+                "The installed pipeline {plugin:?} is no longer on the cluster. Reload the \
+                 pipeline list and rebuild the plan."
+            )
+        })?;
+    let manifest = found
+        .manifest
+        .clone()
+        .filter(|path| path.starts_with('/'))
+        .ok_or_else(|| {
+            format!(
+                "This built-in model has no pipeline manifest. Reinstall the model or choose a \
+                 custom pipeline.{}",
+                found
+                    .error
+                    .as_deref()
+                    .map(|error| format!(" The cluster said: {error}"))
+                    .unwrap_or_default()
+            )
+        })?;
+    let spec = found.models.get(model).cloned().ok_or_else(|| {
+        format!(
+            "The plugin {plugin} has no model {model:?}; its manifest lists: {}.",
+            found.models.keys().cloned().collect::<Vec<_>>().join(", ")
+        )
+    })?;
+    Ok(BuiltinChoice {
+        plugin: plugin.to_string(),
+        key: model.to_string(),
+        manifest,
+        modules: found.modules,
+        model: spec,
+        models: found.models,
+    })
+}
+
 /// Builds and checks a run plan. Remote work is read-only and bounded; nothing is
 /// submitted.
 pub fn build_run_plan(
@@ -1106,19 +2110,43 @@ pub fn build_run_plan(
     pipeline.validate()?;
     profile.validate_pipeline_script(&pipeline.script)?;
     validate_path_arguments(profile, &pipeline, &request.values)?;
-    let (needs_checkpoint, needs_split) =
-        required_plan_artifacts(&request.pipeline_source, &pipeline);
+    let builtin = request.pipeline_source == "builtin";
+    let builtin_choice = if builtin {
+        // The cluster's `model list --json` is the authority on the manifest (the
+        // client's plugin_manifest is never used), so it is read first: a cluster too old
+        // to report one, or a plugin whose manifest cannot be read, is named with the
+        // cluster's own reason instead of a generic "no manifest".
+        if request.model.trim().is_empty() {
+            return Err("Choose the model from the plugin manifest before checking the plan.".to_string());
+        }
+        let choice = resolve_builtin_model(
+            runner,
+            profile,
+            request.pipeline.name.trim(),
+            request.model.trim(),
+        )?;
+        choice.check_options(&request.checkpoint, &request.values)?;
+        // A dependency loop in the manifest is refused before any other check.
+        choice.resources()?;
+        Some(choice)
+    } else {
+        None
+    };
+    let (needs_checkpoint, needs_split) = match &builtin_choice {
+        Some(choice) => (choice.takes_checkpoint(), true),
+        None => required_plan_artifacts(&request.pipeline_source, &pipeline),
+    };
     if needs_checkpoint {
         validate_path_in_roots(profile, &request.checkpoint, "checkpoint")?;
     }
     if needs_split {
         validate_path_in_roots(profile, &request.split, "split")?;
     }
-    let builtin = request.pipeline_source == "builtin";
+    let gres = match &builtin_choice {
+        Some(choice) => choice.gres(entry)?,
+        None => default_eval_gres(entry),
+    };
     if builtin {
-        if request.model.trim().is_empty() {
-            return Err("Choose the model from the plugin manifest before checking the plan.".to_string());
-        }
         for (path, label) in [
             (request.raw_root.trim(), "raw root"),
             (request.media_root.trim(), "media root"),
@@ -1138,6 +2166,10 @@ pub fn build_run_plan(
     let output_dir = format!("{base}/runs/{plan_id}");
     let (environment, overridden, env_note) =
         resolve_environment(profile, &pipeline, request.environment_override.as_ref());
+    let environment = match &builtin_choice {
+        Some(choice) => choice.environment(environment),
+        None => environment,
+    };
     validate_environment_roots(profile, &environment)?;
     environment.validate()?;
 
@@ -1162,8 +2194,8 @@ pub fn build_run_plan(
             &mut checks,
             "split",
             "Test split",
-            &path_check_script(&request.split),
-            CHECK_TIMEOUT,
+            &split_check_script(&request.split),
+            LISTING_TIMEOUT,
         )?
     } else {
         None
@@ -1286,19 +2318,34 @@ pub fn build_run_plan(
             true,
             format!("sha256 {}", split.sha256.clone().unwrap_or_default()),
         ));
+    } else if split.kind == "folder" {
+        let ok = split.is_fingerprinted();
+        checks.push(with_hint(
+            check(
+                "split-sha",
+                "Test split fingerprint",
+                ok,
+                match (&split.listing_sha256, split.file_count) {
+                    (Some(listing), Some(files)) if ok => format!(
+                        "A folder of {files} file(s); its listing (path and size of every file) \
+                         has sha256 {listing}."
+                    ),
+                    _ => "The split folder lists no files, so it cannot be fingerprinted."
+                        .to_string(),
+                },
+            ),
+            "A folder is recorded by the sha256 of its file listing; the save and the submit \
+             check it again.",
+        ));
     } else {
         checks.push(with_hint(
             check(
                 "split-sha",
                 "Test split sha256",
-                split.kind == "folder",
-                if split.kind == "folder" {
-                    "The split is a folder; its listing is recorded but folders have no single sha256."
-                } else {
-                    "Could not read the split file's checksum."
-                },
+                false,
+                "Could not read the split file's checksum.",
             ),
-            "A split file gives a verifiable sha256; a folder is accepted but not hashed.",
+            "A split file gives a verifiable sha256.",
         ));
     }
     if let Some(real_path) = &split.real_path {
@@ -1326,7 +2373,18 @@ pub fn build_run_plan(
 
     }
 
-    // 2. Environment pieces available on the login node (light).
+    // 2. The interpreter that runs a built-in model and its python module (the job
+    //    loads it after module purge), then the environment pieces on the login node.
+    let (environment, run_interpreter, time_estimate) = match &builtin_choice {
+        Some(choice) if environment.kind != EnvironmentKind::Container => {
+            let mut found = read_run_interpreter(runner, profile, &environment)?;
+            checks.push(interpreter_plan_check(&found));
+            let (estimate, facts) = read_python_facts(runner, choice, &mut found, &request.split)?;
+            checks.push(facts);
+            (with_interpreter_module(environment, &found), Some(found), estimate)
+        }
+        _ => (environment, None, None),
+    };
     let env_values = run_check(
         runner,
         &mut checks,
@@ -1349,6 +2407,15 @@ pub fn build_run_plan(
             .get("SINGULARITY")
             .unwrap_or(&String::new())
             .is_empty();
+    if builtin
+        && matches!(
+            environment.kind,
+            EnvironmentKind::Conda | EnvironmentKind::Venv | EnvironmentKind::None
+        )
+        && !environment.modules.is_empty()
+    {
+        checks.push(manifest_modules_check(module_available, &environment.modules));
+    }
     match environment.kind {
         EnvironmentKind::Modules => {
             let has_modules = !environment.modules.is_empty();
@@ -1573,28 +2640,22 @@ pub fn build_run_plan(
     // 5. Typed argv, then the contract-check script rendered from it.
     let argv = match request.pipeline_source.as_str() {
         "builtin" => {
-            let manifest = request
-                .plugin_manifest
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    "This built-in model has no pipeline manifest. Reinstall the model or choose a \
-                     custom pipeline."
-                        .to_string()
-                })?;
+            // The manifest the cluster resolved, never the path the client sent.
+            let choice = builtin_choice
+                .as_ref()
+                .ok_or_else(|| "This built-in model has no pipeline manifest.".to_string())?;
             build_builtin_argv(
                 profile,
-                manifest,
+                &choice.manifest,
                 &plan_id,
                 &request.values,
                 &request.split,
-                &request.checkpoint,
+                if needs_checkpoint { &request.checkpoint } else { "" },
                 &output_dir,
                 request.model.trim(),
                 request.raw_root.trim(),
                 request.media_root.trim(),
-                &format!("{output_dir}/work"),
+                WORK_IN_SCRATCH,
             )?
         }
         _ => build_pipeline_argv(&pipeline, &request.values, &output_dir)?,
@@ -1609,7 +2670,7 @@ pub fn build_run_plan(
         ),
     ));
     let contract_check_script =
-        render_contract_check_script(profile, &environment, &argv, &plan_id)?;
+        render_contract_check_script(profile, &environment, &argv, &plan_id, builtin)?;
     if !environment.compute_has_internet {
         for forbidden in [
             "pip install",
@@ -1655,11 +2716,16 @@ pub fn build_run_plan(
         model: if builtin { request.model.trim().to_string() } else { String::new() },
         raw_root: if builtin { artifact_from_check_for_input(&request.raw_root, "folder") } else { PlanArtifact::default() },
         media_root: if builtin { artifact_from_check_for_input(&request.media_root, "folder") } else { PlanArtifact::default() },
-        work_dir: if builtin { format!("{output_dir}/work") } else { String::new() },
+        work_dir: if builtin { WORK_IN_SCRATCH.to_string() } else { String::new() },
         staging_seconds: None,
         output_dir,
         scratch_dir: profile.scratch_template.clone(),
-        gres: default_eval_gres(entry),
+        gres,
+        model_resources: builtin_choice.as_ref().map(BuiltinChoice::resources).transpose()?,
+        run_interpreter,
+        time_estimate,
+        partition_max_time: if builtin { partition_max_time(entry) } else { None },
+        logs_dir: if builtin { Some(builtin_logs_dir(remote_home.as_deref())?) } else { None },
         checks,
         contract_check_script,
         nothing_submitted: true,
@@ -1667,11 +2733,118 @@ pub fn build_run_plan(
     })
 }
 
+/// `coperceive model list --json`: the plain listing's last word is the entry point
+/// (`module:ATTR`), never the manifest path, so the app reads the JSON form. The
+/// coperceive command goes in as `sh`'s positional parameters (`"$@"`), as the path and
+/// interpreter checks pass theirs: a quoted word inside the single-quoted script body
+/// would end it.
 fn model_list_script(profile: &ServerProfile) -> String {
     format!(
-        "sh -c '# coperceive-check:model-list\n{} model list 2>/dev/null'",
+        "sh -c '# coperceive-check:model-list\n\"$@\" model list --json' sh {}",
         quoted_command(&profile.environment.coperceive_command)
     )
+}
+
+fn model_list_plain_script(profile: &ServerProfile) -> String {
+    format!(
+        "sh -c '# coperceive-check:model-list\n\"$@\" model list 2>/dev/null' sh {}",
+        quoted_command(&profile.environment.coperceive_command)
+    )
+}
+
+/// What argparse prints when this coperceive has no `model list --json`.
+const ARGPARSE_REFUSES_JSON: &str = "error: unrecognized arguments: --json";
+
+pub const MODEL_LIST_FORMAT: &str = "coperceive-model-list";
+
+const MODEL_LIST_TOO_OLD: &str = "The cluster's coperceive is too old to report where its model \
+     manifests are: it has no `coperceive model list --json`. Update coperceive on the cluster \
+     (the profile's coperceive command) to v0.1.1 or later, then reload the pipeline list.";
+
+#[derive(Deserialize)]
+struct ModelList {
+    format: String,
+    format_version: u32,
+    #[serde(default)]
+    plugins: Vec<BuiltinPlugin>,
+}
+
+/// The installed model plugins, from the cluster's `coperceive model list --json`
+/// (read-only, bounded). An older coperceive without `--json` gets a plain error.
+pub fn read_builtin_plugins(
+    runner: &dyn RemoteRunner,
+    profile: &ServerProfile,
+) -> Result<Vec<BuiltinPlugin>, String> {
+    let result = runner
+        .run(&model_list_script(profile), READ_TIMEOUT, None)
+        .map_err(|error| format!("Could not list the installed models on the cluster: {error}"))?;
+    if !result.success {
+        if result.stderr.contains(ARGPARSE_REFUSES_JSON) {
+            return Err(MODEL_LIST_TOO_OLD.to_string());
+        }
+        return Err(format!(
+            "Could not list the installed models on the cluster: {}",
+            result.stderr.trim()
+        ));
+    }
+    let listing: ModelList = serde_json::from_str(&result.stdout).map_err(|error| {
+        format!(
+            "The cluster's `coperceive model list --json` did not answer with the model list \
+             ({error})."
+        )
+    })?;
+    if listing.format != MODEL_LIST_FORMAT || listing.format_version != 1 {
+        return Err(format!(
+            "The cluster's model list has format {} {}, which this app does not read. Update \
+             the app or the cluster's coperceive so they match.",
+            listing.format, listing.format_version
+        ));
+    }
+    Ok(listing.plugins)
+}
+
+fn is_plugin_name(name: &str) -> bool {
+    name.chars()
+        .next()
+        .map(|ch| ch.is_ascii_lowercase())
+        .unwrap_or(false)
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_')
+}
+
+fn builtin_entry(name: &str, description: String, plugin: Option<BuiltinPlugin>) -> PipelineEntry {
+    let plugin_manifest = plugin
+        .as_ref()
+        .and_then(|plugin| plugin.manifest.clone())
+        .filter(|path| path.starts_with('/'));
+    PipelineEntry {
+        id: name.to_string(),
+        name: name.to_string(),
+        description,
+        source: "builtin".to_string(),
+        spec: PipelineSpec {
+            name: name.to_string(),
+            script: plugin_manifest.clone().unwrap_or_default(),
+            interpreter: vec!["coperceive".to_string()],
+            environment: EnvironmentSetup::default(),
+            arguments: vec![crate::hpc::ArgumentSpec {
+                name: "extras".to_string(),
+                kind: ArgumentKind::Str,
+                help: "Extra --option KEY=VALUE pairs for the model run.".to_string(),
+                required: false,
+                default: None,
+                choices: Vec::new(),
+                multiple: true,
+                role: crate::hpc::ArgumentRole::Other,
+            }],
+            output_contract: "coperceive-pipeline-1".to_string(),
+            description: String::new(),
+        },
+        registration_path: None,
+        plugin_manifest,
+        builtin: plugin,
+    }
 }
 
 /// Reads a custom pipeline registration (`coperceive-pipeline.json` beside the
@@ -1756,79 +2929,49 @@ pub fn load_pipeline_registration(
         spec,
         registration_path: Some(registration_path),
         plugin_manifest: None,
+        builtin: None,
     })
 }
 
 /// Lists installed model plugins as built-in pipelines. A cluster without
-/// plugins simply returns an empty list.
+/// plugins simply returns an empty list. A cluster whose coperceive is too old for
+/// `model list --json` still lists its plugins by name, without a manifest and with
+/// the reason as the description; planning one of them gives the same reason.
 pub fn list_builtin_pipelines(
     runner: &dyn RemoteRunner,
     profile: &ServerProfile,
 ) -> Vec<PipelineEntry> {
-    let script = model_list_script(profile);
-    let Ok(result) = runner.run(&script, READ_TIMEOUT, None) else {
-        return Vec::new();
-    };
-    if !result.success {
-        return Vec::new();
+    match read_builtin_plugins(runner, profile) {
+        Ok(plugins) => plugins
+            .into_iter()
+            .filter(|plugin| is_plugin_name(&plugin.name))
+            .map(|plugin| {
+                let description = match &plugin.error {
+                    Some(error) => format!("Installed model plugin; its manifest could not be read: {error}"),
+                    None => "Installed model plugin; runs coperceive model run on the cluster."
+                        .to_string(),
+                };
+                builtin_entry(&plugin.name.clone(), description, Some(plugin))
+            })
+            .collect(),
+        Err(error) if error == MODEL_LIST_TOO_OLD => {
+            let Ok(result) = runner.run(&model_list_plain_script(profile), READ_TIMEOUT, None) else {
+                return Vec::new();
+            };
+            if !result.success {
+                return Vec::new();
+            }
+            result
+                .stdout
+                .lines()
+                .filter(|line| !line.trim().starts_with("no model plugins"))
+                .filter_map(|line| line.split_whitespace().next())
+                .filter(|name| is_plugin_name(name))
+                .map(|name| builtin_entry(name, MODEL_LIST_TOO_OLD.to_string(), None))
+                .collect()
+        }
+        Err(_) => Vec::new(),
     }
-    let mut entries = Vec::new();
-    for line in result.stdout.lines() {
-        let trimmed = line.trim();
-        if trimmed.is_empty() || trimmed.starts_with("no model plugins") {
-            continue;
-        }
-        let parts: Vec<&str> = trimmed.split_whitespace().collect();
-        if parts.len() < 2 {
-            continue;
-        }
-        let name = parts[0];
-        let is_valid_name = name
-            .chars()
-            .next()
-            .map(|ch| ch.is_ascii_lowercase())
-            .unwrap_or(false)
-            && name
-                .chars()
-                .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-' || ch == '_');
-        if !is_valid_name {
-            continue;
-        }
-        let manifest = parts.last().unwrap_or(&"").to_string();
-        let plugin_manifest = if manifest.contains('/') {
-            Some(manifest.clone())
-        } else {
-            None
-        };
-        entries.push(PipelineEntry {
-            id: name.to_string(),
-            name: name.to_string(),
-            description: "Installed model plugin; runs coperceive model run on the cluster."
-                .to_string(),
-            source: "builtin".to_string(),
-            spec: PipelineSpec {
-                name: name.to_string(),
-                script: plugin_manifest.clone().unwrap_or_default(),
-                interpreter: vec!["coperceive".to_string()],
-                environment: EnvironmentSetup::default(),
-                arguments: vec![crate::hpc::ArgumentSpec {
-                    name: "extras".to_string(),
-                    kind: ArgumentKind::Str,
-                    help: "Extra --option KEY=VALUE pairs for the model run.".to_string(),
-                    required: false,
-                    default: None,
-                    choices: Vec::new(),
-                    multiple: true,
-                    role: crate::hpc::ArgumentRole::Other,
-                }],
-                output_contract: "coperceive-pipeline-1".to_string(),
-                description: String::new(),
-            },
-            registration_path: None,
-            plugin_manifest,
-        });
-    }
-    entries
 }
 
 fn now_unix() -> u64 {
@@ -1977,8 +3120,9 @@ fn new_plan_id() -> String {
 struct SavePipeline {
     spec: PipelineSpec,
     source: String,
-    plugin_manifest: Option<String>,
+    builtin: Option<BuiltinChoice>,
     environment: EnvironmentSetup,
+    run_interpreter: Option<RunInterpreter>,
     overridden: bool,
     env_note: String,
 }
@@ -1989,33 +3133,16 @@ fn resolve_pipeline_for_save(
     request: &RunPlanRequest,
 ) -> Result<SavePipeline, String> {
     let source = request.pipeline_source.trim().to_string();
-    let (spec, plugin_manifest) = if source == "builtin" {
+    let (spec, builtin) = if source == "builtin" {
         let wanted = request.pipeline.name.trim();
         if wanted.is_empty() {
             return Err("Choose the installed pipeline to run.".to_string());
         }
-        let entry = list_builtin_pipelines(runner, profile)
-            .into_iter()
-            .find(|entry| entry.name == wanted || entry.id == wanted)
-            .ok_or_else(|| {
-                format!(
-                    "The installed pipeline {wanted:?} is no longer on the cluster. Reload the                      pipeline list and rebuild the plan."
-                )
-            })?;
-        if entry
-            .plugin_manifest
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .is_none()
-        {
-            return Err(
-                "This built-in model has no pipeline manifest. Reinstall the model or choose a \
-                 custom pipeline."
-                    .to_string(),
-            );
-        }
-        (entry.spec, entry.plugin_manifest)
+        let choice = resolve_builtin_model(runner, profile, wanted, request.model.trim())?;
+        let entry = builtin_entry(wanted, String::new(), None);
+        let mut spec = entry.spec;
+        spec.script = choice.manifest.clone();
+        (spec, Some(choice))
     } else {
         let entry = load_pipeline_registration(runner, profile, &request.pipeline.script)?;
         (entry.spec, None)
@@ -2032,11 +3159,28 @@ fn resolve_pipeline_for_save(
             collision.name
         ));
     }
-    let (mut environment, overridden, env_note) =
-        resolve_environment(profile, &spec, None);
+    let (environment, overridden, env_note) = resolve_environment(profile, &spec, None);
+    let mut environment = match &builtin {
+        Some(choice) => choice.environment(environment),
+        None => environment,
+    };
     // A plan never turns on the internet for compute nodes: that is a profile fact.
     environment.compute_has_internet = profile.environment.compute_has_internet;
     validate_environment_roots(profile, &environment)?;
+    // The interpreter and its module are read again on the cluster, as at build time.
+    let run_interpreter = match &builtin {
+        Some(choice) if environment.kind != EnvironmentKind::Container => {
+            choice.resources()?;
+            let found = read_run_interpreter(runner, profile, &environment)?;
+            environment = with_interpreter_module(environment, &found);
+            Some(found)
+        }
+        Some(choice) => {
+            choice.resources()?;
+            None
+        }
+        None => None,
+    };
     Ok(SavePipeline {
         spec,
         source: if source == "builtin" {
@@ -2044,8 +3188,9 @@ fn resolve_pipeline_for_save(
         } else {
             "custom".to_string()
         },
-        plugin_manifest,
+        builtin,
         environment,
+        run_interpreter,
         overridden,
         env_note,
     })
@@ -2063,6 +3208,7 @@ fn revalidate_plan_on_server(
     remote_home: Option<&str>,
     needs_checkpoint: bool,
     needs_split: bool,
+    builtin: bool,
 ) -> Result<(PlanArtifact, PlanArtifact, Vec<PlanCheck>), String> {
     if needs_checkpoint {
         validate_path_in_roots(profile, &plan.checkpoint.path, "checkpoint")?;
@@ -2082,14 +3228,12 @@ fn revalidate_plan_on_server(
         if !needed {
             continue;
         }
-        let values = run_check(
-            runner,
-            &mut checks,
-            &format!("{name}-path"),
-            label,
-            &path_check_script(path),
-            CHECK_TIMEOUT,
-        )?
+        let (script, timeout) = if name == "split" {
+            (split_check_script(path), LISTING_TIMEOUT)
+        } else {
+            (path_check_script(path), CHECK_TIMEOUT)
+        };
+        let values = run_check(runner, &mut checks, &format!("{name}-path"), label, &script, timeout)?
         .ok_or_else(|| format!("Could not read the {what} on the cluster."))?;
         if let Some(error) = path_check_error(&values) {
             return Err(error);
@@ -2112,19 +3256,37 @@ fn revalidate_plan_on_server(
                  code folders. Pick one inside them."
             ));
         }
+        // A test split may be a folder (`model run --scenes` takes one): it is recorded
+        // by the sha256 of its file listing. A checkpoint must be a file with a sha256.
+        let folder_ok = name == "split" && artifact.kind == "folder";
+        let fingerprinted = if folder_ok {
+            artifact.is_fingerprinted()
+        } else {
+            artifact.sha256.is_some()
+        };
         checks.push(check(
             &format!("{name}-sha"),
             &format!("{label} sha256"),
-            artifact.sha256.is_some(),
-            match &artifact.sha256 {
-                Some(sha) => format!("sha256 {sha}"),
-                None => "Could not read a checksum for this file.".to_string(),
+            fingerprinted,
+            match (&artifact.sha256, &artifact.listing_sha256, artifact.file_count) {
+                (Some(sha), _, _) => format!("sha256 {sha}"),
+                (None, Some(listing), Some(files)) if fingerprinted => {
+                    format!("folder of {files} file(s), listing sha256 {listing}")
+                }
+                _ => "Could not read a checksum for this path.".to_string(),
             },
         ));
-        if artifact.sha256.is_none() {
+        if folder_ok && !fingerprinted {
+            return Err(format!(
+                "The {what} folder {path} lists no files, so it has no fingerprint and the plan \
+                 cannot be saved (the submit step compares that fingerprint with the cluster \
+                 again). Choose the folder that holds the scenes."
+            ));
+        }
+        if !fingerprinted {
             return Err(format!(
                 "The cluster no longer reports a sha256 for the {what}, so the plan cannot be \
-                 saved and later verified."
+                 saved (the submit step compares that sha256 with the cluster again)."
             ));
         }
         artifacts[index] = Some(artifact);
@@ -2146,6 +3308,15 @@ fn revalidate_plan_on_server(
         || !env_values.get("LMOD").unwrap_or(&String::new()).is_empty();
     let container_available = !env_values.get("APPTAINER").unwrap_or(&String::new()).is_empty()
         || !env_values.get("SINGULARITY").unwrap_or(&String::new()).is_empty();
+    if builtin
+        && matches!(
+            environment.kind,
+            EnvironmentKind::Conda | EnvironmentKind::Venv | EnvironmentKind::None
+        )
+        && !environment.modules.is_empty()
+    {
+        checks.push(manifest_modules_check(module_available, &environment.modules));
+    }
     match environment.kind {
         EnvironmentKind::Modules => {
             let ok = module_available && !environment.modules.is_empty();
@@ -2311,6 +3482,94 @@ fn revalidate_plan_on_server(
     Ok((checkpoint, split, checks))
 }
 
+/// Before a saved plan is submitted, its inputs are checked again on the cluster: the
+/// checkpoint's sha256, and the test split's sha256 (a file) or listing fingerprint (a
+/// folder), must equal what the save recorded, and each must still resolve to the same
+/// real path. Read-only and bounded. A changed, missing or unreadable input is refused
+/// with the reason, so nothing is submitted against data the user did not review.
+pub fn verify_plan_inputs(runner: &dyn RemoteRunner, plan: &RunPlan) -> Result<(), String> {
+    for (artifact, what, is_split) in [
+        (&plan.checkpoint, "checkpoint", false),
+        (&plan.split, "test split", true),
+    ] {
+        let path = artifact.path.trim();
+        if path.is_empty() {
+            continue;
+        }
+        if !artifact.is_fingerprinted() {
+            return Err(format!(
+                "The saved plan records no fingerprint for the {what} {path}, so it cannot be \
+                 checked before submitting. Rebuild and save the plan. Nothing was submitted."
+            ));
+        }
+        let (script, timeout) = if is_split && artifact.kind == "folder" {
+            (split_check_script(path), LISTING_TIMEOUT)
+        } else {
+            (path_check_script(path), CHECK_TIMEOUT)
+        };
+        let result = runner.run(&script, timeout, None).map_err(|error| {
+            format!(
+                "Could not check the {what} {path} on the cluster before submitting: {error}. \
+                 Nothing was submitted."
+            )
+        })?;
+        if !result.success {
+            return Err(format!(
+                "Could not check the {what} {path} on the cluster before submitting: {}. \
+                 Nothing was submitted.",
+                result.stderr.trim()
+            ));
+        }
+        let values = parse_key_values(&result.stdout);
+        if let Some(error) = path_check_error(&values) {
+            return Err(format!("{error} Nothing was submitted."));
+        }
+        let now = artifact_from_check(path, &values);
+        if now.kind == "missing" {
+            return Err(format!(
+                "The {what} {path} is no longer on the cluster. Nothing was submitted."
+            ));
+        }
+        let changed = if artifact.sha256.is_some() {
+            (artifact.sha256 != now.sha256).then(|| {
+                format!(
+                    "sha256 {} was saved, the cluster now reports {}",
+                    artifact.sha256.as_deref().unwrap_or("none"),
+                    now.sha256.as_deref().unwrap_or("none")
+                )
+            })
+        } else {
+            (artifact.listing_sha256 != now.listing_sha256 || artifact.file_count != now.file_count)
+                .then(|| {
+                    format!(
+                        "{} file(s) with listing sha256 {} were saved, the cluster now lists {} \
+                         file(s) with listing sha256 {}",
+                        artifact.file_count.unwrap_or(0),
+                        artifact.listing_sha256.as_deref().unwrap_or("none"),
+                        now.file_count.unwrap_or(0),
+                        now.listing_sha256.as_deref().unwrap_or("none")
+                    )
+                })
+        }
+        .or_else(|| {
+            (artifact.real_path.is_some() && artifact.real_path != now.real_path).then(|| {
+                format!(
+                    "it resolved to {}, it now resolves to {}",
+                    artifact.real_path.as_deref().unwrap_or(""),
+                    now.real_path.as_deref().unwrap_or("nothing")
+                )
+            })
+        });
+        if let Some(detail) = changed {
+            return Err(format!(
+                "The {what} {path} changed since the plan was saved ({detail}). Nothing was \
+                 submitted. Check the {what}, then rebuild and save the plan."
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Saves a plan under the profile's `results_root/plans/<id>.json`.
 ///
 /// The plan and request from the UI are untrusted: the id, pipeline, script,
@@ -2342,8 +3601,22 @@ pub fn save_run_plan(
     let final_path = format!("{plans_dir}/{}.json", plan.id);
 
     // The client's checks and hashes are deliberately ignored: recompute them.
-    let (needs_checkpoint, needs_split) =
-        required_plan_artifacts(&save_pipeline.source, &save_pipeline.spec);
+    let (needs_checkpoint, needs_split) = match &save_pipeline.builtin {
+        Some(choice) => {
+            let given = if plan.checkpoint.path.trim().is_empty() {
+                request.checkpoint.as_str()
+            } else {
+                plan.checkpoint.path.as_str()
+            };
+            choice.check_options(given, &request.values)?;
+            (choice.takes_checkpoint(), true)
+        }
+        None => required_plan_artifacts(&save_pipeline.source, &save_pipeline.spec),
+    };
+    let gres = match &save_pipeline.builtin {
+        Some(choice) => choice.gres(entry)?,
+        None => default_eval_gres(entry),
+    };
     let (checkpoint, split, mut checks) = revalidate_plan_on_server(
         runner,
         profile,
@@ -2352,6 +3625,7 @@ pub fn save_run_plan(
         remote_home.as_deref(),
         needs_checkpoint,
         needs_split,
+        save_pipeline.builtin.is_some(),
     )?;
     let output_dir = format!(
         "{}/runs/{}",
@@ -2380,17 +3654,7 @@ pub fn save_run_plan(
             _ => {}
         }
     }
-    let built_argv = if save_pipeline.source == "builtin" {
-        let manifest = save_pipeline
-            .plugin_manifest
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| {
-                "This built-in model has no pipeline manifest. Reinstall the model or choose a \
-                 custom pipeline."
-                    .to_string()
-            })?;
+    let argv: Vec<String> = if let Some(choice) = &save_pipeline.builtin {
         let model = request.model.trim();
         let raw = request.raw_root.trim();
         let media = request.media_root.trim();
@@ -2402,27 +3666,29 @@ pub fn save_run_plan(
         }
         validate_path_in_roots(profile, raw, "raw root")?;
         validate_path_in_roots(profile, media, "media root")?;
+        // `coperceive model run` takes --out/--run-id/--work and has no --output-dir.
         build_builtin_argv(
             profile,
-            manifest,
+            &choice.manifest,
             &plan.id,
             &typed,
             &split.path,
-            &checkpoint.path,
+            if needs_checkpoint { &checkpoint.path } else { "" },
             &output_dir,
             model,
             raw,
             media,
-            &format!("{output_dir}/work"),
+            WORK_IN_SCRATCH,
         )?
     } else {
-        build_pipeline_argv(&save_pipeline.spec, &typed, &output_dir)?
+        // A custom pipeline follows the output contract: force the output directory
+        // pair to the recomputed value.
+        let mut argv = build_pipeline_argv(&save_pipeline.spec, &typed, &output_dir)?;
+        strip_output_dir(&mut argv);
+        argv.push("--output-dir".to_string());
+        argv.push(output_dir.clone());
+        argv
     };
-    // Force the output directory pair to the recomputed value.
-    let mut argv: Vec<String> = built_argv.clone();
-    strip_output_dir(&mut argv);
-    argv.push("--output-dir".to_string());
-    argv.push(output_dir.clone());
     if argv.is_empty() || argv.iter().any(|element| element.contains('\n')) {
         return Err("The rebuilt command arguments are empty or contain a line break.".to_string());
     }
@@ -2438,7 +3704,13 @@ pub fn save_run_plan(
     ));
 
     let contract_check_script =
-        render_contract_check_script(profile, &save_pipeline.environment, &argv, &plan.id)?;
+        render_contract_check_script(
+            profile,
+            &save_pipeline.environment,
+            &argv,
+            &plan.id,
+            save_pipeline.builtin.is_some(),
+        )?;
     if !save_pipeline.environment.compute_has_internet {
         for forbidden in [
             "pip install",
@@ -2493,14 +3765,40 @@ pub fn save_run_plan(
         PlanArtifact::default()
     };
     validated.work_dir = if save_pipeline.source == "builtin" {
-        format!("{output_dir}/work")
+        WORK_IN_SCRATCH.to_string()
     } else {
         String::new()
+    };
+    validated.model_resources =
+        save_pipeline.builtin.as_ref().map(BuiltinChoice::resources).transpose()?;
+    // The run's python is read again too: its coperceive (PYTHONPATH) and the --time
+    // estimate are never taken from the client's plan.
+    let mut run_interpreter = save_pipeline.run_interpreter.clone();
+    let mut time_estimate = None;
+    if let Some(found) = run_interpreter.as_mut() {
+        checks.push(interpreter_plan_check(found));
+        if let Some(choice) = &save_pipeline.builtin {
+            let (estimate, facts) = read_python_facts(runner, choice, found, &validated.split.path)?;
+            checks.push(facts);
+            time_estimate = estimate;
+        }
+    }
+    validated.run_interpreter = run_interpreter;
+    validated.time_estimate = time_estimate;
+    validated.partition_max_time = if save_pipeline.builtin.is_some() {
+        partition_max_time(entry)
+    } else {
+        None
+    };
+    validated.logs_dir = if save_pipeline.builtin.is_some() {
+        Some(builtin_logs_dir(remote_home.as_deref())?)
+    } else {
+        None
     };
     validated.checks = checks;
     validated.output_dir = output_dir;
     validated.scratch_dir = profile.scratch_template.clone();
-    validated.gres = default_eval_gres(entry);
+    validated.gres = gres;
     validated.contract_check_script = contract_check_script;
     validated.saved_path = None;
 
@@ -2652,6 +3950,13 @@ mod tests {
                     stderr: String::new(),
                 });
             }
+            if remote_cmd.contains("coperceive-check:plan-python") {
+                return Ok(CommandResult {
+                    success: true,
+                    stdout: "ROOT=/data/code/coperceive\nSAMPLES=1490\n".to_string(),
+                    stderr: String::new(),
+                });
+            }
             if remote_cmd.contains("coperceive-check:plan-read") {
                 let payload = self
                     .written
@@ -2781,6 +4086,1256 @@ mod tests {
                 "coperceive-check:plan-folders",
                 "SCRATCH_OK=1\nRESULTS_OK=1\n",
             )
+            .with("coperceive-check:model-list", MODEL_LIST_JSON)
+            .with("coperceive-check:plan-python", "ROOT=/data/code/coperceive\nSAMPLES=1490\n")
+    }
+
+    /// `coperceive model list --json` on a cluster with Griffin installed: the
+    /// manifest is a resolved path, with what each model needs (models/commands.py).
+    const MODEL_LIST_JSON: &str = r#"{
+  "format": "coperceive-model-list",
+  "format_version": 1,
+  "plugins": [
+    {
+      "error": null,
+      "location": "coperceive_griffin_model:MANIFEST",
+      "manifest": "/data/code/griffin/coperceive_griffin_model/model.yaml",
+      "models": {
+        "vehicle-side": {"cpus": 8, "depends_on": [], "gpu": true, "memory_gb": 64, "options": ["det_json", "min_score", "nusc_root", "subset"], "transient_artifacts": [], "seconds_per_sample": 0.394, "staging_seconds": 700.0, "conversion_seconds": 100.0},
+        "drone-side": {"cpus": 8, "depends_on": [], "gpu": true, "memory_gb": 64, "options": ["subset"], "transient_artifacts": ["track_query"]},
+        "fusion": {"cpus": 4, "depends_on": ["drone-side"], "gpu": true, "memory_gb": 32, "options": [], "transient_artifacts": []},
+        "weights-from-option": {"cpus": 1, "depends_on": [], "gpu": false, "memory_gb": 2, "options": ["checkpoint"], "transient_artifacts": []}
+      },
+      "modules": ["nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"],
+      "name": "griffin",
+      "source": "entry-point"
+    }
+  ]
+}"#;
+
+    /// A cluster with Griffin installed. It answers the read-only checks, keeps the
+    /// one plan write for the read-back, and reports `directories` as folders.
+    struct GriffinCluster {
+        model_list: Result<String, String>,
+        directories: Vec<String>,
+        /// The interpreter check's answer per program (`coperceive-check:plan-interpreter`);
+        /// any other program is a console script with a python beside it, or a python
+        /// outside any venv.
+        interpreters: Vec<(String, String)>,
+        /// The run's python's answer to `coperceive-check:plan-python`.
+        python_facts: String,
+        calls: Mutex<Vec<String>>,
+        written: Mutex<Option<String>>,
+    }
+
+    impl GriffinCluster {
+        fn new() -> Self {
+            Self {
+                model_list: Ok(MODEL_LIST_JSON.to_string()),
+                directories: vec!["/data/scenes/val".to_string()],
+                interpreters: Vec::new(),
+                python_facts: "ROOT=/data/code/coperceive\nSAMPLES=1490\n".to_string(),
+                calls: Mutex::new(Vec::new()),
+                written: Mutex::new(None),
+            }
+        }
+
+        fn with_interpreter(mut self, program: &str, answer: &str) -> Self {
+            self.interpreters.push((program.to_string(), answer.to_string()));
+            self
+        }
+    }
+
+    /// `(program, mode)` of a `sh -c '<script>' sh <program> <mode>` check.
+    fn program_and_mode(remote_cmd: &str) -> (String, String) {
+        let rest = remote_cmd.rsplit_once("' sh ").map(|(_, rest)| rest).unwrap_or("");
+        let mut words = rest.split(' ').map(|word| word.trim_matches('\'').to_string());
+        (words.next().unwrap_or_default(), words.next().unwrap_or_default())
+    }
+
+    impl RemoteRunner for GriffinCluster {
+        fn run(
+            &self,
+            remote_cmd: &str,
+            _timeout: Duration,
+            stdin: Option<&str>,
+        ) -> Result<CommandResult, String> {
+            for forbidden in ["sbatch", "scancel", "squeue"] {
+                assert!(!remote_cmd.contains(forbidden), "{remote_cmd}");
+            }
+            self.calls.lock().unwrap().push(remote_cmd.to_string());
+            let ok = |stdout: String| {
+                Ok(CommandResult { success: true, stdout, stderr: String::new() })
+            };
+            if remote_cmd.contains("coperceive-check:model-list") {
+                return match &self.model_list {
+                    Ok(stdout) => ok(stdout.clone()),
+                    Err(stderr) => Ok(CommandResult {
+                        success: false,
+                        stdout: String::new(),
+                        stderr: stderr.clone(),
+                    }),
+                };
+            }
+            if remote_cmd.contains("coperceive-check:plan-path") {
+                let path = remote_cmd
+                    .rsplit_once(" sh ")
+                    .map(|(_, rest)| rest.trim().trim_matches('\'').to_string())
+                    .unwrap_or_default();
+                return ok(if self.directories.contains(&path) {
+                    format!(
+                        "EXISTS=1\nREADABLE=1\nEXEC=1\nISDIR=1\nREALPATH={path}\nSHA256=\n\
+                         FILES=12\nLISTING_SHA256={}\n",
+                        "1f".repeat(32)
+                    )
+                } else {
+                    format!(
+                        "EXISTS=1\nREADABLE=1\nEXEC={}\nISDIR=0\nREALPATH={path}\nSHA256={}\n",
+                        if path.ends_with("/bin/python") { 1 } else { 0 },
+                        "ab".repeat(32)
+                    )
+                });
+            }
+            if remote_cmd.contains("coperceive-check:plan-interpreter") {
+                let (program, mode) = program_and_mode(remote_cmd);
+                if let Some((_, answer)) =
+                    self.interpreters.iter().find(|(name, _)| *name == program)
+                {
+                    return ok(answer.clone());
+                }
+                let beside = format!("{}python", program.trim_end_matches("coperceive"));
+                return ok(if mode == "script" {
+                    format!("BESIDE={beside}\nPYTHON={beside}\nPYVENV_CFG=\n")
+                } else {
+                    format!("PYTHON={program}\nPYVENV_CFG=\n")
+                });
+            }
+            if remote_cmd.contains("coperceive-check:plan-python") {
+                return ok(self.python_facts.clone());
+            }
+            if remote_cmd.contains("coperceive-check:plan-env") {
+                return ok("MODULE=/usr/share/lmod/lmod/libexec/lmod\nLMOD=x\nAPPTAINER=\n\
+                           SINGULARITY=\nPYTHON3=/usr/bin/python3\nCOPERCEIVE=\nHOME=/home/bob\n"
+                    .to_string());
+            }
+            if remote_cmd.contains("--version") {
+                return ok("coperceive 0.1.1\n".to_string());
+            }
+            if remote_cmd.contains("coperceive-check:plan-folders") {
+                return ok("SCRATCH_OK=1\nRESULTS_OK=1\n".to_string());
+            }
+            if remote_cmd.contains("coperceive-check:plan-write") {
+                *self.written.lock().unwrap() = stdin.map(str::to_string);
+                return ok(String::new());
+            }
+            if remote_cmd.contains("cat -- \"$1\"") {
+                return ok(self.written.lock().unwrap().clone().unwrap_or_default());
+            }
+            Ok(CommandResult {
+                success: false,
+                stdout: String::new(),
+                stderr: format!("unexpected command {remote_cmd}"),
+            })
+        }
+    }
+
+    /// What NewEvaluation.tsx sends for Griffin vehicle-side on cluster-b: the scenes
+    /// folder as the split and no checkpoint (the model pins its own weights).
+    fn griffin_request() -> RunPlanRequest {
+        let mut req = request();
+        req.pipeline_source = "builtin".to_string();
+        req.pipeline.name = "griffin".to_string();
+        req.pipeline.script = "/data/code/griffin/coperceive_griffin_model/model.yaml".to_string();
+        req.pipeline.arguments = Vec::new();
+        req.registration_path = None;
+        req.plugin_manifest = Some("/data/code/griffin/coperceive_griffin_model/model.yaml".to_string());
+        req.values.clear();
+        req.checkpoint = String::new();
+        req.split = "/data/scenes/val".to_string();
+        req.model = "vehicle-side".to_string();
+        req.raw_root = "/data/scenes/raw".to_string();
+        req.media_root = "/data/scenes/raw".to_string();
+        req
+    }
+
+    #[test]
+    fn a_builtin_plan_passes_model_run_its_own_output_flags_and_no_output_dir() {
+        let cluster = GriffinCluster::new();
+        let built = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &built, &griffin_request()).expect("save");
+        for argv in [&built.argv, &saved.argv] {
+            assert!(
+                !argv.iter().any(|word| word.starts_with("--output-dir")),
+                "{argv:?}"
+            );
+            let at = |flag: &str| argv.iter().position(|word| word == flag).map(|i| argv[i + 1].clone());
+            assert_eq!(at("--out"), Some(saved.output_dir.clone()));
+            assert_eq!(at("--run-id"), Some(saved.id.clone()));
+            // The work directory is the job's scratch (the CLI's `--work "$SCRATCH/work"`).
+            assert_eq!(at("--work"), Some("$SCRATCH_DIR/work".to_string()));
+        }
+    }
+
+    #[test]
+    fn a_model_without_a_checkpoint_option_gets_none_and_a_given_one_is_refused() {
+        let cluster = GriffinCluster::new();
+        let plan = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        assert!(
+            !plan.argv.iter().any(|word| word.starts_with("checkpoint=")),
+            "{:?}",
+            plan.argv
+        );
+        assert!(plan.checkpoint.path.is_empty());
+        let mut req = griffin_request();
+        req.checkpoint = "/data/code/checkpoints/vehicle.pth".to_string();
+        let error = build_run_plan(&cluster, &entry(), &req).expect_err("refused");
+        assert!(error.contains("vehicle-side"), "{error}");
+        assert!(error.contains("no checkpoint option"), "{error}");
+        let error = save_run_plan(&cluster, &entry(), &plan, &req).expect_err("refused at save");
+        assert!(error.contains("no checkpoint option"), "{error}");
+    }
+
+    #[test]
+    fn a_model_that_declares_a_checkpoint_option_takes_the_checkpoint() {
+        let cluster = GriffinCluster::new();
+        let mut req = griffin_request();
+        req.model = "weights-from-option".to_string();
+        req.checkpoint = String::new();
+        let error = build_run_plan(&cluster, &entry(), &req).expect_err("needs one");
+        assert!(error.contains("Choose a checkpoint path"), "{error}");
+        req.checkpoint = "/data/code/checkpoints/vehicle.pth".to_string();
+        let plan = build_run_plan(&cluster, &entry(), &req).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &plan, &req).expect("save");
+        assert!(saved
+            .argv
+            .contains(&"checkpoint=/data/code/checkpoints/vehicle.pth".to_string()));
+        assert_eq!(saved.checkpoint.sha256.as_deref(), Some("ab".repeat(32).as_str()));
+    }
+
+    #[test]
+    fn a_scenes_directory_survives_save_and_load_with_its_listing_fingerprint() {
+        let cluster = GriffinCluster::new();
+        let plan = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        assert!(plan.is_saveable(), "checks: {:?}", plan.checks);
+        let saved = save_run_plan(&cluster, &entry(), &plan, &griffin_request()).expect("save");
+        let loaded =
+            crate::job_submit::load_saved_plan(&cluster, &entry().profile, &saved.id).expect("load");
+        assert_eq!(loaded.split.kind, "folder");
+        let json = serde_json::to_value(&loaded).unwrap();
+        assert_eq!(json["split"]["listing_sha256"], serde_json::json!("1f".repeat(32)));
+        assert_eq!(json["split"]["file_count"], serde_json::json!(12));
+    }
+
+    #[test]
+    fn an_empty_scenes_directory_cannot_be_saved() {
+        struct Empty(GriffinCluster);
+        impl RemoteRunner for Empty {
+            fn run(&self, cmd: &str, t: Duration, stdin: Option<&str>) -> Result<CommandResult, String> {
+                let mut result = self.0.run(cmd, t, stdin)?;
+                result.stdout = result
+                    .stdout
+                    .replace("FILES=12", "FILES=0")
+                    .replace(&"1f".repeat(32), &"e3".repeat(32));
+                Ok(result)
+            }
+        }
+        let cluster = GriffinCluster::new();
+        let plan = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        let error = save_run_plan(&Empty(GriffinCluster::new()), &entry(), &plan, &griffin_request())
+            .expect_err("an empty folder");
+        assert!(error.contains("no files"), "{error}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn path_check_fingerprints_a_folder_by_its_file_listing() {
+        if !std::path::Path::new("/bin/sh").exists() {
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("cp-listing-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("scenes/val00")).unwrap();
+        std::fs::create_dir_all(root.join("scenes/val 01")).unwrap();
+        std::fs::write(root.join("scenes/val00/manifest.json"), b"{}").unwrap();
+        std::fs::write(root.join("scenes/val 01/manifest.json"), b"{\"a\":1}").unwrap();
+        let bin = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bin"));
+        let check = || {
+            let output = std::process::Command::new("/bin/sh")
+                .args([
+                    "-c",
+                    &format!("{PATH_CHECK_BODY}{SPLIT_LISTING_BODY}"),
+                    "sh",
+                    &root.join("scenes").to_string_lossy(),
+                ])
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .output()
+                .expect("run sh");
+            parse_key_values(&String::from_utf8_lossy(&output.stdout))
+        };
+        let first = check();
+        assert_eq!(first.get("ISDIR").map(String::as_str), Some("1"), "{first:?}");
+        assert_eq!(first.get("FILES").map(String::as_str), Some("2"), "{first:?}");
+        let listing = first.get("LISTING_SHA256").cloned().unwrap_or_default();
+        assert_eq!(listing.len(), 64, "{first:?}");
+        assert_eq!(check().get("LISTING_SHA256"), Some(&listing), "deterministic");
+        // A file that changes size, or a new file, changes the fingerprint.
+        std::fs::write(root.join("scenes/val00/manifest.json"), b"{\"b\":22}").unwrap();
+        let resized = check().get("LISTING_SHA256").cloned().unwrap_or_default();
+        assert_ne!(resized, listing);
+        std::fs::write(root.join("scenes/val00/extra.bin"), b"").unwrap();
+        let added = check();
+        assert_eq!(added.get("FILES").map(String::as_str), Some("3"));
+        assert_ne!(added.get("LISTING_SHA256"), Some(&resized));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_manifest_path_comes_from_model_list_json_not_the_entry_point_text() {
+        let runner = FakeRunner::default().with("coperceive-check:model-list", MODEL_LIST_JSON);
+        let pipelines = list_builtin_pipelines(&runner, &entry().profile);
+        assert_eq!(pipelines.len(), 1);
+        assert_eq!(
+            pipelines[0].plugin_manifest.as_deref(),
+            Some("/data/code/griffin/coperceive_griffin_model/model.yaml")
+        );
+        let calls = runner.calls();
+        let calls = calls.lock().unwrap();
+        assert!(calls.iter().any(|(command, _)| command.contains("model list --json")), "{calls:?}");
+        // The plain listing's last word is the entry point, never a path. An answer in
+        // that form is not the JSON listing: it is refused with the reason, and no
+        // pipeline is offered with the entry point text as its manifest.
+        let runner = FakeRunner::default().with(
+            "coperceive-check:model-list",
+            "griffin  entry-point  coperceive_griffin_model:MANIFEST\n",
+        );
+        let error = read_builtin_plugins(&runner, &entry().profile).expect_err("not JSON");
+        assert!(error.contains("did not answer with the model list"), "{error}");
+        let pipelines = list_builtin_pipelines(&runner, &entry().profile);
+        assert!(pipelines.is_empty(), "{pipelines:?}");
+        assert!(!pipelines.iter().any(|pipeline| pipeline
+            .plugin_manifest
+            .as_deref()
+            .is_some_and(|path| path.contains("coperceive_griffin_model:MANIFEST"))));
+    }
+
+    #[test]
+    fn a_cluster_coperceive_too_old_for_model_list_json_is_named() {
+        let mut cluster = GriffinCluster::new();
+        cluster.model_list = Err(
+            "usage: coperceive [-h] ...\ncoperceive: error: unrecognized arguments: --json\n"
+                .to_string(),
+        );
+        let error = build_run_plan(&cluster, &entry(), &griffin_request()).expect_err("too old");
+        assert!(error.contains("too old"), "{error}");
+        assert!(error.contains("model list --json"), "{error}");
+    }
+
+    /// Runs every command with this machine's `/bin/sh` from `cwd`, as the login shell
+    /// runs the remote command string.
+    #[cfg(unix)]
+    struct LocalShell {
+        cwd: std::path::PathBuf,
+    }
+
+    #[cfg(unix)]
+    impl RemoteRunner for LocalShell {
+        fn run(&self, cmd: &str, _timeout: Duration, _stdin: Option<&str>) -> Result<CommandResult, String> {
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", cmd])
+                .current_dir(&self.cwd)
+                .env("PATH", "/usr/bin:/bin")
+                .output()
+                .map_err(|error| error.to_string())?;
+            Ok(CommandResult {
+                success: output.status.success(),
+                stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            })
+        }
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_model_list_check_runs_a_coperceive_command_with_quoted_words_under_sh() {
+        use std::os::unix::fs::PermissionsExt;
+        // A venv under a folder whose name has a space, a quote and a `;`: shell_quote
+        // single-quotes it, so it must reach `sh -c` as a positional parameter, never
+        // inside the single-quoted script body.
+        let root = std::env::temp_dir().join(format!("cp-model-list-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bin = root.join("my env's;touch pwned").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        let fake = |name: &str, too_old: bool| {
+            let python = bin.join(name);
+            let json = if too_old {
+                "echo \"usage: coperceive [-h] ...\" >&2\n\
+                 echo \"coperceive: error: unrecognized arguments: --json\" >&2\nexit 2\n"
+                    .to_string()
+            } else {
+                format!("cat <<'EOF'\n{MODEL_LIST_JSON}\nEOF\nexit 0\n")
+            };
+            std::fs::write(
+                &python,
+                format!(
+                    "#!/bin/sh\n\
+                     [ \"$1 $2 $3 $4\" = \"-m coperceive model list\" ] || {{ echo \"bad argv: $*\" >&2; exit 9; }}\n\
+                     if [ \"${{5:-}}\" = --json ]; then\n{json}fi\n\
+                     echo \"griffin  entry-point  coperceive_griffin_model:MANIFEST\"\n"
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&python, std::fs::Permissions::from_mode(0o755)).unwrap();
+            python.to_string_lossy().to_string()
+        };
+        let runner = LocalShell { cwd: root.clone() };
+        let mut profile = entry().profile;
+        profile.environment.coperceive_command =
+            vec![fake("python", false), "-m".to_string(), "coperceive".to_string()];
+        let plugins = read_builtin_plugins(&runner, &profile).expect("model list --json under sh");
+        assert_eq!(plugins.len(), 1, "{plugins:?}");
+        assert_eq!(plugins[0].name, "griffin");
+        // The older coperceive: argparse refuses --json, the plain listing names griffin.
+        profile.environment.coperceive_command =
+            vec![fake("python-old", true), "-m".to_string(), "coperceive".to_string()];
+        let error = read_builtin_plugins(&runner, &profile).expect_err("too old");
+        assert_eq!(error, MODEL_LIST_TOO_OLD);
+        let listed = list_builtin_pipelines(&runner, &profile);
+        assert_eq!(listed.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["griffin"]);
+        assert!(!root.join("pwned").exists(), "a word of the command ran as a command");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_argparses_refusal_of_json_means_too_old() {
+        struct Fails(&'static str);
+        impl RemoteRunner for Fails {
+            fn run(&self, _cmd: &str, _t: Duration, _stdin: Option<&str>) -> Result<CommandResult, String> {
+                Ok(CommandResult { success: false, stdout: String::new(), stderr: self.0.to_string() })
+            }
+        }
+        // A broken command whose error text happens to echo "--json" is not "too old".
+        let error = read_builtin_plugins(
+            &Fails("sh: 1: /home/u/my: not found\nenvs/bin/python -m coperceive model list --json\n"),
+            &entry().profile,
+        )
+        .expect_err("broken");
+        assert_ne!(error, MODEL_LIST_TOO_OLD);
+        assert!(error.contains("/home/u/my: not found"), "{error}");
+        let error = read_builtin_plugins(
+            &Fails("usage: coperceive [-h] ...\ncoperceive: error: unrecognized arguments: --json\n"),
+            &entry().profile,
+        )
+        .expect_err("too old");
+        assert_eq!(error, MODEL_LIST_TOO_OLD);
+    }
+
+    #[test]
+    fn a_gpu_model_without_gpu_discovery_requests_a_gpu_and_the_manifest_cuda_modules() {
+        // cluster-b: a modules profile (python/3.12) with no discovery at all.
+        let cluster = GriffinCluster::new();
+        let plan = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &plan, &griffin_request()).expect("save");
+        for plan in [&plan, &saved] {
+            assert_eq!(plan.gres.as_deref(), Some("gpu:1"), "as plan_sbatch: --gres=gpu:1");
+            assert_eq!(
+                plan.environment.modules,
+                ["python/3.12", "nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"]
+            );
+        }
+    }
+
+    #[test]
+    fn a_gpu_model_on_a_partition_discovery_found_without_gpus_is_refused() {
+        let cluster = GriffinCluster::new();
+        let entry = entry_with_discovered("main-cpu", &[]);
+        let error = build_run_plan(&cluster, &entry, &griffin_request()).expect_err("no GPU");
+        assert!(error.contains("needs a GPU"), "{error}");
+        assert!(error.contains("main-cpu"), "{error}");
+        // With discovered GPUs it is gpu:1, as plan_sbatch writes; the manifest's
+        // --constraint picks the type.
+        let entry = entry_with_discovered("gpu-a40", &["a40"]);
+        let plan = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+        assert_eq!(plan.gres.as_deref(), Some("gpu:1"));
+    }
+
+    /// cluster-b's Griffin with `slurm_constraint: "a40"` on every model, as the real
+    /// manifest pins it.
+    fn model_list_with_a40_constraint() -> String {
+        MODEL_LIST_JSON.replace("\"gpu\": true,", "\"gpu\": true, \"slurm_constraint\": \"a40\",")
+    }
+
+    #[test]
+    fn the_time_estimate_is_the_clis_time_limit() {
+        // coperceive/models/slurm.py time_limit: Griffin over the 1,490-sample fixture.
+        assert_eq!(cli_time_limit(0.394, 700.0, 100.0, 1490), "01:00:00");
+        assert_eq!(cli_time_limit(0.01, 0.0, 0.0, 5), "00:20:00");
+        assert_eq!(cli_time_limit(1.0, 0.0, 0.0, 601), "00:40:00");
+        assert_eq!(cli_time_limit(10.0, 0.0, 0.0, 9000), "50:00:00");
+        for (text, seconds) in [
+            ("30", Some(1800)),
+            ("01:00:00", Some(3600)),
+            ("1-00:00:00", Some(86_400)),
+            ("2-12", Some(216_000)),
+            ("1-01:30", Some(91_800)),
+            ("infinite", None),
+            ("UNLIMITED", None),
+        ] {
+            assert_eq!(slurm_seconds(text), seconds, "{text}");
+        }
+    }
+
+    #[test]
+    fn a_builtin_plan_carries_the_clis_time_estimate_and_its_pythons_coperceive() {
+        let cluster = GriffinCluster::new();
+        let mut entry = entry_with_discovered("gpu-a40", &["a40"]);
+        entry.discovered.as_mut().unwrap().partitions[0].max_time = Some("2-00:00:00".to_string());
+        let built = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry, &built, &griffin_request()).expect("save");
+        for plan in [&built, &saved] {
+            assert_eq!(plan.time_estimate.as_deref(), Some("01:00:00"));
+            assert_eq!(plan.partition_max_time.as_deref(), Some("2-00:00:00"));
+            assert_eq!(
+                plan.run_interpreter.as_ref().and_then(|found| found.package_root.as_deref()),
+                Some("/data/code/coperceive")
+            );
+            let facts = plan.checks.iter().find(|item| item.name == "python-facts").expect("check");
+            assert!(facts.detail.contains("1490 samples"), "{}", facts.detail);
+        }
+        // The python ran with the scenes folder and its own module, every value a parameter.
+        let calls = cluster.calls.lock().unwrap();
+        let facts = calls.iter().find(|call| call.contains("coperceive-check:plan-python")).unwrap();
+        assert!(facts.contains(" /data/scenes/val "), "{facts}");
+        // A client plan's estimate is never kept: save reads the cluster again.
+        drop(calls);
+        let mut edited = built.clone();
+        edited.time_estimate = Some("99:00:00".to_string());
+        let saved = save_run_plan(&cluster, &entry, &edited, &griffin_request()).expect("save");
+        assert_eq!(saved.time_estimate.as_deref(), Some("01:00:00"));
+    }
+
+    #[test]
+    fn a_builtin_plan_logs_to_the_clusters_home_logs_as_the_cli_does() {
+        // coperceive model run --slurm: --slurm-logs defaults to ~/logs (commands.py).
+        let cluster = GriffinCluster::new();
+        let built = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        let mut edited = built.clone();
+        edited.logs_dir = Some("/tmp/elsewhere".to_string());
+        let saved = save_run_plan(&cluster, &entry(), &edited, &griffin_request()).expect("save");
+        for plan in [&built, &saved] {
+            assert_eq!(plan.logs_dir.as_deref(), Some("/home/bob/logs"), "never the client's");
+        }
+        // A custom pipeline keeps its logs in results_root.
+        let custom = build_run_plan(&checked_runner(), &entry(), &request()).expect("custom");
+        assert_eq!(custom.logs_dir, None);
+    }
+
+    #[test]
+    fn a_python_that_cannot_import_coperceive_or_names_a_bad_root_is_refused() {
+        let mut cluster = GriffinCluster::new();
+        cluster.python_facts = String::new();
+        let error = build_run_plan(&cluster, &entry(), &griffin_request()).expect_err("no import");
+        assert!(error.contains("could not import coperceive"), "{error}");
+        cluster.python_facts = "ROOT=/data/x\u{1b}[2J\nSAMPLES=1\n".to_string();
+        let error = build_run_plan(&cluster, &entry(), &griffin_request()).expect_err("control");
+        assert!(error.contains("PYTHONPATH"), "{error}");
+        // Scenes that cannot be counted: no estimate, said so, the walltime is entered.
+        cluster.python_facts = "ROOT=/data/code/coperceive\n".to_string();
+        let plan = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        assert_eq!(plan.time_estimate, None);
+        let facts = plan.checks.iter().find(|item| item.name == "python-facts").unwrap();
+        assert!(facts.detail.contains("enter the walltime"), "{}", facts.detail);
+    }
+
+    #[test]
+    fn a_mixed_partition_gets_gpu_1_and_the_manifest_constraint_picks_the_type() {
+        // sinfo lists a100 first: a typed gpu:a100:1 next to --constraint="a40" fits no node.
+        let mut cluster = GriffinCluster::new();
+        cluster.model_list = Ok(model_list_with_a40_constraint());
+        let entry = entry_with_discovered("gpu-mixed", &["a100", "a40"]);
+        let plan = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry, &plan, &griffin_request()).expect("save");
+        for plan in [&plan, &saved] {
+            assert_eq!(plan.gres.as_deref(), Some("gpu:1"), "as plan_sbatch: --gres=gpu:1");
+            assert_eq!(
+                plan.model_resources.as_ref().and_then(|r| r.constraint.as_deref()),
+                Some("a40")
+            );
+        }
+    }
+
+    #[test]
+    fn a_model_whose_manifest_says_gpu_false_asks_for_no_gpu() {
+        let cluster = GriffinCluster::new();
+        let mut req = griffin_request();
+        req.model = "weights-from-option".to_string();
+        req.checkpoint = "/data/code/checkpoints/vehicle.pth".to_string();
+        for entry in [entry(), entry_with_discovered("gpu-a40", &["a40"])] {
+            let plan = build_run_plan(&cluster, &entry, &req).expect("build");
+            let saved = save_run_plan(&cluster, &entry, &plan, &req).expect("save");
+            for plan in [&plan, &saved] {
+                assert_eq!(plan.gres, None, "plan_sbatch writes no --gres for gpu: false");
+            }
+        }
+    }
+
+    #[test]
+    fn a_custom_pipeline_keeps_the_partitions_typed_gpu() {
+        let entry = entry_with_discovered("gpu-mixed", &["a100", "a40"]);
+        let plan = build_run_plan(&checked_runner(), &entry, &request()).expect("plan");
+        assert_eq!(plan.gres.as_deref(), Some("gpu:a100:1"));
+    }
+
+    // -- Round 2 (review findings) ------------------------------------------------------
+
+    /// What NewEvaluation.tsx sends for a listed built-in pipeline (`request` in
+    /// `checkPlan`): the listing's own spec, source and manifest, which is None when the
+    /// cluster could not report one.
+    fn ui_request(pipeline: &PipelineEntry) -> RunPlanRequest {
+        let mut req = griffin_request();
+        req.pipeline = pipeline.spec.clone();
+        req.pipeline_source = pipeline.source.clone();
+        req.registration_path = pipeline.registration_path.clone();
+        req.plugin_manifest = pipeline.plugin_manifest.clone();
+        req
+    }
+
+    /// A cluster whose coperceive predates `model list --json`: the JSON call fails with
+    /// argparse's message, the plain listing names griffin.
+    struct TooOld(GriffinCluster);
+
+    impl RemoteRunner for TooOld {
+        fn run(&self, cmd: &str, t: Duration, stdin: Option<&str>) -> Result<CommandResult, String> {
+            if cmd.contains("model list 2>/dev/null") {
+                return Ok(CommandResult {
+                    success: true,
+                    stdout: "griffin  entry-point  coperceive_griffin_model:MANIFEST\n".to_string(),
+                    stderr: String::new(),
+                });
+            }
+            self.0.run(cmd, t, stdin)
+        }
+    }
+
+    #[test]
+    fn a_too_old_cluster_is_named_for_the_request_the_ui_sends() {
+        let mut cluster = GriffinCluster::new();
+        cluster.model_list = Err(
+            "usage: coperceive [-h] ...\ncoperceive: error: unrecognized arguments: --json\n"
+                .to_string(),
+        );
+        let cluster = TooOld(cluster);
+        let pipelines = list_builtin_pipelines(&cluster, &entry().profile);
+        let griffin = pipelines.first().expect("griffin is listed by name");
+        assert_eq!(griffin.plugin_manifest, None);
+        let error = build_run_plan(&cluster, &entry(), &ui_request(griffin)).expect_err("too old");
+        assert!(error.contains("too old"), "{error}");
+        assert!(error.contains("Update coperceive on the cluster"), "{error}");
+    }
+
+    #[test]
+    fn a_plugin_whose_manifest_cannot_be_read_shows_the_clusters_reason() {
+        let mut cluster = GriffinCluster::new();
+        cluster.model_list = Ok(r#"{"format": "coperceive-model-list", "format_version": 1,
+            "plugins": [{"name": "griffin", "source": "entry-point",
+              "location": "coperceive_griffin_model:MANIFEST", "manifest": null,
+              "error": "RuntimeError: CUDA is not available on the login node",
+              "modules": [], "models": {}}]}"#
+            .to_string());
+        let pipelines = list_builtin_pipelines(&cluster, &entry().profile);
+        let griffin = pipelines.first().expect("griffin is listed with its error");
+        let error = build_run_plan(&cluster, &entry(), &ui_request(griffin)).expect_err("broken");
+        assert!(error.contains("no pipeline manifest"), "{error}");
+        assert!(error.contains("CUDA is not available on the login node"), "{error}");
+    }
+
+    #[test]
+    fn a_listed_griffin_plans_through_the_ui_request_shape() {
+        let cluster = GriffinCluster::new();
+        let pipelines = list_builtin_pipelines(&cluster, &entry().profile);
+        let plan = build_run_plan(&cluster, &entry(), &ui_request(&pipelines[0])).expect("build");
+        assert!(plan.is_saveable(), "{:?}", plan.checks);
+    }
+
+    #[test]
+    fn a_builtin_plan_records_what_the_manifest_asks_of_the_job() {
+        // plan_sbatch writes --cpus-per-task/--mem from the manifest and excludes the
+        // closure's transient artefacts from the work copy (coperceive/models/slurm.py).
+        let cluster = GriffinCluster::new();
+        let built = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &built, &griffin_request()).expect("save");
+        for plan in [&built, &saved] {
+            let json = serde_json::to_value(plan).unwrap();
+            assert_eq!(
+                json["model_resources"],
+                serde_json::json!({"gpu": true, "cpus": 8, "memory_gb": 64, "transient_artifacts": []}),
+                "{json}"
+            );
+        }
+        let mut req = griffin_request();
+        req.model = "fusion".to_string();
+        let built = build_run_plan(&cluster, &entry(), &req).expect("build fusion");
+        let json = serde_json::to_value(&built).unwrap();
+        assert_eq!(
+            json["model_resources"]["transient_artifacts"],
+            serde_json::json!(["drone-side/track_query"]),
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn a_builtin_plan_keeps_the_work_directory_in_scratch() {
+        // The CLI runs `--work "$SCRATCH/work"` and copies only logs and artefacts home;
+        // Griffin's work holds a toolkit copy and the converted dataset.
+        let cluster = GriffinCluster::new();
+        let built = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &built, &griffin_request()).expect("save");
+        for plan in [&built, &saved] {
+            let at = plan.argv.iter().position(|word| word == "--work").expect("--work");
+            assert_eq!(plan.argv[at + 1], "$SCRATCH_DIR/work");
+            assert!(!plan.argv.iter().any(|word| word.starts_with(&plan.output_dir) && word.ends_with("/work")));
+        }
+    }
+
+    #[test]
+    fn a_venv_profile_loads_the_manifest_modules_too() {
+        // plan_sbatch writes `module purge` and the manifest's modules whatever the
+        // interpreter is (coperceive/models/slurm.py); a venv profile ran Griffin without CUDA.
+        let mut entry = entry();
+        entry.profile.environment = EnvironmentSetup {
+            kind: EnvironmentKind::Venv,
+            interpreter: Some("/data/code/venv/bin/python".to_string()),
+            coperceive_command: vec![
+                "/data/code/venv/bin/python".to_string(),
+                "-m".to_string(),
+                "coperceive".to_string(),
+            ],
+            ..EnvironmentSetup::default()
+        };
+        let cluster = GriffinCluster::new();
+        let built = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry, &built, &griffin_request()).expect("save");
+        for plan in [&built, &saved] {
+            assert_eq!(plan.environment.kind, EnvironmentKind::Venv);
+            assert_eq!(plan.environment.modules, ["nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"]);
+        }
+        let script = crate::job_submit::render_run_script(
+            &entry.profile,
+            &saved,
+            &crate::job_submit::SubmitOptions::default(),
+        )
+        .expect("render")
+        .script;
+        assert!(
+            script.contains("module purge\nmodule load nvidia/cuda-11.8\nmodule load nvidia/cuda-11.x_cudnn-8.6\n"),
+            "{script}"
+        );
+    }
+
+    /// A venv on this cluster's /software/python base, as `pyvenv.cfg` writes it.
+    fn venv_answer(python: &str, home: &str, version: &str) -> String {
+        let venv = python.trim_end_matches("/bin/python");
+        format!(
+            "PYTHON={python}\nPYVENV_CFG={venv}/pyvenv.cfg\nPYVENV_LINE=home = {home}\n\
+             PYVENV_LINE=version = {version}\n"
+        )
+    }
+
+    /// The form's submit: its walltime is the plan's estimate, or one the user entered.
+    fn render_saved(entry: &ServerEntry, plan: &RunPlan) -> String {
+        let walltime = plan.time_estimate.clone().unwrap_or_else(|| "02:00:00".to_string());
+        crate::job_submit::render_run_script(
+            &entry.profile,
+            plan,
+            &crate::job_submit::SubmitOptions { walltime, ..Default::default() },
+        )
+        .expect("render")
+        .script
+    }
+
+    #[test]
+    fn a_venv_interpreter_loads_its_python_module_right_after_module_purge() {
+        // plan_sbatch reloads python/<v> from the venv's pyvenv.cfg after `module purge`
+        // (coperceive/models/slurm.py interpreter_module); without it a venv on a module's
+        // python cannot start on the compute node (libpython not found).
+        let mut entry = entry();
+        entry.profile.environment = EnvironmentSetup {
+            kind: EnvironmentKind::Venv,
+            interpreter: Some("/data/code/venv/bin/python".to_string()),
+            coperceive_command: vec![
+                "/data/code/venv/bin/python".to_string(),
+                "-m".to_string(),
+                "coperceive".to_string(),
+            ],
+            ..EnvironmentSetup::default()
+        };
+        let cluster = GriffinCluster::new().with_interpreter(
+            "/data/code/venv/bin/python",
+            &venv_answer("/data/code/venv/bin/python", "/software/python/3.9.18/bin", "3.9.18"),
+        );
+        let built = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry, &built, &griffin_request()).expect("save");
+        let script = render_saved(&entry, &saved);
+        assert!(
+            script.contains(
+                "module purge\nmodule load python/3.9.18\nmodule load nvidia/cuda-11.8\n\
+                 module load nvidia/cuda-11.x_cudnn-8.6\n"
+            ),
+            "{script}"
+        );
+        // On a modules profile too: the interpreter's module first, then the profile's own
+        // modules and the manifest's, each once.
+        let mut modules = self::entry();
+        modules.profile.environment.coperceive_command = vec![
+            "/data/code/venv/bin/python".to_string(),
+            "-m".to_string(),
+            "coperceive".to_string(),
+        ];
+        modules.profile.environment.modules = vec!["nvidia/cuda-11.8".to_string()];
+        let built = build_run_plan(&cluster, &modules, &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &modules, &built, &griffin_request()).expect("save");
+        let script = render_saved(&modules, &saved);
+        assert!(
+            script.contains(
+                "module purge\nmodule load python/3.9.18\nmodule load nvidia/cuda-11.8\n\
+                 module load nvidia/cuda-11.x_cudnn-8.6\n"
+            ),
+            "{script}"
+        );
+    }
+
+    #[test]
+    fn a_modules_profiles_other_python_module_never_swaps_the_interpreters() {
+        // Lmod keeps one module per name: the profile's python/3.11 loaded after the venv's
+        // python/3.9.18 would swap it, and the 3.9 venv would run on the wrong base.
+        // plan_sbatch loads only the interpreter's python module.
+        let mut entry = entry();
+        entry.profile.environment.coperceive_command = vec![
+            "/data/code/venv/bin/python".to_string(),
+            "-m".to_string(),
+            "coperceive".to_string(),
+        ];
+        entry.profile.environment.modules =
+            vec!["python/3.11".to_string(), "gcc/12".to_string(), "python/3.9.18".to_string()];
+        let cluster = GriffinCluster::new().with_interpreter(
+            "/data/code/venv/bin/python",
+            &venv_answer("/data/code/venv/bin/python", "/software/python/3.9.18/bin", "3.9.18"),
+        );
+        let built = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry, &built, &griffin_request()).expect("save");
+        for plan in [&built, &saved] {
+            assert_eq!(
+                plan.environment.modules,
+                ["python/3.9.18", "gcc/12", "nvidia/cuda-11.8", "nvidia/cuda-11.x_cudnn-8.6"]
+            );
+        }
+        let script = render_saved(&entry, &saved);
+        assert!(
+            script.contains(
+                "module purge\nmodule load python/3.9.18\nmodule load gcc/12\n\
+                 module load nvidia/cuda-11.8\nmodule load nvidia/cuda-11.x_cudnn-8.6\n"
+            ),
+            "{script}"
+        );
+        assert!(!script.contains("module load python/3.11"), "{script}");
+        let comment = script
+            .lines()
+            .find(|line| line.starts_with('#') && line.contains("python/3.11"))
+            .unwrap_or_else(|| panic!("no comment names the dropped module:\n{script}"));
+        assert!(comment.contains("python/3.9.18"), "{comment}");
+        // Without a known interpreter module the profile's python module stays.
+        let unknown = GriffinCluster::new().with_interpreter(
+            "/data/code/venv/bin/python",
+            "PYTHON=/data/code/venv/bin/python\nPYVENV_CFG=\n",
+        );
+        let built = build_run_plan(&unknown, &entry, &griffin_request()).expect("build");
+        assert_eq!(built.environment.modules[0], "python/3.11");
+        assert!(!render_saved(&entry, &built).lines().any(|line| line.starts_with('#') && line.contains("python/3.11")));
+    }
+
+    #[test]
+    fn the_interpreter_module_follows_the_clis_pyvenv_rule() {
+        // home = /software/python/<v>/bin wins; else the version line; else none.
+        for (answer, module) in [
+            (
+                venv_answer("/data/code/venv/bin/python", "/software/python/3.12/bin", "3.12.4"),
+                Some("python/3.12"),
+            ),
+            (
+                venv_answer("/data/code/venv/bin/python", "/usr/bin", "3.11.2"),
+                Some("python/3.11.2"),
+            ),
+            ("PYTHON=/data/code/venv/bin/python\nPYVENV_CFG=\n".to_string(), None),
+        ] {
+            let cluster =
+                GriffinCluster::new().with_interpreter("/data/code/venv/bin/python", &answer);
+            let mut entry = entry();
+            entry.profile.environment.modules = vec!["nvidia/cuda-11.8".to_string()];
+            entry.profile.environment.coperceive_command = vec![
+                "/data/code/venv/bin/python".to_string(),
+                "-m".to_string(),
+                "coperceive".to_string(),
+            ];
+            let built = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+            let first = built.environment.modules.first().cloned();
+            match module {
+                Some(module) => assert_eq!(first.as_deref(), Some(module), "{answer}"),
+                None => assert!(
+                    !built.environment.modules.iter().any(|name| name.starts_with("python/")),
+                    "{answer}: {:?}",
+                    built.environment.modules
+                ),
+            }
+        }
+        // A version that is not a plain module name is refused, never written into the job.
+        let cluster = GriffinCluster::new().with_interpreter(
+            "/apps/python/3.12/bin/python",
+            "PYTHON=/apps/python/3.12/bin/python\nPYVENV_CFG=/apps/python/3.12/pyvenv.cfg\n\
+             PYVENV_LINE=version = 3.12; touch /tmp/x\n",
+        );
+        let mut entry = entry();
+        entry.profile.environment.coperceive_command = vec![
+            "/apps/python/3.12/bin/python".to_string(),
+            "-m".to_string(),
+            "coperceive".to_string(),
+        ];
+        let error =
+            build_run_plan(&cluster, &entry, &griffin_request()).expect_err("unsafe version");
+        assert!(error.contains("pyvenv.cfg"), "{error}");
+    }
+
+    #[test]
+    fn the_interpreter_check_reads_pyvenv_cfg_and_the_shebang_on_a_real_shell() {
+        // The check itself, run by /bin/sh on real files: a venv's bin/python (a symlink),
+        // its pyvenv.cfg, and console scripts with and without a python beside them.
+        let root = std::env::temp_dir().join(format!("cp-interp-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let venv = root.join("venv");
+        std::fs::create_dir_all(venv.join("bin")).unwrap();
+        std::fs::write(
+            venv.join("pyvenv.cfg"),
+            "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\n\
+             version = 3.9.18\nversion_info = 3.9.18.final.0\n",
+        )
+        .unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/bin/sh", venv.join("bin/python")).unwrap();
+        let pipx = root.join("bin");
+        std::fs::create_dir_all(&pipx).unwrap();
+        let script = pipx.join("coperceive");
+        std::fs::write(&script, format!("#!{}/bin/python\nimport sys\n", venv.display()))
+            .unwrap();
+        let run = |program: &str, mode: &str| {
+            let output = std::process::Command::new("/bin/sh")
+                .args(["-c", &interpreter_check_script(program, mode)])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8_lossy(&output.stdout).to_string()
+        };
+        let python = format!("{}/bin/python", venv.display());
+        let found = run(&python, "python");
+        assert!(found.contains("PYVENV_LINE=home = /software/python/3.9.18/bin\n"), "{found}");
+        assert!(found.contains("PYVENV_LINE=version = 3.9.18\n"), "{found}");
+        assert!(!found.contains("version_info"), "{found}");
+        assert_eq!(pyvenv_module(&found).unwrap(), Some("python/3.9.18".to_string()));
+        // No python beside the script: its shebang.
+        let shebang = run(&script.display().to_string(), "script");
+        assert!(shebang.contains("BESIDE=\n"), "{shebang}");
+        assert!(shebang.contains(&format!("SHEBANG=#!{python}\n")), "{shebang}");
+        // The script inside the venv: the python beside it.
+        std::fs::copy(&script, venv.join("bin/coperceive")).unwrap();
+        let beside = run(&format!("{}/bin/coperceive", venv.display()), "script");
+        assert!(beside.contains(&format!("BESIDE={python}\n")), "{beside}");
+        assert!(beside.contains("PYVENV_LINE=home = /software/python/3.9.18/bin\n"), "{beside}");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn a_dependency_loop_in_the_manifest_is_refused_instead_of_hanging() {
+        // model_closure marks a model as seen before its dependencies; a loop (A -> B -> A,
+        // or a model that depends on itself) must end plan building with a clear message.
+        let looped = MODEL_LIST_JSON
+            .replace(
+                r#""drone-side": {"cpus": 8, "depends_on": []"#,
+                r#""drone-side": {"cpus": 8, "depends_on": ["fusion"]"#,
+            )
+            .replace(
+                r#""vehicle-side": {"cpus": 8, "depends_on": []"#,
+                r#""vehicle-side": {"cpus": 8, "depends_on": ["vehicle-side"]"#,
+            );
+        for (model, names) in [
+            ("fusion", ["fusion", "drone-side"]),
+            ("vehicle-side", ["vehicle-side", "vehicle-side"]),
+        ] {
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let list = looped.clone();
+            std::thread::spawn(move || {
+                let mut cluster = GriffinCluster::new();
+                cluster.model_list = Ok(list);
+                let mut req = griffin_request();
+                req.model = model.to_string();
+                let _ = sender.send(build_run_plan(&cluster, &entry(), &req));
+            });
+            let result = receiver.recv_timeout(Duration::from_secs(2)).unwrap_or_else(|_| {
+                panic!("building a plan for {model} did not finish: the dependency loop hangs")
+            });
+            let error = result.expect_err("a dependency loop");
+            assert!(error.contains("loop"), "{error}");
+            for name in names {
+                assert!(error.contains(name), "{error}");
+            }
+        }
+    }
+
+    /// cluster-b with Griffin's `slurm_constraint` in the listing, on `partition` with
+    /// what discovery found there (`None`: no discovery).
+    fn constrained(partition: &str, gpu_types: Option<&[&str]>) -> (ServerEntry, GriffinCluster) {
+        let mut entry = match gpu_types {
+            Some(types) => entry_with_discovered(partition, types),
+            None => entry(),
+        };
+        entry.profile.defaults.partition = Some(partition.to_string());
+        let mut cluster = GriffinCluster::new();
+        cluster.model_list = Ok(MODEL_LIST_JSON.replace(
+            r#""vehicle-side": {"cpus": 8,"#,
+            r#""vehicle-side": {"slurm_constraint": "a40", "cpus": 8,"#,
+        ));
+        (entry, cluster)
+    }
+
+    #[test]
+    fn the_manifests_gpu_constraint_is_written_in_every_discovery_state() {
+        // plan_sbatch writes resources.slurm_constraint as #SBATCH --constraint="a40" after
+        // --time (Griffin's torch ships SASS for sm_86/sm_80 only). The GPU request is
+        // gpu:1 in every state, as plan_sbatch writes it: the constraint picks the type.
+        for (partition, types, gres) in [
+            ("main", None, "gpu:1"),
+            ("gpu-a40", Some(&["a40"][..]), "gpu:1"),
+            ("gpu", Some(&["gpu"][..]), "gpu:1"),
+            ("gpu-mixed", Some(&["a100", "a40"][..]), "gpu:1"),
+        ] {
+            let (entry, cluster) = constrained(partition, types);
+            let built = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+            let saved =
+                save_run_plan(&cluster, &entry, &built, &griffin_request()).expect("save");
+            let script = render_saved(&entry, &saved);
+            assert!(script.contains(&format!("#SBATCH --gres={gres}\n")), "{partition}: {script}");
+            let lines: Vec<&str> = script.lines().collect();
+            let time = lines.iter().position(|line| line.starts_with("#SBATCH --time=")).unwrap();
+            assert_eq!(lines[time + 1], "#SBATCH --constraint=\"a40\"", "{partition}: {script}");
+            assert_eq!(script.matches("--constraint").count(), 1, "{script}");
+        }
+        // A model without one gets no constraint line.
+        let cluster = GriffinCluster::new();
+        let built = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &built, &griffin_request()).expect("save");
+        assert!(!render_saved(&entry(), &saved).contains("--constraint"));
+    }
+
+    #[test]
+    fn a_console_script_without_a_python_beside_it_is_recorded_with_its_shebang() {
+        // pipx (~/.local/bin/coperceive, a symlink into its own venv) and /usr/local/bin
+        // have no python beside the script: environment.json uses the interpreter the
+        // script's shebang names, read when the plan is checked, and its venv's module.
+        let pipx_python = "/data/code/pipx/venvs/coperceive/bin/python";
+        let launcher = format!("'''exec' \"{pipx_python}\" \"$0\" \"$@\"");
+        for (shebang, line2) in [
+            (format!("#!{pipx_python}"), String::new()),
+            // pip's launcher for a path too long for a shebang line.
+            ("#!/bin/sh".to_string(), launcher),
+        ] {
+            let mut entry = entry();
+            entry.profile.environment.coperceive_command =
+                vec!["/home/bob/.local/bin/coperceive".to_string()];
+            let cluster = GriffinCluster::new()
+                .with_interpreter(
+                    "/home/bob/.local/bin/coperceive",
+                    &format!("BESIDE=\nSHEBANG={shebang}\nSHEBANG2={line2}\n"),
+                )
+                .with_interpreter(
+                    pipx_python,
+                    &venv_answer(pipx_python, "/software/python/3.11.4/bin", "3.11.4"),
+                );
+            let built = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+            let saved =
+                save_run_plan(&cluster, &entry, &built, &griffin_request()).expect("save");
+            let script = render_saved(&entry, &saved);
+            assert!(
+                script.contains(&format!(
+                    "\n{pipx_python} - \"$OUT_DIR/{}/environment.json\" <<'PY' || true\n",
+                    saved.id
+                )),
+                "{script}"
+            );
+            assert!(!script.contains("/home/bob/.local/bin/python"), "{script}");
+            assert!(script.contains("module purge\nmodule load python/3.11.4\n"), "{script}");
+        }
+        // `#!/usr/bin/env python3` names no interpreter before the job runs: python3, said so.
+        let mut entry = entry();
+        entry.profile.environment.coperceive_command =
+            vec!["/usr/local/bin/coperceive".to_string()];
+        let cluster = GriffinCluster::new().with_interpreter(
+            "/usr/local/bin/coperceive",
+            "BESIDE=\nSHEBANG=#!/usr/bin/env python3\nSHEBANG2=\n",
+        );
+        let built = build_run_plan(&cluster, &entry, &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry, &built, &griffin_request()).expect("save");
+        let script = render_saved(&entry, &saved);
+        let lines: Vec<&str> = script.lines().collect();
+        let capture = lines
+            .iter()
+            .position(|line| {
+                line.ends_with(&format!("\"$OUT_DIR/{}/environment.json\" <<'PY' || true", saved.id))
+            })
+            .expect("capture line");
+        assert!(lines[capture].starts_with("python3 - "), "{script}");
+        assert!(
+            lines[capture - 1].starts_with('#') && lines[capture - 1].contains("python3"),
+            "{script}"
+        );
+        assert!(!script.contains("/usr/local/bin/python "), "{script}");
+    }
+
+    #[test]
+    fn the_builtin_contract_check_runs_model_run_with_its_own_flags() {
+        // `coperceive model run --help` has no --max-frames and no --output-dir, and
+        // model run writes run.json and boxes.parquet, not predictions.jsonl.
+        let cluster = GriffinCluster::new();
+        let built = build_run_plan(&cluster, &entry(), &griffin_request()).expect("build");
+        let saved = save_run_plan(&cluster, &entry(), &built, &griffin_request()).expect("save");
+        for script in [&built.contract_check_script, &saved.contract_check_script] {
+            for absent in ["--max-frames", "--output-dir", "predictions.jsonl", "metrics.json"] {
+                assert!(!script.contains(absent), "{absent}:\n{script}");
+            }
+            let run = script
+                .lines()
+                .find(|line| !line.starts_with('#') && line.contains(" model run "))
+                .unwrap_or_else(|| panic!("no model run line:\n{script}"));
+            assert!(run.contains("--out \"$OUT_DIR\""), "{run}");
+            assert!(run.contains("--work \"$OUT_DIR/work\""), "{run}");
+            assert!(run.contains(&format!("--run-id {}", built.id)) || run.contains(&format!("--run-id {}", saved.id)), "{run}");
+            assert!(script.contains("run.json"), "{script}");
+            assert!(script.contains("boxes.parquet"), "{script}");
+            assert!(script.contains("no frame limit"), "{script}");
+        }
+    }
+
+    /// Runs the plan's path checks with this machine's shell (the fixture `realpath`
+    /// stands in for GNU `realpath -m`) and answers the rest as GriffinCluster does.
+    struct LocalPaths {
+        cluster: GriffinCluster,
+        timeouts: Mutex<Vec<(String, Duration)>>,
+    }
+
+    impl RemoteRunner for LocalPaths {
+        fn run(&self, cmd: &str, timeout: Duration, stdin: Option<&str>) -> Result<CommandResult, String> {
+            if cmd.contains("coperceive-check:plan-path") {
+                self.timeouts.lock().unwrap().push((cmd.to_string(), timeout));
+                let bin = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bin");
+                let output = std::process::Command::new("/bin/sh")
+                    .args(["-c", cmd])
+                    .env("PATH", format!("{bin}:/usr/bin:/bin"))
+                    .output()
+                    .map_err(|error| error.to_string())?;
+                return Ok(CommandResult {
+                    success: output.status.success(),
+                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                });
+            }
+            self.cluster.run(cmd, timeout, stdin)
+        }
+    }
+
+    /// A real scenes folder under a fresh temp root, and cluster-b with that root as its
+    /// data folder.
+    fn local_scenes(tag: &str) -> (std::path::PathBuf, ServerEntry, RunPlanRequest) {
+        let root = std::env::temp_dir().join(format!("cp-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("scenes")).unwrap();
+        let root = root.canonicalize().unwrap();
+        let mut entry = entry();
+        entry.profile.data_roots = vec![root.to_string_lossy().to_string()];
+        let mut req = griffin_request();
+        req.split = root.join("scenes").to_string_lossy().to_string();
+        req.raw_root = root.join("raw").to_string_lossy().to_string();
+        req.media_root = req.raw_root.clone();
+        (root, entry, req)
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_scenes_folder_of_symlinks_is_fingerprinted_as_the_cli_reads_it() {
+        // coperceive/viewdata.py lists scenes with child.is_dir(), which follows symlinks.
+        let (root, entry, req) = local_scenes("symlinked-scenes");
+        std::fs::create_dir_all(root.join("store/val00")).unwrap();
+        std::fs::write(root.join("store/val00/manifest.json"), b"{}").unwrap();
+        std::fs::write(root.join("store/frames.bin"), b"0123").unwrap();
+        std::fs::create_dir_all(root.join("scenes/val01")).unwrap();
+        std::os::unix::fs::symlink(root.join("store/val00"), root.join("scenes/val00")).unwrap();
+        std::os::unix::fs::symlink(root.join("store/frames.bin"), root.join("scenes/val01/frames.bin"))
+            .unwrap();
+        let runner = LocalPaths { cluster: GriffinCluster::new(), timeouts: Mutex::new(Vec::new()) };
+        let plan = build_run_plan(&runner, &entry, &req).expect("build");
+        let _ = std::fs::remove_dir_all(&root);
+        assert_eq!(plan.split.file_count, Some(2), "{:?}", plan.split);
+        assert!(plan.is_saveable(), "{:?}", plan.checks);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn an_unreadable_scenes_file_fails_the_fingerprint_instead_of_dropping_out() {
+        use std::os::unix::fs::PermissionsExt;
+        let (root, entry, req) = local_scenes("unreadable-scene");
+        std::fs::create_dir_all(root.join("scenes/val00")).unwrap();
+        std::fs::write(root.join("scenes/val00/manifest.json"), b"{}").unwrap();
+        let locked = root.join("scenes/val00/frames.bin");
+        std::fs::write(&locked, b"0123").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let runner = LocalPaths { cluster: GriffinCluster::new(), timeouts: Mutex::new(Vec::new()) };
+        let result = build_run_plan(&runner, &entry, &req);
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let error = result.expect_err("an unreadable file must fail the fingerprint");
+        assert!(error.contains("could not be read"), "{error}");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn the_split_listing_has_its_own_timeout_and_no_other_path_is_walked() {
+        let (root, mut entry, req) = local_scenes("split-timeout");
+        std::fs::create_dir_all(root.join("scenes/val00")).unwrap();
+        std::fs::write(root.join("scenes/val00/manifest.json"), b"{}").unwrap();
+        // A sandbox container image is a directory too: its check must not list it.
+        std::fs::create_dir_all(root.join("image.sif/usr/lib")).unwrap();
+        std::fs::write(root.join("image.sif/usr/lib/libx.so"), b"x").unwrap();
+        let image = root.join("image.sif").to_string_lossy().to_string();
+        entry.profile.code_roots.push(root.to_string_lossy().to_string());
+        entry.profile.environment = EnvironmentSetup {
+            kind: EnvironmentKind::Container,
+            container_image: Some(image.clone()),
+            coperceive_command: entry.profile.environment.coperceive_command.clone(),
+            ..EnvironmentSetup::default()
+        };
+        let runner = LocalPaths { cluster: GriffinCluster::new(), timeouts: Mutex::new(Vec::new()) };
+        let _ = build_run_plan(&runner, &entry, &req);
+        let timeouts = runner.timeouts.lock().unwrap().clone();
+        let bin = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/bin");
+        let image_check = std::process::Command::new("/bin/sh")
+            .args(["-c", PATH_CHECK_BODY, "sh", &image])
+            .env("PATH", format!("{bin}:/usr/bin:/bin"))
+            .output()
+            .unwrap();
+        let _ = std::fs::remove_dir_all(&root);
+        let split = timeouts
+            .iter()
+            .find(|(cmd, _)| cmd.contains(&req.split))
+            .expect("the split was checked");
+        assert!(split.1 > CHECK_TIMEOUT, "split check timeout {:?}", split.1);
+        let image_values = parse_key_values(&String::from_utf8_lossy(&image_check.stdout));
+        assert_eq!(image_values.get("ISDIR").map(String::as_str), Some("1"), "{image_values:?}");
+        assert!(!image_values.contains_key("FILES"), "{image_values:?}");
+        assert!(!image_values.contains_key("LISTING_SHA256"), "{image_values:?}");
     }
 
     #[test]
@@ -2940,13 +5495,18 @@ mod tests {
     }
 
     #[test]
-    fn a_builtin_plugin_still_requires_the_checkpoint_and_split() {
-        let mut req = request();
-        req.pipeline_source = "builtin".to_string();
-        req.plugin_manifest = Some("/data/code/griffin/manifest.yaml".to_string());
+    fn a_builtin_plugin_requires_the_split_and_only_a_declared_checkpoint() {
+        // A built-in model always needs its scenes; a checkpoint only when its manifest
+        // declares a `checkpoint` option (Griffin vehicle-side declares none).
+        let mut req = griffin_request();
+        req.model = "weights-from-option".to_string();
         req.checkpoint = String::new();
         let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("builtin");
         assert!(error.contains("Choose a checkpoint path"), "{error}");
+        let mut req = griffin_request();
+        req.split = String::new();
+        let error = build_run_plan(&checked_runner(), &entry(), &req).expect_err("no split");
+        assert!(error.contains("Choose a split path"), "{error}");
     }
 
     #[test]
@@ -2972,14 +5532,24 @@ mod tests {
 
     #[test]
     fn a_builtin_plan_without_a_plugin_manifest_is_refused() {
+        // The cluster's listing is the authority for the manifest (the client's
+        // plugin_manifest is ignored): a plugin listed without one is refused.
         let mut req = request();
         req.pipeline_source = "builtin".to_string();
+        req.pipeline.name = "griffin".to_string();
         req.model = "vehicle-side".to_string();
         req.raw_root = "/data/code/raw".to_string();
         req.media_root = "/data/code/raw".to_string();
         req.plugin_manifest = None;
-        let error = build_run_plan(&checked_runner(), &entry(), &req)
-            .expect_err("builtin without manifest");
+        let no_manifest = MODEL_LIST_JSON.replace(
+            "\"manifest\": \"/data/code/griffin/coperceive_griffin_model/model.yaml\"",
+            "\"manifest\": null",
+        );
+        assert_ne!(no_manifest, MODEL_LIST_JSON);
+        let runner = FakeRunner::default()
+            .with("coperceive-check:model-list", &no_manifest)
+            .with("coperceive-check:plan-path", "EXISTS=1\nREADABLE=1\nEXEC=0\nISDIR=0\nREALPATH=/data/code/checkpoints/model.pt\nSHA256=abc123\n");
+        let error = build_run_plan(&runner, &entry(), &req).expect_err("builtin without manifest");
         assert!(error.contains("no pipeline manifest"), "{error}");
     }
 
@@ -3066,19 +5636,47 @@ mod tests {
 
     #[test]
     fn lists_installed_plugins_as_builtin_pipelines() {
-        let runner = FakeRunner::default().with(
-            "coperceive-check:model-list",
-            "griffin  entry-point  /data/code/griffin/manifest.yaml\n",
-        );
+        let runner = FakeRunner::default().with("coperceive-check:model-list", MODEL_LIST_JSON);
         let pipelines = list_builtin_pipelines(&runner, &entry().profile);
         assert_eq!(pipelines.len(), 1);
         assert_eq!(pipelines[0].id, "griffin");
         assert_eq!(pipelines[0].source, "builtin");
         assert_eq!(
             pipelines[0].plugin_manifest.as_deref(),
-            Some("/data/code/griffin/manifest.yaml")
+            Some("/data/code/griffin/coperceive_griffin_model/model.yaml")
         );
         assert_eq!(pipelines[0].spec.arguments[0].name, "extras");
+        let plugin = pipelines[0].builtin.as_ref().expect("the listing");
+        assert!(plugin.models["vehicle-side"].gpu);
+    }
+
+    #[test]
+    fn a_too_old_cluster_still_lists_its_plugins_with_the_reason() {
+        let runner = FakeRunner::default()
+            .with_result("model list --json", "", false)
+            .with("coperceive-check:model-list", "griffin  entry-point  coperceive_griffin_model:MANIFEST\n");
+        // FakeRunner's failure says "fake failure", not --json: no fallback, no list.
+        assert!(list_builtin_pipelines(&runner, &entry().profile).is_empty());
+        let mut cluster = GriffinCluster::new();
+        cluster.model_list = Err("coperceive: error: unrecognized arguments: --json".to_string());
+        struct Plain(GriffinCluster);
+        impl RemoteRunner for Plain {
+            fn run(&self, cmd: &str, t: Duration, stdin: Option<&str>) -> Result<CommandResult, String> {
+                if cmd.contains("model list 2>/dev/null") {
+                    return Ok(CommandResult {
+                        success: true,
+                        stdout: "griffin  entry-point  coperceive_griffin_model:MANIFEST\n".to_string(),
+                        stderr: String::new(),
+                    });
+                }
+                self.0.run(cmd, t, stdin)
+            }
+        }
+        let pipelines = list_builtin_pipelines(&Plain(cluster), &entry().profile);
+        assert_eq!(pipelines.len(), 1);
+        assert_eq!(pipelines[0].name, "griffin");
+        assert_eq!(pipelines[0].plugin_manifest, None);
+        assert!(pipelines[0].description.contains("too old"), "{}", pipelines[0].description);
     }
 
     #[test]
@@ -3524,7 +6122,7 @@ mod tests {
     fn contract_script_refuses_a_partition_that_was_never_chosen() {
         let mut profile = entry().profile;
         profile.defaults = JobDefaults::default();
-        let error = render_contract_check_script(&profile, &EnvironmentSetup::default(), &[], "p")
+        let error = render_contract_check_script(&profile, &EnvironmentSetup::default(), &[], "p", false)
             .expect_err("must refuse");
         assert!(error.contains("Choose a partition"));
     }
@@ -3576,6 +6174,7 @@ mod tests {
             &EnvironmentSetup::default(),
             &[],
             "plan-1793222864-c5af819dbd2b",
+            false,
         )
         .expect("script");
         assert!(!script.contains("--gres"));
@@ -3609,6 +6208,7 @@ mod tests {
             &profile.environment,
             &argv,
             "plan-1793222864-c5af819dbd2b",
+            true,
         )
         .expect("contract script");
         assert!(
@@ -3628,7 +6228,8 @@ mod tests {
             "plan-1790000000-aabbccddeeff",
             &BTreeMap::new(),
             "/data/scenes",
-            "/data/checkpoints/model.pt",
+            // vehicle-side declares no checkpoint option: the plan passes none.
+            "",
             "/data/results/runs/plan-1790000000-aabbccddeeff",
             "vehicle-side", "/data/raw", "/data/raw", "/data/results/runs/plan-1790000000-aabbccddeeff/work",
         )
@@ -3644,8 +6245,6 @@ mod tests {
             "/data/results/runs/plan-1790000000-aabbccddeeff",
             "--run-id",
             "plan-1790000000-aabbccddeeff",
-            "--option",
-            "checkpoint=/data/checkpoints/model.pt",
             "--model",
             "vehicle-side",
             "--raw-root",
@@ -3667,7 +6266,7 @@ mod tests {
         assert_eq!(
             flags,
             [
-                "--manifest", "--media-root", "--model", "--option", "--out",
+                "--manifest", "--media-root", "--model", "--out",
                 "--raw-root", "--run-id", "--scenes", "--work",
             ]
         );
@@ -3750,16 +6349,17 @@ mod tests {
 
     #[test]
     fn save_refuses_an_installed_model_whose_manifest_path_is_missing() {
-        let mut req = request();
-        req.pipeline_source = "builtin".to_string();
-        req.pipeline.name = "griffin".to_string();
-        req.model = "vehicle-side".to_string();
+        let mut req = griffin_request();
         req.raw_root = "/data/code/raw".to_string();
         req.media_root = "/data/code/raw".to_string();
         req.plugin_manifest = Some("/tmp/client-manifest.yaml".to_string());
         let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
         let mut echo = EchoRunner::new();
-        echo.model_list = Some("griffin entry-point\n".to_string());
+        // The cluster lists the plugin, but its entry point names no readable manifest.
+        echo.model_list = Some(
+            r#"{"format":"coperceive-model-list","format_version":1,"plugins":[{"name":"griffin","manifest":null,"error":"entry point 'griffin' names a missing manifest","modules":[],"models":{}}]}"#
+                .to_string(),
+        );
         let error = save_run_plan(&echo, &entry(), &plan, &req).expect_err("no manifest");
         assert!(error.contains("no pipeline manifest"), "{error}");
         let written = echo.written.lock().unwrap();
@@ -3771,11 +6371,8 @@ mod tests {
 
     #[test]
     fn a_builtin_plan_carries_model_raw_media_and_work() {
-        let mut req = request();
-        req.pipeline_source = "builtin".to_string();
-        req.pipeline.name = "griffin".to_string();
-        req.plugin_manifest = Some("/data/code/griffin/manifest.yaml".to_string());
-        req.values.clear();
+        let mut req = griffin_request();
+        req.split = "/data/code/splits/test.txt".to_string();
         req.model = "vehicle-side".to_string();
         req.raw_root = "/data/code/raw".to_string();
         req.media_root = "/data/code/raw".to_string();
@@ -3783,7 +6380,8 @@ mod tests {
         assert_eq!(plan.model, "vehicle-side");
         assert_eq!(plan.raw_root.path, "/data/code/raw");
         assert_eq!(plan.media_root.path, "/data/code/raw");
-        assert_eq!(plan.work_dir, format!("{}/work", plan.output_dir));
+        // The job's scratch, as the CLI's `--work "$SCRATCH/work"`.
+        assert_eq!(plan.work_dir, WORK_IN_SCRATCH);
         for item in ["--model", "vehicle-side", "--raw-root", "/data/code/raw", "--media-root", "/data/code/raw", "--work"] {
             assert!(plan.argv.iter().any(|value| value == item), "missing {item}: {:?}", plan.argv);
         }
@@ -3791,9 +6389,8 @@ mod tests {
 
     #[test]
     fn save_uses_the_installed_manifest_not_the_client_path() {
-        let mut req = request();
-        req.pipeline_source = "builtin".to_string();
-        req.pipeline.name = "griffin".to_string();
+        let mut req = griffin_request();
+        req.split = "/data/code/splits/test.txt".to_string();
         req.model = "vehicle-side".to_string();
         req.raw_root = "/data/code/raw".to_string();
         req.media_root = "/data/code/raw".to_string();
@@ -3803,12 +6400,11 @@ mod tests {
         req.values.clear();
         let plan = build_run_plan(&checked_runner(), &entry(), &req).expect("build");
         let mut echo = EchoRunner::new();
-        echo.model_list =
-            Some("griffin entry-point /data/code/griffin/manifest.yaml\n".to_string());
+        echo.model_list = Some(MODEL_LIST_JSON.to_string());
         let saved = save_run_plan(&echo, &entry(), &plan, &req).expect("save");
         assert!(saved
             .argv
-            .contains(&"/data/code/griffin/manifest.yaml".to_string()));
+            .contains(&"/data/code/griffin/coperceive_griffin_model/model.yaml".to_string()));
         assert!(!saved
             .argv
             .iter()

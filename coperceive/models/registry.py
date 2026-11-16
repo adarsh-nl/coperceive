@@ -49,22 +49,30 @@ def resolve_manifest(name: str | None, *, manifest: Path | None) -> Manifest:
         return load_manifest(manifest)
     if name is None:
         raise RegistryError("a plugin name or --manifest FILE is required")
-    entry = _entry_points().get(name)
-    if entry is None:
-        known = ", ".join(info.name for info in list_plugins())
-        raise RegistryError(f"no model plugin named {name!r}; known: {known or 'none'}")
-    loaded: object = entry.load()
-    if not isinstance(loaded, (str, Path)):
-        raise RegistryError(f"entry point {name!r} did not name a manifest file")
-    path = Path(loaded)
-    if not path.is_file():
-        raise RegistryError(f"entry point {name!r} names a missing manifest {path}")
-    loaded_manifest = load_manifest(path)
+    loaded_manifest = load_manifest(manifest_path(name))
     if loaded_manifest.name != name:
         raise RegistryError(
             f"entry point {name!r} names a manifest called {loaded_manifest.name!r}"
         )
     return loaded_manifest
+
+
+def manifest_path(name: str) -> Path:
+    """The manifest file the entry point ``name`` names (as the entry point gives it)."""
+    entry = _entry_points().get(name)
+    if entry is None:
+        known = ", ".join(info.name for info in list_plugins())
+        raise RegistryError(f"no model plugin named {name!r}; known: {known or 'none'}")
+    try:
+        loaded: object = entry.load()
+    except (ImportError, AttributeError) as exc:
+        raise RegistryError(f"entry point {name!r} could not be loaded: {exc}") from exc
+    if not isinstance(loaded, (str, Path)):
+        raise RegistryError(f"entry point {name!r} did not name a manifest file")
+    path = Path(loaded)
+    if not path.is_file():
+        raise RegistryError(f"entry point {name!r} names a missing manifest {path}")
+    return path
 
 
 def _entry_points() -> dict[str, metadata.EntryPoint]:
@@ -74,4 +82,11 @@ def _entry_points() -> dict[str, metadata.EntryPoint]:
     return _entries
 
 
-__all__ = ["PluginInfo", "RegistryError", "clear_cache", "list_plugins", "resolve_manifest"]
+__all__ = [
+    "PluginInfo",
+    "RegistryError",
+    "clear_cache",
+    "list_plugins",
+    "manifest_path",
+    "resolve_manifest",
+]

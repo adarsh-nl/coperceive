@@ -1,0 +1,179 @@
+{
+  "about": "Plan parity (ADR 0018, ported to release/v0.1.1): one logical input set per case for the Griffin vehicle-side run. src-tauri/tests/plan_parity.rs renders the app's job script into app/<case>.sbatch; tests/test_plan_parity.py renders `coperceive model run --slurm` for the same inputs and compares the two whole scripts line by line against allowed_differences.json. Paths are logical: the CLI builds them under a temporary directory and maps it back. Each case's `python` is the interpreter that runs `model run` (the CLI's --slurm-python, and the interpreter both sides record environment.json with). Each case's `pyvenv_cfg` is the pyvenv.cfg of the venv that holds `python`, on this cluster's /software/python/<version> base: the CLI reads it locally (slurm.py interpreter_module), the app over the plan's read-only interpreter check, and both load that python module after module purge. Each case's `coperceive_root` and `samples` are what the run's python reports on the cluster (the app's read-only plan-python check): the root of the coperceive it imports (the job's PYTHONPATH; the CLI exports the root of the checkout that emitted the job, mapped to code_root) and the pose times of the fixture's 10 scenes x 149 poses, which the CLI counts locally for its --time estimate.",
+  "run_id": "plan-1790000000-aabbccddeeff",
+  "code_root": "/opt/coperceive",
+  "model_list": "model_list.json",
+  "cases": [
+    {
+      "name": "base",
+      "about": "The release doc's Griffin vehicle run (docs/release/v0.1.1-eval-pipeline-test.md): the scenes folder, an A40 partition that discovery found, the CUDA modules on the profile.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490
+    },
+    {
+      "name": "mixed_partition",
+      "about": "A mixed partition whose discovery lists a100 before a40: the app must write --gres=gpu:1 as plan_sbatch does and let the manifest's --constraint=\"a40\" pick the type (a typed gpu:a100:1 beside it would fit no node).",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-mixed",
+        "discovered_gpu_types": [
+          "a100",
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "nvidia/cuda-11.8",
+          "nvidia/cuda-11.x_cudnn-8.6"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490
+    },
+    {
+      "name": "modules_no_gpu_discovery",
+      "about": "A modules profile (python/3.12) on a partition with no GPU discovery: the app must still request a GPU and load the manifest's CUDA modules, as plan_sbatch does.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "main",
+        "discovered_gpu_types": null,
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "python/3.12"
+        ],
+        "coperceive_command": [
+          "/home/bob/coperceive-app/.venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/home/bob/coperceive-app/.venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.12/bin\ninclude-system-site-packages = false\nversion = 3.12.4\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490
+    },
+    {
+      "name": "modules_profile_other_python",
+      "about": "A modules profile that lists its own python/3.11 while the venv that runs coperceive is on /software/python/3.9.18: the app loads only the interpreter's python/3.9.18 (another python module would swap it under Lmod), as plan_sbatch does, and says so in a comment.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [
+          "python/3.11"
+        ],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ],
+        "kind": "modules"
+      },
+      "cli_logs": "/home/tester/logs",
+      "python": "/opt/venv/bin/python",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490
+    },
+    {
+      "name": "venv_profile",
+      "about": "A venv profile (no modules of its own) running `<venv>/bin/python -m coperceive`: the app must still write module purge and the manifest's CUDA modules, as plan_sbatch does for any interpreter.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "kind": "venv",
+        "interpreter": "/opt/venv/bin/python",
+        "extra_code_roots": [
+          "/opt/venv"
+        ],
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [],
+        "coperceive_command": [
+          "/opt/venv/bin/python",
+          "-m",
+          "coperceive"
+        ]
+      },
+      "python": "/opt/venv/bin/python",
+      "cli_logs": "/home/tester/logs",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490
+    },
+    {
+      "name": "venv_script_command",
+      "about": "A discovered venv profile whose coperceive command is the console script <venv>/bin/coperceive (server_profiles.rs): the run is that script, environment.json is recorded with <venv>/bin/python, the interpreter pip names in the script's shebang, which is the CLI's --slurm-python.",
+      "root": "/data/griffin",
+      "model": "vehicle-side",
+      "profile": {
+        "kind": "venv",
+        "interpreter": "/opt/venv/bin/python",
+        "extra_code_roots": [
+          "/opt/venv"
+        ],
+        "partition": "gpu-a40",
+        "discovered_gpu_types": [
+          "a40"
+        ],
+        "scratch_template": "/scratch/$USER/$SLURM_JOB_ID",
+        "results_root": "/home/tester/results",
+        "modules": [],
+        "coperceive_command": [
+          "/opt/venv/bin/coperceive"
+        ]
+      },
+      "python": "/opt/venv/bin/python",
+      "cli_logs": "/home/tester/logs",
+      "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
+      "coperceive_root": "/opt/coperceive",
+      "samples": 1490
+    }
+  ]
+}
