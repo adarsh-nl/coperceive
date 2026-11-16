@@ -24,6 +24,47 @@ if [ -z "${TOKEN_FILE}" ] || [ ! -f "${TOKEN_FILE}" ]; then
     exit 1
 fi
 
+# The session id names files under ~/.coperceive and the Slurm job, so it is a
+# plain file name: letters, digits, '.', '_' and '-', at most 128 characters
+# (the rule `coperceive remote start` applies before it submits).
+case "${UUID}" in
+    '' | *[!0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ._-]*)
+        echo "Error: the session id may only use letters, digits, '.', '_' and '-'" >&2
+        exit 1
+        ;;
+esac
+if [ "${#UUID}" -gt 128 ]; then
+    echo "Error: the session id is longer than 128 characters" >&2
+    exit 1
+fi
+
+# Paths reach the server's argv, the newline-separated media list and the
+# session file. A control character (newline, carriage return, escape, ...) in
+# one is never a real folder name; refuse it rather than pass it on.
+has_control_char() {
+    case "$1" in
+        *[[:cntrl:]]*) return 0 ;;
+    esac
+    return 1
+}
+for checked in DATA_ROOT TOKEN_FILE COPERCEIVE_REMOTE_PYTHON COPERCEIVE_REMOTE_STATIC \
+    COPERCEIVE_EXTRA_ARGS; do
+    if has_control_char "${!checked:-}"; then
+        echo "Error: ${checked} contains a control character" >&2
+        exit 1
+    fi
+done
+# The media list is newline-separated: check each root on its own. (Checked here,
+# before the EXIT trap below, whose cleanup would turn this exit into success.)
+if [ -n "${COPERCEIVE_REMOTE_MEDIA_ROOTS:-}" ]; then
+    while IFS= read -r media; do
+        if has_control_char "${media}"; then
+            echo "Error: a media root in COPERCEIVE_REMOTE_MEDIA_ROOTS contains a control character" >&2
+            exit 1
+        fi
+    done <<< "${COPERCEIVE_REMOTE_MEDIA_ROOTS}"
+fi
+
 SESSIONS_DIR="${HOME}/.coperceive/sessions"
 LOGS_DIR="${HOME}/.coperceive/logs"
 mkdir -p -m 0700 "${SESSIONS_DIR}" "${LOGS_DIR}"
@@ -126,24 +167,44 @@ fi
     ${COPERCEIVE_EXTRA_ARGS:-} &
 SERVE_PID=$!
 
-# Write 0600 session file
-touch "${SESSION_FILE}"
-chmod 0600 "${SESSION_FILE}"
+# Write the 0600 session file. The login node sends the session's bearer token
+# to the "ip" and "port" read from it, so no value may be read as syntax: each
+# is passed to Python as its own argument and written with json.dump (the
+# program below is a quoted heredoc, nothing in it is expanded). A folder name
+# such as `x", "ip": "...` stays one string in "data_root". The file is created
+# 0600 beside its final name and renamed into place, so it is never half written.
 NOW_TS=$(date +%s)
-cat <<EOF > "${SESSION_FILE}"
-{
-  "uuid": "${UUID}",
-  "job_id": ${SLURM_JOB_ID:-0},
-  "node": "${SLURMD_NODENAME:-$(hostname)}",
-  "ip": "${NODE_IP}",
-  "port": ${PORT},
-  "pid": ${SERVE_PID},
-  "started_at": ${NOW_TS},
-  "last_heartbeat": ${NOW_TS},
-  "data_root": "${DATA_ROOT}",
-  "token_file": "${TOKEN_FILE}"
+NODE_NAME="${SLURMD_NODENAME:-$(hostname)}"
+"${PYTHON_BIN}" -I - "${SESSION_FILE}" "${UUID}" "${SLURM_JOB_ID:-0}" "${NODE_NAME}" \
+    "${NODE_IP}" "${PORT}" "${SERVE_PID}" "${NOW_TS}" "${DATA_ROOT}" "${TOKEN_FILE}" <<'PY'
+import json
+import os
+import sys
+import tempfile
+
+path, uuid, job_id, node, ip, port, pid, now, data_root, token_file = sys.argv[1:]
+session = {
+    "uuid": uuid,
+    "job_id": int(job_id),
+    "node": node,
+    "ip": ip,
+    "port": int(port),
+    "pid": int(pid),
+    "started_at": int(now),
+    "last_heartbeat": int(now),
+    "data_root": data_root,
+    "token_file": token_file,
 }
-EOF
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".session-", suffix=".tmp")
+try:
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
+        json.dump(session, out, indent=2)
+        out.write("\n")
+    os.replace(tmp, path)
+finally:
+    if os.path.exists(tmp):
+        os.unlink(tmp)
+PY
 
 echo "Session file created: ${SESSION_FILE} (mode 0600)"
 
