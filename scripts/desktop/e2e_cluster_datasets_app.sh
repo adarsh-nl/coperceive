@@ -799,16 +799,48 @@ done
 
 # Step 3: Attach a full remote session (`remote_connect`) and switch to local again;
 # `disconnect_remote_in_background` must send `remote stop` over SSH (`remote-stop` in FAKE_SSH_LOG).
-REMOTE_CONNECT_PAYLOAD=$(python3 - "${PROFILE_ID}" "${CLUSTER}/results" <<'PY'
+REMOTE_CACHE_ROOT=$(python3 - "${CLUSTER}/results" <<'PY'
+from pathlib import Path
+import sys
+
+results_dir = Path(sys.argv[1])
+candidates = sorted(
+    p.parent.parent
+    for p in results_dir.rglob("COMPLETE.json")
+    if p.parent.name == "scene_0000" and (p.parent / "manifest.json").is_file()
+)
+if not candidates:
+    manifests = sorted(str(p) for p in results_dir.rglob("manifest.json"))
+    raise SystemExit(f"No prepared scene_0000 under {results_dir}; manifests={manifests}")
+print(candidates[0])
+PY
+) || fail "failed to locate prepared remote cache root for Flow F Step 3"
+
+REMOTE_CONNECT_PAYLOAD=$(python3 - "${PROFILE_ID}" "${REMOTE_CACHE_ROOT}" <<'PY'
 import json, sys
+
+dataset_meta = {
+    "dataset": {
+        "scenes": [
+            {"scene_id": "scene_0000", "state": "ready"},
+            {"scene_id": "scene_0001", "state": "ready"},
+            {"scene_id": "scene_0002", "state": "ready"},
+        ],
+        "label": "OPV2V test",
+        "server": "Dataset e2e fake cluster",
+    }
+}
+connect_args = {
+    "alias": "cluster-b",
+    "dataRoot": sys.argv[2],
+    "profileId": sys.argv[1],
+}
 js = (
-    "window.__TAURI_INTERNALS__.invoke('remote_connect', "
-    + json.dumps({
-        "alias": "cluster-b",
-        "dataRoot": sys.argv[2],
-        "profileId": sys.argv[1],
-    })
-    + ")"
+    "(async () => { "
+    f"const r = await window.__TAURI_INTERNALS__.invoke('remote_connect', {json.dumps(connect_args)}); "
+    f"await window.__TAURI_INTERNALS__.invoke('set_viewer_dataset_scenes', {json.dumps(dataset_meta)}); "
+    "return r; "
+    "})()"
 )
 print(json.dumps({"window": "main", "script": js}))
 PY
@@ -820,13 +852,17 @@ curl -s -f -X POST \
     "http://127.0.0.1:${CTRL_PORT}/eval" >/dev/null || fail "failed to invoke remote_connect in Flow F"
 
 REMOTE_ATTACHED=0
+LAST_REMOTE_ATTACH=""
 for i in {1..90}; do
     if grep -q "^remote-start$" "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null; then
         RESP=$(curl -s -X POST \
             -H "Authorization: Bearer ${CTRL_SECRET}" \
             -H "Content-Type: application/json" \
-            -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; return { ok: body.includes(\"Streaming over SSH\") }; })()"}' \
+            -d '{"window":"viewer","script":"(() => { const body = document.body ? document.body.innerText : \"\"; const ok = body.includes(\"scene_0000\") && body.includes(\"Streaming over SSH\") && !body.includes(\"demo-junction\"); return { ok, snippet: body.slice(0, 300) }; })()"}' \
             "http://127.0.0.1:${CTRL_PORT}/eval" 2>/dev/null || echo "")
+        if [ -n "${RESP}" ]; then
+            LAST_REMOTE_ATTACH="${RESP}"
+        fi
         if echo "${RESP}" | grep -q '"ok":true'; then
             REMOTE_ATTACHED=1
             break
@@ -834,7 +870,7 @@ for i in {1..90}; do
     fi
     sleep 0.5
 done
-[ "${REMOTE_ATTACHED}" -eq 1 ] || fail "remote_connect did not attach remote viewer before second local switch"
+[ "${REMOTE_ATTACHED}" -eq 1 ] || fail "remote_connect did not attach remote viewer before second local switch (${LAST_REMOTE_ATTACH}; ssh log: $(tr '\n' ',' < "${TMP_DIR}/flow-f-ssh.txt" 2>/dev/null))"
 
 curl -s -f -X POST \
     -H "Authorization: Bearer ${CTRL_SECRET}" \

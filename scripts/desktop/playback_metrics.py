@@ -3,11 +3,22 @@
 
 from __future__ import annotations
 
+import argparse
+import http.client
 import json
 import sys
-from collections.abc import Sequence
+import time
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
+
+PLAYBACK_POLL_SCRIPT = (
+    "(() => { const st = window.__COPERCEIVE_PLAYBACK_STATE__?.() ?? {}; "
+    'const txt = document.body ? document.body.innerText : ""; '
+    "return { frameIndex: st.frameIndex ?? -1, samples: st.samples ?? 0, "
+    'playing: Boolean(st.playing), buffering: txt.includes("Buffering") }; })()'
+)
 
 
 @dataclass(frozen=True)
@@ -63,6 +74,79 @@ def evaluate_playback_samples(
     return frames, elapsed_s, ratio, min_required, frames >= min_required
 
 
+def eval_controller(
+    port: int,
+    secret: str,
+    script: str = PLAYBACK_POLL_SCRIPT,
+    window: str = "viewer",
+    timeout_s: float = 10.0,
+) -> dict[str, object] | None:
+    """Send one `/eval` POST over loopback without spawning external processes."""
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=timeout_s)
+    try:
+        body = json.dumps({"window": window, "script": script}).encode("utf-8")
+        conn.request(
+            "POST",
+            "/eval",
+            body=body,
+            headers={
+                "Host": f"127.0.0.1:{port}",
+                "Authorization": f"Bearer {secret}",
+                "Content-Type": "application/json",
+            },
+        )
+        resp = conn.getresponse()
+        raw = resp.read().decode("utf-8", errors="replace")
+        if resp.status != 200:
+            return None
+        parsed: object = json.loads(raw)
+        if not isinstance(parsed, dict):
+            return None
+        return cast(dict[str, object], parsed)
+    except OSError:
+        return None
+    except json.JSONDecodeError:
+        return None
+    finally:
+        conn.close()
+
+
+def poll_playback_samples(
+    fetch_fn: Callable[[], dict[str, object] | None],
+    polls: int = 25,
+    interval_s: float = 0.2,
+    clock_fn: Callable[[], float] = time.monotonic,
+    sleep_fn: Callable[[float], None] = time.sleep,
+) -> tuple[list[PlaybackSample], bool]:
+    """Collect playback samples in-process so polling does not contend for CPU."""
+    collected: list[PlaybackSample] = []
+    buffering_seen = False
+    for _ in range(polls):
+        sleep_fn(interval_s)
+        payload = fetch_fn()
+        wall_s = clock_fn()
+        if not isinstance(payload, dict):
+            continue
+        raw_res: object = payload.get("result")
+        if not isinstance(raw_res, dict):
+            continue
+        res = cast(dict[str, object], raw_res)
+        if res.get("buffering") is True:
+            buffering_seen = True
+        idx = res.get("frameIndex", -1)
+        count = res.get("samples", 0)
+        if (
+            isinstance(idx, int)
+            and not isinstance(idx, bool)
+            and isinstance(count, int)
+            and not isinstance(count, bool)
+            and count > 0
+            and 0 <= idx < count
+        ):
+            collected.append(PlaybackSample(frame_index=idx, samples=count, wall_s=wall_s))
+    return collected, buffering_seen
+
+
 def load_samples_jsonl(path: Path) -> list[PlaybackSample]:
     """Load recorded playback poll samples from a JSON-lines file."""
     out: list[PlaybackSample] = []
@@ -81,11 +165,7 @@ def load_samples_jsonl(path: Path) -> list[PlaybackSample]:
     return out
 
 
-def main(argv: list[str]) -> int:
-    if len(argv) != 2:
-        print("usage: playback_metrics.py <samples.jsonl>", file=sys.stderr)
-        return 2
-    samples = load_samples_jsonl(Path(argv[1]))
+def _report_samples(samples: Sequence[PlaybackSample]) -> int:
     frames, elapsed_s, ratio, min_required, passed = evaluate_playback_samples(samples)
     start_f = samples[0].frame_index
     end_f = samples[-1].frame_index
@@ -103,6 +183,55 @@ def main(argv: list[str]) -> int:
         )
         return 26
     return 0
+
+
+def main(argv: list[str]) -> int:
+    if len(argv) >= 2 and argv[1] == "poll":
+        parser = argparse.ArgumentParser(prog="playback_metrics.py poll")
+        parser.add_argument("--port", type=int, required=True)
+        parser.add_argument("--secret", required=True)
+        parser.add_argument("--window", default="viewer")
+        parser.add_argument("--polls", type=int, default=25)
+        parser.add_argument("--interval", type=float, default=0.2)
+        ns = parser.parse_args(argv[2:])
+        samples, buffering_seen = poll_playback_samples(
+            lambda: eval_controller(ns.port, ns.secret, window=ns.window),
+            polls=ns.polls,
+            interval_s=ns.interval,
+        )
+        perf = eval_controller(
+            ns.port,
+            ns.secret,
+            script=(
+                "(() => { const perf = window.__COPERCEIVE_PLAYBACK_PERF__?.() ?? null; "
+                "const st = window.__COPERCEIVE_PLAYBACK_STATE__?.(); "
+                'if (st?.playing) window.__COPERCEIVE_PLAYBACK__?.("toggle"); return perf; })()'
+            ),
+            window=ns.window,
+        )
+        print(f"Demo playback perf breakdown: {json.dumps(perf)}")
+        if buffering_seen:
+            print(
+                "Error: Demo playback showed 'Buffering' during 1x local playback!",
+                file=sys.stderr,
+            )
+            return 26
+        if len(samples) < 2:
+            print(
+                "Error: Could not read at least 2 playback samples during demo playback!",
+                file=sys.stderr,
+            )
+            return 26
+        return _report_samples(samples)
+
+    if len(argv) != 2:
+        print(
+            "usage: playback_metrics.py <samples.jsonl> | poll --port PORT --secret SECRET",
+            file=sys.stderr,
+        )
+        return 2
+    samples = load_samples_jsonl(Path(argv[1]))
+    return _report_samples(samples)
 
 
 if __name__ == "__main__":
