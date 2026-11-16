@@ -11,6 +11,7 @@ is paired at most once in a pass, so a bin's AP lies in ``[0, 1]``.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any, cast
 
 import pytest
 from coperceive.evaluation.breakdown import BREAKDOWNS, build_compare
@@ -114,9 +115,14 @@ def _compare(
     )
 
 
+def _json(document: dict[str, object]) -> Any:
+    """``compare.json`` as parsed JSON: the tests walk it by key."""
+    return cast(Any, document)
+
+
 def _bin_ap(document: dict[str, object], dimension: str, label: str, threshold: float) -> object:
-    output = document["outputs"][0]  # type: ignore[index]
-    for row in output["breakdowns"][dimension]:  # type: ignore[index]
+    output = _json(document)["outputs"][0]
+    for row in output["breakdowns"][dimension]:
         if row["bin"] == label:
             return row["runs"]["r"]["ap"][threshold_key(threshold)]["mean"]
     raise KeyError(label)
@@ -180,7 +186,7 @@ def test_a_true_positive_of_another_bin_is_ignored_and_a_stray_box_counts_everyw
 
 def _every_ap(document: dict[str, object]) -> list[float]:
     values: list[float] = []
-    for output in document["outputs"]:  # type: ignore[union-attr]
+    for output in _json(document)["outputs"]:
         for rows in output["breakdowns"].values():
             for row in rows:
                 for cell in row["runs"].values():
@@ -215,8 +221,8 @@ def test_every_bin_ap_lies_in_zero_one_and_class_bins_equal_the_pooled_ap(
         assert all(0.0 <= value <= 1.0 + 1e-9 for value in values), (seed, max(values))
         # The class breakdown is the pooled per-class AP of eval report.
         rows = collect(root / "scenes", root / "predictions", RUN_ID)
-        for output in document["outputs"]:  # type: ignore[union-attr]
-            key = (output["agent_id"], output["source"])
+        for output in _json(document)["outputs"]:
+            key: tuple[str, str] = (output["agent_id"], output["source"])
             pooled = pooled_ap([row for row in rows if row.output == key], run.config.thresholds)
             for row in output["breakdowns"]["class"]:
                 cell = row["runs"][RUN_ID]["ap"]
