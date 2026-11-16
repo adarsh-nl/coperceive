@@ -7,8 +7,11 @@ surface). Nothing from OpenCOOD is vendored: the code calls its public entry poi
 ``opencood/tools/inference.py`` does, and feeds them a dataset-backed pipeline whose raw data
 we provide for the current frame:
 
-- ``opencood.hypes_yaml.yaml_utils.load_yaml(config)`` parses the checkpoint's ``config.yaml``
-  (including its ``yaml_parser``, e.g. ``load_point_pillar_params``);
+- the checkpoint's ``config.yaml`` is parsed by ``opencood_config`` as data (a safe loader
+  that reads the numpy/tuple tags a training run's ``yaml.dump`` writes) and its
+  ``yaml_parser`` (e.g. ``load_point_pillar_params``) is looked up by name in
+  ``opencood.hypes_yaml.yaml_utils``. Upstream's own ``load_yaml`` uses PyYAML's full loader and
+  ``eval``, which run code from the file, so it is only used with ``trust_checkpoint_pickle``;
 - ``opencood.tools.train_utils.create_model(config)`` builds the model; the weights are read
   here with ``torch.load`` because a user-supplied checkpoint file has no fixed name;
 - the dataset class named by ``config['fusion']['core_method']`` is instantiated with its own
@@ -26,8 +29,9 @@ dataset's first ``lidar_np.shape``/``shuffle_points`` call.
 Weight loading is strict by default: a state dict whose keys do not match the model exactly
 raises an EngineError naming the manifest option ``allow_partial_weights`` (only then is a
 non-strict retry allowed and logged). The ``weights_only=True`` safe unpickler is tried
-first; the legacy pickle loader, which executes code embedded in a user-supplied checkpoint,
-runs only with ``trust_checkpoint_pickle=true`` and its use is logged.
+first, and only on torch >= 2.6.0 (CVE-2025-32434: older torch runs code through it); the
+legacy pickle loader, which executes code embedded in a user-supplied checkpoint, runs only
+with ``trust_checkpoint_pickle=true`` and its use is logged.
 
 Priors sent with every frame are the CoBEVT/V2XSet-era defaults, because schema 1 stores no
 speeds or asynchronous delays: ``ego_speed = 0.0``, ``time_delay = 0.0`` and an identity
@@ -49,8 +53,11 @@ import hashlib
 import importlib
 import importlib.util
 import os
+import re
 import shutil
 import tempfile
+from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 from opencood_convert import ConvertError, boxes_from_opencood
@@ -149,16 +156,102 @@ def _fusion_of(config: dict[str, object]) -> str:
     return str(method)
 
 
-def _load_weights(torch, path: str, *, trust_pickle: bool = False) -> dict[str, object]:
-    """Load a state dict, preferring the safe unpickler; the pickle fallback is opt-in.
+CONFIG_LOADER_SAFE = "safe"
+CONFIG_LOADER_TRUSTED = "opencood load_yaml (trusted)"
 
-    ``weights_only=True`` (torch >= 2.0) refuses globals other than tensors, which many
-    older checkpoints need (numpy scalars, small helper objects). Falling back to the legacy
-    pickle loader would execute code embedded in a user-supplied file, so it is only used
-    when ``trust_pickle`` is set (manifest option ``trust_checkpoint_pickle=true``); the
-    default is a clear error that names that option. torch older than 2.0 has no
-    ``weights_only`` argument at all, so every load there goes through the legacy loader and
-    the same opt-in applies.
+
+def _read_config(
+    yaml_utils: Any, config_path: str, *, trust: bool, log: Callable[[str], None]
+) -> tuple[object, str]:
+    """The checkpoint config as data, and which loader read it (for ``plugin.log``).
+
+    ``opencood_config`` reads it without running anything it names. Upstream's ``load_yaml``
+    (PyYAML's full loader + ``eval(yaml_parser)``, i.e. code from the archive) is used only
+    when that safe reader refuses the file *and* ``trust_checkpoint_pickle`` is set; without
+    the option the refusal is an error naming it, raised before any weights are read.
+    """
+    # Imported here: it needs PyYAML, and `hello` must work in an environment without it.
+    import opencood_config  # noqa: PLC0415
+
+    try:
+        return opencood_config.load_checkpoint_config(config_path, yaml_utils), CONFIG_LOADER_SAFE
+    except opencood_config.ConfigRefused as refused:
+        if not trust:
+            raise EngineError(
+                f"the checkpoint config {config_path} {refused}. OpenCOOD's own load_yaml would "
+                "run that as code; pass --option trust_checkpoint_pickle=true only if you trust "
+                "this checkpoint"
+            ) from None
+        log(
+            f"the checkpoint config {refused}; reading it with OpenCOOD's own load_yaml, which "
+            "runs code the file names (trust_checkpoint_pickle=true)"
+        )
+    except Exception as exc:  # noqa: BLE001 - a bad file or the parser's own error
+        raise EngineError(f"cannot read the checkpoint config {config_path}: {exc}") from None
+    try:
+        return yaml_utils.load_yaml(config_path), CONFIG_LOADER_TRUSTED
+    except Exception as exc:  # noqa: BLE001 - the user's parser reports its own error
+        raise EngineError(f"cannot read the checkpoint config {config_path}: {exc}") from None
+
+
+# torch.load(weights_only=True) is a safety boundary only from torch 2.6.0: CVE-2025-32434
+# (GHSA-53q9-r3pm-6pq6) lets a crafted checkpoint run code through it on torch <= 2.5.1, and
+# torch before 1.13 has no weights_only argument at all.
+SAFE_WEIGHTS_ONLY_TORCH = (2, 6, 0)
+# A PEP 440 version (the public grammar, every spelling it normalises: ``rc``/``c``/``pre``,
+# ``-1`` and ``rev`` post-releases, ``-``/``_``/``.`` separators, any case). Torch never uses
+# an epoch, so only an explicit ``0!`` is accepted; any other epoch counts as unparseable.
+_TORCH_VERSION = re.compile(
+    r"""
+    \s* v?
+    (?:0!)?
+    (?P<release>[0-9]+(?:\.[0-9]+)*)
+    (?P<pre>[-_.]?(?:alpha|beta|preview|pre|rc|a|b|c)[-_.]?[0-9]*)?
+    (?P<post>-[0-9]+|[-_.]?(?:post|rev|r)[-_.]?[0-9]*)?
+    (?P<dev>[-_.]?dev[-_.]?[0-9]*)?
+    (?:\+[a-z0-9]+(?:[-_.][a-z0-9]+)*)?
+    \s*
+    """,
+    re.VERBOSE | re.IGNORECASE,
+)
+
+
+def weights_only_is_safe(version: str) -> bool:
+    """Whether this torch's ``weights_only=True`` loader is a boundary (>= 2.6.0, PEP 440 order).
+
+    The release tuples are compared first (``2.6`` == ``2.6.0``). At an equal release a
+    pre-release (``2.6.0rc1``, even ``2.6.0rc1.post1``) or a dev build (``2.6.0.dev2024…``) is
+    older, and a post-release (``2.6.0.post1``, also ``2.6.0.post1.dev0``) is newer. A local
+    part (``+cu121``) is ignored. A version that is not PEP 440 counts as older: fail closed.
+    """
+    match = _TORCH_VERSION.fullmatch(version)
+    if match is None:
+        return False
+    release: list[int] = [int(part) for part in match.group("release").split(".")]
+    while len(release) > 1 and release[-1] == 0:
+        release.pop()
+    safe: list[int] = list(SAFE_WEIGHTS_ONLY_TORCH)
+    while len(safe) > 1 and safe[-1] == 0:
+        safe.pop()
+    if release != safe:
+        return release > safe
+    if match.group("pre"):
+        return False
+    if match.group("post"):
+        return True
+    return not match.group("dev")
+
+
+def _load_weights(torch: Any, path: str, *, trust_pickle: bool = False) -> dict[str, object]:
+    """Load a state dict, preferring the safe unpickler; anything that can run code is opt-in.
+
+    ``weights_only=True`` refuses globals other than tensors, which many older checkpoints
+    need (numpy scalars, small helper objects). Falling back to the legacy pickle loader would
+    execute code embedded in a user-supplied file, so it is only used when ``trust_pickle`` is
+    set (manifest option ``trust_checkpoint_pickle=true``); the default is a clear error that
+    names that option. On torch older than 2.6.0 the safe loader itself is not safe
+    (CVE-2025-32434) and before 1.13 it does not exist, so there every load needs the same
+    opt-in and is refused before ``torch.load`` runs.
     """
     # Defensive repeats of the archive guards: the seam must not hand a link, a directory or
     # an empty file to torch.load even if it is constructed directly.
@@ -168,20 +261,17 @@ def _load_weights(torch, path: str, *, trust_pickle: bool = False) -> dict[str, 
         raise EngineError(f"weights {path!r} is not a regular file")
     if os.path.getsize(path) == 0:
         raise EngineError(f"weights {path!r} is empty")
+    version = str(getattr(torch, "__version__", "") or "")
+    if not trust_pickle and not weights_only_is_safe(version):
+        raise EngineError(
+            f"this torch ({version or 'unknown version'}) is not a 2.6.0 or newer release; "
+            "before 2.6.0, torch.load(weights_only=True) can still run code embedded in a "
+            f"checkpoint (CVE-2025-32434; before 1.13 it has no weights_only at all), so {path} "
+            "is not loaded; upgrade torch in the OpenCOOD environment to 2.6.0 or newer, or pass "
+            "--option trust_checkpoint_pickle=true only if you trust this checkpoint"
+        )
     try:
         state = torch.load(path, map_location="cpu", weights_only=True)
-    except TypeError:
-        if not trust_pickle:
-            raise EngineError(
-                f"this torch ({getattr(torch, '__version__', 'unknown')}) has no weights_only "
-                f"argument, so loading {path} would use the legacy pickle loader, which "
-                "executes code embedded in the file; pass --option trust_checkpoint_pickle=true "
-                "only if you trust this checkpoint"
-            ) from None
-        try:
-            state = torch.load(path, map_location="cpu")
-        except Exception as exc:  # noqa: BLE001 - a bad file is reported to the parent
-            raise EngineError(f"cannot load weights {path}: {exc}") from None
     except Exception as safe_error:  # noqa: BLE001 - the safe unpickler could not read it
         if not trust_pickle:
             raise EngineError(
@@ -190,8 +280,13 @@ def _load_weights(torch, path: str, *, trust_pickle: bool = False) -> dict[str, 
                 "embedded in the file; pass --option trust_checkpoint_pickle=true only if you "
                 "trust this checkpoint"
             ) from None
+        # torch before 1.13 rejects the keyword; its plain load is the legacy loader.
+        no_argument = isinstance(safe_error, TypeError) and "weights_only" in str(safe_error)
         try:
-            state = torch.load(path, map_location="cpu", weights_only=False)
+            if no_argument:
+                state = torch.load(path, map_location="cpu")
+            else:
+                state = torch.load(path, map_location="cpu", weights_only=False)
         except Exception as exc:  # noqa: BLE001 - a bad file is reported to the parent
             raise EngineError(f"cannot load weights {path}: {exc}") from None
     if not isinstance(state, dict):
@@ -298,10 +393,9 @@ class OpenCOODEngine:
             raise EngineError("opencood.hypes_yaml.yaml_utils.load_yaml is not available")
         if not callable(getattr(self._train_utils, "create_model", None)):
             raise EngineError("opencood.tools.train_utils.create_model is not available")
-        try:
-            loaded = yaml_utils.load_yaml(config_path)
-        except Exception as exc:  # noqa: BLE001 - the user's parser reports its own error
-            raise EngineError(f"cannot read the checkpoint config {config_path}: {exc}") from None
+        loaded, self.config_loader = _read_config(
+            yaml_utils, config_path, trust=bool(trust_checkpoint_pickle), log=self._log
+        )
         if not isinstance(loaded, dict):
             raise EngineError(f"the checkpoint config {config_path} is not a mapping")
         config = copy.deepcopy(loaded)
@@ -463,4 +557,5 @@ class OpenCOODEngine:
             "device": self.device,
             "weights": "partial allowed" if self.partial_weights else "strict",
             "pickle_fallback": "allowed" if self.trust_checkpoint_pickle else "refused",
+            "config_loader": self.config_loader,
         }

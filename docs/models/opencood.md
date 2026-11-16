@@ -74,7 +74,15 @@ from:
   <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/tools/train_utils.py>
 - **Config loading.** `opencood/hypes_yaml/yaml_utils.py::load_yaml(file, opt=None)` loads a
   YAML file and applies its `yaml_parser` (for CoBEVT-style configs,
-  `load_point_pillar_params`, which fills the anchor `W/H/D` and `vh/vw/vd`).
+  `load_point_pillar_params`, which fills the anchor `W/H/D` and `vh/vw/vd` and sets
+  `model.args.point_pillar_scatter.grid_size` to an int64 **ndarray**). It parses with PyYAML's
+  full `yaml.Loader` and then runs `eval(param["yaml_parser"])(param)`, so a config can run
+  code; the plugin therefore does **not** call it by default (see
+  [Weights loading and archive limits](#weights-loading-and-archive-limits)). Training
+  (`opencood/tools/train_utils.py::setup_train`) writes the checkpoint's `config.yaml` with
+  `yaml.dump(hypes)` *after* `load_yaml`, so a genuine checkpoint config carries numpy tags
+  (`!!python/object/apply:numpy.core.multiarray._reconstruct` for `grid_size`) and
+  `!!python/tuple`. (Re-read for the 2026-11-16 security review.)
   <https://github.com/DerrickXuNu/OpenCOOD/blob/main/opencood/hypes_yaml/yaml_utils.py>
 - **Dataset classes and communication range.** `opencood/data_utils/datasets/__init__.py`
   defines `COM_RANGE = 70` and the four dataset classes
@@ -129,7 +137,11 @@ from:
    the Python/torch/CUDA versions of the environment are the user's choice. Note the commit
    (`git -C <checkout> rev-parse --short HEAD`) and the versions
    (`python -c "import opencood, torch; print(torch.__version__)"`); they decide whether this
-   plugin's seam runs and belong in the report.
+   plugin's seam runs and belong in the report. With a torch older than **2.6.0** the plugin
+   refuses to load any checkpoint weights unless `--option trust_checkpoint_pickle=true` is
+   passed, because `torch.load(weights_only=True)` is not safe there (CVE-2025-32434, see
+   [Weights loading and archive limits](#weights-loading-and-archive-limits)); prefer an
+   environment with torch 2.6.0 or newer if its CUDA build allows it.
 2. The manifest resolves the environment by conda name: `environment: {conda: opencood}`.
    A different name is a one-line change in `model.yaml`, or pass a prefix. Nothing is
    activated; the parent starts `<prefix>/bin/python` directly, so the same command works
@@ -191,14 +203,43 @@ Other options: `score_threshold` (float, negative means the checkpoint config's 
   With that option the worker retries non-strictly and writes what it skipped (counts) to
   `<work_dir>/plugin.log`; `plugin.log` also says `weights=partial allowed` versus `strict`.
   Use it only when the checkpoint/config pairing is known to be a partial match.
+- **The checkpoint archive is treated as code until trusted.** Two things in it can run code
+  in the OpenCOOD environment: its `config.yaml` (through upstream's `load_yaml`) and its
+  weights (through pickle). Both are gated by the one option
+  `--option trust_checkpoint_pickle=true`; without it nothing from the archive runs, and the
+  first refusal stops `configure` with an error naming the option.
+- **The config is read as data.** The worker parses `config.yaml` itself
+  (`opencood_config.py`): a YAML safe loader with OpenCOOD's own float resolver (`1e-3` is a
+  float, as `load_yaml` makes it) that also reads exactly the tags a training run's
+  `yaml.dump` writes: `!!python/tuple`, and numpy scalars, dtypes and arrays
+  (`numpy.core.multiarray` from numpy 1.x, `numpy._core.multiarray` from 2.x), rebuilt from
+  their numeric bytes without importing or calling anything the tag names. The config's
+  `yaml_parser` is applied only when it is a bare `load_<name>_params` name, looked up in the
+  installed `opencood.hypes_yaml.yaml_utils`, never `eval`'d. Any other `!!python/...` tag, or
+  a `yaml_parser` that is an expression, is refused with an error naming
+  `trust_checkpoint_pickle`; with that option the worker hands the file to upstream's own
+  `load_yaml` instead and writes that it did so to `plugin.log` (`config_loader=opencood
+  load_yaml (trusted)` on the `loaded:` line; `config_loader=safe` otherwise). A
+  `yaml_parser` name this OpenCOOD checkout does not define is a plain error, as it is
+  upstream. Note that the config still chooses *which installed* OpenCOOD code runs before
+  the weights are read: `create_model` imports `opencood.models.<model.core_method>` and the
+  dataset class comes from `fusion.core_method`; that is confined to the installed package.
 - **The pickle fallback is opt-in.** The worker first loads with
   `torch.load(..., weights_only=True)`, which refuses globals other than tensors. Many older
   checkpoints carry numpy scalars or helper objects and need the **legacy pickle loader**;
   that loader **executes code embedded in a user-supplied file**, so it only runs with
   `--option trust_checkpoint_pickle=true` and the use is recorded in `plugin.log`. Without
-  the option the worker stops with an error naming the option instead of loading. On a
-  torch older than 2.0 there is no `weights_only` argument at all, so every load is through
-  the legacy loader and the same opt-in applies.
+  the option the worker stops with an error naming the option instead of loading.
+- **torch older than 2.6.0 needs the same opt-in for every load.** `weights_only=True` is a
+  safety boundary only from torch 2.6.0: on torch 2.5.1 and older a crafted file can still
+  run code through it ([CVE-2025-32434](https://nvd.nist.gov/vuln/detail/CVE-2025-32434),
+  advisory [GHSA-53q9-r3pm-6pq6](https://github.com/pytorch/pytorch/security/advisories/GHSA-53q9-r3pm-6pq6)),
+  and before 1.13 the argument does not exist. The worker reads `torch.__version__` and, on a
+  release older than 2.6.0, a 2.6.0 pre-release or dev build (`2.6.0rc1`, `2.6.0a0+git…`,
+  `2.6.0.dev…`) or a version that is not PEP 440, refuses before `torch.load` runs unless
+  `trust_checkpoint_pickle=true`; the error names the torch version and the CVE. Versions
+  are compared in PEP 440 order, so a post-release such as `2.6.0.post1` counts as 2.6.0 or
+  newer, and a local suffix such as `+cu124` is ignored.
 - **Archive size cap.** Before extracting anything, the worker sums the ZIP headers'
   declared uncompressed sizes; over the cap (default 20 GiB,
   `--option max_checkpoint_bytes=<bytes>`) the archive is refused with the declared total
@@ -441,7 +482,9 @@ checkpoint bytes in the repository).
    the weights strictly with the safe unpickler; if it stops naming
    `allow_partial_weights`/`trust_checkpoint_pickle`, record the exact error and decide with
    the checkpoint's owner whether to opt in (both are logged) rather than passing them by
-   default. After the run, the work directory
+   default. The `loaded:` line in `plugin.log` should say `config_loader=safe`; if the config
+   is refused instead, record the tag or `yaml_parser` the error quotes (a genuine training
+   config should not need the trusted loader). After the run, the work directory
    must hold no extracted checkpoint tree (`<out>/.work/<run-id>/` outside a Slurm job): the
    extraction is a temporary directory removed once the model is loaded, and `plugin.log`
    names the config and weights files it used.
@@ -488,11 +531,22 @@ Checked by this repository's tests:
   listed later and its rows are attributed to it; an unknown pinned agent is an
   `unsupported` error), strict weights (mismatch is an error unless
   `allow_partial_weights=true`, which logs the skipped tensors), the opt-in pickle fallback
-  (default refusal names `trust_checkpoint_pickle`; opted-in path loads; the old-torch
+  (default refusal names `trust_checkpoint_pickle`; opted-in path loads; the torch < 1.13
   no-`weights_only` path needs the same opt-in), a missing work directory refused with a
   clear `configure_failed`, the full `model run` → `eval run` chain against
   `tests/fake_opencood` (a stand-in package whose corner writer transcribes upstream, no
   GPU), the emitted sbatch fragments, and a **whole-script golden** (normalised machine paths,
   committed under `tests/fixtures/opencood/`) covering the same script end to end.
+- `tests/test_opencood_config.py`: an archive config with a `!!python/object/apply:` tag or an
+  expression in `yaml_parser` runs nothing with default options (the fake OpenCOOD's
+  `load_yaml` does what upstream's does, full loader + `eval`, so handing it the file would
+  run the payload) and the error names `trust_checkpoint_pickle`; a genuine training
+  config (`yaml.dump` after `load_point_pillar_params`, numpy 1.x and 2.x tag spellings) and a
+  hand-written hypes file load by default with the values upstream's loader gives; numpy
+  scalars/dtypes/arrays (big-endian, Fortran-order, empty, 0-d), tuples and aliases come back
+  with upstream's types; every other `!!python/` tag and malformed numpy payload is refused;
+  `yaml_parser` is looked up, never evaluated; the trusted path uses upstream's loader and
+  logs it; and the torch gate (2.5.1, 1.13, 2.6.0 pre-releases and unknown versions refused
+  before `torch.load` unless trusted; 2.6.0, `+cu` builds and newer keep `weights_only=True`).
 - **Not checked here** (the [unverified list](#what-is-unverified-until-the-cluster-run)):
   the real OpenCOOD run, the real archive, the real numeric boxes and AP.

@@ -111,9 +111,16 @@ models:
         type: bool
         default: false
         description: >-
-          allow torch.load's legacy pickle loader when the safe weights_only=True loader
-          cannot read the checkpoint (old torch, numpy scalars, helper objects). That loader
-          executes code embedded in the file: only enable for a checkpoint you trust.
+          trust the checkpoint archive to run code. It does three things. (1) When the
+          plugin's safe reader refuses the archive's config.yaml (a !!python/ tag other than
+          tuples and numpy values, or a yaml_parser that is not a load_<name>_params name),
+          the file is read with OpenCOOD's own load_yaml, which runs what it names. A config
+          the safe reader accepts is still read safely. (2) On torch older than 2.6.0 (also
+          2.6.0 pre-releases and unknown versions) every weights load needs this option,
+          because weights_only=True can run code there (CVE-2025-32434). (3) When
+          torch.load(weights_only=True) cannot read the weights (numpy scalars, helper
+          objects), the legacy pickle loader is used. Each use is logged in plugin.log. Only
+          enable it for a checkpoint you trust.
       max_checkpoint_bytes:
         type: int
         default: 21474836480
