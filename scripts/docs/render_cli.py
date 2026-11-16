@@ -1,15 +1,17 @@
 # SPDX-License-Identifier: Apache-2.0
 """Write ``docs/reference/cli.md`` from the real argparse help.
 
-The page is generated. Do not edit it by hand. ``COLUMNS`` is fixed so the
-wrapped help text does not depend on the terminal width.
+The page is generated. Do not edit it by hand. ``COLUMNS`` is fixed, and the
+help text is reflowed so Python 3.11, 3.12, and 3.13 print the same page.
 """
 
 from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
+import textwrap
 from pathlib import Path
 from typing import cast
 
@@ -35,8 +37,58 @@ def _subparsers(parser: argparse.ArgumentParser) -> list[tuple[str, argparse.Arg
     return found
 
 
+def _stabilize(help_text: str) -> str:
+    """Make argparse's help identical on Python 3.11 through 3.13.
+
+    3.13 repeats a short option's metavar (``-o OUT, --out OUT``) and breaks
+    usage lines in different places. The words are the same.
+    """
+    short_metavar = (
+        r"(?m)^(?P<indent>\s*)(?P<short>-[A-Za-z]) "
+        r"(?P<meta>\S+), (?P<long>--[\w-]+) (?P=meta)(?=\s|$)"
+    )
+    text = re.sub(
+        short_metavar,
+        r"\g<indent>\g<short>, \g<long> \g<meta>",
+        help_text,
+    )
+    lines = text.splitlines()
+    reflowed: list[str] = []
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        if line.startswith("usage:"):
+            parts = [line.strip()]
+            index += 1
+            while index < len(lines) and lines[index].startswith("   ") and lines[index].strip():
+                parts.append(lines[index].strip())
+                index += 1
+            joined = " ".join(parts)
+            reflowed.extend(
+                textwrap.wrap(
+                    joined,
+                    width=100,
+                    subsequent_indent="       ",
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                )
+            )
+            continue
+        reflowed.append(line)
+        index += 1
+    collapsed: list[str] = []
+    option = re.compile(r"^(?P<indent> +)(?P<spec>-\S.*?)\s{2,}(?P<help>\S.*)$")
+    for line in reflowed:
+        match = option.match(line)
+        if match is None:
+            collapsed.append(line)
+            continue
+        collapsed.append(f"{match.group('indent')}{match.group('spec')}  {match.group('help')}")
+    return "\n".join(collapsed).rstrip() + "\n"
+
+
 def _walk(parser: argparse.ArgumentParser, prefix: list[str]) -> list[tuple[list[str], str]]:
-    blocks: list[tuple[list[str], str]] = [(prefix, parser.format_help().rstrip() + "\n")]
+    blocks: list[tuple[list[str], str]] = [(prefix, _stabilize(parser.format_help()))]
     for name, child in _subparsers(parser):
         blocks.extend(_walk(child, [*prefix, name]))
     return blocks

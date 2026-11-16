@@ -167,6 +167,31 @@ def test_every_docs_page_is_in_the_nav_or_excluded() -> None:
     assert not absent, "Nav entries that are not files:\n" + "\n".join(absent)
 
 
+def test_cli_help_stabilizer_ignores_python_313_wrapping() -> None:
+    """3.13 breaks usage lines elsewhere and repeats a short option's metavar."""
+    import importlib.util
+
+    root = _repo_root()
+    script = root / "scripts" / "docs" / "render_cli.py"
+    spec = importlib.util.spec_from_file_location("render_cli_stabilize", script)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    older = """usage: coperceive maps install [-h]
+                               --town {Town01,Town02} --maps MAPS
+  -o, --out OUT         Output .cpbundle path.
+usage: coperceive dataset [-h] {catalog,detect} ...
+"""
+    newer = """usage: coperceive maps install [-h] --town
+                               {Town01,Town02} --maps
+                               MAPS
+  -o OUT, --out OUT     Output .cpbundle path.
+usage: coperceive dataset [-h] {catalog,detect}
+                          ...
+"""
+    assert module._stabilize(older) == module._stabilize(newer)
+
+
 def test_cli_reference_matches_argparse_help() -> None:
     """The CLI page is the generator's output, not a hand-written command list."""
     import importlib.util

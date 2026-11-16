@@ -12,8 +12,8 @@ There is no `coperceive import` command. A raw dataset is read with
 
 ```text
 usage: coperceive [-h] [--version]
-                  {schema,capabilities,bundle,demo,serve,scene,maps,adapters,predictions,eval,model,remote,repro,robustness,download,convert,validate,export,dataset}
-                  ...
+       {schema,capabilities,bundle,demo,serve,scene,maps,adapters,predictions,eval,model,remote,repro,robustness,download,convert,validate,export,dataset}
+       ...
 
 Cooperative multi-agent perception data tools.
 
@@ -40,8 +40,8 @@ positional arguments:
     dataset             Dataset catalog and operations.
 
 options:
-  -h, --help            show this help message and exit
-  --version             show program's version number and exit
+  -h, --help  show this help message and exit
+  --version  show program's version number and exit
 ```
 
 ## `coperceive schema`
@@ -74,46 +74,42 @@ positional arguments:
     open                Verify and open a .cpbundle read-only.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive bundle export`
 
 ```text
 usage: coperceive bundle export [-h] --root ROOT --predictions PREDICTIONS -o OUT [--title TITLE]
-                                [--frames FRAMES] [--include-raw] [--include-full-predictions]
-                                [--marker MARKER]
-                                run_id
+       [--frames FRAMES] [--include-raw] [--include-full-predictions] [--marker MARKER] run_id
 
 positional arguments:
   run_id
 
 options:
-  -h, --help            show this help message and exit
-  --root ROOT           Scenes root the run was evaluated on.
+  -h, --help  show this help message and exit
+  --root ROOT  Scenes root the run was evaluated on.
   --predictions PREDICTIONS
                         Predictions root.
-  -o OUT, --out OUT     Output .cpbundle path.
+  -o, --out OUT  Output .cpbundle path.
   --title TITLE
   --frames FRAMES
   --include-raw
   --include-full-predictions
-  --marker MARKER       Extra identifier to scrub.
+  --marker MARKER  Extra identifier to scrub.
 ```
 
 ## `coperceive bundle preview`
 
 ```text
 usage: coperceive bundle preview [-h] --root ROOT --predictions PREDICTIONS [--title TITLE]
-                                 [--frames FRAMES] [--include-raw] [--include-full-predictions]
-                                 [--marker MARKER]
-                                 run_id
+       [--frames FRAMES] [--include-raw] [--include-full-predictions] [--marker MARKER] run_id
 
 positional arguments:
   run_id
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --root ROOT
   --predictions PREDICTIONS
   --title TITLE
@@ -132,7 +128,7 @@ positional arguments:
   file
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --data-root DATA_ROOT
                         App data folder for bundles/<sha>/.
 ```
@@ -159,36 +155,34 @@ positional arguments:
   directory    New directory for the demo.
 
 options:
-  -h, --help   show this help message and exit
+  -h, --help  show this help message and exit
   --seed SEED
 ```
 
 ## `coperceive serve`
 
 ```text
-usage: coperceive serve [-h] [--host HOST] [--port PORT] --root ROOT [--token TOKEN]
-                        [--token-file PATH] [--root-path ROOT_PATH] [--maps MAPS]
-                        [--predictions PREDICTIONS] [--static STATIC] [--media-root DIR]
-                        [--allow-origin ALLOW_ORIGIN] [--remote-stream-argv REMOTE_STREAM_ARGV]
-                        [--remote-cache-dir REMOTE_CACHE_DIR]
-                        [--remote-cache-bytes REMOTE_CACHE_BYTES]
+usage: coperceive serve [-h] [--host HOST] [--port PORT] --root ROOT [--token TOKEN] [--token-file
+       PATH] [--root-path ROOT_PATH] [--maps MAPS] [--predictions PREDICTIONS] [--static STATIC]
+       [--media-root DIR] [--allow-origin ALLOW_ORIGIN] [--remote-stream-argv REMOTE_STREAM_ARGV]
+       [--remote-cache-dir REMOTE_CACHE_DIR] [--remote-cache-bytes REMOTE_CACHE_BYTES]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --host HOST
   --port PORT
-  --root ROOT           Directory the server is allowed to touch.
-  --token TOKEN         Bearer token (deprecated for security; use COPERCEIVE_TOKEN or --token-
+  --root ROOT  Directory the server is allowed to touch.
+  --token TOKEN  Bearer token (deprecated for security; use COPERCEIVE_TOKEN or --token-
                         file).
-  --token-file PATH     Path to a file containing the bearer token. Must be mode 0600 or 0400.
+  --token-file PATH  Path to a file containing the bearer token. Must be mode 0600 or 0400.
   --root-path ROOT_PATH
                         URL prefix when the app sits behind a JupyterHub or similar proxy.
-  --maps MAPS           Shared HD-map root. Defaults to ROOT/maps when that directory exists.
+  --maps MAPS  Shared HD-map root. Defaults to ROOT/maps when that directory exists.
   --predictions PREDICTIONS
                         Predictions root. Defaults to ROOT/predictions when it holds a run.
-  --static STATIC       Serve this web build (a vite build directory with index.html) instead of
+  --static STATIC  Serve this web build (a vite build directory with index.html) instead of
                         the packaged one.
-  --media-root DIR      Directory a scene's image links may resolve into, e.g. the dataset copy a
+  --media-root DIR  Directory a scene's image links may resolve into, e.g. the dataset copy a
                         staged scene links its camera directories to. Repeatable.
   --allow-origin ALLOW_ORIGIN
                         Exact origin allowed for cross-origin requests.
@@ -217,23 +211,22 @@ options:
 ## `coperceive scene pack`
 
 ```text
-usage: coperceive scene pack [-h] [--images {full,preview,none}] [--media-root DIR]
-                             [--griffin-root DIR] [--dry-run] [--force]
-                             source dest
+usage: coperceive scene pack [-h] [--images {full,preview,none}] [--media-root DIR] [--griffin-root
+       DIR] [--dry-run] [--force] source dest
 
 positional arguments:
   source                Scene directory (manifest.json plus tables).
   dest                  Library directory. The scene is written as a child of this.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --images {full,preview,none}
                         full copies image bytes, preview writes 640 px JPEG quality 85, none skips
                         images.
-  --media-root DIR      A symlink target may resolve here. Repeatable.
-  --griffin-root DIR    Raw Griffin release root. Image paths may resolve here.
-  --dry-run             Print the byte count for the chosen image option and do not write.
-  --force               Pack even if the plan is more than 3× the listed images plus scene files.
+  --media-root DIR  A symlink target may resolve here. Repeatable.
+  --griffin-root DIR  Raw Griffin release root. Image paths may resolve here.
+  --dry-run  Print the byte count for the chosen image option and do not write.
+  --force  Pack even if the plan is more than 3× the listed images plus scene files.
 ```
 
 ## `coperceive maps`
@@ -255,7 +248,7 @@ positional arguments:
     identify            Name each scene's town by the alignment residual; write a platform table.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive maps fetch`
@@ -264,8 +257,8 @@ options:
 usage: coperceive maps fetch [-h] --dest DEST [--package PACKAGE]
 
 options:
-  -h, --help         show this help message and exit
-  --dest DEST        Directory for the .xodr files. Not the git tree.
+  -h, --help  show this help message and exit
+  --dest DEST  Directory for the .xodr files. Not the git tree.
   --package PACKAGE  Local CARLA tar.gz. Omit to download the pinned 0.9.15 package.
 ```
 
@@ -273,13 +266,13 @@ options:
 
 ```text
 usage: coperceive maps ingest [-h] --xodr XODR --map-name MAP_NAME --out OUT [--step-m STEP_M]
-                              [--source-url SOURCE_URL]
+       [--source-url SOURCE_URL]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --xodr XODR
-  --map-name MAP_NAME   For example Carla/Maps/Town03.
-  --out OUT             Maps root. The slug is the last path segment.
+  --map-name MAP_NAME  For example Carla/Maps/Town03.
+  --out OUT  Maps root. The slug is the last path segment.
   --step-m STEP_M
   --source-url SOURCE_URL
 ```
@@ -290,8 +283,8 @@ options:
 usage: coperceive maps align [-h] --maps MAPS --scenes SCENES
 
 options:
-  -h, --help       show this help message and exit
-  --maps MAPS      Maps root written by ingest.
+  -h, --help  show this help message and exit
+  --maps MAPS  Maps root written by ingest.
   --scenes SCENES  Directory of schema 1 scenes.
 ```
 
@@ -299,11 +292,11 @@ options:
 
 ```text
 usage: coperceive maps install [-h] --town
-                               {Town01,Town02,Town03,Town04,Town05,Town06,Town07,Town10HD} --maps
-                               MAPS --scenes SCENES [--url URL] [--progress-json]
+       {Town01,Town02,Town03,Town04,Town05,Town06,Town07,Town10HD} --maps MAPS --scenes SCENES
+       [--url URL] [--progress-json]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --town {Town01,Town02,Town03,Town04,Town05,Town06,Town07,Town10HD}
   --maps MAPS
   --scenes SCENES
@@ -317,7 +310,7 @@ options:
 usage: coperceive maps list [-h] --maps MAPS
 
 options:
-  -h, --help   show this help message and exit
+  -h, --help  show this help message and exit
   --maps MAPS
 ```
 
@@ -325,11 +318,10 @@ options:
 
 ```text
 usage: coperceive maps remove [-h] --town
-                              {Town01,Town02,Town03,Town04,Town05,Town06,Town07,Town10HD} --maps
-                              MAPS
+       {Town01,Town02,Town03,Town04,Town05,Town06,Town07,Town10HD} --maps MAPS
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --town {Town01,Town02,Town03,Town04,Town05,Town06,Town07,Town10HD}
   --maps MAPS
 ```
@@ -337,14 +329,13 @@ options:
 ## `coperceive maps install-town03`
 
 ```text
-usage: coperceive maps install-town03 [-h] --maps MAPS --scenes SCENES [--url URL]
-                                      [--progress-json]
+usage: coperceive maps install-town03 [-h] --maps MAPS --scenes SCENES [--url URL] [--progress-json]
 
 options:
-  -h, --help       show this help message and exit
-  --maps MAPS      Maps root (library_root/maps).
+  -h, --help  show this help message and exit
+  --maps MAPS  Maps root (library_root/maps).
   --scenes SCENES  Library/data root with scenes.
-  --url URL        Override the pinned mirror (tests).
+  --url URL  Override the pinned mirror (tests).
   --progress-json  Print one JSON progress event per line for the desktop app.
 ```
 
@@ -352,13 +343,13 @@ options:
 
 ```text
 usage: coperceive maps identify [-h] --maps MAPS --scenes SCENES --out OUT [--accept-m ACCEPT_M]
-                                [--ratio RATIO] [--gap-m GAP_M]
+       [--ratio RATIO] [--gap-m GAP_M]
 
 options:
-  -h, --help           show this help message and exit
-  --maps MAPS          Maps root written by ingest.
-  --scenes SCENES      Directory of schema 1 scenes.
-  --out OUT            YAML platform table to write.
+  -h, --help  show this help message and exit
+  --maps MAPS  Maps root written by ingest.
+  --scenes SCENES  Directory of schema 1 scenes.
+  --out OUT  YAML platform table to write.
   --accept-m ACCEPT_M
   --ratio RATIO
   --gap-m GAP_M
@@ -376,7 +367,7 @@ positional arguments:
     ingest             Write schema 1 scenes from a raw dataset tree.
 
 options:
-  -h, --help           show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive adapters list`
@@ -392,15 +383,14 @@ options:
 
 ```text
 usage: coperceive adapters check [-h] [--raw-root RAW_ROOT] [--param NAME=VALUE] [--scenes SCENES]
-                                 [--format {generic}]
-                                 [adapter] [directory]
+       [--format {generic}] [adapter] [directory]
 
 positional arguments:
   adapter              A built-in name, installed adapter, or manifest file.
   directory            Generic dataset directory.
 
 options:
-  -h, --help           show this help message and exit
+  -h, --help  show this help message and exit
   --raw-root RAW_ROOT  The extracted dataset directory.
   --param NAME=VALUE
   --scenes SCENES
@@ -411,19 +401,18 @@ options:
 
 ```text
 usage: coperceive adapters ingest [-h] --raw-root RAW_ROOT [--param NAME=VALUE] [--scenes SCENES]
-                                  --out OUT [--workers WORKERS] [--platform-table PLATFORM_TABLE]
-                                  adapter
+       --out OUT [--workers WORKERS] [--platform-table PLATFORM_TABLE] adapter
 
 positional arguments:
   adapter               A built-in name, an installed adapter, or a manifest file.
 
 options:
-  -h, --help            show this help message and exit
-  --raw-root RAW_ROOT   The extracted dataset directory.
-  --param NAME=VALUE    A manifest parameter, for example subset=25m. Repeatable.
-  --scenes SCENES       Comma-separated scene ids. Default: all.
-  --out OUT             One scene directory per scene is written here.
-  --workers WORKERS     Parallel scenes. 0 uses up to 8 processes.
+  -h, --help  show this help message and exit
+  --raw-root RAW_ROOT  The extracted dataset directory.
+  --param NAME=VALUE  A manifest parameter, for example subset=25m. Repeatable.
+  --scenes SCENES  Comma-separated scene ids. Default: all.
+  --out OUT  One scene directory per scene is written here.
+  --workers WORKERS  Parallel scenes. 0 uses up to 8 processes.
   --platform-table PLATFORM_TABLE
                         YAML scene_id -> {key: value} of platform values not in the data (for
                         example map_name from `coperceive maps identify`).
@@ -445,29 +434,28 @@ options:
 ## `coperceive predictions import`
 
 ```text
-usage: coperceive predictions import [-h] --run RUN --root ROOT [--predictions PREDICTIONS]
-                                     [--scene SCENE] [--model MODEL] --score-note SCORE_NOTE
-                                     [--categories CATEGORIES] [--source-note NAME=TEXT] [--force]
-                                     file
+usage: coperceive predictions import [-h] --run RUN --root ROOT [--predictions PREDICTIONS] [--scene
+       SCENE] [--model MODEL] --score-note SCORE_NOTE [--categories CATEGORIES] [--source-note
+       NAME=TEXT] [--force] file
 
 positional arguments:
   file                  A .jsonl or .parquet file with the boxes.parquet columns.
 
 options:
-  -h, --help            show this help message and exit
-  --run RUN             Run id; the directory name.
-  --root ROOT           Directory of scene directories.
+  -h, --help  show this help message and exit
+  --run RUN  Run id; the directory name.
+  --root ROOT  Directory of scene directories.
   --predictions PREDICTIONS
                         Predictions root. Default: ROOT/predictions.
-  --scene SCENE         Scene id for rows without a scene_id column.
-  --model MODEL         Free text: name, checkpoint, commit.
+  --scene SCENE  Scene id for rows without a scene_id column.
+  --model MODEL  Free text: name, checkpoint, commit.
   --score-note SCORE_NOTE
                         What score is (sigmoid, logit...).
   --categories CATEGORIES
                         Comma-separated classes. Default: the classes seen.
   --source-note NAME=TEXT
                         A source and its one-line note. Repeatable. Default note: imported.
-  --force               Overwrite a scene that already has boxes.parquet.
+  --force  Overwrite a scene that already has boxes.parquet.
 ```
 
 ## `coperceive eval`
@@ -483,26 +471,25 @@ positional arguments:
     failures            Rank the worst frames of a run and tag why each failed.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive eval run`
 
 ```text
-usage: coperceive eval run [-h] --root ROOT [--predictions PREDICTIONS] [--config CONFIG]
-                           [--scenes SCENES]
-                           run_id
+usage: coperceive eval run [-h] --root ROOT [--predictions PREDICTIONS] [--config CONFIG] [--scenes
+       SCENES] run_id
 
 positional arguments:
   run_id
 
 options:
-  -h, --help            show this help message and exit
-  --root ROOT           Directory of scene directories.
+  -h, --help  show this help message and exit
+  --root ROOT  Directory of scene directories.
   --predictions PREDICTIONS
                         Predictions root. Default: ROOT/predictions.
-  --config CONFIG       Evaluation config YAML. Default: the spec.
-  --scenes SCENES       Comma-separated scene ids. Default: all.
+  --config CONFIG  Evaluation config YAML. Default: the spec.
+  --scenes SCENES  Comma-separated scene ids. Default: all.
 ```
 
 ## `coperceive eval report`
@@ -514,8 +501,8 @@ positional arguments:
   run_id
 
 options:
-  -h, --help            show this help message and exit
-  --root ROOT           Directory of scene directories.
+  -h, --help  show this help message and exit
+  --root ROOT  Directory of scene directories.
   --predictions PREDICTIONS
                         Predictions root. Default: ROOT/predictions.
 ```
@@ -523,22 +510,21 @@ options:
 ## `coperceive eval compare`
 
 ```text
-usage: coperceive eval compare [-h] --root ROOT [--predictions PREDICTIONS] [--by BY]
-                               [--json JSON] [--from-scores] [--distance-bins DISTANCE_BINS]
-                               [--visibility-bins VISIBILITY_BINS]
-                               RUN [RUN ...]
+usage: coperceive eval compare [-h] --root ROOT [--predictions PREDICTIONS] [--by BY] [--json JSON]
+       [--from-scores] [--distance-bins DISTANCE_BINS] [--visibility-bins VISIBILITY_BINS] RUN [RUN
+       ...]
 
 positional arguments:
   RUN                   Two, three or four run ids.
 
 options:
-  -h, --help            show this help message and exit
-  --root ROOT           Directory of scene directories.
+  -h, --help  show this help message and exit
+  --root ROOT  Directory of scene directories.
   --predictions PREDICTIONS
                         Predictions root. Default: ROOT/predictions.
-  --by BY               Comma-separated breakdowns: distance, occlusion, agents, class, scene.
-  --json JSON           Write compare.json (schema docs/spec/compare.schema.json) to this path.
-  --from-scores         Read outcomes.json or matches only; do not reopen scenes.
+  --by BY  Comma-separated breakdowns: distance, occlusion, agents, class, scene.
+  --json JSON  Write compare.json (schema docs/spec/compare.schema.json) to this path.
+  --from-scores  Read outcomes.json or matches only; do not reopen scenes.
   --distance-bins DISTANCE_BINS
                         Ascending distance edges in metres. Default: 0,30,50.
   --visibility-bins VISIBILITY_BINS
@@ -548,26 +534,24 @@ options:
 ## `coperceive eval failures`
 
 ```text
-usage: coperceive eval failures [-h] --root ROOT [--predictions PREDICTIONS] [--top TOP]
-                                [--json [JSON]] [--weights WEIGHTS] [--latency-run LATENCY_RUN]
-                                [--from-scores]
-                                run_id
+usage: coperceive eval failures [-h] --root ROOT [--predictions PREDICTIONS] [--top TOP] [--json
+       [JSON]] [--weights WEIGHTS] [--latency-run LATENCY_RUN] [--from-scores] run_id
 
 positional arguments:
   run_id
 
 options:
-  -h, --help            show this help message and exit
-  --root ROOT           Directory of scene directories.
+  -h, --help  show this help message and exit
+  --root ROOT  Directory of scene directories.
   --predictions PREDICTIONS
                         Predictions root. Default: ROOT/predictions.
-  --top TOP             How many frames to keep. Default 50.
-  --json [JSON]         Write failures.json to this path, or print it when the path is omitted.
-  --weights WEIGHTS     JSON file of badness and tag weights.
+  --top TOP  How many frames to keep. Default 50.
+  --json [JSON]  Write failures.json to this path, or print it when the path is omitted.
+  --weights WEIGHTS  JSON file of badness and tag weights.
   --latency-run LATENCY_RUN
                         A run whose perturbation delays other agents, for the latency-sensitive
                         tag.
-  --from-scores         Read outcomes.json or matches only; do not reopen scenes.
+  --from-scores  Read outcomes.json or matches only; do not reopen scenes.
 ```
 
 ## `coperceive model`
@@ -586,7 +570,7 @@ positional arguments:
     cache               The per-scene result cache of runs.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive model list`
@@ -607,7 +591,7 @@ positional arguments:
   plugin               Plugin name (entry point).
 
 options:
-  -h, --help           show this help message and exit
+  -h, --help  show this help message and exit
   --manifest MANIFEST  Manifest file instead of a name.
 ```
 
@@ -615,18 +599,17 @@ options:
 
 ```text
 usage: coperceive model check [-h] [--manifest MANIFEST] [--model MODEL] [--keep] [--work WORK]
-                              [--raw-root RAW_ROOT] [--option K=V]
-                              [plugin]
+       [--raw-root RAW_ROOT] [--option K=V] [plugin]
 
 positional arguments:
   plugin               Plugin name (entry point).
 
 options:
-  -h, --help           show this help message and exit
+  -h, --help  show this help message and exit
   --manifest MANIFEST  Manifest file instead of a name.
-  --model MODEL        One model; default every model.
-  --keep               Keep the work directory.
-  --work WORK          Work root; default a temporary directory.
+  --model MODEL  One model; default every model.
+  --keep  Keep the work directory.
+  --work WORK  Work root; default a temporary directory.
   --raw-root RAW_ROOT  Raw release for models with raw inputs.
   --option K=V
 ```
@@ -635,30 +618,25 @@ options:
 
 ```text
 usage: coperceive model run [-h] [--manifest MANIFEST] --scenes SCENES --out OUT --run-id RUN_ID
-                            [--model MODEL] [--agents AGENTS] [--source SOURCE]
-                            [--scene-ids SCENE_IDS] [--raw-root RAW_ROOT]
-                            [--media-root MEDIA_ROOT] [--artifacts ARTIFACTS]
-                            [--no-auto-dependencies] [--option K=V]
-                            [--frame-timeout FRAME_TIMEOUT] [--run-timeout RUN_TIMEOUT]
-                            [--no-cache] [--hash-inputs] [--work WORK] [--force]
-                            [--perturb PERTURB] [--staging-seconds STAGING_SECONDS] [--slurm]
-                            [--submit] [--slurm-python SLURM_PYTHON]
-                            [--slurm-partition SLURM_PARTITION] [--slurm-logs SLURM_LOGS]
-                            [--slurm-results SLURM_RESULTS]
-                            [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE]
-                            [plugin]
+       [--model MODEL] [--agents AGENTS] [--source SOURCE] [--scene-ids SCENE_IDS] [--raw-root
+       RAW_ROOT] [--media-root MEDIA_ROOT] [--artifacts ARTIFACTS] [--no-auto-dependencies]
+       [--option K=V] [--frame-timeout FRAME_TIMEOUT] [--run-timeout RUN_TIMEOUT] [--no-cache]
+       [--hash-inputs] [--work WORK] [--force] [--perturb PERTURB] [--staging-seconds
+       STAGING_SECONDS] [--slurm] [--submit] [--slurm-python SLURM_PYTHON] [--slurm-partition
+       SLURM_PARTITION] [--slurm-logs SLURM_LOGS] [--slurm-results SLURM_RESULTS]
+       [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE] [plugin]
 
 positional arguments:
   plugin                Plugin name (entry point).
 
 options:
-  -h, --help            show this help message and exit
-  --manifest MANIFEST   Manifest file instead of a name.
-  --scenes SCENES       Directory of schema 1 scenes.
-  --out OUT             Predictions root.
+  -h, --help  show this help message and exit
+  --manifest MANIFEST  Manifest file instead of a name.
+  --scenes SCENES  Directory of schema 1 scenes.
+  --out OUT  Predictions root.
   --run-id RUN_ID
   --model MODEL
-  --agents AGENTS       Comma-separated agent ids.
+  --agents AGENTS  Comma-separated agent ids.
   --source SOURCE
   --scene-ids SCENE_IDS
                         Comma-separated scene ids.
@@ -674,12 +652,12 @@ options:
   --hash-inputs
   --work WORK
   --force
-  --perturb PERTURB     Perturbation spec, for example latency_frames=2,pose_noise_xy=0.2,seed=7.
+  --perturb PERTURB  Perturbation spec, for example latency_frames=2,pose_noise_xy=0.2,seed=7.
   --staging-seconds STAGING_SECONDS
                         The rsync wall time the Slurm job measured; recorded as timings.staging_s.
-  --slurm               Emit the sbatch for this run under <out>/.slurm/ and print it; run
+  --slurm  Emit the sbatch for this run under <out>/.slurm/ and print it; run
                         nothing.
-  --submit              With --slurm: also sbatch it.
+  --submit  With --slurm: also sbatch it.
   --slurm-python SLURM_PYTHON
                         Interpreter on the node; default this one.
   --slurm-partition SLURM_PARTITION
@@ -698,15 +676,15 @@ options:
 
 ```text
 usage: coperceive model perturb-inputs [-h] --scenes SCENES --scene SCENE --perturb PERTURB --out
-                                       OUT [--ego EGO]
+       OUT [--ego EGO]
 
 options:
-  -h, --help         show this help message and exit
-  --scenes SCENES    Directory of schema 1 scenes.
-  --scene SCENE      Scene id.
+  -h, --help  show this help message and exit
+  --scenes SCENES  Directory of schema 1 scenes.
+  --scene SCENE  Scene id.
   --perturb PERTURB  Perturbation spec.
-  --out OUT          Directory for perturbation.json and frames.json.
-  --ego EGO          Ego agent id. Default: the first agent.
+  --out OUT  Directory for perturbation.json and frames.json.
+  --ego EGO  Ego agent id. Default: the first agent.
 ```
 
 ## `coperceive model cache`
@@ -725,11 +703,11 @@ options:
 ## `coperceive model cache prune`
 
 ```text
-usage: coperceive model cache prune [-h] --out OUT [--run-id RUN_ID] [--plugin PLUGIN]
-                                    [--model MODEL]
+usage: coperceive model cache prune [-h] --out OUT [--run-id RUN_ID] [--plugin PLUGIN] [--model
+       MODEL]
 
 options:
-  -h, --help       show this help message and exit
+  -h, --help  show this help message and exit
   --out OUT
   --run-id RUN_ID
   --plugin PLUGIN
@@ -752,54 +730,52 @@ positional arguments:
     scan                Describe the folders and coperceive scenes under a path (metadata only).
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive remote start`
 
 ```text
 usage: coperceive remote start [-h] --root ROOT --partition PARTITION [--time TIME] [--cpus CPUS]
-                               [--mem MEM] [--python PYTHON] [--static STATIC] [--uuid UUID]
-                               [--sbatch-script SBATCH_SCRIPT] [--wait-timeout WAIT_TIMEOUT]
-                               [--media-root DIR]
+       [--mem MEM] [--python PYTHON] [--static STATIC] [--uuid UUID] [--sbatch-script SBATCH_SCRIPT]
+       [--wait-timeout WAIT_TIMEOUT] [--media-root DIR]
 
 options:
-  -h, --help            show this help message and exit
-  --root ROOT           Data directory root to serve.
+  -h, --help  show this help message and exit
+  --root ROOT  Data directory root to serve.
   --partition PARTITION
                         Slurm partition chosen in the server profile (there is no product
                         default).
-  --time TIME           Slurm walltime from the server profile; omitted means the partition
+  --time TIME  Slurm walltime from the server profile; omitted means the partition
                         default.
-  --cpus CPUS           CPUs allocated, from the server profile; omitted means the cluster
+  --cpus CPUS  CPUs allocated, from the server profile; omitted means the cluster
                         default.
-  --mem MEM             Memory allocated, from the server profile; omitted means the cluster
+  --mem MEM  Memory allocated, from the server profile; omitted means the cluster
                         default.
-  --python PYTHON       Python interpreter on the compute node from the server profile.
-  --static STATIC       Viewer page directory on the server (the desktop app uploads its built
+  --python PYTHON  Python interpreter on the compute node from the server profile.
+  --static STATIC  Viewer page directory on the server (the desktop app uploads its built
                         bundle to ~/.cache/coperceive/static/<app-version>).
-  --uuid UUID           Explicit session UUID (auto-generated if omitted).
+  --uuid UUID  Explicit session UUID (auto-generated if omitted).
   --sbatch-script SBATCH_SCRIPT
                         Path to remote_serve.sbatch script.
   --wait-timeout WAIT_TIMEOUT
                         Max seconds to wait on login node for RUNNING status (default: 45s).
-  --media-root DIR      Additional media roots to allow. Repeatable.
+  --media-root DIR  Additional media roots to allow. Repeatable.
 ```
 
 ## `coperceive remote status`
 
 ```text
-usage: coperceive remote status [-h] [--uuid OPT_UUID] [--job-id JOB_ID]
-                                [--health-timeout HEALTH_TIMEOUT]
-                                [uuid]
+usage: coperceive remote status [-h] [--uuid OPT_UUID] [--job-id JOB_ID] [--health-timeout
+       HEALTH_TIMEOUT] [uuid]
 
 positional arguments:
   uuid                  Session UUID.
 
 options:
-  -h, --help            show this help message and exit
-  --uuid OPT_UUID       Session UUID.
-  --job-id JOB_ID       Slurm job ID.
+  -h, --help  show this help message and exit
+  --uuid OPT_UUID  Session UUID.
+  --job-id JOB_ID  Slurm job ID.
   --health-timeout HEALTH_TIMEOUT
                         Timeout in seconds for /api/health probe (default: 3.0).
 ```
@@ -813,7 +789,7 @@ positional arguments:
   uuid             Session UUID.
 
 options:
-  -h, --help       show this help message and exit
+  -h, --help  show this help message and exit
   --uuid OPT_UUID  Session UUID.
   --job-id JOB_ID  Slurm job ID.
 ```
@@ -824,7 +800,7 @@ options:
 usage: coperceive remote token [-h] --uuid UUID
 
 options:
-  -h, --help   show this help message and exit
+  -h, --help  show this help message and exit
   --uuid UUID  Session UUID.
 ```
 
@@ -846,7 +822,7 @@ positional arguments:
   uuid             Session UUID.
 
 options:
-  -h, --help       show this help message and exit
+  -h, --help  show this help message and exit
   --uuid OPT_UUID  Session UUID.
 ```
 
@@ -854,14 +830,14 @@ options:
 
 ```text
 usage: coperceive remote scan [-h] --root ROOT --path PATH [--depth DEPTH] [--timeout TIMEOUT]
-                              [--max-entries MAX_ENTRIES] [--max-total MAX_TOTAL]
+       [--max-entries MAX_ENTRIES] [--max-total MAX_TOTAL]
 
 options:
-  -h, --help            show this help message and exit
-  --root ROOT           Data directory root that limits the scan.
-  --path PATH           Directory inside --root to describe.
-  --depth DEPTH         Folders below --path to inspect (default 2, max 4).
-  --timeout TIMEOUT     Wall-clock seconds before returning partial results (default 10, max 30).
+  -h, --help  show this help message and exit
+  --root ROOT  Data directory root that limits the scan.
+  --path PATH  Directory inside --root to describe.
+  --depth DEPTH  Folders below --path to inspect (default 2, max 4).
+  --timeout TIMEOUT  Wall-clock seconds before returning partial results (default 10, max 30).
   --max-entries MAX_ENTRIES
                         Entries read per directory (default 200).
   --max-total MAX_TOTAL
@@ -882,52 +858,49 @@ positional arguments:
     capture-env         Write environment.json for this process (python, packages, GPU summary).
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive repro export`
 
 ```text
-usage: coperceive repro export [-h] [--out OUT] [--stdout] [--root ROOT]
-                               [--predictions PREDICTIONS] [--profile PROFILE]
-                               [--markdown MARKDOWN] [--time-limit TIME_LIMIT] [--gpus GPUS]
-                               [--memory MEMORY]
-                               run_id
+usage: coperceive repro export [-h] [--out OUT] [--stdout] [--root ROOT] [--predictions PREDICTIONS]
+       [--profile PROFILE] [--markdown MARKDOWN] [--time-limit TIME_LIMIT] [--gpus GPUS] [--memory
+       MEMORY] run_id
 
 positional arguments:
   run_id                Predictions run id, or the saved plan id.
 
 options:
-  -h, --help            show this help message and exit
-  --out OUT             Where to write the card JSON.
-  --stdout              Print the card JSON to stdout. Used by the desktop app.
-  --root ROOT           Directory of scene directories.
+  -h, --help  show this help message and exit
+  --out OUT  Where to write the card JSON.
+  --stdout  Print the card JSON to stdout. Used by the desktop app.
+  --root ROOT  Directory of scene directories.
   --predictions PREDICTIONS
                         Predictions root. Default: ROOT/predictions.
-  --profile PROFILE     Server profile JSON. The plan and the run live under its results folder.
-  --markdown MARKDOWN   Also write a short Markdown companion.
+  --profile PROFILE  Server profile JSON. The plan and the run live under its results folder.
+  --markdown MARKDOWN  Also write a short Markdown companion.
   --time-limit TIME_LIMIT
                         Scheduler time the job requested.
-  --gpus GPUS           Scheduler GPU request, such as a GRES string.
-  --memory MEMORY       Scheduler memory the job requested.
+  --gpus GPUS  Scheduler GPU request, such as a GRES string.
+  --memory MEMORY  Scheduler memory the job requested.
 ```
 
 ## `coperceive repro check`
 
 ```text
-usage: coperceive repro check [-h] [--run-dir RUN_DIR] [--predictions PREDICTIONS]
-                              [--run-id RUN_ID]
-                              card
+usage: coperceive repro check [-h] [--run-dir RUN_DIR] [--predictions PREDICTIONS] [--run-id RUN_ID]
+       card
 
 positional arguments:
   card                  Path to a repro card JSON file.
 
 options:
-  -h, --help            show this help message and exit
-  --run-dir RUN_DIR     Run directory. Recomputes the sha256 of predictions.jsonl.
+  -h, --help  show this help message and exit
+  --run-dir RUN_DIR  Run directory. Recomputes the sha256 of predictions.jsonl.
   --predictions PREDICTIONS
                         Predictions root. Compares embedded scores with each scene's metrics.json.
-  --run-id RUN_ID       Run id under --predictions. Required when --predictions is set.
+  --run-id RUN_ID  Run id under --predictions. Required when --predictions is set.
 ```
 
 ## `coperceive repro capture-env`
@@ -937,7 +910,7 @@ usage: coperceive repro capture-env [-h] --out OUT
 
 options:
   -h, --help  show this help message and exit
-  --out OUT   Path of environment.json.
+  --out OUT  Path of environment.json.
 ```
 
 ## `coperceive robustness`
@@ -957,17 +930,12 @@ options:
 
 ```text
 usage: coperceive robustness sweep [-h] [--manifest MANIFEST] [--model MODEL] --scenes SCENES
-                                   [--scene-ids SCENE_IDS] --out OUT [--run-id RUN_ID]
-                                   [--agents AGENTS] [--source SOURCE] [--raw-root RAW_ROOT]
-                                   [--media-root MEDIA_ROOT] [--option K=V]
-                                   [--frame-timeout FRAME_TIMEOUT] [--run-timeout RUN_TIMEOUT]
-                                   [--no-cache] [--hash-inputs] [--work WORK] [--force]
-                                   [--config [NAME=]FILE] [--max-cells MAX_CELLS] [--slurm]
-                                   [--slurm-python SLURM_PYTHON]
-                                   [--slurm-partition SLURM_PARTITION] [--slurm-logs SLURM_LOGS]
-                                   [--slurm-results SLURM_RESULTS]
-                                   [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE]
-                                   definition [plugin]
+       [--scene-ids SCENE_IDS] --out OUT [--run-id RUN_ID] [--agents AGENTS] [--source SOURCE]
+       [--raw-root RAW_ROOT] [--media-root MEDIA_ROOT] [--option K=V] [--frame-timeout
+       FRAME_TIMEOUT] [--run-timeout RUN_TIMEOUT] [--no-cache] [--hash-inputs] [--work WORK]
+       [--force] [--config [NAME=]FILE] [--max-cells MAX_CELLS] [--slurm] [--slurm-python
+       SLURM_PYTHON] [--slurm-partition SLURM_PARTITION] [--slurm-logs SLURM_LOGS] [--slurm-results
+       SLURM_RESULTS] [--slurm-scratch-template SLURM_SCRATCH_TEMPLATE] definition [plugin]
 
 positional arguments:
   definition            Sweep definition: a YAML or JSON file path, or the YAML itself when it is
@@ -975,16 +943,16 @@ positional arguments:
   plugin                Plugin name (entry point).
 
 options:
-  -h, --help            show this help message and exit
-  --manifest MANIFEST   Manifest file instead of a name.
-  --model MODEL         One model of the plugin; default: default.
-  --scenes SCENES       Directory of schema 1 scenes.
+  -h, --help  show this help message and exit
+  --manifest MANIFEST  Manifest file instead of a name.
+  --model MODEL  One model of the plugin; default: default.
+  --scenes SCENES  Directory of schema 1 scenes.
   --scene-ids SCENE_IDS
                         Comma-separated scene ids.
-  --out OUT             Predictions root; sweep.json is written here.
-  --run-id RUN_ID       Run id prefix of the cells; default sweep (each cell gets a stable
+  --out OUT  Predictions root; sweep.json is written here.
+  --run-id RUN_ID  Run id prefix of the cells; default sweep (each cell gets a stable
                         suffix).
-  --agents AGENTS       Comma-separated agent ids.
+  --agents AGENTS  Comma-separated agent ids.
   --source SOURCE
   --raw-root RAW_ROOT
   --media-root MEDIA_ROOT
@@ -993,13 +961,13 @@ options:
   --run-timeout RUN_TIMEOUT
   --no-cache
   --hash-inputs
-  --work WORK           Work root; each cell uses <work>/<run_id>.
-  --force               Re-emit every cell even when its run exists, reusing the per-scene cache.
+  --work WORK  Work root; each cell uses <work>/<run_id>.
+  --force  Re-emit every cell even when its run exists, reusing the per-scene cache.
   --config [NAME=]FILE  Evaluation config YAML; repeatable. Without a name the file stem is used;
                         default: the eval spec's default config, recorded as 'default'.
   --max-cells MAX_CELLS
                         Refuse a sweep with more runs than this; default 64.
-  --slurm               Emit one sbatch per cell under <out>/.slurm/ and print it; run nothing.
+  --slurm  Emit one sbatch per cell under <out>/.slurm/ and print it; run nothing.
   --slurm-python SLURM_PYTHON
                         Interpreter on the node; default this one.
   --slurm-partition SLURM_PARTITION
@@ -1030,17 +998,16 @@ options:
 
 ```text
 usage: coperceive download griffin [-h] --subset {25m,40m,55m,random} [--components COMPONENTS]
-                                   [--preset {dev}] --dest DEST [--dry-run]
-                                   [--accept-griffin-terms]
+       [--preset {dev}] --dest DEST [--dry-run] [--accept-griffin-terms]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --subset {25m,40m,55m,random}
   --components COMPONENTS
                         Comma-separated list: metadata, lidar, or an archive basename.
   --preset {dev}
-  --dest DEST           Directory outside this repository.
-  --dry-run             Print exact Hub sizes and the licence status. Write nothing.
+  --dest DEST  Directory outside this repository.
+  --dry-run  Print exact Hub sizes and the licence status. Write nothing.
   --accept-griffin-terms
                         Record the MIT acknowledgement once for this machine, outside the
                         repository.
@@ -1063,14 +1030,14 @@ options:
 
 ```text
 usage: coperceive convert griffin [-h] --subset {25m,40m,55m,random} --raw-root RAW_ROOT --out OUT
-                                  [--workers WORKERS]
+       [--workers WORKERS]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --subset {25m,40m,55m,random}
-  --raw-root RAW_ROOT   Extracted griffin-release directory.
-  --out OUT             One hybrid directory per scene is written here.
-  --workers WORKERS     Parallel scenes. 0 uses up to 8 processes.
+  --raw-root RAW_ROOT  Extracted griffin-release directory.
+  --out OUT  One hybrid directory per scene is written here.
+  --workers WORKERS  Parallel scenes. 0 uses up to 8 processes.
 ```
 
 ## `coperceive validate`
@@ -1082,11 +1049,11 @@ positional arguments:
   root                 A scene directory, or a directory of scene directories.
 
 options:
-  -h, --help           show this help message and exit
-  --json JSON          JSON report path. Relative paths are written from the current directory.
+  -h, --help  show this help message and exit
+  --json JSON  JSON report path. Relative paths are written from the current directory.
   --markdown MARKDOWN  Markdown report path.
-  --strict             Exit 1 when the report contains a hard failure. The default exit is 0.
-  --maps MAPS          Shared HD-map root. Defaults to ROOT/maps when that directory holds a map.
+  --strict  Exit 1 when the report contains a hard failure. The default exit is 0.
+  --maps MAPS  Shared HD-map root. Defaults to ROOT/maps when that directory holds a map.
 ```
 
 ## `coperceive export`
@@ -1103,7 +1070,7 @@ positional arguments:
     paper               Write a zip of LaTeX tables and figures for a paper.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive export rerun`
@@ -1116,30 +1083,29 @@ positional arguments:
 
 options:
   -h, --help  show this help message and exit
-  --out OUT   Path of the .rrd file.
+  --out OUT  Path of the .rrd file.
 ```
 
 ## `coperceive export sequence`
 
 ```text
-usage: coperceive export sequence [-h] --out OUT --agent AGENT --sensor SENSOR
-                                  [--start-us START_US] [--end-us END_US] [--fps FPS]
-                                  [--width WIDTH] [--height HEIGHT] [--format {mp4,gif,png}]
-                                  scene
+usage: coperceive export sequence [-h] --out OUT --agent AGENT --sensor SENSOR [--start-us START_US]
+       [--end-us END_US] [--fps FPS] [--width WIDTH] [--height HEIGHT] [--format {mp4,gif,png}]
+       scene
 
 positional arguments:
   scene                 One schema 1 scene directory.
 
 options:
-  -h, --help            show this help message and exit
-  --out OUT             File, or a directory of PNG frames.
-  --agent AGENT         Agent that owns the camera.
-  --sensor SENSOR       Camera sensor id.
-  --start-us START_US   Inclusive start, µs.
-  --end-us END_US       Inclusive end, µs.
-  --fps FPS             File rate. Default 10.
-  --width WIDTH         0 keeps the image width.
-  --height HEIGHT       0 keeps the image height.
+  -h, --help  show this help message and exit
+  --out OUT  File, or a directory of PNG frames.
+  --agent AGENT  Agent that owns the camera.
+  --sensor SENSOR  Camera sensor id.
+  --start-us START_US  Inclusive start, µs.
+  --end-us END_US  Inclusive end, µs.
+  --fps FPS  File rate. Default 10.
+  --width WIDTH  0 keeps the image width.
+  --height HEIGHT  0 keeps the image height.
   --format {mp4,gif,png}
                         mp4, gif, or png. Default follows the --out suffix, or png for a
                         directory.
@@ -1149,22 +1115,20 @@ options:
 
 ```text
 usage: coperceive export bev [-h] --out OUT [--time-us TIME_US] [--maps MAPS] [--format {png,svg}]
-                             [--theme {dark,light}] [--color {agent,class}] [--run RUN]
-                             [--predictions PREDICTIONS]
-                             scene
+       [--theme {dark,light}] [--color {agent,class}] [--run RUN] [--predictions PREDICTIONS] scene
 
 positional arguments:
   scene                 One schema 1 scene directory.
 
 options:
-  -h, --help            show this help message and exit
-  --out OUT             Path ending in .png or .svg.
-  --time-us TIME_US     Recorded sample, µs.
-  --maps MAPS           Directory of sidecar maps.
-  --format {png,svg}    png or svg. Default follows the --out suffix.
+  -h, --help  show this help message and exit
+  --out OUT  Path ending in .png or .svg.
+  --time-us TIME_US  Recorded sample, µs.
+  --maps MAPS  Directory of sidecar maps.
+  --format {png,svg}  png or svg. Default follows the --out suffix.
   --theme {dark,light}
   --color {agent,class}
-  --run RUN             Draw the match rows of this evaluated run at the sample.
+  --run RUN  Draw the match rows of this evaluated run at the sample.
   --predictions PREDICTIONS
                         Predictions root. Defaults to <scene>/../predictions when it holds a run.
 ```
@@ -1173,20 +1137,18 @@ options:
 
 ```text
 usage: coperceive export overlay [-h] --out OUT --agent AGENT --sensor SENSOR [--time-us TIME_US]
-                                 [--format {png,svg}] [--theme {dark,light}]
-                                 [--color {agent,class}]
-                                 scene
+       [--format {png,svg}] [--theme {dark,light}] [--color {agent,class}] scene
 
 positional arguments:
   scene                 One schema 1 scene directory.
 
 options:
-  -h, --help            show this help message and exit
-  --out OUT             Path ending in .png or .svg.
-  --agent AGENT         Agent that owns the camera.
-  --sensor SENSOR       Camera sensor id.
-  --time-us TIME_US     Recorded sample, µs.
-  --format {png,svg}    png or svg. Default follows the --out suffix.
+  -h, --help  show this help message and exit
+  --out OUT  Path ending in .png or .svg.
+  --agent AGENT  Agent that owns the camera.
+  --sensor SENSOR  Camera sensor id.
+  --time-us TIME_US  Recorded sample, µs.
+  --format {png,svg}  png or svg. Default follows the --out suffix.
   --theme {dark,light}
   --color {agent,class}
 ```
@@ -1194,38 +1156,36 @@ options:
 ## `coperceive export paper`
 
 ```text
-usage: coperceive export paper [-h] --out OUT [--run RUN] [--predictions PREDICTIONS]
-                               [--scenes SCENES] [--compare COMPARE] [--degradation DEGRADATION]
-                               [--failures FAILURES] [--repro-card REPRO_CARD]
-                               [--bookmarks BOOKMARKS] [--frames FRAMES] [--decimals DECIMALS]
-                               [--bold-best | --no-bold-best]
-                               [--include-counts | --no-include-counts]
-                               [--metric {precision,recall,ap,recovered,lost_by_fusion}]
-                               [--qualitative] [--allow-dataset ALLOW_DATASET]
+usage: coperceive export paper [-h] --out OUT [--run RUN] [--predictions PREDICTIONS] [--scenes
+       SCENES] [--compare COMPARE] [--degradation DEGRADATION] [--failures FAILURES] [--repro-card
+       REPRO_CARD] [--bookmarks BOOKMARKS] [--frames FRAMES] [--decimals DECIMALS] [--bold-best |
+       --no-bold-best] [--include-counts | --no-include-counts] [--metric
+       {precision,recall,ap,recovered,lost_by_fusion}] [--qualitative] [--allow-dataset
+       ALLOW_DATASET]
 
 options:
-  -h, --help            show this help message and exit
-  --out OUT             Zip path. The name must end in .zip.
-  --run RUN             Scored run id under the predictions root.
+  -h, --help  show this help message and exit
+  --out OUT  Zip path. The name must end in .zip.
+  --run RUN  Scored run id under the predictions root.
   --predictions PREDICTIONS
                         Predictions root.
-  --scenes SCENES       Scene library, for qualitative frames.
-  --compare COMPARE     coperceive-compare JSON. Optional.
+  --scenes SCENES  Scene library, for qualitative frames.
+  --compare COMPARE  coperceive-compare JSON. Optional.
   --degradation DEGRADATION
                         coperceive-degradation JSON. Optional.
-  --failures FAILURES   coperceive-failures JSON. Optional.
+  --failures FAILURES  coperceive-failures JSON. Optional.
   --repro-card REPRO_CARD
                         A repro card JSON file or a directory of them. Repeatable.
   --bookmarks BOOKMARKS
                         Bookmark list JSON. Optional.
-  --frames FRAMES       JSON list of frames: scene_id, time_us, and optional agent_id and
+  --frames FRAMES  JSON list of frames: scene_id, time_us, and optional agent_id and
                         sensor_id.
-  --decimals DECIMALS   Decimal places. 0 to 6.
+  --decimals DECIMALS  Decimal places. 0 to 6.
   --bold-best, --no-bold-best
   --include-counts, --no-include-counts
   --metric {precision,recall,ap,recovered,lost_by_fusion}
                         Metric column. Repeatable. Default: precision, recall, ap.
-  --qualitative         Draw bookmarked frames whose dataset is on the allow list.
+  --qualitative  Draw bookmarked frames whose dataset is on the allow list.
   --allow-dataset ALLOW_DATASET
                         Opt in a dataset for qualitative frames. Fixtures are already allowed.
                         Griffin and CARLA can be named. OPV2V, V2XSet and V2V4Real are never
@@ -1236,8 +1196,7 @@ options:
 
 ```text
 usage: coperceive dataset [-h]
-                          {catalog,dry-run,prepare,status,previews,stream,detect,index,download}
-                          ...
+       {catalog,dry-run,prepare,status,previews,stream,detect,index,download} ...
 
 positional arguments:
   {catalog,dry-run,prepare,status,previews,stream,detect,index,download}
@@ -1253,7 +1212,7 @@ positional arguments:
     download            Download and convert dataset preset.
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
 ```
 
 ## `coperceive dataset catalog`
@@ -1275,7 +1234,7 @@ positional arguments:
   preset       Preset ID (e.g. dev, one-scene, full).
 
 options:
-  -h, --help   show this help message and exit
+  -h, --help  show this help message and exit
   --dest DEST  Destination directory.
 ```
 
@@ -1283,22 +1242,21 @@ options:
 
 ```text
 usage: coperceive dataset prepare [-h] --adapter {griffin,opv2v,v2xset,v2v4real,dair-v2x-c}
-                                  --raw-root RAW_ROOT [--split SPLIT] --cache CACHE
-                                  [--scenes SCENES] [--all] [--workers WORKERS]
-                                  [--images {originals,previews}] [--verbose]
+       --raw-root RAW_ROOT [--split SPLIT] --cache CACHE [--scenes SCENES] [--all] [--workers
+       WORKERS] [--images {originals,previews}] [--verbose]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --adapter {griffin,opv2v,v2xset,v2v4real,dair-v2x-c}
   --raw-root RAW_ROOT
-  --split SPLIT         The split to prepare (OPV2V/V2XSet).
-  --cache CACHE         The split cache directory.
-  --scenes SCENES       Comma-separated scene ids.
-  --all                 Prepare every scene.
+  --split SPLIT  The split to prepare (OPV2V/V2XSet).
+  --cache CACHE  The split cache directory.
+  --scenes SCENES  Comma-separated scene ids.
+  --all  Prepare every scene.
   --workers WORKERS
   --images {originals,previews}
                         Camera images: read the dataset's originals, or also save 640 px previews.
-  --verbose             Print the full traceback on failure.
+  --verbose  Print the full traceback on failure.
 ```
 
 ## `coperceive dataset status`
@@ -1307,9 +1265,9 @@ options:
 usage: coperceive dataset status [-h] --cache CACHE [--verbose]
 
 options:
-  -h, --help     show this help message and exit
+  -h, --help  show this help message and exit
   --cache CACHE
-  --verbose      Print the full traceback on failure.
+  --verbose  Print the full traceback on failure.
 ```
 
 ## `coperceive dataset previews`
@@ -1318,11 +1276,11 @@ options:
 usage: coperceive dataset previews [-h] --cache-root CACHE_ROOT [--remove] [--verbose]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --cache-root CACHE_ROOT
                         <results_root>/coperceive-cache
-  --remove              Delete the previews (only), keeping the scenes.
-  --verbose             Print the full traceback on failure.
+  --remove  Delete the previews (only), keeping the scenes.
+  --verbose  Print the full traceback on failure.
 ```
 
 ## `coperceive dataset stream`
@@ -1331,7 +1289,7 @@ options:
 usage: coperceive dataset stream [-h] --root ROOT
 
 options:
-  -h, --help   show this help message and exit
+  -h, --help  show this help message and exit
   --root ROOT  Allowed root; the first is the cache split directory paths start from.
 ```
 
@@ -1341,28 +1299,28 @@ options:
 usage: coperceive dataset detect [-h] --path PATH [--max-scenes MAX_SCENES] [--verbose]
 
 options:
-  -h, --help            show this help message and exit
-  --path PATH           A raw dataset or split directory.
+  -h, --help  show this help message and exit
+  --path PATH  A raw dataset or split directory.
   --max-scenes MAX_SCENES
-  --verbose             Print the full traceback on failure.
+  --verbose  Print the full traceback on failure.
 ```
 
 ## `coperceive dataset index`
 
 ```text
-usage: coperceive dataset index [-h] --adapter {griffin,opv2v,v2xset,v2v4real,dair-v2x-c}
-                                --raw-root RAW_ROOT [--split SPLIT] [--max-scenes MAX_SCENES]
-                                [--max-entries MAX_ENTRIES] [--timeout TIMEOUT] [--verbose]
+usage: coperceive dataset index [-h] --adapter {griffin,opv2v,v2xset,v2v4real,dair-v2x-c} --raw-root
+       RAW_ROOT [--split SPLIT] [--max-scenes MAX_SCENES] [--max-entries MAX_ENTRIES] [--timeout
+       TIMEOUT] [--verbose]
 
 options:
-  -h, --help            show this help message and exit
+  -h, --help  show this help message and exit
   --adapter {griffin,opv2v,v2xset,v2v4real,dair-v2x-c}
   --raw-root RAW_ROOT
-  --split SPLIT         The split to index (OPV2V/V2XSet). Required when the root holds several.
+  --split SPLIT  The split to index (OPV2V/V2XSet). Required when the root holds several.
   --max-scenes MAX_SCENES
   --max-entries MAX_ENTRIES
   --timeout TIMEOUT
-  --verbose             Print the full traceback on failure.
+  --verbose  Print the full traceback on failure.
 ```
 
 ## `coperceive dataset download`
@@ -1375,7 +1333,7 @@ positional arguments:
   preset          Preset ID (e.g. dev, one-scene, full).
 
 options:
-  -h, --help      show this help message and exit
-  --dest DEST     Destination library root.
+  -h, --help  show this help message and exit
+  --dest DEST  Destination library root.
   --accept-terms  Accept dataset licence terms.
 ```
