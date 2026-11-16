@@ -21,6 +21,9 @@ mod tests {
 
     #[test]
     fn test_find_free_loopback_port() {
+        let _port_guard = crate::test_seams::PORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let port = find_free_loopback_port().expect("failed to find free port");
         assert!(
             port > 1024,
@@ -37,6 +40,9 @@ mod tests {
 
     #[test]
     fn test_is_port_available_when_bound() {
+        let _port_guard = crate::test_seams::PORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind listener");
         let port = listener.local_addr().unwrap().port();
         assert!(

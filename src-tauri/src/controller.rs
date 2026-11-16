@@ -1188,6 +1188,9 @@ pub mod tests {
     fn test_spawn_controller_eval_real_socket() {
         use std::net::TcpStream;
 
+        let _port_guard = crate::test_seams::PORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let mut config = make_test_config();
         let port_holder = Arc::new(Mutex::new(0u16));
         let port_holder_clone = port_holder.clone();
