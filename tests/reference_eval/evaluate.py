@@ -559,14 +559,46 @@ def _ap_of_category(
     return walk_average_precision(statuses, n_gt)
 
 
+def _merged_ap_of_category(
+    evals: Sequence[_OutputEval], category: str, i: int, ranking_scope: str
+) -> float | None:
+    """A.8, the row over every output: the pooled AP of ``category`` at index ``i``.
+
+    The records of every ``(scene, output)`` pair are merged into one order that does
+    not depend on the order of the outputs. ``per_frame``: by scene, sample time
+    (earliest first), score (highest first), ``agent_id``, ``source``, then row order
+    within the output. ``pooled``: by score (highest first), scene, ``agent_id``,
+    ``source``, then row order. Strings compare in plain string order.
+    """
+    n_gt = sum(entry.ap_input.n_gt.get(category, 0) for entry in evals)
+    # (score, status, time, scene_id, agent_id, source, row position within the output)
+    merged = [
+        (score, status, time_us, entry.scene_id, entry.key[0], entry.key[1], position)
+        for entry in evals
+        for position, (score, status, time_us) in enumerate(
+            entry.ap_input.records[i].get(category, [])
+        )
+    ]
+    if ranking_scope == RANKING_POOLED:
+        merged.sort(key=lambda r: (-r[0], r[3], r[4], r[5], r[6]))
+    else:
+        merged.sort(key=lambda r: (r[3], r[2], -r[0], r[4], r[5], r[6]))
+    return walk_average_precision([record[1] for record in merged], n_gt)
+
+
 def _ap_table(
-    inputs: Sequence[_ApInput], declared: Sequence[str], config: ConfigSpec
+    inputs: Sequence[_ApInput],
+    declared: Sequence[str],
+    config: ConfigSpec,
+    every_output: Sequence[_OutputEval] | None = None,
 ) -> tuple[ApResult, ...]:
     """AP per threshold index over ``(scene, output)`` pairs given in pooling order.
 
     With one pair this is the per-scene table of A.5. With several it is the pooled
     table of A.8: ``n_gt(c)`` summed, the lists of step 3 joined in the order given by
-    the ranking scope, steps 2 to 6 run once, and the category sets united.
+    the ranking scope, steps 2 to 6 run once, and the category sets united. When
+    ``every_output`` is given (the row over every output, whose ``ap_input`` are
+    ``inputs``), the lists are merged by the key of A.8 instead of joined in order.
     """
     categories: set[str] = set()
     for ap_input in inputs:
@@ -577,7 +609,11 @@ def _ap_table(
     table: list[ApResult] = []
     for i in range(len(config.thresholds)):
         per_category: dict[str, float | None] = {
-            category: _ap_of_category(inputs, category, i, config.ranking_scope)
+            category: (
+                _ap_of_category(inputs, category, i, config.ranking_scope)
+                if every_output is None
+                else _merged_ap_of_category(every_output, category, i, config.ranking_scope)
+            )
             for category in ordered
         }
         table.append(
@@ -756,7 +792,14 @@ def _pooled_row(key: OutputKey | None, evals: Sequence[_OutputEval], run: RunSpe
         recall=_ratio(tp, gt),
         recovered=sum(entry.result.cooperative.recovered for entry in cooperative_of),
         lost_by_fusion=sum(entry.result.cooperative.lost_by_fusion for entry in cooperative_of),
-        ap=_ap_table([entry.ap_input for entry in evals], run.categories, run.config),
+        # The row over every output merges its AP lists by the key of A.8; a row of one
+        # output joins its scenes in scene order (A.5 order within each).
+        ap=_ap_table(
+            [entry.ap_input for entry in evals],
+            run.categories,
+            run.config,
+            every_output=evals if key is None else None,
+        ),
     )
 
 

@@ -380,27 +380,38 @@ def pooled_ap(
     :func:`~coperceive.evaluation.metrics.average_precision` walk gives the value,
     ``None`` when the pooled ``n_gt`` is 0. Rows without a pool add nothing.
 
-    Under ``ranking_scope: pooled`` the walk sorts the whole list by score once.
-    Under ``per_frame`` each row's records are put in time order, then score order,
-    and the rows are concatenated with no sort over the whole list (spec A.8).
+    The walk visits the records in one documented order, which no file order can
+    change across outputs (spec A.8). Under ``per_frame``: scene, then time, then
+    score (highest first), then ``agent_id``, then ``source``, then ``boxes.parquet``
+    row order. Under ``pooled``: score (highest first), then scene, ``agent_id``,
+    ``source`` and row order. For one output this is the order of A.5.
     """
-    pools = [row.pool for row in rows if row.pool is not None]
+    pooled_rows = [row for row in rows if row.pool is not None]
+    pools = [row.pool for row in pooled_rows if row.pool is not None]
     per_frame = bool(pools) and pools[0].ranking_scope == "per_frame"
     categories = sorted({category for pool in pools for category in pool.categories})
     table: dict[str, dict[str, float | None]] = {}
     for index, threshold in enumerate(thresholds):
         per_category: dict[str, float | None] = {}
         for category in categories:
-            walk: list[tuple[float, str]] = []
+            keyed: list[tuple[tuple[object, ...], float, str]] = []
             n_gt = 0
-            for pool in pools:
-                records = list(pool.records.get(index, {}).get(category, ()))
-                if per_frame:
-                    # A stable sort: equal time and score keep boxes.parquet row order.
-                    records.sort(key=lambda record: (record[2], -record[0]))
-                walk.extend((score, status) for score, status, _time in records)
+            for row in pooled_rows:
+                pool = row.pool
+                assert pool is not None
+                records = pool.records.get(index, {}).get(category, ())
+                for k, (score, status, time_us) in enumerate(records):
+                    output = (row.scene_id, row.agent_id, row.source)
+                    key = (
+                        (output[0], time_us, -score, output[1], output[2], k)
+                        if per_frame
+                        else (-score, *output, k)
+                    )
+                    keyed.append((key, score, status))
                 n_gt += pool.n_gt.get(category, 0)
-            per_category[category] = average_precision(walk, n_gt, presorted=per_frame)
+            keyed.sort(key=lambda item: item[0])
+            walk = [(score, status) for _key, score, status in keyed]
+            per_category[category] = average_precision(walk, n_gt, presorted=True)
         table[threshold_key(threshold)] = per_category
     return table
 

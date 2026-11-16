@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Old rule:** `ranking_scope: pooled` keeps the single sort over everything, as KITTI does.
   - **Records:** every `metrics.json` records `ranking_scope`. One without it is reported as "legacy (pooled, ego-only)".
   - **Numbers that change:** every AP, mAP and per-class AP of `eval run`, `eval report`, `eval compare`, `eval compare --by` and the paper export. Counts, precision and recall do not change.
-  - **On the demo run** (pooled → per_frame):
+  - **On the demo run** (pooled → per_frame; the `all` rows are as measured before the every-output merge above):
 
     | Value | AP@0.5 (BEV) | AP@0.7 (BEV) |
     | --- | --- | --- |
@@ -67,6 +67,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     | `--by distance` 0-30m, cav-b | 0.558 → 0.559 | 0.285 → 0.295 |
     | `--by distance` 30-50m, cav-b | 0.583 → 0.566 | 0.420 → 0.434 |
     | `--by distance` 50m+, cav-b | 0.607 → 0.612 | 0.362 → 0.364 |
+- The bottom `all` row of `eval report` and `eval compare` no longer depends on the order of the rows in `boxes.parquet` (PR #165).
+  - **What was wrong:** under `per_frame`, the row over every output joined each scene's outputs in the order they first appear in the file, so the same predictions written in another order could give another AP. For example, a true positive at 0.5 for one agent and a false positive at 0.9 for another gave 0.5 or 0.25.
+  - **Now:** the records of every output are merged into one documented order (`docs/eval-spec.md` A.8). Under `per_frame`: scene, time, score (highest first), `agent_id`, `source`, then row order. Under `pooled`: score first, then the same keys. For one output this is the order it already had.
+  - **Numbers that change:** the AP, mAP and per-class AP of the bottom `all` row only, under either ranking scope, when outputs of one frame interleave by score. Per-scene rows and per-output `all` rows do not change, and neither does the robustness sweep's cell mAP when a run has one output.
+  - **On the demo run** (bottom `all` row, AP@0.5 / AP@0.7, before → after): mAP 0.537 → 0.540 / 0.281 → 0.281; car 0.997 → 0.997 / 0.712 → 0.711; cyclist 0.484 → 0.498 / 0.112 → 0.113; pedestrian 0.129 → 0.125 / 0.018 → 0.018.
 - A `fused` output is scored against the ground truth of every connected agent (`gt_scope: connected_union`, PR #165).
   - **Why:** OPV2V's evaluation targets are the vehicles hit by at least one LiDAR point from any connected vehicle, and it ignores vehicles outside the 70 m broadcast range ([OPV2V paper](https://arxiv.org/abs/2109.07644), Sec. V-B). V2X-ViT states the same rule ([V2X-ViT paper](https://arxiv.org/abs/2203.10638), Sec. 4.2).
   - **What changed:** at each time, a `fused` output's ground truth starts with the ego's own boxes. Each agent within `comm_range_m` (70 m, horizontal) then adds the boxes that hold at least one LiDAR return from the ego or a connected agent. A box that the spec's A.9 pairing matches to one already in the set is not added again. When there is no sweep at that time, every connected agent's list counts as observed.

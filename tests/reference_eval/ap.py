@@ -41,7 +41,9 @@ def walk_average_precision(statuses: Sequence[str], n_gt: int) -> float | None:
     """A.5 steps 2 and 4 to 6 on statuses already in walking order (no sort here).
 
     This is the walk of ``ranking_scope: per_frame``, where the order is the per-frame
-    order of each ``(scene, output)`` and the pool concatenates those lists (A.8).
+    order of each ``(scene, output)`` and the pool of one output concatenates those
+    lists in scene order (A.8). The row over every output merges its lists by the key
+    of A.8 before the walk (``evaluate._merged_ap_of_category``).
     """
     # Step 2: no ground truth to find, no AP.
     if n_gt == 0:
