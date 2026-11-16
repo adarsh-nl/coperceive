@@ -6,6 +6,12 @@
 The output is a generic multi-view dataset (``scene.yaml`` and per-agent files),
 ingested to schema-1 scenes and scored with a small noisy prediction set. No
 third-party bytes: every image, point and box is generated here.
+
+The junction is dressed for the product tour: dense ray-cast LiDAR that also
+sees buildings, trees and parked cars, and camera frames rendered from the same
+world description. LiDAR samples are written in the recording agent's body
+frame (the LiDAR sensor's extrinsic is identity), which is the frame the
+generic format and the app read them in; the app applies the agent pose once.
 """
 
 from __future__ import annotations
@@ -36,12 +42,34 @@ SCENE_ID = "demo-junction"
 RUN_ID = "demo"
 FRAMES = 100
 RATE_HZ = 10
-WIDTH, HEIGHT = 640, 480
-FX, FY, CX, CY = 500.0, 500.0, 320.0, 240.0
-LIDAR_AZ = 32
+WIDTH, HEIGHT = 512, 384
+FX, FY, CX, CY = 400.0, 400.0, 256.0, 192.0
+
+# Dense enough that a sweep reads as a LiDAR scan (126 x 24 beams) while the
+# float32 files, their ingested mirror and the rendered cameras still fit the
+# 15 MB demo budget.
+LIDAR_AZ = 64
 LIDAR_EL = 16
-LIDAR_RANGE = 60.0
+LIDAR_MIN_EL_DEG = -24.0
+LIDAR_MAX_EL_DEG = 8.0
+LIDAR_RANGE = 70.0
 MAX_BYTES = 15_000_000
+
+# Camera sensor on both CAVs: the same extrinsic the scene.yaml records.
+CAMERA_EXTRINSIC = SE3.from_rpy_deg(-90, 0, -90).translation(1.8, 0.0, 1.2)
+LIGHT_DIR = np.array([0.35, 0.25, 0.9]) / float(np.linalg.norm([0.35, 0.25, 0.9]))
+
+PALETTE: dict[str, list[tuple[int, int, int]]] = {
+    "building": [(172, 164, 154), (146, 154, 166), (188, 178, 160), (126, 130, 138)],
+    "tree": [(94, 72, 52)],
+    "crown": [(74, 116, 64), (62, 102, 60), (82, 122, 70)],
+    "pole": [(72, 72, 76)],
+    "kerb": [(168, 168, 162)],
+    "car": [(198, 54, 46), (44, 74, 142), (226, 226, 228), (42, 42, 46), (150, 150, 155)],
+    "parked": [(178, 182, 188), (38, 44, 58), (150, 60, 52), (214, 210, 200), (60, 92, 110)],
+    "cyclist": [(32, 142, 182)],
+    "pedestrian": [(212, 172, 62), (82, 92, 122), (162, 62, 92)],
+}
 
 
 @dataclass(frozen=True)
@@ -68,6 +96,14 @@ class _Object:
     yaw_deg: float
     position: tuple[float, float]
     velocity: tuple[float, float]
+
+
+@dataclass(frozen=True)
+class _Static:
+    center: tuple[float, float, float]
+    size: tuple[float, float, float]
+    yaw_deg: float
+    kind: str
 
 
 def _objects() -> tuple[_Object, ...]:
@@ -103,158 +139,404 @@ def _agent_pose(agent_id: str, frame: int) -> SE3:
     return SE3.identity().translation(0.0, -12.0, 6.0)
 
 
-def _box_corners(
-    center: tuple[float, float, float], size: tuple[float, float, float], yaw: float
-) -> list[tuple[float, float, float]]:
-    l, w, h = size
-    local = [
-        (l / 2, w / 2, h / 2),
-        (l / 2, w / 2, -h / 2),
-        (l / 2, -w / 2, h / 2),
-        (l / 2, -w / 2, -h / 2),
-        (-l / 2, w / 2, h / 2),
-        (-l / 2, w / 2, -h / 2),
-        (-l / 2, -w / 2, h / 2),
-        (-l / 2, -w / 2, -h / 2),
-    ]
-    c, s = math.cos(yaw), math.sin(yaw)
-    return [
-        (center[0] + c * x - s * y, center[1] + s * x + c * y, center[2] + z) for x, y, z in local
-    ]
-
-
-def _ray_box(
-    origin: np.ndarray,
-    direction: np.ndarray,
-    center: np.ndarray,
-    yaw: float,
-    size: tuple[float, float, float],
-) -> float | None:
-    c, s = math.cos(-yaw), math.sin(-yaw)
-    o = origin - center
-    o = np.array([c * o[0] - s * o[1], s * o[0] + c * o[1], o[2]])
-    d = np.array(
-        [c * direction[0] - s * direction[1], s * direction[0] + c * direction[1], direction[2]]
-    )
-    half = np.array([size[0] / 2, size[1] / 2, size[2] / 2])
-    tmin, tmax = -np.inf, np.inf
-    for axis in range(3):
-        if abs(d[axis]) < 1e-9:
-            if abs(o[axis]) > half[axis]:
-                return None
+def _static_world() -> tuple[_Static, ...]:
+    """Deterministic street furniture: blocks, trees, parked cars, poles, kerbs."""
+    rng = random.Random(11)
+    items: list[_Static] = []
+    # Two rows of buildings down each side of both roads (four quadrants).
+    for sx in (-1, 1):
+        for sy in (-1, 1):
+            for k in (0, 1):
+                w = rng.uniform(9.0, 15.0)
+                d = rng.uniform(10.0, 16.0)
+                h = rng.uniform(7.0, 20.0)
+                x = sx * (14.0 + 18.0 * k + w / 2.0)
+                y = sy * (14.0 + d / 2.0)
+                items.append(_Static((x, y, h / 2.0), (w, d, h), 0.0, "building"))
+                items.append(
+                    _Static(
+                        (sx * (14.0 + d / 2.0), sy * (14.0 + 18.0 * k + w / 2.0), h / 2.0),
+                        (d, w, h),
+                        0.0,
+                        "building",
+                    )
+                )
+    # Street trees along both pavements (trunk + crown).
+    for coord in range(-66, 67, 9):
+        if abs(coord) < 12:
             continue
-        a = (-half[axis] - o[axis]) / d[axis]
-        b = (half[axis] - o[axis]) / d[axis]
-        tmin, tmax = max(tmin, min(a, b)), min(tmax, max(a, b))
-        if tmin > tmax:
-            return None
-    return float(tmin) if tmax >= max(tmin, 0) else None
+        for side in (-1, 1):
+            for cx, cy in ((float(coord), side * 10.6), (side * 10.6, float(coord))):
+                items.append(_Static((cx, cy, 2.6), (0.5, 0.5, 5.2), 0.0, "tree"))
+                items.append(_Static((cx, cy, 6.4), (3.4, 3.4, 2.8), 0.0, "crown"))
+    # Parked cars along the kerbs; not annotated (they are set dressing).
+    for x, side, yaw in (
+        (-24.0, -1, 0.0),
+        (-33.0, -1, 0.0),
+        (-45.0, -1, 0.0),
+        (-20.0, 1, 180.0),
+        (18.0, 1, 180.0),
+        (27.0, 1, 180.0),
+        (36.0, 1, 180.0),
+        (44.0, -1, 0.0),
+    ):
+        items.append(_Static((x, side * 8.35, 0.75), (4.4, 1.8, 1.5), yaw, "parked"))
+    for y, side, yaw in ((-32.0, -1, 90.0), (30.0, 1, 270.0), (-28.0, 1, 270.0), (34.0, -1, 90.0)):
+        items.append(_Static((side * 8.35, y, 0.75), (1.8, 4.4, 1.5), yaw, "parked"))
+    # Signal poles at the four corners.
+    for px, py in ((9.5, 9.5), (-9.5, 9.5), (9.5, -9.5), (-9.5, -9.5)):
+        items.append(_Static((px, py, 2.6), (0.25, 0.25, 5.2), 0.0, "pole"))
+    # Kerbs along both roads.
+    for side in (-1, 1):
+        items.append(_Static((0.0, side * 9.05, 0.08), (140.0, 0.35, 0.16), 0.0, "kerb"))
+        items.append(_Static((side * 9.05, 0.0, 0.08), (0.35, 140.0, 0.16), 0.0, "kerb"))
+    return tuple(items)
 
 
-def _lidar(
-    agent_id: str, frame: int, objects: tuple[_Object, ...], rng: random.Random
-) -> np.ndarray:
-    pose = _agent_pose(agent_id, frame)
-    origin = np.array(pose.apply((0.0, 0.0, 1.8)))
-    # Direction in body FLU, rotated by the agent's yaw only.
-    yaw = math.atan2(pose.qz, pose.qw) * 2.0
-    points: list[tuple[float, float, float, float]] = []
-    for az_i in range(LIDAR_AZ):
-        az = 2 * math.pi * az_i / LIDAR_AZ
-        for el_i in range(LIDAR_EL):
-            el = math.radians(-25.0 + 40.0 * el_i / (LIDAR_EL - 1))
-            body = np.array(
-                [math.cos(el) * math.cos(az), math.cos(el) * math.sin(az), math.sin(el)]
-            )
-            world_dir = np.array(
-                [
-                    math.cos(yaw) * body[0] - math.sin(yaw) * body[1],
-                    math.sin(yaw) * body[0] + math.cos(yaw) * body[1],
-                    body[2],
-                ]
-            )
-            best = LIDAR_RANGE
-            if world_dir[2] < -1e-6:
-                best = min(best, float(-origin[2] / world_dir[2]))
-            for obj in objects:
-                center, obj_yaw = _actor_at(obj, frame / RATE_HZ)
-                t = _ray_box(
-                    origin,
-                    world_dir,
-                    np.array(center),
-                    obj_yaw,
-                    (obj.length, obj.width, obj.height),
-                )
-                if t is not None and 0.1 < t < best:
-                    best = t
-            if best < LIDAR_RANGE:
-                point = origin + world_dir * best
-                # centimetre-scale beam noise, deterministic from the seed
-                point = point + np.array(
-                    [rng.gauss(0, 0.01), rng.gauss(0, 0.01), rng.gauss(0, 0.01)]
-                )
-                points.append((float(point[0]), float(point[1]), float(point[2]), 0.0))
-    # A few centre-directed beams guarantee a surface return for every box that
-    # is not occluded, including thin pedestrians between the azimuth grid lines.
-    for obj in objects:
-        center, obj_yaw = _actor_at(obj, frame / RATE_HZ)
-        for dz in (0.0, 0.35):
-            direction = np.array(center) + np.array([0.0, 0.0, dz]) - origin
-            length = float(np.linalg.norm(direction))
-            if length <= 1e-6 or length >= LIDAR_RANGE:
-                continue
-            direction = direction / length
-            best = LIDAR_RANGE
-            for other in objects:
-                oc, oyaw = _actor_at(other, frame / RATE_HZ)
-                t = _ray_box(
-                    origin, direction, np.array(oc), oyaw, (other.length, other.width, other.height)
-                )
-                if t is not None and 0.1 < t < best:
-                    best = t
-            if best < LIDAR_RANGE:
-                point = origin + direction * best
-                points.append((float(point[0]), float(point[1]), float(point[2]), 0.0))
-    return np.asarray(points, dtype=np.float32)
+STATIC = _static_world()
 
 
-def _camera_image(agent_id: str, frame: int, objects: tuple[_Object, ...]) -> Image.Image:
-    image = Image.new("RGB", (WIDTH, HEIGHT), (135, 170, 205))
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((0, HEIGHT // 2, WIDTH, HEIGHT), fill=(105, 105, 105))
-    pose = _agent_pose(agent_id, frame)
-    camera = pose.compose(SE3.from_rpy_deg(-90, 0, -90).translation(1.8, 0.0, 1.2))
-    for obj in objects:
-        center, yaw = _actor_at(obj, frame / RATE_HZ)
-        corners = _box_corners(center, (obj.length, obj.width, obj.height), yaw)
-        projected: list[tuple[float, float]] = []
-        visible = True
-        for corner in corners:
-            p = camera.inverse().apply(corner)
-            if p[2] <= 0.5:
-                visible = False
-                break
-            projected.append((FX * p[0] / p[2] + CX, FY * p[1] / p[2] + CY))
-        if not visible:
-            continue
-        faces = [(0, 1, 3, 2), (4, 6, 7, 5), (0, 2, 6, 4), (1, 5, 7, 3), (2, 3, 7, 6), (0, 4, 5, 1)]
-        shade = {"car": (200, 60, 50), "cyclist": (40, 150, 190), "pedestrian": (220, 180, 40)}[
-            obj.category
+# -- vectorised geometry -------------------------------------------------------------
+
+
+def _quaternion_matrix(pose: SE3) -> np.ndarray:
+    w, x, y, z = pose.qw, pose.qx, pose.qy, pose.qz
+    return np.array(
+        [
+            [1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w)],
+            [2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w)],
+            [2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)],
         ]
-        for face in faces:
-            pts = [projected[i] for i in face]
-            if all(p[2] > 1.0 for p in [camera.inverse().apply(corners[i]) for i in face]):
-                draw.polygon(pts, fill=shade, outline=(30, 30, 30))
+    )
+
+
+def _apply(pose: SE3, points: np.ndarray) -> np.ndarray:
+    """``R @ p + t`` for an (N, 3) float64 array."""
+    return points @ _quaternion_matrix(pose).T + np.array([pose.tx, pose.ty, pose.tz])
+
+
+def _apply_inverse(pose: SE3, points: np.ndarray) -> np.ndarray:
+    """``R.T @ (p - t)``: world points into the pose's source (body) frame."""
+    return (points - np.array([pose.tx, pose.ty, pose.tz])) @ _quaternion_matrix(pose)
+
+
+def _boxes_at(
+    t: float,
+) -> list[tuple[tuple[float, float, float], tuple[float, float, float], float, str]]:
+    """Every static and moving box at time ``t``: (centre, size l/w/h, yaw, kind)."""
+    boxes: list[tuple[tuple[float, float, float], tuple[float, float, float], float, str]] = [
+        (item.center, item.size, item.yaw_deg, item.kind) for item in STATIC
+    ]
+    for obj in _objects():
+        center, yaw = _actor_at(obj, t)
+        boxes.append((center, (obj.length, obj.width, obj.height), math.degrees(yaw), obj.category))
+    return boxes
+
+
+def _arrays(
+    boxes: list[tuple[tuple[float, float, float], tuple[float, float, float], float, str]],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    centers = np.array([box[0] for box in boxes], dtype=np.float64)
+    half = np.array([box[1] for box in boxes], dtype=np.float64) / 2.0
+    yaw = np.radians([box[2] for box in boxes])
+    return centers, half, yaw
+
+
+def _slab(
+    origin: np.ndarray, dirs: np.ndarray, centers: np.ndarray, half: np.ndarray, yaw: np.ndarray
+) -> np.ndarray:
+    """Nearest yaw-rotated-box hit distance for each ray (R, 3); inf when none.
+
+    Vectorised over both boxes and rays: one frame is ~150 boxes x ~1000 rays.
+    """
+    rays = dirs.shape[0]
+    boxes = centers.shape[0]
+    c = np.cos(-yaw)
+    s = np.sin(-yaw)
+    rel = origin[None, :] - centers
+    local_origin = np.stack(
+        [c * rel[:, 0] - s * rel[:, 1], s * rel[:, 0] + c * rel[:, 1], rel[:, 2]], axis=1
+    )
+    local_dirs = np.stack(
+        [
+            c[:, None] * dirs[None, :, 0] - s[:, None] * dirs[None, :, 1],
+            s[:, None] * dirs[None, :, 0] + c[:, None] * dirs[None, :, 1],
+            np.broadcast_to(dirs[None, :, 2], (boxes, rays)),
+        ],
+        axis=2,
+    )
+    tmin = np.full((boxes, rays), -np.inf)
+    tmax = np.full((boxes, rays), np.inf)
+    for axis in range(3):
+        with np.errstate(divide="ignore", invalid="ignore"):
+            low = (-half[:, axis][:, None] - local_origin[:, axis][:, None]) / local_dirs[
+                :, :, axis
+            ]
+            high = (half[:, axis][:, None] - local_origin[:, axis][:, None]) / local_dirs[
+                :, :, axis
+            ]
+        tmin = np.maximum(tmin, np.minimum(low, high))
+        tmax = np.minimum(tmax, np.maximum(low, high))
+    hit = (tmax >= np.maximum(tmin, 0.0)) & (tmin > 0.25)
+    return np.where(hit, tmin, np.inf).min(axis=0)
+
+
+def _lidar(agent_id: str, frame: int, seed: int) -> np.ndarray:
+    """One sweep, in the agent body frame (x forward, y left, z up)."""
+    pose = _agent_pose(agent_id, frame)
+    rotation = _quaternion_matrix(pose)
+    origin = np.array(pose.apply((0.0, 0.0, 1.8)))
+    az = np.linspace(0.0, 2.0 * math.pi, LIDAR_AZ, endpoint=False)
+    el = np.radians(np.linspace(LIDAR_MIN_EL_DEG, LIDAR_MAX_EL_DEG, LIDAR_EL))
+    a, e = np.meshgrid(az, el)
+    body = np.stack([np.cos(e) * np.cos(a), np.cos(e) * np.sin(a), np.sin(e)], axis=-1).reshape(
+        -1, 3
+    )
+    dirs = body @ rotation.T
+
+    rng = np.random.default_rng(
+        seed * 1_000_003 + frame * 17 + {"cav-a": 1, "cav-b": 2, "rsu": 3}[agent_id]
+    )
+    centers, half, yaw = _arrays(_boxes_at(frame / RATE_HZ))
+    best = _slab(origin, dirs, centers, half, yaw)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        ground = np.where(dirs[:, 2] < -1e-6, -origin[2] / dirs[:, 2], np.inf)
+    on_ground = ground <= best
+    best = np.minimum(best, ground)
+    keep = (best < LIDAR_RANGE) & (rng.random(dirs.shape[0]) > 0.25)
+    world = origin + dirs[keep] * best[keep, None]
+    world += rng.normal(0.0, 0.015, world.shape)
+    intensity = np.where(on_ground[keep], 0.16, 0.58) + rng.uniform(-0.04, 0.04, world.shape[0])
+
+    # A few centre-directed beams guarantee a surface return on every actor that
+    # is visible, even for thin pedestrians between the azimuth grid lines.
+    extra: list[tuple[float, float, float, float]] = []
+    for obj in _objects():
+        center, _yaw = _actor_at(obj, frame / RATE_HZ)
+        for dz in (0.0, 0.35):
+            target = np.array(center) + np.array([0.0, 0.0, dz])
+            direction = target - origin
+            distance = float(np.linalg.norm(direction))
+            if distance <= 1e-6 or distance >= LIDAR_RANGE:
+                continue
+            direction = direction / distance
+            hit = _slab(origin, direction[None, :], centers, half, yaw)[0]
+            if hit < distance + 0.8:
+                point = origin + direction * hit
+                extra.append((float(point[0]), float(point[1]), float(point[2]), 0.62))
+    body_points = _apply_inverse(pose, world)
+    points = np.concatenate(
+        [
+            np.column_stack([body_points, intensity]),
+            np.array(extra, dtype=np.float64).reshape(-1, 4),
+        ],
+        axis=0,
+    )
+    return points.astype(np.float32)
+
+
+# -- camera --------------------------------------------------------------------------
+
+# The background is rendered at half resolution and upscaled: perspective ground
+# and sky are smooth, and this keeps 200 camera frames fast for the demo budget.
+_BG_SCALE = 2
+_FACES = np.array(
+    ((0, 1, 3, 2), (4, 6, 7, 5), (0, 2, 6, 4), (1, 5, 7, 3), (2, 3, 7, 6), (0, 4, 5, 1)),
+    dtype=np.int64,
+)
+_FACE_LIGHT = float(np.linalg.norm(LIGHT_DIR))
+
+
+def _ground_frame(camera: SE3) -> Image.Image:
+    """Procedural sky, roads, pavements, lane markings and grass."""
+    width, height = WIDTH // _BG_SCALE, HEIGHT // _BG_SCALE
+    u = (np.arange(width, dtype=np.float64) + 0.5) * _BG_SCALE - 0.5
+    v = (np.arange(height, dtype=np.float64) + 0.5) * _BG_SCALE - 0.5
+    dcam = np.stack(
+        [
+            np.broadcast_to((u - CX)[None, :] / FX, (height, width)),
+            np.broadcast_to((v - CY)[:, None] / FY, (height, width)),
+            np.ones((height, width)),
+        ],
+        axis=-1,
+    )
+    dirs = dcam @ _quaternion_matrix(camera).T
+    origin = np.array([camera.tx, camera.ty, camera.tz])
+    with np.errstate(divide="ignore", invalid="ignore"):
+        distance = np.where(dirs[..., 2] < -1e-5, -origin[2] / dirs[..., 2], np.inf)
+    valid = (distance > 0.8) & (distance < 190.0)
+    ground = origin[None, None, :] + dirs * np.where(valid, distance, 1.0)[..., None]
+    x = ground[..., 0]
+    y = ground[..., 1]
+    on_road = (np.abs(x) < 7.4) | (np.abs(y) < 7.4)
+    on_pavement = (~on_road) & ((np.abs(x) < 13.0) | (np.abs(y) < 13.0))
+    color = np.empty((height, width, 3), dtype=np.float64)
+    row = v / HEIGHT
+    row_colors = np.stack([120.0 + 70.0 * row, 160.0 + 55.0 * row, 208.0 + 30.0 * row], axis=-1)
+    color[:] = row_colors[:, None, :]
+    grass = np.array([96.0, 124.0, 78.0])
+    pavement = np.array([150.0, 148.0, 142.0])
+    road = np.array([74.0, 76.0, 80.0])
+    surface = np.where(on_road[..., None], road, np.where(on_pavement[..., None], pavement, grass))
+    on_x_road = np.abs(y) < 7.2
+    on_y_road = np.abs(x) < 7.2
+    junction = on_x_road & on_y_road
+    dash = (np.floor(x * 0.5) % 2.0) == 0.0
+    dash_y = (np.floor(y * 0.5) % 2.0) == 0.0
+    white = (
+        on_x_road
+        & ~junction
+        & dash
+        & ((np.abs(np.abs(y) - 1.75) < 0.1) | (np.abs(np.abs(y) - 5.25) < 0.1))
+    ) | (
+        on_y_road
+        & ~junction
+        & dash_y
+        & ((np.abs(np.abs(x) - 1.75) < 0.1) | (np.abs(np.abs(x) - 5.25) < 0.1))
+    )
+    yellow = (on_x_road & ~junction & (np.abs(y) < 0.12)) | (
+        on_y_road & ~junction & (np.abs(x) < 0.12)
+    )
+    surface = np.where(white[..., None], np.array([232.0, 232.0, 226.0]), surface)
+    surface = np.where(yellow[..., None], np.array([228.0, 196.0, 72.0]), surface)
+    haze = np.clip(distance / 170.0, 0.0, 1.0) * 0.42
+    blended = surface * (1.0 - haze[..., None]) + color * haze[..., None]
+    color = np.where(valid[..., None], blended, color)
+    small = Image.fromarray(np.clip(color, 0.0, 255.0).astype(np.uint8))
+    return small.resize((WIDTH, HEIGHT), Image.Resampling.BILINEAR)
+
+
+def _corners_for(
+    center: tuple[float, float, float], size: tuple[float, float, float], yaw: float
+) -> np.ndarray:
+    length, width, height = size
+    local = np.array(
+        [
+            (length / 2, width / 2, height / 2),
+            (length / 2, width / 2, -height / 2),
+            (length / 2, -width / 2, height / 2),
+            (length / 2, -width / 2, -height / 2),
+            (-length / 2, width / 2, height / 2),
+            (-length / 2, width / 2, -height / 2),
+            (-length / 2, -width / 2, height / 2),
+            (-length / 2, -width / 2, -height / 2),
+        ]
+    )
+    c, s = math.cos(yaw), math.sin(yaw)
+    rotated = np.stack(
+        [c * local[:, 0] - s * local[:, 1], s * local[:, 0] + c * local[:, 1], local[:, 2]], axis=1
+    )
+    return rotated + np.array(center)
+
+
+def _render_parts(
+    boxes: list[tuple[tuple[float, float, float], tuple[float, float, float], float, str]],
+) -> tuple[np.ndarray, list[tuple[int, int, int]]]:
+    """Corner arrays and base colours for every box face the camera draws."""
+    corners: list[np.ndarray] = []
+    colours: list[tuple[int, int, int]] = []
+    for index, (center, size, yaw_deg, kind) in enumerate(boxes):
+        yaw = math.radians(yaw_deg)
+        base = PALETTE[kind][index % len(PALETTE[kind])]
+        if kind in {"car", "parked"}:
+            length, width, height = size
+            corners.append(
+                _corners_for(
+                    (center[0], center[1], center[2] - height * 0.2),
+                    (length, width, height * 0.6),
+                    yaw,
+                )
+            )
+            colours.append(base)
+            corners.append(
+                _corners_for(
+                    (
+                        center[0] - 0.08 * length * math.cos(yaw),
+                        center[1] - 0.08 * length * math.sin(yaw),
+                        center[2] + height * 0.28,
+                    ),
+                    (length * 0.52, width * 0.88, height * 0.4),
+                    yaw,
+                )
+            )
+            colours.append((52, 62, 74))
+        else:
+            corners.append(_corners_for(center, size, yaw))
+            colours.append(base)
+    return np.stack(corners), colours
+
+
+_STATIC_BOXES: list[tuple[tuple[float, float, float], tuple[float, float, float], float, str]] = [
+    (item.center, item.size, item.yaw_deg, item.kind) for item in STATIC
+]
+_STATIC_CORNERS, _STATIC_COLOURS = _render_parts(_STATIC_BOXES)
+
+
+def _camera_image(frame: int, agent_id: str) -> Image.Image:
+    camera = _agent_pose(agent_id, frame).compose(CAMERA_EXTRINSIC)
+    image = _ground_frame(camera)
+    draw = ImageDraw.Draw(image)
+    dynamic_boxes = _boxes_at(frame / RATE_HZ)[len(STATIC) :]
+    if dynamic_boxes:
+        dynamic_corners, dynamic_colours = _render_parts(dynamic_boxes)
+        corners = np.concatenate([_STATIC_CORNERS, dynamic_corners], axis=0)
+        colours = _STATIC_COLOURS + dynamic_colours
+    else:
+        corners, colours = _STATIC_CORNERS, _STATIC_COLOURS
+    flat = corners.reshape(-1, 3)
+    local = _apply_inverse(camera, flat).reshape(-1, 8, 3)
+    with np.errstate(divide="ignore", invalid="ignore"):
+        u = FX * local[..., 0] / local[..., 2] + CX
+        v = FY * local[..., 1] / local[..., 2] + CY
+    depths = local[..., 2]
+    face_depths = depths[:, _FACES].mean(axis=2)
+    face_uv = np.stack([u[:, _FACES], v[:, _FACES]], axis=-1)
+    in_front = (depths[:, _FACES] >= 0.5).all(axis=2)
+    on_screen = (
+        (face_uv[..., 0].max(axis=2) > -40)
+        & (face_uv[..., 0].min(axis=2) < WIDTH + 40)
+        & (face_uv[..., 1].max(axis=2) > -40)
+        & (face_uv[..., 1].min(axis=2) < HEIGHT + 40)
+        & (face_depths < 170.0)
+    )
+    p0 = corners[:, _FACES[:, 0]]
+    p1 = corners[:, _FACES[:, 1]]
+    p2 = corners[:, _FACES[:, 2]]
+    normals = np.cross(p1 - p0, p2 - p0)
+    norm = np.linalg.norm(normals, axis=2)
+    normals = normals / np.where(norm > 0.0, norm, 1.0)[..., None]
+    shade = 0.55 + 0.45 * np.abs(np.einsum("nfk,k->nf", normals, LIGHT_DIR / _FACE_LIGHT))
+    haze = np.clip(face_depths / 170.0, 0.0, 1.0) * 0.4
+    colours_array = np.array(colours, dtype=np.float64)
+    sky = np.array([190.0, 205.0, 225.0])
+    keep = in_front & on_screen
+    selected = np.argwhere(keep)
+    order = np.argsort(-face_depths[keep])
+    for flat_index in selected[order]:
+        face = int(flat_index[1])
+        tessellation = int(flat_index[0])
+        colour = colours_array[tessellation]
+        level = float(shade[tessellation, face])
+        fade = float(haze[tessellation, face])
+        fill = colour * level * (1.0 - fade) + sky * fade
+        draw.polygon(
+            [tuple(map(float, point)) for point in face_uv[tessellation, face]],
+            fill=tuple(int(round(channel)) for channel in fill),
+        )
     return image
+
+
+# -- dataset writing -----------------------------------------------------------------
 
 
 def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
-def _write_agents(root: Path, objects: tuple[_Object, ...], seed: int) -> None:
+def _write_agents(root: Path, seed: int) -> None:
     timestamps = [i * 100_000 for i in range(FRAMES)]
     (root / "agents").mkdir(parents=True)
+    objects = _objects()
     for agent_id in ("cav-a", "cav-b", "rsu"):
         agent_root = root / "agents" / agent_id
         (agent_root / "lidar").mkdir(parents=True)
@@ -281,13 +563,27 @@ def _write_agents(root: Path, objects: tuple[_Object, ...], seed: int) -> None:
                 encoding="utf-8",
             )
         for frame in range(FRAMES):
-            rng = random.Random(seed * 1_000_003 + frame * 17 + sum(ord(c) for c in agent_id))
-            points = _lidar(agent_id, frame, objects, rng)
+            points = _lidar(agent_id, frame, seed)
             (agent_root / "lidar" / f"{frame:06d}.bin").write_bytes(points.tobytes())
             if agent_id != "rsu":
-                _camera_image(agent_id, frame, objects).save(
-                    agent_root / "camera" / f"{frame:06d}.png"
+                _camera_image(frame, agent_id).quantize(colors=64).save(
+                    agent_root / "camera" / f"{frame:06d}.png", optimize=True
                 )
+    sensors = []
+    for agent_id in ("cav-a", "cav-b"):
+        sensors.append(
+            {
+                "id": "front",
+                "modality": "camera",
+                "files": f"agents/{agent_id}/camera/{{frame:06d}}.png",
+                "intrinsic": [FX, FY, CX, CY],
+                "image_size": [WIDTH, HEIGHT],
+                "body_from_sensor": {
+                    "translation_m": [1.8, 0.0, 1.2],
+                    "rotation_rpy_deg": [-90, 0, -90],
+                },
+            }
+        )
     _write_yaml(
         root / "scene.yaml",
         {
@@ -308,17 +604,7 @@ def _write_agents(root: Path, objects: tuple[_Object, ...], seed: int) -> None:
                             "modality": "lidar",
                             "files": "agents/cav-a/lidar/{frame:06d}.bin",
                         },
-                        {
-                            "id": "front",
-                            "modality": "camera",
-                            "files": "agents/cav-a/camera/{frame:06d}.png",
-                            "intrinsic": [FX, FY, CX, CY],
-                            "image_size": [WIDTH, HEIGHT],
-                            "body_from_sensor": {
-                                "translation_m": [1.8, 0.0, 1.2],
-                                "rotation_rpy_deg": [-90, 0, -90],
-                            },
-                        },
+                        sensors[0],
                     ],
                 },
                 {
@@ -332,17 +618,7 @@ def _write_agents(root: Path, objects: tuple[_Object, ...], seed: int) -> None:
                             "modality": "lidar",
                             "files": "agents/cav-b/lidar/{frame:06d}.bin",
                         },
-                        {
-                            "id": "front",
-                            "modality": "camera",
-                            "files": "agents/cav-b/camera/{frame:06d}.png",
-                            "intrinsic": [FX, FY, CX, CY],
-                            "image_size": [WIDTH, HEIGHT],
-                            "body_from_sensor": {
-                                "translation_m": [1.8, 0.0, 1.2],
-                                "rotation_rpy_deg": [-90, 0, -90],
-                            },
-                        },
+                        sensors[1],
                     ],
                 },
                 {
@@ -418,7 +694,7 @@ def create(path: str | Path, seed: int = 0) -> DemoScene:
         if child.exists():
             raise FileExistsError(f"{child} already exists")
     raw.mkdir(parents=True)
-    _write_agents(raw, _objects(), seed)
+    _write_agents(raw, seed)
     ingest(GenericAdapter(), raw, scenes, params={}, workers=1)
     # Ingest keeps image paths relative to the raw root; copy the generated
     # camera frames beside the manifest so the viewer strip resolves them.
