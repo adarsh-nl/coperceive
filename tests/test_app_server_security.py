@@ -576,3 +576,19 @@ def test_token_file_the_desktop_writes_is_accepted(tmp_path: Path) -> None:
     assert _resolve(token_file) == "0123456789abcdef0123456789abcdef"
     token_file.chmod(0o400)
     assert _resolve(token_file) == "0123456789abcdef0123456789abcdef"
+
+
+def test_jobs_database_path_check_ignores_windows_case_and_separators() -> None:
+    """SQLite's PRAGMA database_list and os.path.realpath can spell one Windows path with a
+    different case or separator; the check must still see one file, and two files apart."""
+    import ntpath
+    import posixpath
+
+    from coperceive.app.jobs import same_path
+
+    reported = "C:\\Users\\Lab\\Scenes\\jobs.sqlite"
+    assert same_path(reported, "c:/users/lab/scenes/jobs.sqlite", ntpath)
+    assert same_path(reported, "C:\\Users\\Lab\\Scenes\\.\\jobs.sqlite", ntpath)
+    assert not same_path(reported, "C:\\Users\\Lab\\Other\\jobs.sqlite", ntpath)
+    # On POSIX the case matters.
+    assert not same_path("/data/Lab/jobs.sqlite", "/data/lab/jobs.sqlite", posixpath)

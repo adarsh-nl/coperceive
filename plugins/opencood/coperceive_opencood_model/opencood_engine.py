@@ -1,11 +1,10 @@
 # SPDX-License-Identifier: Apache-2.0
-# torch and OpenCOOD are optional, untyped dependencies imported at run time; this file had
-# these reports before the security fixes (87 on release/v0.1.2), and the plugin is outside the
-# project's pyright include. The pre-push hook checks changed files directly.
+# torch and OpenCOOD are optional, untyped dependencies imported at run time, so their names
+# and members are unknown to pyright; the plugin is outside the project's pyright include and the
+# pre-push hook checks changed files directly.
 # pyright: reportMissingImports=false, reportUnknownMemberType=false, reportUnknownVariableType=false
 # pyright: reportUnknownArgumentType=false, reportUnknownParameterType=false, reportUnknownLambdaType=false
-# pyright: reportMissingParameterType=false, reportMissingTypeArgument=false, reportArgumentType=false
-# pyright: reportIndexIssue=false
+# pyright: reportMissingParameterType=false, reportMissingTypeArgument=false
 """The thin OpenCOOD seam: load the checkpoint's own config, run its own inference pipeline.
 
 Everything OpenCOOD-specific lives in this module, which is imported lazily by the worker and
@@ -64,7 +63,7 @@ import re
 import shutil
 import tempfile
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from opencood_convert import ConvertError, boxes_from_opencood
@@ -437,7 +436,7 @@ class OpenCOODEngine:
         config["root_dir"] = os.path.join(dataset_root, "train")
         config["validate_dir"] = os.path.join(dataset_root, "validate")
 
-        injected = {"frame": None}
+        injected: dict[str, dict[str, object] | None] = {"frame": None}
 
         class _Injected(dataset_class):  # type: ignore[misc, valid-type]
             def retrieve_base_data(self, idx, cur_ego_pose_flag=True):  # noqa: ANN001, ANN201
@@ -521,7 +520,8 @@ class OpenCOODEngine:
         try:
             item = self._dataset[0]
             batch = self._dataset.collate_batch_test([item])
-            batch = self._to_device(batch)
+            # OpenCOOD's collate_batch_test returns a dict of tensors keyed by agent role.
+            batch = cast(dict[str, object], self._to_device(batch))
             with self._torch.no_grad():
                 output = self.model(batch["ego"])
             processed = self._dataset.post_process(batch, {"ego": output})

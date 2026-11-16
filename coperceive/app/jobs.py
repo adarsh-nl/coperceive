@@ -13,6 +13,7 @@ import subprocess
 import time
 from collections.abc import Sequence
 from pathlib import Path
+from types import ModuleType
 
 # Phase 0 allow-list. Add names here on purpose; do not accept a free-form command.
 ALLOW: dict[str, tuple[str, ...]] = {"echo": ("echo",)}
@@ -120,6 +121,14 @@ def _existing_or_new(folder: _Folder, name: str) -> os.stat_result:
     return info
 
 
+def same_path(a: str, b: str, path_module: ModuleType = os.path) -> bool:
+    """True when ``a`` and ``b`` spell one path. Windows can report one file with another
+    case or separator (SQLite's ``database_list`` against ``os.path.realpath``), so both
+    are normalised the platform's way; no filesystem lookup is made."""
+    norm = path_module.normcase
+    return norm(path_module.normpath(a)) == norm(path_module.normpath(b))
+
+
 def _main_file(conn: sqlite3.Connection) -> str:
     for _seq, schema, filename in conn.execute("PRAGMA database_list").fetchall():
         if schema == "main":
@@ -167,7 +176,7 @@ def open_db(path: Path) -> sqlite3.Connection:
                 now = folder.lstat(name)
                 _require_plain_file(name, now)
                 if (
-                    opened != str(expected)
+                    not same_path(opened, str(expected))
                     or (now.st_dev, now.st_ino) != (checked.st_dev, checked.st_ino)
                     or not folder.same_folder()
                 ):

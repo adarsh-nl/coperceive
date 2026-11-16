@@ -321,9 +321,10 @@ fn fetch_remote_manifest(
     destination: &Path,
     scp: &str,
 ) -> Result<Option<String>, String> {
+    validate_alias(alias)?;
     let _ = fs::remove_file(destination);
     let output = crate::platform::create_command(scp)
-        .args(["-q", "-p"])
+        .args(["-q", "-p", "--"])
         .arg(format!("{alias}:{remote_rel}/{MANIFEST_NAME}"))
         .arg(destination)
         .output()
@@ -337,10 +338,11 @@ fn fetch_remote_manifest(
 }
 
 fn upload_static(alias: &str, local: &Path, remote_rel: &str, scp: &str) -> Result<(), String> {
+    validate_alias(alias)?;
     let source = format!("{}/.", local.display());
     let destination = format!("{alias}:{remote_rel}");
     let output = crate::platform::create_command(scp)
-        .args(["-r", "-q", "-p"])
+        .args(["-r", "-q", "-p", "--"])
         .arg(&source)
         .arg(&destination)
         .output()
@@ -668,5 +670,51 @@ mod tests {
         assert_eq!(inferred_res, Some(res_dir));
 
         let _ = fs::remove_dir_all(&root);
+    }
+}
+
+#[cfg(test)]
+mod scp_tests {
+    use super::*;
+
+    /// A stand-in `scp` that records its arguments, one per line, next to itself.
+    #[cfg(unix)]
+    fn recording_scp(dir: &Path) -> (String, PathBuf) {
+        use std::os::unix::fs::PermissionsExt;
+        let log = dir.join("argv.txt");
+        let script = dir.join("scp");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done > '{}'\nexit 1\n", log.display()),
+        )
+        .unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+        (script.display().to_string(), log)
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn scp_gets_double_dash_before_its_operands() {
+        let dir = std::env::temp_dir().join(format!("coperceive-scp-{}", std::process::id()));
+        fs::create_dir_all(&dir).unwrap();
+        let (scp, log) = recording_scp(&dir);
+        let _ = fetch_remote_manifest("cluster", "rel", &dir.join("m.txt"), &scp);
+        let fetch: Vec<String> = fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
+        let at = fetch.iter().position(|a| a == "--").expect("-- passed to scp on fetch");
+        assert!(fetch[at + 1].starts_with("cluster:"), "{fetch:?}");
+        let _ = upload_static("cluster", &dir, "rel", &scp);
+        let upload: Vec<String> = fs::read_to_string(&log).unwrap().lines().map(String::from).collect();
+        let at = upload.iter().position(|a| a == "--").expect("-- passed to scp on upload");
+        assert!(upload[at + 2].starts_with("cluster:"), "{upload:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn an_option_like_alias_never_reaches_scp() {
+        let dir = std::env::temp_dir();
+        let hostile = "-oProxyCommand=touch /tmp/coperceive-pwned";
+        // "false" would run if the alias were not refused first; either way no option is read.
+        assert!(fetch_remote_manifest(hostile, "rel", &dir.join("m.txt"), "false").is_err());
+        assert!(upload_static(hostile, &dir, "rel", "false").is_err());
     }
 }
