@@ -23,6 +23,7 @@ from typing import Protocol, cast
 
 from coperceive.adapters.build import CheckReport, SceneRef
 from coperceive.adapters.prefetch import current_stats
+from coperceive.adapters.scene_paths import ScenePathError, safe_scene_id, scene_path
 from coperceive.errors import CoperceiveError
 from coperceive.model import SCHEMA_VERSION, Scene
 from coperceive.store import write_scene
@@ -104,6 +105,14 @@ def ingest(
     from ``coperceive maps identify``); the table's values win over the manifest's.
     """
     refs = list(adapter.scenes(raw_root, params))
+    unsafe: list[str] = []
+    for ref in refs:
+        try:
+            safe_scene_id(ref.scene_id)
+        except ScenePathError as exc:
+            unsafe.append(f"{ref.scene_id!r}: {exc}")
+    if unsafe:
+        raise IngestError(IngestReport((), (), (), tuple(unsafe), (), ()))
     if platform:
         refs = [_with_platform(ref, platform.get(ref.scene_id, {})) for ref in refs]
     if scene_ids is not None:
@@ -178,17 +187,24 @@ def ingest_one(job: _Job) -> _Result:
     """Ingest a single scene. Safe to run in a worker process."""
     raw_root = Path(job.raw_root)
     out = Path(job.out)
-    final = out / job.ref.scene_id
-    partial = out / ".partial" / job.ref.scene_id
+    final = scene_path(out, job.ref.scene_id)
+    partial_root = out / ".partial"
+    if partial_root.is_symlink():
+        raise ScenePathError(f"unsafe scene path: {partial_root} is a symlink")
+    partial = scene_path(partial_root, job.ref.scene_id)
     expected = _expected(job.ref)
     if _is_complete(final, expected):
         return _Result(job.ref.scene_id, "skipped", len(job.ref.samples), _stored_variants(final))
     if final.exists():
+        if final.is_symlink():
+            raise ScenePathError(f"unsafe scene path: {final} is a symlink")
         shutil.rmtree(final)
     if _is_complete(partial, expected):
         partial.rename(final)
         return _Result(job.ref.scene_id, "resumed", len(job.ref.samples), _stored_variants(final))
     if partial.exists():
+        if partial.is_symlink():
+            raise ScenePathError(f"unsafe scene path: {partial} is a symlink")
         shutil.rmtree(partial)
     partial.parent.mkdir(parents=True, exist_ok=True)
     partial.mkdir()
@@ -209,7 +225,8 @@ def ingest_one(job: _Job) -> _Result:
         (partial / COMPLETE).write_text(json.dumps(marker, indent=2) + "\n", encoding="utf-8")
         partial.rename(final)
     except Exception:
-        shutil.rmtree(partial, ignore_errors=True)
+        if not partial.is_symlink():
+            shutil.rmtree(partial, ignore_errors=True)
         raise
     return _Result(job.ref.scene_id, "wrote", len(job.ref.samples), variants)
 

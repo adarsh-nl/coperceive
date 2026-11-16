@@ -31,6 +31,7 @@ from coperceive.adapters.readers.numpy_yaml import yaml_loader_kind
 from coperceive.adapters.registry import RegistryError, resolve_adapter
 from coperceive.adapters.spec import SpecError
 from coperceive.camera_images import IMAGE_MODES, stage_images
+from coperceive.adapters.scene_paths import safe_scene_id, scene_path
 from coperceive.errors import CoperceiveError
 from coperceive.remote.recognise import (
     DETECT_PROBE_SCENES,
@@ -277,6 +278,8 @@ def _write_dataset(cache_dir: Path, payload: dict[str, Any]) -> None:
 
 
 def _scene_ready(cache_dir: Path, scene_id: str) -> bool:
+    safe_scene_id(scene_id)
+    scene = scene_path(cache_dir, scene_id)
     folder = cache_dir / scene_id
     return (folder / "manifest.json").is_file() and (folder / "COMPLETE.json").is_file()
 
@@ -407,6 +410,7 @@ def _slurm_job_id() -> str | None:
 
 def mark_scene_images(cache: Path, scene_id: str, mode: str) -> None:
     """Record which camera-image mode a prepared scene uses."""
+    safe_scene_id(scene_id)
     with _cache_lock(cache):
         try:
             dataset = _read_dataset(cache)
@@ -428,6 +432,7 @@ def _claim_and_prepare_scene(
     job_id: str | None,
     images: str = "originals",
 ) -> tuple[str, str, str | None, int | None]:
+    scene_id = safe_scene_id(scene_id)
     raw = Path(raw_root)
     cache = Path(cache_root)
     adapter = resolve_adapter(adapter_name)
@@ -467,7 +472,7 @@ def _claim_and_prepare_scene(
     if restage:
         started = time.perf_counter()
         try:
-            stage_images(cache / scene_id, raw, images)
+            stage_images(scene_path(cache, scene_id), raw, images)
             state, reason, prepared = "ready", None, int(time.time())
         except Exception as exc:  # noqa: BLE001 - reported per scene
             state, reason, prepared = "failed", f"{type(exc).__name__}: {exc}", None
@@ -479,7 +484,9 @@ def _claim_and_prepare_scene(
         return _finish_scene(cache, scene_id, job_id, state, reason, prepared, images)
     partial_root = cache / ".partial"
     partial_root.mkdir(parents=True, exist_ok=True)
-    temporary = partial_root / scene_id
+    temporary = scene_path(partial_root, scene_id)
+    if temporary.is_symlink():
+        raise DatasetError("unsafe scene path: symlink")
     shutil.rmtree(temporary, ignore_errors=True)
     state = "failed"
     reason: str | None = None
@@ -496,7 +503,7 @@ def _claim_and_prepare_scene(
                 workers=1,
                 scene_ids=[scene_id],
             )
-            produced = partial_root / scene_id
+            produced = scene_path(partial_root, scene_id)
             if (
                 not (produced / "manifest.json").is_file()
                 or not (produced / "COMPLETE.json").is_file()
@@ -505,8 +512,10 @@ def _claim_and_prepare_scene(
             staged = time.perf_counter()
             stage_images(produced, raw, images)
             previews_s = time.perf_counter() - staged
-            destination = cache / scene_id
-            old = cache / f".old-{scene_id}"
+            destination = scene_path(cache, scene_id)
+            old = scene_path(cache, f".old-{scene_id}")
+            if old.is_symlink():
+                raise DatasetError("unsafe scene path: symlink")
             if old.exists():
                 shutil.rmtree(old)
             if destination.exists():
