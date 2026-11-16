@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import zipfile
 from pathlib import Path
@@ -471,7 +472,19 @@ def test_omitted_sensor_data_uses_matching_local_scene(demo_root: Path, tmp_path
     opened = open_bundle(bundle, data_root=tmp_path / "data", library_roots=[demo_root / "scenes"])
     assert opened.report["sensor_data"] == "local-copy"
     assert "your local copy" in str(opened.report["scenes"][0]["label"])
-    assert list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
+    assert not list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
+    with zipfile.ZipFile(bundle) as archive:
+        manifest = json.loads(archive.read("bundle.json"))
+    for item in manifest["contents"]:
+        path = opened.root / item["path"]
+        assert hashlib.sha256(path.read_bytes()).hexdigest() == item["sha256"]
+    extracted = {
+        p.relative_to(opened.root).as_posix() for p in opened.root.rglob("*") if p.is_file()
+    }
+    assert extracted == {item["path"] for item in manifest["contents"]} | {
+        "bundle.json",
+        "open.json",
+    }
 
 
 def test_omitted_sensor_data_without_local_scene_shows_note(

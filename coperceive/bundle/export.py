@@ -497,6 +497,10 @@ def export_bundle(request: BundleExportRequest) -> Path:
                 (work / rel).parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(metrics, work / rel)
                 staging.files[rel] = "eval-metrics"
+                rel_pred = f"predictions/{run_id}/{scene_id}/metrics.json"
+                (work / rel_pred).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(metrics, work / rel_pred)
+                staging.files[rel_pred] = "predictions"
         # filtered predictions
         write_run(work / "predictions", run_id, meta, filtered, force=True)
         for path in (work / "predictions").rglob("*"):
