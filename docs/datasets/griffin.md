@@ -66,12 +66,12 @@ The same tree can be ingested with `coperceive adapters ingest griffin --raw-roo
 
 ## Known issues and conventions
 
-- The adapter requires a pose key `timestamp` that the draft says no source documents. See [GRF-3](../geometry/conventions.md#grf-3).
-- Image size is `2 × cx` by `2 × cy`, not a measured PNG, unless the principal point is the centre, which no source states. See [GRF-6](../geometry/conventions.md#grf-6).
-- Whether stored points are already in the ego frame: **unverified**. See [GRF-7](../geometry/conventions.md#grf-7).
-- The preparation note says `.bin`; the adapter reads `.ply` and requires a property `I`. Record layout: **unverified**. See [GRF-8](../geometry/conventions.md#grf-8).
-- Category letter case: **unverified**. See [GRF-13](../geometry/conventions.md#grf-13).
-- `info.map_name`, `info.cruise_altitude`, and an identical drone-side `scene_infos.json` are required by the adapter and are not in the sources the draft read. See [GRF-14](../geometry/conventions.md#grf-14).
+- The adapter requires a pose key `timestamp` that the draft says no source documents. See [GRF-3](../geometry/conventions.md#grf-3) (draft, PR #166).
+- Image size is `2 × cx` by `2 × cy`, not a measured PNG, unless the principal point is the centre, which no source states. See [GRF-6](../geometry/conventions.md#grf-6) (draft, PR #166).
+- Whether stored points are already in the ego frame: **unverified**. See [GRF-7](../geometry/conventions.md#grf-7) (draft, PR #166).
+- The preparation note says `.bin`; the adapter reads `.ply` and requires a property `I`. Record layout: **unverified**. See [GRF-8](../geometry/conventions.md#grf-8) (draft, PR #166).
+- Category letter case: **unverified**. See [GRF-13](../geometry/conventions.md#grf-13) (draft, PR #166).
+- `info.map_name`, `info.cruise_altitude`, and an identical drone-side `scene_infos.json` are required by the adapter and are not in the sources the draft read. See [GRF-14](../geometry/conventions.md#grf-14) (draft, PR #166).
 
 ## Citation
 

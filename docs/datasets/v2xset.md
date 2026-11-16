@@ -55,11 +55,11 @@ coperceive eval run RUN_ID --root /data/v2xset-scenes
 
 ## Known issues and conventions
 
-- The OPV2V rows apply, including the pitch and roll sign finding. See [OPV-6](../geometry/conventions.md#opv-6) and [OPV-13](../geometry/conventions.md#opv-13).
-- Only the id `-1` is typed as infrastructure. See [V2X-1](../geometry/conventions.md#v2x-1).
-- Whether a roadside unit's YAML has `camera*` blocks: **unverified**. See [V2X-2](../geometry/conventions.md#v2x-2).
-- The own-LiDAR-hit rule is **unverified** for V2XSet. See [V2X-3](../geometry/conventions.md#v2x-3).
-- The 0.05 s tick is **unverified** for V2XSet. See [V2X-4](../geometry/conventions.md#v2x-4).
+- The OPV2V rows apply, including the pitch and roll sign finding. See [OPV-6](../geometry/conventions.md#opv-6) and [OPV-13](../geometry/conventions.md#opv-13) (draft, PR #166).
+- Only the id `-1` is typed as infrastructure. See [V2X-1](../geometry/conventions.md#v2x-1) (draft, PR #166).
+- Whether a roadside unit's YAML has `camera*` blocks: **unverified**. See [V2X-2](../geometry/conventions.md#v2x-2) (draft, PR #166).
+- The own-LiDAR-hit rule is **unverified** for V2XSet. See [V2X-3](../geometry/conventions.md#v2x-3) (draft, PR #166).
+- The 0.05 s tick is **unverified** for V2XSet. See [V2X-4](../geometry/conventions.md#v2x-4) (draft, PR #166).
 
 ## Citation
 
