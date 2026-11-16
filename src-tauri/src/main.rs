@@ -1128,7 +1128,9 @@ mod viewer_bridge {
         app: tauri::AppHandle,
     ) -> Result<bool, String> {
         ensure_viewer_window(&window)?;
-        Ok(show_library_window(&app))
+        let shown = show_library_window(&app);
+        eprintln!("[viewer] show-library -> shown={shown} (ipc)");
+        Ok(shown)
     }
 
     #[tauri::command]
