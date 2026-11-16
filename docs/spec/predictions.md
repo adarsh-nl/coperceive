@@ -155,7 +155,7 @@ Normative AP values:
 
 ### Pooled AP
 
-The AP in `metrics.json` is per scene and is a diagnostic. The headline AP of a run, per output `(agent_id, source)` and per class, pools every detection across scenes the way OpenCOOD and KITTI do: one precision/recall curve per class over the predictions of every evaluated scene of that output, with `n_gt` summed over the scenes.
+The AP in `metrics.json` is per scene and is a diagnostic. The headline AP of a run, per output `(agent_id, source)` and per class, pools every detection across scenes, as KITTI does (one curve over the whole split; [Simonelli et al. 2019](https://arxiv.org/abs/1905.12365), Sec. 1). It is not OpenCOOD's default, which sorts detections only locally ([OpenCOOD README](https://github.com/DerrickXuNu/OpenCOOD), "Test the model"); see `docs/eval-spec.md` Part C. The pooled AP is: one precision/recall curve per class over the predictions of every evaluated scene of that output, with `n_gt` summed over the scenes.
 
 1. Take, for every evaluated scene in scene-id order, the prediction rows of the output and the category from `matches.parquet` with their `status_at_<i>` (below) for the threshold, in `boxes.parquet` row order; concatenate them. `n_gt` is the sum over those scenes of the output's non-ignored ground-truth boxes of the category (`gt` rows with a status other than `ignored`).
 2. Run steps 2–5 of **AP** once over that list: sort by score descending with a stable sort (ties keep scene order, then file order), walk, envelope, area. A class whose pooled `n_gt` is 0 has no pooled AP (`null`, rendered `n/a`); a class with ground truth and no prediction has `0.0`.

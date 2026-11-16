@@ -253,6 +253,23 @@ Anchors: `coperceive/evaluation/evaluate.py::_cooperative_columns`, `coperceive/
 
 ---
 
+## Part B. The field's conventions
+
+**Being written.** The research behind this part is done: claims about OPV2V/OpenCOOD, V2XSet/V2X-ViT, V2V4Real, DAIR-V2X, KITTI, PASCAL VOC/COCO, nuScenes, Griffin and later OpenCOOD-style work were collected from papers and written documentation only (no evaluation source code, ADR 0016 §2), and every claim was re-opened by a second reader. The text is not in this commit. The facts that bear most directly on Part A, each confirmed by the second reader:
+
+- OPV2V computes IoU on the x-y plane only, for every detector ([OPV2V paper](https://arxiv.org/abs/2109.07644), Sec. V-B).
+- OpenCOOD's default evaluation sorts detection scores only locally, not over the whole test set. Its README says the OPV2V paper does not perform the global sort, and a global sort is an opt-in flag added later ([OpenCOOD README](https://github.com/DerrickXuNu/OpenCOOD), "Test the model"; [OpenCOOD PR #105](https://github.com/DerrickXuNu/OpenCOOD/pull/105); maintainer reply in [issue #101](https://github.com/DerrickXuNu/OpenCOOD/issues/101)). That "locally" means within one frame is the issue reporter's description in #101, not documentation: **unverified**.
+- OPV2V's evaluation targets are the vehicles hit by at least one LiDAR point from any connected vehicle, so ground truth is defined on the aggregated points of all connected vehicles, and collaborators outside the 70 m communication range are ignored ([OPV2V paper](https://arxiv.org/abs/2109.07644), Sec. III-B and V-B).
+- KITTI computes AP from one precision/recall curve over the whole split ([Simonelli et al. 2019](https://arxiv.org/abs/1905.12365), Sec. 1).
+
+---
+
+## Part C. Where Coperceive differs
+
+**Being written.** It will list, row by row, each place where Part A differs from Part B and which choice is intended. Defects found by this verification that are already fixed are in the CHANGELOG entries of PR #165.
+
+---
+
 ## Part D. Golden cases
 
 Each case is small enough to check with a pencil. Unless a row says otherwise: one agent `ego` at the world origin with no rotation, one pose time, class `car`, boxes 4 m long and 2 m wide given in the world frame, the default config of A.2 (IoU thresholds 0.5 and 0.7, display 0.5, score threshold 0.3). "Far" means a prediction that overlaps nothing.
