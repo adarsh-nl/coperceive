@@ -779,6 +779,13 @@ jobs:
       - name: Install x64 DMG and run smoke test on native Intel macOS
         env:
           COPERCEIVE_PRESERVE_LOGS_DIR: /tmp/intel-smoke-evidence
+          # macos-15-intel runs in a headless VM whose WKWebView returns null for WebGL
+          # vendor/renderer/shader precision ("webgl":{"renderer":null,"unmaskedRenderer":null,
+          # "vendor":null,"webgl":true,"webgl2":true}, "THREE.WebGLRenderer: null is not an
+          # object (evaluating 'e.getShaderPrecisionFormat(e.VERTEX_SHADER,e.HIGH_FLOAT).precision')").
+          # Keep all install/launch/bundled-python/sidecar/demo/API/non-WebGL UI assertions blocking,
+          # verify the visible "3D view unavailable" notice, and skip only 3D rendering/playback ratio.
+          COPERCEIVE_INTEL_VM_NO_WEBGL: "1"
         run: |
           rm -rf /tmp/intel-smoke-evidence
           mkdir -p /tmp/intel-smoke-evidence
@@ -794,6 +801,13 @@ jobs:
           cp -R "${MOUNT_DIR}/Coperceive.app" /tmp/intel-app/Coperceive.app
           hdiutil detach "${MOUNT_DIR}" || true
           bash scripts/desktop/smoke_test.sh /tmp/intel-app/Coperceive.app "${DMG_FILE}"
+      - name: Upload native Intel screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-intel-screenshots
+          path: /tmp/e2e-shots/*.png
+          if-no-files-found: ignore
       - name: Collect Intel macOS smoke evidence on failure
         if: failure()
         run: |

@@ -74,6 +74,13 @@ import PanelState from "../desktop/PanelState";
 import { PANEL_DEFINITIONS } from "../desktop/panelStates";
 import { useCameraStripMode } from "./cameraStripSetting";
 import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
+import {
+  collectWebglDiagnostics,
+  copyWebglDiagnostics,
+  formatWebglDiagnosticsText,
+  formatWebglGraphicsReadout,
+  type WebglDiagnostics,
+} from "./webglDiagnostics";
 import { SPLIT_MAX, SPLIT_MIN } from "./appearance";
 import {
   alignSeries,
@@ -1421,7 +1428,8 @@ export default function Viewer({
   });
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
-  const [webglError, setWebglError] = useState("");
+  const [webglDiag, setWebglDiag] = useState<WebglDiagnostics | null>(null);
+  const [webglCopied, setWebglCopied] = useState(false);
   const [mapInfoFor, setMapInfoFor] = useState<{ sceneId: string; info: MapInfo | null } | null>(null);
   const [mapInstall, setMapInstall] = useState<{
     busy: boolean;
@@ -2120,17 +2128,8 @@ export default function Viewer({
     if (!canvas) {
       return;
     }
-    let renderer: THREE.WebGLRenderer;
-    try {
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-    } catch (error) {
-      // No WebGL (blocked, no GPU, remote desktop): say so in the viewport instead of
-      // throwing out of the effect, which would unmount the whole page. The state is
-      // set on the next tick so the effect itself stays free of state updates.
-      const reason = error instanceof Error ? error.message : String(error);
-      void Promise.resolve().then(() => setWebglError(reason));
-      return;
-    }
+    let createdRenderer: THREE.WebGLRenderer | null = null;
+    let bloom: BloomRig;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(
       styleRef.current === "classic" ? 0x141414 : VIEWER_STYLE_TOKENS[styleRef.current].background,
@@ -2139,6 +2138,22 @@ export default function Viewer({
     camera.up.set(0, 0, 1);
     camera.position.set(40, -40, 25);
     camera.layers.enable(BLOOM_LAYER);
+    try {
+      createdRenderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+      bloom = createBloom(createdRenderer, scene, camera);
+    } catch (error) {
+      createdRenderer?.dispose();
+      // No WebGL (blocked, broken GPU driver, VM, or remote desktop): say so in the
+      // viewport with diagnostics instead of throwing out of the effect. Stage stays null
+      // so non-WebGL panels (frames, camera strip, telemetry, scores) keep working.
+      const diag = collectWebglDiagnostics(canvas, error);
+      void Promise.resolve().then(() => {
+        setWebglDiag(diag);
+        setWebglCopied(false);
+      });
+      return;
+    }
+    const renderer = createdRenderer;
     const controls = new OrbitControls(camera, canvas);
     controls.target.set(0, 0, 0);
     controls.enableDamping = true;
@@ -2213,7 +2228,6 @@ export default function Viewer({
     if (labelHost) {
       labelHost.appendChild(labelRenderer.domElement);
     }
-    const bloom = createBloom(renderer, scene, camera);
     const trailLog = new Map<string, Map<number, { x: number; y: number; z: number }>>();
     const trailLines = new Map<string, THREE.Line>();
     const leaderLines = new Map<string, THREE.Line>();
@@ -3025,7 +3039,7 @@ export default function Viewer({
   }, [sendState]);
 
   useEffect(() => {
-    if (!summary || !stageRef.current) {
+    if (!summary) {
       return;
     }
     // A scene choice changes the scene id before the new summary arrives. The old summary must
@@ -3058,8 +3072,8 @@ export default function Viewer({
       setStatus(`${summary.scene_id} at ${time} µs. ${mapNote}`);
     }
 
-    // Immediately remove hidden agents' objects and trigger immediate redraw
-    if (latestRef.current) {
+    // Immediately remove hidden agents' objects and trigger immediate redraw when WebGL stage exists
+    if (stage && latestRef.current) {
       const { frame: curFrame, types: curTypes } = latestRef.current;
       drawBoxes(stage, curFrame, curTypes, hidden, appearance, dimmedRef.current);
 
@@ -3135,37 +3149,60 @@ export default function Viewer({
         dropped(frameLoaded);
         return;
       }
-      const drawn = await drawFrame(
-        stage,
-        body,
-        types,
-        hidden,
-        appearance,
-        effectiveToken,
-        cacheRef.current,
-        () => dimmedRef.current,
-        stale,
-        (ms) => {
-          pointsMs = ms;
-        },
-        () => {
-          latestRef.current = { frame: body, types };
-        },
-      );
-      const frameDrawn = performance.now();
-      if (!drawn || stale()) {
-        dropped(frameLoaded);
-        return;
+      let frameDrawn = frameLoaded;
+      let frameRendered = frameLoaded;
+      if (stage) {
+        const drawn = await drawFrame(
+          stage,
+          body,
+          types,
+          hidden,
+          appearance,
+          effectiveToken,
+          cacheRef.current,
+          () => dimmedRef.current,
+          stale,
+          (ms) => {
+            pointsMs = ms;
+          },
+          () => {
+            latestRef.current = { frame: body, types };
+          },
+        );
+        frameDrawn = performance.now();
+        if (!drawn || stale()) {
+          dropped(frameLoaded);
+          return;
+        }
+        // latestRef moved to this frame inside drawFrame, as its points went on screen.
+        // The per-tick redraw above draws boxes from latestRef, so it must never hold a
+        // frame whose points have not arrived (over a slow tunnel the boxes ran ahead of
+        // frozen points).
+        drawnRef.current = `${summary.scene_id}|${time}`;
+        syncMotion(stage, body, types, hidden);
+        syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
+        stage.renderNow();
+        frameRendered = performance.now();
+        if (framedScene.current !== summary.scene_id) {
+          const home = orbitGoal(drawn.positions, drawn.anchor);
+          const tokens = VIEWER_STYLE_TOKENS[styleRef.current];
+          if (tokens.distanceScale !== 1) {
+            const offset = home.position.clone().sub(home.target).multiplyScalar(tokens.distanceScale);
+            home.position.copy(home.target).add(offset);
+          }
+          home.fov = tokens.fov;
+          styleDistance.current = tokens.distanceScale;
+          orbitHomeRef.current = home;
+          const snap = goalFor(modeRef.current, body, types, cameraKeyRef.current, home) ?? home;
+          applyGoal(stage.camera, stage.controls.target, snap);
+          stage.controls.enabled = modeRef.current === "orbit";
+          settleRef.current = false;
+          framedScene.current = summary.scene_id;
+        }
+      } else {
+        latestRef.current = { frame: body, types };
+        drawnRef.current = `${summary.scene_id}|${time}`;
       }
-      // latestRef moved to this frame inside drawFrame, as its points went on screen.
-      // The per-tick redraw above draws boxes from latestRef, so it must never hold a
-      // frame whose points have not arrived (over a slow tunnel the boxes ran ahead of
-      // frozen points).
-      drawnRef.current = `${summary.scene_id}|${time}`;
-      syncMotion(stage, body, types, hidden);
-      syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
-      stage.renderNow();
-      const frameRendered = performance.now();
       const cacheStats = cacheRef.current.stats;
       window.__COPERCEIVE_CACHE_STATS__ = { ...cacheStats };
       recordFrameStat({
@@ -3179,22 +3216,6 @@ export default function Viewer({
         frame_misses: cacheStats.frame_misses,
         result: "applied",
       });
-      if (framedScene.current !== summary.scene_id) {
-        const home = orbitGoal(drawn.positions, drawn.anchor);
-        const tokens = VIEWER_STYLE_TOKENS[styleRef.current];
-        if (tokens.distanceScale !== 1) {
-          const offset = home.position.clone().sub(home.target).multiplyScalar(tokens.distanceScale);
-          home.position.copy(home.target).add(offset);
-        }
-        home.fov = tokens.fov;
-        styleDistance.current = tokens.distanceScale;
-        orbitHomeRef.current = home;
-        const snap = goalFor(modeRef.current, body, types, cameraKeyRef.current, home) ?? home;
-        applyGoal(stage.camera, stage.controls.target, snap);
-        stage.controls.enabled = modeRef.current === "orbit";
-        settleRef.current = false;
-        framedScene.current = summary.scene_id;
-      }
       const shown = appearance.points
         ? body.point_sensors.reduce((sum, sensor) => {
             return hidden[sensor.agent_id] ? sum : sum + sensor.count;
@@ -3655,7 +3676,7 @@ export default function Viewer({
   }, [pick, cameraFrame, liveEvalPick]);
 
   useEffect(() => {
-    if (!summary || !stageRef.current) {
+    if (!summary) {
       return;
     }
     const stillWanted = () => summary.scene_id === sceneIdRef.current;
@@ -3678,6 +3699,10 @@ export default function Viewer({
           return;
         }
         setMapInfoFor({ sceneId: summary.scene_id, info });
+      }
+      if (!stage) {
+        setMapNote(mapNoteFor(info));
+        return;
       }
       if (info && !info.available) {
         replaceMap(stage, new ArrayBuffer(0));
@@ -5032,14 +5057,30 @@ export default function Viewer({
         />
         <div className="label-host" />
         <div className="vignette" aria-hidden="true" />
-        {webglError ? (
+        {webglDiag ? (
           <div className="webgl-missing" role="alert">
-            <strong>The 3D view needs WebGL, which this browser did not provide.</strong>
-            <p>
-              Boxes, points and the map cannot be drawn. The scene list, the timeline and the tables still
-              work. Turn on hardware acceleration or open the page in another browser.
+            <strong>
+              3D view unavailable: this computer&apos;s graphics (WebGL) could not start. Camera images, boxes and scores still work.
+            </strong>
+            <p className="webgl-readout">{formatWebglGraphicsReadout(webglDiag)}</p>
+            <p className="webgl-missing-actions">
+              <button
+                type="button"
+                className="webgl-copy-link"
+                data-testid="copy-webgl-diagnostics"
+                onClick={() => {
+                  void copyWebglDiagnostics(formatWebglDiagnosticsText(webglDiag)).then((ok) => {
+                    if (ok) {
+                      setWebglCopied(true);
+                      window.setTimeout(() => setWebglCopied(false), 2000);
+                    }
+                  });
+                }}
+              >
+                {webglCopied ? "Copied diagnostics" : "Copy diagnostics"}
+              </button>
             </p>
-            <p className="mono">{webglError}</p>
+            <p className="mono">{webglDiag.error}</p>
           </div>
         ) : null}
             {summary ? (

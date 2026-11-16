@@ -703,6 +703,21 @@ button:disabled { opacity: 0.45; cursor: not-allowed; }
   line-height: 1.45;
 }
 .webgl-missing p { margin: 8px 0 0; }
+.webgl-missing .webgl-readout { font-size: 0.78rem; color: #d6d6d0; }
+.webgl-missing .webgl-missing-actions { margin: 10px 0 0; }
+.webgl-missing .webgl-copy-link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: #8fd0b0;
+  font: inherit;
+  font-weight: 500;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.webgl-missing .webgl-copy-link:hover { color: #b5e6ce; }
+.webgl-missing .webgl-copy-link:focus-visible { outline: 2px solid #8fd0b0; outline-offset: 2px; border-radius: 3px; }
 .webgl-missing .mono { font-family: "Geist Mono Variable", ui-monospace, monospace; font-size: 0.74rem; color: #bdbdbd; }
 .status-pill { top: 10px; left: 10px; display: flex; align-items: center; gap: 8px; padding: 6px 10px; font-size: 0.8rem; }
 .status-pill i { width: 8px; height: 8px; border-radius: 99px; background: #8fd0b0; }
