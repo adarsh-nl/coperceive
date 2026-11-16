@@ -306,6 +306,9 @@ mod tests {
 
     #[test]
     fn poll_health_stops_immediately_when_process_exits() {
+        let _port_guard = crate::test_seams::PORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let port = find_free_loopback_port().expect("free port");
         let origin = format!("http://127.0.0.1:{port}");
         let start = Instant::now();
@@ -321,6 +324,9 @@ mod tests {
 
     #[test]
     fn poll_health_aborts_within_connect_timeout_after_process_exits() {
+        let _port_guard = crate::test_seams::PORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let port = find_free_loopback_port().expect("free port");
         let origin = format!("http://127.0.0.1:{port}");
         let mut checks = 0usize;
@@ -340,6 +346,9 @@ mod tests {
 
     #[test]
     fn poll_health_succeeds_on_200_ok() {
+        let _port_guard = crate::test_seams::PORT_TEST_LOCK
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
         let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind");
         let port = listener.local_addr().expect("addr").port();
         let handle = std::thread::spawn(move || {

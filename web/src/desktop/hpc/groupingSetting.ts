@@ -5,44 +5,21 @@
  * applied live in every open view.
  */
 import { useEffect, useState } from "react";
-import { getPersistentState } from "../local";
+import { getViewerPreferences, updatePersistentState } from "../local";
 import { isDatasetGrouping, type DatasetGrouping } from "./grouping";
 
 /** Fired on window when the setting changes; detail is the new grouping. */
 export const DATASET_GROUPING_EVENT = "coperceive-dataset-grouping";
 
-function controller(): { port: number; secret: string } | null {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) return null;
-  return { port: window.__COPERCEIVE_CTRL_PORT__, secret: window.__COPERCEIVE_CTRL_SECRET__ || "" };
-}
-
 export async function loadDatasetGrouping(): Promise<DatasetGrouping> {
-  const saved = await getPersistentState().catch(() => null);
+  const saved = await getViewerPreferences().catch(() => null);
   if (saved && isDatasetGrouping(saved.dataset_grouping)) return saved.dataset_grouping;
-  const ctrl = controller();
-  if (ctrl) {
-    try {
-      const response = await fetch(`http://127.0.0.1:${ctrl.port}/state`, {
-        headers: { Authorization: `Bearer ${ctrl.secret}` },
-      });
-      const state = (await response.json()) as { dataset_grouping?: unknown };
-      if (isDatasetGrouping(state.dataset_grouping)) return state.dataset_grouping;
-    } catch {
-      // Fall back to the default below.
-    }
-  }
   return "none";
 }
 
 export function saveDatasetGrouping(grouping: DatasetGrouping): void {
   window.dispatchEvent(new CustomEvent(DATASET_GROUPING_EVENT, { detail: grouping }));
-  const ctrl = controller();
-  if (!ctrl) return;
-  fetch(`http://127.0.0.1:${ctrl.port}/state`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${ctrl.secret}` },
-    body: JSON.stringify({ dataset_grouping: grouping }),
-  }).catch(() => undefined);
+  void updatePersistentState({ dataset_grouping: grouping }).catch(() => undefined);
 }
 
 /** The saved grouping, kept in step with every change made anywhere in the app. */
