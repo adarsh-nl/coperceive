@@ -27,7 +27,9 @@ class Expectation:
     * ``annotated``: ``(world agent id, frame)`` → the object ids that agent's
       annotations list at that frame;
     * ``track_ids``: object id → the scene's ``track_id`` for it;
-    * ``categories``: world class → scene class.
+    * ``categories``: world class → scene class;
+    * ``without_sweeps``: world agents whose LiDAR returns the dataset does not store
+      (Griffin's drone, for one); the point checks skip them.
     """
 
     agents: Mapping[str, str]
@@ -36,6 +38,7 @@ class Expectation:
     annotated: Mapping[tuple[str, int], tuple[int, ...]]
     track_ids: Mapping[int, str]
     categories: Mapping[str, str] = field(default_factory=dict[str, str])
+    without_sweeps: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)

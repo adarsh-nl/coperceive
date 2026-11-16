@@ -172,6 +172,10 @@ def check_frames(world: World, scene: Scene, expectation: Expectation) -> list[F
     return findings
 
 
+def _has_sensor(scene: Scene, agent_id: str, sensor_id: str) -> bool:
+    return any(s.agent_id == agent_id and s.sensor_id == sensor_id for s in scene.sensors)
+
+
 def check_sensor_poses(world: World, scene: Scene, expectation: Expectation) -> list[Finding]:
     """LiDAR and camera poses in the world: 1 cm and 0.1°, and the camera intrinsics."""
     findings: list[Finding] = []
@@ -188,6 +192,8 @@ def check_sensor_poses(world: World, scene: Scene, expectation: Expectation) -> 
             )
             for camera in agent.cameras:
                 sensor_id = expectation.cameras[(agent.agent_id, camera.sensor_id)]
+                if not _has_sensor(scene, scene_id, sensor_id):
+                    continue  # reported once below
                 findings += _pose_findings(
                     "sensor-pose",
                     agent.agent_id,
@@ -197,7 +203,20 @@ def check_sensor_poses(world: World, scene: Scene, expectation: Expectation) -> 
                     world_from_sensor(scene, scene_id, sensor_id, frame),
                 )
         for camera in agent.cameras:
-            sensor = scene.sensor(scene_id, expectation.cameras[(agent.agent_id, camera.sensor_id)])
+            sensor_id = expectation.cameras[(agent.agent_id, camera.sensor_id)]
+            if not _has_sensor(scene, scene_id, sensor_id):
+                findings.append(
+                    Finding(
+                        "sensor-pose",
+                        agent.agent_id,
+                        0,
+                        f"camera {camera.sensor_id}",
+                        f"a camera {sensor_id!r} in the scene",
+                        "not imported",
+                    )
+                )
+                continue
+            sensor = scene.sensor(scene_id, sensor_id)
             expected = (camera.fx, camera.fy, camera.cx, camera.cy, camera.width, camera.height)
             got = (
                 sensor.fx,
@@ -314,6 +333,8 @@ def check_points(world: World, scene: Scene, expectation: Expectation) -> list[F
     """
     findings: list[Finding] = []
     for agent in world.agents:
+        if agent.agent_id in expectation.without_sweeps:
+            continue
         scene_id = expectation.agents[agent.agent_id]
         times = frame_times(scene, scene_id)
         for frame in range(world.n_frames):
@@ -371,6 +392,8 @@ def check_registration(world: World, scene: Scene, expectation: Expectation) -> 
     for frame in range(world.n_frames):
         offsets: dict[int, dict[str, Array]] = {}
         for agent in world.agents:
+            if agent.agent_id in expectation.without_sweeps:
+                continue
             points, truth = _world_points(world, scene, expectation, agent.agent_id, frame)
             if points is None or len(points) != len(truth):
                 continue
@@ -435,6 +458,8 @@ def check_cameras(world: World, scene: Scene, expectation: Expectation) -> list[
             objects = {obj.object_id: obj for obj in world.objects[frame]}
             for camera in agent.cameras:
                 sensor_id = expectation.cameras[(agent.agent_id, camera.sensor_id)]
+                if not _has_sensor(scene, scene_id, sensor_id):
+                    continue  # reported by check_sensor_poses
                 sensor = scene.sensor(scene_id, sensor_id)
                 if None in (sensor.fx, sensor.fy, sensor.cx, sensor.cy):
                     continue  # reported by check_sensor_poses
