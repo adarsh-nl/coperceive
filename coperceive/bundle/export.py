@@ -8,12 +8,21 @@ frames plus the run's predictions), the poses, the repro card and the rerun
 command as text. LiDAR points and camera images are only carried when the
 dataset is on the redistributable allow list (see :mod:`coperceive.bundle.sensor`),
 the exporter opts in, and the selected frames fit the sensor-data cap.
+
+Nothing is read through a link (FOLD-03). Every scene and run folder the export
+reads is walked first with ``os.walk(followlinks=False)``; each entry is
+``lstat``-ed, and a symbolic link (to anything, including a file in the same
+scene), a FIFO, a device or a socket refuses the **whole** export with an error
+that names it. The staged files pass the same check before they are scrubbed,
+hashed and zipped, and every copy opens its source with ``O_NOFOLLOW``.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import stat
 import tempfile
 import zipfile
 from dataclasses import dataclass, field, replace
@@ -110,6 +119,92 @@ def _safe_scene_id(value: object) -> str:
     return text
 
 
+def _shown(label: str, relative: str) -> str:
+    return f"{label}/{relative}" if label and relative not in {"", "."} else (relative or label)
+
+
+def _plain_entry(path: Path, shown: str, *, directory: bool) -> os.stat_result:
+    """``lstat`` one entry: a regular file, or a real directory when ``directory``."""
+    try:
+        status = os.lstat(path)
+    except OSError as exc:
+        raise BundleExportError(
+            f"refusing to export: cannot read {shown} ({exc.strerror})"
+        ) from None
+    if stat.S_ISLNK(status.st_mode):
+        raise BundleExportError(
+            f"refusing to export: {shown} is a symbolic link. A bundle carries only "
+            "regular files; replace the link with a copy of the file it points to."
+        )
+    if directory and stat.S_ISDIR(status.st_mode):
+        return status
+    if not stat.S_ISREG(status.st_mode):
+        raise BundleExportError(f"refusing to export: {shown} is not a regular file")
+    return status
+
+
+def check_source_tree(root: Path, top: Path, label: str) -> None:
+    """Refuse ``top`` (``root`` itself or a path under it) unless every entry is plain.
+
+    ``root`` is the folder the user chose and may itself be reached through a
+    link; nothing below it may be. Each component from ``root`` down to ``top``,
+    and every entry ``os.walk(followlinks=False)`` finds under ``top``, must be a
+    regular file or a real directory whose resolved path stays inside ``root``.
+    """
+    try:
+        resolved_root = root.resolve(strict=True)
+        relative = top.relative_to(root)
+    except (OSError, ValueError):
+        raise BundleExportError(f"refusing to export: {label} is not readable") from None
+    current = root
+    for part in relative.parts:
+        current = current / part
+        _plain_entry(current, _shown(label, current.relative_to(root).as_posix()), directory=True)
+
+    def contained(path: Path, shown: str) -> None:
+        try:
+            inside = path.resolve(strict=True).is_relative_to(resolved_root)
+        except OSError:
+            inside = False
+        if not inside:
+            raise BundleExportError(f"refusing to export: {shown} resolves outside {label}")
+
+    contained(top, _shown(label, relative.as_posix()))
+    if not top.is_dir():
+        return
+
+    def walk_error(exc: OSError) -> None:
+        raise BundleExportError(
+            f"refusing to export: cannot list a folder under {label} ({exc.strerror})"
+        )
+
+    for dirpath, dirnames, filenames in os.walk(top, onerror=walk_error, followlinks=False):
+        here = Path(dirpath)
+        for name in sorted(dirnames) + sorted(filenames):
+            entry = here / name
+            shown = _shown(label, entry.relative_to(root).as_posix())
+            _plain_entry(entry, shown, directory=True)
+            contained(entry, shown)
+
+
+def _copy_regular(source: Path, destination: Path, shown: str) -> None:
+    """Copy one checked file without following a link swapped in after the walk."""
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
+    try:
+        descriptor = os.open(source, flags)
+    except OSError as exc:
+        raise BundleExportError(
+            f"refusing to export: cannot open {shown} ({exc.strerror})"
+        ) from None
+    with os.fdopen(descriptor, "rb") as handle:
+        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+            raise BundleExportError(f"refusing to export: {shown} is not a regular file")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
+        with destination.open("wb") as sink:
+            shutil.copyfileobj(handle, sink, 1024 * 1024)
+
+
 def _scene_directory(scenes_root: Path, scene_id: str) -> Path:
     candidate = scenes_root / scene_id
     try:
@@ -157,9 +252,10 @@ def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[st
         for item in cast(list[dict[str, object]], payload.get("frames", [])):
             candidates.append((_safe_scene_id(item.get("scene_id")), int(item.get("time_us", 0))))
     if not candidates:
-        for scene_dir in sorted(
-            p for p in scenes_root.iterdir() if (p / "manifest.json").is_file()
-        ):
+        for scene_dir in sorted(scenes_root.iterdir()):
+            if scene_dir.name.startswith(".") or not (scene_dir / "manifest.json").is_file():
+                continue
+            check_source_tree(scenes_root, scene_dir, "scenes")
             scene = read_scene(scene_dir, points=False)
             times = sorted({a.time_us for a in scene.annotations})
             candidates.extend((scene.scene_id, time) for time in times)
@@ -188,12 +284,9 @@ def _sensor_bytes(scene_dir: Path, scene: Scene, times: set[int]) -> int:
     for image in scene.images:
         if image.time_us not in times:
             continue
-        try:
-            path = scene_dir / _safe_image_path(image.path)
-            if path.is_file():
-                total += path.stat().st_size
-        except (BundleExportError, OSError):
-            continue
+        relative = _safe_image_path(image.path)
+        shown = f"scenes/{scene.scene_id}/{relative}"
+        total += _plain_entry(scene_dir / relative, shown, directory=False).st_size
     return total
 
 
@@ -205,14 +298,21 @@ def _plan_sensor(request: BundleExportRequest, frames: list[tuple[str, int]]) ->
     for scene_id, _time_us in frames:
         if scene_id not in scene_ids:
             scene_ids.append(scene_id)
-    first_complete = _read_complete(_scene_directory(request.scenes_root, scene_ids[0]))
-    recorded_adapter = first_complete.get("adapter")
-    generator = first_complete.get("generator")
-    policy = sensor_data_policy(
-        request.dataset_id,
-        recorded_adapter=recorded_adapter if isinstance(recorded_adapter, str) else None,
-        generator=generator if isinstance(generator, str) else None,
-    )
+    # Each scene proves itself: one demo scene must not carry another scene's
+    # sensor bytes into the bundle. The first refusal is the recorded decision.
+    policy: SensorPolicy | None = None
+    for scene_id in scene_ids:
+        complete = _read_complete(_scene_directory(request.scenes_root, scene_id))
+        recorded_adapter = complete.get("adapter")
+        generator = complete.get("generator")
+        scene_policy = sensor_data_policy(
+            request.dataset_id,
+            recorded_adapter=recorded_adapter if isinstance(recorded_adapter, str) else None,
+            generator=generator if isinstance(generator, str) else None,
+        )
+        if policy is None or (policy.allowed and not scene_policy.allowed):
+            policy = scene_policy
+    assert policy is not None
     adapter: str | None = None
     rows: list[dict[str, object]] = []
     full_scenes: dict[str, Scene] = {}
@@ -297,21 +397,19 @@ def _write_scene(
     target = work / "scenes" / scene.scene_id
     write_scene(filtered, target)
     complete = scene_dir / "COMPLETE.json"
-    if complete.is_file():
-        shutil.copy2(complete, target / "COMPLETE.json")
+    if os.path.lexists(complete):
+        (target / "COMPLETE.json").unlink(missing_ok=True)
+        _copy_regular(complete, target / "COMPLETE.json", f"scenes/{scene.scene_id}/COMPLETE.json")
     sensor_paths: set[str] = set()
     if include_sensor:
         for image in filtered.images:
             if image.time_us not in times:
                 continue
             relative = _safe_image_path(image.path)
-            source = scene_dir / relative
-            if not source.is_file():
-                staging.notes.append(f"missing image for {scene.scene_id}: {image.path}")
-                continue
-            destination = target / relative
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(source, destination)
+            shown = f"scenes/{scene.scene_id}/{relative}"
+            # A recorded image that is missing refuses the export instead of
+            # leaving a silent gap; _sensor_bytes has already lstat-ed it.
+            _copy_regular(scene_dir / relative, target / relative, shown)
             sensor_paths.add(f"scenes/{scene.scene_id}/{relative}")
         sensor_paths.add(f"scenes/{scene.scene_id}/points.bin")
         sensor_paths.add(f"scenes/{scene.scene_id}/point_index.parquet")
@@ -420,6 +518,13 @@ def _scrub_work(
     return redactions, details
 
 
+def _check_staged(work: Path, staging: _Staging) -> None:
+    """Staging holds only regular files and real folders, and lists each file."""
+    check_source_tree(work, work, "bundle")
+    for relative in staging.files:
+        _plain_entry(work / safe_member(relative), relative, directory=False)
+
+
 def rerun_command(run_id: str) -> str:
     """The text the app shows with a copy button. It is never executed here."""
     return f"coperceive eval run {run_id} --root scenes --predictions predictions"
@@ -428,7 +533,13 @@ def rerun_command(run_id: str) -> str:
 def export_bundle(request: BundleExportRequest) -> Path:
     """Write ``request.out`` and return its path. Every text file is scrubbed."""
     run_id = request.run_id
+    if not run_id or "/" in run_id or "\\" in run_id or run_id in {".", ".."}:
+        raise BundleExportError(f"unsafe run id {run_id!r}")
     run_dir = request.predictions_root / run_id
+    if not os.path.lexists(run_dir):
+        raise BundleExportError(f"no prediction run {run_id!r} under {request.predictions_root}")
+    # FOLD-03: walk everything the export reads before reading any of it.
+    check_source_tree(request.predictions_root, run_dir, "predictions")
     if not run_dir.is_dir():
         raise BundleExportError(f"no prediction run {run_id!r} under {request.predictions_root}")
     meta = read_run_meta(request.predictions_root, run_id)
@@ -442,6 +553,11 @@ def export_bundle(request: BundleExportRequest) -> Path:
     filtered = [box for box in box_rows if (box.scene_id, box.time_us) in wanted]
     if not filtered:
         raise BundleExportError("the selected frames have no predictions")
+    for scene_id in dict.fromkeys(scene_id for scene_id, _time_us in frames):
+        candidate = request.scenes_root / scene_id
+        if not os.path.lexists(candidate):
+            raise BundleExportError(f"no scene {scene_id!r} under {request.scenes_root}")
+        check_source_tree(request.scenes_root, candidate, "scenes")
     # The sensor decision (allow list, opt-in, cap) is made before any file is
     # written; an over-cap selection refuses the export rather than truncating it.
     sensor = _plan_sensor(request, frames)
@@ -492,14 +608,13 @@ def export_bundle(request: BundleExportRequest) -> Path:
         staging.files["eval/config.json"] = "eval-config"
         for scene_id, _time_us in frames:
             metrics = request.predictions_root / run_id / scene_id / "metrics.json"
-            if metrics.is_file():
-                rel = f"eval/{scene_id}/metrics.json"
-                (work / rel).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(metrics, work / rel)
+            rel = f"eval/{scene_id}/metrics.json"
+            if os.path.lexists(metrics) and rel not in staging.files:
+                shown = f"predictions/{run_id}/{scene_id}/metrics.json"
+                _copy_regular(metrics, work / rel, shown)
                 staging.files[rel] = "eval-metrics"
                 rel_pred = f"predictions/{run_id}/{scene_id}/metrics.json"
-                (work / rel_pred).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(metrics, work / rel_pred)
+                _copy_regular(metrics, work / rel_pred, shown)
                 staging.files[rel_pred] = "predictions"
         # filtered predictions
         write_run(work / "predictions", run_id, meta, filtered, force=True)
@@ -509,10 +624,9 @@ def export_bundle(request: BundleExportRequest) -> Path:
         if request.include_full_predictions:
             for name in ("run.json", BOXES_FILE):
                 source = run_dir / name
-                if source.is_file():
+                if os.path.lexists(source):
                     target = f"predictions-full/{name}"
-                    (work / target).parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(source, work / target)
+                    _copy_regular(source, work / target, f"predictions/{run_id}/{name}")
                     staging.files[target] = "full-predictions"
         # scenes: structure, GT boxes and poses always; sensors only if allowed
         for index, (scene_id, time_us) in enumerate(frames):
@@ -535,7 +649,11 @@ def export_bundle(request: BundleExportRequest) -> Path:
                         "note": "sensor data included under the redistributable-dataset allow list",
                     }
                 )
+        # Every staged file is checked like a source file before the scrubber
+        # rewrites it (a link here would be written through) and before hashing.
+        _check_staged(work, staging)
         staging.redactions, staging.redaction_details = _scrub_work(work, request.extra_markers)
+        _check_staged(work, staging)
         # manifest over every file except itself
         contents: list[Content] = []
         for rel in sorted(staging.files):
@@ -584,10 +702,12 @@ def export_bundle(request: BundleExportRequest) -> Path:
         if isinstance(sensor_doc, dict):
             document["sensor_data"] = scrub_json(sensor_doc, request.extra_markers)
         (work / MANIFEST).write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+        _plain_entry(work / MANIFEST, MANIFEST, directory=False)
+        # Exactly the manifest and the files it lists, nothing else in staging.
         with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
-            for path in sorted(work.rglob("*")):
-                if path.is_file():
-                    archive.write(path, path.relative_to(work).as_posix())
+            archive.write(work / MANIFEST, MANIFEST)
+            for item in contents:
+                archive.write(work / item.path, item.path)
     return out
 
 
