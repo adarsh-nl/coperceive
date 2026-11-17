@@ -247,19 +247,53 @@ def scrub_text(
     return out
 
 
+#: Keys whose values are credentials, after ``-`` and ``.`` are read as ``_``.
+CREDENTIAL_KEYS = frozenset(
+    {
+        "password",
+        "passwd",
+        "secret",
+        "token",
+        "api_key",
+        "apikey",
+        "access_key",
+        "private_key",
+        "authorization",
+    }
+)
+REDACTED_VALUE = "<redacted>"
+
+
+def is_credential_key(key: str) -> bool:
+    """A whole credential key, or one as a suffix after ``_``, ``-`` or ``.``.
+
+    Case-insensitive. A suffix needs the separator, so ``hf_token`` and
+    ``X-Api-Key`` match while ``tokenizer``, ``max_tokens`` and ``secretariat`` do not.
+    """
+    name = key.lower().replace("-", "_").replace(".", "_")
+    return any(name == word or name.endswith("_" + word) for word in CREDENTIAL_KEYS)
+
+
 def scrub_json(
     value: object,
     markers: tuple[str, ...] = (),
     roots: tuple[tuple[str, str], ...] = (),
 ) -> object:
-    """Scrub a decoded JSON value, including keys/strings in arbitrary schemas."""
+    """Scrub a decoded JSON value, including keys/strings in arbitrary schemas.
+
+    The value under a credential key (see :func:`is_credential_key`), whatever its
+    type and at any depth, becomes ``"<redacted>"``. Strings elsewhere keep the
+    path, host and marker scrubbing of :func:`scrub_text`.
+    """
     if isinstance(value, str):
         return scrub_text(value, markers, roots)
     if isinstance(value, list):
         return [scrub_json(item, markers, roots) for item in value]
     if isinstance(value, dict):
         return {
-            scrub_text(str(key), markers, roots): scrub_json(item, markers, roots)
+            scrub_text(str(key), markers, roots): (
+                REDACTED_VALUE if is_credential_key(str(key)) else scrub_json(item, markers, roots)
+            )
             for key, item in value.items()
         }
     return value
