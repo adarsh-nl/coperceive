@@ -330,16 +330,18 @@ APP_STDERR="${TMPDIR}/app_stderr.log"
 run_diag_eval_probe() {
     local p_port="${1:-}"
     local p_secret="${2:-}"
+    local p_ctrl_info="${3:-${CTRL_INFO_FILE:-}}"
+    local p_marker="${4:-${MARKER_FILE:-}}"
     if [ -z "${p_port}" ] || [ -z "${p_secret}" ]; then
-        if [ -f "${CTRL_INFO_FILE}" ]; then
-            p_port=$(sed -n '1p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
-            p_secret=$(sed -n '2p' "${CTRL_INFO_FILE}" 2>/dev/null || echo "")
-        elif [ -f "${MARKER_FILE}" ]; then
-            p_port=$(sed -n '4p' "${MARKER_FILE}" 2>/dev/null || echo "")
-            p_secret=$(sed -n '5p' "${MARKER_FILE}" 2>/dev/null || echo "")
+        if [ -n "${p_ctrl_info}" ] && [ -f "${p_ctrl_info}" ]; then
+            p_port=$(sed -n '1p' "${p_ctrl_info}" 2>/dev/null || echo "")
+            p_secret=$(sed -n '2p' "${p_ctrl_info}" 2>/dev/null || echo "")
+        elif [ -n "${p_marker}" ] && [ -f "${p_marker}" ]; then
+            p_port=$(sed -n '4p' "${p_marker}" 2>/dev/null || echo "")
+            p_secret=$(sed -n '5p' "${p_marker}" 2>/dev/null || echo "")
         fi
     fi
-    echo "=== Controller /eval diagnostic probe (ctrl_info_exists=$([ -f "${CTRL_INFO_FILE}" ] && echo yes || echo no), ctrl_port=${p_port:-missing}) ===" >&2
+    echo "=== Controller /eval diagnostic probe (ctrl_info_exists=$([ -n "${p_ctrl_info}" ] && [ -f "${p_ctrl_info}" ] && echo yes || echo no), ctrl_port=${p_port:-missing}) ===" >&2
     if [ -n "${p_port}" ] && [ "${p_port}" != "0" ] && [ -n "${p_secret}" ]; then
         local js_probe='(() => { const out = { readyState: document.readyState, href: window.location.href, consoleErrors: window.__COPERCEIVE_CONSOLE_ERRORS__ ?? null, lastUiError: window.__COPERCEIVE_LAST_ERROR__ ?? null, autoConnectState: window.__COPERCEIVE_AUTOCONNECT_STATE__ ?? null, scriptCount: document.scripts ? document.scripts.length : -1, bodyTextLen: document.body ? document.body.innerText.length : -1, bodyPreview: document.body ? document.body.innerText.slice(0, 300) : "" }; try { const c = document.createElement("canvas"); const gl2 = c.getContext("webgl2"); const gl = gl2 ? null : c.getContext("webgl"); const ctx = gl2 || gl; const dbg = ctx ? ctx.getExtension("WEBGL_debug_renderer_info") : null; out.webgl = { webgl2: Boolean(gl2), webgl: Boolean(gl || gl2), vendor: ctx ? ctx.getParameter(ctx.VENDOR) : null, renderer: ctx ? ctx.getParameter(ctx.RENDERER) : null, unmaskedRenderer: dbg && ctx ? ctx.getParameter(dbg.UNMASKED_RENDERER_WEBGL) : null }; } catch (e) { out.webglError = String(e); } return out; })()'
         local win
@@ -368,6 +370,65 @@ run_diag_eval_probe() {
     spctl --assess --verbose=4 --type execute "${APP_BUNDLE}" 2>&1 || true
 }
 
+wait_for_app_readiness() {
+    local label="$1"
+    local app_pid="$2"
+    local marker_file="$3"
+    local ctrl_info_file="$4"
+    local stdout_log="$5"
+    local stderr_log="$6"
+    local require_session="$7"
+    local timeout_exit_code="$8"
+    local died_exit_code="$9"
+
+    for i in {1..90}; do
+        if [ -f "${marker_file}" ]; then
+            if [ "${require_session}" = "1" ]; then
+                local m_origin m_token
+                m_origin=$(sed -n '1p' "${marker_file}" 2>/dev/null || echo "")
+                m_token=$(sed -n '2p' "${marker_file}" 2>/dev/null || echo "")
+                if [ -n "${m_origin}" ] && [ -n "${m_token}" ]; then
+                    return 0
+                fi
+            else
+                local m_port m_secret
+                m_port=$(sed -n '4p' "${marker_file}" 2>/dev/null || echo "")
+                m_secret=$(sed -n '5p' "${marker_file}" 2>/dev/null || echo "")
+                if [ -n "${m_port}" ] && [ "${m_port}" != "0" ] && [ -n "${m_secret}" ]; then
+                    return 0
+                fi
+            fi
+        fi
+        if ! kill -0 "${app_pid}" 2>/dev/null; then
+            echo "Error: ${label} process died prematurely during startup!" >&2
+            echo "=== ${label} stderr ===" >&2
+            cat "${stderr_log}" >&2 || true
+            echo "=== ${label} stdout ===" >&2
+            cat "${stdout_log}" >&2 || true
+            exit "${died_exit_code}"
+        fi
+        sleep 0.5
+    done
+
+    echo "Error: ${label} readiness signal (${marker_file}) was not complete within 45s timeout!" >&2
+    local last_phase
+    last_phase=$(grep '\[auto-connect\] state=' "${stdout_log}" 2>/dev/null | tail -n 1 || true)
+    if [ -n "${last_phase}" ]; then
+        echo "Last auto-connect phase: ${last_phase}" >&2
+    fi
+    run_diag_eval_probe "" "" "${ctrl_info_file}" "${marker_file}"
+    echo "=== Sidecar logs under ${TMPDIR} ===" >&2
+    while IFS= read -r slog; do
+        echo "--- ${slog} ---" >&2
+        tail -n 40 "${slog}" >&2 || true
+    done < <(find "${TMPDIR}" -maxdepth 3 -name 'serve-*.log' -type f 2>/dev/null | sort || true)
+    echo "=== ${label} stderr ===" >&2
+    cat "${stderr_log}" >&2 || true
+    echo "=== ${label} stdout ===" >&2
+    cat "${stdout_log}" >&2 || true
+    exit "${timeout_exit_code}"
+}
+
 echo "Starting app binary with auto-connect fixture: ${FIXTURE_ROOT}..."
 LAUNCH_START_S=$(python3 -c 'import time; print(f"{time.monotonic():.6f}")')
 COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
@@ -378,32 +439,10 @@ APP_PID=$!
 echo "App process spawned with PID ${APP_PID}"
 
 echo "Waiting for auto-connect and viewer startup (up to 45s)..."
-for i in {1..90}; do
-    if [ -f "${MARKER_FILE}" ]; then
-        break
-    fi
-    if ! kill -0 "${APP_PID}" 2>/dev/null; then
-        echo "Error: App process died prematurely during startup!" >&2
-        echo "=== App stderr ===" >&2
-        cat "${APP_STDERR}" >&2
-        echo "=== App stdout ===" >&2
-        cat "${APP_STDOUT}" >&2
-        exit 12
-    fi
-    sleep 0.5
-done
-
-if [ ! -f "${MARKER_FILE}" ]; then
-    echo "Error: Auto-connect marker file was not created within 45s timeout!" >&2
-    run_diag_eval_probe
-    echo "=== App stderr ===" >&2
-    cat "${APP_STDERR}" >&2
-    echo "=== App stdout ===" >&2
-    cat "${APP_STDOUT}" >&2
-    exit 13
-fi
+wait_for_app_readiness "Auto-connect app" "${APP_PID}" "${MARKER_FILE}" "${CTRL_INFO_FILE}" "${APP_STDOUT}" "${APP_STDERR}" 1 13 12
 MARKER_ELAPSED_S=$(python3 -c 'import time, sys; print(f"{time.monotonic() - float(sys.argv[1]):.2f}")' "${LAUNCH_START_S}")
 echo "Auto-connect marker created in ${MARKER_ELAPSED_S}s."
+grep '\[auto-connect\] state=' "${APP_STDOUT}" || true
 
 APP_ORIGIN=$(sed -n '1p' "${MARKER_FILE}")
 APP_TOKEN=$(sed -n '2p' "${MARKER_FILE}")
@@ -538,6 +577,7 @@ echo "--- First-Run Welcome Card & Demo Mode Verification (macOS) ---"
 DEMO_STATE_DIR="${TMPDIR}/demo-state"
 mkdir -p "${DEMO_STATE_DIR}"
 DEMO_MARKER="${TMPDIR}/demo_marker.txt"
+DEMO_CTRL_INFO="${TMPDIR}/demo_ctrl_info.txt"
 DEMO_STDOUT="${TMPDIR}/demo_stdout.log"
 DEMO_STDERR="${TMPDIR}/demo_stderr.log"
 
@@ -548,35 +588,14 @@ unset COPERCEIVE_PYTHON
 echo "Starting app binary on empty state dir: ${DEMO_STATE_DIR}..."
 COPERCEIVE_STATE_DIR="${DEMO_STATE_DIR}" \
 COPERCEIVE_TEST_MARKER_FILE="${DEMO_MARKER}" \
+COPERCEIVE_CTRL_INFO_FILE="${DEMO_CTRL_INFO}" \
 "${APP_EXE}" > "${DEMO_STDOUT}" 2> "${DEMO_STDERR}" &
 APP_PID=$!
 echo "Demo test app process spawned with PID ${APP_PID}"
 
-DEMO_CTRL_PORT=""
-DEMO_CTRL_SECRET=""
-for i in {1..90}; do
-    if [ -f "${DEMO_MARKER}" ]; then
-        DEMO_CTRL_PORT=$(sed -n '4p' "${DEMO_MARKER}")
-        DEMO_CTRL_SECRET=$(sed -n '5p' "${DEMO_MARKER}")
-        if [ -n "${DEMO_CTRL_PORT}" ] && [ "${DEMO_CTRL_PORT}" != "0" ] && [ -n "${DEMO_CTRL_SECRET}" ]; then
-            break
-        fi
-    fi
-    if ! kill -0 "${APP_PID}" 2>/dev/null; then
-        echo "Error: Demo test app process died during startup!" >&2
-        cat "${DEMO_STDERR}" >&2
-        cat "${DEMO_STDOUT}" >&2
-        exit 20
-    fi
-    sleep 0.5
-done
-
-if [ -z "${DEMO_CTRL_PORT}" ] || [ "${DEMO_CTRL_PORT}" = "0" ] || [ -z "${DEMO_CTRL_SECRET}" ]; then
-    echo "Error: Controller port/secret not written to ${DEMO_MARKER} within timeout!" >&2
-    cat "${DEMO_STDERR}" >&2
-    cat "${DEMO_STDOUT}" >&2
-    exit 20
-fi
+wait_for_app_readiness "Demo test app" "${APP_PID}" "${DEMO_MARKER}" "${DEMO_CTRL_INFO}" "${DEMO_STDOUT}" "${DEMO_STDERR}" 0 20 20
+DEMO_CTRL_PORT=$(sed -n '4p' "${DEMO_MARKER}")
+DEMO_CTRL_SECRET=$(sed -n '5p' "${DEMO_MARKER}")
 echo "Controller ready on port ${DEMO_CTRL_PORT}"
 
 echo "Polling for first-run library location prompt on empty state dir..."

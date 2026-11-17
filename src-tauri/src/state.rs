@@ -809,6 +809,11 @@ pub fn add_recent_root(state: &mut AppPersistentState, root: &str) {
     }
 }
 
+/// Returns true when the remembered recent-roots menu items need updating.
+pub fn recent_roots_changed(previous: &[String], updated: &[String]) -> bool {
+    previous != updated
+}
+
 fn name_ends_with_partial(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
@@ -1663,5 +1668,15 @@ pub mod tests {
         .expect("full scope should apply");
         assert!(!s.reopen_last_session);
         assert!(s.auto_next_scene);
+    }
+
+    #[test]
+    fn recent_roots_changed_skips_identical_order() {
+        let initial = vec!["/data/scene_a".to_string(), "/data/scene_b".to_string()];
+        assert!(!super::recent_roots_changed(&initial, &initial));
+
+        let reordered = vec!["/data/scene_b".to_string(), "/data/scene_a".to_string()];
+        assert!(super::recent_roots_changed(&initial, &reordered));
+        assert!(super::recent_roots_changed(&[], &initial));
     }
 }
