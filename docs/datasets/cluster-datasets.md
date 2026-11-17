@@ -100,9 +100,9 @@ user chooses per prepare, before confirming:
 ```json
 {
   "schema": "coperceive-cluster-detect-1",
-  "path": "/datasets/eemcs/ps/cv/opencood/opv2v/test",
+  "path": "/data/opv2v/test",
   "adapter": "opv2v",
-  "raw_root": "/datasets/eemcs/ps/cv/opencood/opv2v",
+  "raw_root": "/data/opv2v",
   "split": "test",
   "params": {"split": "test"},
   "licence": {
@@ -151,7 +151,7 @@ user chooses per prepare, before confirming:
 {
   "schema": "coperceive-cluster-index-1",
   "adapter": "opv2v",
-  "raw_root": "/datasets/eemcs/ps/cv/opencood/opv2v",
+  "raw_root": "/data/opv2v",
   "split": "test",
   "params": {"split": "test"},
   "licence": {"status": "unknown", "spdx": null, "notice": "…", "links": ["…"]},
@@ -224,7 +224,7 @@ Written inside every cache split directory. Atomically replaced (temp + rename).
 {
   "schema": "coperceive-cluster-dataset-cache-1",
   "adapter": "opv2v",
-  "raw_root": "/datasets/eemcs/ps/cv/opencood/opv2v",
+  "raw_root": "/data/opv2v",
   "split": "test",
   "params": {"split": "test"},
   "cache_root": "/scratch/alice/.../coperceive-cache/opv2v/3b1e2f0a9c77/test",

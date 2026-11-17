@@ -2,7 +2,7 @@
 
 Coperceive checks GitHub Releases for a newer macOS build and asks before restarting. The check is not Apple code signing. It uses a Tauri updater keypair. The private key must never be committed, pasted into a chat, or written into `state.json`, logs, or this file.
 
-The public key that used to be in `src-tauri/tauri.conf.json` matched a private key that was committed in `docs/updater-secrets.md` (commit `e7f6fef`). Treat that keypair as public. It was replaced on 2026-10-30: the current public key (minisign key id `9AB294B56FC3C444`) is in `src-tauri/tauri.conf.json`, and its private key and password exist only on Adarsh's Mac and in the GitHub Actions secrets below.
+The public key that used to be in `src-tauri/tauri.conf.json` matched a private key that was committed in `docs/updater-secrets.md` (commit `e7f6fef`). Treat that keypair as public. It was replaced on 2026-10-30: the current public key (minisign key id `9AB294B56FC3C444`) is in `src-tauri/tauri.conf.json`, and its private key and password exist only on the maintainer's Mac and in the GitHub Actions secrets below.
 
 ## What to generate
 
