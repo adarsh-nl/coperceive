@@ -439,3 +439,28 @@ def test_reserved_names_are_refused(plain_bundle: Path, tmp_path: Path, name: st
     on a case-insensitive file system."""
     bundle = _with_member(plain_bundle, tmp_path / "reserved.cpbundle", name, b"{}")
     _assert_refused_and_contained(bundle, tmp_path, "reserved name")
+
+
+@pytest.mark.parametrize(
+    ("recorded", "match"),
+    [
+        # Scene ids read from manifests are checked before they name any path.
+        ("../../escaped", "unsafe scene id"),
+        # The staged folder is named from the manifest, so it must be the folder name.
+        ("other-scene", "records scene id"),
+    ],
+)
+def test_export_refuses_a_manifest_scene_id_that_is_not_its_folder(
+    demo: Path, tmp_path: Path, recorded: str, match: str
+) -> None:
+    from coperceive.bundle import BundleExportError
+
+    manifest_path = demo / "scenes" / SCENE / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["scene_id"] = recorded
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    out = tmp_path / "out" / "shared.cpbundle"
+    with pytest.raises(BundleExportError, match=match):
+        export_bundle(_request(demo, out, dataset_id="demo", frames=f"{SCENE}@0"))
+    assert not out.exists()
+    assert not list(tmp_path.rglob("escaped*"))

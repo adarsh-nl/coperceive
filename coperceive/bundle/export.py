@@ -265,7 +265,7 @@ def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[st
             check_source_tree(scenes_root, scene_dir, "scenes")
             scene = read_scene(scene_dir, points=False)
             times = sorted({a.time_us for a in scene.annotations})
-            candidates.extend((scene.scene_id, time) for time in times)
+            candidates.extend((_safe_scene_id(scene.scene_id), time) for time in times)
     if spec.startswith("worst:"):
         return candidates[:count]
     out: list[tuple[str, int]] = []
@@ -385,6 +385,13 @@ def _write_scene(
     include_sensor: bool,
 ) -> None:
     """Write the scene with only the included frames and only the allowed sensors."""
+    # The staged folder is named from the manifest's scene id, which comes from
+    # someone else's folder: it must be the plain folder name the run refers to.
+    if scene.scene_id != _safe_scene_id(scene_dir.name):
+        raise BundleExportError(
+            f"refusing to export: scenes/{scene_dir.name}/manifest.json records scene id "
+            f"{scene.scene_id!r}, not {scene_dir.name!r}"
+        )
     filtered = replace(
         scene,
         agents=tuple(
