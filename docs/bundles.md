@@ -67,6 +67,14 @@ an error too. Links inside a scene are refused rather than copied: one rule for
 every link keeps `bundle.json` one-to-one with regular files on disk. Replace a
 link with a copy of its target to export the scene.
 
+One link is left out instead: the `raw` link that preparing a cluster scene's
+camera images (`camera_images.stage_images`) puts directly in the scene folder,
+and only when the bundle carries no sensor data. It is never followed, read,
+resolved or copied; `bundle.json` lists it under `omitted_links` by its path in
+the bundle (`scenes/<scene>/raw`), never its target, and the export review says
+"The link to the raw camera folder is not included." With sensor data opted in
+it is refused, as is a real file or folder at that path and any other link.
+
 The app's Run history has an **Export bundle…** action with the same review:
 every file with size, the total, what the scrubber removed per file, and licence
 notes. Nothing is uploaded anywhere. `--compare` and paper `figures/` are not
@@ -86,7 +94,11 @@ checks the archive again and refuses an extracted copy that has changed.
 
 Every JSON/text file in the bundle is scrubbed with the repro-card scrubber:
 the runtime user/host/home markers, personal identifiers, emails and
-secret-shaped values. The repro card is also checked against its own schema.
+secret-shaped values. In JSON files, the value under a credential-like key
+becomes `"<redacted>"` at any depth: `password`, `passwd`, `secret`, `token`,
+`api_key`, `apikey`, `access_key`, `private_key` or `authorization`, compared
+case-insensitively as the whole key or as a suffix after `_`, `-` or `.`
+(`hf_token`, `X-Api-Key`). `tokenizer` or `max_tokens` are not credential keys. The repro card is also checked against its own schema.
 The bundle contains no credentials and does not run anything from the card.
 
 ## Open
@@ -105,7 +117,9 @@ It never executes scripts, pickles or repro-card commands. The app's
 **Open bundle…** shows the run summary, scores, comparison and frames in the
 viewer; the rerun command is text with a copy button only. The viewer's jobs
 database for a bundle lives in a private temporary folder, never inside the
-extracted bundle, and every route keeps the token, CSRF and loopback-Host
+extracted bundle; the folder is removed when the server stops, and a folder
+left by a server that crashed is removed by a later open or serve once it is
+proven stale (its lock is free). Every route keeps the token, CSRF and loopback-Host
 checks of `coperceive serve`. A local copy is served only while it still
 resolves inside a library root that `open.json` records.
 
