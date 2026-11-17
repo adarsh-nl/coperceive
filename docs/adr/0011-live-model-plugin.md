@@ -11,7 +11,7 @@ Step A (ADR 0010) evaluates a run that somebody wrote: by hand, with `coperceive
 - the toolkit's own data conversion (`trans_kitti2nuscenes.py`, `generate_nuscenes_pkl.py`);
 - `scripts/griffin/griffin_to_predictions.py` to turn `results_nusc_det.json` into `boxes.parquet` through `validate_boxes` and `write_run`.
 
-The reusable pieces were the converter and the sbatch. Three more released checkpoints sit beside the vehicle one under `/datasets/eemcs/ps/cv/huggingface/griffin/ckpts/griffin_50scenes_25m/`: `drone-side/iter_33024.pth`, `early-fusion/iter_33024.pth` and `cooperative/instance_fusion/iter_33024.pth`. The toolkit also has a result-level late fusion (`tools/eval_late_fusion.sh`, `tools/result_converter/det_result_late_fusion.py`). Each would today be another sbatch and another converter.
+The reusable pieces were the converter and the sbatch. Three more released checkpoints sit beside the vehicle one under `/data/griffin/ckpts/griffin_50scenes_25m/`: `drone-side/iter_33024.pth`, `early-fusion/iter_33024.pth` and `cooperative/instance_fusion/iter_33024.pth`. The toolkit also has a result-level late fusion (`tools/eval_late_fusion.sh`, `tools/result_converter/det_result_late_fusion.py`). Each would today be another sbatch and another converter.
 
 Step B makes a model a plugin: something `coperceive` can list, check, run over scenes and, later, stream into the viewer, while the output stays an ordinary step A run so `eval run`, `report`, `compare`, the routes and the figures need no change.
 
@@ -101,7 +101,7 @@ Top-level keys, defined in the spec:
 | `resources` | `gpu`, `memory_gb`, `seconds_per_sample`, `staging_seconds`, `frame_timeout_s`, `run_timeout_s`, `grace_s`, `slurm_constraint`, `max_inflight`. |
 | `commands` | `batch` and `live` argv templates with the closed placeholder set `{python}`, `{plugin_dir}`, `{work_dir}`, `{model}`. |
 
-Installing a plugin on the HPC (Adarsh, 2026-10-18): a plugin is a pip-installable package. Its wheel is built on the login node into a local wheelhouse (`pip wheel plugins/griffin --no-deps -w ~/wheelhouse`) and installed into the `.venv` from there (`pip install --no-index --find-links ~/wheelhouse coperceive-griffin-model`); compute nodes install nothing and never reach PyPI. The Griffin plugin lives in this repository under `plugins/griffin/`; `--manifest FILE` remains the way to run a plugin that is not installed.
+Installing a plugin on the HPC (the maintainer, 2026-10-18): a plugin is a pip-installable package. Its wheel is built on the login node into a local wheelhouse (`pip wheel plugins/griffin --no-deps -w ~/wheelhouse`) and installed into the `.venv` from there (`pip install --no-index --find-links ~/wheelhouse coperceive-griffin-model`); compute nodes install nothing and never reach PyPI. The Griffin plugin lives in this repository under `plugins/griffin/`; `--manifest FILE` remains the way to run a plugin that is not installed.
 
 ### 2. Process isolation: a subprocess over stdin/stdout, containers later through Singularity
 
@@ -125,7 +125,7 @@ Ground truth is never sent; the child sees poses, calibration and sensor data on
 
 The child's environment is built from an empty map. It receives `PATH`, `HOME`, `LANG`, `LC_ALL`, `LC_CTYPE`, `TMPDIR`, `CUDA_VISIBLE_DEVICES`, `CUDA_HOME` and `NVIDIA_VISIBLE_DEVICES` when the parent has them; `LD_LIBRARY_PATH` only when the manifest says `inherit_ld_library_path: true` (the Griffin env takes CUDA 11.8 from a module that sets it); the variables named in `environment.secrets`, by name, when present; and values the parent sets itself: `PYTHONNOUSERSITE=1`, `PYTHONPATH=<plugin_dir>`, `COPERCEIVE_MODEL_WORK=<work_dir>`, `COPERCEIVE_MODEL_PROTOCOL=1`. Nothing else. Secret values never appear in `run.json`, the cache, the logs or the emitted sbatch; the parent redacts them from anything it writes.
 
-Containers: Singularity/Apptainer first, when built at all, because that is what the cluster has. `environment.container` is reserved in `spec_version` 1 and refused by `model run` until a runtime exists. Adarsh (2026-10-18): plain subprocess first, Singularity later.
+Containers: Singularity/Apptainer first, when built at all, because that is what the cluster has. `environment.container` is reserved in `spec_version` 1 and refused by `model run` until a runtime exists. the maintainer (2026-10-18): plain subprocess first, Singularity later.
 
 ### 3. Batch mode writes a step A run
 
@@ -143,13 +143,13 @@ Scenes are taken in the order `coperceive/viewdata.py` `scene_directories` retur
 
 Then `coperceive eval run ID --root ROOT --predictions PREDICTIONS` as today.
 
-A partial run (decision 6) is evaluated on its finished scenes only and is marked as such: `eval run` writes `run_status: partial` and `missing_scenes` into every `metrics.json` of that run, and `eval report` and `eval compare` print `partial: N of M scenes` under the title (Adarsh, 2026-10-18).
+A partial run (decision 6) is evaluated on its finished scenes only and is marked as such: `eval run` writes `run_status: partial` and `missing_scenes` into every `metrics.json` of that run, and `eval report` and `eval compare` print `partial: N of M scenes` under the title (the maintainer, 2026-10-18).
 
 Rejected: the plugin writing `boxes.parquet` itself (every plugin would reimplement the gate, and a Python 3.8 child would need PyArrow); a streaming Parquet writer per frame (the per-scene cache of decision 7 gives resume without a second file format).
 
 ### 4. Live mode: a session started by POST, results pushed over SSE
 
-Scope (Adarsh, 2026-10-18): step B builds batch mode only. Live mode is designed here and in the spec so that the protocol, the cache and the provenance of batch mode fit it, and it is built after batch mode works, as a step of its own. SSE stays the transport: one-way is enough for frames.
+Scope (the maintainer, 2026-10-18): step B builds batch mode only. Live mode is designed here and in the spec so that the protocol, the cache and the provenance of batch mode fit it, and it is built after batch mode works, as a step of its own. SSE stays the transport: one-way is enough for frames.
 
 `coperceive serve --model <plugin> [--model-name NAME] [--manifest FILE] [--eval-config FILE]` loads the manifest at start and adds a route family under `/api/scenes/{scene_id}/live`:
 
@@ -174,7 +174,7 @@ In the Predictions block the session appears in the run list as `run_id: "live:<
 `--slurm` writes `<out>/.slurm/<run_id>.sbatch` and prints it; `--submit` additionally runs `sbatch <file>` as an argv list. The default is emit only, because the HPC rule is to show the script before submitting. The emitted script:
 
 - `--partition=ps,main-gpu` and `--gres=gpu:1` when `resources.gpu` is true, else `ps,main-cpu`; `--mem` from `memory_gb`; `--constraint` from `slurm_constraint`; `--mail-type=END,FAIL`; logs under `~/logs/%x-%j.{out,err}`;
-- `--time` = `staging_seconds + conversion_seconds + seconds_per_sample × samples`, rounded up to the next ten minutes, doubled; the three numbers come from the manifest for the first run, and after that from the newest run of the same plugin and model under `--out` whose `provenance.timings` hold `inference_s`: `staging_s` (the rsync wall time the job measures and passes as `--staging-seconds`), `conversion_s` and `per_sample_s`, which is inference only (Adarsh, 2026-10-18: estimates from the manifest, then updated from the last run's provenance; 2026-10-19: the child reports `conversion_s` and `inference_s` in `configured`, the parent owns staging, never the whole worker time over the samples);
+- `--time` = `staging_seconds + conversion_seconds + seconds_per_sample × samples`, rounded up to the next ten minutes, doubled; the three numbers come from the manifest for the first run, and after that from the newest run of the same plugin and model under `--out` whose `provenance.timings` hold `inference_s`: `staging_s` (the rsync wall time the job measures and passes as `--staging-seconds`), `conversion_s` and `per_sample_s`, which is inference only (the maintainer, 2026-10-18: estimates from the manifest, then updated from the last run's provenance; 2026-10-19: the child reports `conversion_s` and `inference_s` in `configured`, the parent owns staging, never the whole worker time over the samples);
 - `set -euo pipefail`; `module purge` then `module load` of `environment.modules`; `SCRATCH=/local/$SLURM_JOB_ID` with the `trap` of the `CLAUDE.md` template;
 - staging with `rsync -a --files-from` of exactly the scene files and the `inputs.raw` files the selected scenes need, listed the way `scripts/griffin/stage_viewer.py` `staged_files` lists them;
 - the same `coperceive model run` without `--slurm` against the staged copy, `--work "$SCRATCH/work"`;
@@ -190,7 +190,7 @@ The parent sends `cancel`; after `grace_s` (default 10 s, manifest `resources.gr
 
 ### 7. Caching per scene under the run directory
 
-Adarsh's choice (2026-10-18): the cache lives under the run directory as `cache/`, keyed by the plugin, the model, the checkpoint MD5 and the scene.
+the maintainer's choice (2026-10-18): the cache lives under the run directory as `cache/`, keyed by the plugin, the model, the checkpoint MD5 and the scene.
 
 Location: `<predictions root>/<run_id>/cache/<plugin>/<model>/<checkpoint_md5>/<scene_id>/`. The directory holds `result.json`, the child's validated rows for the whole scene before they became `boxes.parquet`, with the `manifest_sha256`, the effective options, the `hello.environment` and the listing of the inputs the scene used (path, size, `mtime_ns`); and the scene's artefacts (`track_query/`, `det_pkl`, `det_json`, whatever `outputs.artifacts` names). `checkpoint_md5` is the digest the child reports in `hello.environment` (`none` for a model without weights); a manifest may pin it per model and a `hello` that reports another digest is a protocol violation.
 
@@ -216,19 +216,19 @@ One plugin, `griffin`, with four models, measured in the toolkit at commit `9c02
 | `instance-fusion` | `cooperative/instance_fusion/tiny_track_r50_stream_bs8_48epoch_3cls.py` | 4 | `cooperative/instance_fusion/iter_33024.pth` | `drone-side` artefact `track_query` (`read_track_query_file_root`) | `vehicle`, `fused` |
 | `late-fusion` (optional) | `cooperative/late_fusion/…` through `det_result_late_fusion.py` | none | none | both single-agent `det_pkl` artefacts | `vehicle`, `fused` |
 
-The brief said instance fusion needs the two single-agent outputs. The toolkit says otherwise: instance fusion takes the drone-side track queries that the drone-side eval config writes, and late fusion is the model that takes both detection pickles. The manifest's `depends_on` names artefacts per model, and the driver runs the dependency model first unless `--artifacts DIR` points at an earlier run's cache. Adarsh confirmed the dependency on 2026-10-18: instance fusion depends on the drone pass. Late fusion stays optional and unscheduled.
+The brief said instance fusion needs the two single-agent outputs. The toolkit says otherwise: instance fusion takes the drone-side track queries that the drone-side eval config writes, and late fusion is the model that takes both detection pickles. The manifest's `depends_on` names artefacts per model, and the driver runs the dependency model first unless `--artifacts DIR` points at an earlier run's cache. the maintainer confirmed the dependency on 2026-10-18: instance fusion depends on the drone pass. Late fusion stays optional and unscheduled.
 
 Environment: `conda: griffin` (`~/.conda/envs/griffin`), `modules: [nvidia/cuda-11.8, nvidia/cuda-11.x_cudnn-8.6]`, `inherit_ld_library_path: true`, no secrets. The worker is Python 3.8 code in `plugins/griffin/coperceive_griffin_model/`, with no `zip(strict=True)`, no `match`, no `X | Y` at runtime (job 627063 failed on exactly that).
 
 Inputs: `inputs.raw` templates for both sides' `scene_infos.json`, `calib/{sensor}.json`, `pose/{frame:06d}.json`, `label/{frame:06d}.txt` and the cameras the model uses, with `raw_agent_roots: {vehicle: vehicle-side, drone: drone-side}` and `raw_clock: {scale_us: 100000, offset_us: 0}` (`griffin.yaml` `clock.scale_us: 100000`). The label files are listed because the toolkit's `trans_kitti2nuscenes.py` reads them to build its tables; the detector's forward pass takes images and poses. The plan's Griffin task checks that claim by running one scene with its label contents replaced and comparing the boxes.
 
-How the worker answers frames: the toolkit's inference is a whole-dataset `tools/dist_eval.sh` over nuScenes-style tables, not a per-frame API, and the Agile track head is stateful within a scene (`frames: sequence`). The first version runs the toolkit once per `configure` over the requested scenes (conversion, info pkl, `tools/test.py`, as `griffin-infer.sbatch` does) and answers each `frame` from the resulting `results_nusc_det.json`. Frames are then free; the first costs the whole scene. Per-frame inference through `model.forward_test` is not attempted in step B (Adarsh, 2026-10-18): Griffin is a scene-level batch plugin, which is what the per-scene cache of decision 7 is shaped for. A `det_json` option makes the worker answer from an existing detection JSON without a GPU, which is what `model check` and the conversion tests use.
+How the worker answers frames: the toolkit's inference is a whole-dataset `tools/dist_eval.sh` over nuScenes-style tables, not a per-frame API, and the Agile track head is stateful within a scene (`frames: sequence`). The first version runs the toolkit once per `configure` over the requested scenes (conversion, info pkl, `tools/test.py`, as `griffin-infer.sbatch` does) and answers each `frame` from the resulting `results_nusc_det.json`. Frames are then free; the first costs the whole scene. Per-frame inference through `model.forward_test` is not attempted in step B (the maintainer, 2026-10-18): Griffin is a scene-level batch plugin, which is what the per-scene cache of decision 7 is shaped for. A `det_json` option makes the worker answer from an existing detection JSON without a GPU, which is what `model check` and the conversion tests use.
 
 Conversion is the rules of `scripts/griffin/griffin_to_predictions.py`: `translation` is the world (ENU) centre, `size` is nuScenes `wlh` and becomes `size_lwh = (size[1], size[0], size[2])`, `rotation` is `[qw, qx, qy, qz]`, normalised when its norm is within `1e-3` of 1 (`QUATERNION_SLACK`) and refused otherwise, `detection_name` is the category, `detection_score` the score, `frame` is `world`, and the sample token maps to `scene_id` and `time_us` through `scene.json`, `sample.json`, `BASE_US` and `STEP_US`. `run.json` carries the `score_note`, `model` and `notes` texts of the vehicle run of job 627093: the MIT notice `Copyright (c) [2025] [Jiahao Wang]` and the citation `arXiv:2503.06983`. The eval config stays the user's; the Griffin `gt_class_map` is documented in `docs/eval.md`.
 
 Acceptance: the plugin's vehicle-side run over the ten val scenes must equal job 627093's `boxes.parquet` per scene (`pa.Table.equals(check_metadata=False)`), and `eval compare` between the two runs must print `+0.000` throughout. Same checkpoint, same rules; any difference is a finding.
 
-Two checks that need no GPU (Adarsh, 2026-10-18: scrambled labels plus one known-answer fixture plugin). The scrambled-label run of one scene, with every staged `label/*.txt` replaced by one unrelated line, must give the same boxes as the normal run, which shows the detector never read the labels. The fake plugin of the tests gains a `known-answer` model that emits each requested agent's ground-truth boxes shifted by an `offset_m` option: `model run` then `eval run` must give the exactly predictable counts (offset 0: every ground-truth box a true positive; an offset beyond the matching threshold: every box a false positive and every ground truth a miss). That is the proof that the driver, the writer and step A agree, independent of any real model.
+Two checks that need no GPU (the maintainer, 2026-10-18: scrambled labels plus one known-answer fixture plugin). The scrambled-label run of one scene, with every staged `label/*.txt` replaced by one unrelated line, must give the same boxes as the normal run, which shows the detector never read the labels. The fake plugin of the tests gains a `known-answer` model that emits each requested agent's ground-truth boxes shifted by an `offset_m` option: `model run` then `eval run` must give the exactly predictable counts (offset 0: every ground-truth box a true positive; an offset beyond the matching threshold: every box a false positive and every ground truth a miss). That is the proof that the driver, the writer and step A agree, independent of any real model.
 
 ## Security review
 
@@ -261,7 +261,7 @@ Live mode (designed in decision 4 and the spec, built after batch mode works), t
 
 ## Review of 2026-10-18
 
-Adarsh answered the eleven open questions of the first draft; each answer is folded into the decision it names.
+the maintainer answered the eleven open questions of the first draft; each answer is folded into the decision it names.
 
 | # | Question | Answer | Where |
 | --- | --- | --- | --- |

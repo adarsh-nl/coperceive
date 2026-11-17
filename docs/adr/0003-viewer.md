@@ -30,7 +30,7 @@ Foxglove Studio is archived and its open-source edition was discontinued (see th
 - One scrubber.
 - Per-agent visibility.
 - A path that works behind a hub prefix and offline.
-- A licence Adarsh can ship.
+- A licence the maintainer can ship.
 
 ## Decision
 

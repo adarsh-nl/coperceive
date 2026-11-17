@@ -10,7 +10,7 @@ locally and through `model run --slurm`, writing an ordinary predictions format 
 > from the development checkout. Its contents (config file name, epoch, fusion method, voxel
 > size, weight file name), the OpenCOOD commit in the user's conda environment and every AP
 > number are **unknown** here. They are cluster checks: see
-> [What Adarsh must check on the cluster](#what-adarsh-must-check-on-the-cluster). Expected
+> [What the maintainer must check on the cluster](#what-the-maintainer-must-check-on-the-cluster). Expected
 > AP is **to be measured**, not quoted.
 
 ## Licence
@@ -167,7 +167,7 @@ Pass the archive on the command line; there is deliberately **no default and no 
 cluster path** in the plugin:
 
 ```bash
---option checkpoint=/datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip
+--option checkpoint=/data/v2xset-checkpoints/cobevt_lidar.zip
 ```
 
 The model option is required and the plugin fails with exit 1 when it is missing. The
@@ -357,7 +357,7 @@ checkpoints; neither is a claim about *this archive's* epoch/config. Quote a num
 after a cluster run of this exact checkpoint on this exact staged split, and record the run id
 and job id next to it.
 
-## What Adarsh must check on the cluster
+## What the maintainer must check on the cluster
 
 All commands below are read-only. Record the output in the task/PR (no dataset bytes, no
 checkpoint bytes in the repository).
@@ -365,10 +365,10 @@ checkpoint bytes in the repository).
 1. **Archive contents and digests** (they are unknown to this repository):
 
    ```bash
-   unzip -l /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip
-   md5sum /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip
+   unzip -l /data/v2xset-checkpoints/cobevt_lidar.zip
+   md5sum /data/v2xset-checkpoints/cobevt_lidar.zip
    # read-only: stream the weights file (.pth path from the listing) through md5sum
-   unzip -p /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip \
+   unzip -p /data/v2xset-checkpoints/cobevt_lidar.zip \
      '<weights .pth path from the listing>' | md5sum
    ```
 
@@ -389,7 +389,7 @@ checkpoint bytes in the repository).
    .venv/bin/python - <<'PY'
    import glob
    import yaml
-   paths = sorted(glob.glob("/datasets/eemcs/ps/cv/opencood/v2xset/validate/*/*/*.yaml"))[:200]
+   paths = sorted(glob.glob("/data/v2xset/validate/*/*/*.yaml"))[:200]
    poses = [yaml.safe_load(open(p, encoding="utf-8"))["lidar_pose"] for p in paths]
    print(len(poses), "poses")
    print("roll  deg: min %.6f max %.6f" % (min(p[3] for p in poses), max(p[3] for p in poses)))
@@ -406,7 +406,7 @@ checkpoint bytes in the repository).
    mode):
 
    ```bash
-   SCENE=/datasets/eemcs/ps/cv/opencood/v2xset/validate/<scene>
+   SCENE=/data/v2xset/validate/<scene>
    head -20 "$SCENE"/data_protocol.yaml
    .venv/bin/python - "$SCENE" <<'PY'
    import glob
@@ -425,9 +425,9 @@ checkpoint bytes in the repository).
    discovered YAML; the command below only prints it:
 
    ```bash
-   unzip -p /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip '*config*.yaml' \
+   unzip -p /data/v2xset-checkpoints/cobevt_lidar.zip '*config*.yaml' \
      | head -80
-   unzip -p /datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip '*config*.yaml' \
+   unzip -p /data/v2xset-checkpoints/cobevt_lidar.zip '*config*.yaml' \
      | grep -nE 'core_method|voxel_size|cav_lidar_range|root_dir|validate_dir|postprocess|target_args|score_threshold|order|max_cav'
    ```
 
@@ -473,7 +473,7 @@ checkpoint bytes in the repository).
 
    ```bash
    coperceive model run opencood --scenes SCENES --out PREDICTIONS --run-id opencood-1 \
-     --option checkpoint=/datasets/eemcs/ps/cv/opencood/v2xset_checkpoints/cobevt_lidar.zip \
+     --option checkpoint=/data/v2xset-checkpoints/cobevt_lidar.zip \
      --scene-ids SCENE_ID --slurm --submit
    ```
 
