@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import AsyncIterator, Callable, Sequence
 from pathlib import Path
+from typing import cast
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -19,6 +20,7 @@ from fastapi.responses import FileResponse, HTMLResponse, Response, StreamingRes
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 from pydantic import BaseModel, Field
+from starlette.datastructures import Headers
 
 from coperceive.app.jobs import CSRF_HEADER, confine, confine_media, list_jobs, open_db, run_job
 from coperceive.camera_images import served_candidates
@@ -179,6 +181,59 @@ class ViewSequenceRequest(BaseModel):
 
 _EXPORT_NAME = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 
+_CSRF_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+
+# The names a browser on this machine uses for a loopback server. A page served
+# from any other name (a DNS-rebinding domain, a LAN name) keeps that name in
+# its Host header even when it resolves to 127.0.0.1.
+_LOOPBACK_HOSTNAMES = ("127.0.0.1", "localhost", "[::1]")
+
+
+def _route_path(scope: dict[str, object]) -> str:
+    """The path Starlette's router matches: ``scope["path"]`` without ``root_path``.
+
+    Uvicorn puts ``--root-path`` in front of the request path and the router
+    strips it again (``starlette._utils.get_route_path``, mirrored here), so the
+    guard has to decide on the same path or a prefixed request skips it.
+    """
+    path = str(scope.get("path", ""))
+    root_path = str(scope.get("root_path", "") or "")
+    if not root_path or not path.startswith(root_path):
+        return path
+    if path == root_path:
+        return ""
+    if path[len(root_path)] == "/":
+        return path[len(root_path) :]
+    return path
+
+
+def _is_api(path: str) -> bool:
+    return path == "/api" or path.startswith("/api/")
+
+
+def _loopback_host(scope: dict[str, object], headers: Headers, port: int) -> bool:
+    """True when the one Host header names a loopback address on ``port``.
+
+    ``port`` 0 means the port the server listens on (``scope["server"]``), for a
+    server started on an ephemeral port.
+    """
+    values = headers.getlist("host")
+    if len(values) != 1:
+        return False
+    expected = port
+    if expected == 0:
+        server = scope.get("server")
+        listening = list(cast(Sequence[object], server)) if isinstance(server, tuple | list) else []
+        if len(listening) != 2 or not isinstance(listening[1], int):
+            return False
+        expected = listening[1]
+    host = values[0].strip().lower()
+    default_port = 443 if scope.get("scheme") == "https" else 80
+    for name in _LOOPBACK_HOSTNAMES:
+        if host == f"{name}:{expected}" or (expected == default_port and host == name):
+            return True
+    return False
+
 
 def create_app(
     *,
@@ -191,6 +246,7 @@ def create_app(
     media_roots: Sequence[str | Path] = (),
     allow_origin: str | None = None,
     remote: RemoteScenes | None = None,
+    loopback_port: int | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -200,6 +256,9 @@ def create_app(
     packaged page with another build directory. ``media_roots`` are directories a
     scene's image links may resolve into (a staged scene links ``<side>/camera``
     to the dataset copy); without them an image outside the scene is 400.
+    ``loopback_port`` makes every request carry a loopback Host header on that
+    port (0: the listening port); ``coperceive serve`` sets it when it has no
+    token.
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
@@ -232,11 +291,26 @@ def create_app(
     app.state.remote = remote
     static_dir = _STATIC if static is None else Path(static).resolve()
 
+    # Whether a request is `/api` is decided on the route path (`root_path`
+    # removed), the path the router serves: uvicorn puts --root-path in front of
+    # the request path, so the raw path would let every prefixed route skip the
+    # token and CSRF checks. `loopback_port` (`coperceive serve` without a token)
+    # also refuses, with a 400, every HTTP request whose Host is not 127.0.0.1,
+    # localhost or [::1] on that port, so a DNS-rebinding page cannot use the
+    # token-less API.
     @app.middleware("http")
     async def auth_and_csrf(request: Request, call_next):  # type: ignore[no-untyped-def]
+        if loopback_port is not None and not _loopback_host(
+            request.scope, request.headers, loopback_port
+        ):
+            return _json_error(
+                400,
+                "host not allowed: without a token this server answers only "
+                "127.0.0.1, localhost or [::1] on its own port",
+            )
         if request.method == "OPTIONS":
             return await call_next(request)
-        if request.url.path.startswith("/api/"):
+        if _is_api(_route_path(request.scope)):
             expected = request.app.state.token
             if expected:
                 header = request.headers.get("authorization", "")
@@ -246,7 +320,7 @@ def create_app(
                     and hmac.compare_digest(header[len(prefix) :], expected)
                 ):
                     return _json_error(401, "bearer token required")
-            if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            if request.method in _CSRF_METHODS:
                 if request.headers.get(CSRF_HEADER) != "1":
                     return _json_error(403, f"missing {CSRF_HEADER}: 1")
         return await call_next(request)
