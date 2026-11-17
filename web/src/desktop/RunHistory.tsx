@@ -26,7 +26,7 @@ import {
 } from "./runPlan";
 import { errorText } from "./errors";
 import BundlePanel from "./BundlePanel";
-import { openBundle, pickBundleFile } from "./local";
+import { openBundleViewer, pickBundleFile } from "./local";
 import {
   Facts,
   GridTable,
@@ -234,8 +234,8 @@ export default function RunHistory() {
     try {
       const file = await pickBundleFile();
       if (!file) return;
-      const opened = await openBundle(file);
-      setOpenedBundle(`Bundle checked: ${opened.manifest.title || opened.manifest.run_id}. Opening in the viewer is coming in a later version.`);
+      const opened = await openBundleViewer(file);
+      setOpenedBundle(`Opened read-only: ${opened.manifest.title || opened.manifest.run_id}.`);
     } catch (e) {
       setBundleError(errorText(e));
     }
@@ -512,7 +512,7 @@ export default function RunHistory() {
           </select>
         ) : null}
         <button type="button" className="c-secondary" onClick={() => void openBundleFile()}>
-          Check bundle…
+          Open bundle…
         </button>
         {profiles.length === 0 ? null : <div role="group" aria-label="Filter runs by state" className="c-chips">
           {FILTERS.map((item) => {

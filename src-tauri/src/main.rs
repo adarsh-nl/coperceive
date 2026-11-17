@@ -250,7 +250,9 @@ async fn bundle_preview(
     predictions_root: String,
     frames: String,
     title: String,
-    include_raw: bool,
+    dataset_id: Option<String>,
+    include_sensor_data: bool,
+    sensor_max_bytes: Option<u64>,
     include_full_predictions: bool,
     markers: Vec<String>,
 ) -> Result<serde_json::Value, String> {
@@ -261,8 +263,16 @@ async fn bundle_preview(
         "--frames".to_string(), frames,
         "--title".to_string(), title,
     ];
-    if include_raw {
-        args.push("--include-raw".to_string());
+    if let Some(dataset_id) = dataset_id {
+        args.push("--dataset-id".to_string());
+        args.push(dataset_id);
+    }
+    if include_sensor_data {
+        args.push("--include-sensor-data".to_string());
+    }
+    if let Some(cap) = sensor_max_bytes {
+        args.push("--sensor-max-bytes".to_string());
+        args.push(cap.to_string());
     }
     if include_full_predictions {
         args.push("--include-full-predictions".to_string());
@@ -284,7 +294,9 @@ async fn bundle_export(
     out: String,
     frames: String,
     title: String,
-    include_raw: bool,
+    dataset_id: Option<String>,
+    include_sensor_data: bool,
+    sensor_max_bytes: Option<u64>,
     include_full_predictions: bool,
     markers: Vec<String>,
 ) -> Result<String, String> {
@@ -296,8 +308,16 @@ async fn bundle_export(
         "--frames".to_string(), frames,
         "--title".to_string(), title,
     ];
-    if include_raw {
-        args.push("--include-raw".to_string());
+    if let Some(dataset_id) = dataset_id {
+        args.push("--dataset-id".to_string());
+        args.push(dataset_id);
+    }
+    if include_sensor_data {
+        args.push("--include-sensor-data".to_string());
+    }
+    if let Some(cap) = sensor_max_bytes {
+        args.push("--sensor-max-bytes".to_string());
+        args.push(cap.to_string());
     }
     if include_full_predictions {
         args.push("--include-full-predictions".to_string());
@@ -311,21 +331,33 @@ async fn bundle_export(
 }
 
 #[tauri::command]
-async fn bundle_open(app: tauri::AppHandle, file: String) -> Result<serde_json::Value, String> {
+async fn bundle_open(
+    app: tauri::AppHandle,
+    _state: tauri::State<'_, Arc<AppState>>,
+    file: String,
+) -> Result<serde_json::Value, String> {
     use tauri::Manager;
     let data_root = app
         .path()
         .app_data_dir()
         .map_err(|err| format!("no app data folder: {err}"))?;
-    let stdout = run_bundle_python(
-        &app,
-        &[
-            "open".to_string(),
-            file,
-            "--data-root".to_string(),
-            data_root.to_string_lossy().into_owned(),
-        ],
-    )?;
+    let mut args = vec![
+        "open".to_string(),
+        file,
+        "--data-root".to_string(),
+        data_root.to_string_lossy().into_owned(),
+    ];
+    // The recipient's local copy of an omitted scene is looked up in the
+    // library (the configured root, else the default one when it exists).
+    let library = state::load_state()
+        .library_root
+        .map(PathBuf::from)
+        .unwrap_or_else(state::default_library_root);
+    if library.is_dir() {
+        args.push("--library-root".to_string());
+        args.push(library.to_string_lossy().into_owned());
+    }
+    let stdout = run_bundle_python(&app, &args)?;
     let opened = stdout
         .lines()
         .find_map(|line| line.strip_prefix("opened "))
@@ -335,6 +367,59 @@ async fn bundle_open(app: tauri::AppHandle, file: String) -> Result<serde_json::
     let value: serde_json::Value = serde_json::from_str(&manifest)
         .map_err(|err| format!("bundle manifest is not JSON: {err}"))?;
     Ok(serde_json::json!({"root": opened, "manifest": value}))
+}
+
+#[tauri::command]
+async fn bundle_open_viewer(
+    app: tauri::AppHandle,
+    state: tauri::State<'_, Arc<AppState>>,
+    file: String,
+) -> Result<serde_json::Value, String> {
+    let opened = bundle_open(app.clone(), state.clone(), file).await?;
+    let root = opened
+        .get("root")
+        .and_then(|value| value.as_str())
+        .ok_or_else(|| "bundle open returned no root".to_string())?;
+    // The viewer serves the bundle's scenes folder; switch_data_root adds the
+    // bundle's predictions and open.json (see opened_bundle_dir).
+    let scenes = PathBuf::from(root).join("scenes");
+    switch_data_root(&app, state.inner(), scenes.clone()).await?;
+    // switch_data_root only re-points a viewer window that is already open;
+    // Open bundle… is started from Run history, often with none, so open one.
+    use tauri::Manager;
+    if app.get_webview_window("viewer").is_none() {
+        let (origin, token) = {
+            let lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+            let session = lock
+                .as_ref()
+                .ok_or_else(|| "the bundle's viewer server is not running".to_string())?;
+            (format!("http://127.0.0.1:{}", session.port), session.token.clone())
+        };
+        let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+        open_viewer_window(
+            &app,
+            &origin,
+            &token,
+            &scenes.to_string_lossy(),
+            ctrl_port,
+            state.inner(),
+            None,
+        )?;
+    }
+    Ok(opened)
+}
+
+/// The opened result bundle that `scenes_root` (`<bundles>/<sha>/scenes`) belongs
+/// to, when it is one: its folder holds the bundle's `predictions` and `open.json`.
+fn opened_bundle_dir(scenes_root: &Path, bundles_dir: &Path) -> Option<PathBuf> {
+    if scenes_root.file_name()? != "scenes" {
+        return None;
+    }
+    let bundle = scenes_root.parent()?;
+    if bundle.parent()? != bundles_dir {
+        return None;
+    }
+    bundle.join("open.json").is_file().then(|| bundle.to_path_buf())
 }
 
 fn pick_save_path_inner(
@@ -689,6 +774,17 @@ async fn switch_data_root(
         extra_args.push("--predictions".to_string());
         extra_args.push(pred_dir.to_string_lossy().into_owned());
     }
+    let opened_bundle = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|dir| opened_bundle_dir(&new_path, &dir.join("bundles")));
+    if let Some(bundle) = &opened_bundle {
+        extra_args.push("--predictions".to_string());
+        extra_args.push(bundle.join("predictions").to_string_lossy().into_owned());
+        extra_args.push("--bundle-info".to_string());
+        extra_args.push(bundle.join("open.json").to_string_lossy().into_owned());
+    }
 
     let mut new_session = SidecarSession::spawn_with_args(
         &python_bin,
@@ -738,8 +834,9 @@ async fn switch_data_root(
         }
     }
 
-    // Update state.json with new root and prepend to recent_roots
-    {
+    // Update state.json with new root and prepend to recent_roots. A shared
+    // bundle is not a library root and must not appear in Recent.
+    if opened_bundle.is_none() {
         let mut persistent = state::load_state();
         persistent.last_data_root = Some(new_path_str.clone());
         persistent.last_scene_id = None;
@@ -4387,6 +4484,7 @@ fn main() {
             bundle_preview,
             bundle_export,
             bundle_open,
+            bundle_open_viewer,
             save_exported_file,
         ])
         .on_page_load(|webview, payload| {

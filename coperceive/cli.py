@@ -9,6 +9,7 @@ import os
 import stat
 import sys
 import warnings
+import zipfile
 from pathlib import Path
 from typing import cast
 
@@ -52,7 +53,24 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_export.add_argument("-o", "--out", required=True, help="Output .cpbundle path.")
     bundle_export.add_argument("--title", default="")
     bundle_export.add_argument("--frames", default="worst:6")
-    bundle_export.add_argument("--include-raw", action="store_true")
+    bundle_export.add_argument(
+        "--dataset-id",
+        default=None,
+        help="The dataset the run was evaluated on, recorded in the bundle. A name never "
+        "allows sensor data: only a demo scene's COMPLETE.json generator marker does.",
+    )
+    bundle_export.add_argument(
+        "--include-sensor-data",
+        action="store_true",
+        help="Include LiDAR points and camera images for the included frames. Only "
+        "Coperceive demo scenes qualify, and the frames must fit the cap.",
+    )
+    bundle_export.add_argument(
+        "--sensor-max-bytes",
+        type=int,
+        default=None,
+        help="Uncompressed sensor-data cap in bytes (default 50 MiB).",
+    )
     bundle_export.add_argument("--include-full-predictions", action="store_true")
     bundle_export.add_argument(
         "--marker", action="append", default=[], help="Extra identifier to scrub."
@@ -64,7 +82,9 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_preview.add_argument("--predictions", required=True)
     bundle_preview.add_argument("--title", default="")
     bundle_preview.add_argument("--frames", default="worst:6")
-    bundle_preview.add_argument("--include-raw", action="store_true")
+    bundle_preview.add_argument("--dataset-id", default=None)
+    bundle_preview.add_argument("--include-sensor-data", action="store_true")
+    bundle_preview.add_argument("--sensor-max-bytes", type=int, default=None)
     bundle_preview.add_argument("--include-full-predictions", action="store_true")
     bundle_preview.add_argument("--marker", action="append", default=[])
     bundle_preview.set_defaults(func=_bundle_preview)
@@ -72,6 +92,14 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_open.add_argument("file")
     bundle_open.add_argument(
         "--data-root", default=None, help="App data folder for bundles/<sha>/."
+    )
+    bundle_open.add_argument(
+        "--library-root",
+        action="append",
+        default=[],
+        metavar="DIR",
+        help="The recipient's library root. A bundle without sensor data uses a matching "
+        "scene from here (same scene id, adapter and frame count). Repeatable.",
     )
     bundle_open.set_defaults(func=_bundle_open)
 
@@ -131,6 +159,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--allow-origin",
         default=None,
         help="Exact origin allowed for cross-origin requests.",
+    )
+    serve.add_argument(
+        "--bundle-info",
+        default=None,
+        metavar="PATH",
+        help="An opened result bundle's open.json. The scene summary then says whether "
+        "sensor frames are included, from the recipient's local copy, or omitted.",
     )
     serve.add_argument(
         "--remote-stream-argv",
@@ -540,6 +575,7 @@ def main(argv: list[str] | None = None) -> None:
 
 def _bundle_export(args: argparse.Namespace) -> None:
     from coperceive.bundle import BundleExportRequest, export_bundle
+    from coperceive.bundle.sensor import SENSOR_MAX_BYTES
 
     try:
         path = export_bundle(
@@ -550,7 +586,11 @@ def _bundle_export(args: argparse.Namespace) -> None:
                 out=Path(args.out),
                 title=args.title,
                 frames=args.frames,
-                include_raw=args.include_raw,
+                dataset_id=args.dataset_id,
+                include_sensor_data=args.include_sensor_data,
+                sensor_max_bytes=(
+                    SENSOR_MAX_BYTES if args.sensor_max_bytes is None else args.sensor_max_bytes
+                ),
                 include_full_predictions=args.include_full_predictions,
                 extra_markers=tuple(args.marker),
             )
@@ -559,10 +599,19 @@ def _bundle_export(args: argparse.Namespace) -> None:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
     print(f"wrote {path}")
+    with zipfile.ZipFile(path) as archive:
+        _print_omitted_links(json.loads(archive.read("bundle.json")))
+
+
+def _print_omitted_links(manifest: dict[str, object]) -> None:
+    """Say so when a prepared scene's raw camera link was left out (stderr: stdout is data)."""
+    if manifest.get("omitted_links"):
+        print("The link to the raw camera folder is not included.", file=sys.stderr)
 
 
 def _bundle_preview(args: argparse.Namespace) -> None:
     from coperceive.bundle import BundleExportRequest, preview_bundle
+    from coperceive.bundle.sensor import SENSOR_MAX_BYTES
 
     try:
         manifest = preview_bundle(
@@ -573,7 +622,11 @@ def _bundle_preview(args: argparse.Namespace) -> None:
                 out=Path(".coperceive-preview.cpbundle"),
                 title=args.title,
                 frames=args.frames,
-                include_raw=args.include_raw,
+                dataset_id=args.dataset_id,
+                include_sensor_data=args.include_sensor_data,
+                sensor_max_bytes=(
+                    SENSOR_MAX_BYTES if args.sensor_max_bytes is None else args.sensor_max_bytes
+                ),
                 include_full_predictions=args.include_full_predictions,
                 extra_markers=tuple(args.marker),
             )
@@ -581,6 +634,7 @@ def _bundle_preview(args: argparse.Namespace) -> None:
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
+    _print_omitted_links(manifest)
     print(json.dumps(manifest, indent=2))
 
 
@@ -588,13 +642,17 @@ def _bundle_open(args: argparse.Namespace) -> None:
     from coperceive.bundle import open_bundle
 
     data_root = Path(args.data_root) if args.data_root else Path.home() / ".coperceive"
+    library_roots = tuple(Path(item) for item in args.library_root)
     try:
-        opened = open_bundle(Path(args.file), data_root=data_root)
+        opened = open_bundle(Path(args.file), data_root=data_root, library_roots=library_roots)
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
     print(f"opened {opened.root}")
     print(f"run {opened.manifest.get('run_id')} schema {opened.manifest.get('schema_version')}")
+    print(f"scenes {opened.scenes_root}")
+    print(f"predictions {opened.predictions_root}")
+    print(f"report {opened.report_path}")
 
 
 def _demo_create(args: argparse.Namespace) -> None:
@@ -1226,6 +1284,7 @@ def _serve(args: argparse.Namespace) -> None:
         remote_stream_argv=stream_argv,
         remote_cache_dir=args.remote_cache_dir,
         remote_cache_bytes=args.remote_cache_bytes,
+        bundle_info=args.bundle_info,
     )
 
 

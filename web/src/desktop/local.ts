@@ -844,6 +844,10 @@ export interface BundleManifest {
   total_bytes?: number;
   licences?: Array<Record<string, string>>;
   privacy?: Record<string, unknown>;
+  /** The export's sensor decision: included only for demo scenes the exporter opted in for. */
+  sensor_data?: { status: "included" | "omitted"; reason: string; licence?: string | null; bytes?: number };
+  /** Links left out of the bundle by their path in it (a prepared scene's raw camera link). */
+  omitted_links?: string[];
 }
 
 export async function bundlePreview(
@@ -852,7 +856,9 @@ export async function bundlePreview(
   predictionsRoot: string,
   frames = "worst:6",
   title = "",
-  includeRaw = false,
+  datasetId = "",
+  includeSensorData = false,
+  sensorMaxBytes: number | null = null,
   includeFullPredictions = false,
   markers: string[] = [],
 ): Promise<BundleManifest> {
@@ -861,7 +867,9 @@ export async function bundlePreview(
   }
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<BundleManifest>("bundle_preview", {
-    runId, scenesRoot, predictionsRoot, frames, title, includeRaw, includeFullPredictions, markers,
+    runId, scenesRoot, predictionsRoot, frames, title,
+    datasetId: datasetId || null, includeSensorData, sensorMaxBytes,
+    includeFullPredictions, markers,
   });
 }
 
@@ -872,19 +880,29 @@ export async function bundleExport(
   out: string,
   frames = "worst:6",
   title = "",
-  includeRaw = false,
+  datasetId = "",
+  includeSensorData = false,
+  sensorMaxBytes: number | null = null,
   includeFullPredictions = false,
   markers: string[] = [],
 ): Promise<string> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<string>("bundle_export", {
-    runId, scenesRoot, predictionsRoot, out, frames, title, includeRaw, includeFullPredictions, markers,
+    runId, scenesRoot, predictionsRoot, out, frames, title,
+    datasetId: datasetId || null, includeSensorData, sensorMaxBytes,
+    includeFullPredictions, markers,
   });
 }
 
 export async function openBundle(file: string): Promise<{ root: string; manifest: BundleManifest }> {
   const { invoke } = await import("@tauri-apps/api/core");
   return invoke<{ root: string; manifest: BundleManifest }>("bundle_open", { file });
+}
+
+
+export async function openBundleViewer(file: string): Promise<{ root: string; manifest: BundleManifest }> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  return invoke<{ root: string; manifest: BundleManifest }>("bundle_open_viewer", { file });
 }
 
 export async function saveExportedFile(

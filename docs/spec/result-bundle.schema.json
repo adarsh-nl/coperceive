@@ -3,30 +3,214 @@
   "$id": "https://coperceive.dev/spec/result-bundle.schema.json",
   "title": "Coperceive result bundle manifest",
   "type": "object",
-  "required": ["schema", "schema_version", "created_utc", "app_version", "title", "run_id", "contents"],
+  "required": [
+    "schema",
+    "schema_version",
+    "created_utc",
+    "app_version",
+    "title",
+    "run_id",
+    "contents",
+    "rerun_command",
+    "sensor_data"
+  ],
   "properties": {
-    "schema": {"const": "coperceive-result-bundle"},
-    "schema_version": {"type": "integer", "minimum": 1},
-    "created_utc": {"type": "string"},
-    "app_version": {"type": "string"},
-    "title": {"type": "string"},
-    "run_id": {"type": "string"},
+    "schema": {
+      "const": "coperceive-result-bundle"
+    },
+    "schema_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "created_utc": {
+      "type": "string"
+    },
+    "app_version": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9._-]+$"
+    },
+    "omitted_links": {
+      "description": "Links left out of the bundle and never followed: a prepared cluster scene's raw camera link, by its path in the bundle (never its target). Only when sensor data is omitted.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^scenes/[A-Za-z0-9._-]+/raw$",
+        "not": {
+          "pattern": "^scenes/\\.{1,2}/"
+        }
+      }
+    },
     "contents": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["path", "sha256", "size", "kind"],
+        "required": [
+          "path",
+          "sha256",
+          "size",
+          "kind"
+        ],
         "properties": {
-          "path": {"type": "string"},
-          "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
-          "size": {"type": "integer", "minimum": 0},
-          "kind": {"type": "string"}
+          "path": {
+            "type": "string",
+            "description": "bundle.json and open.json (any case) are reserved: Coperceive writes them.",
+            "not": {
+              "pattern": "^(?:[Bb][Uu][Nn][Dd][Ll][Ee]|[Oo][Pp][Ee][Nn])\\.[Jj][Ss][Oo][Nn]$"
+            }
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "kind": {
+            "type": "string"
+          }
         },
         "additionalProperties": false
       }
     },
-    "licences": {"type": "array"},
-    "privacy": {"type": "object"}
+    "licences": {
+      "type": "array"
+    },
+    "privacy": {
+      "type": "object"
+    },
+    "rerun_command": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sensor_data": {
+      "type": "object",
+      "required": [
+        "status",
+        "reason",
+        "bytes",
+        "max_bytes",
+        "scenes"
+      ],
+      "properties": {
+        "status": {
+          "enum": [
+            "included",
+            "omitted"
+          ]
+        },
+        "reason": {
+          "type": "string"
+        },
+        "licence": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "licence_url": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dataset_id": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "dataset_label": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[^/\\\\]+$"
+        },
+        "adapter": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^[A-Za-z0-9._-]+$"
+        },
+        "bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "max_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "scenes": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": [
+              "scene_id",
+              "frame_count",
+              "frames_included"
+            ],
+            "properties": {
+              "scene_id": {
+                "type": "string",
+                "pattern": "^[A-Za-z0-9._-]+$"
+              },
+              "frame_count": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "frames_included": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                  "type": "integer"
+                }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "included"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "licence"
+            ],
+            "properties": {
+              "licence": {
+                "type": "string",
+                "minLength": 1
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          }
+        }
+      ]
+    }
   },
   "additionalProperties": false
 }

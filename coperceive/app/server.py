@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import dataclasses
 import functools
 import hmac
 import io
@@ -25,6 +27,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from starlette.datastructures import Headers
 
+from coperceive.app import bundle_jobs
 from coperceive.app.jobs import (
     CSRF_HEADER,
     JobsDatabaseError,
@@ -431,6 +434,7 @@ def create_app(
     allow_origin: str | None = None,
     remote: RemoteScenes | None = None,
     loopback_port: int | None = None,
+    bundle_info: str | Path | None = None,
 ) -> FastAPI:
     """The app over ``root``.
 
@@ -443,14 +447,31 @@ def create_app(
     ``loopback_port`` makes every request carry a loopback Host header on that
     port (0: the listening port); ``coperceive serve`` sets it when it has no
     token.
+    ``bundle_info`` is an opened result bundle's ``open.json``: its per-scene
+    sensor decision (included, from the recipient's local copy, or omitted with
+    the dataset-licence note) is added to the scene summary, and the viewer says so.
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
+    # A bundle is read-only: its viewer jobs database lives in a private temp
+    # folder, never inside the extracted bundle or the library. The folder is
+    # removed at shutdown; stale ones are swept when the next one is made.
+    jobs_folder = bundle_jobs.create() if bundle_info is not None else None
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            if jobs_folder is not None:
+                jobs_folder.remove()
+
     app = FastAPI(
         title="coperceive",
         version="0.0.0",
         root_path=root_path,
         description="Local cooperative-perception data app.",
+        lifespan=lifespan,
     )
     if allow_origin:
         app.add_middleware(
@@ -462,8 +483,12 @@ def create_app(
         )
     app.state.root = root_path_obj
     app.state.token = token
-    app.state.db_path = root_path_obj / "jobs.sqlite"
+    app.state.db_path = (
+        jobs_folder.database if jobs_folder is not None else root_path_obj / "jobs.sqlite"
+    )
     app.state.scene_cache = _SceneCache()
+    # The recipient's own copy of a bundle's scene (sensor bytes only), read in place.
+    app.state.bundle_local_cache = _SceneCache()
     app.state.maps = _maps_root(root_path_obj, maps)
     app.state.map_cache = {}
     app.state.predictions = predictions_root(
@@ -473,6 +498,7 @@ def create_app(
     # A cluster dataset viewed over SSH: `root` is the local mirror, the scenes
     # and their point sweeps and images come from `remote` (docs/datasets/cluster-datasets.md).
     app.state.remote = remote
+    app.state.bundle_info = _load_bundle_info(bundle_info)
     # Bounded per-request timings for the viewer (GET /api/stream-stats); the
     # data plane is the sidecar -> StreamClient -> streamer, not Rust.
     app.state.stream_stats = _StreamHttpStats()
@@ -548,7 +574,7 @@ def create_app(
 
     @app.get("/api/scenes/{scene_id}")
     def scene_summary(scene_id: str) -> dict[str, object]:
-        scene = _cached_scene(app, scene_id)
+        scene, local_sensor = _view_scene(app, scene_id)
         body = summarize(scene)
         if app.state.remote is not None:
             body["point_sweeps"] = len(_remote_call(lambda: app.state.remote.sweeps(scene_id)))
@@ -556,9 +582,12 @@ def create_app(
             mirrored = _remote_call(lambda: app.state.remote.ensure(scene_id))
             body["seen_by"] = seen_by_for_scene(scene, adapter_name(mirrored))
             return body
-        directory = _scene_dir(app.state.root, scene_id)
+        directory = local_sensor or _scene_dir(app.state.root, scene_id)
         body["images_staged"] = _images_staged(app, scene, directory)
         body["seen_by"] = seen_by_for_scene(scene, adapter_name(directory))
+        bundle = _bundle_scene_view(app, scene_id)
+        if bundle is not None:
+            body["bundle"] = bundle
         return body
 
     @app.get("/api/scenes/{scene_id}/frame")
@@ -567,7 +596,8 @@ def create_app(
         stats.begin()
         started = time.perf_counter()
         try:
-            document = frame_document(_cached_scene(app, scene_id), time_us)
+            scene, _local = _view_scene(app, scene_id)
+            document = frame_document(scene, time_us)
             if app.state.remote is not None:
                 document["point_sensors"] = [
                     {"agent_id": sweep.agent_id, "sensor_id": sweep.sensor_id, "count": sweep.count}
@@ -657,13 +687,13 @@ def create_app(
         width: int | None,
         full: bool,
     ) -> Response:
-        scene = _cached_scene(app, scene_id)
+        scene, local = _view_scene(app, scene_id)
+        scene_dir = local or _scene_dir(app.state.root, scene_id)
         relative = image_path(scene, time_us, agent_id, sensor_id)
         if relative is None:
             raise HTTPException(status_code=404, detail="image not found")
         if app.state.remote is not None:
             return _remote_image(app, scene_id, relative, width=width, full=full)
-        scene_dir = _scene_dir(app.state.root, scene_id)
         # A cluster scene's preview falls back to its original, and `full` asks
         # for the original (docs/datasets/cluster-datasets.md, "Camera images").
         target: Path | None = None
@@ -720,7 +750,7 @@ def create_app(
                     return Response(status_code=499)
                 served = len(payload)
                 return Response(content=payload, media_type="application/octet-stream")
-            scene = await asyncio.to_thread(_cached_scene, app, scene_id)
+            scene, _local = await asyncio.to_thread(_view_scene, app, scene_id)
             blob = frame_points(scene, time_us, agent_id, sensor_id)
             served = len(blob)
             return Response(content=blob, media_type="application/octet-stream")
@@ -1162,6 +1192,110 @@ def _remote_image(
         except (OSError, ValueError, Image.UnidentifiedImageError):
             pass
     return Response(content=data, media_type=_IMAGE_TYPES.get(suffix, "application/octet-stream"))
+
+
+def _load_bundle_info(path: str | Path | None) -> dict[str, object] | None:
+    """The opened bundle's ``open.json``, or None when the app is not serving a bundle.
+
+    An unreadable or older report is not a server error: the viewer simply has
+    no bundle note, which is the same as any dataset root.
+    """
+    if path is None:
+        return None
+    try:
+        payload: object = json.loads(Path(path).read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(payload, dict) or payload.get("schema") != "coperceive-bundle-open":
+        return None
+    return dict(payload)
+
+
+def _bundle_scene_view(app: FastAPI, scene_id: str) -> dict[str, object] | None:
+    """The opened bundle's sensor decision for one scene, if it names that scene."""
+    info = getattr(app.state, "bundle_info", None)
+    if not isinstance(info, dict):
+        return None
+    dataset = info.get("dataset")
+    dataset = dataset if isinstance(dataset, dict) else {}
+    scenes = info.get("scenes")
+    if not isinstance(scenes, list):
+        return None
+    for row in scenes:
+        if not isinstance(row, dict) or row.get("scene_id") != scene_id:
+            continue
+        licence = dataset.get("licence")
+        return {
+            "sensor_data": row.get("sensor_data", "omitted"),
+            "dataset": dataset.get("label") or dataset.get("id"),
+            "licence": licence if isinstance(licence, str) else None,
+            "label": row.get("label"),
+            "note": row.get("note"),
+            "local_copy": row.get("local_copy"),
+            "title": info.get("title"),
+            "run_id": info.get("run_id"),
+            "rerun_command": info.get("rerun_command"),
+        }
+    return None
+
+
+def _bundle_local_scene(app: FastAPI, scene_id: str) -> Path | None:
+    """A local-copy bundle reads sensors from the recipient's own scene, in place.
+
+    ``open.json`` records the path only after ``open_bundle`` checked it resolves
+    inside a library root. Here it must still be an absolute scene folder with
+    the same scene id, outside the served bundle, and still resolve inside one
+    of the library roots ``open.json`` records (a link swapped in since is refused).
+    """
+    view = _bundle_scene_view(app, scene_id)
+    if view is None or view.get("sensor_data") != "local-copy":
+        return None
+    raw = view.get("local_copy")
+    if not isinstance(raw, str) or not raw or not Path(raw).is_absolute():
+        return None
+    try:
+        resolved = Path(raw).resolve(strict=True)
+        manifest = json.loads((resolved / "manifest.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(manifest, dict) or manifest.get("scene_id") != scene_id:
+        return None
+    if resolved.is_relative_to(app.state.root):
+        return None
+    info = app.state.bundle_info
+    recorded = info.get("library_roots") if isinstance(info, dict) else None
+    roots: list[Path] = []
+    for item in recorded if isinstance(recorded, list) else []:
+        if isinstance(item, str) and Path(item).is_absolute():
+            try:
+                roots.append(Path(item).resolve(strict=True))
+            except OSError:
+                continue
+    if not any(resolved.is_relative_to(root) for root in roots):
+        return None
+    return resolved
+
+
+def _view_scene(app: FastAPI, scene_id: str) -> tuple[Scene, Path | None]:
+    """The scene the viewer shows, and the folder its sensor files come from.
+
+    For a bundle whose sensor data comes from the recipient's local copy, the
+    bundle stays the source of truth: its poses, boxes and frames, with only the
+    local copy's LiDAR sweeps and camera rows at those frames. Otherwise this is
+    the cached scene, with ``None`` (the scene's own folder).
+    """
+    scene = _cached_scene(app, scene_id)
+    local = _bundle_local_scene(app, scene_id)
+    if local is None:
+        return scene, None
+    sensors: Scene = app.state.bundle_local_cache.load(local)
+    times = {pose.time_us for agent in scene.agents for pose in agent.poses}
+    merged = dataclasses.replace(
+        scene,
+        point_clouds=tuple(cloud for cloud in sensors.point_clouds if cloud.time_us in times),
+        images=tuple(image for image in sensors.images if image.time_us in times),
+    )
+    return merged, local
 
 
 def _predictions_root(app: FastAPI) -> Path:

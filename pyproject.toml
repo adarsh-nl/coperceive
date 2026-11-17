@@ -51,6 +51,7 @@ dev = [
     "playwright>=1.49",
     "types-PyYAML>=6",
     "matplotlib>=3.8",
+    "jsonschema>=4.23",
 ]
 
 [project.scripts]

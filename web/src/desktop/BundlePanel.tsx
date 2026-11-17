@@ -22,7 +22,9 @@ export default function BundlePanel({
   const [predictionsRoot, setPredictionsRoot] = useState("");
   const [frames, setFrames] = useState("worst:6");
   const [title, setTitle] = useState("");
-  const [includeRaw, setIncludeRaw] = useState(false);
+  const [datasetId, setDatasetId] = useState("");
+  const [includeSensor, setIncludeSensor] = useState(false);
+  const [sensorMaxBytes, setSensorMaxBytes] = useState("");
   const [includeFull, setIncludeFull] = useState(false);
   const [manifest, setManifest] = useState<BundleManifest | null>(null);
   const [error, setError] = useState("");
@@ -37,7 +39,8 @@ export default function BundlePanel({
       setManifest(
         await bundlePreview(
           runId, scenesRoot.trim(), predictionsRoot.trim(), frames, title,
-          includeRaw, includeFull, markers,
+          datasetId.trim(), includeSensor,
+          sensorMaxBytes.trim() ? Number(sensorMaxBytes) : null, includeFull, markers,
         ),
       );
     } catch (caught) {
@@ -57,7 +60,8 @@ export default function BundlePanel({
       setSaved(
         await bundleExport(
           runId, scenesRoot.trim(), predictionsRoot.trim(), chosen, frames, title,
-          includeRaw, includeFull, markers,
+          datasetId.trim(), includeSensor,
+          sensorMaxBytes.trim() ? Number(sensorMaxBytes) : null, includeFull, markers,
         ),
       );
     } catch (caught) {
@@ -80,13 +84,15 @@ export default function BundlePanel({
       <div style={field}><label style={label}>Predictions folder</label><input style={input} value={predictionsRoot} onChange={(e) => setPredictionsRoot(e.target.value)} placeholder="/data/predictions" /></div>
       <div style={field}><label style={label}>Frames</label><input style={input} value={frames} onChange={(e) => setFrames(e.target.value)} /></div>
       <div style={field}><label style={label}>Title</label><input style={input} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
+      <div style={field}><label style={label}>Dataset id (optional, recorded in the bundle)</label><input style={input} value={datasetId} onChange={(e) => setDatasetId(e.target.value)} placeholder="never inferred from a name" /></div>
+      <label style={{ display: "flex", gap: "6px", fontSize: "0.8rem" }}>
+        <input type="checkbox" checked={includeSensor} onChange={(e) => setIncludeSensor(e.target.checked)} />
+        Include sensor data (Coperceive demo scenes only)
+      </label>
       <label style={{ display: "flex", gap: "6px", fontSize: "0.8rem" }}>
         <input type="checkbox" checked={includeFull} onChange={(e) => setIncludeFull(e.target.checked)} /> Include full predictions
       </label>
-      <label style={{ display: "flex", gap: "6px", fontSize: "0.8rem" }}>
-        <input type="checkbox" checked={includeRaw} onChange={(e) => setIncludeRaw(e.target.checked)} /> Include raw sensor files for selected frames
-      </label>
-      {includeRaw ? <p style={{ color: "#d29922", fontSize: "0.8rem" }}>Check the dataset licence before sharing raw data.</p> : null}
+      <div style={field}><label style={label}>Sensor-data cap (bytes, optional)</label><input style={input} value={sensorMaxBytes} onChange={(e) => setSensorMaxBytes(e.target.value)} placeholder="default 50 MiB" /></div>
       <div style={{ display: "flex", gap: "8px" }}>
         <button type="button" style={button} disabled={busy || !scenesRoot.trim() || !predictionsRoot.trim()} onClick={() => void preview()}>
           {busy ? "Preparing…" : "Review bundle"}
@@ -104,6 +110,16 @@ export default function BundlePanel({
                 <li key={item.file}>{item.file} — {item.kind} identifiers removed</li>
               ))}
             </ul>
+          ) : null}
+          {manifest.sensor_data ? (
+            <div data-testid="bundle-sensor-decision">
+              {manifest.sensor_data.status === "included"
+                ? `Sensor data included (licence: ${manifest.sensor_data.licence ?? "recorded"}, ${manifest.sensor_data.bytes ?? 0} bytes).`
+                : `Sensor data not included: ${manifest.sensor_data.reason}.`}
+            </div>
+          ) : null}
+          {manifest.omitted_links && manifest.omitted_links.length > 0 ? (
+            <div data-testid="bundle-omitted-links">The link to the raw camera folder is not included.</div>
           ) : null}
           {manifest.licences && manifest.licences.length > 0 ? <div>Licence notes: {JSON.stringify(manifest.licences)}</div> : <div>No raw data included.</div>}
           <ul style={{ maxHeight: "10rem", overflow: "auto", paddingLeft: "1rem" }}>
