@@ -844,6 +844,8 @@ export interface BundleManifest {
   total_bytes?: number;
   licences?: Array<Record<string, string>>;
   privacy?: Record<string, unknown>;
+  /** The export's sensor decision: included only for demo scenes the exporter opted in for. */
+  sensor_data?: { status: "included" | "omitted"; reason: string; licence?: string | null; bytes?: number };
 }
 
 export async function bundlePreview(

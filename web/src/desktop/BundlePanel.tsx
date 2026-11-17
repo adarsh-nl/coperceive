@@ -1,13 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 /** Export review for one result bundle. Nothing is written until Save. */
 import { useState } from "react";
-import {
-  bundleExport,
-  bundlePreview,
-  bundleSensorPolicy,
-  pickSavePath,
-  type BundleManifest,
-} from "./local";
+import { bundleExport, bundlePreview, pickSavePath, type BundleManifest } from "./local";
 import { errorText } from "./errors";
 
 const field = { marginBottom: "0.6rem" } as const;
@@ -30,7 +24,6 @@ export default function BundlePanel({
   const [title, setTitle] = useState("");
   const [datasetId, setDatasetId] = useState("");
   const [includeSensor, setIncludeSensor] = useState(false);
-  const [sensorPolicy, setSensorPolicy] = useState<{ allowed: boolean; licence: string | null; dataset_label: string | null; reason: string } | null>(null);
   const [sensorMaxBytes, setSensorMaxBytes] = useState("");
   const [includeFull, setIncludeFull] = useState(false);
   const [manifest, setManifest] = useState<BundleManifest | null>(null);
@@ -91,20 +84,10 @@ export default function BundlePanel({
       <div style={field}><label style={label}>Predictions folder</label><input style={input} value={predictionsRoot} onChange={(e) => setPredictionsRoot(e.target.value)} placeholder="/data/predictions" /></div>
       <div style={field}><label style={label}>Frames</label><input style={input} value={frames} onChange={(e) => setFrames(e.target.value)} /></div>
       <div style={field}><label style={label}>Title</label><input style={input} value={title} onChange={(e) => setTitle(e.target.value)} /></div>
-      <div style={field}>
-        <label style={label}>Dataset id (for sensor-data licence)</label>
-        <input style={input} value={datasetId} onChange={(e) => {
-          setDatasetId(e.target.value);
-          setSensorPolicy(null);
-          if (e.target.value.trim()) void bundleSensorPolicy(e.target.value.trim()).then(setSensorPolicy).catch(() => setSensorPolicy(null));
-        }} placeholder="demo, griffin (never inferred)" />
-        {sensorPolicy ? <div style={{ fontSize: "0.75rem", color: sensorPolicy.allowed ? "var(--text-subtle)" : "var(--danger)" }}>
-          {sensorPolicy.allowed ? `Licence: ${sensorPolicy.licence ?? "recorded"}` : sensorPolicy.reason}
-        </div> : null}
-      </div>
+      <div style={field}><label style={label}>Dataset id (optional, recorded in the bundle)</label><input style={input} value={datasetId} onChange={(e) => setDatasetId(e.target.value)} placeholder="never inferred from a name" /></div>
       <label style={{ display: "flex", gap: "6px", fontSize: "0.8rem" }}>
-        <input type="checkbox" checked={includeSensor} disabled={!sensorPolicy?.allowed} onChange={(e) => setIncludeSensor(e.target.checked)} />
-        Include sensor data{sensorPolicy?.allowed && sensorPolicy.licence ? ` (licence: ${sensorPolicy.licence})` : ""}
+        <input type="checkbox" checked={includeSensor} onChange={(e) => setIncludeSensor(e.target.checked)} />
+        Include sensor data (Coperceive demo scenes only)
       </label>
       <label style={{ display: "flex", gap: "6px", fontSize: "0.8rem" }}>
         <input type="checkbox" checked={includeFull} onChange={(e) => setIncludeFull(e.target.checked)} /> Include full predictions
@@ -127,6 +110,13 @@ export default function BundlePanel({
                 <li key={item.file}>{item.file} — {item.kind} identifiers removed</li>
               ))}
             </ul>
+          ) : null}
+          {manifest.sensor_data ? (
+            <div data-testid="bundle-sensor-decision">
+              {manifest.sensor_data.status === "included"
+                ? `Sensor data included (licence: ${manifest.sensor_data.licence ?? "recorded"}, ${manifest.sensor_data.bytes ?? 0} bytes).`
+                : `Sensor data not included: ${manifest.sensor_data.reason}.`}
+            </div>
           ) : null}
           {manifest.licences && manifest.licences.length > 0 ? <div>Licence notes: {JSON.stringify(manifest.licences)}</div> : <div>No raw data included.</div>}
           <ul style={{ maxHeight: "10rem", overflow: "auto", paddingLeft: "1rem" }}>
