@@ -336,14 +336,30 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
     return tuple(out)
 
 
+#: The tables ``write_scene`` writes for a scene that are not sensor data
+#: (lower case). Every other member under ``scenes/`` is LiDAR or camera data.
+SCENE_STRUCTURE_FILES = frozenset(
+    {
+        "manifest.json",
+        "complete.json",
+        "poses.parquet",
+        "annotations.parquet",
+        "objects.parquet",
+        "images.parquet",
+    }
+)
+
+
 def _is_sensor_path(path: str) -> bool:
-    """Sensor bytes by path, never by the bundle-supplied ``kind``."""
-    return (
-        path.endswith("/points.bin")
-        or path.endswith("/point_index.parquet")
-        or "/agents/" in path
-        and path.endswith((".png", ".jpg", ".jpeg", ".webp"))
-    )
+    """Sensor bytes by path, never by the bundle-supplied ``kind``.
+
+    Any member under ``scenes/`` that is not one of a scene's own tables counts,
+    whatever its case, suffix or folder: points blobs, point indexes and images.
+    """
+    parts = path.split("/")
+    if parts[0].lower() != "scenes":
+        return False
+    return not (len(parts) == 3 and parts[2].lower() in SCENE_STRUCTURE_FILES)
 
 
 def check_zip_entry(info: zipfile.ZipInfo) -> None:

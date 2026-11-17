@@ -250,7 +250,8 @@ def test_open_cap_refuses_before_extracting(included: Path, tmp_path: Path) -> N
 def test_open_cap_counts_sensor_files_by_path_not_by_declared_kind(
     included: Path, tmp_path: Path
 ) -> None:
-    """Relabelled sensor files (kind and status say none) still count against the cap."""
+    """Relabelled sensor files (kind and status say none) are still refused before extracting:
+    a bundle that says its sensor data is omitted may hold no sensor file at all."""
 
     def relabel(manifest: dict[str, object]) -> None:
         for item in manifest["contents"]:  # type: ignore[union-attr]
@@ -260,7 +261,7 @@ def test_open_cap_counts_sensor_files_by_path_not_by_declared_kind(
 
     relabelled = _rewrite_manifest(included, tmp_path / "relabelled.cpbundle", relabel)
     data = tmp_path / "data"
-    with pytest.raises(BundleError, match="sensor-data cap"):
+    with pytest.raises(BundleError, match="sensor data is omitted"):
         open_bundle(relabelled, data_root=data, limits=OpenLimits(max_sensor_bytes=1024))
     assert _files(data) == []
 
@@ -492,3 +493,76 @@ def test_a_link_in_an_unrelated_scene_does_not_refuse_the_export(
         names = archive.namelist()
     assert f"scenes/{SCENE}/manifest.json" in names
     assert not [name for name in names if "zz-other" in name]
+
+
+# every image or point member counts, whatever its case or folder ------------
+
+
+def _move_sensor_members(
+    source: Path, dest: Path, rename: Callable[[str], str], *, relabel: bool
+) -> tuple[Path, int]:
+    """Rename the bundle's camera images; with ``relabel``, also call them structure."""
+    renamed: dict[str, str] = {}
+    with zipfile.ZipFile(source) as original, zipfile.ZipFile(dest, "w") as target:
+        manifest = json.loads(original.read("bundle.json"))
+        for item in manifest["contents"]:
+            if item["kind"] == "sensor-image":
+                renamed[item["path"]] = rename(item["path"])
+                item["path"] = renamed[item["path"]]
+            if relabel and str(item["kind"]).startswith("sensor-"):
+                item["kind"] = "scene-structure"
+        if relabel:
+            dropped = {
+                item["path"]
+                for item in manifest["contents"]
+                if item["path"].endswith(("points.bin", "point_index.parquet"))
+            }
+            manifest["contents"] = [i for i in manifest["contents"] if i["path"] not in dropped]
+            manifest["sensor_data"].update(status="omitted", bytes=0)
+        else:
+            dropped = set()
+        for info in original.infolist():
+            if info.filename == "bundle.json" or info.filename in dropped:
+                continue
+            target.writestr(renamed.get(info.filename, info.filename), original.read(info.filename))
+        target.writestr("bundle.json", json.dumps(manifest))
+    image_bytes = sum(
+        int(item["size"]) for item in manifest["contents"] if item["path"] in renamed.values()
+    )
+    return dest, image_bytes
+
+
+RENAMES: dict[str, Callable[[str], str]] = {
+    "upper-case suffix": lambda path: path.rsplit(".", 1)[0] + "." + path.rsplit(".", 1)[1].upper(),
+    "another folder": lambda path: path.replace("/agents/", "/agentz/"),
+    "no image suffix": lambda path: path.rsplit(".", 1)[0] + ".dat",
+}
+
+
+@pytest.mark.parametrize("rename", sorted(RENAMES))
+def test_an_omitted_bundle_with_image_members_is_refused(
+    included: Path, tmp_path: Path, rename: str
+) -> None:
+    bundle, image_bytes = _move_sensor_members(
+        included, tmp_path / "relabelled.cpbundle", RENAMES[rename], relabel=True
+    )
+    assert image_bytes > 0
+    data = tmp_path / "data"
+    with pytest.raises(BundleError, match="sensor data is omitted"):
+        open_bundle(bundle, data_root=data)
+    assert _files(data) == []
+
+
+@pytest.mark.parametrize("rename", sorted(RENAMES))
+def test_open_cap_counts_every_scene_media_member_before_extracting(
+    included: Path, tmp_path: Path, rename: str
+) -> None:
+    sensor_bytes = int(_manifest(included)["sensor_data"]["bytes"])  # type: ignore[index]
+    bundle, image_bytes = _move_sensor_members(
+        included, tmp_path / "renamed.cpbundle", RENAMES[rename], relabel=False
+    )
+    assert image_bytes > 0
+    data = tmp_path / "data"
+    with pytest.raises(BundleError, match="sensor-data cap"):
+        open_bundle(bundle, data_root=data, limits=OpenLimits(max_sensor_bytes=sensor_bytes - 1))
+    assert _files(data) == []

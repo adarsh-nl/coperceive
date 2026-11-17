@@ -168,12 +168,21 @@ def _extract(path: Path, target: Path, digest: str, limits: OpenLimits) -> Opene
             archive.extract(MANIFEST, work)
         manifest = read_manifest(work / MANIFEST)
         contents = validate_manifest(manifest)
-        sensor_bytes = sum(item.size for item in contents if _is_sensor_path(item.path))
+        sensor_files = [item for item in contents if _is_sensor_path(item.path)]
+        sensor_data = manifest["sensor_data"]
+        status = sensor_data.get("status") if isinstance(sensor_data, dict) else None
+        if status != "included" and sensor_files:
+            raise BundleError(
+                f"sensor data is omitted, but the bundle holds sensor file {sensor_files[0].path!r}"
+            )
+        sensor_bytes = sum(item.size for item in sensor_files)
         if sensor_bytes > limits.max_sensor_bytes:
             raise BundleError(
                 f"this bundle's sensor data is {sensor_bytes} bytes, over the "
                 f"{limits.max_sensor_bytes}-byte sensor-data cap"
             )
+        if status == "included" and sensor_bytes != sensor_data.get("bytes"):  # type: ignore[union-attr]
+            raise BundleError("sensor_data.bytes does not match the sensor files the bundle holds")
         expected = {item.path: item for item in contents}
         with zipfile.ZipFile(path) as archive:
             infos = archive.infolist()
