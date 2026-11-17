@@ -2,8 +2,9 @@
 
 A result bundle is **one file** a researcher can send a colleague. It holds the
 repro card, the score report and config, the run's boxes for the included
-frames, rendered frame previews with boxes/ground truth, and optionally raw
-sensor files. The recipient opens it **read-only**, with no
+frames and their matches, rendered frame previews with boxes/ground truth,
+and, for Coperceive demo scenes only, the frames' LiDAR points and camera
+images. The recipient opens it **read-only**, with no
 dataset and no cluster access.
 
 Bundles are zip files with a versioned `bundle.json` manifest. Every listed file
@@ -15,8 +16,9 @@ anything is extracted.
 ```bash
 coperceive bundle export <run-id> \
   --root <scenes> --predictions <predictions-root> \
-  -o results.cpbundle [--title "…"] [--frames worst:6] \
-  [--include-raw] [--include-full-predictions] [--marker VALUE]
+  -o results.cpbundle [--title "…"] [--frames worst:6] [--dataset-id ID] \
+  [--include-sensor-data] [--sensor-max-bytes N] \
+  [--include-full-predictions] [--marker VALUE]
 ```
 
 By default only the selected frames' predictions are included (six frames, or
@@ -24,15 +26,37 @@ By default only the selected frames' predictions are included (six frames, or
 the CLI shows their size.
 
 Sensor data (LiDAR points and camera images for the included frames) is off by
-default and included only when **all** hold: the dataset id is named explicitly
-(`--dataset-id` or the app field), its catalog licence permits redistribution
-(demo/synthetic/generated scenes and Griffin MIT are allow-listed; OPV2V,
-V2XSet, V2V4Real, DAIR-V2X-C and generic are refused), the exporter ticks the
-opt-in, and the selected sensor bytes fit the cap (`--sensor-max-bytes`,
-default 50 MiB; Python: `BundleExportRequest.sensor_max_bytes` and
-`OpenLimits.max_sensor_bytes`). The bundle records `sensor_data` status, reason
-and licence. When omitted, opening uses a matching local scene if available,
-otherwise it shows the boxes on an empty grid with the licence note.
+default and included only when **all** hold:
+
+- every included scene is a Coperceive demo scene: its `COMPLETE.json` records
+  `generator: "coperceive demo"` and the `generic` adapter. A typed dataset id
+  or a folder name is never proof;
+- the exporter ticks the opt-in (`--include-sensor-data`, or "Include sensor
+  data" in the app);
+- the selected sensor bytes fit the cap (`--sensor-max-bytes`, default 50 MiB;
+  Python: `BundleExportRequest.sensor_max_bytes`). The cap is checked before
+  anything is written.
+
+No third-party dataset is on the allow list. OPV2V, V2XSet, V2V4Real,
+DAIR-V2X-C, generic folders and Griffin are refused by name (Griffin's catalog
+entry is `requires_terms: true`: each user accepts its terms before
+downloading). The bundle records `sensor_data` status, reason and licence.
+
+When sensor data is omitted, opening looks for the same scene in the
+recipient's library (`--library-root`, repeatable; the app passes its library
+folder): same scene id, adapter and frame count, and its resolved path must stay
+inside a library root, so a link out of the library is not followed. The viewer
+reads that copy in place, never copies it into the bundle, and shows only the
+bundle's frames. Otherwise it shows the boxes on an empty grid with the reason.
+
+The export never follows a link. It walks each scene and run folder it reads
+with `os.walk(followlinks=False)` and `lstat`s every entry first: a symbolic
+link (to a file, a folder, another link, or a file in the same scene), a FIFO
+or any other non-regular file refuses the whole export with an error that
+names it. Nothing is skipped silently, and a recorded image that is missing is
+an error too. Links inside a scene are refused rather than copied: one rule for
+every link keeps `bundle.json` one-to-one with regular files on disk. Replace a
+link with a copy of its target to export the scene.
 
 The app's Run history has an **Export bundle…** action with the same review:
 every file with size, the total, what the scrubber removed per file, and licence
@@ -42,7 +66,8 @@ part of this version.
 Size caps are set from Python with `coperceive.bundle.open.OpenLimits`
 (`max_files`, `max_file_bytes`, `max_total_bytes`, `max_sensor_bytes`); the CLI
 uses the defaults: 20,000 files, 512 MiB per file, 2 GiB total and 50 MiB
-sensor data.
+sensor data. The sensor cap counts LiDAR and camera files by path, whatever
+`kind` the bundle gives them, and is checked before anything else is extracted.
 
 ## Privacy
 
@@ -54,15 +79,21 @@ The bundle contains no credentials and does not run anything from the card.
 ## Open
 
 ```bash
-coperceive bundle open results.cpbundle [--data-root ~/.coperceive]
+coperceive bundle open results.cpbundle [--data-root ~/.coperceive] [--library-root DIR]
+coperceive serve --root <opened>/scenes --predictions <opened>/predictions \
+  --bundle-info <opened>/open.json
 ```
 
 Opening validates and extracts under `<data-root>/bundles/<bundle-sha>/`. It
 refuses absolute paths, `..`, symlinks, duplicates, unlisted files, oversized
-headers, hash mismatches, malformed JSON and bundles made by a newer schema.
+headers, hash mismatches, malformed JSON, members named `open.json` or
+`BUNDLE.JSON`, and bundles made by a newer schema.
 It never executes scripts, pickles or repro-card commands. The app's
 **Open bundle…** shows the run summary, scores, comparison and frames in the
-viewer; the rerun command is text with a copy button only.
+viewer; the rerun command is text with a copy button only. The viewer's jobs
+database for a bundle lives in a private temporary folder, never inside the
+extracted bundle, and every route keeps the token, CSRF and loopback-Host
+checks of `coperceive serve`.
 
 ## Schema
 
