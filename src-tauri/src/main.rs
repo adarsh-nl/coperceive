@@ -422,22 +422,6 @@ fn opened_bundle_dir(scenes_root: &Path, bundles_dir: &Path) -> Option<PathBuf> 
     bundle.join("open.json").is_file().then(|| bundle.to_path_buf())
 }
 
-#[tauri::command]
-async fn bundle_sensor_policy(
-    app: tauri::AppHandle,
-    dataset_id: String,
-) -> Result<serde_json::Value, String> {
-    let stdout = run_bundle_python(
-        &app,
-        &[
-            "sensor-policy".to_string(),
-            "--dataset-id".to_string(),
-            dataset_id,
-        ],
-    )?;
-    serde_json::from_str(&stdout).map_err(|err| format!("sensor policy is not JSON: {err}"))
-}
-
 fn pick_save_path_inner(
     app: &tauri::AppHandle,
     state: &AppState,
@@ -4501,7 +4485,6 @@ fn main() {
             bundle_export,
             bundle_open,
             bundle_open_viewer,
-            bundle_sensor_policy,
             save_exported_file,
         ])
         .on_page_load(|webview, payload| {

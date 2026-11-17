@@ -102,13 +102,6 @@ def build_parser() -> argparse.ArgumentParser:
         "scene from here (same scene id, adapter and frame count). Repeatable.",
     )
     bundle_open.set_defaults(func=_bundle_open)
-    bundle_policy = bundle_commands.add_parser(
-        "sensor-policy", help="Print whether a dataset's sensor data may be included."
-    )
-    bundle_policy.add_argument(
-        "--dataset-id", required=True, help="The dataset id to look up in the allow list."
-    )
-    bundle_policy.set_defaults(func=_bundle_sensor_policy)
 
     demo = sub.add_parser("demo", help="Create the synthetic demo scene.")
     demo_sub = demo.add_subparsers(dest="demo_command")
@@ -660,12 +653,6 @@ def _bundle_open(args: argparse.Namespace) -> None:
     print(f"scenes {opened.scenes_root}")
     print(f"predictions {opened.predictions_root}")
     print(f"report {opened.report_path}")
-
-
-def _bundle_sensor_policy(args: argparse.Namespace) -> None:
-    from coperceive.bundle import sensor_data_policy
-
-    print(json.dumps(sensor_data_policy(args.dataset_id).as_document(), indent=2))
 
 
 def _demo_create(args: argparse.Namespace) -> None:

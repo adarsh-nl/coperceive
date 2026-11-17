@@ -899,15 +899,6 @@ export async function openBundle(file: string): Promise<{ root: string; manifest
   return invoke<{ root: string; manifest: BundleManifest }>("bundle_open", { file });
 }
 
-export async function bundleSensorPolicy(datasetId: string): Promise<{
-  allowed: boolean;
-  licence: string | null;
-  dataset_label: string | null;
-  reason: string;
-}> {
-  const { invoke } = await import("@tauri-apps/api/core");
-  return invoke("bundle_sensor_policy", { datasetId });
-}
 
 export async function openBundleViewer(file: string): Promise<{ root: string; manifest: BundleManifest }> {
   const { invoke } = await import("@tauri-apps/api/core");

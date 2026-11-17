@@ -37,7 +37,7 @@ from coperceive.bundle import (
     open_bundle,
     sensor_data_policy,
 )
-from coperceive.cli import build_parser, main
+from coperceive.cli import build_parser
 from coperceive.demo import create
 
 SCENE = "demo-junction"
@@ -159,9 +159,7 @@ def test_each_scene_proves_itself_not_only_the_first(demo: Path, tmp_path: Path)
 # 2. Griffin is off the allow list --------------------------------------------
 
 
-def test_griffin_is_refused_because_its_catalog_entry_requires_terms(
-    capsys: pytest.CaptureFixture[str],
-) -> None:
+def test_griffin_is_refused_because_its_catalog_entry_requires_terms() -> None:
     from coperceive.catalog.runner import get_dataset
 
     griffin = get_dataset("griffin")
@@ -176,8 +174,6 @@ def test_griffin_is_refused_because_its_catalog_entry_requires_terms(
     document = allow_list_document()
     assert "griffin" in document["refused"]  # type: ignore[operator]
     assert "griffin" not in json.dumps(document["allowed"]).lower()
-    main(["bundle", "sensor-policy", "--dataset-id", "griffin"])
-    assert json.loads(capsys.readouterr().out)["allowed"] is False
 
 
 # 3. opt-in, and the 50 MiB cap before writing or extracting ------------------
