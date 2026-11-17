@@ -119,5 +119,6 @@ nav:
           - Left-handed sources: adr/0012-left-handed-sources.md
           - Desktop app: adr/0014-desktop-app.md
           - Cluster profiles: adr/0015-cluster-profiles-scheduler-adapter.md
+          - Plan parity: adr/0018-plan-parity.md
           - Security review: adr/0019-security-review.md
           - App runs follow the CLI job: adr/0021-app-model-runs-follow-the-cli-slurm-job.md
