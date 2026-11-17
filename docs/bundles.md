@@ -21,8 +21,10 @@ coperceive bundle export <run-id> \
   [--include-full-predictions] [--marker VALUE]
 ```
 
-By default only the selected frames' predictions are included (six frames, or
-`worst:N`, or `scene@time_us,...`). The full run's predictions are opt-in and
+By default only the selected frames' predictions are included (`worst:6`, or
+`worst:N`, or `scene@time_us,...`). `worst:N` takes the run's `failures.json`
+ranking, or the run's first N predicted frames when it has none; neither reads
+any scene that is not exported. The full run's predictions are opt-in and
 the CLI shows their size.
 
 Sensor data (LiDAR points and camera images for the included frames) is off by
@@ -49,11 +51,16 @@ inside a library root, so a link out of the library is not followed. The viewer
 reads that copy in place, never copies it into the bundle, and shows only the
 bundle's frames. Otherwise it shows the boxes on an empty grid with the reason.
 
-The export never follows a link. It walks each scene and run folder it reads
-with `os.walk(followlinks=False)` and `lstat`s every entry first: a symbolic
-link (to a file, a folder, another link, or a file in the same scene), a FIFO
-or any other non-regular file refuses the whole export with an error that
-names it. Nothing is skipped silently, and a recorded image that is missing is
+The export never follows a link. It walks the run folder and each exported
+scene folder with `os.walk(followlinks=False)` and `lstat`s every entry first:
+a symbolic link (to a file, a folder, another link, or a file in the same
+scene), a hard link (a file with other names), a FIFO or any other non-regular
+file refuses the whole export with an error that names it. A link in a scene
+that is not exported does not matter. Each file is then read only through a
+check that it is still the file the walk saw (same device and inode, opened
+without following a final link), so a file or folder swapped in after the walk
+is refused instead of read. Scene tables and the run's files are read from a
+private copy made that way. Nothing is skipped silently, and a recorded image that is missing is
 an error too. Links inside a scene are refused rather than copied: one rule for
 every link keeps `bundle.json` one-to-one with regular files on disk. Replace a
 link with a copy of its target to export the scene.
@@ -66,8 +73,12 @@ part of this version.
 Size caps are set from Python with `coperceive.bundle.open.OpenLimits`
 (`max_files`, `max_file_bytes`, `max_total_bytes`, `max_sensor_bytes`); the CLI
 uses the defaults: 20,000 files, 512 MiB per file, 2 GiB total and 50 MiB
-sensor data. The sensor cap counts LiDAR and camera files by path, whatever
-`kind` the bundle gives them, and is checked before anything else is extracted.
+sensor data. The sensor cap counts every member under `scenes/` other than a
+scene's own tables (`manifest.json`, `COMPLETE.json`, and the poses,
+annotations, objects and images tables), whatever its case, suffix or `kind`,
+and is checked before anything else is extracted. A bundle that records sensor
+data as omitted may hold no such member at all. Opening the same bundle again
+checks the archive again and refuses an extracted copy that has changed.
 
 ## Privacy
 
@@ -93,7 +104,8 @@ It never executes scripts, pickles or repro-card commands. The app's
 viewer; the rerun command is text with a copy button only. The viewer's jobs
 database for a bundle lives in a private temporary folder, never inside the
 extracted bundle, and every route keeps the token, CSRF and loopback-Host
-checks of `coperceive serve`.
+checks of `coperceive serve`. A local copy is served only while it still
+resolves inside a library root that `open.json` records.
 
 ## Schema
 
