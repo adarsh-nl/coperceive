@@ -122,13 +122,19 @@ def _cli_script(case: dict[str, Any], tmp_path: Path) -> str:
     # base: the CLI reads its pyvenv.cfg here (slurm.py interpreter_module), the app over
     # its plan-time interpreter check (the Rust fake cluster answers with the same text).
     (python.parent.parent / "pyvenv.cfg").write_text(case["pyvenv_cfg"], encoding="utf-8")
-    # The CLI emits from the case's code root: the Griffin plugin is copied there, and that
-    # root is the checkout the job's PYTHONPATH names (slurm.py coperceive_root), so a code
-    # root with a space or a quote reaches the CLI's script as it reaches the app's.
-    code = _under(tmp_path, _code_root(case))
-    manifest = code / GRIFFIN.relative_to(REPO)
-    if not manifest.is_file():
-        shutil.copytree(GRIFFIN.parent, manifest.parent)
+    # A case with its own code_root: the CLI emits from there. The Griffin plugin is copied
+    # to it and slurm.coperceive_root is patched to it, so a code root with a space reaches
+    # the CLI's script as it reaches the app's. Every other case runs the real
+    # coperceive_root (this checkout, mapped back to code_root by _logical), so the CLI's
+    # own PYTHONPATH is checked end to end.
+    patched: contextlib.AbstractContextManager[object] = contextlib.nullcontext()
+    manifest = GRIFFIN
+    if "code_root" in case:
+        code = _under(tmp_path, case["code_root"])
+        manifest = code / GRIFFIN.relative_to(REPO)
+        if not manifest.is_file():
+            shutil.copytree(GRIFFIN.parent, manifest.parent)
+        patched = mock.patch.object(slurm, "coperceive_root", return_value=code)
     media = ["--media-root", str(raw)] if case.get("media_root", True) else []
     options = [word for extra in case.get("extras", []) for word in ("--option", extra)]
     args = [
@@ -161,10 +167,7 @@ def _cli_script(case: dict[str, Any], tmp_path: Path) -> str:
         profile["scratch_template"],
     ]
     captured = io.StringIO()
-    with (
-        contextlib.redirect_stdout(captured),
-        mock.patch.object(slurm, "coperceive_root", return_value=code),
-    ):
+    with contextlib.redirect_stdout(captured), patched:
         main(args)
     text = captured.getvalue()
     return _logical(text[text.index("#!/bin/bash") :], tmp_path, _code_root(case))
@@ -415,6 +418,13 @@ def test_the_app_and_the_cli_write_the_same_griffin_job(name: str, tmp_path: Pat
         for side, text in (("cli", cli), ("app", app)):
             done = subprocess.run(["bash", "-n", "-c", text], capture_output=True, text=True)
             assert done.returncode == 0, (name, side, done.stderr)
+
+
+def test_the_cli_exports_the_checkout_that_emits_the_job() -> None:
+    """The cases without their own code_root rely on the real ``coperceive_root`` being
+    this checkout (mapped back to ``code_root``); a root one folder off would otherwise be
+    mapped wrongly and only show up as a PYTHONPATH difference."""
+    assert slurm.coperceive_root() == REPO.resolve()
 
 
 def test_every_allowed_difference_still_occurs_and_says_why(tmp_path: Path) -> None:
