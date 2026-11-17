@@ -35,6 +35,17 @@
       "type": "string",
       "pattern": "^[A-Za-z0-9._-]+$"
     },
+    "omitted_links": {
+      "description": "Links left out of the bundle and never followed: a prepared cluster scene's raw camera link, by its path in the bundle (never its target). Only when sensor data is omitted.",
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "^scenes/[A-Za-z0-9._-]+/raw$",
+        "not": {
+          "pattern": "^scenes/\\.{1,2}/"
+        }
+      }
+    },
     "contents": {
       "type": "array",
       "items": {

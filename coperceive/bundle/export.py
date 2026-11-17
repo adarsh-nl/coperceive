@@ -44,6 +44,7 @@ from typing import BinaryIO, cast
 from coperceive import __version__
 from coperceive.bundle.format import Content, manifest_document, safe_member, sha256_file
 from coperceive.bundle.sensor import SENSOR_MAX_BYTES, SensorPolicy, sensor_data_policy
+from coperceive.camera_images import RAW_LINK
 from coperceive.evaluation.evaluate import MATCHES_FILE
 from coperceive.evaluation.predictions import (
     BOXES_FILE,
@@ -161,7 +162,14 @@ def _plain_entry(path: Path, shown: str, *, directory: bool) -> os.stat_result:
 _Entry = tuple[int, int, bool]
 
 
-def check_source_tree(root: Path, top: Path, label: str) -> dict[str, _Entry]:
+def check_source_tree(
+    root: Path,
+    top: Path,
+    label: str,
+    *,
+    left_out: str | None = None,
+    omitted: list[str] | None = None,
+) -> dict[str, _Entry]:
     """Refuse ``top`` (``root`` itself or a path under it) unless every entry is plain.
 
     ``root`` is the folder the user chose and may itself be reached through a
@@ -169,6 +177,11 @@ def check_source_tree(root: Path, top: Path, label: str) -> dict[str, _Entry]:
     and every entry ``os.walk(followlinks=False)`` finds under ``top``, must be a
     regular file with one name or a real directory whose resolved path stays
     inside ``root``. Returns what was seen, keyed by the path relative to ``root``.
+
+    ``left_out`` names the one entry (relative to ``root``) that must instead be a
+    symbolic link: a prepared cluster scene's camera link. It is appended to
+    ``omitted`` and never followed, resolved, recorded or descended into; a real
+    file or folder there is refused.
     """
     seen: dict[str, _Entry] = {}
 
@@ -209,9 +222,29 @@ def check_source_tree(root: Path, top: Path, label: str) -> dict[str, _Entry]:
             entry = here / name
             key = entry.relative_to(root).as_posix()
             shown = _shown(label, key)
+            if key == left_out:
+                _left_out_link(entry, shown)
+                if omitted is not None:
+                    omitted.append(key)
+                continue
             record(key, _plain_entry(entry, shown, directory=True))
             contained(entry, shown)
     return seen
+
+
+def _left_out_link(entry: Path, shown: str) -> None:
+    """The raw camera link is left out only if ``lstat`` says it is a link."""
+    try:
+        status = os.lstat(entry)
+    except OSError as exc:
+        raise BundleExportError(
+            f"refusing to export: cannot read {shown} ({exc.strerror})"
+        ) from None
+    if not stat.S_ISLNK(status.st_mode):
+        raise BundleExportError(
+            f"refusing to export: {shown} is not the link to the raw camera folder that "
+            "a prepared cluster scene has there; only that link is left out of a bundle"
+        )
 
 
 def _open_regular(source: Path, shown: str) -> BinaryIO:
@@ -241,9 +274,23 @@ class _Tree:
     root: Path
     label: str
     seen: dict[str, _Entry] = field(default_factory=dict)
+    #: Camera links left out of the bundle, relative to ``root``. Never followed.
+    omitted: list[str] = field(default_factory=list)
 
     def walk(self, relative: str) -> None:
         self.seen.update(check_source_tree(self.root, self.root / relative, self.label))
+
+    def walk_scene(self, scene_id: str) -> None:
+        """Walk one exported scene; its ``camera_images.RAW_LINK`` link is left out."""
+        self.seen.update(
+            check_source_tree(
+                self.root,
+                self.root / scene_id,
+                self.label,
+                left_out=f"{scene_id}/{RAW_LINK}",
+                omitted=self.omitted,
+            )
+        )
 
     def files_under(self, relative: str) -> list[str]:
         prefix = relative.rstrip("/") + "/"
@@ -475,6 +522,13 @@ def _plan_sensor(
     full_scenes: dict[str, Scene] = {}
     total = 0
     want_sensor = policy.allowed and request.include_sensor_data
+    if want_sensor and sources.scenes.omitted:
+        # The camera link's images would be sensor data read through the link.
+        raise BundleExportError(
+            f"refusing to export: scenes/{sources.scenes.omitted[0]} is the link to the raw "
+            "camera folder; it is left out only when the bundle carries no sensor data. "
+            "Export without sensor data."
+        )
     for scene_id in scene_ids:
         snapshot = sources.scene(scene_id, points=want_sensor)
         if adapter is None:
@@ -744,7 +798,7 @@ def _export(request: BundleExportRequest, sources: _Sources) -> Path:
     for scene_id in dict.fromkeys(scene_id for scene_id, _time_us in frames):
         if not os.path.lexists(request.scenes_root / scene_id):
             raise BundleExportError(f"no scene {scene_id!r} under {request.scenes_root}")
-        sources.scenes.walk(scene_id)
+        sources.scenes.walk_scene(scene_id)
     if os.path.lexists(request.scenes_root / "dataset.json"):
         # The repro card records the dataset manifest's hash.
         sources.scenes.walk("dataset.json")
@@ -900,6 +954,8 @@ def _export(request: BundleExportRequest, sources: _Sources) -> Path:
             },
             sensor_data=sensor_document,
             rerun_command=command,
+            # Left out, never followed: the path in the bundle, never the target.
+            omitted_links=[f"scenes/{key}" for key in sorted(sources.scenes.omitted)],
         )
         document["rerun_command"] = scrub_text(
             str(document.get("rerun_command", "")), request.extra_markers

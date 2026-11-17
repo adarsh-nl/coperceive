@@ -381,6 +381,16 @@ def test_hand_validator_and_schema_accept_the_same_samples(
     sample = json.loads(json.dumps(valid))
     del sample["title"]
     samples.append(sample)
+    for links in (
+        ["scenes/demo-junction/raw"],
+        ["scenes/demo-junction/other"],
+        ["scenes/../raw"],
+        ["raw"],
+        "scenes/demo-junction/raw",
+    ):
+        sample = json.loads(json.dumps(valid))
+        sample["omitted_links"] = links
+        samples.append(sample)
     for reserved in ("open.json", "BUNDLE.JSON"):
         sample = json.loads(json.dumps(valid))
         sample["contents"].append(

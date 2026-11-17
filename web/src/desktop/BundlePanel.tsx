@@ -118,6 +118,9 @@ export default function BundlePanel({
                 : `Sensor data not included: ${manifest.sensor_data.reason}.`}
             </div>
           ) : null}
+          {manifest.omitted_links && manifest.omitted_links.length > 0 ? (
+            <div data-testid="bundle-omitted-links">The link to the raw camera folder is not included.</div>
+          ) : null}
           {manifest.licences && manifest.licences.length > 0 ? <div>Licence notes: {JSON.stringify(manifest.licences)}</div> : <div>No raw data included.</div>}
           <ul style={{ maxHeight: "10rem", overflow: "auto", paddingLeft: "1rem" }}>
             {manifest.contents.map((item) => <li key={item.path}>{item.path} — {item.size} B</li>)}

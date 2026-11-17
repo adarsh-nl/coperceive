@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import zipfile
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -86,6 +86,7 @@ def manifest_document(
     privacy: Mapping[str, object],
     sensor_data: Mapping[str, object],
     rerun_command: str,
+    omitted_links: Sequence[str] = (),
 ) -> dict[str, object]:
     return {
         "schema": SCHEMA,
@@ -102,6 +103,7 @@ def manifest_document(
         "privacy": dict(privacy),
         "rerun_command": rerun_command,
         "sensor_data": dict(sensor_data),
+        "omitted_links": list(omitted_links),
     }
 
 
@@ -249,6 +251,7 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
         "privacy",
         "rerun_command",
         "sensor_data",
+        "omitted_links",
     }
     unknown = set(payload) - allowed
     if unknown:
@@ -329,6 +332,7 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
     elif sensor_bytes:
         raise BundleError("sensor_data is omitted but the bundle lists sensor files")
     listed = {item.path for item in out}
+    _validate_omitted_links(payload.get("omitted_links", []), listed)
     for row in sensor_data["scenes"]:  # type: ignore[index]
         scene_id = row["scene_id"]  # type: ignore[index]
         if f"scenes/{scene_id}/manifest.json" not in listed:
@@ -348,6 +352,21 @@ SCENE_STRUCTURE_FILES = frozenset(
         "images.parquet",
     }
 )
+
+
+def _validate_omitted_links(value: object, listed: set[str]) -> None:
+    """``omitted_links``: each a scene's raw camera link, which the bundle does not hold."""
+    from coperceive.camera_images import RAW_LINK
+
+    if not isinstance(value, list):
+        raise BundleError("bundle.json omitted_links must be a list")
+    for index, item in enumerate(value):
+        parts = item.split("/") if isinstance(item, str) else []
+        if len(parts) != 3 or parts[0] != "scenes" or parts[2] != RAW_LINK:
+            raise BundleError(f"omitted_links[{index}] is not a scene's {RAW_LINK} link")
+        _single_part(parts[1], f"omitted_links[{index}] scene")
+        if any(path == item or path.startswith(item + "/") for path in listed):
+            raise BundleError(f"omitted_links[{index}] is also a file in the bundle")
 
 
 def _is_sensor_path(path: str) -> bool:

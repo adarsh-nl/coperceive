@@ -9,6 +9,7 @@ import os
 import stat
 import sys
 import warnings
+import zipfile
 from pathlib import Path
 from typing import cast
 
@@ -605,6 +606,14 @@ def _bundle_export(args: argparse.Namespace) -> None:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
     print(f"wrote {path}")
+    with zipfile.ZipFile(path) as archive:
+        _print_omitted_links(json.loads(archive.read("bundle.json")))
+
+
+def _print_omitted_links(manifest: dict[str, object]) -> None:
+    """Say so when a prepared scene's raw camera link was left out (stderr: stdout is data)."""
+    if manifest.get("omitted_links"):
+        print("The link to the raw camera folder is not included.", file=sys.stderr)
 
 
 def _bundle_preview(args: argparse.Namespace) -> None:
@@ -632,6 +641,7 @@ def _bundle_preview(args: argparse.Namespace) -> None:
     except (OSError, ValueError) as exc:
         print(str(exc), file=sys.stderr)
         raise SystemExit(2) from exc
+    _print_omitted_links(manifest)
     print(json.dumps(manifest, indent=2))
 
 
