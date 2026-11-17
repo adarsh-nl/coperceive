@@ -28,11 +28,12 @@ import zipfile
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import cast
+from typing import BinaryIO, cast
 
 from coperceive import __version__
 from coperceive.bundle.format import Content, manifest_document, safe_member, sha256_file
 from coperceive.bundle.sensor import SENSOR_MAX_BYTES, SensorPolicy, sensor_data_policy
+from coperceive.evaluation.evaluate import MATCHES_FILE
 from coperceive.evaluation.predictions import (
     BOXES_FILE,
     PredictionBox,
@@ -187,8 +188,8 @@ def check_source_tree(root: Path, top: Path, label: str) -> None:
             contained(entry, shown)
 
 
-def _copy_regular(source: Path, destination: Path, shown: str) -> None:
-    """Copy one checked file without following a link swapped in after the walk."""
+def _open_regular(source: Path, shown: str) -> BinaryIO:
+    """Open one checked file without following a link swapped in after the walk."""
     flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
         descriptor = os.open(source, flags)
@@ -196,9 +197,15 @@ def _copy_regular(source: Path, destination: Path, shown: str) -> None:
         raise BundleExportError(
             f"refusing to export: cannot open {shown} ({exc.strerror})"
         ) from None
-    with os.fdopen(descriptor, "rb") as handle:
-        if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
-            raise BundleExportError(f"refusing to export: {shown} is not a regular file")
+    handle = os.fdopen(descriptor, "rb")
+    if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+        handle.close()
+        raise BundleExportError(f"refusing to export: {shown} is not a regular file")
+    return handle
+
+
+def _copy_regular(source: Path, destination: Path, shown: str) -> None:
+    with _open_regular(source, shown) as handle:
         destination.parent.mkdir(parents=True, exist_ok=True)
         destination.unlink(missing_ok=True)
         with destination.open("wb") as sink:
@@ -518,6 +525,21 @@ def _scrub_work(
     return redactions, details
 
 
+def _write_matches(source: Path, destination: Path, times: set[int], shown: str) -> None:
+    """The run's ``matches.parquet`` rows at the included frames only."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    _plain_entry(source, shown, directory=False)
+    with _open_regular(source, shown) as handle:
+        table = pq.read_table(handle)
+    if "time_us" not in table.column_names:
+        raise BundleExportError(f"{shown} has no time_us column")
+    keep = pa.array([value in times for value in table.column("time_us").to_pylist()])
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    pq.write_table(table.filter(keep), destination)
+
+
 def _check_staged(work: Path, staging: _Staging) -> None:
     """Staging holds only regular files and real folders, and lists each file."""
     check_source_tree(work, work, "bundle")
@@ -618,6 +640,17 @@ def export_bundle(request: BundleExportRequest) -> Path:
                 staging.files[rel_pred] = "predictions"
         # filtered predictions
         write_run(work / "predictions", run_id, meta, filtered, force=True)
+        # The viewer draws a run's boxes from its matches, so the included
+        # frames' rows travel too (a bundle without them shows no predictions).
+        for scene_id in dict.fromkeys(scene_id for scene_id, _time_us in frames):
+            source = run_dir / scene_id / MATCHES_FILE
+            if os.path.lexists(source):
+                _write_matches(
+                    source,
+                    work / "predictions" / run_id / scene_id / MATCHES_FILE,
+                    set(_included_times(frames, scene_id)),
+                    f"predictions/{run_id}/{scene_id}/{MATCHES_FILE}",
+                )
         for path in (work / "predictions").rglob("*"):
             if path.is_file():
                 staging.files[path.relative_to(work).as_posix()] = "predictions"
