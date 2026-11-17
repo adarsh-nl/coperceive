@@ -1,6 +1,6 @@
 # ADR 0018 — Plan parity: one test holds the app's job script to the CLI's
 
-Status: proposed on 2026-11-16, for PM review before the build. Branch `agent/claude-plan-parity`, PR into `release/v0.1.2`. Nothing outside `docs/` changes in this commit.
+Status: accepted with [ADR 0021](0021-app-model-runs-follow-the-cli-slurm-job.md) (PM decision, 2026-11-16). This ADR describes the parity harness. ADR 0021 holds the decisions: the CLI is the reference, and it lists each difference the app may keep, with its reason. Where the two disagree, ADR 0021 wins.
 
 ## Context
 
@@ -9,94 +9,93 @@ Two code paths write the Slurm job script for one evaluation:
 - **The app.** `build_run_plan` and `save_run_plan` (`src-tauri/src/run_plan.rs`), then `render_run_script` (`src-tauri/src/job_submit.rs`).
 - **The CLI.** `coperceive model run --slurm` (`coperceive/models/slurm.py::plan_sbatch`).
 
-[`docs/release/v0.1.1-eval-pipeline-test.md`](../release/v0.1.1-eval-pipeline-test.md) runs the Griffin acceptance job through the CLI and expects the app to submit the same job. Nothing checks that it does. The one existing test, `run_plan::tests::builtin_argv_parity_with_the_cli_golden_sections`, never reads the CLI golden it is named after.
+[`docs/release/v0.1.1-eval-pipeline-test.md`](../release/v0.1.1-eval-pipeline-test.md) runs the Griffin acceptance job through the CLI and expects the app to submit the same job.
 
-### What a first comparison found
-
-On 2026-11-16 both paths were rendered for the same inputs, at this branch's base (`a7779ad`). The app ran against a fake cluster: a stub runner that answers the read-only commands and refuses `sbatch`, `scancel` and `squeue`. The CLI ran with `--slurm` and never `--submit`. Nothing was submitted and no SSH connection was made.
-
-**Blockers: an app-submitted Griffin job cannot succeed today.** All five are in `run_plan.rs` or `job_submit.rs`, which belong to the HPC owner (AGENTS.md §3), so they are routed, not fixed here.
-
-1. The inner command passes `--output-dir`, which `coperceive model run` rejects: `build_parser()` exits 2 with "unrecognized arguments". Code: `run_plan.rs:2421-2425`, `job_submit.rs:276-280`.
-2. It passes `--option checkpoint=<path>`. The Griffin vehicle-side model declares no `checkpoint` option, so `check_options` refuses it. Code: `run_plan.rs:528-529`.
-3. A scenes **directory** cannot be saved. Save fails with "The cluster no longer reports a sha256 for the test split"; only a single file saves. Code: `run_plan.rs:2124-2129`.
-4. The post-run checks require `predictions.jsonl` and `metrics.json`. `model run` writes neither, so a successful run exits 1. Code: `job_submit.rs:299-308`.
-5. The manifest is the last token of the cluster's `coperceive model list` row, used only when it contains `/`. The real row prints the entry point `coperceive_griffin_model:MANIFEST` (`coperceive/models/registry.py:37-41`), so the app cannot plan Griffin. Code: `run_plan.rs:1797-1802`. **Unverified live**: the Griffin plugin is not installed where this was run, so this was read from the code and reproduced with a fake row.
-
-**One CLI bug.** `slurm.py` ends the script with `echo "done: <shlex-quoted path> (exit $RC)"`. With `--out` under `te st/it's "q"`, the single-quoted word inside double quotes ends the string early, and the script fails `bash -n`. This file is not owned by another agent, so it is fixed here.
-
-**Two more defects, seen when case (c) below was rendered.** On a modules profile with no GPU discovery, the app loads only the profile's modules, so the CUDA modules Griffin's manifest needs are missing. It also requests no GPU at all, because it never reads the manifest's `gpu: true`. Both are in `run_plan.rs` and routed.
-
-**Differences that are not yet decided** include:
-
-- `#SBATCH` resources: `--time`, `--gres`, `--mem`, `--cpus-per-task`, `--constraint`, `--mail-type`.
-- The log location.
-- The CUDA modules and `PYTHONPATH` lines.
-- The `--work` directory.
-- The run id: the app's is `plan-…`; the release doc expects `griffin25m-vehicle-plugin`.
-- The app refusing a plan with no `--media-root`.
-- Values derived from `results_root`, which the app interpolates unquoted: a `"` breaks the script, `$(…)` would run on the node, and `~` is never expanded.
-
-**Differences that are intended, each with a document behind it:**
-
-| Difference | Source |
-| --- | --- |
-| The `coperceive-` job-name prefix | ADR 0015 |
-| No staging block, so no `--staging-seconds` | release doc, "App-plan parity" |
-| Output on `results_root` with no copy home | ADR 0015 §3a |
-| The scratch subdirectory | `job_submit.rs:148-151` |
-| Comment and echo lines | cosmetic |
-| ProxyJump | transport only; it never reaches a script |
+The first comparison (2026-11-16, PR #167) found six blockers: `--output-dir`, the checkpoint option, the scenes directory, the post-run checks, the manifest path and the GPU and CUDA modules. It also found a CLI quoting bug in the job's last `echo`. PR #180 fixed the six blockers in the app, and ADR 0021 decided the remaining differences. The quote fix reached `release/v0.1.2` as a backport (f5cbfa4). Its test is `tests/test_model_slurm.py::test_paths_with_spaces_and_quotes_keep_the_script_valid`.
 
 ## Decision
 
 ### 1. One set of cases, both renderers, one comparator
 
-- **`tests/fixtures/plan_parity/cases.json`**: the logical inputs of each case. That is the paths, model, extras, a fixed run id that both validators accept, and the cluster profile: partition, scratch template, results root, environment, GPU types, ProxyJump and port. The cases:
-  - **base**: the release doc's Griffin vehicle run.
-  - **(a) spaces and quotes**: every path under `te st/it's "q"`.
-  - **(b) missing optional flag**: no `--media-root` and no extras.
-  - **(c) ProxyJump plus module setup**: `modules: [python/3.12]`, a jump host and a port.
-- **`src-tauri/tests/plan_parity.rs`** (new, the first file in `src-tauri/tests/`) renders the app's script for each case.
-  - It drives the UI's call chain through public functions only, with a fake runner that panics on `sbatch`, `scancel` or `squeue`.
-  - It writes nothing unless `COPERCEIVE_UPDATE_PARITY=1`; otherwise it asserts the committed render byte for byte.
-  - For case (c) it also checks that ProxyJump changes the SSH arguments and leaves the script byte-identical.
-- **`tests/test_plan_parity.py`** renders the CLI's script for each case with `--slurm`, never `--submit`. It then compares the two scripts section by section:
-  - the `#SBATCH` keys;
-  - the module and export lines;
-  - the environment capture;
-  - staging, exit-code capture, copy-home and post-run checks;
-  - `bash -n` of each script;
-  - the inner command. This is tokenised with `shlex`, so quoting style does not count. Runtime words like `$SCRATCH/scenes` are mapped back to their source, and the result is parsed by the real `build_parser()` and `check_options`.
+**`tests/fixtures/plan_parity/cases.json`** holds the logical inputs of each case: the paths, the model, its options, a fixed run id and the cluster profile.
 
-### 2. A ledger of known differences, checked both ways
+Accepted cases:
 
-`tests/fixtures/plan_parity/allowed_differences.json` lists, per case, each difference with a `kind`, a reason and a citation:
+| Case | What it covers |
+| --- | --- |
+| `base` | The release doc's Griffin vehicle run. |
+| `mixed_partition` | A partition whose discovery lists a100 before a40. |
+| `modules_no_gpu_discovery` | A modules profile (python/3.12) with no GPU discovery. |
+| `modules_profile_other_python` | A profile python module other than the venv's. |
+| `venv_profile` | A venv profile running `<venv>/bin/python -m coperceive`. |
+| `venv_script_command` | A venv profile running the console script `<venv>/bin/coperceive`. |
+| `proxy_jump_modules` | A modules profile reached through a jump host on port 2222, on a CPU partition, data and results under `/data`, with `--option min_score=0.05`. |
+| `spaces_and_quotes` | Scenes, raw root and media root under `te st/it's "q"`, and a code root with a space. |
 
-- **`intended`**: a difference that a document decides.
-- **`defect`**: a difference that is a bug, with the owner it is routed to (and the blocker number above, where it is one).
-- **`undecided`**: a difference no document decides yet, waiting for the PM.
+Refusals (`refusals` in `cases.json`) are inputs the app refuses. Each carries the exact message, a reason and a citation:
 
-The test fails on any difference that is **not** in the ledger. It also fails on any ledger entry that **no longer** occurs, so a fix forces the entry out and the ledger cannot go stale.
+| Refusal | The app says | The CLI |
+| --- | --- | --- |
+| `results_root_with_space` | `#170`'s message: a results folder with a space, a `#` or a quote is refused. | Takes it. The CLI writes no results folder into an `#SBATCH` line, and refuses a `--slurm-logs` folder with a space for the same reason. |
+| `no_media_root` | "Choose the media root on the cluster before checking the plan." | Takes it: `--media-root` is optional. Not decided (see below). |
 
-This keeps CI green while the blockers exist, which a red test in files this task may not edit could not do. It does not hide them, because each one is named in the ledger and in the report. See open question 1.
+**`src-tauri/tests/plan_parity.rs`** renders the app's side:
 
-### 3. The CLI fix
+- It drives the New evaluation screen's call chain through public functions, with a fake cluster. The fake cluster panics on `sbatch`, `scancel` or `squeue`. Its `model list --json` answer is `model_list.json`, which `test_plan_parity.py` holds to the CLI's real output.
+- It holds every render to the committed `app/<case>.sbatch` byte for byte. It writes those files only under `COPERCEIVE_UPDATE_PARITY=1`. Python cannot run this renderer, so this test owns staleness.
+- It holds every refusal to its exact message, and checks that no render exists for it.
+- `proxy_jump_changes_the_ssh_arguments_and_not_the_script`: for each case with a `proxy_jump`, the SSH arguments carry `-J <jump>` (and the port) with the jump host and no `-J` without it. Both renders must succeed, and they must be byte-identical to each other and to the committed render.
 
-`slurm.py`'s last `echo` is rewritten so the quoted path stays one shell word. Case (a) proves it: `bash -n` passes on the CLI script. Before the fix, the same case fails `bash -n`.
+**`tests/test_plan_parity.py`** renders the CLI's side with `--slurm`, never `--submit`, and compares:
+
+1. **The whole scripts, line by line.** Every line only one side has must match a row of `allowed_differences.json`. Every app-side row must match in every case it applies to, so the app cannot drop a listed line.
+2. **The scratch setup, step by step** (`_scratch_setup`). Before `module purge`, both sides must, in this order: start with `set -euo pipefail`, assign the scratch folder the profile's template, `mkdir` it, set the EXIT `trap` that removes it, export `TMPDIR` under it, and make `TMPDIR` and the work folder.
+3. **The run block, in place.** `set +e`, `model run`, `RC=$?`, `set -e` and the exit `echo` must come in that order. After them come `environment.json` (written by the run's interpreter), the work copy, and the exit with the run's status.
+4. **The `model run` line, field by field.** It is parsed by the real `build_parser()`, with the CLI's staged paths mapped back. The ledger's `argv_fields` excuse only `out` and `staging_seconds`. The app's options also go through the manifest's `check_options`.
+5. **`--gres=gpu:1`, the work copy's rsync filter, and `bash -n`** on both scripts.
+6. **The refusals.** `model run --slurm` takes each refused input and writes valid shell, so a refusal stays a listed difference rather than a hidden one.
+
+### 2. What is compared, and what is only listed
+
+Nothing is skipped without being listed. Every line is either identical on both sides or a ledger row with a reason. Some lines get a structural check as well. The lines PR #167's comparison did not reach are covered as follows:
+
+| Line(s) | How it is held |
+| --- | --- |
+| `set -euo pipefail` | It is not in the ledger, so it must be identical on both sides. The scratch-setup check also requires it to be the first command. |
+| `trap … EXIT` | A ledger row pins each side's line exactly. The scratch-setup check compares what it removes, the signal, and its place: after the `mkdir`, before anything runs. Before that check, moving the app's trap after the run block passed the harness. |
+| `SCRATCH` / `SCRATCH_DIR` | A ledger row pins each side's line. Only the variable's name differs (ADR 0021, "Scratch setup"). The scratch-setup check requires both values to equal the profile's template. |
+| `mkdir` of scratch, `TMPDIR`, work | A ledger row pins each side's line. The scratch-setup check compares the folders and their order. The app's `-m 0700` is listed in ADR 0021, "Scratch setup". |
+| Other `mkdir` lines | Rows with reasons, compared nowhere else, because the other side has no counterpart: the CLI's staging, out, results and predictions folders, and the app's `OUT_DIR` and `OUT_DIR/<plan id>`. See ADR 0021, "Staging", "Copy home" and "`environment.json` path". |
+
+### 3. The ledger
+
+`tests/fixtures/plan_parity/allowed_differences.json` has one kind of row: `intended`, decided by ADR 0021, with a reason and a citation. The test fails on any one-sided line that no row matches. It also fails on any row that no longer matches, so the ledger cannot go stale. A row that names a case's paths lists the cases it applies to.
+
+PR #167's `defect` and `undecided` kinds are gone, and so are its six blockers, each settled by PR #180:
+
+- `--output-dir` is no longer passed;
+- the checkpoint option is passed only when the model declares one;
+- a scenes directory is saved with a listing fingerprint;
+- the post-run checks require `run.json`, and `boxes.parquet` only when boxes were written;
+- the manifest path comes from `model list --json`;
+- the GPU request and CUDA modules come from the manifest.
+
+PR #167's refusal cases `scenes_directory` and `model_list_entry_point` are dropped for the same reason: every accepted case now covers them.
 
 ### 4. Never submit, never SSH
 
-No test, fixture or script in this work calls `sbatch`, `scancel`, `squeue` or `ssh`. The fake runner panics if anything tries.
+No test, fixture or script in this work calls `sbatch`, `scancel`, `squeue` or `ssh`. The fake cluster panics if anything tries.
 
 ## Consequences
 
-- Any change to either renderer that changes the job a cluster would run fails a test, unless the ledger records it with a reason.
-- The ledger's `defect` entries list what must be fixed before the app is used for a real Griffin submission. **Until blockers 1–5 are fixed, Adarsh should not submit Griffin from the app.**
-- `cargo test --manifest-path src-tauri/Cargo.toml` on Linux runs the Rust test. The macOS `cargo test --lib` job does not, because `--lib` excludes `tests/`. That job is in `.github/workflows/ci.yml`, the viewer owner's file, so this is routed if macOS coverage is wanted.
+- Any change to either renderer that changes the job a cluster would run fails a test, unless ADR 0021 and the ledger record it with a reason.
+- CI (`.github/workflows/ci.yml`; the three desktop jobs run on a pull request only when the `desktop` path filter matches, which includes `tests/fixtures/plan_parity/**` and `coperceive/models/**`):
+  - **Linux** (`desktop-linux`, `ubuntu-22.04`) runs `cargo test --manifest-path src-tauri/Cargo.toml -q`, 20 times. This is the full suite, including `src-tauri/tests/plan_parity.rs`.
+  - **macOS** (`desktop-macos`, `macos-15`) runs `cargo test --verbose --color=never` in `src-tauri`. This is also the full suite, so it includes `plan_parity.rs`.
+  - **Windows** (`desktop-windows`, `windows-latest`) runs `cargo test --lib --verbose --color=never` in `src-tauri`. `--lib` excludes `tests/`, so `plan_parity.rs` does not run on Windows.
+  - `tests/test_plan_parity.py` runs in the Python job's `pytest`.
 
-## Open questions for the PM
+## Not decided here
 
-1. Is the `defect` kind in the ledger acceptable? The alternative is a test that stays red until the HPC owner fixes blockers 1–5.
-2. Which of the undecided differences are intended? Above all the `#SBATCH` resources, the run id and the log location.
-3. Before any real submission, does Adarsh's `results_root` start with `~`? The app writes it into the script unexpanded.
+1. **No media root.** The app refuses a built-in plan with no media root. The CLI's `--media-root` is optional. ADR 0021 covers the script for inputs both sides accept, so it does not decide whether the app should accept an empty media root. The `no_media_root` refusal pins the current message, so a change in either direction is seen. This is for the PM.
+2. **A single quote in the code root.** The app writes `PYTHONPATH` with `shell_quote` (`'\''`), while `plan_sbatch` uses `shlex.quote` (`'"'"'`). The value in the shell is the same, but the bytes differ, and ADR 0021 lists `PYTHONPATH` as identical. The fix belongs in `job_submit.rs`, which the HPC owner owns (AGENTS.md §3), so it is routed. Until it is fixed, `spaces_and_quotes` puts only a space in its code root.
