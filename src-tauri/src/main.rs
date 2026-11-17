@@ -382,7 +382,30 @@ async fn bundle_open_viewer(
         .ok_or_else(|| "bundle open returned no root".to_string())?;
     // The viewer serves the bundle's scenes folder; switch_data_root adds the
     // bundle's predictions and open.json (see opened_bundle_dir).
-    switch_data_root(&app, state.inner(), PathBuf::from(root).join("scenes")).await?;
+    let scenes = PathBuf::from(root).join("scenes");
+    switch_data_root(&app, state.inner(), scenes.clone()).await?;
+    // switch_data_root only re-points a viewer window that is already open;
+    // Open bundle… is started from Run history, often with none, so open one.
+    use tauri::Manager;
+    if app.get_webview_window("viewer").is_none() {
+        let (origin, token) = {
+            let lock = state.sidecar.lock().map_err(|e| e.to_string())?;
+            let session = lock
+                .as_ref()
+                .ok_or_else(|| "the bundle's viewer server is not running".to_string())?;
+            (format!("http://127.0.0.1:{}", session.port), session.token.clone())
+        };
+        let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+        open_viewer_window(
+            &app,
+            &origin,
+            &token,
+            &scenes.to_string_lossy(),
+            ctrl_port,
+            state.inner(),
+            None,
+        )?;
+    }
     Ok(opened)
 }
 
