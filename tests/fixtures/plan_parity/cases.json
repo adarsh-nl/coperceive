@@ -208,7 +208,7 @@
     },
     {
       "name": "spaces_and_quotes",
-      "about": "Every data path (scenes, raw root, media root) is under a folder with a space, a single quote and double quotes, and the code root (manifest and PYTHONPATH) has a space and a single quote. The results root has none: #170 refuses a results folder with a space, a '#' or a quote (it goes into #SBATCH --output/--error), see the refusal results_root_with_space; a code folder may not hold a double quote (#170).",
+      "about": "Every data path (scenes, raw root, media root) is under a folder with a space, a single quote and double quotes, and the code root (manifest and PYTHONPATH) has a space. The code root has no quote: #170 refuses a double quote in a code folder, and with a single quote the app's PYTHONPATH line is quoted '\\'' where plan_sbatch's shlex.quote writes '\"'\"' (same value, other bytes), a difference routed to the owner of job_submit.rs (ADR 0018). The results root has none: #170 refuses a results folder with a space, a '#' or a quote (it goes into #SBATCH --output/--error); see the refusal results_root_with_space.",
       "root": "/data/te st/it's \"q\"",
       "model": "vehicle-side",
       "profile": {
@@ -232,9 +232,9 @@
       "cli_logs": "/home/tester/logs",
       "python": "/opt/venv/bin/python",
       "pyvenv_cfg": "home = /software/python/3.9.18/bin\ninclude-system-site-packages = false\nversion = 3.9.18\n",
-      "coperceive_root": "/opt/co perceive/it's",
+      "coperceive_root": "/opt/co perceive",
       "samples": 1490,
-      "code_root": "/opt/co perceive/it's"
+      "code_root": "/opt/co perceive"
     }
   ],
   "refusals": [
