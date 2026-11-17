@@ -546,8 +546,19 @@ fn pythonpath_line(plan: &RunPlan) -> Result<Vec<String>, String> {
     }
     Ok(vec![format!(
         "export PYTHONPATH={}  # the coperceive the run's python imports, as plan_sbatch exports its own",
-        shell_quote(root)
+        shlex_quote(root)
     )])
+}
+
+/// Python's `shlex.quote`: [`shell_quote`] with a single quote written `'"'"'`, as
+/// `plan_sbatch` writes it, so a line both scripts share is the same bytes.
+fn shlex_quote(arg: &str) -> String {
+    let quoted = shell_quote(arg);
+    if quoted.starts_with('\'') {
+        format!("'{}'", arg.replace('\'', "'\"'\"'"))
+    } else {
+        quoted
+    }
 }
 
 /// For a built-in plan on a modules profile: a comment naming the profile's python
@@ -1489,6 +1500,15 @@ mod tests {
         spaced.run_interpreter.as_mut().unwrap().package_root = Some("/opt/my coperceive".into());
         let script = render_run_script(&profile, &spaced, &SubmitOptions::default()).unwrap().script;
         assert!(script.contains("\nexport PYTHONPATH='/opt/my coperceive'  # "), "{script}");
+        // A single quote is written as shlex.quote writes it ('"'"'), so the line is the
+        // CLI's byte for byte (plan parity case spaces_and_quotes).
+        let mut quoted = plan.clone();
+        quoted.run_interpreter.as_mut().unwrap().package_root = Some("/opt/co perceive/it's".into());
+        let script = render_run_script(&profile, &quoted, &SubmitOptions::default()).unwrap().script;
+        assert!(
+            script.contains("\nexport PYTHONPATH='/opt/co perceive/it'\"'\"'s'  # "),
+            "{script}"
+        );
         let mut unknown = plan.clone();
         unknown.run_interpreter.as_mut().unwrap().package_root = None;
         let script = render_run_script(&profile, &unknown, &SubmitOptions::default()).unwrap().script;
