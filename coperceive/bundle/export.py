@@ -9,12 +9,23 @@ command as text. LiDAR points and camera images are only carried when the
 dataset is on the redistributable allow list (see :mod:`coperceive.bundle.sensor`),
 the exporter opts in, and the selected frames fit the sensor-data cap.
 
-Nothing is read through a link (FOLD-03). Every scene and run folder the export
-reads is walked first with ``os.walk(followlinks=False)``; each entry is
+Nothing is read through a link (FOLD-03). The run folder and each exported scene
+folder are walked first with ``os.walk(followlinks=False)``; each entry is
 ``lstat``-ed, and a symbolic link (to anything, including a file in the same
-scene), a FIFO, a device or a socket refuses the **whole** export with an error
-that names it. The staged files pass the same check before they are scrubbed,
-hashed and zipped, and every copy opens its source with ``O_NOFOLLOW``.
+scene), a hard link, a FIFO, a device or a socket refuses the **whole** export
+with an error that names it. The walk records each entry's device and inode.
+Every source file is then read only through :class:`_Tree.open`, which opens it
+with ``O_NOFOLLOW | O_NONBLOCK`` and refuses it unless ``fstat`` shows the same
+device and inode, one name, and a regular file: a file or a parent folder
+swapped after the walk is refused, not read. Scene tables and the run's files
+are copied that way into a private snapshot, and everything else (the scene
+reader, the repro card) reads the snapshot. The staged files pass the walk
+check again before they are scrubbed, hashed and zipped.
+
+What this does not close: a path swapped after the walk is still *opened*
+before ``fstat`` can refuse it. ``O_NONBLOCK`` keeps a FIFO from blocking that
+open, but opening a device node can have side effects of its own. Nothing from
+such an open is read.
 """
 
 from __future__ import annotations
@@ -141,17 +152,29 @@ def _plain_entry(path: Path, shown: str, *, directory: bool) -> os.stat_result:
         return status
     if not stat.S_ISREG(status.st_mode):
         raise BundleExportError(f"refusing to export: {shown} is not a regular file")
+    if status.st_nlink > 1:
+        raise BundleExportError(f"refusing to export: {shown} is a hard link (it has other names)")
     return status
 
 
-def check_source_tree(root: Path, top: Path, label: str) -> None:
+#: What the walk saw for one entry: device, inode, and whether it is a folder.
+_Entry = tuple[int, int, bool]
+
+
+def check_source_tree(root: Path, top: Path, label: str) -> dict[str, _Entry]:
     """Refuse ``top`` (``root`` itself or a path under it) unless every entry is plain.
 
     ``root`` is the folder the user chose and may itself be reached through a
     link; nothing below it may be. Each component from ``root`` down to ``top``,
     and every entry ``os.walk(followlinks=False)`` finds under ``top``, must be a
-    regular file or a real directory whose resolved path stays inside ``root``.
+    regular file with one name or a real directory whose resolved path stays
+    inside ``root``. Returns what was seen, keyed by the path relative to ``root``.
     """
+    seen: dict[str, _Entry] = {}
+
+    def record(relative_path: str, status: os.stat_result) -> None:
+        seen[relative_path] = (status.st_dev, status.st_ino, stat.S_ISDIR(status.st_mode))
+
     try:
         resolved_root = root.resolve(strict=True)
         relative = top.relative_to(root)
@@ -160,7 +183,8 @@ def check_source_tree(root: Path, top: Path, label: str) -> None:
     current = root
     for part in relative.parts:
         current = current / part
-        _plain_entry(current, _shown(label, current.relative_to(root).as_posix()), directory=True)
+        key = current.relative_to(root).as_posix()
+        record(key, _plain_entry(current, _shown(label, key), directory=True))
 
     def contained(path: Path, shown: str) -> None:
         try:
@@ -172,7 +196,7 @@ def check_source_tree(root: Path, top: Path, label: str) -> None:
 
     contained(top, _shown(label, relative.as_posix()))
     if not top.is_dir():
-        return
+        return seen
 
     def walk_error(exc: OSError) -> None:
         raise BundleExportError(
@@ -183,9 +207,11 @@ def check_source_tree(root: Path, top: Path, label: str) -> None:
         here = Path(dirpath)
         for name in sorted(dirnames) + sorted(filenames):
             entry = here / name
-            shown = _shown(label, entry.relative_to(root).as_posix())
-            _plain_entry(entry, shown, directory=True)
+            key = entry.relative_to(root).as_posix()
+            shown = _shown(label, key)
+            record(key, _plain_entry(entry, shown, directory=True))
             contained(entry, shown)
+    return seen
 
 
 def _open_regular(source: Path, shown: str) -> BinaryIO:
@@ -198,29 +224,105 @@ def _open_regular(source: Path, shown: str) -> BinaryIO:
             f"refusing to export: cannot open {shown} ({exc.strerror})"
         ) from None
     handle = os.fdopen(descriptor, "rb")
-    if not stat.S_ISREG(os.fstat(handle.fileno()).st_mode):
+    status = os.fstat(handle.fileno())
+    if not stat.S_ISREG(status.st_mode):
         handle.close()
         raise BundleExportError(f"refusing to export: {shown} is not a regular file")
+    if status.st_nlink > 1:
+        handle.close()
+        raise BundleExportError(f"refusing to export: {shown} is a hard link (it has other names)")
     return handle
 
 
-def _copy_regular(source: Path, destination: Path, shown: str) -> None:
-    with _open_regular(source, shown) as handle:
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        destination.unlink(missing_ok=True)
-        with destination.open("wb") as sink:
-            shutil.copyfileobj(handle, sink, 1024 * 1024)
+@dataclass
+class _Tree:
+    """One source folder (the scenes root or the predictions root) and what its walk saw."""
+
+    root: Path
+    label: str
+    seen: dict[str, _Entry] = field(default_factory=dict)
+
+    def walk(self, relative: str) -> None:
+        self.seen.update(check_source_tree(self.root, self.root / relative, self.label))
+
+    def files_under(self, relative: str) -> list[str]:
+        prefix = relative.rstrip("/") + "/"
+        return sorted(
+            key for key, entry in self.seen.items() if key.startswith(prefix) and not entry[2]
+        )
+
+    def open(self, relative: str) -> BinaryIO:
+        """The walked file at ``relative``, refused unless it is still that file."""
+        shown = _shown(self.label, relative)
+        entry = self.seen.get(relative)
+        if entry is None or entry[2]:
+            raise BundleExportError(f"refusing to export: {shown} was not checked before reading")
+        handle = _open_regular(self.root / relative, shown)
+        status = os.fstat(handle.fileno())
+        if (status.st_dev, status.st_ino) != entry[:2]:
+            handle.close()
+            raise BundleExportError(
+                f"refusing to export: {shown} changed after it was checked "
+                "(a file or folder on its path was replaced)"
+            )
+        return handle
+
+    def copy(self, relative: str, destination: Path) -> None:
+        with self.open(relative) as handle:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.unlink(missing_ok=True)
+            with destination.open("wb") as sink:
+                shutil.copyfileobj(handle, sink, 1024 * 1024)
 
 
-def _scene_directory(scenes_root: Path, scene_id: str) -> Path:
-    candidate = scenes_root / scene_id
-    try:
-        candidate.resolve().relative_to(scenes_root.resolve())
-    except (OSError, ValueError):
-        raise BundleExportError(f"scene {scene_id!r} is outside the scenes root") from None
-    if not (candidate / "manifest.json").is_file():
-        raise BundleExportError(f"no scene {scene_id!r} under {scenes_root}")
-    return candidate
+@dataclass
+class _Sources:
+    """Checked reads of the folders an export uses, through a private snapshot.
+
+    ``snapshot`` mirrors the two roots: ``snapshot/scenes/<scene>/`` holds the
+    scene's top-level tables (``points.bin`` only when asked for) and
+    ``snapshot/predictions/<run>/`` the whole run folder, each copied through
+    :meth:`_Tree.open`. Readers that take a path (``read_scene``, the repro card)
+    are given the snapshot, never the source.
+    """
+
+    scenes: _Tree
+    predictions: _Tree
+    snapshot: Path
+    _copied: set[str] = field(default_factory=set)
+
+    @property
+    def scenes_root(self) -> Path:
+        return self.snapshot / "scenes"
+
+    @property
+    def predictions_root(self) -> Path:
+        return self.snapshot / "predictions"
+
+    def _take(self, tree: _Tree, relative: str) -> None:
+        key = f"{tree.label}/{relative}"
+        if key not in self._copied:
+            tree.copy(relative, self.snapshot / tree.label / relative)
+            self._copied.add(key)
+
+    def run(self, run_id: str) -> Path:
+        self.predictions.walk(run_id)
+        for relative in self.predictions.files_under(run_id):
+            self._take(self.predictions, relative)
+        (self.predictions_root / run_id).mkdir(parents=True, exist_ok=True)
+        return self.predictions_root / run_id
+
+    def scene(self, scene_id: str, *, points: bool = False) -> Path:
+        """The snapshot of one walked scene's tables (and its points blob with ``points``)."""
+        for relative in self.scenes.files_under(scene_id):
+            name = relative[len(scene_id) + 1 :]
+            if "/" in name or (name == "points.bin" and not points):
+                continue
+            self._take(self.scenes, relative)
+        directory = self.scenes_root / scene_id
+        if not (directory / "manifest.json").is_file():
+            raise BundleExportError(f"no scene {scene_id!r} under {self.scenes.root}")
+        return directory
 
 
 def _safe_image_path(value: str) -> str:
@@ -244,14 +346,27 @@ def _scene_adapter(scene_dir: Path) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[str, int]]:
-    if spec.startswith("worst:"):
-        try:
-            count = int(spec.split(":", 1)[1])
-        except ValueError:
-            raise BundleExportError("frames must be worst:N or a comma-separated list") from None
-    else:
-        count = 0
+def _choose_frames(run_dir: Path, spec: str, boxes: list[PredictionBox]) -> list[tuple[str, int]]:
+    """The frames to export. Reads only the run's own (snapshot) folder, never a scene.
+
+    ``worst:N`` takes the first N of the run's ``failures.json`` ranking, or, when
+    the run has none, its first N predicted frames. Otherwise ``spec`` is an
+    explicit ``scene@time_us,...`` list.
+    """
+    if not spec.startswith("worst:"):
+        out: list[tuple[str, int]] = []
+        for part in spec.split(","):
+            scene_id, _, time_text = part.partition("@")
+            try:
+                time_us = int(time_text or 0)
+            except ValueError:
+                raise BundleExportError("frames must be worst:N or scene@time_us,...") from None
+            out.append((_safe_scene_id(scene_id), time_us))
+        return out
+    try:
+        count = int(spec.split(":", 1)[1])
+    except ValueError:
+        raise BundleExportError("frames must be worst:N or a comma-separated list") from None
     candidates: list[tuple[str, int]] = []
     failures = run_dir / "failures.json"
     if failures.is_file():
@@ -259,20 +374,8 @@ def _choose_frames(scenes_root: Path, run_dir: Path, spec: str) -> list[tuple[st
         for item in cast(list[dict[str, object]], payload.get("frames", [])):
             candidates.append((_safe_scene_id(item.get("scene_id")), int(item.get("time_us", 0))))
     if not candidates:
-        for scene_dir in sorted(scenes_root.iterdir()):
-            if scene_dir.name.startswith(".") or not (scene_dir / "manifest.json").is_file():
-                continue
-            check_source_tree(scenes_root, scene_dir, "scenes")
-            scene = read_scene(scene_dir, points=False)
-            times = sorted({a.time_us for a in scene.annotations})
-            candidates.extend((_safe_scene_id(scene.scene_id), time) for time in times)
-    if spec.startswith("worst:"):
-        return candidates[:count]
-    out: list[tuple[str, int]] = []
-    for part in spec.split(","):
-        scene_id, _, time_text = part.partition("@")
-        out.append((_safe_scene_id(scene_id), int(time_text or 0)))
-    return out
+        candidates = sorted({(_safe_scene_id(box.scene_id), box.time_us) for box in boxes})
+    return candidates[:count]
 
 
 def _frame_count(scene: Scene) -> int:
@@ -284,6 +387,7 @@ def _included_times(frames: list[tuple[str, int]], scene_id: str) -> list[int]:
 
 
 def _sensor_bytes(scene_dir: Path, scene: Scene, times: set[int]) -> int:
+    """LiDAR and camera bytes at ``times``; image sizes come from an ``lstat`` of each source."""
     total = 0
     for cloud in scene.point_clouds:
         if cloud.time_us in times:
@@ -297,7 +401,9 @@ def _sensor_bytes(scene_dir: Path, scene: Scene, times: set[int]) -> int:
     return total
 
 
-def _plan_sensor(request: BundleExportRequest, frames: list[tuple[str, int]]) -> _SensorPlan:
+def _plan_sensor(
+    request: BundleExportRequest, frames: list[tuple[str, int]], sources: _Sources
+) -> _SensorPlan:
     """Decide what sensor data may travel, before anything is written."""
     if request.sensor_max_bytes < 0:
         raise BundleExportError("sensor_max_bytes must be zero or more")
@@ -309,7 +415,7 @@ def _plan_sensor(request: BundleExportRequest, frames: list[tuple[str, int]]) ->
     # sensor bytes into the bundle. The first refusal is the recorded decision.
     policy: SensorPolicy | None = None
     for scene_id in scene_ids:
-        complete = _read_complete(_scene_directory(request.scenes_root, scene_id))
+        complete = _read_complete(sources.scene(scene_id))
         recorded_adapter = complete.get("adapter")
         generator = complete.get("generator")
         scene_policy = sensor_data_policy(
@@ -326,15 +432,15 @@ def _plan_sensor(request: BundleExportRequest, frames: list[tuple[str, int]]) ->
     total = 0
     want_sensor = policy.allowed and request.include_sensor_data
     for scene_id in scene_ids:
-        scene_dir = _scene_directory(request.scenes_root, scene_id)
+        snapshot = sources.scene(scene_id, points=want_sensor)
         if adapter is None:
-            adapter = _scene_adapter(scene_dir) or policy.adapter
+            adapter = _scene_adapter(snapshot) or policy.adapter
         times = set(_included_times(frames, scene_id))
-        structure = read_scene(scene_dir, points=False)
+        structure = read_scene(snapshot, points=False)
         if want_sensor:
-            scene = read_scene(scene_dir)
+            scene = read_scene(snapshot)
             full_scenes[scene_id] = scene
-            total += _sensor_bytes(scene_dir, scene, times)
+            total += _sensor_bytes(request.scenes_root / scene_id, scene, times)
         else:
             scene = structure
         rows.append(
@@ -378,7 +484,8 @@ def _plan_sensor(request: BundleExportRequest, frames: list[tuple[str, int]]) ->
 def _write_scene(
     staging: _Staging,
     work: Path,
-    scene_dir: Path,
+    sources: _Sources,
+    scene_id: str,
     scene: Scene,
     times: set[int],
     *,
@@ -387,10 +494,10 @@ def _write_scene(
     """Write the scene with only the included frames and only the allowed sensors."""
     # The staged folder is named from the manifest's scene id, which comes from
     # someone else's folder: it must be the plain folder name the run refers to.
-    if scene.scene_id != _safe_scene_id(scene_dir.name):
+    if scene.scene_id != _safe_scene_id(scene_id):
         raise BundleExportError(
-            f"refusing to export: scenes/{scene_dir.name}/manifest.json records scene id "
-            f"{scene.scene_id!r}, not {scene_dir.name!r}"
+            f"refusing to export: scenes/{scene_id}/manifest.json records scene id "
+            f"{scene.scene_id!r}, not {scene_id!r}"
         )
     filtered = replace(
         scene,
@@ -410,20 +517,19 @@ def _write_scene(
     )
     target = work / "scenes" / scene.scene_id
     write_scene(filtered, target)
-    complete = scene_dir / "COMPLETE.json"
-    if os.path.lexists(complete):
+    complete = sources.scene(scene_id) / "COMPLETE.json"
+    if complete.is_file():
         (target / "COMPLETE.json").unlink(missing_ok=True)
-        _copy_regular(complete, target / "COMPLETE.json", f"scenes/{scene.scene_id}/COMPLETE.json")
+        shutil.copyfile(complete, target / "COMPLETE.json")
     sensor_paths: set[str] = set()
     if include_sensor:
         for image in filtered.images:
             if image.time_us not in times:
                 continue
             relative = _safe_image_path(image.path)
-            shown = f"scenes/{scene.scene_id}/{relative}"
             # A recorded image that is missing refuses the export instead of
-            # leaving a silent gap; _sensor_bytes has already lstat-ed it.
-            _copy_regular(scene_dir / relative, target / relative, shown)
+            # leaving a silent gap: it was never walked, so it cannot be opened.
+            sources.scenes.copy(f"{scene_id}/{relative}", target / relative)
             sensor_paths.add(f"scenes/{scene.scene_id}/{relative}")
         sensor_paths.add(f"scenes/{scene.scene_id}/points.bin")
         sensor_paths.add(f"scenes/{scene.scene_id}/point_index.parquet")
@@ -564,32 +670,44 @@ def export_bundle(request: BundleExportRequest) -> Path:
     run_id = request.run_id
     if not run_id or "/" in run_id or "\\" in run_id or run_id in {".", ".."}:
         raise BundleExportError(f"unsafe run id {run_id!r}")
-    run_dir = request.predictions_root / run_id
-    if not os.path.lexists(run_dir):
+    if not os.path.lexists(request.predictions_root / run_id):
         raise BundleExportError(f"no prediction run {run_id!r} under {request.predictions_root}")
-    # FOLD-03: walk everything the export reads before reading any of it.
-    check_source_tree(request.predictions_root, run_dir, "predictions")
-    if not run_dir.is_dir():
-        raise BundleExportError(f"no prediction run {run_id!r} under {request.predictions_root}")
-    meta = read_run_meta(request.predictions_root, run_id)
+    with tempfile.TemporaryDirectory(prefix="coperceive-bundle-src-") as raw_sources:
+        sources = _Sources(
+            scenes=_Tree(request.scenes_root, "scenes"),
+            predictions=_Tree(request.predictions_root, "predictions"),
+            snapshot=Path(raw_sources),
+        )
+        return _export(request, sources)
+
+
+def _export(request: BundleExportRequest, sources: _Sources) -> Path:
+    run_id = request.run_id
+    # FOLD-03: the run folder is walked, then read only from its checked snapshot.
+    run_dir = sources.run(run_id)
+    meta = read_run_meta(sources.predictions_root, run_id)
     box_rows: list[PredictionBox] = []
     for scene_dir in sorted(p for p in run_dir.iterdir() if p.is_dir()):
-        box_rows.extend(read_boxes(request.predictions_root, run_id, scene_dir.name))
-    frames = _choose_frames(request.scenes_root, run_dir, request.frames)
+        box_rows.extend(read_boxes(sources.predictions_root, run_id, scene_dir.name))
+    frames = _choose_frames(run_dir, request.frames, box_rows)
     if not frames:
         raise BundleExportError("no frames selected")
     wanted = set(frames)
     filtered = [box for box in box_rows if (box.scene_id, box.time_us) in wanted]
     if not filtered:
         raise BundleExportError("the selected frames have no predictions")
+    # Only the exported scenes are walked; a link in another scene is not our business.
     for scene_id in dict.fromkeys(scene_id for scene_id, _time_us in frames):
-        candidate = request.scenes_root / scene_id
-        if not os.path.lexists(candidate):
+        if not os.path.lexists(request.scenes_root / scene_id):
             raise BundleExportError(f"no scene {scene_id!r} under {request.scenes_root}")
-        check_source_tree(request.scenes_root, candidate, "scenes")
+        sources.scenes.walk(scene_id)
+    if os.path.lexists(request.scenes_root / "dataset.json"):
+        # The repro card records the dataset manifest's hash.
+        sources.scenes.walk("dataset.json")
+        sources.scenes.copy("dataset.json", sources.scenes_root / "dataset.json")
     # The sensor decision (allow list, opt-in, cap) is made before any file is
     # written; an over-cap selection refuses the export rather than truncating it.
-    sensor = _plan_sensor(request, frames)
+    sensor = _plan_sensor(request, frames, sources)
     out = request.out
     out.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="coperceive-bundle-") as raw_work:
@@ -599,8 +717,8 @@ def export_bundle(request: BundleExportRequest) -> Path:
         card = export_card(
             ExportRequest(
                 run_id=run_id,
-                scenes_root=request.scenes_root,
-                predictions_root=request.predictions_root,
+                scenes_root=sources.scenes_root,
+                predictions_root=sources.predictions_root,
                 created_utc=request.created_utc,
             )
         )
@@ -622,7 +740,7 @@ def export_bundle(request: BundleExportRequest) -> Path:
         (work / "eval").mkdir()
         config_doc: object = "unknown"
         for scene_id, _time_us in frames:
-            candidate = request.predictions_root / run_id / scene_id / "metrics.json"
+            candidate = run_dir / scene_id / "metrics.json"
             if candidate.is_file():
                 try:
                     payload = json.loads(candidate.read_text(encoding="utf-8"))
@@ -636,14 +754,15 @@ def export_bundle(request: BundleExportRequest) -> Path:
         )
         staging.files["eval/config.json"] = "eval-config"
         for scene_id, _time_us in frames:
-            metrics = request.predictions_root / run_id / scene_id / "metrics.json"
+            metrics = run_dir / scene_id / "metrics.json"
             rel = f"eval/{scene_id}/metrics.json"
-            if os.path.lexists(metrics) and rel not in staging.files:
-                shown = f"predictions/{run_id}/{scene_id}/metrics.json"
-                _copy_regular(metrics, work / rel, shown)
+            if metrics.is_file() and rel not in staging.files:
+                (work / rel).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(metrics, work / rel)
                 staging.files[rel] = "eval-metrics"
                 rel_pred = f"predictions/{run_id}/{scene_id}/metrics.json"
-                _copy_regular(metrics, work / rel_pred, shown)
+                (work / rel_pred).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(metrics, work / rel_pred)
                 staging.files[rel_pred] = "predictions"
         # filtered predictions
         write_run(work / "predictions", run_id, meta, filtered, force=True)
@@ -651,7 +770,7 @@ def export_bundle(request: BundleExportRequest) -> Path:
         # frames' rows travel too (a bundle without them shows no predictions).
         for scene_id in dict.fromkeys(scene_id for scene_id, _time_us in frames):
             source = run_dir / scene_id / MATCHES_FILE
-            if os.path.lexists(source):
+            if source.is_file():
                 _write_matches(
                     source,
                     work / "predictions" / run_id / scene_id / MATCHES_FILE,
@@ -664,18 +783,21 @@ def export_bundle(request: BundleExportRequest) -> Path:
         if request.include_full_predictions:
             for name in ("run.json", BOXES_FILE):
                 source = run_dir / name
-                if os.path.lexists(source):
+                if source.is_file():
                     target = f"predictions-full/{name}"
-                    _copy_regular(source, work / target, f"predictions/{run_id}/{name}")
+                    (work / target).parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(source, work / target)
                     staging.files[target] = "full-predictions"
         # scenes: structure, GT boxes and poses always; sensors only if allowed
         for index, (scene_id, time_us) in enumerate(frames):
-            scene_dir = _scene_directory(request.scenes_root, scene_id)
-            scene = sensor.full_scenes.get(scene_id) or read_scene(scene_dir, points=False)
+            scene = sensor.full_scenes.get(scene_id) or read_scene(
+                sources.scene(scene_id), points=False
+            )
             _write_scene(
                 staging,
                 work,
-                scene_dir,
+                sources,
+                scene_id,
                 scene,
                 set(_included_times(frames, scene_id)),
                 include_sensor=sensor.status == "included",

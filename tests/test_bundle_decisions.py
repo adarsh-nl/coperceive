@@ -132,8 +132,6 @@ def test_demo_scene_without_the_generator_marker_omits_sensor_data(
 
 def test_each_scene_proves_itself_not_only_the_first(demo: Path, tmp_path: Path) -> None:
     """A demo scene first must not let a second, non-demo scene's sensors travel."""
-    from coperceive.bundle.export import _plan_sensor
-
     scenes = demo / "scenes"
     shutil.copytree(scenes / SCENE, scenes / "second")
     manifest = json.loads((scenes / "second" / "manifest.json").read_text(encoding="utf-8"))
@@ -143,13 +141,19 @@ def test_each_scene_proves_itself_not_only_the_first(demo: Path, tmp_path: Path)
     complete.update(adapter="opv2v", scene_id="second")
     complete.pop("generator")
     (scenes / "second" / "COMPLETE.json").write_text(json.dumps(complete), encoding="utf-8")
-    plan = _plan_sensor(
-        _request(demo, tmp_path / "x.cpbundle", dataset_id="demo", include_sensor_data=True),
-        [(SCENE, 0), ("second", 0)],
+    bundle = export_bundle(
+        _request(
+            demo,
+            tmp_path / "x.cpbundle",
+            dataset_id="demo",
+            include_sensor_data=True,
+            frames=f"{SCENE}@0,second@0",
+        )
     )
-    assert plan.status == "omitted"
-    assert "adapter 'opv2v'" in str(plan.reason)
-    assert plan.bytes == 0
+    manifest = _manifest(bundle)
+    assert manifest["sensor_data"]["status"] == "omitted"
+    assert "adapter 'opv2v'" in str(manifest["sensor_data"]["reason"])
+    assert not _sensor_files(manifest)
 
 
 # 2. Griffin is off the allow list --------------------------------------------
@@ -209,7 +213,9 @@ def test_export_cap_refuses_before_the_staging_folder_exists(
     real = tempfile.TemporaryDirectory
 
     def watched(*args: object, **kwargs: object) -> tempfile.TemporaryDirectory[str]:
-        staged.append("staging")
+        # The archive staging folder; the checked source snapshot is made earlier.
+        if kwargs.get("prefix") == "coperceive-bundle-":
+            staged.append("staging")
         return real(*args, **kwargs)  # type: ignore[call-overload,no-any-return]
 
     monkeypatch.setattr("coperceive.bundle.export.tempfile.TemporaryDirectory", watched)
@@ -444,9 +450,8 @@ def test_reserved_names_are_refused(plain_bundle: Path, tmp_path: Path, name: st
 @pytest.mark.parametrize(
     ("recorded", "match"),
     [
-        # Scene ids read from manifests are checked before they name any path.
-        ("../../escaped", "unsafe scene id"),
         # The staged folder is named from the manifest, so it must be the folder name.
+        ("../../escaped", "records scene id"),
         ("other-scene", "records scene id"),
     ],
 )
@@ -464,3 +469,26 @@ def test_export_refuses_a_manifest_scene_id_that_is_not_its_folder(
         export_bundle(_request(demo, out, dataset_id="demo", frames=f"{SCENE}@0"))
     assert not out.exists()
     assert not list(tmp_path.rglob("escaped*"))
+
+
+# only the exported scenes are walked ------------------------------------------
+
+
+@pytest.mark.parametrize("frames", [f"{SCENE}@0", "worst:3"])
+def test_a_link_in_an_unrelated_scene_does_not_refuse_the_export(
+    demo: Path, tmp_path: Path, frames: str
+) -> None:
+    """An explicit frame list, or worst:N without failures.json, reads only its scenes."""
+    assert not (demo / "predictions" / "demo" / "failures.json").exists()
+    other = demo / "scenes" / "zz-other"
+    other.mkdir()
+    (other / "manifest.json").write_text("{}", encoding="utf-8")
+    (other / "COMPLETE.json").write_text("{}", encoding="utf-8")
+    (other / "raw").symlink_to(tmp_path, target_is_directory=True)
+    bundle = export_bundle(
+        _request(demo, tmp_path / "one.cpbundle", dataset_id="demo", frames=frames)
+    )
+    with zipfile.ZipFile(bundle) as archive:
+        names = archive.namelist()
+    assert f"scenes/{SCENE}/manifest.json" in names
+    assert not [name for name in names if "zz-other" in name]
