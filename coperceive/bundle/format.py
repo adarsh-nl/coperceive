@@ -15,6 +15,9 @@ from pathlib import Path
 SCHEMA = "coperceive-result-bundle"
 VERSION = 1
 MANIFEST = "bundle.json"
+#: Written by Coperceive next to an extracted bundle, never taken from one:
+#: ``open.json`` is the per-open sensor decision the viewer trusts.
+RESERVED_PATHS = frozenset({"bundle.json", "open.json"})
 MAX_FILES = 20_000
 MAX_FILE_BYTES = 512 * 1024 * 1024
 MAX_TOTAL_BYTES = 2 * 1024 * 1024 * 1024
@@ -294,6 +297,8 @@ def validate_manifest(payload: Mapping[str, object]) -> tuple[Content, ...]:
         if not isinstance(path, str) or not isinstance(digest, str) or not isinstance(size, int):
             raise BundleError(f"contents[{index}] is missing path/sha256/size")
         safe_member(path)
+        if path.lower() in RESERVED_PATHS:
+            raise BundleError(f"contents[{index}] uses the reserved name {path!r}")
         if path == MANIFEST or path in seen:
             raise BundleError(f"duplicate content path {path!r}")
         if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
