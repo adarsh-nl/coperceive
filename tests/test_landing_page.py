@@ -295,8 +295,9 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
 
         assert page.locator("h1").inner_text() == "Many agents.\nOne scene."
         nav = page.locator("header nav a")
-        assert nav.all_inner_texts() == ["Pipeline", "Install", "GitHub"]
-        assert nav.nth(2).get_attribute("href") == REPO
+        assert nav.all_inner_texts() == ["Pipeline", "Install", "Docs", "GitHub"]
+        assert nav.nth(2).get_attribute("href") == "/coperceive/docs/"
+        assert nav.nth(3).get_attribute("href") == REPO
         assert page.get_by_role("link", name="View on GitHub").get_attribute("href") == REPO
         docs = page.get_by_role("link", name="Read the docs").get_attribute("href")
         assert docs == f"{REPO}/tree/main/docs"
