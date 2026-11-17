@@ -741,6 +741,7 @@ async fn switch_data_root(
     // Update state.json with new root and prepend to recent_roots
     {
         let mut persistent = state::load_state();
+        let previous_recent = persistent.recent_roots.clone();
         persistent.last_data_root = Some(new_path_str.clone());
         persistent.last_scene_id = None;
         persistent.last_sample_index = None;
@@ -750,10 +751,7 @@ async fn switch_data_root(
         state::add_recent_root(&mut persistent, &new_path_str);
         let _ = state::save_state(&persistent);
 
-        // Update application menu with refreshed recent roots
-        if let Ok(menu) = build_app_menu(app, &persistent.recent_roots) {
-            let _ = app.set_menu(menu);
-        }
+        schedule_app_menu_refresh(app, &previous_recent, &persistent.recent_roots);
     }
 
     // Update window title and notify viewer
@@ -1655,6 +1653,56 @@ fn build_app_menu(
     }
 }
 
+fn schedule_app_menu_refresh(
+    app: &tauri::AppHandle,
+    previous_recent: &[String],
+    updated_recent: &[String],
+) {
+    if !state::recent_roots_changed(previous_recent, updated_recent) {
+        return;
+    }
+    let handle = app.clone();
+    let recent_roots = updated_recent.to_vec();
+    let _ = app.run_on_main_thread(move || {
+        if let Ok(menu) = build_app_menu(&handle, &recent_roots) {
+            let _ = handle.set_menu(menu);
+        }
+    });
+}
+
+fn write_test_marker_file(state: &AppState, session: Option<(&str, &str)>) {
+    let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") else {
+        return;
+    };
+    let (origin, token, log_path_str) = match session {
+        Some((orig, tok)) => {
+            let log_path = state
+                .sidecar
+                .lock()
+                .ok()
+                .and_then(|s| s.as_ref().map(|sess| sess.log_path.display().to_string()))
+                .unwrap_or_default();
+            (orig, tok, log_path)
+        }
+        None => ("", "", String::new()),
+    };
+    let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+    let ctrl_secret = state
+        .ctrl_secret
+        .lock()
+        .ok()
+        .and_then(|s| s.clone())
+        .unwrap_or_default();
+    let _ = coperceive_desktop::test_seams::write_test_marker_atomic(
+        Path::new(&marker_path),
+        origin,
+        token,
+        &log_path_str,
+        ctrl_port,
+        &ctrl_secret,
+    );
+}
+
 /// The library's shared maps root, passed to the local server so maps installed
 /// from the Library card (library_root/maps) are found even when the server root
 /// is a single scene directory.
@@ -1816,6 +1864,7 @@ async fn start_local_session_inner(
     // Persist new root to state.json and update recent_roots
     {
         let mut persistent = state::load_state();
+        let previous_recent = persistent.recent_roots.clone();
         if !is_restore || persistent.last_data_root.as_deref() != Some(data_root.as_str()) {
             persistent.last_scene_id = None;
             persistent.last_sample_index = None;
@@ -1827,13 +1876,16 @@ async fn start_local_session_inner(
         state::add_recent_root(&mut persistent, &data_root);
         let _ = state::save_state(&persistent);
 
-        // Update application menu with refreshed recent roots
-        if let Ok(menu) = build_app_menu(app, &persistent.recent_roots) {
-            let _ = app.set_menu(menu);
-        }
+        schedule_app_menu_refresh(app, &previous_recent, &persistent.recent_roots);
     }
 
     let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
+    set_auto_connect_state(
+        app,
+        state,
+        "state_saved",
+        serde_json::json!({ "origin": origin }),
+    );
 
     // Open viewer window at session.origin with initialization_script
     set_auto_connect_state(
@@ -1877,28 +1929,7 @@ async fn start_local_session_inner(
         *lock = Some(data_root);
     }
 
-    if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
-        let log_path = {
-            let lock = state.sidecar.lock().ok();
-            lock.and_then(|s| s.as_ref().map(|sess| sess.log_path.clone()))
-                .unwrap_or_default()
-        };
-        let ctrl_secret = state
-            .ctrl_secret
-            .lock()
-            .ok()
-            .and_then(|s| s.clone())
-            .unwrap_or_default();
-        let content = format!(
-            "{}\n{}\n{}\n{}\n{}\n",
-            payload.origin,
-            payload.token,
-            log_path.display(),
-            ctrl_port,
-            ctrl_secret,
-        );
-        let _ = std::fs::write(&marker_path, content);
-    }
+    write_test_marker_file(state, Some((&payload.origin, &payload.token)));
 
     Ok(payload)
 }
@@ -5056,24 +5087,6 @@ fn main() {
                                 Ok(payload) => {
                                     println!("[auto-connect] Successfully connected: origin={}", payload.origin);
                                     let _ = std::io::Write::flush(&mut std::io::stdout());
-                                    if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
-                                        let log_path = {
-                                            let lock = st.sidecar.lock().ok();
-                                            lock.and_then(|s| s.as_ref().map(|sess| sess.log_path.clone()))
-                                                .unwrap_or_default()
-                                        };
-                                        let ctrl_port = st.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
-                                        let ctrl_secret = st.ctrl_secret.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
-                                        let content = format!(
-                                            "{}\n{}\n{}\n{}\n{}\n",
-                                            payload.origin,
-                                            payload.token,
-                                            log_path.display(),
-                                            ctrl_port,
-                                            ctrl_secret,
-                                        );
-                                        let _ = std::fs::write(&marker_path, content);
-                                    }
                                 }
                                 Err(err) => {
                                     set_auto_connect_state(
@@ -5101,31 +5114,13 @@ fn main() {
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.show();
                     }
-                    if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
-                        let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
-                        let ctrl_secret = state
-                            .ctrl_secret
-                            .lock()
-                            .ok()
-                            .and_then(|s| s.clone())
-                            .unwrap_or_default();
-                        let _ = std::fs::write(&marker_path, format!("\n\n\n{}\n{}\n", ctrl_port, ctrl_secret));
-                    }
+                    write_test_marker_file(&state, None);
                 }
             } else {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.show();
                 }
-                if let Ok(marker_path) = std::env::var("COPERCEIVE_TEST_MARKER_FILE") {
-                    let ctrl_port = state.ctrl_port.lock().ok().and_then(|p| *p).unwrap_or(0);
-                    let ctrl_secret = state
-                        .ctrl_secret
-                        .lock()
-                        .ok()
-                        .and_then(|s| s.clone())
-                        .unwrap_or_default();
-                    let _ = std::fs::write(&marker_path, format!("\n\n\n{}\n{}\n", ctrl_port, ctrl_secret));
-                }
+                write_test_marker_file(&state, None);
             }
 
             Ok(())
