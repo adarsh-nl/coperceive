@@ -523,7 +523,7 @@ def print_summary(report: StagingReport) -> None:
         else:
             _say(f"map {item.map_name}: not measured ({item.reason})")
     _say("timings: " + ", ".join(f"{label} {secs:.1f} s" for label, secs in report.timings))
-    _say("serve on this node (tunnel: HANDOVER.md, 'Viewing from a laptop'):")
+    _say("serve on this node (tunnel from your laptop: ssh -L <port>:<node>:<port> <login-host>):")
     _say(report.serve_command)
 
 

@@ -6,12 +6,12 @@ Status: accepted on 2026-10-18 and implemented in batch mode on branch `feat/eva
 
 Step A (ADR 0010) evaluates a run that somebody wrote: by hand, with `coperceive predictions import`, or with a one-off converter. The first real run came from the Griffin vehicle-side checkpoint and took:
 
-- a separate conda environment, `~/.conda/envs/griffin` (Python 3.8.20, torch 1.9.1+cu111, mmcv-full 1.4.0, mmdet3d v0.17.1), built offline from a 2.4 GB wheelhouse because compute nodes cannot reach PyPI (HANDOVER.md, "Task 12");
+- a separate conda environment, `~/.conda/envs/griffin` (Python 3.8.20, torch 1.9.1+cu111, mmcv-full 1.4.0, mmdet3d v0.17.1), built offline from a 2.4 GB wheelhouse because compute nodes cannot reach PyPI;
 - one GPU job, `~/scripts/slurm/griffin-infer.sbatch`, 23 min 36 s wall on an A40 in job 627093, of which 11 min 17 s was staging 17.0 GB of camera PNGs to `/local/$SLURM_JOB_ID` and 9 min 37 s was `tools/dist_eval.sh` over 1,490 samples;
 - the toolkit's own data conversion (`trans_kitti2nuscenes.py`, `generate_nuscenes_pkl.py`);
 - `scripts/griffin/griffin_to_predictions.py` to turn `results_nusc_det.json` into `boxes.parquet` through `validate_boxes` and `write_run`.
 
-The reusable pieces were the converter and the sbatch. Three more released checkpoints sit beside the vehicle one under `/datasets/eemcs/ps/cv/huggingface/griffin/ckpts/griffin_50scenes_25m/`: `drone-side/iter_33024.pth`, `early-fusion/iter_33024.pth` and `cooperative/instance_fusion/iter_33024.pth`. The toolkit also has a result-level late fusion (`tools/eval_late_fusion.sh`, `tools/result_converter/det_result_late_fusion.py`). Each would today be another sbatch and another converter.
+The reusable pieces were the converter and the sbatch. Three more released checkpoints sit beside the vehicle one under `/data/huggingface/griffin/ckpts/griffin_50scenes_25m/`: `drone-side/iter_33024.pth`, `early-fusion/iter_33024.pth` and `cooperative/instance_fusion/iter_33024.pth`. The toolkit also has a result-level late fusion (`tools/eval_late_fusion.sh`, `tools/result_converter/det_result_late_fusion.py`). Each would today be another sbatch and another converter.
 
 Step B makes a model a plugin: something `coperceive` can list, check, run over scenes and, later, stream into the viewer, while the output stays an ordinary step A run so `eval run`, `report`, `compare`, the routes and the figures need no change.
 
@@ -182,7 +182,7 @@ In the Predictions block the session appears in the run list as `run_id: "live:<
 
 The script contains no environment value; `environment.secrets` are read from the job's environment, which `sbatch --export` controls. On a laptop or a workstation the same command runs in-process; only the emitter knows about Slurm.
 
-Live mode, once built, on the HPC means `srun --partition=ps,main-gpu --gres=gpu:1 --pty bash`, then `coperceive serve --model griffin` on that node bound to `127.0.0.1`, reached through the two-hop tunnel of HANDOVER.md "Viewing from a laptop". The server and the child share the allocation. The login node runs neither.
+Live mode, once built, on the HPC means `srun --partition=ps,main-gpu --gres=gpu:1 --pty bash`, then `coperceive serve --model griffin` on that node bound to `127.0.0.1`, reached through a two-hop SSH tunnel (laptop → login node → compute node). The server and the child share the allocation. The login node runs neither.
 
 ### 6. Cancellation and timeouts
 

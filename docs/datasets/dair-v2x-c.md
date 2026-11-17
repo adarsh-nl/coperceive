@@ -7,7 +7,7 @@ layout**, optionally with the **CoAlign complemented annotations**.
 
 ## Availability and licence
 
-- **Cluster copy:** `/datasets/eemcs/ps/cv/air-thu/dair-v2x-c_raw` contains only
+- **Cluster copy:** `/data/air-thu/dair-v2x-c_raw` contains only
   the CoAlign complemented annotations (`DAIR-V2X-C_Complemented_Anno/` with
   `train.json`, `val.json`, `readme.md`, `new_labels/cooperative_label` and
   `new_labels/vehicle-side_label`). The published sensor tree

@@ -3313,9 +3313,9 @@ def focus_and_clear(field_id):
     wait_for_field_value(field_id, "", f"Clearing #{field_id}")
 
 cases = [
-    ("hpc-user", "nanjaiyalatha"),
+    ("hpc-user", "alicelowercase"),
     ("hpc-partition", "ps"),
-    ("hpc-host", "hpc-head1"),
+    ("hpc-host", "login1"),
 ]
 
 for field_id, text in cases:

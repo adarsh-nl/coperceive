@@ -18,7 +18,7 @@ Neither dataset publishes a licence. The OPV2V page states "Copyright © 2021 UC
 <split>/<scene>/<agent>/NNNNNN_cameraK.png   # 800x600
 ```
 
-Scenes are named by their collection time; agents by their CARLA actor id. In V2XSet the roadside unit is the agent directory `-1` (29 of 58 scenes). On the HPC: `/datasets/eemcs/ps/cv/opencood/opv2v` (train 44, validate 9, test 16, test_culver_city 4 scenes) and `/datasets/eemcs/ps/cv/opencood/v2xset` (train 33, validate 6, test 19).
+Scenes are named by their collection time; agents by their CARLA actor id. In V2XSet the roadside unit is the agent directory `-1` (29 of 58 scenes). On the HPC: `/data/opencood/opv2v` (train 44, validate 9, test 16, test_culver_city 4 scenes) and `/data/opencood/v2xset` (train 33, validate 6, test 19).
 
 ## Conventions, from public documentation only
 
@@ -32,10 +32,10 @@ Scenes are named by their collection time; agents by their CARLA actor id. In V2
 ## Commands
 
 ```bash
-coperceive adapters check opv2v --raw-root /datasets/eemcs/ps/cv/opencood/opv2v --param split=test --scenes 2021_08_20_21_10_24
+coperceive adapters check opv2v --raw-root /data/opencood/opv2v --param split=test --scenes 2021_08_20_21_10_24
 coperceive maps ingest --xodr ~/maps-src/carla-0.9.15/Town06.xodr --map-name Carla/Maps/Town06 --out MAPS   # one per town
 coperceive maps identify --maps MAPS --scenes SCENES --out scene_towns.yaml
-coperceive adapters ingest v2xset --raw-root /datasets/eemcs/ps/cv/opencood/v2xset --param split=train --out SCENES --platform-table scene_towns.yaml
+coperceive adapters ingest v2xset --raw-root /data/opencood/v2xset --param split=train --out SCENES --platform-table scene_towns.yaml
 ```
 
 On the HPC the whole flow runs in `scripts/opencood/stage_viewer.py` inside a compute-node allocation (`~/scripts/slurm/opencood-viewer-stage.sbatch`), which stages into `/local/$SLURM_JOB_ID`, links the images from the dataset through `--media-root`, and prints the serve line.
