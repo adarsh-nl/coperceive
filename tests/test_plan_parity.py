@@ -472,3 +472,26 @@ def test_the_app_reads_what_model_list_json_prints_for_griffin(
     printed = json.loads(_logical(capsys.readouterr().out, Path("/nonexistent")))
     committed = json.loads((PARITY / CASES["model_list"]).read_text(encoding="utf-8"))
     assert printed == committed
+
+
+def _refusal_names() -> list[str]:
+    return [case["name"] for case in CASES["refusals"]]
+
+
+@pytest.mark.parametrize("name", _refusal_names())
+def test_the_cli_takes_each_input_the_app_refuses(name: str, tmp_path: Path) -> None:
+    """plan_parity.rs holds the app to the refusal's exact message; here, ``model run
+    --slurm`` takes the same input and writes a valid script, so the refusal is a real,
+    listed difference and not a gap in the harness."""
+    (case,) = [case for case in CASES["refusals"] if case["name"] == name]
+    assert name not in _case_names(), name
+    assert not (PARITY / "app" / f"{name}.sbatch").exists(), name
+    for key in ("refused", "why", "cite"):
+        assert case[key].strip(), (name, key)
+    cli = _cli_script(case, tmp_path)
+    _, _, ns = _parse(_run_line(cli), {"$STAGING": "0"})
+    media = [] if case.get("media_root", True) is False else [f"{case['root']}/raw"]
+    assert ns.media_root == media, (name, ns.media_root)
+    if shutil.which("bash") is not None:
+        done = subprocess.run(["bash", "-n", "-c", cli], capture_output=True, text=True)
+        assert done.returncode == 0, (name, done.stderr)
