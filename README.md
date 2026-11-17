@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-outlined.svg">
-    <img alt="Coperceive" src="assets/brand/wordmark-light-outlined.svg" width="320">
+    <img alt="Coperceive" src="assets/brand/wordmark-light-outlined.svg" width="260">
   </picture>
 </p>
 
