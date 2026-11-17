@@ -81,7 +81,8 @@ options:
 
 ```text
 usage: coperceive bundle export [-h] --root ROOT --predictions PREDICTIONS -o OUT [--title TITLE]
-       [--frames FRAMES] [--include-raw] [--include-full-predictions] [--marker MARKER] run_id
+       [--frames FRAMES] [--dataset-id DATASET_ID] [--include-sensor-data] [--sensor-max-bytes
+       SENSOR_MAX_BYTES] [--include-full-predictions] [--marker MARKER] run_id
 
 positional arguments:
   run_id
@@ -94,7 +95,15 @@ options:
   -o, --out OUT  Output .cpbundle path.
   --title TITLE
   --frames FRAMES
-  --include-raw
+  --dataset-id DATASET_ID
+                        The dataset the run was evaluated on, recorded in the bundle. A name never
+                        allows sensor data: only a demo scene's COMPLETE.json generator marker
+                        does.
+  --include-sensor-data
+                        Include LiDAR points and camera images for the included frames. Only
+                        Coperceive demo scenes qualify, and the frames must fit the cap.
+  --sensor-max-bytes SENSOR_MAX_BYTES
+                        Uncompressed sensor-data cap in bytes (default 50 MiB).
   --include-full-predictions
   --marker MARKER  Extra identifier to scrub.
 ```
@@ -103,7 +112,8 @@ options:
 
 ```text
 usage: coperceive bundle preview [-h] --root ROOT --predictions PREDICTIONS [--title TITLE]
-       [--frames FRAMES] [--include-raw] [--include-full-predictions] [--marker MARKER] run_id
+       [--frames FRAMES] [--dataset-id DATASET_ID] [--include-sensor-data] [--sensor-max-bytes
+       SENSOR_MAX_BYTES] [--include-full-predictions] [--marker MARKER] run_id
 
 positional arguments:
   run_id
@@ -114,7 +124,9 @@ options:
   --predictions PREDICTIONS
   --title TITLE
   --frames FRAMES
-  --include-raw
+  --dataset-id DATASET_ID
+  --include-sensor-data
+  --sensor-max-bytes SENSOR_MAX_BYTES
   --include-full-predictions
   --marker MARKER
 ```
@@ -122,7 +134,7 @@ options:
 ## `coperceive bundle open`
 
 ```text
-usage: coperceive bundle open [-h] [--data-root DATA_ROOT] file
+usage: coperceive bundle open [-h] [--data-root DATA_ROOT] [--library-root DIR] file
 
 positional arguments:
   file
@@ -131,6 +143,8 @@ options:
   -h, --help  show this help message and exit
   --data-root DATA_ROOT
                         App data folder for bundles/<sha>/.
+  --library-root DIR  The recipient's library root. A bundle without sensor data uses a matching
+                        scene from here (same scene id, adapter and frame count). Repeatable.
 ```
 
 ## `coperceive demo`
@@ -164,8 +178,9 @@ options:
 ```text
 usage: coperceive serve [-h] [--host HOST] [--port PORT] --root ROOT [--token TOKEN] [--token-file
        PATH] [--root-path ROOT_PATH] [--maps MAPS] [--predictions PREDICTIONS] [--static STATIC]
-       [--media-root DIR] [--allow-origin ALLOW_ORIGIN] [--remote-stream-argv REMOTE_STREAM_ARGV]
-       [--remote-cache-dir REMOTE_CACHE_DIR] [--remote-cache-bytes REMOTE_CACHE_BYTES]
+       [--media-root DIR] [--allow-origin ALLOW_ORIGIN] [--bundle-info PATH] [--remote-stream-argv
+       REMOTE_STREAM_ARGV] [--remote-cache-dir REMOTE_CACHE_DIR] [--remote-cache-bytes
+       REMOTE_CACHE_BYTES]
 
 options:
   -h, --help  show this help message and exit
@@ -187,6 +202,8 @@ options:
                         staged scene links its camera directories to. Repeatable.
   --allow-origin ALLOW_ORIGIN
                         Exact origin allowed for cross-origin requests.
+  --bundle-info PATH  An opened result bundle's open.json. The scene summary then says whether
+                        sensor frames are included, from the recipient's local copy, or omitted.
   --remote-stream-argv REMOTE_STREAM_ARGV
                         JSON argv of a `coperceive dataset stream` reached over SSH: --root is
                         then the local mirror of that cluster dataset (no Slurm job).
