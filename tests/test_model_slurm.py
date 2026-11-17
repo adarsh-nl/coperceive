@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import shutil
 import stat
 import subprocess
@@ -194,7 +195,11 @@ def test_gpu_script_lines(roots: tuple[Path, Path, Scene], tmp_path: Path) -> No
     assert "--slurm" not in script
     assert "pip " not in script and "pypi" not in script.lower()
     assert script.rstrip().endswith('exit "$RC"')
-    assert "export PYTHONPATH=" + str(Path(__file__).resolve().parents[1]) in script
+    exports = [line for line in script.splitlines() if line.startswith("export PYTHONPATH=")]
+    assert exports == [
+        f"export PYTHONPATH={shlex.quote(str(Path(__file__).resolve().parents[1]))}"
+        "  # the coperceive that emitted this job, not the venv's editable target"
+    ], exports
     assert plan.partition == "test-partition" and plan.gres == "gpu:1"
     assert plan.estimate_source.startswith("the manifest")
 

@@ -18,4 +18,6 @@ Every ADR currently in `docs/adr/` is listed below. There is no `0013` file in t
 | 0012 Left-handed sources | [0012](../adr/0012-left-handed-sources.md) |
 | 0014 Desktop app | [0014](../adr/0014-desktop-app.md) |
 | 0015 Cluster profiles | [0015](../adr/0015-cluster-profiles-scheduler-adapter.md) |
+| 0018 Plan parity | [0018](../adr/0018-plan-parity.md) |
 | 0019 Security review | [0019](../adr/0019-security-review.md) |
+| 0021 App runs follow the CLI job | [0021](../adr/0021-app-model-runs-follow-the-cli-slurm-job.md) |

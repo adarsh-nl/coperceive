@@ -10,6 +10,8 @@ CLI is the reference. A line may differ only for a reason in the table below, an
 `tests/fixtures/plan_parity/allowed_differences.json` lists each such line with that
 reason. `tests/test_plan_parity.py` and `src-tauri/tests/plan_parity.rs` enforce this.
 
+[ADR 0018](0018-plan-parity.md) describes that harness: its cases and refusals, what it compares and how, and what it leaves undecided.
+
 ## Remaining differences
 
 | Line(s) | CLI | App | Why |
