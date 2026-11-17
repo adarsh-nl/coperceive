@@ -55,14 +55,14 @@ def build_parser() -> argparse.ArgumentParser:
     bundle_export.add_argument(
         "--dataset-id",
         default=None,
-        help="The dataset the run was evaluated on. Required for sensor data: the "
-        "redistributable allow list is looked up by this id, never inferred from a name.",
+        help="The dataset the run was evaluated on, recorded in the bundle. A name never "
+        "allows sensor data: only a demo scene's COMPLETE.json generator marker does.",
     )
     bundle_export.add_argument(
         "--include-sensor-data",
         action="store_true",
-        help="Include LiDAR points and camera images for the included frames, when the "
-        "dataset's recorded licence allows redistribution and the frames fit the cap.",
+        help="Include LiDAR points and camera images for the included frames. Only "
+        "Coperceive demo scenes qualify, and the frames must fit the cap.",
     )
     bundle_export.add_argument(
         "--sensor-max-bytes",
