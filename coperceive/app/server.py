@@ -1232,8 +1232,9 @@ def _bundle_local_scene(app: FastAPI, scene_id: str) -> Path | None:
     """A local-copy bundle reads sensors from the recipient's own scene, in place.
 
     ``open.json`` records the path only after ``open_bundle`` checked it resolves
-    inside a library root; here it must still be an absolute scene folder with
-    the same scene id, outside the served bundle.
+    inside a library root. Here it must still be an absolute scene folder with
+    the same scene id, outside the served bundle, and still resolve inside one
+    of the library roots ``open.json`` records (a link swapped in since is refused).
     """
     view = _bundle_scene_view(app, scene_id)
     if view is None or view.get("sensor_data") != "local-copy":
@@ -1249,6 +1250,17 @@ def _bundle_local_scene(app: FastAPI, scene_id: str) -> Path | None:
     if not isinstance(manifest, dict) or manifest.get("scene_id") != scene_id:
         return None
     if resolved.is_relative_to(app.state.root):
+        return None
+    info = app.state.bundle_info
+    recorded = info.get("library_roots") if isinstance(info, dict) else None
+    roots: list[Path] = []
+    for item in recorded if isinstance(recorded, list) else []:
+        if isinstance(item, str) and Path(item).is_absolute():
+            try:
+                roots.append(Path(item).resolve(strict=True))
+            except OSError:
+                continue
+    if not any(resolved.is_relative_to(root) for root in roots):
         return None
     return resolved
 

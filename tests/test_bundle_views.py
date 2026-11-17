@@ -13,9 +13,11 @@ passes ``open_db``. Synthetic demo data only.
 from __future__ import annotations
 
 import hashlib
+import json
 import os
+import shutil
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from coperceive.app import serve
@@ -23,6 +25,7 @@ from coperceive.app.server import create_app
 from coperceive.bundle import BundleExportRequest, OpenedBundle, export_bundle, open_bundle
 from coperceive.cli import main
 from coperceive.demo import create
+from coperceive.store import read_scene
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -181,17 +184,33 @@ def test_local_copy_view_shows_the_bundle_with_the_local_sensors(
 def test_local_copy_view_does_not_serve_frames_outside_the_bundle(
     views: dict[str, OpenedBundle],
 ) -> None:
+    """The local copy has 100 frames; only the bundle's own frames are served."""
     opened = views["local-copy"]
     client = TestClient(_app(opened))
-    outside = max(_frames(opened)) + 100_000
-    frame = client.get(f"/api/scenes/{SCENE}/frame", params={"time_us": outside})
-    sensors = frame.json()["point_sensors"] if frame.status_code == 200 else []
+    frames = _frames(opened)
+    inside = client.get(f"/api/scenes/{SCENE}/frame", params={"time_us": frames[0]})
+    sensors = inside.json()["point_sensors"]
+    assert sensors
+    outside = max(frames) + 100_000  # a frame the local copy has and the bundle lacks
+    rows = cast(list[dict[str, object]], opened.report["scenes"])
+    local = read_scene(Path(str(rows[0]["local_copy"])), points=False)
+    assert outside in {pose.time_us for agent in local.agents for pose in agent.poses}
     for row in sensors:
         points = client.get(
             f"/api/scenes/{SCENE}/points",
             params={"time_us": outside, "agent_id": row["agent_id"], "sensor_id": row["sensor_id"]},
         )
-        assert points.status_code != 200 or not points.content
+        assert points.status_code != 200 or not points.content, row
+    camera = _camera(client.get(f"/api/scenes/{SCENE}").json())
+    image = client.get(
+        f"/api/scenes/{SCENE}/image",
+        params={
+            "time_us": outside,
+            "agent_id": camera["agent_id"],
+            "sensor_id": camera["sensor_id"],
+        },
+    )
+    assert image.status_code == 404
 
 
 def test_omitted_view_shows_boxes_and_the_reason(views: dict[str, OpenedBundle]) -> None:
@@ -206,30 +225,64 @@ def test_omitted_view_shows_boxes_and_the_reason(views: dict[str, OpenedBundle])
     assert not view["frame"]["point_sensors"]
 
 
-def test_a_local_copy_path_outside_its_report_shape_is_not_served(
-    views: dict[str, OpenedBundle], tmp_path: Path
-) -> None:
-    """open.json's local_copy must be an absolute folder of the same scene."""
-    import json
+def _real_copy(demo_root: Path, folder: Path, *, scene_id: str = SCENE) -> Path:
+    """A full copy of the demo scene (sweeps and images) at ``folder``."""
+    shutil.copytree(demo_root / "scenes" / SCENE, folder)
+    if scene_id != SCENE:
+        manifest = json.loads((folder / "manifest.json").read_text(encoding="utf-8"))
+        manifest["scene_id"] = scene_id
+        (folder / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    return folder
 
+
+def _sweeps_served(
+    served: Path, report: dict[str, object], local_copy: str, roots: list[Path]
+) -> int:
+    """``point_sweeps`` of the summary when open.json names ``local_copy``."""
+    report = json.loads(json.dumps(report))
+    report["scenes"][0]["local_copy"] = local_copy  # type: ignore[index]
+    report["library_roots"] = [str(root) for root in roots]
+    path = served.parent / f"open-{len(list(served.parent.glob('open-*.json')))}.json"
+    path.write_text(json.dumps(report), encoding="utf-8")
+    app = create_app(
+        root=served / "scenes", predictions=served / "predictions", bundle_info=path, token=None
+    )
+    summary = TestClient(app).get(f"/api/scenes/{SCENE}")
+    assert summary.status_code == 200, summary.text
+    return int(summary.json()["point_sweeps"])
+
+
+@pytest.mark.parametrize(
+    "case", ["relative", "other-scene-id", "inside-the-bundle", "outside-the-library"]
+)
+def test_a_local_copy_that_fails_one_check_is_not_served(
+    views: dict[str, OpenedBundle],
+    demo_root: Path,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    case: str,
+) -> None:
+    """Each bad local_copy holds real sweeps, so only the guard under test refuses it."""
     opened = views["local-copy"]
-    report = json.loads(opened.report_path.read_text(encoding="utf-8"))
-    for bad in (
-        "relative/demo-junction",
-        str(tmp_path / "missing"),
-        str(opened.scenes_root / SCENE),
-    ):
-        report["scenes"][0]["local_copy"] = bad
-        path = tmp_path / "open.json"
-        path.write_text(json.dumps(report), encoding="utf-8")
-        app = create_app(
-            root=opened.scenes_root,
-            predictions=opened.predictions_root,
-            bundle_info=path,
-            token=None,
-        )
-        summary = TestClient(app).get(f"/api/scenes/{SCENE}").json()
-        assert summary["point_sweeps"] == 0, bad
+    report = dict(opened.report)
+    served = tmp_path / "served"
+    shutil.copytree(opened.root, served)
+    library = tmp_path / "library"
+    good = _real_copy(demo_root, library / SCENE)
+    # The control: a real copy inside the recorded library root is served.
+    assert _sweeps_served(served, report, str(good), [library]) > 0
+    if case == "relative":
+        monkeypatch.chdir(tmp_path)
+        bad = "library/" + SCENE
+        assert (tmp_path / bad / "points.bin").is_file()
+    elif case == "other-scene-id":
+        bad = str(_real_copy(demo_root, library / "renamed" / SCENE, scene_id="another-scene"))
+    elif case == "inside-the-bundle":
+        bad = str(_real_copy(demo_root, served / "scenes" / ".inside" / SCENE))
+        library = served
+    else:
+        bad = str(_real_copy(demo_root, tmp_path / "elsewhere" / SCENE))
+    assert _sweeps_served(served, report, bad, [library]) == 0
 
 
 # --- #170 stays intact ------------------------------------------------------------

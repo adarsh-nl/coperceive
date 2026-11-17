@@ -59,6 +59,7 @@ OPEN_REPORT_KEYS = frozenset(
         "rerun_command",
         "scenes",
         "paths",
+        "library_roots",
     }
 )
 
@@ -509,7 +510,21 @@ def _resolve_sensor_data(
         "rerun_command": manifest.get("rerun_command"),
         "scenes": report_scenes,
         "paths": {"scenes": SCENES, "predictions": PREDICTIONS},
+        # The server serves a local copy only while it still resolves inside one of these.
+        "library_roots": _resolved_roots(library_roots),
     }
+
+
+def _resolved_roots(library_roots: Sequence[Path]) -> list[str]:
+    roots: list[str] = []
+    for raw in library_roots:
+        try:
+            resolved = Path(raw).expanduser().resolve(strict=True)
+        except OSError:
+            continue
+        if resolved.is_dir() and str(resolved) not in roots:
+            roots.append(str(resolved))
+    return roots
 
 
 def _write_report(root: Path, report: dict[str, object]) -> None:
