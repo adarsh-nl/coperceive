@@ -1,6 +1,6 @@
 # ADR 0009 — Dataset adapters
 
-Status: accepted on 2026-10-17 and implemented in `coperceive/adapters/` the same day. The eight decisions at the end were taken by Adarsh; the outcomes are recorded there. Differences between this text and the code are listed under "As built". Schema 1 (`docs/spec/format.md`) is unchanged and stays the only output format.
+Status: accepted on 2026-10-17 and implemented in `coperceive/adapters/` the same day. The eight decisions at the end were taken by the maintainer; the outcomes are recorded there. Differences between this text and the code are listed under "As built". Schema 1 (`docs/spec/format.md`) is unchanged and stays the only output format.
 
 ## Context
 
@@ -10,9 +10,9 @@ The goal is that a new dataset is mostly a declarative description of where thin
 
 The adapter layer is clean-room. It was designed from the Griffin reader in this tree and from the public descriptions of the file layouts named below. kesai-labs/py123d and the adarsh-nl fork were not opened, installed or imported. The names, the manifest keys and the module layout here are ours.
 
-The cooperative datasets Adarsh has on the cluster (OPV2V, V2XSet, DAIR-V2X-C; see the storage table in the HPC notes) are the targets that the generality claims below have to survive. None of them were opened for this ADR. Their layouts are described from memory of their public documentation and are not verified.
+The cooperative datasets the maintainer has on the cluster (OPV2V, V2XSet, DAIR-V2X-C; see the storage table in the HPC notes) are the targets that the generality claims below have to survive. None of them were opened for this ADR. Their layouts are described from memory of their public documentation and are not verified.
 
-HANDOVER, CONTRIBUTING and the format spec all say "no second dataset". This ADR does not change that. The generic readers are checked against synthetic fixtures until Adarsh approves a second real dataset.
+HANDOVER, CONTRIBUTING and the format spec all say "no second dataset". This ADR does not change that. The generic readers are checked against synthetic fixtures until the maintainer approves a second real dataset.
 
 ## Options
 
@@ -166,7 +166,7 @@ conventions:
   camera_axes: RDF            # OpenCV-style; RUB for OpenGL-style sources
 ```
 
-The remap is applied to poses, extrinsics, boxes and lidar points before the `Scene` is built. Griffin is `FLU` (the toolkit's `PoseData` docstring, `docs/datasets/griffin.md`) and `RDF` (the Town03-000 front camera's `+Y` points down, HANDOVER), so its remap is the identity.
+The remap is applied to poses, extrinsics, boxes and lidar points before the `Scene` is built. Griffin is `FLU` (the toolkit's `PoseData` docstring, `docs/datasets/griffin-details.md`) and `RDF` (the Town03-000 front camera's `+Y` points down, HANDOVER), so its remap is the identity.
 
 #### Rotation encodings
 
@@ -260,7 +260,7 @@ Each rule in `raw.py` and `convert.py`, and where it goes:
 | `intrinsic` 3×3 optional; width `round(2*cx)`, height `round(2*cy)` | `intrinsic: {field: intrinsic, shape: 3x3, optional: true}`, `image_size: {derive: principal_point_x2}` |
 | Modality: stem starts `lidar` → lidar, else camera; an intrinsic forces camera | modality rules `has_intrinsic: camera`, `stem_prefix: {lidar: lidar}`, `default: camera` |
 | Labels `label/{frame:06d}.txt`, width 12, 11 or 9 per line | `text_rows` with three `variants` |
-| 9-field: roll and pitch 0, visibility null | `missing_angles: zero` with the reason from `docs/datasets/griffin.md`; visibility absent → null |
+| 9-field: roll and pitch 0, visibility null | `missing_angles: zero` with the reason from `docs/datasets/griffin-details.md`; visibility absent → null |
 | Track id `str(int(float(...)))` | `track_id_cast: int_string` |
 | Boxes in the body frame | `frame: body` |
 | Image refs for every camera × frame, file not required | `images: {for_each: camera, path: "{agent_root}/camera/{sensor}/{frame:06d}.png", require_file: false}` |
@@ -278,7 +278,7 @@ Nothing in Griffin needs a plugin. The two rules that come closest are the modal
 Two tests, added in the same PR as the Griffin manifest:
 
 1. `tests/test_adapters_griffin.py`, in CI. It builds the synthetic release the Griffin tests already build, adds an 11-field and a 9-field label line, a calib with no intrinsic and a missing lidar directory case, then runs `convert_griffin` (the current code, kept until the PR merges) and `adapters ingest griffin` into two directories.
-2. The same comparison marked `slow`, against `COPERCEIVE_GRIFFIN_RAW`. Adarsh runs it on real data through an sbatch job and pastes the output.
+2. The same comparison marked `slow`, against `COPERCEIVE_GRIFFIN_RAW`. the maintainer runs it on real data through an sbatch job and pastes the output.
 
 "Identical" means:
 
@@ -295,7 +295,7 @@ After the comparison passes on real data, `coperceive/griffin/raw.py` and the sc
 - PyYAML becomes a core dependency, if decision 1 stays YAML.
 - `coperceive/adapters` is under strict pyright. `coperceive/griffin` keeps its exclusion until its reader is deleted.
 - A dataset the vocabulary cannot express needs a reader plugin, not a manifest key. New manifest keys mean `spec_version` 2.
-- The "add a dataset in 20 minutes" doc walks through a synthetic KITTI-style toy dataset generated by a script in `tests/`. No real second dataset is ingested until Adarsh says so.
+- The "add a dataset in 20 minutes" doc walks through a synthetic KITTI-style toy dataset generated by a script in `tests/`. No real second dataset is ingested until the maintainer says so.
 - Generic readers other than ASCII PLY, `json_record` and `text_rows` are checked only against synthetic fixtures. Nothing here claims they read OPV2V, V2XSet, DAIR-V2X or nuScenes correctly.
 
 ## As built
@@ -317,7 +317,7 @@ Where the implementation departs from the text above:
 
 ## Decisions
 
-Taken by Adarsh on 2026-10-17.
+Taken by the maintainer on 2026-10-17.
 
 1. **Manifest format.** YAML with `yaml.safe_load`. `pyyaml` becomes a core dependency.
 2. **Axis convention.** `FLU` body and `RDF` camera are written into `docs/spec/format.md` as the adapter output convention. Schema version stays 1: it documents what the viewer and projection already assume.
@@ -326,4 +326,4 @@ Taken by Adarsh on 2026-10-17.
 5. **Entry point groups.** `coperceive.adapters` and `coperceive.readers`.
 6. **In-process plugins.** Adapters and readers run in the CLI process. Model plugins (roadmap) run in a subprocess or container.
 7. **Griffin 9-field lines.** Roll and pitch stay 0, visibility null, so the output stays identical. A test pins it. TODO: carry the missing-angle fact through the schema in a later version instead of storing a filled-in zero.
-8. **Toy dataset.** The "add a dataset in 20 minutes" doc uses a synthetic KITTI-style dataset generated in tests. The first real second dataset will be OPV2V or V2XSet, when Adarsh says go; neither is ingested by this phase.
+8. **Toy dataset.** The "add a dataset in 20 minutes" doc uses a synthetic KITTI-style dataset generated in tests. The first real second dataset will be OPV2V or V2XSet, when the maintainer says go; neither is ingested by this phase.

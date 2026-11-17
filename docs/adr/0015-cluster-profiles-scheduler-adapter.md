@@ -1,6 +1,6 @@
 # ADR 0015 — Cluster profiles, the scheduler adapter, and pipeline registration
 
-Status: proposed (Adarsh reviews)
+Status: proposed (the maintainer reviews)
 
 Amends ADR 0011 decision 5: the Slurm partition and resources of a model run come
 from the user's server profile, not from constants such as `ps`/`ps,main-gpu`
