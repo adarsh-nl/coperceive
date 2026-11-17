@@ -28,11 +28,11 @@ module purge
 module load python/3.9.18
 module load nvidia/cuda-11.8
 module load nvidia/cuda-11.x_cudnn-8.6
-export PYTHONPATH='/opt/co perceive/it'"'"'s'  # the coperceive the run's python imports, as plan_sbatch exports its own
+export PYTHONPATH='/opt/co perceive'  # the coperceive the run's python imports, as plan_sbatch exports its own
 echo "Starting run for plan plan-1790000000-aabbccddeeff on $(hostname)"
 # The run's exit status is kept: its logs and artefacts come home below either way.
 set +e
-/opt/venv/bin/python -m coperceive model run --manifest '/opt/co perceive/it'\''s/plugins/griffin/coperceive_griffin_model/model.yaml' --scenes '/data/te st/it'\''s "q"/scenes' --out /home/tester/results/runs/plan-1790000000-aabbccddeeff --run-id plan-1790000000-aabbccddeeff --model vehicle-side --raw-root '/data/te st/it'\''s "q"/raw' --media-root '/data/te st/it'\''s "q"/raw' --work "$SCRATCH_DIR/work"
+/opt/venv/bin/python -m coperceive model run --manifest '/opt/co perceive/plugins/griffin/coperceive_griffin_model/model.yaml' --scenes '/data/te st/it'\''s "q"/scenes' --out /home/tester/results/runs/plan-1790000000-aabbccddeeff --run-id plan-1790000000-aabbccddeeff --model vehicle-side --raw-root '/data/te st/it'\''s "q"/raw' --media-root '/data/te st/it'\''s "q"/raw' --work "$SCRATCH_DIR/work"
 RC=$?
 set -e
 echo "model run exit $RC"
