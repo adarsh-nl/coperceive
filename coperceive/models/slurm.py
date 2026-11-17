@@ -195,6 +195,23 @@ class SlurmError(CoperceiveError):
     """The job could not be planned or submitted."""
 
 
+def validate_logs_dir(logs_dir: Path) -> Path:
+    """Check the ``--slurm-logs`` folder before it becomes ``#SBATCH --output=``/``--error=``.
+
+    Slurm reads an ``#SBATCH`` value up to the first blank, so a folder with a space, a tab
+    or a line break would send the job's logs to another path (or break the script). It is
+    refused with the reason instead of being quoted, which ``#SBATCH`` lines do not honour.
+    """
+    text = str(logs_dir.resolve())
+    if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 0x7F for ch in text):
+        raise SlurmError(
+            f"The Slurm log folder {text!r} (--slurm-logs) contains a space or a control "
+            "character; #SBATCH --output/--error cannot hold one. Choose a log folder whose "
+            "path has no spaces."
+        )
+    return logs_dir
+
+
 def interpreter_module(python: Path) -> str | None:
     """The ``module load`` the interpreter needs on a compute node, from the venv's
     ``pyvenv.cfg`` (``home = /software/python/<version>/bin`` on this cluster, else the
@@ -484,6 +501,7 @@ def plan_sbatch(
     run_id = validate_run_id(run_id)
     scratch_template = validate_scratch_template(scratch_template)
     _check_header_values(manifest, spec, run_id, python)
+    validate_logs_dir(logs_dir)
     samples = sum(len(pose_times(scene)) for scene in scenes.values())
     closure = model_closure(manifest, spec, options)
     scene_set: set[str] = set()
@@ -654,7 +672,8 @@ def plan_sbatch(
                     f"{shlex.quote(str(out_root.resolve() / f'{run_id}-{member.key}'))}/",
                 )
             ],
-            f'echo "done: {shlex.quote(str(target))} (exit $RC)"',
+            # The path is its own shell word: a quoted word inside "..." would not be.
+            f'echo "done:" {shlex.quote(str(target))} "(exit $RC)"',
             'exit "$RC"',
             "",
         ]
@@ -799,6 +818,7 @@ __all__ = [
     "staged_files",
     "submit",
     "time_limit",
+    "validate_logs_dir",
     "validate_run_id",
     "write_plan",
 ]

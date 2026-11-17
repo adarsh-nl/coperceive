@@ -594,10 +594,12 @@ options:
 ## `coperceive model list`
 
 ```text
-usage: coperceive model list [-h]
+usage: coperceive model list [-h] [--json]
 
 options:
   -h, --help  show this help message and exit
+  --json  Machine-readable listing: each plugin's manifest as a resolved path, its modules,
+              and per model whether it needs a GPU and which --option keys it takes.
 ```
 
 ## `coperceive model inspect`

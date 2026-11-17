@@ -11,6 +11,8 @@ import {
   formatArgv,
   historyCanRerun,
   slurmSeconds,
+  defaultWalltime,
+  walltimeProblem,
   historyStateLabel,
   historyTiming,
   reproPreviewLines,
@@ -21,10 +23,14 @@ import {
   shouldPollJob,
   initialArgumentForm,
   planIsSaveable,
+  artifactFingerprintText,
+  pipelineNeedsCheckpoint,
+  pipelineNeedsSplit,
   planSummary,
   progressLabel,
   validateArgumentForm,
   type JobWatchStatus,
+  type PipelineEntry,
   type PipelineSpec,
   type RunPlan,
 } from "./runPlan.ts";
@@ -137,6 +143,104 @@ test("a plan is saveable only when every check passed and both hashes exist", ()
   const noHash = plan({ checkpoint: { path: "/x", sha256: null, kind: "folder", real_path: "/x" } });
   assert.strictEqual(planIsSaveable(noHash), false);
   assert.strictEqual(planIsSaveable(null), false);
+});
+
+/** Griffin as `list_builtin_pipelines` returns it from `coperceive model list --json`. */
+function griffinEntry(builtin: PipelineEntry["builtin"] | undefined = undefined): PipelineEntry {
+  return {
+    id: "griffin",
+    name: "griffin",
+    description: "Installed model plugin; runs coperceive model run on the cluster.",
+    source: "builtin",
+    spec: { ...spec, name: "griffin", arguments: [] },
+    registration_path: null,
+    plugin_manifest: "/opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml",
+    builtin:
+      builtin === undefined
+        ? {
+            name: "griffin",
+            manifest: "/opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml",
+            error: null,
+            modules: ["nvidia/cuda-11.8"],
+            models: {
+              "vehicle-side": { gpu: true, options: ["det_json", "min_score", "nusc_root", "subset"] },
+              "weights-from-option": { gpu: false, options: ["checkpoint"] },
+            },
+          }
+        : builtin,
+  };
+}
+
+test("a built-in model needs a checkpoint only when its manifest declares the option", () => {
+  // Griffin vehicle-side pins its own weights: the backend refuses a checkpoint for it.
+  assert.strictEqual(pipelineNeedsCheckpoint(griffinEntry(), "vehicle-side"), false);
+  assert.strictEqual(pipelineNeedsCheckpoint(griffinEntry(), "weights-from-option"), true);
+  // A model the listing does not know, or a cluster too old to list models: no field;
+  // the cluster's own message says why when the plan is checked.
+  assert.strictEqual(pipelineNeedsCheckpoint(griffinEntry(), "nope"), false);
+  assert.strictEqual(pipelineNeedsCheckpoint(griffinEntry(null), "vehicle-side"), false);
+  assert.strictEqual(pipelineNeedsSplit(griffinEntry()), true);
+  // A custom pipeline follows its own argument roles.
+  const custom: PipelineEntry = { ...griffinEntry(null), source: "custom", spec };
+  assert.strictEqual(pipelineNeedsCheckpoint(custom, ""), true);
+  assert.strictEqual(pipelineNeedsSplit(custom), true);
+  const bare: PipelineEntry = { ...custom, spec: { ...spec, arguments: [] } };
+  assert.strictEqual(pipelineNeedsCheckpoint(bare, ""), false);
+  assert.strictEqual(pipelineNeedsSplit(bare), false);
+  assert.strictEqual(pipelineNeedsCheckpoint(null, ""), false);
+});
+
+test("a Griffin plan with no checkpoint and a fingerprinted scenes folder can be saved", () => {
+  const griffin = plan({
+    checkpoint: { path: "", sha256: null, kind: "", real_path: null },
+    split: {
+      path: "/data/griffin/scenes",
+      sha256: null,
+      kind: "folder",
+      real_path: "/data/griffin/scenes",
+      listing_sha256: "1f".repeat(32),
+      file_count: 12,
+    },
+  });
+  assert.strictEqual(planIsSaveable(griffin), true);
+  // An empty folder, or one without a listing, has no fingerprint.
+  const empty = plan({ ...griffin, split: { ...griffin.split, file_count: 0 } });
+  assert.strictEqual(planIsSaveable(empty), false);
+  const unlisted = plan({ ...griffin, split: { ...griffin.split, listing_sha256: null } });
+  assert.strictEqual(planIsSaveable(unlisted), false);
+  // A checkpoint that was given must still have its sha256.
+  const unhashed = plan({ ...griffin, checkpoint: { path: "/x.pt", sha256: null, kind: "file", real_path: "/x.pt" } });
+  assert.strictEqual(planIsSaveable(unhashed), false);
+});
+
+test("a folder's fingerprint is shown as its listing, not as a missing sha256", () => {
+  assert.strictEqual(
+    artifactFingerprintText({
+      path: "/data/griffin/scenes",
+      sha256: null,
+      kind: "folder",
+      real_path: "/data/griffin/scenes",
+      listing_sha256: "ab".repeat(32),
+      file_count: 12,
+    }),
+    `listing sha256 ${"ab".repeat(32)} (12 files)`,
+  );
+  assert.strictEqual(
+    artifactFingerprintText({ path: "/x.pt", sha256: "cd".repeat(32), kind: "file", real_path: "/x.pt" }),
+    `sha256 ${"cd".repeat(32)}`,
+  );
+  assert.strictEqual(
+    artifactFingerprintText({ path: "/x", sha256: null, kind: "file", real_path: "/x" }),
+    "not recorded",
+  );
+});
+
+test("the New evaluation panel asks the plan helpers, not a built-in rule, for the checkpoint", () => {
+  const source = readFileSync(new URL("./NewEvaluation.tsx", import.meta.url), "utf8");
+  assert.ok(source.includes("pipelineNeedsCheckpoint(selectedPipeline, model)"), "checkpoint rule");
+  assert.ok(source.includes("pipelineNeedsSplit(selectedPipeline)"), "split rule");
+  assert.ok(!source.includes('Split sha256'), "a folder split is shown by its listing");
+  assert.ok(source.includes("artifactFingerprintText(plan.split)"), "split fingerprint text");
 });
 
 test("summaries are plain language and mention the resolved environment", () => {
@@ -285,4 +389,21 @@ test("repro card preview names what is included and what is missing", () => {
   assert.ok(lines.missing.some((line) => line.includes("Python version")));
   assert.ok(lines.missing.some((line) => line.includes("has not scored")));
   assert.ok(lines.missing.some((line) => line.includes("metrics.scene-a")));
+});
+
+test("a built-in run's walltime defaults to the CLI's estimate, never to four hours", () => {
+  assert.strictEqual(defaultWalltime({ time_estimate: "01:00:00" }), "01:00:00");
+  assert.strictEqual(defaultWalltime({ time_estimate: null }), "");
+  assert.strictEqual(defaultWalltime(null), "");
+  assert.match(walltimeProblem("", { time_estimate: null }) ?? "", /Enter the walltime/);
+  assert.strictEqual(walltimeProblem("01:00:00", { time_estimate: "01:00:00" }), null);
+});
+
+test("a walltime over the partition's discovered limit is refused before the preview", () => {
+  const plan = { time_estimate: "01:00:00", partition_max_time: "1-00:00:00" };
+  assert.strictEqual(walltimeProblem("1-00:00:00", plan), null);
+  assert.match(walltimeProblem("1-00:00:01", plan) ?? "", /longer than the partition's time limit 1-00:00:00/);
+  assert.match(walltimeProblem("48:00:00", plan) ?? "", /1-00:00:00/);
+  // No discovered limit: nothing to refuse.
+  assert.strictEqual(walltimeProblem("7-00:00:00", { time_estimate: "01:00:00", partition_max_time: null }), null);
 });

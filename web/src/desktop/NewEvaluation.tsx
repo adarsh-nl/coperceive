@@ -33,6 +33,11 @@ import {
   formatArgv,
   initialArgumentForm,
   planIsSaveable,
+  defaultWalltime,
+  walltimeProblem,
+  artifactFingerprintText,
+  pipelineNeedsCheckpoint,
+  pipelineNeedsSplit,
   planSummary,
   jobStateLabel,
   validateArgumentForm,
@@ -173,7 +178,7 @@ export default function NewEvaluation() {
   const [error, setError] = useState("");
   const [note, setNote] = useState("");
   const [showSubmitAdvanced, setShowSubmitAdvanced] = useState(false);
-  const [submitWalltime, setSubmitWalltime] = useState("04:00:00");
+  const [submitWalltime, setSubmitWalltime] = useState("");
   const [submitCpus, setSubmitCpus] = useState("");
   const [submitGres, setSubmitGres] = useState("");
   const [submitPreview, setSubmitPreview] = useState<SubmissionPreview | null>(null);
@@ -184,15 +189,12 @@ export default function NewEvaluation() {
 
   const selectedProfile = profiles.find((entry) => entry.id === profileId) ?? null;
   const selectedPipeline = pipelines.find((entry) => entry.id === pipelineId) ?? null;
-  // Builtin model plugins always take a checkpoint and a scene/split. A custom
-  // pipeline only gets these fields when its registration declares the role;
-  // otherwise its own typed arguments are the complete input set.
-  const needsCheckpoint =
-    selectedPipeline?.source === "builtin" ||
-    Boolean(selectedPipeline?.spec.arguments.some((argument) => argument.role === "checkpoint"));
-  const needsSplit =
-    selectedPipeline?.source === "builtin" ||
-    Boolean(selectedPipeline?.spec.arguments.some((argument) => argument.role === "test_data"));
+  // A built-in model always runs over its scenes and takes a checkpoint only when its
+  // manifest declares a `checkpoint` option (from the cluster's model list). A custom
+  // pipeline gets these fields when its registration declares the role; otherwise its
+  // own typed arguments are the complete input set.
+  const needsCheckpoint = pipelineNeedsCheckpoint(selectedPipeline, model);
+  const needsSplit = pipelineNeedsSplit(selectedPipeline);
   const seeded = useRef(false);
   const stepArguments = (selectedPipeline?.spec.arguments ?? []).filter(
     (argument) => argument.role !== "checkpoint" && argument.role !== "test_data",
@@ -304,7 +306,7 @@ export default function NewEvaluation() {
   };
 
   const submitOptions = (): SubmitOptions => ({
-    walltime: submitWalltime.trim() || "04:00:00",
+    walltime: submitWalltime.trim(),
     cpus_per_task: submitCpus.trim() ? Number(submitCpus.trim()) : null,
     account: null,
     qos: null,
@@ -313,6 +315,7 @@ export default function NewEvaluation() {
 
   useEffect(() => {
     setSubmitGres(plan?.gres ?? "");
+    setSubmitWalltime(defaultWalltime(plan));
   }, [plan]);
 
   const invalidateSubmitPreview = () => {
@@ -325,6 +328,12 @@ export default function NewEvaluation() {
   const previewJobScript = async () => {
     if (!selectedProfile || !plan || !plan.saved_path) {
       setError("Save the plan before preparing a submission.");
+      return;
+    }
+    const walltimeError = walltimeProblem(submitWalltime, plan);
+    if (walltimeError) {
+      setSubmitError(walltimeError);
+      setShowSubmitAdvanced(true);
       return;
     }
     setSubmitBusy("preview");
@@ -377,7 +386,9 @@ export default function NewEvaluation() {
     }
     if ((needsCheckpoint && !checkpoint.trim()) || (needsSplit && !split.trim())) {
       setError(
-        "Choose the checkpoint and the test split on the cluster for this pipeline.",
+        needsCheckpoint
+          ? "Choose the checkpoint and the test split on the cluster for this pipeline."
+          : "Choose the test split on the cluster for this pipeline.",
       );
       return;
     }
@@ -399,7 +410,8 @@ export default function NewEvaluation() {
         registration_path: selectedPipeline.registration_path,
         plugin_manifest: selectedPipeline.plugin_manifest,
         values: collectValues(selectedPipeline.spec, argumentForm),
-        checkpoint: checkpoint.trim(),
+        // A model whose manifest has no checkpoint option gets none (the cluster refuses one).
+        checkpoint: needsCheckpoint ? checkpoint.trim() : "",
         split: split.trim(),
         model: selectedPipeline.source === "builtin" ? model.trim() : "",
         raw_root: selectedPipeline.source === "builtin" ? rawRoot.trim() : "",
@@ -876,18 +888,22 @@ export default function NewEvaluation() {
 
           {plan.checkpoint.path || plan.split.path ? (
             <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.5rem" }}>
-              <div style={{ flex: 1 }}>
-                <div style={labelStyle}>Checkpoint sha256</div>
-                <code style={{ fontSize: "0.75rem", color: "var(--text)", wordBreak: "break-all" }}>
-                  {plan.checkpoint.sha256 ?? "not recorded"} · {plan.checkpoint.path}
-                </code>
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={labelStyle}>Split sha256</div>
-                <code style={{ fontSize: "0.75rem", color: "var(--text)", wordBreak: "break-all" }}>
-                  {plan.split.sha256 ?? "not recorded"} · {plan.split.path}
-                </code>
-              </div>
+              {plan.checkpoint.path ? (
+                <div style={{ flex: 1 }}>
+                  <div style={labelStyle}>Checkpoint</div>
+                  <code style={{ fontSize: "0.75rem", color: "var(--text)", wordBreak: "break-all" }}>
+                    {artifactFingerprintText(plan.checkpoint)} · {plan.checkpoint.path}
+                  </code>
+                </div>
+              ) : null}
+              {plan.split.path ? (
+                <div style={{ flex: 1 }}>
+                  <div style={labelStyle}>{plan.split.kind === "folder" ? "Test split (folder)" : "Test split"}</div>
+                  <code style={{ fontSize: "0.75rem", color: "var(--text)", wordBreak: "break-all" }}>
+                    {artifactFingerprintText(plan.split)} · {plan.split.path}
+                  </code>
+                </div>
+              ) : null}
             </div>
           ) : null}
 
@@ -927,6 +943,13 @@ export default function NewEvaluation() {
                 Generate the full job script and read it before submitting. Nothing is submitted
                 automatically; the Submit button is enabled only after you confirm the script you see.
               </p>
+              <p style={{ margin: "0 0 0.5rem", fontSize: "0.8rem", color: "var(--text-subtle)" }}>
+                Walltime {submitWalltime.trim() || "not set"}
+                {plan.time_estimate
+                  ? ` (coperceive model run --slurm estimates ${plan.time_estimate})`
+                  : " (no estimate: enter one under Advanced)"}
+                {plan.partition_max_time ? `; the partition allows ${plan.partition_max_time}` : ""}.
+              </p>
               <button
                 type="button"
                 style={secondaryButton}
@@ -944,7 +967,7 @@ export default function NewEvaluation() {
                       id="submit-walltime"
                       style={input}
                       value={submitWalltime}
-                      placeholder="04:00:00"
+                      placeholder={plan.time_estimate ?? "HH:MM:SS"}
                       onChange={(event) => {
                         setSubmitWalltime(event.target.value);
                         invalidateSubmitPreview();
