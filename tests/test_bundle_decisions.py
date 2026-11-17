@@ -495,6 +495,32 @@ def test_a_link_in_an_unrelated_scene_does_not_refuse_the_export(
     assert not [name for name in names if "zz-other" in name]
 
 
+def test_worst_frames_are_ranked_without_failures_json(demo: Path, tmp_path: Path) -> None:
+    """worst:N means the worst frames even when the run has no failures.json ranking."""
+    from coperceive.evaluation.failures import mine_failures
+    from coperceive.evaluation.outcomes import load_run_records
+    from coperceive.evaluation.predictions import read_boxes
+
+    assert not (demo / "predictions" / "demo" / "failures.json").exists()
+    records, _ = load_run_records(demo / "scenes", demo / "predictions", "demo", from_scores=False)
+    ranked = mine_failures(records, run_id="demo", top=len(records))["frames"]
+    worst = (str(ranked[0]["scene_id"]), int(ranked[0]["time_us"]))  # type: ignore[index]
+    predicted = sorted({b.time_us for b in read_boxes(demo / "predictions", "demo", SCENE)})
+    assert worst[1] not in predicted[:2], "the fixture's worst frame must not be an early one"
+    bundle = export_bundle(
+        _request(demo, tmp_path / "worst.cpbundle", dataset_id="demo", frames="worst:2")
+    )
+    rows = _manifest(bundle)["sensor_data"]["scenes"]  # type: ignore[index]
+    chosen = {(row["scene_id"], time_us) for row in rows for time_us in row["frames_included"]}
+    assert worst in chosen
+    expected: list[tuple[str, int]] = []
+    for frame in ranked:  # type: ignore[union-attr]
+        key = (str(frame["scene_id"]), int(frame["time_us"]))
+        if key not in expected:
+            expected.append(key)
+    assert chosen == set(expected[:2])
+
+
 # every image or point member counts, whatever its case or folder ------------
 
 

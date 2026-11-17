@@ -23,8 +23,10 @@ coperceive bundle export <run-id> \
 
 By default only the selected frames' predictions are included (`worst:6`, or
 `worst:N`, or `scene@time_us,...`). `worst:N` takes the run's `failures.json`
-ranking, or the run's first N predicted frames when it has none; neither reads
-any scene that is not exported. The full run's predictions are opt-in and
+ranking or, when it has none, the same ranking (`coperceive eval failures`)
+computed from the run's matches and the scenes it has predictions for. Only the
+scenes finally chosen are walked and exported, so a link in another scene does
+not refuse the export. The full run's predictions are opt-in and
 the CLI shows their size.
 
 Sensor data (LiDAR points and camera images for the included frames) is off by

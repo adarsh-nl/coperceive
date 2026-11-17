@@ -346,12 +346,52 @@ def _scene_adapter(scene_dir: Path) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _choose_frames(run_dir: Path, spec: str, boxes: list[PredictionBox]) -> list[tuple[str, int]]:
-    """The frames to export. Reads only the run's own (snapshot) folder, never a scene.
+def _ranked_frames(run_dir: Path, scenes_root: Path, run_id: str) -> list[tuple[str, int]]:
+    """The run's frames, worst first, ranked as ``coperceive eval failures`` ranks them.
 
-    ``worst:N`` takes the first N of the run's ``failures.json`` ranking, or, when
-    the run has none, its first N predicted frames. Otherwise ``spec`` is an
-    explicit ``scene@time_us,...`` list.
+    Choosing frames is not exporting: this reads the run's matches from its
+    checked snapshot and, for distance, only the scenes the run has predictions
+    for, with ``read_scene`` and no walk. A scene that cannot be read is left
+    out of the ranking; the scenes finally chosen are walked and read through
+    the checked snapshot like any other export.
+    """
+    from coperceive.errors import CoperceiveError
+    from coperceive.evaluation.evaluate import METRICS_FILE
+    from coperceive.evaluation.failures import mine_failures
+    from coperceive.evaluation.outcomes import OutcomeRecord, match_rows, records_from_rows
+
+    records: list[OutcomeRecord] = []
+    for scene_dir in sorted(p for p in run_dir.iterdir() if p.is_dir()):
+        scene_id = _safe_scene_id(scene_dir.name)
+        if not (scene_dir / METRICS_FILE).is_file() or not (scene_dir / MATCHES_FILE).is_file():
+            continue
+        try:
+            scene = read_scene(scenes_root / scene_id, points=False)
+        except (OSError, CoperceiveError, ValueError):
+            continue
+        records.extend(
+            records_from_rows(scene, match_rows(scene_dir), run_id=run_id, scene_id=scene_id)
+        )
+    if not records:
+        return []
+    document = mine_failures(records, run_id=run_id, top=len(records))
+    ranked: list[tuple[str, int]] = []
+    for frame in cast(list[dict[str, object]], document["frames"]):
+        key = (_safe_scene_id(frame["scene_id"]), int(cast(int, frame["time_us"])))
+        if key not in ranked:
+            ranked.append(key)
+    return ranked
+
+
+def _choose_frames(
+    run_dir: Path, spec: str, boxes: list[PredictionBox], scenes_root: Path, run_id: str
+) -> list[tuple[str, int]]:
+    """The frames to export.
+
+    ``worst:N`` takes the first N of the run's ``failures.json`` ranking or, when
+    the run has none, of the same ranking computed here (see :func:`_ranked_frames`),
+    then the run's other predicted frames. Otherwise ``spec`` is an explicit
+    ``scene@time_us,...`` list, parsed without reading anything.
     """
     if not spec.startswith("worst:"):
         out: list[tuple[str, int]] = []
@@ -374,7 +414,11 @@ def _choose_frames(run_dir: Path, spec: str, boxes: list[PredictionBox]) -> list
         for item in cast(list[dict[str, object]], payload.get("frames", [])):
             candidates.append((_safe_scene_id(item.get("scene_id")), int(item.get("time_us", 0))))
     if not candidates:
-        candidates = sorted({(_safe_scene_id(box.scene_id), box.time_us) for box in boxes})
+        candidates = _ranked_frames(run_dir, scenes_root, run_id)
+        # Frames the ranking scores as clean still count, after the bad ones.
+        for key in sorted({(_safe_scene_id(box.scene_id), box.time_us) for box in boxes}):
+            if key not in candidates:
+                candidates.append(key)
     return candidates[:count]
 
 
@@ -689,7 +733,7 @@ def _export(request: BundleExportRequest, sources: _Sources) -> Path:
     box_rows: list[PredictionBox] = []
     for scene_dir in sorted(p for p in run_dir.iterdir() if p.is_dir()):
         box_rows.extend(read_boxes(sources.predictions_root, run_id, scene_dir.name))
-    frames = _choose_frames(run_dir, request.frames, box_rows)
+    frames = _choose_frames(run_dir, request.frames, box_rows, request.scenes_root, run_id)
     if not frames:
         raise BundleExportError("no frames selected")
     wanted = set(frames)
