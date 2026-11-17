@@ -47,7 +47,11 @@
         ],
         "properties": {
           "path": {
-            "type": "string"
+            "type": "string",
+            "description": "bundle.json and open.json (any case) are reserved: Coperceive writes them.",
+            "not": {
+              "pattern": "^(?:[Bb][Uu][Nn][Dd][Ll][Ee]|[Oo][Pp][Ee][Nn])\\.[Jj][Ss][Oo][Nn]$"
+            }
           },
           "sha256": {
             "type": "string",

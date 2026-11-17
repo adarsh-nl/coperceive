@@ -381,6 +381,12 @@ def test_hand_validator_and_schema_accept_the_same_samples(
     sample = json.loads(json.dumps(valid))
     del sample["title"]
     samples.append(sample)
+    for reserved in ("open.json", "BUNDLE.JSON"):
+        sample = json.loads(json.dumps(valid))
+        sample["contents"].append(
+            {"path": reserved, "sha256": "a" * 64, "size": 1, "kind": "frame-json"}
+        )
+        samples.append(sample)
     for mutate in (
         lambda doc: doc["sensor_data"].__setitem__("dataset_id", "../x"),
         lambda doc: doc["sensor_data"]["scenes"][0].__setitem__("frames_included", []),
