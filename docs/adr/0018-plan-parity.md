@@ -61,8 +61,8 @@ Nothing is skipped without being listed. Every line is either identical on both 
 
 | Line(s) | How it is held |
 | --- | --- |
-| `set -euo pipefail` | It is not in the ledger, so it must be identical on both sides. The scratch-setup check also requires it to be the first command. |
-| `trap … EXIT` | A ledger row pins each side's line exactly. The scratch-setup check compares what it removes, the signal, and its place: after the `mkdir`, before anything runs. Before that check, moving the app's trap after the run block passed the harness. |
+| `set -euo pipefail` | It is not in the ledger, so it must be identical on both sides. The scratch-setup check also requires it to be the first command after the `#SBATCH` header: any command ahead of it fails. |
+| `trap … EXIT` | A ledger row pins each side's line exactly. The scratch-setup check compares what it removes and the signal. Between `set -euo pipefail` and the trap it allows only the scratch assignment, the `mkdir` of the scratch folder, and a plain assignment of a literal word (the CLI's `RUN_ID=<id>`, which runs nothing). Any other command there fails. Before that check, moving the app's trap after the run block passed the harness. |
 | `SCRATCH` / `SCRATCH_DIR` | A ledger row pins each side's line. Only the variable's name differs (ADR 0021, "Scratch setup"). The scratch-setup check requires both values to equal the profile's template. |
 | `mkdir` of scratch, `TMPDIR`, work | A ledger row pins each side's line. The scratch-setup check compares the folders and their order. The app's `-m 0700` is listed in ADR 0021, "Scratch setup". |
 | Other `mkdir` lines | Rows with reasons, compared nowhere else, because the other side has no counterpart: the CLI's staging, out, results and predictions folders, and the app's `OUT_DIR` and `OUT_DIR/<plan id>`. See ADR 0021, "Staging", "Copy home" and "`environment.json` path". |
@@ -89,11 +89,12 @@ No test, fixture or script in this work calls `sbatch`, `scancel`, `squeue` or `
 ## Consequences
 
 - Any change to either renderer that changes the job a cluster would run fails a test, unless ADR 0021 and the ledger record it with a reason.
-- CI (`.github/workflows/ci.yml`; the three desktop jobs run on a pull request only when the `desktop` path filter matches, which includes `tests/fixtures/plan_parity/**` and `coperceive/models/**`):
+- CI (`.github/workflows/ci.yml`). Four desktop jobs run on a pull request only when the `desktop` path filter matches, which includes `tests/fixtures/plan_parity/**` and `coperceive/models/**`: `desktop-linux`, `desktop-windows`, `desktop-macos` and `desktop-macos-intel`. Three of them run `cargo test`:
   - **Linux** (`desktop-linux`, `ubuntu-22.04`) runs `cargo test --manifest-path src-tauri/Cargo.toml -q`, 20 times. This is the full suite, including `src-tauri/tests/plan_parity.rs`.
   - **macOS** (`desktop-macos`, `macos-15`) runs `cargo test --verbose --color=never` in `src-tauri`. This is also the full suite, so it includes `plan_parity.rs`.
   - **Windows** (`desktop-windows`, `windows-latest`) runs `cargo test --lib --verbose --color=never` in `src-tauri`. `--lib` excludes `tests/`, so `plan_parity.rs` does not run on Windows.
-  - `tests/test_plan_parity.py` runs in the Python job's `pytest`.
+  - **macOS Intel** (`desktop-macos-intel`, `macos-15-intel`) runs no `cargo test`. It installs the x86_64 DMG that `desktop-macos` built and runs a smoke test.
+  - `tests/test_plan_parity.py` runs in the `test` job's `pytest` (`ubuntu-latest`), which the desktop filter does not gate.
 
 ## Not decided here
 
