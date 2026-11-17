@@ -99,6 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 - Upgraded Pillow to 13.0.0 in `uv.lock` and tokio to 1.54.1 (PR #130).
 - Restricted Pillow image decoders strictly to PNG and JPEG to reduce parser attack surface (PR #130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
+- `coperceive serve` auth with `--root-path` and DNS rebinding without a token (FOLD-02, FOLD-06, security review #170; backported from release/v0.1.2). FOLD-02: with `--root-path` set, the bearer-token and `X-Coperceive-Request` checks never ran, because uvicorn puts the prefix in front of the path, so every `/api` route behind a proxy was open. They now apply to every `/api` route whatever the root path: a `--root-path` deployment with a token now requires the token on every `/api` route, and the CSRF header on every POST. FOLD-06: a token-less `coperceive serve` accepted any `Host` header, so a DNS-rebinding page could read the root and start jobs. **Behaviour that changes:** without a token, serve now answers only `127.0.0.1`, `localhost` or `[::1]` on its own port and returns 400 for any other `Host`, including an SSH tunnel that arrives on a different local port (keep the same port, for example `-L 8731:127.0.0.1:8731`, or use a token). Token-less serve behind a hub proxy no longer works: use `COPERCEIVE_TOKEN` or `--token-file` and enter the token in the page. With a token the `Host` is not checked, so the desktop app, which always starts serve with `--token-file`, is unchanged.
 
 ## [0.1.0] - 2026-11-05
 
