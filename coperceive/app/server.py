@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import dataclasses
 import functools
 import hmac
 import io
@@ -475,6 +476,8 @@ def create_app(
         else root_path_obj / "jobs.sqlite"
     )
     app.state.scene_cache = _SceneCache()
+    # The recipient's own copy of a bundle's scene (sensor bytes only), read in place.
+    app.state.bundle_local_cache = _SceneCache()
     app.state.maps = _maps_root(root_path_obj, maps)
     app.state.map_cache = {}
     app.state.predictions = predictions_root(
@@ -560,10 +563,7 @@ def create_app(
 
     @app.get("/api/scenes/{scene_id}")
     def scene_summary(scene_id: str) -> dict[str, object]:
-        scene = _cached_scene(app, scene_id)
-        local_sensor = _bundle_local_scene(app, scene_id)
-        if local_sensor is not None:
-            scene = read_scene(local_sensor, points=True)
+        scene, local_sensor = _view_scene(app, scene_id)
         body = summarize(scene)
         if app.state.remote is not None:
             body["point_sweeps"] = len(_remote_call(lambda: app.state.remote.sweeps(scene_id)))
@@ -585,10 +585,7 @@ def create_app(
         stats.begin()
         started = time.perf_counter()
         try:
-            scene = _cached_scene(app, scene_id)
-            local = _bundle_local_scene(app, scene_id)
-            if local is not None:
-                scene = read_scene(local, points=True)
+            scene, _local = _view_scene(app, scene_id)
             document = frame_document(scene, time_us)
             if app.state.remote is not None:
                 document["point_sensors"] = [
@@ -679,12 +676,8 @@ def create_app(
         width: int | None,
         full: bool,
     ) -> Response:
-        scene = _cached_scene(app, scene_id)
-        scene_dir = _scene_dir(app.state.root, scene_id)
-        local = _bundle_local_scene(app, scene_id)
-        if local is not None:
-            scene = read_scene(local, points=False)
-            scene_dir = local
+        scene, local = _view_scene(app, scene_id)
+        scene_dir = local or _scene_dir(app.state.root, scene_id)
         relative = image_path(scene, time_us, agent_id, sensor_id)
         if relative is None:
             raise HTTPException(status_code=404, detail="image not found")
@@ -746,10 +739,7 @@ def create_app(
                     return Response(status_code=499)
                 served = len(payload)
                 return Response(content=payload, media_type="application/octet-stream")
-            scene = await asyncio.to_thread(_cached_scene, app, scene_id)
-            local = _bundle_local_scene(app, scene_id)
-            if local is not None:
-                scene = await asyncio.to_thread(read_scene, local, points=True)
+            scene, _local = await asyncio.to_thread(_view_scene, app, scene_id)
             blob = frame_points(scene, time_us, agent_id, sensor_id)
             served = len(blob)
             return Response(content=blob, media_type="application/octet-stream")
@@ -1239,20 +1229,50 @@ def _bundle_scene_view(app: FastAPI, scene_id: str) -> dict[str, object] | None:
 
 
 def _bundle_local_scene(app: FastAPI, scene_id: str) -> Path | None:
-    """A local-copy bundle serves sensors from the recipient's own scene path."""
+    """A local-copy bundle reads sensors from the recipient's own scene, in place.
+
+    ``open.json`` records the path only after ``open_bundle`` checked it resolves
+    inside a library root; here it must still be an absolute scene folder with
+    the same scene id, outside the served bundle.
+    """
     view = _bundle_scene_view(app, scene_id)
     if view is None or view.get("sensor_data") != "local-copy":
         return None
     raw = view.get("local_copy")
-    if not isinstance(raw, str) or not raw:
+    if not isinstance(raw, str) or not raw or not Path(raw).is_absolute():
         return None
-    path = Path(raw)
     try:
-        path.relative_to(path)  # resolve below
-        resolved = path.resolve()
+        resolved = Path(raw).resolve(strict=True)
+        manifest = json.loads((resolved / "manifest.json").read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    return resolved if (resolved / "manifest.json").is_file() else None
+    if not isinstance(manifest, dict) or manifest.get("scene_id") != scene_id:
+        return None
+    if resolved.is_relative_to(app.state.root):
+        return None
+    return resolved
+
+
+def _view_scene(app: FastAPI, scene_id: str) -> tuple[Scene, Path | None]:
+    """The scene the viewer shows, and the folder its sensor files come from.
+
+    For a bundle whose sensor data comes from the recipient's local copy, the
+    bundle stays the source of truth: its poses, boxes and frames, with only the
+    local copy's LiDAR sweeps and camera rows at those frames. Otherwise this is
+    the cached scene, with ``None`` (the scene's own folder).
+    """
+    scene = _cached_scene(app, scene_id)
+    local = _bundle_local_scene(app, scene_id)
+    if local is None:
+        return scene, None
+    sensors: Scene = app.state.bundle_local_cache.load(local)
+    times = {pose.time_us for agent in scene.agents for pose in agent.poses}
+    merged = dataclasses.replace(
+        scene,
+        point_clouds=tuple(cloud for cloud in sensors.point_clouds if cloud.time_us in times),
+        images=tuple(image for image in sensors.images if image.time_us in times),
+    )
+    return merged, local
 
 
 def _predictions_root(app: FastAPI) -> Path:

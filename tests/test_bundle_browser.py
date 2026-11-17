@@ -18,7 +18,7 @@ from pathlib import Path
 import pytest
 import uvicorn
 from coperceive.app.server import create_app
-from coperceive.bundle import BundleExportRequest, export_bundle, open_bundle
+from coperceive.bundle import BundleExportRequest, OpenedBundle, export_bundle, open_bundle
 from coperceive.demo import create
 
 from tests.test_viewer_browser import _bundle_dir, _unavailable
@@ -141,6 +141,28 @@ def _ok_responses(page: Page, needle: str) -> list[str]:
     return [url for url, status in page._bundle_responses if needle in url and status == 200]  # type: ignore[attr-defined]
 
 
+def _assert_bundle_frames_and_predictions(page: Page, opened: OpenedBundle) -> None:
+    """The timeline is the bundle's frames and the run's boxes load at each one.
+
+    A local copy must not widen the timeline to every frame of the recipient's
+    scene, and the prediction overlay needs the bundled ``matches.parquet``.
+    """
+    frames = opened.report["scenes"][0]["frames"]
+    samples = page.evaluate("() => window.__COPERCEIVE_PLAYBACK_STATE__?.().samples ?? 0")
+    assert samples == len(frames)
+    page.wait_for_function(
+        "() => performance.getEntriesByType('resource').some((e) => e.name.includes('/predictions/demo/frame'))",
+        timeout=30000,
+    )
+    page.wait_for_load_state("networkidle")
+    answered = [
+        (url, status)
+        for url, status in page._bundle_responses  # type: ignore[attr-defined]
+        if "/predictions/demo/frame" in url
+    ]
+    assert answered and all(status == 200 for _url, status in answered), answered
+
+
 def _screenshot(page: Page, name: str) -> None:
     shots = os.environ.get("COPERCEIVE_E2E_SHOTS")
     if shots:
@@ -193,6 +215,7 @@ def test_bundle_view_included(browser: Browser, included_bundle: Path, tmp_path:
             assert "mAP" in body
             assert _ok_responses(page, "/image")
             assert _ok_responses(page, "/points")
+            _assert_bundle_frames_and_predictions(page, opened)
             for editable in ("Submit", "Re-run", "Save plan"):
                 assert page.get_by_role("button", name=editable, exact=True).count() == 0
             _screenshot(page, "bundle-included.png")
@@ -222,6 +245,7 @@ def test_bundle_view_local_copy(
             assert "mAP" in body
             assert _ok_responses(page, "/image")
             assert _ok_responses(page, "/points")
+            _assert_bundle_frames_and_predictions(page, opened)
             # The bundle itself never gained local sensor files.
             assert not list((opened.root / "scenes/demo-junction/agents").rglob("*.png"))
             _assert_extraction_intact(opened.root)
@@ -247,6 +271,7 @@ def test_bundle_view_not_included(browser: Browser, omitted_bundle: Path, tmp_pa
             assert int(counts.get("points") or 0) == 0
             assert int(counts.get("boxes") or 0) > 0
             assert not [url for url in _requests(page) if "/image" in url]
+            _assert_bundle_frames_and_predictions(page, opened)
             assert "mAP" in body
             assert str(manifest["rerun_command"]) in body
             assert page.get_by_role("button", name="Copy rerun").count() == 1
