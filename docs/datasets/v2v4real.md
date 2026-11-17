@@ -17,7 +17,7 @@ commit frames, crops, screenshots or derived scene files to this repository.
 
 ## Confirmed cluster copy (test split)
 
-Adarsh extracted `/datasets/eemcs/ps/cv/opencood/v2v4real/test/` on 2026-11-05:
+Adarsh extracted `/data/opencood/v2v4real/test/` on 2026-11-05:
 **9 scenarios**, 7,972 files + 28 folders (the zip's 8,000 entries), 9.0 GB, so
 the split is complete. Scenario names include
 `testoutput_CAV_data_2022-03-15-09-54-40_0`; agents are `0/` and `1/`. A sample

@@ -205,6 +205,6 @@ Taken by Adarsh on 2026-10-17. Items 1, 3 and 5 are his words; the rest are the 
 7. **Visibility.** Every GT box is kept by default.
 8. **Compare UX.** Overlay plus a delta table; split viewport later if needed.
 9. **Import formats.** JSON lines and Parquet.
-10. **First real run.** From a detector on Griffin; even one single-agent detector is enough. The released Griffin checkpoints (`vehicle-side.pth`, `drone-side.pth`, `cooperative.pth`, early-fusion and instance-fusion weights for every subset, under `/datasets/eemcs/ps/cv/huggingface/griffin/ckpts/` on the HPC) are the candidate source; they need the Griffin toolkit's inference code and environment, which this repository does not contain. Planned as the acceptance check, run on the HPC as a GPU job, after step A's code is in.
+10. **First real run.** From a detector on Griffin; even one single-agent detector is enough. The released Griffin checkpoints (`vehicle-side.pth`, `drone-side.pth`, `cooperative.pth`, early-fusion and instance-fusion weights for every subset, under `/data/huggingface/griffin/ckpts/` on the HPC) are the candidate source; they need the Griffin toolkit's inference code and environment, which this repository does not contain. Planned as the acceptance check, run on the HPC as a GPU job, after step A's code is in.
 
 The reference copy `tests/griffin_reference.py` stays (same session): checksums would say that something changed, the reference code says what changed, which is how the quaternion sign flip was found.

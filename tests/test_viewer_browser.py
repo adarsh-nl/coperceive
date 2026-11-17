@@ -1387,8 +1387,8 @@ def test_identifier_inputs_have_autocapitalize_and_autocorrect_disabled(
     # 3. Typing lowercase values retains them without transformation
     user_input = session.page.locator("#hpc-user")
     user_input.fill("")
-    user_input.press_sequentially("nanjaiyalatha")
-    assert user_input.input_value() == "nanjaiyalatha"
+    user_input.press_sequentially("alicelowercase")
+    assert user_input.input_value() == "alicelowercase"
 
     session.page.select_option("#hpc-scheduler", "slurm")
     partition_input = session.page.locator("#hpc-partition")

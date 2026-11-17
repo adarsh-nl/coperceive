@@ -366,11 +366,17 @@ def export_hero(
 
 
 if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Export the landing-page hero clip.")
+    parser.add_argument("--scene-dir", type=Path, required=True, help="staged Town03-000 scene")
+    parser.add_argument("--map-dir", type=Path, required=True, help="Town03 map folder")
+    parser.add_argument("--out-bin", type=Path, required=True, help="output clip.bin")
+    parser.add_argument("--out-manifest", type=Path, required=True, help="output manifest.json")
+    args = parser.parse_args()
     export_hero(
-        scene_dir=Path(
-            "/home/nanjaiyalathaa/results/reference-stepb-20261020/staged-scenes/Town03-000"
-        ),
-        map_dir=Path("/home/nanjaiyalathaa/results/628385/maps/Town03"),
-        out_bin=Path("/home/nanjaiyalathaa/wt/landing/site/public/hero/clip.bin"),
-        out_manifest=Path("/home/nanjaiyalathaa/wt/landing/site/public/hero/manifest.json"),
+        scene_dir=args.scene_dir,
+        map_dir=args.map_dir,
+        out_bin=args.out_bin,
+        out_manifest=args.out_manifest,
     )
