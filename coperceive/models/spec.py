@@ -28,7 +28,22 @@ AGENT_TYPES = ("vehicle", "uav", "infrastructure", "other")
 OPTION_TYPES = ("str", "int", "float", "bool")
 ERROR_CODES = ("unsupported", "configure_failed", "frame_failed", "cancelled", "bad_message")
 
-_NAME = re.compile(r"^[a-z0-9_-]+$")
+# Always used with fullmatch: `re.match('^...$')` also accepts a final "\n", and these names
+# reach `#SBATCH --job-name` and comment lines of the --slurm job script.
+_NAME = re.compile(r"[a-z0-9_-]+")
+# `environment.secrets` are environment variable names (POSIX portable form).
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+# `resources.slurm_constraint` is a Slurm --constraint feature expression: feature names,
+# `&` AND, `|` OR, `*` counts, `[...]` matching OR and `(...)` grouping. It is written into
+# `#SBATCH --constraint="..."`, so a quote, backslash, space or line break is refused.
+_SLURM_CONSTRAINT = re.compile(r"[A-Za-z0-9_.,:&|*()\[\]-]+")
+# `outputs.artifacts` (and so `transient_artifacts` and `depends_on[].artifact`) name a
+# directory `artifacts/<model>/<name>` and reach the --slurm job script raw inside an rsync
+# `--exclude='...'` pattern: a plain path segment, no quote, glob, slash or `.`/`..`.
+_ARTIFACT_NAME = re.compile(r"[A-Za-z0-9_.-]+")
+# `environment.modules` entries become `module load <name>` lines of the job script: an Lmod
+# or Environment Modules name such as `nvidia/cuda-11.x_cudnn-8.6`, `foss@2023a`.
+_MODULE_NAME = re.compile(r"[A-Za-z0-9_.+/@:-]+")
 _ARGV_FIELD = re.compile(r"\{([^{}]*)\}")
 # ``{option:NAME}`` in ``commands.batch``/``commands.live``: the validated effective value of
 # the model's option NAME, which lets a child that needs a file to hash at ``hello`` receive
@@ -178,7 +193,7 @@ def parse_manifest(payload: object, *, source: Path | None) -> Manifest:
     if version != SPEC_VERSION:
         raise ModelSpecError(f"spec_version: expected {SPEC_VERSION}, got {version}")
     name = root.str("name")
-    if not _NAME.match(name):
+    if not _NAME.fullmatch(name):
         raise ModelSpecError(f"name: expected [a-z0-9_-]+, got {name!r}")
     plugin_version = root.str("version")
     licence = _licence(root.sub("licence"))
@@ -267,6 +282,57 @@ def select_model(manifest: Manifest, name: str | None) -> ModelSpec:
     if spec is None:
         raise ModelSpecError(f"{manifest.name} has no model {name!r}; models: {names}")
     return spec
+
+
+def check_slurm_constraint(value: str, path: str = "slurm_constraint") -> str:
+    """``value`` when it is a Slurm ``--constraint`` feature expression the job script can
+    carry inside ``#SBATCH --constraint="..."``; a ModelSpecError naming ``path`` else."""
+    if _SLURM_CONSTRAINT.fullmatch(value) is None:
+        raise ModelSpecError(
+            f"{path}: {value!r} is not a Slurm feature expression; use feature names "
+            "(letters, digits, '_', '.', '-', ':', ',') joined by '&', '|', '*' counts, "
+            "'[...]' and '(...)', with no spaces, quotes or line breaks"
+        )
+    return value
+
+
+def check_artifact_name(value: str, path: str = "outputs.artifacts") -> str:
+    """An artefact name is one plain path segment: ``[A-Za-z0-9_.-]+``, not ``.``/``..``."""
+    if value in {".", ".."} or _ARTIFACT_NAME.fullmatch(value) is None:
+        raise ModelSpecError(
+            f"{path}: {value!r}: artifact names are [A-Za-z0-9_.-]+ (not '.' or '..'); "
+            "they name a directory and reach the --slurm job script"
+        )
+    return value
+
+
+def check_module_name(value: str, path: str = "environment.modules") -> str:
+    """A ``module load`` name: ``[A-Za-z0-9_.+/@:-]+`` and no ``.``/``..`` segment."""
+    if _MODULE_NAME.fullmatch(value) is None or any(
+        segment in {".", ".."} for segment in value.split("/")
+    ):
+        raise ModelSpecError(
+            f"{path}: {value!r}: module names are [A-Za-z0-9_.+/@:-]+ without a '.' or "
+            "'..' segment; each becomes a `module load` line of the --slurm job script"
+        )
+    return value
+
+
+def check_model_key(value: str, path: str = "models") -> str:
+    """A model key or option name: ``[a-z0-9_-]+``."""
+    if _NAME.fullmatch(value) is None:
+        raise ModelSpecError(f"{path}: {value!r}: model keys and option names are [a-z0-9_-]+")
+    return value
+
+
+def check_secret_name(value: str, path: str = "environment.secrets") -> str:
+    """``value`` when it is an environment variable name; a ModelSpecError naming ``path``
+    else. Secret names are written into a comment line of the --slurm job script."""
+    if _ENV_NAME.fullmatch(value) is None:
+        raise ModelSpecError(
+            f"{path}: {value!r} is not an environment variable name ([A-Za-z_][A-Za-z0-9_]*)"
+        )
+    return value
 
 
 def check_options(spec: ModelSpec, given: Mapping[str, str]) -> dict[str, object]:
@@ -454,6 +520,10 @@ def _environment(node: _Node | None) -> Environment:
         inherit_ld_library_path=node.bool("inherit_ld_library_path", False),
         container_runtime=runtime,
     )
+    for secret in environment.secrets:
+        check_secret_name(secret, node.at("secrets"))
+    for module in environment.modules:
+        check_module_name(module, node.at("modules"))
     node.done()
     return environment
 
@@ -464,7 +534,7 @@ def _models(node: _Node | None) -> dict[str, ModelSpec]:
         raise ModelSpecError(f"{node.path}: at least one model is required")
     out: dict[str, ModelSpec] = {}
     for key in list(node.payload):
-        if not _NAME.match(key):
+        if not _NAME.fullmatch(key):
             raise ModelSpecError(f"{node.at(key)}: model keys are [a-z0-9_-]+")
         sub = node.sub(key)
         assert sub is not None
@@ -571,6 +641,8 @@ def _outputs(node: _Node | None) -> Outputs:
         transient_artifacts=node.strs("transient_artifacts", optional=True),
         deterministic=node.bool("deterministic", True),
     )
+    for name in outputs.artifacts:
+        check_artifact_name(name, node.at("artifacts"))
     for name in outputs.transient_artifacts:
         if name not in outputs.artifacts:
             raise ModelSpecError(
@@ -597,6 +669,8 @@ def _resources(node: _Node | None) -> Resources:
         slurm_constraint=node.opt_str("slurm_constraint"),
         max_inflight=node.opt_int("max_inflight", 1),
     )
+    if resources.slurm_constraint is not None:
+        check_slurm_constraint(resources.slurm_constraint, node.at("slurm_constraint"))
     if resources.max_inflight < 1:
         raise ModelSpecError(f"{node.at('max_inflight')}: expected at least 1")
     if resources.cpus < 1 or resources.memory_gb < 1:
@@ -625,7 +699,7 @@ def _options(node: _Node | None) -> dict[str, OptionSpec]:
         return {}
     out: dict[str, OptionSpec] = {}
     for key in list(node.payload):
-        if not _NAME.match(key):
+        if not _NAME.fullmatch(key):
             raise ModelSpecError(f"{node.at(key)}: option names are [a-z0-9_-]+")
         sub = node.sub(key)
         assert sub is not None
@@ -725,7 +799,7 @@ def _argv(node: _Node, key: str) -> tuple[str, ...]:
                 continue
             if field.startswith(_OPTION_FIELD_PREFIX):
                 name = field[len(_OPTION_FIELD_PREFIX) :]
-                if not _NAME.match(name):
+                if not _NAME.fullmatch(name):
                     raise ModelSpecError(
                         f"{node.at(key)}: {{{field}}}: option names are [a-z0-9_-]+"
                     )
@@ -755,7 +829,12 @@ __all__ = [
     "OptionSpec",
     "Outputs",
     "Resources",
+    "check_artifact_name",
+    "check_model_key",
+    "check_module_name",
     "check_options",
+    "check_secret_name",
+    "check_slurm_constraint",
     "load_manifest",
     "manifest_sha256",
     "option_text",

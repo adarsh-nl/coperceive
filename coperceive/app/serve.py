@@ -47,6 +47,9 @@ def run(
         media_roots=media_roots,
         allow_origin=allow_origin,
         remote=remote,
+        # Without a token, only this machine's loopback names on this port may
+        # reach the app: a DNS-rebinding page keeps its own Host header.
+        loopback_port=port if token is None else None,
     )
     uvicorn.run(app, host=host, port=port, root_path=root_path)
 

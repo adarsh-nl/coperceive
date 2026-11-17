@@ -105,3 +105,78 @@ def test_desktop_path_filters_cover_required_directories() -> None:
     assert not matches_any("tests/test_cli_griffin.py"), "Test changes should skip desktop-macos"
     assert not matches_any("docs/ci.md"), "Documentation changes should skip desktop-macos"
     assert not matches_any("README.md"), "Root doc changes should skip desktop-macos"
+
+
+def test_docs_path_filters_and_job() -> None:
+    """Verify the docs CI job is gated by the docs path filter and enforces strict builds."""
+    data = _load_ci_workflow()
+    jobs = cast(dict[str, Any], data.get("jobs", {}))
+    changes_job = cast(dict[str, Any], jobs["changes"])
+    outputs = cast(dict[str, Any], changes_job.get("outputs", {}))
+    assert "docs" in outputs, "changes job must expose a 'docs' output"
+
+    changes_steps = cast(list[dict[str, Any]], changes_job.get("steps", []))
+    paths_filter_step = next(
+        s for s in changes_steps if "dorny/paths-filter" in str(s.get("uses", ""))
+    )
+    filters_yaml = cast(
+        dict[str, Any],
+        yaml.safe_load(str(cast(dict[str, Any], paths_filter_step["with"])["filters"])),
+    )
+    docs_patterns = cast(list[str], filters_yaml.get("docs", []))
+    assert docs_patterns, f"Expected 'docs' patterns in filters, got {filters_yaml}"
+
+    def matches_docs(path: str) -> bool:
+        return any(fnmatch(path, pattern) for pattern in docs_patterns)
+
+    assert matches_docs("docs/index.md")
+    assert matches_docs("mkdocs.yml")
+    assert matches_docs("requirements-docs.txt")
+    assert matches_docs(".github/workflows/ci.yml")
+    assert matches_docs(".github/workflows/pages.yml")
+    assert not matches_docs("src-tauri/src/main.rs")
+    assert not matches_docs("coperceive/griffin/commands.py")
+
+    assert "docs" in jobs, "Workflow must include a 'docs' job"
+    docs_job = cast(dict[str, Any], jobs["docs"])
+    assert docs_job.get("needs") == "changes"
+    assert "needs.changes.outputs.docs == 'true'" in str(docs_job.get("if", ""))
+
+    docs_steps = cast(list[dict[str, Any]], docs_job["steps"])
+    run_cmds = "\n".join(str(s.get("run", "")) for s in docs_steps)
+    assert "requirements-docs.txt" in run_cmds
+    assert "mkdocs build --strict" in run_cmds
+    assert "|| true" not in run_cmds
+
+
+def test_pages_workflow_builds_docs_and_validates_dist() -> None:
+    """Verify pages.yml triggers on docs changes, builds strict docs, and validates paths."""
+    pages_path = _repo_root() / ".github" / "workflows" / "pages.yml"
+    assert pages_path.is_file(), f"Workflow file not found: {pages_path}"
+    with open(pages_path, encoding="utf-8") as f:
+        data = cast(dict[str, Any], yaml.safe_load(f))
+
+    on_raw = cast(dict[str, Any] | None, data.get("on") or data.get(True))  # type: ignore[reportCallIssue]
+    on_block = on_raw or {}
+    for event in ("push", "pull_request"):
+        paths = cast(list[str], cast(dict[str, Any], on_block[event])["paths"])
+        for expected in ("site/**", "docs/**", "mkdocs.yml", "requirements-docs.txt"):
+            assert expected in paths, f"Expected {expected!r} in pages.yml {event}.paths"
+
+    jobs = cast(dict[str, Any], data["jobs"])
+    deploy_job = cast(dict[str, Any], jobs["deploy"])
+    assert deploy_job.get("if") == (
+        "github.event_name == 'workflow_dispatch' || "
+        "(github.event_name == 'push' && github.ref == 'refs/heads/main')"
+    )
+
+    build_steps = cast(list[dict[str, Any]], cast(dict[str, Any], jobs["build"])["steps"])
+    run_cmds = "\n".join(str(s.get("run", "")) for s in build_steps)
+    assert "npm run build" in run_cmds
+    assert "pip install -r requirements-docs.txt" in run_cmds
+    assert "mkdocs build --strict -d site/dist/docs" in run_cmds
+    assert run_cmds.index("npm run build") < run_cmds.index(
+        "mkdocs build --strict -d site/dist/docs"
+    )
+    assert "docs/index.html" in run_cmds
+    assert "docs/search/search_index.json" in run_cmds

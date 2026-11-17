@@ -1,1 +1,0 @@
-build_run_plan: Choose the media root on the cluster before checking the plan.

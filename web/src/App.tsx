@@ -4,7 +4,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { apiBase, authHeaders, clientFor, errorDetail, isJob, type Job } from "./api/client";
 import { BrandWordmark } from "./desktop/Brand";
 import ConnectScreen from "./desktop/ConnectScreen";
-import { isTauriEnvironment, isViewerWindow, showLibrary } from "./desktop/local";
+import { isTauriEnvironment, isViewerWindow, showLibrary, updatePersistentState } from "./desktop/local";
 import { DesktopPreferences } from "./desktop/SettingsView";
 import { ViewerUpdates } from "./desktop/UpdateBanner";
 import { CrashNotice } from "./desktop/CrashNotice";
@@ -405,18 +405,7 @@ export default function App() {
           setHasThemeOverride(true);
           writeTheme(next);
           setTheme(next);
-          if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-            const port = window.__COPERCEIVE_CTRL_PORT__;
-            const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-            void fetch(`http://127.0.0.1:${port}/state`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${secret}`,
-              },
-              body: JSON.stringify({ theme_override: next }),
-            }).catch(() => {});
-          }
+          void updatePersistentState({ theme_override: next }).catch(() => {});
         }}
         onOpen={() => {
           window.location.hash = "#/viewer";

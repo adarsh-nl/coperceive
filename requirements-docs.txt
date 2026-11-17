@@ -1,0 +1,4 @@
+# Pinned documentation build. ADR 0005 measured these versions on 2026-10-15.
+# Install with: pip install -r requirements-docs.txt
+mkdocs==1.6.1
+mkdocs-material==9.7.7

@@ -124,10 +124,10 @@ mod tests {
             );
             assert!(!body.contains("CARGO_PKG_VERSION"), "{what} reads CARGO_PKG_VERSION");
         }
-        let checker = &main[main.find("cfg.updater_checker = Some(").expect("checker")..];
-        let checker = &checker[..checker.find("cfg.updater_installer").unwrap_or(checker.len())];
+        let checker = &main[main.find("fn run_updater_check(").expect("run_updater_check")..];
+        let checker = &checker[..checker.find("fn run_updater_install(").unwrap_or(checker.len())];
         assert!(!checker.contains("CARGO_PKG_VERSION"), "the up-to-date reply reads CARGO_PKG_VERSION");
-        assert_eq!(checker.matches("app_version(&check_handle.package_info().version)").count(), 2);
+        assert_eq!(checker.matches("app_version(&handle.package_info().version)").count(), 2);
         assert_eq!(app_version(&"0.1.1"), "0.1.1");
     }
 

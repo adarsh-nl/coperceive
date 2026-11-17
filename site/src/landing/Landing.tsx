@@ -190,6 +190,7 @@ export function Landing() {
             <nav aria-label="Page" className="lm-nav" style={{ display: "flex", alignItems: "center", gap: 28, fontSize: 14, color: "#a1a1a6" }}>
               <a href="#pipeline" className="lm-link lm-anchor">Pipeline</a>
               <a href="#install" className="lm-link lm-anchor">Install</a>
+              <a href="/coperceive/docs/" className="lm-link">Docs</a>
               <a href={REPO} className="lm-link" style={{ padding: "9px 16px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.18)", color: "#f5f5f7" }}>GitHub</a>
             </nav>
           </header>

@@ -2,7 +2,7 @@
 //! Remote HPC and SSH session manager for Coperceive Desktop.
 
 use std::io::Read;
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Stdio};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -230,21 +230,43 @@ impl RemoteClient {
     }
 
     fn run_remote_cmd(&self, args: &[String]) -> Result<String, SshErrorKind> {
+        self.run_remote_cmd_with_timeout(args, None)
+    }
+
+    fn run_remote_cmd_with_timeout(
+        &self,
+        args: &[String],
+        timeout: Option<Duration>,
+    ) -> Result<String, SshErrorKind> {
         let remote_cmd = remote_command_line(&self.coperceive_command, args);
         let ssh_args = build_ssh_command(&self.alias, &remote_cmd);
+        let result = match timeout {
+            Some(limit) => crate::ssh::run_local_command(&self.ssh_bin, &ssh_args, limit, None)
+                .map_err(|e| {
+                    if e.kind() == std::io::ErrorKind::TimedOut {
+                        SshErrorKind::Other(e.to_string())
+                    } else {
+                        SshErrorKind::Other(format!("Could not start SSH: {}", e))
+                    }
+                })?,
+            None => {
+                let output = crate::platform::create_command(&self.ssh_bin)
+                    .args(&ssh_args)
+                    .output()
+                    .map_err(|e| SshErrorKind::Other(format!("Could not start SSH: {}", e)))?;
+                crate::ssh::CommandResult {
+                    success: output.status.success(),
+                    stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+                    stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+                }
+            }
+        };
 
-        let output = crate::platform::create_command(&self.ssh_bin)
-            .args(&ssh_args)
-            .output()
-            .map_err(|e| SshErrorKind::Other(format!("Could not start SSH: {}", e)))?;
-
-        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-        if !output.status.success() {
-            return Err(classify_ssh_error(&stderr));
+        if !result.success {
+            return Err(classify_ssh_error(&result.stderr));
         }
 
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        Ok(stdout)
+        Ok(result.stdout.trim().to_string())
     }
 
     pub fn start(
@@ -332,10 +354,11 @@ impl RemoteClient {
         Ok(parsed)
     }
 
-    pub fn stop(
+    fn stop_impl(
         &self,
         uuid: Option<&str>,
         job_id: Option<u64>,
+        timeout: Option<Duration>,
     ) -> Result<RemoteStopResponse, SshErrorKind> {
         let mut args = vec!["stop".to_string()];
         if let Some(u) = uuid {
@@ -345,10 +368,27 @@ impl RemoteClient {
             args.extend(["--job-id".to_string(), j.to_string()]);
         }
 
-        let stdout = self.run_remote_cmd(&args)?;
+        let stdout = self.run_remote_cmd_with_timeout(&args, timeout)?;
         let parsed: RemoteStopResponse =
             parse_remote_reply("stop", &stdout).map_err(SshErrorKind::Other)?;
         Ok(parsed)
+    }
+
+    pub fn stop(
+        &self,
+        uuid: Option<&str>,
+        job_id: Option<u64>,
+    ) -> Result<RemoteStopResponse, SshErrorKind> {
+        self.stop_impl(uuid, job_id, None)
+    }
+
+    pub fn stop_with_timeout(
+        &self,
+        uuid: Option<&str>,
+        job_id: Option<u64>,
+        timeout: Duration,
+    ) -> Result<RemoteStopResponse, SshErrorKind> {
+        self.stop_impl(uuid, job_id, Some(timeout))
     }
 
     pub fn heartbeat(&self, uuid: &str) -> Result<RemoteHeartbeatResponse, SshErrorKind> {
@@ -770,12 +810,54 @@ impl RemoteSessionManager {
         format!("http://127.0.0.1:{}", self.local_port)
     }
 
-    pub fn disconnect(&mut self) -> Result<(), SshErrorKind> {
+    fn disconnect_impl(&mut self, timeout: Option<Duration>) -> Result<(), SshErrorKind> {
         if let Some(mut t) = self.tunnel.take() {
             let _ = t.close();
         }
-        self.client.stop(Some(&self.uuid), None)?;
+        self.client.stop_impl(Some(&self.uuid), None, timeout)?;
         Ok(())
+    }
+
+    pub fn disconnect(&mut self) -> Result<(), SshErrorKind> {
+        self.disconnect_impl(None)
+    }
+
+    pub fn disconnect_with_timeout(&mut self, timeout: Duration) -> Result<(), SshErrorKind> {
+        self.disconnect_impl(Some(timeout))
+    }
+}
+
+/// Clears active cluster dataset metadata unless a remote session is active so
+/// stale streaming headers cannot linger after switching to a local scene.
+pub fn resolve_viewer_dataset_scenes(
+    has_remote: bool,
+    dataset: serde_json::Value,
+) -> serde_json::Value {
+    if has_remote {
+        dataset
+    } else {
+        serde_json::Value::Null
+    }
+}
+
+#[cfg(test)]
+mod scene_tests {
+    use super::resolve_viewer_dataset_scenes;
+
+    #[test]
+    fn dataset_scenes_is_cleared_when_no_remote_session_is_active() {
+        let cluster_dataset = serde_json::json!({
+            "scenes": [{ "scene_id": "train_0000", "state": "ready" }],
+            "about": { "label": "V2XSET train", "server": "HPC" }
+        });
+        assert_eq!(
+            resolve_viewer_dataset_scenes(false, cluster_dataset.clone()),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            resolve_viewer_dataset_scenes(true, cluster_dataset.clone()),
+            cluster_dataset
+        );
     }
 }
 
@@ -788,6 +870,7 @@ mod tests {
     struct FakeSshScript {
         path: PathBuf,
         _guard: std::sync::MutexGuard<'static, ()>,
+        _port_guard: std::sync::MutexGuard<'static, ()>,
     }
 
     impl FakeSshScript {
@@ -795,10 +878,14 @@ mod tests {
             let guard = crate::test_seams::FAKE_SSH_LOCK
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
+            let port_guard = crate::test_seams::PORT_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
             let fixture = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/hpc/fake_ssh.sh");
             Self {
                 path: PathBuf::from(fixture),
                 _guard: guard,
+                _port_guard: port_guard,
             }
         }
     }
@@ -1114,7 +1201,7 @@ mod tests {
             path_sep,
             std::env::var("PATH").unwrap_or_default()
         );
-        let status = Command::new("sh")
+        let status = std::process::Command::new("sh")
             .arg("-c")
             .arg(&line)
             .env("PATH", path)
@@ -1164,4 +1251,64 @@ mod tests {
         drop(mgr);
     }
 
+    #[test]
+    fn disconnect_with_timeout_kills_hanging_ssh_child() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = std::env::temp_dir().join(format!(
+            "coperceive-remote-timeout-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).expect("create temp test dir");
+        let pid_file = dir.join("fake_ssh.pid");
+        let fake_ssh = dir.join("fake_ssh.sh");
+        let script = format!(
+            "#!/bin/sh\necho $$ > \"{}\"\nexec sleep 30\n",
+            pid_file.display()
+        );
+        fs::write(&fake_ssh, script).expect("write fake ssh script");
+        let mut perms = fs::metadata(&fake_ssh).expect("stat script").permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&fake_ssh, perms).expect("chmod script");
+
+        let client = RemoteClient::with_ssh_bin("hpc-alias", fake_ssh.to_str().unwrap());
+        let mut session = RemoteSessionManager {
+            client,
+            tunnel: None,
+            uuid: "hang-uuid".to_string(),
+            local_port: 0,
+            remote_ip: String::new(),
+            remote_port: 0,
+            token: "secret-token".to_string(),
+            data_root: String::new(),
+            job_id: None,
+        };
+
+        let started = std::time::Instant::now();
+        let err = session
+            .disconnect_with_timeout(Duration::from_secs(1))
+            .expect_err("hanging ssh must time out");
+        let elapsed = started.elapsed();
+        assert!(
+            elapsed < Duration::from_secs(5),
+            "disconnect_with_timeout took too long: {elapsed:?}"
+        );
+        assert!(
+            err.to_string().contains("did not answer"),
+            "unexpected timeout error: {err}"
+        );
+
+        let pid_text = fs::read_to_string(&pid_file).expect("fake ssh pid recorded");
+        let pid = pid_text.trim();
+        let alive = std::process::Command::new("kill")
+            .args(["-0", pid])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .expect("probe fake ssh pid")
+            .success();
+        assert!(!alive, "timed out ssh child (pid {pid}) was not killed");
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

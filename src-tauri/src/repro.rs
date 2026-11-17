@@ -9,7 +9,6 @@
 //! `COPERCEIVE_TEST_REPRO_DIR` at a local fixture instead of SSH.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 use std::time::Duration;
 
 use crate::hpc::ServerProfile;
@@ -63,7 +62,7 @@ pub fn card_from_profile(
     push_plain(&mut args, "--time-limit", time_limit);
     push_plain(&mut args, "--gpus", gpus);
     push_plain(&mut args, "--memory", memory);
-    let output = Command::new(python)
+    let output = crate::platform::python_command(python)
         .args(&args)
         .output()
         .map_err(|error| format!("Could not start Python to build the repro card: {error}"))?;
@@ -96,7 +95,15 @@ pub fn stage_remote_run(
     std::fs::create_dir_all(&run)
         .map_err(|error| format!("Could not prepare the card: {error}"))?;
     let stored = plan.clone();
-    if let Some(text) = read_capped(runner, &stored.output_dir, "environment.json") {
+    // A built-in run's environment.json is beside its run.json, in <output_dir>/<plan id>/,
+    // where coperceive model run (and the app's job) writes it; a custom pipeline's is in
+    // <output_dir>/. The plan id was validated by load_saved_plan.
+    let environment_dir = if stored.pipeline.source == "builtin" {
+        format!("{}/{}", stored.output_dir.trim_end_matches('/'), stored.id)
+    } else {
+        stored.output_dir.clone()
+    };
+    if let Some(text) = read_capped(runner, &environment_dir, "environment.json") {
         write_child(&run, "environment.json", &text)?;
     }
     if let Some(text) = read_capped(runner, &stored.output_dir, "perturbation.json") {
@@ -231,12 +238,16 @@ mod tests {
 
     struct FakeRunner {
         calls: Mutex<Vec<String>>,
+        /// A built-in plan: `model run` writes environment.json beside run.json, in
+        /// `<output_dir>/<plan id>/`, and only there.
+        builtin: bool,
     }
 
     impl FakeRunner {
         fn new() -> Self {
             Self {
                 calls: Mutex::new(Vec::new()),
+                builtin: false,
             }
         }
     }
@@ -250,7 +261,7 @@ mod tests {
         ) -> Result<CommandResult, String> {
             self.calls.lock().unwrap().push(remote_cmd.to_string());
             if remote_cmd.contains("plans/") {
-                let plan = serde_json::json!({
+                let mut plan = serde_json::json!({
                     "schema": "coperceive-run-plan-1",
                     "id": TEST_PLAN_ID,
                     "created_unix": 1,
@@ -267,13 +278,21 @@ mod tests {
                     "contract_check_script": "",
                     "nothing_submitted": true
                 });
+                if self.builtin {
+                    plan["pipeline"]["source"] = serde_json::json!("builtin");
+                }
                 return Ok(CommandResult {
                     success: true,
                     stdout: plan.to_string(),
                     stderr: String::new(),
                 });
             }
-            if remote_cmd.contains("environment.json") {
+            let run_dir_file = format!(
+                "/data/results/runs/{TEST_PLAN_ID}/{TEST_PLAN_ID}/environment.json"
+            );
+            if remote_cmd.contains("environment.json")
+                && remote_cmd.contains(&run_dir_file) == self.builtin
+            {
                 return Ok(CommandResult {
                     success: true,
                     stdout: "{\"schema\":\"coperceive-environment\",\"schema_version\":1}\n".into(),
@@ -334,6 +353,20 @@ mod tests {
         assert!(calls
             .iter()
             .all(|call| !call.contains("predictions.jsonl\n{")));
+        let _ = std::fs::remove_dir_all(&dest);
+    }
+
+    #[test]
+    fn a_builtin_runs_environment_json_is_read_from_its_run_directory() {
+        // coperceive model run (and the app's job) writes it beside run.json, in
+        // <output_dir>/<plan id>/; a custom pipeline in <output_dir>/.
+        let runner = FakeRunner { builtin: true, ..FakeRunner::new() };
+        let dest = std::env::temp_dir()
+            .join(format!("coperceive-repro-builtin-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dest);
+        stage_remote_run(&runner, &profile(), TEST_PLAN_ID, &dest).expect("stage");
+        let environment = dest.join("results").join("runs").join(TEST_PLAN_ID).join("environment.json");
+        assert!(environment.is_file(), "{:?}", runner.calls.lock().unwrap());
         let _ = std::fs::remove_dir_all(&dest);
     }
 }

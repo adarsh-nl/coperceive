@@ -4,7 +4,7 @@ Status: accepted as a plan. The desktop shell is not built in Phase 5.
 
 ## Context
 
-The viewer is three.js inside the local page (ADR 0003). The server is FastAPI on loopback (ADR 0004). Adarsh wants a standalone desktop app later. That package has to wrap the page and the server without folding them into one module.
+The viewer is three.js inside the local page (ADR 0003). The server is FastAPI on loopback (ADR 0004). the maintainer wants a standalone desktop app later. That package has to wrap the page and the server without folding them into one module.
 
 The split already in the tree:
 
@@ -43,4 +43,4 @@ The same `coperceive` command remains usable from a terminal.
 
 - CI does not package a desktop app.
 - The routes in `docs/viewer.md` are the contract a shell would call.
-- Tauri is the planned shell. Electron is the fallback. Adarsh can reverse that choice before any shell work starts.
+- Tauri is the planned shell. Electron is the fallback. the maintainer can reverse that choice before any shell work starts.

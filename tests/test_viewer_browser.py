@@ -752,6 +752,81 @@ def browser_without_webgl(playwright: Playwright) -> Iterator[Browser]:
     launched.close()
 
 
+def _assert_non_webgl_viewer_works(page: Page) -> None:
+    notice = page.locator(".webgl-missing")
+    deadline = time.monotonic() + 10
+    while notice.count() == 0 and time.monotonic() < deadline:
+        page.wait_for_timeout(100)
+    assert notice.count() == 1, "no WebGL notice"
+    notice_text = notice.inner_text()
+    assert (
+        "3D view unavailable: this computer's graphics (WebGL) could not start. "
+        "Camera images, boxes and scores still work."
+    ) in notice_text, notice_text
+    copy_btn = notice.locator('[data-testid="copy-webgl-diagnostics"]')
+    assert copy_btn.count() == 1, "missing Copy diagnostics button"
+    assert "Copy diagnostics" in copy_btn.inner_text()
+
+    # Camera strip starts collapsed by default in browser mode; open it so
+    # thumbnails mount and draw their 2D canvases without WebGL.
+    toggle = page.locator(".cam-strip[data-open='false'] .cam-strip-toggle")
+    if toggle.count() > 0:
+        toggle.click()
+
+    # Step forward to sample 3 / 7 (where Town03-000 stages camera PNGs) so we also
+    # verify stepping advances frames cleanly without WebGL.
+    step = page.locator("button[aria-label='Step forward']")
+    step.click()
+    step.click()
+    deadline = time.monotonic() + 10
+    while "sample 3 / 7" not in page.locator(".clock").inner_text() and time.monotonic() < deadline:
+        page.wait_for_timeout(100)
+    clock_text = page.locator(".clock").inner_text()
+    assert "sample 3 / 7" in clock_text, clock_text
+
+    # Non-3D features keep working without WebGL: camera thumbnails, boxes, and evaluation scores.
+    ready: dict[str, int | bool] = {}
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        ready = cast(
+            dict[str, int | bool],
+            page.evaluate(
+                """() => {
+                    const camSel = "section.cam-strip[data-open='true'] .cam-thumb canvas";
+                    const cams = [...document.querySelectorAll(camSel)]
+                        .filter(c => c.width > 0 && c.height > 0).length;
+                    const boxSel = 'button.eye[aria-label="Boxes"] .eye-meta';
+                    const boxesText = (document.querySelector(boxSel)?.textContent || "0").trim();
+                    const boxes = parseInt(boxesText, 10) || 0;
+                    const evalText = (document.querySelector(".eval-head")?.textContent || "")
+                        + (document.querySelector(".eval-grid")?.textContent || "");
+                    const chipSel = "[aria-label=Statuses] .chip .num";
+                    const chipNodes = [...document.querySelectorAll(chipSel)];
+                    const chips = chipNodes.reduce(
+                        (s, el) => s + (parseInt((el.textContent || "0").trim(), 10) || 0),
+                        0,
+                    );
+                    const hasMap = evalText.toLowerCase().includes("map@0.5");
+                    return { cams, boxes, hasMap, chips };
+                }"""
+            ),
+        )
+        if (
+            int(ready["cams"]) >= 1
+            and int(ready["boxes"]) > 0
+            and bool(ready["hasMap"])
+            and int(ready["chips"]) > 0
+        ):
+            break
+        page.wait_for_timeout(100)
+    else:
+        pytest.fail(f"Non-WebGL viewer panels did not populate: {ready}")
+
+    assert page.locator("#scene-id").inner_text() == SCENE_FULL
+    assert page.locator("button[aria-label=Play]").count() == 1
+    assert "sample 3 / 7" in page.locator(".clock").inner_text()
+
+
 def test_a_browser_without_webgl_gets_a_message_not_a_blank_page(
     browser_without_webgl: Browser, viewer_url: str
 ) -> None:
@@ -759,18 +834,81 @@ def test_a_browser_without_webgl_gets_a_message_not_a_blank_page(
     errors: list[str] = []
     page.on("pageerror", lambda error: errors.append(str(error)))
     page.goto(f"{viewer_url}/#/viewer", wait_until="networkidle")
-    notice = page.locator(".webgl-missing")
-    deadline = time.monotonic() + 10
-    while notice.count() == 0 and time.monotonic() < deadline:
-        page.wait_for_timeout(100)
-    assert notice.count() == 1, "no WebGL notice"
-    assert "needs WebGL" in notice.inner_text()
-    # The rest of the page is still there and usable.
-    assert page.locator("#scene-id").inner_text() == SCENE_FULL
-    assert page.locator("button[aria-label=Play]").count() == 1
-    assert "sample 1 / 7" in page.locator(".clock").inner_text()
+    _assert_non_webgl_viewer_works(page)
     assert errors == [], errors
     page.close()
+
+
+def test_broken_webgl_precision_format_shows_diagnostics_and_loads_cameras_and_scores(
+    browser: Browser, viewer_url: str
+) -> None:
+    """Simulates a broken VM WebGL driver (like macos-15-intel WKWebView) where
+    getContext('webgl2') returns an object whose getShaderPrecisionFormat/VENDOR/RENDERER
+    return null so THREE.WebGLRenderer throws."""
+    context = browser.new_context(
+        viewport={"width": 1400, "height": 900},
+        permissions=["clipboard-read", "clipboard-write"],
+    )
+    page = context.new_page()
+    errors: list[str] = []
+    page.on("pageerror", lambda error: errors.append(str(error)))
+    page.add_init_script(
+        """(() => {
+            const origGetContext = HTMLCanvasElement.prototype.getContext;
+            HTMLCanvasElement.prototype.getContext = function(type, ...args) {
+                const ctx = origGetContext.call(this, type, ...args);
+                if (type === "webgl" || type === "webgl2" || type === "experimental-webgl") {
+                    if (!ctx) {
+                        return null;
+                    }
+                    return new Proxy(ctx, {
+                        get(target, prop) {
+                            if (prop === "getShaderPrecisionFormat") {
+                                return () => null;
+                            }
+                            if (prop === "getParameter") {
+                                return (pname) => {
+                                    if (pname === target.VENDOR || pname === target.RENDERER) {
+                                        return null;
+                                    }
+                                    return target.getParameter(pname);
+                                };
+                            }
+                            if (prop === "getExtension") {
+                                return (name) => {
+                                    if (name === "WEBGL_debug_renderer_info") {
+                                        return null;
+                                    }
+                                    return target.getExtension(name);
+                                };
+                            }
+                            const value = target[prop];
+                            return typeof value === "function" ? value.bind(target) : value;
+                        },
+                    });
+                }
+                return ctx;
+            };
+        })();"""
+    )
+    page.goto(f"{viewer_url}/#/viewer", wait_until="networkidle")
+    _assert_non_webgl_viewer_works(page)
+    notice_text = page.locator(".webgl-missing").inner_text()
+    assert "Graphics readout: vendor null" in notice_text, notice_text
+    assert "renderer null" in notice_text, notice_text
+
+    copy_btn = page.locator('[data-testid="copy-webgl-diagnostics"]')
+    copy_btn.click()
+    deadline = time.monotonic() + 5
+    while "Copied diagnostics" not in copy_btn.inner_text() and time.monotonic() < deadline:
+        page.wait_for_timeout(50)
+    copied = page.evaluate("() => navigator.clipboard.readText()")
+    assert "vendor: null" in copied, copied
+    assert "renderer: null" in copied, copied
+    assert "vertexHighFloatPrecision: null" in copied, copied
+    assert "/Users/" not in copied and "/home/" not in copied and "127.0.0.1" not in copied, copied
+    assert errors == [], errors
+    context.close()
 
 
 def test_agent_display_names_label_the_panels_and_raw_ids_stay_in_tooltips(

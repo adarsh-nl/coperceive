@@ -20,7 +20,7 @@ REPO = Path(__file__).resolve().parents[1]
 RUN_ID = "griffin25m-vehicle-plugin"
 
 
-def build_griffin_fixture(root: Path) -> tuple[Path, Path, Path]:
+def _build_fixture(root: Path) -> tuple[Path, Path, Path]:
     scenes = root / "scenes"
     raw = root / "raw"
     out = root / "predictions"
@@ -68,7 +68,7 @@ def _normalise(text: str, root: Path) -> str:
 
 
 def test_griffin_vehicle_sbatch_matches_the_golden(tmp_path: Path) -> None:
-    scenes, raw, out = build_griffin_fixture(tmp_path)
+    scenes, raw, out = _build_fixture(tmp_path)
     args = [
         "model",
         "run",
@@ -130,7 +130,7 @@ def test_documented_eval_config_matches_the_expected_table() -> None:
 def test_a_shell_shaped_run_id_is_refused(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    scenes, raw, out = build_griffin_fixture(tmp_path)
+    scenes, raw, out = _build_fixture(tmp_path)
     with pytest.raises(SystemExit) as caught:
         main(
             [
@@ -168,7 +168,7 @@ def test_a_shell_shaped_run_id_is_refused(
 
 
 def test_dry_run_never_submits_and_never_uses_a_real_profile(tmp_path: Path) -> None:
-    scenes, raw, out = build_griffin_fixture(tmp_path)
+    scenes, raw, out = _build_fixture(tmp_path)
     captured = io.StringIO()
     with contextlib.redirect_stdout(captured):
         main(

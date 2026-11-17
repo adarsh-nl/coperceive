@@ -25,6 +25,67 @@ New-Item -ItemType Directory -Path $TempDir -Force | Out-Null
 $MarkerFile = Join-Path $TempDir "test_marker.txt"
 $StateDir = Join-Path $TempDir "state"
 
+# Normal (non-test) release launch must NOT start a loopback controller
+Write-Host ""
+Write-Host "--- Production Launch Controller Gate Check (Windows) ---"
+$ProdStateDir = Join-Path $TempDir "prod-state"
+New-Item -ItemType Directory -Path $ProdStateDir -Force | Out-Null
+$ProdStdOutFile = Join-Path $TempDir "prod_stdout.log"
+$ProdStdErrFile = Join-Path $TempDir "prod_stderr.log"
+foreach ($varName in @(
+    "COPERCEIVE_TEST_ENV",
+    "COPERCEIVE_TEST_MARKER_FILE",
+    "COPERCEIVE_CTRL_INFO_FILE",
+    "COPERCEIVE_AUTOCONNECT_ROOT",
+    "COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT",
+    "COPERCEIVE_UPDATE_URL",
+    "COPERCEIVE_MOCK_DIALOG_FILE",
+    "COPERCEIVE_TEST_IMPORT_SOURCE"
+)) {
+    Remove-Item "Env:$varName" -ErrorAction SilentlyContinue
+}
+$env:COPERCEIVE_STATE_DIR = $ProdStateDir
+$prodProc = Start-Process -FilePath $AppExe -RedirectStandardOutput $ProdStdOutFile -RedirectStandardError $ProdStdErrFile -PassThru
+for ($i = 0; $i -lt 8; $i++) {
+    if ($prodProc.HasExited) {
+        if (Test-Path $ProdStdErrFile) { Get-Content $ProdStdErrFile }
+        if (Test-Path $ProdStdOutFile) { Get-Content $ProdStdOutFile }
+        Write-Error "Production launch exited prematurely with exit code $($prodProc.ExitCode)"
+        exit 8
+    }
+    Start-Sleep -Milliseconds 500
+}
+$prodOutText = ""
+if (Test-Path $ProdStdOutFile) { $prodOutText += (Get-Content $ProdStdOutFile -Raw) }
+if (Test-Path $ProdStdErrFile) { $prodOutText += (Get-Content $ProdStdErrFile -Raw) }
+if ($prodOutText -match "Loopback controller listening|\[desktop-ctrl\]") {
+    Stop-Process -Id $prodProc.Id -Force -ErrorAction SilentlyContinue
+    Write-Host $prodOutText
+    Write-Error "Security failure: loopback controller started during normal (non-test) launch!"
+    exit 8
+}
+$prodPids = New-Object System.Collections.Generic.HashSet[int]
+[void]$prodPids.Add($prodProc.Id)
+$queue = New-Object System.Collections.Generic.Queue[int]
+$queue.Enqueue($prodProc.Id)
+while ($queue.Count -gt 0) {
+    $parentId = $queue.Dequeue()
+    Get-CimInstance Win32_Process -Filter "ParentProcessId = $parentId" -ErrorAction SilentlyContinue | ForEach-Object {
+        $childId = [int]$_.ProcessId
+        if ($prodPids.Add($childId)) { $queue.Enqueue($childId) }
+    }
+}
+$prodListeners = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $prodPids.Contains([int]$_.OwningProcess) })
+if ($prodListeners.Count -gt 0) {
+    Stop-Process -Id $prodProc.Id -Force -ErrorAction SilentlyContinue
+    $prodListeners | Format-Table -AutoSize
+    Write-Error "Security failure: unexpected listening TCP socket(s) during normal launch!"
+    exit 8
+}
+Stop-Process -Id $prodProc.Id -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 1
+Write-Host "PROD_LAUNCH_VERIFIED: os=windows listening_ports=0 ctrl_disabled=true"
+
 $env:COPERCEIVE_AUTOCONNECT_ROOT = $FixtureRoot
 $env:COPERCEIVE_TEST_MARKER_FILE = $MarkerFile
 $env:COPERCEIVE_STATE_DIR = $StateDir
@@ -350,7 +411,7 @@ if ($clickResp.result -ne "clicked") {
 }
 
 Write-Host "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
-$viewerScript = "(() => { document.querySelector('section.cam-strip[data-open=`"true`"] .cam-thumb')?.scrollIntoView?.(); const title = (document.querySelector('.dataset-badge .dataset-name')?.textContent || '').trim(); const points = [...document.querySelectorAll('.agent-points')].reduce((s, el) => s + (parseInt((el.getAttribute('title') || '0').split(' ')[0], 10) || 0), 0); const cameras = [...document.querySelectorAll('section.cam-strip[data-open=`"true`"] .cam-thumb canvas')].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector('button.eye[aria-label=`"Boxes`"] .eye-meta')?.textContent || '0').trim(), 10) || 0; const ready = title === 'Demo (synthetic)' && points > 0 && cameras >= 1 && boxes > 0; return { ready, title, points, cameras, boxes }; })()"
+$viewerScript = "(() => { document.querySelector('section.cam-strip[data-open=`"true`"] .cam-thumb')?.scrollIntoView?.(); const title = (document.querySelector('.dataset-badge .dataset-name')?.textContent || '').trim(); const points = [...document.querySelectorAll('.agent-points')].reduce((s, el) => s + (parseInt((el.getAttribute('title') || '0').split(' ')[0], 10) || 0), 0); const cameras = [...document.querySelectorAll('section.cam-strip[data-open=`"true`"] .cam-thumb canvas')].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector('button.eye[aria-label=`"Boxes`"] .eye-meta')?.textContent || '0').trim(), 10) || 0; const notice = (document.querySelector('.webgl-missing')?.textContent || '').trim(); const hasWebglUnavailable = notice.includes('3D view unavailable') && notice.includes('Copy diagnostics'); const ready = title === 'Demo (synthetic)' && points > 0 && cameras >= 1 && boxes > 0 && !hasWebglUnavailable; return { ready, title, points, cameras, boxes, hasWebglUnavailable }; })()"
 $viewerBody = @{
     window = "viewer"
     script = $viewerScript

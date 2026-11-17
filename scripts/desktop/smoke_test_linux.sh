@@ -91,6 +91,97 @@ echo "Found bundled Python: ${PYTHON_BIN}"
 echo "Python version: $("${PYTHON_BIN}" --version)"
 unset COPERCEIVE_PYTHON
 
+echo ""
+echo "--- Production Launch Controller Gate Check (Linux) ---"
+PROD_STATE_DIR="${SMOKE_TMPDIR}/prod-state"
+mkdir -p "${PROD_STATE_DIR}"
+PROD_STDOUT="${SMOKE_TMPDIR}/prod_stdout.log"
+PROD_STDERR="${SMOKE_TMPDIR}/prod_stderr.log"
+
+(
+    unset COPERCEIVE_TEST_ENV
+    unset COPERCEIVE_TEST_MARKER_FILE
+    unset COPERCEIVE_CTRL_INFO_FILE
+    unset COPERCEIVE_AUTOCONNECT_ROOT
+    unset COPERCEIVE_DESKTOP_AUTOCONNECT_ROOT
+    unset COPERCEIVE_UPDATE_URL
+    unset COPERCEIVE_MOCK_DIALOG_FILE
+    unset COPERCEIVE_TEST_IMPORT_SOURCE
+    export COPERCEIVE_STATE_DIR="${PROD_STATE_DIR}"
+    exec "${APP_EXE}" > "${PROD_STDOUT}" 2> "${PROD_STDERR}"
+) &
+APP_PID=$!
+
+for _ in {1..8}; do
+    if ! kill -0 "${APP_PID}" 2>/dev/null; then
+        echo "Error: Production launch exited prematurely during controller-gate check!" >&2
+        cat "${PROD_STDERR}" >&2 || true
+        cat "${PROD_STDOUT}" >&2 || true
+        exit 8
+    fi
+    sleep 0.5
+done
+
+if grep -q -E "Loopback controller listening|\\[desktop-ctrl\\]" "${PROD_STDOUT}" "${PROD_STDERR}" 2>/dev/null; then
+    echo "Security failure: loopback controller started during normal (non-test) launch!" >&2
+    cat "${PROD_STDOUT}" >&2
+    exit 8
+fi
+
+if ! python3 - "${APP_PID}" <<'PY'
+import glob, os, sys
+root_pid = int(sys.argv[1])
+pids = {root_pid}
+changed = True
+while changed:
+    changed = False
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit():
+            continue
+        pid = int(entry)
+        if pid in pids:
+            continue
+        try:
+            with open(f"/proc/{pid}/stat", "rb") as f:
+                rest = f.read().rsplit(b")", 1)[1].split()
+            if int(rest[1]) in pids:
+                pids.add(pid)
+                changed = True
+        except OSError:
+            pass
+inodes = set()
+for pid in pids:
+    for link in glob.glob(f"/proc/{pid}/fd/*"):
+        try:
+            target = os.readlink(link)
+            if target.startswith("socket:[") and target.endswith("]"):
+                inodes.add(target[8:-1])
+        except OSError:
+            pass
+listeners = []
+for proto in ("tcp", "tcp6"):
+    try:
+        with open(f"/proc/net/{proto}") as f:
+            next(f)
+            for line in f:
+                cols = line.split()
+                if len(cols) >= 10 and cols[3] == "0A" and cols[9] in inodes:
+                    listeners.append(f"{proto}:{cols[1]}")
+    except OSError:
+        pass
+if listeners:
+    print("Security failure: unexpected listening TCP socket(s):", listeners, file=sys.stderr)
+    sys.exit(1)
+PY
+then
+    exit 8
+fi
+
+kill -TERM "${APP_PID}" 2>/dev/null || true
+wait "${APP_PID}" 2>/dev/null || true
+APP_PID=""
+echo "PROD_LAUNCH_VERIFIED: os=linux listening_ports=0 ctrl_disabled=true"
+
 echo "Starting coperceive-desktop with auto-connect fixture..."
 COPERCEIVE_AUTOCONNECT_ROOT="${FIXTURE_ROOT}" \
 COPERCEIVE_TEST_MARKER_FILE="${MARKER_FILE}" \
@@ -342,7 +433,7 @@ if ! echo "${CLICK_RESP}" | grep -q '"clicked"'; then
 fi
 
 echo "Polling until demo scene is generated, opened in viewer, and renders LiDAR points, camera strip, and boxes..."
-VIEWER_CHECK_SCRIPT='{"window":"viewer","script":"(() => { document.querySelector(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb\")?.scrollIntoView?.(); const title = (document.querySelector(\".dataset-badge .dataset-name\")?.textContent || \"\").trim(); const points = [...document.querySelectorAll(\".agent-points\")].reduce((s, el) => s + (parseInt((el.getAttribute(\"title\") || \"0\").split(\" \")[0], 10) || 0), 0); const cameras = [...document.querySelectorAll(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb canvas\")].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector(\"button.eye[aria-label=\\\"Boxes\\\"] .eye-meta\")?.textContent || \"0\").trim(), 10) || 0; const ready = title === \"Demo (synthetic)\" && points > 0 && cameras >= 1 && boxes > 0; return { ready, title, points, cameras, boxes }; })()"}'
+VIEWER_CHECK_SCRIPT='{"window":"viewer","script":"(() => { document.querySelector(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb\")?.scrollIntoView?.(); const title = (document.querySelector(\".dataset-badge .dataset-name\")?.textContent || \"\").trim(); const points = [...document.querySelectorAll(\".agent-points\")].reduce((s, el) => s + (parseInt((el.getAttribute(\"title\") || \"0\").split(\" \")[0], 10) || 0), 0); const cameras = [...document.querySelectorAll(\"section.cam-strip[data-open=\\\"true\\\"] .cam-thumb canvas\")].filter(c => c.width > 0 && c.height > 0).length; const boxes = parseInt((document.querySelector(\"button.eye[aria-label=\\\"Boxes\\\"] .eye-meta\")?.textContent || \"0\").trim(), 10) || 0; const notice = (document.querySelector(\".webgl-missing\")?.textContent || \"\").trim(); const hasWebglUnavailable = notice.includes(\"3D view unavailable\") && notice.includes(\"Copy diagnostics\"); const ready = title === \"Demo (synthetic)\" && points > 0 && cameras >= 1 && boxes > 0 && !hasWebglUnavailable; return { ready, title, points, cameras, boxes, hasWebglUnavailable }; })()"}'
 
 DEMO_LOADED=0
 LAST_VIEWER_STATE=""

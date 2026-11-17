@@ -4,11 +4,15 @@
 # Rendered by Coperceive from the saved plan and the server profile.
 # The user reviewed this exact script before confirming the submission.
 #SBATCH --job-name=coperceive-run-plan-1790000000-aabbccddeeff
-#SBATCH --partition=gpu-a40
-#SBATCH --time=04:00:00
-#SBATCH --gres=gpu:a40:1
-#SBATCH --output=/home/te st/results/coperceive-run-plan-1790000000-aabbccddeeff-%j.out
-#SBATCH --error=/home/te st/results/coperceive-run-plan-1790000000-aabbccddeeff-%j.err
+#SBATCH --partition=gpu-mixed
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=64G
+#SBATCH --time=01:00:00
+#SBATCH --constraint="a40"
+#SBATCH --output=/home/tester/logs/%x-%j.out
+#SBATCH --error=/home/tester/logs/%x-%j.err
+#SBATCH --mail-type=END,FAIL
 
 set -euo pipefail
 SCRATCH_DIR="/scratch/$USER/$SLURM_JOB_ID"
@@ -16,13 +20,24 @@ mkdir -p -m 0700 -- "$SCRATCH_DIR"
 trap 'rm -rf -- "$SCRATCH_DIR"' EXIT
 export TMPDIR="$SCRATCH_DIR/tmp"
 mkdir -p -m 0700 -- "$TMPDIR"
-OUT_DIR="/home/te st/results/runs/plan-1790000000-aabbccddeeff"
+mkdir -p -m 0700 -- "$SCRATCH_DIR/work"
+OUT_DIR="/home/tester/results/runs/plan-1790000000-aabbccddeeff"
 mkdir -p -m 0700 -- "$OUT_DIR"
 
 module purge
+module load python/3.9.18
 module load nvidia/cuda-11.8
 module load nvidia/cuda-11.x_cudnn-8.6
-python3 - "$OUT_DIR/environment.json" <<'PY' || true
+export PYTHONPATH=/opt/coperceive  # the coperceive the run's python imports, as plan_sbatch exports its own
+echo "Starting run for plan plan-1790000000-aabbccddeeff on $(hostname)"
+# The run's exit status is kept: its logs and artefacts come home below either way.
+set +e
+/opt/venv/bin/python -m coperceive model run --manifest /opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml --scenes /data/griffin/scenes --out /home/tester/results/runs/plan-1790000000-aabbccddeeff --run-id plan-1790000000-aabbccddeeff --model vehicle-side --raw-root /data/griffin/raw --media-root /data/griffin/raw --work "$SCRATCH_DIR/work"
+RC=$?
+set -e
+echo "model run exit $RC"
+mkdir -p -m 0700 -- "$OUT_DIR/plan-1790000000-aabbccddeeff"
+/opt/venv/bin/python - "$OUT_DIR/plan-1790000000-aabbccddeeff/environment.json" <<'PY' || true
 import hashlib
 import json
 import os
@@ -104,9 +119,10 @@ with open(out, "w", encoding="utf-8") as handle:
     json.dump(payload, handle, sort_keys=True)
     handle.write("\n")
 PY
-echo "Starting run for plan plan-1790000000-aabbccddeeff on $(hostname)"
-/opt/venv/bin/python -m coperceive model run --manifest /opt/coperceive/plugins/griffin/coperceive_griffin_model/model.yaml --scenes '/data/te st/it'\''s "q"/scenes' --out '/home/te st/results/runs/plan-1790000000-aabbccddeeff' --run-id plan-1790000000-aabbccddeeff --option 'checkpoint=/data/te st/it'\''s "q"/checkpoints/vehicle.pth' --model vehicle-side --raw-root '/data/te st/it'\''s "q"/raw' --media-root '/data/te st/it'\''s "q"/raw' --work '/home/te st/results/runs/plan-1790000000-aabbccddeeff/work' --output-dir "$OUT_DIR"
+# The work directory's logs and artefacts, not its inputs or any toolkit copy.
+rsync -a --include='*/' --include='*.log' --include='artifacts/***' --exclude='*' --prune-empty-dirs "$SCRATCH_DIR/work/" "$OUT_DIR/work/"
+if [ "$RC" -ne 0 ]; then exit "$RC"; fi
 
-test -s "$OUT_DIR/predictions.jsonl" || { echo "The run wrote no predictions.jsonl; it does not meet the output contract." >&2; exit 1; }
-test -s "$OUT_DIR/metrics.json" || { echo "The run wrote no metrics.json; it does not meet the output contract." >&2; exit 1; }
+test -s "$OUT_DIR/plan-1790000000-aabbccddeeff/run.json" || { echo "coperceive model run wrote no run.json in $OUT_DIR/plan-1790000000-aabbccddeeff." >&2; exit 1; }
+if grep -Eq '"boxes_written": *[1-9]' "$OUT_DIR/plan-1790000000-aabbccddeeff/run.json"; then compgen -G "$OUT_DIR/plan-1790000000-aabbccddeeff/*/boxes.parquet" >/dev/null || { echo "coperceive model run wrote boxes but no boxes.parquet for any scene in $OUT_DIR/plan-1790000000-aabbccddeeff." >&2; exit 1; }; fi
 echo "Run finished for plan plan-1790000000-aabbccddeeff: $OUT_DIR"

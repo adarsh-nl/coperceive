@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from importlib import metadata
 from pathlib import Path
@@ -48,6 +49,217 @@ def test_model_list(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixtu
     out = capsys.readouterr().out
     assert "fake" in out and "entry-point" in out
     registry.clear_cache()
+
+
+def test_model_list_json_names_each_manifest_by_path(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The app reads ``model list --json``: an entry point's manifest is a resolved path,
+    never the ``module:ATTR`` text the plain listing prints, with what each model needs."""
+    monkeypatch.setattr(metadata, "entry_points", _fake_entry_points)
+    registry.clear_cache()
+    main(["model", "list", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    registry.clear_cache()
+    assert payload["format"] == "coperceive-model-list"
+    assert payload["format_version"] == 1
+    (plugin,) = payload["plugins"]
+    assert plugin["name"] == "fake"
+    assert plugin["location"] == "tests.fake_model_plugin:MANIFEST"
+    assert plugin["manifest"] == str(FAKE.resolve())
+    assert plugin["error"] is None
+    assert plugin["modules"] == []
+    assert plugin["models"]["default"] == {
+        "gpu": False,
+        "options": ["extra", "misbehave"],
+        "cpus": 1,
+        "memory_gb": 2,
+        "transient_artifacts": [],
+        "depends_on": [],
+        "slurm_constraint": None,
+        # plan_sbatch's --time estimate (time_limit) reads these; the app computes the same.
+        "seconds_per_sample": 0.01,
+        "staging_seconds": 0.0,
+        "conversion_seconds": 0.0,
+    }
+    assert plugin["models"]["known-answer"]["options"] == ["offset_m", "scramble_labels"]
+
+
+def test_model_list_json_reports_a_broken_entry_point_without_failing(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from tests.test_model_spec import _FakeEntryPoint  # pyright: ignore[reportPrivateUsage]
+
+    def entry_points(**kwargs: object) -> list[_FakeEntryPoint]:
+        rows = [
+            _FakeEntryPoint("fake", "coperceive.models", "tests.fake_model_plugin:MANIFEST"),
+            _FakeEntryPoint("gone", "coperceive.models", "tests.fake_model_plugin:MISSING"),
+        ]
+        return [row for row in rows if kwargs.get("group") in (None, row.group)]
+
+    monkeypatch.setattr(metadata, "entry_points", entry_points)
+    registry.clear_cache()
+    main(["model", "list", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    registry.clear_cache()
+    by_name = {plugin["name"]: plugin for plugin in payload["plugins"]}
+    assert by_name["fake"]["manifest"] == str(FAKE.resolve())
+    assert by_name["gone"]["manifest"] is None
+    assert by_name["gone"]["models"] == {}
+    assert "gone" in by_name["gone"]["error"]
+
+
+class _LoudEntryPoint:
+    """An entry point whose import misbehaves: it raises, or it prints to stdout (through
+    Python and through file descriptor 1, as a C extension would)."""
+
+    group = "coperceive.models"
+
+    def __init__(self, name: str, value: str, behaviour: str) -> None:
+        self.name = name
+        self.value = value
+        self.behaviour = behaviour
+
+    def load(self) -> object:
+        import os
+
+        if self.behaviour == "runtime":
+            raise RuntimeError("CUDA is not available on the login node")
+        if self.behaviour == "syntax":
+            raise SyntaxError("invalid syntax (plugin.py, line 3)")
+        if self.behaviour == "exit":
+            raise SystemExit("plugin gave up: no GPU on this node")
+        if self.behaviour == "exit-code":
+            raise SystemExit(3)
+        if self.behaviour == "interrupt":
+            raise KeyboardInterrupt
+        print("plugin banner on stdout")
+        os.write(1, b"raw fd-1 text from the plugin\n")
+        return FAKE
+
+
+def _entry_points_with(*extra: _LoudEntryPoint):  # noqa: ANN202
+    from tests.test_model_spec import _FakeEntryPoint  # pyright: ignore[reportPrivateUsage]
+
+    def entry_points(**kwargs: object) -> list[object]:
+        rows: list[object] = [
+            _FakeEntryPoint("fake", "coperceive.models", "tests.fake_model_plugin:MANIFEST"),
+            *extra,
+        ]
+        return [row for row in rows if kwargs.get("group") in (None, "coperceive.models")]
+
+    return entry_points
+
+
+@pytest.mark.parametrize(
+    ("behaviour", "reason"),
+    [
+        ("runtime", "CUDA is not available"),
+        ("syntax", "invalid syntax"),
+        ("exit", "plugin gave up: no GPU on this node"),
+        ("exit-code", "SystemExit"),
+    ],
+)
+def test_model_list_json_survives_a_plugin_that_raises_on_import(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    behaviour: str,
+    reason: str,
+) -> None:
+    """One third-party plugin that raises anything while it is imported is that plugin's
+    error, not the end of the listing: the app would otherwise list no models at all."""
+    monkeypatch.setattr(
+        metadata,
+        "entry_points",
+        _entry_points_with(_LoudEntryPoint("broken", "broken_plugin:MANIFEST", behaviour)),
+    )
+    registry.clear_cache()
+    main(["model", "list", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    registry.clear_cache()
+    by_name = {plugin["name"]: plugin for plugin in payload["plugins"]}
+    assert by_name["fake"]["manifest"] == str(FAKE.resolve())
+    assert by_name["broken"]["manifest"] is None
+    assert by_name["broken"]["models"] == {}
+    assert reason in by_name["broken"]["error"]
+
+
+def test_model_list_json_lets_a_keyboard_interrupt_through(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Ctrl-C while a plugin is imported stops the listing; only a plugin's own errors and
+    its ``sys.exit`` are caught as that plugin's row."""
+    monkeypatch.setattr(
+        metadata,
+        "entry_points",
+        _entry_points_with(_LoudEntryPoint("stuck", "stuck_plugin:MANIFEST", "interrupt")),
+    )
+    registry.clear_cache()
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            main(["model", "list", "--json"])
+    finally:
+        registry.clear_cache()
+
+
+def test_model_list_json_keeps_stdout_to_the_json_when_a_plugin_prints(
+    monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
+) -> None:
+    """What a plugin prints while it is imported goes to stderr, so stdout is exactly the
+    JSON document the app parses."""
+    monkeypatch.setattr(
+        metadata, "entry_points", _entry_points_with(_LoudEntryPoint("fake2", "x:Y", "print"))
+    )
+    registry.clear_cache()
+    main(["model", "list", "--json"])
+    captured = capfd.readouterr()
+    registry.clear_cache()
+    payload = json.loads(captured.out)
+    assert [plugin["name"] for plugin in payload["plugins"]] == ["fake", "fake2"]
+    assert "plugin banner on stdout" in captured.err
+    assert "raw fd-1 text from the plugin" in captured.err
+
+
+def test_model_list_json_refuses_a_manifest_named_unlike_its_entry_point(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """``resolve_manifest`` refuses an entry point whose manifest has another name; the
+    listing must not offer the app a manifest ``model run`` would then refuse."""
+    from tests.test_model_spec import _FakeEntryPoint  # pyright: ignore[reportPrivateUsage]
+
+    def entry_points(**kwargs: object) -> list[_FakeEntryPoint]:
+        rows = [_FakeEntryPoint("other", "coperceive.models", "tests.fake_model_plugin:MANIFEST")]
+        return [row for row in rows if kwargs.get("group") in (None, row.group)]
+
+    monkeypatch.setattr(metadata, "entry_points", entry_points)
+    registry.clear_cache()
+    main(["model", "list", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    registry.clear_cache()
+    (plugin,) = payload["plugins"]
+    assert plugin["manifest"] is None
+    assert plugin["models"] == {}
+    assert "'fake'" in plugin["error"]
+
+
+def test_model_list_json_carries_the_resources_and_closure_the_job_needs(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The app writes --cpus-per-task/--mem and the work copy-home filter as plan_sbatch
+    does, so the listing carries each model's cpus, memory, transient artefacts and the
+    models it depends on."""
+    monkeypatch.setattr(metadata, "entry_points", _fake_entry_points)
+    registry.clear_cache()
+    main(["model", "list", "--json"])
+    payload = json.loads(capsys.readouterr().out)
+    registry.clear_cache()
+    model = payload["plugins"][0]["models"]["default"]
+    assert model["cpus"] == 1
+    assert model["memory_gb"] == 2
+    assert model["transient_artifacts"] == []
+    assert model["depends_on"] == []
+    # plan_sbatch writes resources.slurm_constraint as #SBATCH --constraint; none here.
+    assert model["slurm_constraint"] is None
 
 
 def test_model_inspect(capsys: pytest.CaptureFixture[str]) -> None:

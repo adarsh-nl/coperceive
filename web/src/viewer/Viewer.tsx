@@ -33,11 +33,14 @@ import ExportDialog from "./ExportDialog";
 import {
   getDatasetScenes,
   getViewerJob,
+  hasDesktopController,
+  openFolderDialog,
   pickSavePath,
   prepareSceneInMainWindow,
   revealInFinder,
   setViewerTitle,
   saveExportedFile,
+  updatePersistentState,
   type ViewerJob,
 } from "../desktop/local";
 import { getRevealLabel, getModifierKey } from "../desktop/platform";
@@ -83,6 +86,13 @@ import {
   type StreamProgress,
 } from "./streamBuffer";
 import { imageNote, isMapInfo, lidarNote, mapNoteFor, missingNotes, type MapInfo } from "./emptyState";
+import {
+  collectWebglDiagnostics,
+  copyWebglDiagnostics,
+  formatWebglDiagnosticsText,
+  formatWebglGraphicsReadout,
+  type WebglDiagnostics,
+} from "./webglDiagnostics";
 import { SPLIT_MAX, SPLIT_MIN } from "./appearance";
 import {
   alignSeries,
@@ -104,7 +114,7 @@ import {
 } from "./predictionTypes";
 import { formatHeading, formatSpeed, headingDeg, sparkPaths, speedMps } from "./telemetry";
 import Timeline, { type Marker } from "./timeline";
-import { neighbourScene } from "./sceneNav";
+import { camerasFoldCount, initialSampleIndex, neighbourScene, resolveActiveDataset } from "./sceneNav";
 import {
   agentRole,
   boxesInView,
@@ -189,7 +199,7 @@ type Drawn = { positions: ArrayLike<number>; anchor: { x: number; y: number; z: 
 /** Which ground-truth wires to dim at which sample; stale for any other sample. */
 type Dimmed = { timeUs: number; keys: ReadonlySet<string> };
 
-const PREDICTION_FRAME_LIMIT = 16;
+const PREDICTION_FRAME_LIMIT = 256;
 
 type PredictionCache = {
   clear: () => void;
@@ -834,22 +844,27 @@ async function drawFrame(
   let pointCount = 0;
   const sweeps: { xyz: Float32Array; color: THREE.Color }[] = [];
   const pointsStarted = performance.now();
-  for (const sensor of frame.point_sensors) {
-    if (!appearance.points || hidden[sensor.agent_id] || sensor.count === 0) {
-      continue;
-    }
-    const buffer = await cache.loadPoints(
-      frame.scene_id,
-      frame.time_us,
-      sensor.agent_id,
-      sensor.sensor_id,
-      token,
-    );
-    if (stale()) {
-      (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "mid-sensor" };
-      return null;
-    }
-    const xyz = new Float32Array(buffer);
+  const activeSensors = frame.point_sensors.filter(
+    (sensor) => appearance.points && !hidden[sensor.agent_id] && sensor.count > 0,
+  );
+  const buffers = await Promise.all(
+    activeSensors.map((sensor) =>
+      cache.loadPoints(
+        frame.scene_id,
+        frame.time_us,
+        sensor.agent_id,
+        sensor.sensor_id,
+        token,
+      ),
+    ),
+  );
+  if (stale()) {
+    (window as unknown as { __LAST_DRAW__?: unknown }).__LAST_DRAW__ = { stale: true, where: "mid-sensor" };
+    return null;
+  }
+  for (let i = 0; i < activeSensors.length; i += 1) {
+    const sensor = activeSensors[i]!;
+    const xyz = new Float32Array(buffers[i]!);
     pointCount += xyz.length / 3;
     sweeps.push({ xyz, color: new THREE.Color(colorFor(types.get(sensor.agent_id) ?? "")) });
   }
@@ -952,6 +967,45 @@ function recordFrameStat(stat: FrameRenderStat) {
   const list = window.__COPERCEIVE_FRAME_STATS__ ?? (window.__COPERCEIVE_FRAME_STATS__ = []);
   list.push(stat);
   if (list.length > 1000) list.splice(0, list.length - 1000);
+}
+
+function recordFrustumStat(ms: number) {
+  if (typeof window === "undefined") return;
+  const list = window.__COPERCEIVE_FRUSTUM_STATS__ ?? (window.__COPERCEIVE_FRUSTUM_STATS__ = []);
+  list.push(ms);
+  if (list.length > 1000) list.splice(0, list.length - 1000);
+}
+
+function summarizeMs(values: number[]) {
+  if (values.length === 0) return { avg: 0, max: 0 };
+  let sum = 0;
+  let max = 0;
+  for (const v of values) {
+    sum += v;
+    if (v > max) max = v;
+  }
+  return {
+    avg: Math.round((sum / values.length) * 10) / 10,
+    max: Math.round(max * 10) / 10,
+  };
+}
+
+function summarizePlaybackPerf() {
+  if (typeof window === "undefined") return null;
+  const stats = window.__COPERCEIVE_FRAME_STATS__ ?? [];
+  const frustums = window.__COPERCEIVE_FRUSTUM_STATS__ ?? [];
+  const applied = stats.filter((s) => s.result === "applied");
+  const dropped = stats.length - applied.length;
+  return {
+    frames: stats.length,
+    applied: applied.length,
+    dropped,
+    load_ms: summarizeMs(stats.map((s) => s.load_ms)),
+    points_ms: summarizeMs(stats.flatMap((s) => (s.points_ms !== null ? [s.points_ms] : []))),
+    draw_ms: summarizeMs(stats.map((s) => s.draw_ms)),
+    render_ms: summarizeMs(stats.map((s) => s.render_ms)),
+    frustum_ms: { count: frustums.length, ...summarizeMs(frustums) },
+  };
 }
 
 /** Test-only: the points/boxes sample of every rendered frame where either changed. */
@@ -1127,6 +1181,8 @@ declare global {
     __COPERCEIVE_SCENES__?: () => string[];
     __COPERCEIVE_TEST_ENV__?: boolean;
     __COPERCEIVE_FRAME_STATS__?: FrameRenderStat[];
+    __COPERCEIVE_FRUSTUM_STATS__?: number[];
+    __COPERCEIVE_PLAYBACK_PERF__?: typeof summarizePlaybackPerf;
     __COPERCEIVE_RENDERED_TIMES__?: { at: number; points: number | null; boxes: number | null }[];
     __COPERCEIVE_CACHE_STATS__?: {
       frame_hits: number;
@@ -1244,19 +1300,10 @@ function writeWebLoopChoice(val: boolean) {
 }
 
 function postControllerState(body: Record<string, unknown>) {
-  if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+  if (!isTauriEnvironment() && !hasDesktopController()) {
     return;
   }
-  const port = window.__COPERCEIVE_CTRL_PORT__;
-  const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-  void fetch(`http://127.0.0.1:${port}/state`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${secret}`,
-    },
-    body: JSON.stringify(body),
-  }).catch(() => undefined);
+  void updatePersistentState(body).catch(() => undefined);
 }
 
 function savedLoopChoice(): boolean | null {
@@ -1269,7 +1316,7 @@ function savedLoopChoice(): boolean | null {
   }
   // The desktop sidecar origin changes every launch, so localStorage is not
   // the resume record there. The fixed-port web app still uses it.
-  if (window.__COPERCEIVE_DESKTOP__ || window.__COPERCEIVE_CTRL_PORT__) {
+  if (window.__COPERCEIVE_DESKTOP__ || isTauriEnvironment() || hasDesktopController()) {
     return null;
   }
   return readWebLoopChoice();
@@ -1367,7 +1414,18 @@ export default function Viewer({
   // (just prepared) is chosen once the list is read again.
   const [sceneListRev, setSceneListRev] = useState(0);
   const wantedSceneRef = useRef("");
-  const sceneOrder = datasetScenes.length > 0 ? datasetScenes : scenes;
+  const activeDataset = useMemo(
+    () =>
+      resolveActiveDataset(sceneId, scenes, {
+        scenes: datasetScenes,
+        about: datasetAbout,
+        statuses: datasetSceneStatuses,
+      }),
+    [sceneId, scenes, datasetScenes, datasetAbout, datasetSceneStatuses],
+  );
+  const activeDatasetAbout = activeDataset.about;
+  const activeDatasetStatuses = activeDataset.statuses;
+  const sceneOrder = activeDataset.scenes.length > 0 ? activeDataset.scenes : scenes;
   const readyScenes = useMemo(() => new Set(scenes), [scenes]);
   const navRef = useRef({ order: sceneOrder, ready: readyScenes, autoNext });
   navRef.current = { order: sceneOrder, ready: readyScenes, autoNext };
@@ -1379,6 +1437,8 @@ export default function Viewer({
     if (scene) {
       setPlaying(false);
       setSceneNotice(null);
+      setFrameIndex(0);
+      frameRef.current = 0;
       setSceneId(scene);
     }
   }, []);
@@ -1393,6 +1453,8 @@ export default function Viewer({
     if (continueOn && scene) {
       autoPlayRef.current = true;
       setSceneNotice(skipped.length > 0 ? { text: skippedNote.trim(), next: null, prepare: null } : null);
+      setFrameIndex(0);
+      frameRef.current = 0;
       setSceneId(scene);
       return;
     }
@@ -1412,7 +1474,8 @@ export default function Viewer({
   });
   const [status, setStatus] = useState("Choose a scene under the server root.");
   const [mapNote, setMapNote] = useState("");
-  const [webglError, setWebglError] = useState("");
+  const [webglDiag, setWebglDiag] = useState<WebglDiagnostics | null>(null);
+  const [webglCopied, setWebglCopied] = useState(false);
   const [mapInfoFor, setMapInfoFor] = useState<{ sceneId: string; info: MapInfo | null } | null>(null);
   const [mapInstall, setMapInstall] = useState<{
     busy: boolean;
@@ -1449,16 +1512,22 @@ export default function Viewer({
   }, []);
 
   // A cluster dataset's viewer: every scene with its state (from the main
-  // window's dataset view) and the Slurm job serving it, through the controller.
+  // window's dataset view) and the Slurm job serving it, via viewer-bridge IPC (or test controller).
   useEffect(() => {
-    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__) {
+    if (!isTauriEnvironment() && !hasDesktopController()) {
       return;
     }
     let stopped = false;
     const pollScenes = async () => {
       try {
         const dataset = await getDatasetScenes();
-        if (stopped || !dataset) return;
+        if (stopped) return;
+        if (!dataset) {
+          setDatasetScenes([]);
+          setDatasetAbout(null);
+          setDatasetSceneStatuses({});
+          return;
+        }
         setDatasetScenes(dataset.scenes.map((scene) => scene.scene_id));
         setDatasetAbout(
           dataset.label || dataset.server ? { label: dataset.label ?? "", server: dataset.server ?? "" } : null,
@@ -1496,6 +1565,8 @@ export default function Viewer({
       if (navRef.current.ready.has(asked)) {
         setPlaying(false);
         setSceneNotice(null);
+        setFrameIndex(0);
+        frameRef.current = 0;
         setSceneId(asked);
       } else {
         wantedSceneRef.current = asked;
@@ -1609,7 +1680,7 @@ export default function Viewer({
     loopRef.current = next;
     loopChoiceRef.current = next;
     setLoop(next);
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
+    if (isTauriEnvironment() || hasDesktopController()) {
       postControllerState({ loop: next });
     } else {
       writeWebLoopChoice(next);
@@ -1628,16 +1699,9 @@ export default function Viewer({
   const [datasetError, setDatasetError] = useState<string | null>(null);
 
   const triggerOpenFolder = () => {
-    if (typeof window !== "undefined" && window.__COPERCEIVE_CTRL_PORT__) {
-      const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
-      fetch(`http://127.0.0.1:${window.__COPERCEIVE_CTRL_PORT__}/open-dialog`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${secret}`,
-          "Content-Type": "application/json",
-        },
-      }).catch((e) => {
-        console.error("open-dialog fetch error:", e);
+    if (isTauriEnvironment() || hasDesktopController()) {
+      void openFolderDialog().catch((e) => {
+        console.error("open-dialog error:", e);
       });
     }
   };
@@ -1710,6 +1774,10 @@ export default function Viewer({
       setDataBasename(basename);
       setDataRoot(root);
       setDatasetError(null);
+      setDatasetScenes([]);
+      setDatasetAbout(null);
+      setDatasetSceneStatuses({});
+      setViewerJob(null);
       setPlaying(false);
 
       bumpSceneDrawToken();
@@ -1934,6 +2002,19 @@ export default function Viewer({
   const frameRef = useRef(0);
   const playingRef = useRef(false);
   playingRef.current = playing;
+  const telemetryResumeWaitersRef = useRef<Set<() => void>>(new Set());
+  useEffect(() => {
+    if (!playing) {
+      for (const resolve of telemetryResumeWaitersRef.current) resolve();
+      telemetryResumeWaitersRef.current.clear();
+    }
+  }, [playing]);
+  useEffect(() => {
+    window.__COPERCEIVE_PLAYBACK_PERF__ = summarizePlaybackPerf;
+    return () => {
+      delete window.__COPERCEIVE_PLAYBACK_PERF__;
+    };
+  }, []);
   const summaryRef = useRef(summary);
   summaryRef.current = summary;
 
@@ -2404,17 +2485,8 @@ export default function Viewer({
     if (!canvas) {
       return;
     }
-    let renderer: THREE.WebGLRenderer;
-    try {
-      renderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
-    } catch (error) {
-      // No WebGL (blocked, no GPU, remote desktop): say so in the viewport instead of
-      // throwing out of the effect, which would unmount the whole page. The state is
-      // set on the next tick so the effect itself stays free of state updates.
-      const reason = error instanceof Error ? error.message : String(error);
-      void Promise.resolve().then(() => setWebglError(reason));
-      return;
-    }
+    let createdRenderer: THREE.WebGLRenderer | null = null;
+    let bloom: BloomRig;
     const scene = new THREE.Scene();
     scene.background = new THREE.Color(
       styleRef.current === "classic" ? 0x141414 : VIEWER_STYLE_TOKENS[styleRef.current].background,
@@ -2423,6 +2495,22 @@ export default function Viewer({
     camera.up.set(0, 0, 1);
     camera.position.set(40, -40, 25);
     camera.layers.enable(BLOOM_LAYER);
+    try {
+      createdRenderer = new THREE.WebGLRenderer({ canvas, antialias: true, preserveDrawingBuffer: true });
+      bloom = createBloom(createdRenderer, scene, camera);
+    } catch (error) {
+      createdRenderer?.dispose();
+      // No WebGL (blocked, broken GPU driver, VM, or remote desktop): say so in the
+      // viewport with diagnostics instead of throwing out of the effect. Stage stays null
+      // so non-WebGL panels (frames, camera strip, telemetry, scores) keep working.
+      const diag = collectWebglDiagnostics(canvas, error);
+      void Promise.resolve().then(() => {
+        setWebglDiag(diag);
+        setWebglCopied(false);
+      });
+      return;
+    }
+    const renderer = createdRenderer;
     const controls = new OrbitControls(camera, canvas);
     controls.target.set(0, 0, 0);
     controls.enableDamping = true;
@@ -2497,7 +2585,6 @@ export default function Viewer({
     if (labelHost) {
       labelHost.appendChild(labelRenderer.domElement);
     }
-    const bloom = createBloom(renderer, scene, camera);
     const trailLog = new Map<string, Map<number, { x: number; y: number; z: number }>>();
     const trailLines = new Map<string, THREE.Line>();
     const leaderLines = new Map<string, THREE.Line>();
@@ -3070,19 +3157,10 @@ export default function Viewer({
         return;
       }
       let initialFrame = 0;
-      let initialHidden: Record<string, boolean> = { ...hidden };
+      let initialHidden: Record<string, boolean> = {};
       if (typeof window !== "undefined" && window.__COPERCEIVE_INITIAL_STATE__) {
         const init = window.__COPERCEIVE_INITIAL_STATE__;
-        if (typeof init.last_sample_index === "number" && init.last_sample_index < body.times_us.length) {
-          initialFrame = init.last_sample_index;
-        } else if (typeof init.last_timestamp_us === "number") {
-          const found = body.times_us.findIndex((t) => t >= init.last_timestamp_us!);
-          if (found >= 0) initialFrame = found;
-        } else if (typeof init.last_timestamp_ns === "number") {
-          const targetUs = Math.round(init.last_timestamp_ns / 1000);
-          const found = body.times_us.findIndex((t) => t >= targetUs);
-          if (found >= 0) initialFrame = found;
-        }
+        initialFrame = initialSampleIndex(init, body.scene_id, body.times_us);
         if (init.last_viewpoint) {
           const vp = init.last_viewpoint as Viewpoint;
           if (vp === "orbit" || vp === "chase" || vp === "drone" || vp === "bird" || vp === "camera") {
@@ -3098,7 +3176,7 @@ export default function Viewer({
           onTheme?.(sys);
           setAppearance((curr) => ({ ...curr, theme: sys }));
         }
-        if (init.agent_visibility) {
+        if (init.agent_visibility && (!init.last_scene_id || init.last_scene_id === body.scene_id)) {
           initialHidden = init.agent_visibility;
         }
         if (init.layer_toggles) {
@@ -3246,46 +3324,37 @@ export default function Viewer({
   }, [scenes]);
 
   const sendState = useCallback(async () => {
-    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
-    const port = window.__COPERCEIVE_CTRL_PORT__;
-    const secret = window.__COPERCEIVE_CTRL_SECRET__ || "";
+    if ((!isTauriEnvironment() && !hasDesktopController()) || !summary) return;
     const timeUs = summary?.times_us?.[frameIndex];
     try {
-      await fetch(`http://127.0.0.1:${port}/state`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${secret}`,
+      await updatePersistentState({
+        scene_id: sceneId || undefined,
+        sample_index: frameIndex,
+        timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
+        viewpoint,
+        theme_override: userThemeOverrideRef.current ? appearance.theme : null,
+        agent_visibility: hidden,
+        layer_toggles: {
+          points: appearance.points,
+          boxes: appearance.boxes,
+          frustums: appearance.frustums,
+          map: appearance.map,
+          axes: appearance.axes,
+          frustum_images: appearance.frustumImages,
+          frustum_opacity: appearance.frustumOpacity,
+          frustum_image_cameras: appearance.frustumImageCameras ?? undefined,
         },
-        body: JSON.stringify({
-          scene_id: sceneId || undefined,
-          sample_index: frameIndex,
-          timestamp_us: typeof timeUs === "number" ? timeUs : undefined,
-          viewpoint,
-          theme_override: userThemeOverrideRef.current ? appearance.theme : null,
-          agent_visibility: hidden,
-          layer_toggles: {
-            points: appearance.points,
-            boxes: appearance.boxes,
-            frustums: appearance.frustums,
-            map: appearance.map,
-            axes: appearance.axes,
-            frustum_images: appearance.frustumImages,
-            frustum_opacity: appearance.frustumOpacity,
-            frustum_image_cameras: appearance.frustumImageCameras ?? undefined,
-          },
-          selected_camera: appearance.splitCamera || cameraId || undefined,
-          split_view: Boolean(appearance.splitCamera),
-          panel_collapse: {
-            camera_strip_open: appearance.stripOpen,
-          },
-          layout: {
-            left_px: layoutRef.current.left_px,
-            right_px: layoutRef.current.right_px,
-            strip_px: layoutRef.current.strip_px,
-          },
-          ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
-        }),
+        selected_camera: appearance.splitCamera || cameraId || undefined,
+        split_view: Boolean(appearance.splitCamera),
+        panel_collapse: {
+          camera_strip_open: appearance.stripOpen,
+        },
+        layout: {
+          left_px: layoutRef.current.left_px,
+          right_px: layoutRef.current.right_px,
+          strip_px: layoutRef.current.strip_px,
+        },
+        ...(loopChoiceRef.current !== null ? { loop: loopChoiceRef.current } : {}),
       });
     } catch {}
   }, [sceneId, frameIndex, viewpoint, appearance, hidden, summary, cameraId, loop, layout]);
@@ -3308,7 +3377,7 @@ export default function Viewer({
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined" || !window.__COPERCEIVE_CTRL_PORT__ || !summary) return;
+    if ((!isTauriEnvironment() && !hasDesktopController()) || !summary) return;
     stateDebounceTimerRef.current = window.setTimeout(() => {
       stateDebounceTimerRef.current = null;
       void sendStateRef.current();
@@ -3322,7 +3391,7 @@ export default function Viewer({
   }, [sendState]);
 
   useEffect(() => {
-    if (!summary || !stageRef.current) {
+    if (!summary) {
       return;
     }
     // A scene choice changes the scene id before the new summary arrives. The old summary must
@@ -3355,8 +3424,8 @@ export default function Viewer({
       setStatus(`${summary.scene_id} at ${time} µs. ${mapNote}`);
     }
 
-    // Immediately remove hidden agents' objects and trigger immediate redraw
-    if (latestRef.current) {
+    // Immediately remove hidden agents' objects and trigger immediate redraw when WebGL stage exists
+    if (stage && latestRef.current) {
       const { frame: curFrame, types: curTypes } = latestRef.current;
       drawBoxes(stage, curFrame, curTypes, hidden, appearance, dimmedRef.current);
 
@@ -3432,37 +3501,60 @@ export default function Viewer({
         dropped(frameLoaded);
         return;
       }
-      const drawn = await drawFrame(
-        stage,
-        body,
-        types,
-        hidden,
-        appearance,
-        effectiveToken,
-        cacheRef.current,
-        () => dimmedRef.current,
-        stale,
-        (ms) => {
-          pointsMs = ms;
-        },
-        () => {
-          latestRef.current = { frame: body, types };
-        },
-      );
-      const frameDrawn = performance.now();
-      if (!drawn || stale()) {
-        dropped(frameLoaded);
-        return;
+      let frameDrawn = frameLoaded;
+      let frameRendered = frameLoaded;
+      if (stage) {
+        const drawn = await drawFrame(
+          stage,
+          body,
+          types,
+          hidden,
+          appearance,
+          effectiveToken,
+          cacheRef.current,
+          () => dimmedRef.current,
+          stale,
+          (ms) => {
+            pointsMs = ms;
+          },
+          () => {
+            latestRef.current = { frame: body, types };
+          },
+        );
+        frameDrawn = performance.now();
+        if (!drawn || stale()) {
+          dropped(frameLoaded);
+          return;
+        }
+        // latestRef moved to this frame inside drawFrame, as its points went on screen.
+        // The per-tick redraw above draws boxes from latestRef, so it must never hold a
+        // frame whose points have not arrived (over a slow tunnel the boxes ran ahead of
+        // frozen points).
+        drawnRef.current = `${summary.scene_id}|${time}`;
+        syncMotion(stage, body, types, hidden);
+        syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
+        stage.renderNow();
+        frameRendered = performance.now();
+        if (framedScene.current !== summary.scene_id) {
+          const home = orbitGoal(drawn.positions, drawn.anchor);
+          const tokens = VIEWER_STYLE_TOKENS[styleRef.current];
+          if (tokens.distanceScale !== 1) {
+            const offset = home.position.clone().sub(home.target).multiplyScalar(tokens.distanceScale);
+            home.position.copy(home.target).add(offset);
+          }
+          home.fov = tokens.fov;
+          styleDistance.current = tokens.distanceScale;
+          orbitHomeRef.current = home;
+          const snap = goalFor(modeRef.current, body, types, cameraKeyRef.current, home) ?? home;
+          applyGoal(stage.camera, stage.controls.target, snap);
+          stage.controls.enabled = modeRef.current === "orbit";
+          settleRef.current = false;
+          framedScene.current = summary.scene_id;
+        }
+      } else {
+        latestRef.current = { frame: body, types };
+        drawnRef.current = `${summary.scene_id}|${time}`;
       }
-      // latestRef moved to this frame inside drawFrame, as its points went on screen.
-      // The per-tick redraw above draws boxes from latestRef, so it must never hold a
-      // frame whose points have not arrived (over a slow tunnel the boxes ran ahead of
-      // frozen points).
-      drawnRef.current = `${summary.scene_id}|${time}`;
-      syncMotion(stage, body, types, hidden);
-      syncPicks(stage.picks, body.boxes, (box) => boxShown(box, hidden, appearance));
-      stage.renderNow();
-      const frameRendered = performance.now();
       const cacheStats = cacheRef.current.stats;
       window.__COPERCEIVE_CACHE_STATS__ = { ...cacheStats };
       recordFrameStat({
@@ -3476,22 +3568,6 @@ export default function Viewer({
         frame_misses: cacheStats.frame_misses,
         result: "applied",
       });
-      if (framedScene.current !== summary.scene_id) {
-        const home = orbitGoal(drawn.positions, drawn.anchor);
-        const tokens = VIEWER_STYLE_TOKENS[styleRef.current];
-        if (tokens.distanceScale !== 1) {
-          const offset = home.position.clone().sub(home.target).multiplyScalar(tokens.distanceScale);
-          home.position.copy(home.target).add(offset);
-        }
-        home.fov = tokens.fov;
-        styleDistance.current = tokens.distanceScale;
-        orbitHomeRef.current = home;
-        const snap = goalFor(modeRef.current, body, types, cameraKeyRef.current, home) ?? home;
-        applyGoal(stage.camera, stage.controls.target, snap);
-        stage.controls.enabled = modeRef.current === "orbit";
-        settleRef.current = false;
-        framedScene.current = summary.scene_id;
-      }
       const shown = appearance.points
         ? body.point_sensors.reduce((sum, sensor) => {
             return hidden[sensor.agent_id] ? sum : sum + sensor.count;
@@ -3574,6 +3650,7 @@ export default function Viewer({
       }
     }
     void (async () => {
+      const frustumStart = performance.now();
       await Promise.all(
         wanted.map(async (frustum) => {
           const key = cameraKey(frustum.agent_id, frustum.sensor_id);
@@ -3635,8 +3712,9 @@ export default function Viewer({
       if (cancelled) {
         return;
       }
+      recordFrustumStat(performance.now() - frustumStart);
       const nextTime = summary?.times_us[frameIndex + 1];
-      if (typeof nextTime === "number") {
+      if (!playingRef.current && typeof nextTime === "number") {
         for (const frustum of wanted) {
           void loadImage(frame.scene_id, nextTime, frustum.agent_id, frustum.sensor_id, effectiveToken, FRUSTUM_TEXTURE).catch(() => undefined);
         }
@@ -3952,7 +4030,7 @@ export default function Viewer({
   }, [pick, cameraFrame, liveEvalPick]);
 
   useEffect(() => {
-    if (!summary || !stageRef.current) {
+    if (!summary) {
       return;
     }
     const stillWanted = () => summary.scene_id === sceneIdRef.current;
@@ -3975,6 +4053,10 @@ export default function Viewer({
           return;
         }
         setMapInfoFor({ sceneId: summary.scene_id, info });
+      }
+      if (!stage) {
+        setMapNote(mapNoteFor(info));
+        return;
       }
       if (info && !info.available) {
         replaceMap(stage, new ArrayBuffer(0));
@@ -4400,6 +4482,7 @@ export default function Viewer({
       return;
     }
     const times = summary.times_us;
+    const waiters = telemetryResumeWaitersRef.current;
     const vehicleId = summary.agents.find((agent) => agent.agent_type === "vehicle")?.agent_id ?? "";
     void (async () => {
       const points: number[] = [];
@@ -4414,6 +4497,11 @@ export default function Viewer({
       let previous: FrameDocument | null = null;
       let previousTime = 0;
       for (let index = 0; index < times.length; index += 1) {
+        while (playingRef.current && !cancelled && stillWanted()) {
+          await new Promise<void>((resolve) => {
+            waiters.add(resolve);
+          });
+        }
         if (cancelled || !stillWanted()) {
           return;
         }
@@ -4503,6 +4591,8 @@ export default function Viewer({
     })().catch(() => undefined);
     return () => {
       cancelled = true;
+      for (const resolve of waiters) resolve();
+      waiters.clear();
     };
   }, [summary, effectiveToken, hidden, appearance]);
 
@@ -4814,9 +4904,9 @@ export default function Viewer({
   const jobText = jobBadge(viewerJob);
   // Where the scene comes from, as the app knows it: the cluster over SSH, this
   // Mac's folder, or the server this page was loaded from.
-  const connectionText = datasetAbout?.server
-    ? `Streaming over SSH from ${datasetAbout.server}`
-    : viewerJob
+  const connectionText = activeDatasetAbout?.server
+    ? `Streaming over SSH from ${activeDatasetAbout.server}`
+    : viewerJob && activeDataset.scenes.length > 0
       ? "Streaming over SSH"
       : isDesktop
         ? `Local folder${dataBasename ? ` · ${dataBasename}` : ""}`
@@ -4863,9 +4953,9 @@ export default function Viewer({
       )}
       <span
         className="crumb-dataset"
-        title={datasetAbout?.server ? `${datasetAbout.label} on ${datasetAbout.server}` : undefined}
+        title={activeDatasetAbout?.server ? `${activeDatasetAbout.label} on ${activeDatasetAbout.server}` : undefined}
       >
-        {datasetAbout?.label || (sceneId && sceneStem !== sceneId ? sceneStem : "Scenes")}
+        {activeDatasetAbout?.label || (sceneId && sceneStem !== sceneId ? sceneStem : "Scenes")}
       </span>
       <span className="crumb-sep" aria-hidden="true">/</span>
       <span className="scene-nav">
@@ -4893,7 +4983,7 @@ export default function Viewer({
                   return { value: id, label: id };
                 }
                 // A scene of this dataset that the viewer cannot show yet.
-                const state = datasetSceneStatuses[id];
+                const state = activeDatasetStatuses[id];
                 const note = state === "preparing" ? "preparing…" : state === "failed" ? "failed" : "not prepared";
                 return { value: id, label: `${id} · ${note}` };
               })
@@ -4905,11 +4995,11 @@ export default function Viewer({
           if (!readyScenes.has(id)) {
             setSceneNotice({
               text:
-                datasetSceneStatuses[id] === "preparing"
+                activeDatasetStatuses[id] === "preparing"
                   ? `${id} is being prepared. It opens here when it is ready.`
                   : `${id} is not prepared yet.`,
               next: null,
-              prepare: datasetSceneStatuses[id] === "preparing" ? null : id,
+              prepare: activeDatasetStatuses[id] === "preparing" ? null : id,
             });
             return;
           }
@@ -4917,6 +5007,8 @@ export default function Viewer({
           // prefetching frames, and over a slow link those queue ahead of the
           // request for the chosen scene.
           setPlaying(false);
+          setFrameIndex(0);
+          frameRef.current = 0;
           setSceneId(id);
         }}
       />
@@ -5125,7 +5217,7 @@ export default function Viewer({
               <details className="cam-fold">
                 <summary>
                   Cameras
-                  <span className="num">{cameraChoices.filter((row) => showCameraImage(appearance, row.key)).length}</span>
+                  <span className="num">{camerasFoldCount(appearance, cameraChoices.map((row) => row.key))}</span>
                 </summary>
                 <div className="cam-actions">
                   <button type="button" onClick={() => setAppearance((current) => setAllFrustumImages(current))}>
@@ -5319,14 +5411,30 @@ export default function Viewer({
         />
         <div className="label-host" />
         <div className="vignette" aria-hidden="true" />
-        {webglError ? (
+        {webglDiag ? (
           <div className="webgl-missing" role="alert">
-            <strong>The 3D view needs WebGL, which this browser did not provide.</strong>
-            <p>
-              Boxes, points and the map cannot be drawn. The scene list, the timeline and the tables still
-              work. Turn on hardware acceleration or open the page in another browser.
+            <strong>
+              3D view unavailable: this computer&apos;s graphics (WebGL) could not start. Camera images, boxes and scores still work.
+            </strong>
+            <p className="webgl-readout">{formatWebglGraphicsReadout(webglDiag)}</p>
+            <p className="webgl-missing-actions">
+              <button
+                type="button"
+                className="webgl-copy-link"
+                data-testid="copy-webgl-diagnostics"
+                onClick={() => {
+                  void copyWebglDiagnostics(formatWebglDiagnosticsText(webglDiag)).then((ok) => {
+                    if (ok) {
+                      setWebglCopied(true);
+                      window.setTimeout(() => setWebglCopied(false), 2000);
+                    }
+                  });
+                }}
+              >
+                {webglCopied ? "Copied diagnostics" : "Copy diagnostics"}
+              </button>
             </p>
-            <p className="mono">{webglError}</p>
+            <p className="mono">{webglDiag.error}</p>
           </div>
         ) : null}
             {summary ? (

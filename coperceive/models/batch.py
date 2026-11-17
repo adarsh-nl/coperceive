@@ -221,6 +221,7 @@ def provenance_json(
     cache_hits: int,
     frames_run: int,
     dependencies: Mapping[str, Mapping[str, str]],
+    boxes_written: int = 0,
     timings: Mapping[str, float],
     parent_env: Mapping[str, str],
     checkpoint: CheckpointInfo | None = None,
@@ -247,6 +248,9 @@ def provenance_json(
         "options": dict(options),
         "cache_hits": cache_hits,
         "frames_run": frames_run,
+        # Rows written to boxes.parquet in this invocation: a job checks for boxes.parquet
+        # only when this is above zero (a run whose scenes have no boxes writes none).
+        "boxes_written": boxes_written,
         "timings": dict(timings),
         "dependencies": {k: dict(v) for k, v in dependencies.items()},
         "slurm_job_id": parent_env.get("SLURM_JOB_ID"),
@@ -447,6 +451,7 @@ def run_batch(
             cache_hits=counters["hits"],
             frames_run=frames,
             dependencies=dependencies,
+            boxes_written=counters["boxes"],
             checkpoint=checkpoint,
             timings=_timings(wall, frames, reported, options.staging_seconds),
             parent_env=env,
