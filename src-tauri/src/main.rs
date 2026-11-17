@@ -333,7 +333,7 @@ async fn bundle_export(
 #[tauri::command]
 async fn bundle_open(
     app: tauri::AppHandle,
-    state: tauri::State<'_, Arc<AppState>>,
+    _state: tauri::State<'_, Arc<AppState>>,
     file: String,
 ) -> Result<serde_json::Value, String> {
     use tauri::Manager;
@@ -347,9 +347,15 @@ async fn bundle_open(
         "--data-root".to_string(),
         data_root.to_string_lossy().into_owned(),
     ];
-    if let Some(library) = state::load_state().library_root {
+    // The recipient's local copy of an omitted scene is looked up in the
+    // library (the configured root, else the default one when it exists).
+    let library = state::load_state()
+        .library_root
+        .map(PathBuf::from)
+        .unwrap_or_else(state::default_library_root);
+    if library.is_dir() {
         args.push("--library-root".to_string());
-        args.push(library);
+        args.push(library.to_string_lossy().into_owned());
     }
     let stdout = run_bundle_python(&app, &args)?;
     let opened = stdout
@@ -374,8 +380,23 @@ async fn bundle_open_viewer(
         .get("root")
         .and_then(|value| value.as_str())
         .ok_or_else(|| "bundle open returned no root".to_string())?;
-    switch_data_root(&app, state.inner(), std::path::PathBuf::from(root)).await?;
+    // The viewer serves the bundle's scenes folder; switch_data_root adds the
+    // bundle's predictions and open.json (see opened_bundle_dir).
+    switch_data_root(&app, state.inner(), PathBuf::from(root).join("scenes")).await?;
     Ok(opened)
+}
+
+/// The opened result bundle that `scenes_root` (`<bundles>/<sha>/scenes`) belongs
+/// to, when it is one: its folder holds the bundle's `predictions` and `open.json`.
+fn opened_bundle_dir(scenes_root: &Path, bundles_dir: &Path) -> Option<PathBuf> {
+    if scenes_root.file_name()? != "scenes" {
+        return None;
+    }
+    let bundle = scenes_root.parent()?;
+    if bundle.parent()? != bundles_dir {
+        return None;
+    }
+    bundle.join("open.json").is_file().then(|| bundle.to_path_buf())
 }
 
 #[tauri::command]
@@ -746,15 +767,16 @@ async fn switch_data_root(
         extra_args.push("--predictions".to_string());
         extra_args.push(pred_dir.to_string_lossy().into_owned());
     }
-    let is_bundle = new_path.join("open.json").is_file()
-        && app
-            .path()
-            .app_data_dir()
-            .map(|dir| new_path.starts_with(dir.join("bundles")))
-            .unwrap_or(false);
-    if is_bundle {
+    let opened_bundle = app
+        .path()
+        .app_data_dir()
+        .ok()
+        .and_then(|dir| opened_bundle_dir(&new_path, &dir.join("bundles")));
+    if let Some(bundle) = &opened_bundle {
+        extra_args.push("--predictions".to_string());
+        extra_args.push(bundle.join("predictions").to_string_lossy().into_owned());
         extra_args.push("--bundle-info".to_string());
-        extra_args.push(new_path.join("open.json").to_string_lossy().into_owned());
+        extra_args.push(bundle.join("open.json").to_string_lossy().into_owned());
     }
 
     let mut new_session = SidecarSession::spawn_with_args(
@@ -805,10 +827,9 @@ async fn switch_data_root(
         }
     }
 
-    let is_bundle_root = new_path.join("open.json").is_file();
     // Update state.json with new root and prepend to recent_roots. A shared
     // bundle is not a library root and must not appear in Recent.
-    if !is_bundle_root {
+    if opened_bundle.is_none() {
         let mut persistent = state::load_state();
         persistent.last_data_root = Some(new_path_str.clone());
         persistent.last_scene_id = None;
