@@ -127,6 +127,10 @@ def open_bundle(
 ) -> OpenedBundle:
     """Validate, verify and extract a bundle. Never executes anything from it."""
     limits = limits or OpenLimits()
+    from coperceive.app.bundle_jobs import sweep_stale
+
+    # A served bundle's private jobs folder outlives a crashed server; tidy up here.
+    sweep_stale()
     try:
         digest = _bundle_sha(path)
         target = data_root / "bundles" / digest

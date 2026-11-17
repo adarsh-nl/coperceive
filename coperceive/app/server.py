@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
 import dataclasses
 import functools
 import hmac
@@ -12,7 +13,6 @@ import io
 import json
 import re
 import sqlite3
-import tempfile
 import threading
 import time
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -27,6 +27,7 @@ from PIL import Image
 from pydantic import BaseModel, Field
 from starlette.datastructures import Headers
 
+from coperceive.app import bundle_jobs
 from coperceive.app.jobs import (
     CSRF_HEADER,
     JobsDatabaseError,
@@ -452,11 +453,25 @@ def create_app(
     """
     root_path_obj = Path(root).resolve()
     root_path_obj.mkdir(parents=True, exist_ok=True)
+    # A bundle is read-only: its viewer jobs database lives in a private temp
+    # folder, never inside the extracted bundle or the library. The folder is
+    # removed at shutdown; stale ones are swept when the next one is made.
+    jobs_folder = bundle_jobs.create() if bundle_info is not None else None
+
+    @contextlib.asynccontextmanager
+    async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
+        try:
+            yield
+        finally:
+            if jobs_folder is not None:
+                jobs_folder.remove()
+
     app = FastAPI(
         title="coperceive",
         version="0.0.0",
         root_path=root_path,
         description="Local cooperative-perception data app.",
+        lifespan=lifespan,
     )
     if allow_origin:
         app.add_middleware(
@@ -468,12 +483,8 @@ def create_app(
         )
     app.state.root = root_path_obj
     app.state.token = token
-    # A bundle is read-only: its viewer jobs database lives in a private temp
-    # dir, never inside the extracted bundle or the library.
     app.state.db_path = (
-        Path(tempfile.mkdtemp(prefix="coperceive-bundle-jobs-")) / "jobs.sqlite"
-        if bundle_info is not None
-        else root_path_obj / "jobs.sqlite"
+        jobs_folder.database if jobs_folder is not None else root_path_obj / "jobs.sqlite"
     )
     app.state.scene_cache = _SceneCache()
     # The recipient's own copy of a bundle's scene (sensor bytes only), read in place.
