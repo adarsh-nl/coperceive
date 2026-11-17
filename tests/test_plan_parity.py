@@ -9,10 +9,16 @@ an entry of ``allowed_differences.json`` (with its reason); every app-side entry
 match in every case it applies to, so the app cannot drop a listed line, and every
 CLI-side entry must still match somewhere. The run block (``set +e``, ``model run``,
 ``RC=$?``, ``set -e``, the exit echo), environment.json, the work copy and the exit with
-the run's status are checked in place on both sides. The one line that differs by design
+the run's status are checked in place on both sides, and so is the scratch setup before
+it (``set -euo pipefail``, the scratch directory, its ``mkdir``, the EXIT ``trap``, ``TMPDIR``
+and the work directory). The one line that differs by design
 in both, ``model run``, is then parsed by the real ``build_parser()`` on both sides and
 compared field by field, and the app's options go through the manifest's
 ``check_options``.
+
+The ``refusals`` of cases.json are inputs the app refuses: plan_parity.rs holds the
+app to the exact message, and this file checks that ``model run --slurm`` takes the same
+input (so the refusal stays a listed difference, not a silent one).
 
 Python cannot run the app's renderer: ``src-tauri/tests/plan_parity.rs`` owns staleness.
 It re-renders every case and compares the committed ``app/<case>.sbatch`` byte for byte,
@@ -36,10 +42,11 @@ import subprocess
 from importlib import metadata
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import pytest
 from coperceive.cli import build_parser, main
-from coperceive.models import registry
+from coperceive.models import registry, slurm
 from coperceive.models.spec import check_options, load_manifest, select_model
 
 from tests.test_eval_pipeline_dry_run import (
@@ -84,16 +91,21 @@ def _case(name: str) -> dict[str, Any]:
     return next(case for case in CASES["cases"] if case["name"] == name)
 
 
+def _code_root(case: dict[str, Any]) -> str:
+    """The case's code root: where the manifest lives and what PYTHONPATH names."""
+    return case.get("code_root", CASES["code_root"])
+
+
 def _under(tmp_path: Path, logical: str) -> Path:
     return tmp_path / logical.lstrip("/")
 
 
-def _logical(text: str, tmp_path: Path) -> str:
+def _logical(text: str, tmp_path: Path, code_root: str | None = None) -> str:
     """This machine's paths back to the logical ones of cases.json."""
     for value in (str(tmp_path.resolve()), str(tmp_path)):
         text = text.replace(value, "")
     for value in (str(REPO.resolve()), str(REPO)):
-        text = text.replace(value, CASES["code_root"])
+        text = text.replace(value, code_root or CASES["code_root"])
     return text
 
 
@@ -110,19 +122,28 @@ def _cli_script(case: dict[str, Any], tmp_path: Path) -> str:
     # base: the CLI reads its pyvenv.cfg here (slurm.py interpreter_module), the app over
     # its plan-time interpreter check (the Rust fake cluster answers with the same text).
     (python.parent.parent / "pyvenv.cfg").write_text(case["pyvenv_cfg"], encoding="utf-8")
+    # The CLI emits from the case's code root: the Griffin plugin is copied there, and that
+    # root is the checkout the job's PYTHONPATH names (slurm.py coperceive_root), so a code
+    # root with a space or a quote reaches the CLI's script as it reaches the app's.
+    code = _under(tmp_path, _code_root(case))
+    manifest = code / GRIFFIN.relative_to(REPO)
+    if not manifest.is_file():
+        shutil.copytree(GRIFFIN.parent, manifest.parent)
+    media = ["--media-root", str(raw)] if case.get("media_root", True) else []
+    options = [word for extra in case.get("extras", []) for word in ("--option", extra)]
     args = [
         "model",
         "run",
         "--manifest",
-        str(GRIFFIN),
+        str(manifest),
         "--model",
         case["model"],
         "--scenes",
         str(scenes),
         "--raw-root",
         str(raw),
-        "--media-root",
-        str(raw),
+        *media,
+        *options,
         "--out",
         str(out),
         "--run-id",
@@ -140,10 +161,13 @@ def _cli_script(case: dict[str, Any], tmp_path: Path) -> str:
         profile["scratch_template"],
     ]
     captured = io.StringIO()
-    with contextlib.redirect_stdout(captured):
+    with (
+        contextlib.redirect_stdout(captured),
+        mock.patch.object(slurm, "coperceive_root", return_value=code),
+    ):
         main(args)
     text = captured.getvalue()
-    return _logical(text[text.index("#!/bin/bash") :], tmp_path)
+    return _logical(text[text.index("#!/bin/bash") :], tmp_path, _code_root(case))
 
 
 def _app_script(name: str) -> str:
@@ -196,6 +220,68 @@ def _run_block(text: str, side: str) -> None:
     (capture,) = [i for i, line in enumerate(lines) if line.endswith("<<'PY' || true")]
     assert run + 3 < capture < exits[0], (side, "environment.json after the run", capture)
     assert lines.count("set +e") == 1 and lines.count("set -e") == 1, side
+
+
+# The scratch steps both sides take before ``module purge``, in this order. Each side's
+# other lines there (the CLI's RUN_ID and staging folders, the app's OUT_DIR) are one-sided
+# lines of allowed_differences.json.
+SCRATCH_STEPS = (
+    ("strict", "set -euo pipefail"),
+    ("scratch", None),
+    ("mkdir", "<SCRATCH>"),
+    ("trap", "rm -rf <SCRATCH>", "EXIT"),
+    ("tmpdir", "<SCRATCH>/tmp"),
+    ("mkdir", "$TMPDIR"),
+    ("mkdir", "<SCRATCH>/work"),
+)
+
+
+def _scratch_setup(text: str, side: str) -> list[tuple[str, ...]]:
+    """The scratch steps of ``text`` from ``set -euo pipefail`` to ``module purge``, with
+    the side's scratch variable written ``<SCRATCH>``: ``set -euo pipefail`` is the first
+    command after the ``#SBATCH`` header, the scratch directory is assigned the profile's
+    template, made, removed by an EXIT trap before anything else runs, and holds TMPDIR
+    and the work directory. A job that sets the trap late leaves scratch behind when an
+    earlier step fails; one without strict mode runs on past a failed step."""
+    lines = text.splitlines()
+    commands = [
+        i
+        for i, line in enumerate(lines)
+        if line.strip() and not line.startswith("#") and not line.startswith(" ")
+    ]
+    start = commands[0]
+    end = lines.index("module purge")
+    assert start < end, (side, "module purge before the first command")
+    variable = ""
+    steps: list[tuple[str, ...]] = []
+    for line in lines[start:end]:
+        if not line.strip() or line.startswith("#"):
+            continue
+        if line == "set -euo pipefail":
+            steps.append(("strict", line))
+            continue
+        assigned = re.fullmatch(r"(SCRATCH|SCRATCH_DIR)=(.*)", line)
+        if assigned and not variable:
+            variable = assigned.group(1)
+            steps.append(("scratch", shlex.split(assigned.group(2))[0]))
+            continue
+        words = shlex.split(line.replace(f"${variable}", "<SCRATCH>")) if variable else []
+        if words[:1] == ["mkdir"]:
+            # -p, the app's -m 0700 and -- are options; the folders are what matter.
+            paths = [w for w in words[1:] if w not in ("-p", "-m", "0700", "--")]
+            steps += [("mkdir", path) for path in paths if path in _SHARED_MKDIRS]
+        elif words[:1] == ["trap"]:
+            removed = [w for w in shlex.split(words[1]) if w != "--"]
+            steps.append(("trap", " ".join(removed), *words[2:]))
+        elif words[:2] == ["export", "TMPDIR=<SCRATCH>/tmp"]:
+            steps.append(("tmpdir", "<SCRATCH>/tmp"))
+    template = next((step[1] for step in steps if step[0] == "scratch"), None)
+    expected = [("scratch", template) if step[0] == "scratch" else step for step in SCRATCH_STEPS]
+    assert steps == expected, (side, steps)
+    return steps
+
+
+_SHARED_MKDIRS = ("<SCRATCH>", "$TMPDIR", "<SCRATCH>/work")
 
 
 def _work_copy_line(text: str) -> str:
@@ -274,6 +360,12 @@ def test_the_app_and_the_cli_write_the_same_griffin_job(name: str, tmp_path: Pat
         (capture,) = [line for line in text.splitlines() if line.endswith("<<'PY' || true")]
         assert capture.split()[0] == python, (name, side, capture)
         _run_block(text, side)
+    # The scratch setup before anything runs: the same steps, in the same order, on the
+    # profile's scratch template (the ledger excuses only the variable's name and the
+    # app's 0700 mode; ADR 0021, "Scratch setup").
+    setup = {side: _scratch_setup(text, side) for side, text in (("cli", cli), ("app", app))}
+    assert setup["cli"] == setup["app"], (name, setup)
+    assert ("scratch", case["profile"]["scratch_template"]) in setup["cli"], (name, setup)
 
     # 2. The model run line, field by field, with the CLI's staged copies mapped back.
     root = case["root"]
@@ -314,7 +406,7 @@ def test_the_app_and_the_cli_write_the_same_griffin_job(name: str, tmp_path: Pat
         for line in (_work_copy_line(cli), _work_copy_line(app))
     ]
     assert filters[0] == filters[1] and filters[0], (name, filters)
-    manifest = load_manifest(Path(str(ns_app.manifest).replace(CASES["code_root"], str(REPO))))
+    manifest = load_manifest(Path(str(ns_app.manifest).replace(_code_root(case), str(REPO))))
     given = dict(option.split("=", 1) for option in ns_app.option)
     check_options(select_model(manifest, ns_app.model), given)
 
