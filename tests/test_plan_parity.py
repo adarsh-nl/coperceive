@@ -241,28 +241,22 @@ SCRATCH_STEPS = (
 
 def _scratch_setup(text: str, side: str) -> list[tuple[str, ...]]:
     """The scratch steps of ``text`` from ``set -euo pipefail`` to ``module purge``, with
-    the side's scratch variable written ``<SCRATCH>``: ``set -euo pipefail`` is the first
-    command after the ``#SBATCH`` header, the scratch directory is assigned the profile's
-    template, made, removed by an EXIT trap before anything else runs, and holds TMPDIR
-    and the work directory. A job that sets the trap late leaves scratch behind when an
-    earlier step fails; one without strict mode runs on past a failed step."""
+    the side's scratch variable written ``<SCRATCH>``. ``set -euo pipefail`` must be the
+    first command after the ``#SBATCH`` header. Up to the EXIT trap only the scratch
+    assignment, its ``mkdir`` and a plain assignment of a literal word (the CLI's
+    ``RUN_ID=<id>``, which runs nothing) may come: any other command there would run
+    before the trap, so scratch would be left behind if it failed. After the trap, until
+    ``module purge``, TMPDIR and the work folder are checked in order; each side's other
+    lines there are one-sided ledger rows. A job without strict mode first runs on past a
+    failed step."""
     lines = text.splitlines()
-    commands = [
-        i
-        for i, line in enumerate(lines)
-        if line.strip() and not line.startswith("#") and not line.startswith(" ")
-    ]
-    start = commands[0]
     end = lines.index("module purge")
-    assert start < end, (side, "module purge before the first command")
+    commands = [line for line in lines[:end] if line.strip() and not line.startswith("#")]
+    assert commands and commands[0] == "set -euo pipefail", (side, "first command", commands[:1])
     variable = ""
-    steps: list[tuple[str, ...]] = []
-    for line in lines[start:end]:
-        if not line.strip() or line.startswith("#"):
-            continue
-        if line == "set -euo pipefail":
-            steps.append(("strict", line))
-            continue
+    trapped = False
+    steps: list[tuple[str, ...]] = [("strict", commands[0])]
+    for line in commands[1:]:
         assigned = re.fullmatch(r"(SCRATCH|SCRATCH_DIR)=(.*)", line)
         if assigned and not variable:
             variable = assigned.group(1)
@@ -272,12 +266,21 @@ def _scratch_setup(text: str, side: str) -> list[tuple[str, ...]]:
         if words[:1] == ["mkdir"]:
             # -p, the app's -m 0700 and -- are options; the folders are what matter.
             paths = [w for w in words[1:] if w not in ("-p", "-m", "0700", "--")]
+            if not trapped:
+                assert paths == ["<SCRATCH>"], (side, "before the EXIT trap", line)
             steps += [("mkdir", path) for path in paths if path in _SHARED_MKDIRS]
         elif words[:1] == ["trap"]:
             removed = [w for w in shlex.split(words[1]) if w != "--"]
             steps.append(("trap", " ".join(removed), *words[2:]))
+            trapped = True
         elif words[:2] == ["export", "TMPDIR=<SCRATCH>/tmp"]:
             steps.append(("tmpdir", "<SCRATCH>/tmp"))
+        elif not trapped:
+            assert re.fullmatch(r"[A-Z_][A-Z0-9_]*=[A-Za-z0-9._/-]+", line), (
+                side,
+                "before the EXIT trap",
+                line,
+            )
     template = next((step[1] for step in steps if step[0] == "scratch"), None)
     expected = [("scratch", template) if step[0] == "scratch" else step for step in SCRATCH_STEPS]
     assert steps == expected, (side, steps)
@@ -418,6 +421,28 @@ def test_the_app_and_the_cli_write_the_same_griffin_job(name: str, tmp_path: Pat
         for side, text in (("cli", cli), ("app", app)):
             done = subprocess.run(["bash", "-n", "-c", text], capture_output=True, text=True)
             assert done.returncode == 0, (name, side, done.stderr)
+
+
+@pytest.mark.parametrize(
+    ("before", "inserted"),
+    [
+        ("set -euo pipefail\n", 'cd "$HOME"\n'),
+        ("trap 'rm -rf", 'cp -r /data "$SCRATCH_DIR"\n'),
+        ("trap 'rm -rf", 'echo "$(hostname)"\n'),
+    ],
+    ids=["before_strict_mode", "copy_before_the_trap", "echo_before_the_trap"],
+)
+def test_the_scratch_check_refuses_a_command_ahead_of_strict_mode_or_the_trap(
+    before: str, inserted: str
+) -> None:
+    """``_scratch_setup`` does not only pick out the lines it knows: a command ahead of
+    ``set -euo pipefail``, or between the scratch folder and its EXIT trap, fails it."""
+    text = _app_script("base")
+    _scratch_setup(text, "app")
+    mutated = text.replace(before, inserted + before, 1)
+    assert mutated != text
+    with pytest.raises(AssertionError, match="first command|before the EXIT trap"):
+        _scratch_setup(mutated, "app")
 
 
 def test_the_cli_exports_the_checkout_that_emits_the_job() -> None:
