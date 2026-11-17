@@ -63,6 +63,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - System log directories, application data directories, and clipboard interactions abstracted into platform-specific implementations.
 
 ### Fixed
+- Evaluations of a built-in model submitted from the app now run, and their Slurm job is the one `coperceive model run --slurm` writes for the same inputs. Before, a Griffin evaluation from New evaluation could not run:
+  - the form demanded a checkpoint that Griffin does not take;
+  - the job passed `--output-dir`, which `model run` refuses at once;
+  - the job ignored the manifest's 8 CPUs, 64 GB, GPU, `a40` constraint and CUDA modules on venv, conda and plain profiles;
+  - `module purge` unloaded the venv's own Python;
+  - the job asked for 04:00:00;
+  - logs went to the results folder;
+  - `environment.json` was recorded with whatever `python3` the node found first.
+
+  The app's job now writes the same lines as the CLI's:
+  - `model run --out --run-id --work "$SCRATCH_DIR/work"`;
+  - `--gres=gpu:1` plus the manifest's `--constraint` (no GPU when the manifest says `gpu: false`);
+  - the manifest's CPUs and memory;
+  - `--time` from the CLI's estimate (01:00:00 for Griffin), shown in the form and editable, and refused before preview when it is over the partition's limit;
+  - `--mail-type=END,FAIL`;
+  - logs in `~/logs/%x-%j.out|err` (the folder is made at submit);
+  - `module purge`, then the venv's `python/<version>`, then the manifest's modules;
+  - `PYTHONPATH` set to the cluster's coperceive;
+  - `environment.json` beside `run.json`, recorded with the run's own interpreter.
+
+  More changes:
+  - A run succeeds when `model run` exits 0 and writes `run.json`. `boxes.parquet` is required only when `run.json`'s new `provenance.boxes_written` is above zero.
+  - A scenes folder can be the test split. It is fingerprinted by its listing and checked again at save and submit.
+  - The app reads plugins with the new `coperceive model list --json`. One plugin that fails or exits while importing is shown with its reason, and the rest of the list stays.
+  - A manifest whose models depend on each other in a loop gets a clear message instead of hanging.
+  - A built-in plan saved before this fix is refused with "Rebuild this plan" before anything is submitted.
+  - CLI: the job's final `echo` quotes its path. `--slurm-logs` folders containing whitespace or control characters are refused, because `#SBATCH --output` cannot quote them.
+
+  The remaining differences are in ADR 0021, and `tests/test_plan_parity.py` with `src-tauri/tests/plan_parity.rs` hold the two scripts together.
 - Evaluation plan builder and CLI parity (PR #143, PR #149): pass `--model`, `--raw-root`, `--media-root`, and `--work` to `coperceive model run`, validate and shell-quote run IDs, and quote Slurm environment paths as a single shell word.
 - Diagnostics reporting and zip bundle export made cross-platform with clipboard fallback and clear missing-tool errors.
 - Release asset packaging tightened to copy only exact application bundle and DMG assets, excluding stray dependencies (`dateutil-zoneinfo.tar.gz`).

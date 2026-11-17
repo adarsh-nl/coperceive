@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import dataclasses
+import json
 import os
 import re
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
 from pathlib import Path
 from typing import cast
 
@@ -21,7 +23,13 @@ from coperceive.models.batch import BatchError, BatchReport, RunOptions, run_bat
 from coperceive.models.cache import CacheError, prune
 from coperceive.models.check import check_plugin, render_check
 from coperceive.models.inputs import InputError
-from coperceive.models.registry import RegistryError, list_plugins, resolve_manifest
+from coperceive.models.registry import (
+    PluginInfo,
+    RegistryError,
+    list_plugins,
+    manifest_path,
+    resolve_manifest,
+)
 from coperceive.models.runner import resolve_interpreter
 from coperceive.models.slurm import (
     SlurmError,
@@ -30,7 +38,7 @@ from coperceive.models.slurm import (
     validate_partition,
     write_plan,
 )
-from coperceive.models.spec import Manifest, ModelSpecError, select_model
+from coperceive.models.spec import Manifest, ModelSpecError, load_manifest, select_model
 from coperceive.robustness.apply import export_perturbed_inputs
 from coperceive.robustness.spec import PerturbationError, load_perturbation
 from coperceive.store import read_scene
@@ -64,6 +72,14 @@ def add_parser(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None
     commands = model.add_subparsers(dest="model_command", required=True)
 
     listing = commands.add_parser("list", help="Installed model plugins.")
+    listing.add_argument(
+        "--json",
+        action="store_true",
+        help=(
+            "Machine-readable listing: each plugin's manifest as a resolved path, its "
+            "modules, and per model whether it needs a GPU and which --option keys it takes."
+        ),
+    )
     listing.set_defaults(func=list_command)
 
     inspect = commands.add_parser("inspect", help="Print the validated manifest and interpreter.")
@@ -199,13 +215,102 @@ def _csv(value: str | None) -> tuple[str, ...] | None:
 # -- commands ----------------------------------------------------------------------------------
 
 
-def list_command(_args: argparse.Namespace) -> None:
+LIST_FORMAT = "coperceive-model-list"
+LIST_FORMAT_VERSION = 1
+
+
+def list_command(args: argparse.Namespace) -> None:
     rows = list_plugins()
+    if getattr(args, "json", False):
+        # Importing a plugin runs its code: whatever it prints (through Python or straight
+        # to file descriptor 1) goes to stderr, so stdout holds only the JSON document.
+        with _stdout_to_stderr():
+            plugins = [_plugin_json(row) for row in rows]
+        payload = {
+            "format": LIST_FORMAT,
+            "format_version": LIST_FORMAT_VERSION,
+            "plugins": plugins,
+        }
+        print(json.dumps(payload, indent=2, sort_keys=True))
+        return
     width = max((len(row.name) for row in rows), default=4)
     for row in rows:
         print(f"{row.name.ljust(width)}  {row.source.ljust(11)}  {row.location}")
     if not rows:
         print("no model plugins installed (entry point group coperceive.models)")
+
+
+def _plugin_json(row: PluginInfo) -> dict[str, object]:
+    """One plugin of ``model list --json``. A plugin whose manifest cannot be resolved or
+    read is listed with ``manifest: null`` and the reason, never dropped or guessed."""
+    entry: dict[str, object] = {
+        "name": row.name,
+        "source": row.source,
+        "location": row.location,
+        "manifest": None,
+        "error": None,
+        "modules": [],
+        "models": {},
+    }
+    try:
+        path = manifest_path(row.name)
+        manifest = load_manifest(path)
+        if manifest.name != row.name:
+            # resolve_manifest (what `model run <name>` uses) refuses this too.
+            raise RegistryError(
+                f"entry point {row.name!r} names a manifest called {manifest.name!r}"
+            )
+    except (Exception, SystemExit) as exc:  # noqa: BLE001 - one plugin's error is its own row
+        # A third-party plugin may raise anything while it is imported (a RuntimeError, a
+        # SyntaxError, or sys.exit()); that is reported as its error, never the end of the
+        # whole listing. KeyboardInterrupt is not caught: Ctrl-C still stops the listing.
+        if isinstance(exc, SystemExit):
+            code = exc.code
+            reason = code if isinstance(code, str) and code else f"SystemExit: {code!r}"
+            entry["error"] = f"{reason} (the plugin exited while it was imported)"
+        else:
+            entry["error"] = str(exc) or type(exc).__name__
+        return entry
+    entry["manifest"] = str(path.resolve())
+    entry["modules"] = list(manifest.environment.modules)
+    entry["models"] = {
+        key: {
+            "gpu": spec.resources.gpu,
+            "options": sorted(spec.options),
+            "cpus": spec.resources.cpus,
+            "memory_gb": spec.resources.memory_gb,
+            "transient_artifacts": list(spec.outputs.transient_artifacts),
+            "depends_on": sorted({dependency.model for dependency in spec.depends_on}),
+            # plan_sbatch writes it as #SBATCH --constraint (the Griffin GPU pin).
+            "slurm_constraint": spec.resources.slurm_constraint,
+            # plan_sbatch's --time estimate (time_limit) from the manifest's resources.
+            "seconds_per_sample": spec.resources.seconds_per_sample,
+            "staging_seconds": spec.resources.staging_seconds,
+            "conversion_seconds": spec.resources.conversion_seconds,
+        }
+        for key, spec in manifest.models.items()
+    }
+    return entry
+
+
+@contextlib.contextmanager
+def _stdout_to_stderr() -> Generator[None, None, None]:
+    """Send stdout to stderr for the block, at the Python level and at file descriptor 1."""
+    sys.stdout.flush()
+    try:
+        saved = os.dup(1)
+    except OSError:
+        saved = None
+    try:
+        if saved is not None:
+            os.dup2(2, 1)
+        with contextlib.redirect_stdout(sys.stderr):
+            yield
+    finally:
+        sys.stderr.flush()
+        if saved is not None:
+            os.dup2(saved, 1)
+            os.close(saved)
 
 
 def inspect_command(args: argparse.Namespace) -> None:

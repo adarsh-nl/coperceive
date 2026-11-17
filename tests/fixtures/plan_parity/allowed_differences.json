@@ -1,0 +1,387 @@
+{
+  "about": "Lines that legitimately differ between the app's Griffin job (tests/fixtures/plan_parity/app/<case>.sbatch) and `coperceive model run --slurm` for the same inputs. tests/test_plan_parity.py fails on a one-sided line no entry matches. side: cli, app or both; match: a full-line regex for ONE line (a trailing '  # comment' is dropped first); cases: the cases the entry applies to (default: all). Every app-side and both-side entry must match a one-sided line in EVERY case it applies to, so the app cannot drop the line; a cli-side entry must still match somewhere. kind: intended, the only kind (docs/adr/0021-app-model-runs-follow-the-cli-slurm-job.md decides it). Not listed, so they must be identical: the module lines (python/<v> from the venv's pyvenv.cfg, then the manifest's), --gres=gpu:1, --constraint, --time (the CLI's estimate), --mail-type, --output/--error (~/logs/%x-%j), PYTHONPATH, --cpus-per-task, --mem, set -euo pipefail, module purge, the partition, and the run block (`set +e`, model run, `RC=$?`, `set -e`, `echo \"model run exit $RC\"`), which the test also checks in place on both sides with the work copy and the exit after it.",
+  "lines": [
+    {
+      "id": "comments",
+      "side": "both",
+      "match": "# .*",
+      "kind": "intended",
+      "why": "Header and explanatory comments: the CLI explains its --time estimate, the app names the plan and the review. No effect on the job.",
+      "cite": "cosmetic (ADR 0018, 'Comment and echo lines')"
+    },
+    {
+      "id": "blank",
+      "side": "cli",
+      "match": "",
+      "kind": "intended",
+      "why": "Blank lines between the CLI's blocks.",
+      "cite": "cosmetic"
+    },
+    {
+      "id": "job-name",
+      "side": "cli",
+      "match": "#SBATCH --job-name=model-griffin-plan-1790000000-aabbccddeeff",
+      "kind": "intended",
+      "why": "The CLI names its job model-<plugin>-<run id>.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "job-name",
+      "side": "app",
+      "match": "#SBATCH --job-name=coperceive-run-plan-1790000000-aabbccddeeff",
+      "kind": "intended",
+      "why": "App jobs are named coperceive-<kind>-<id> so the app lists and manages only its own jobs.",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md:41, :107, :220"
+    },
+    {
+      "id": "scratch",
+      "side": "cli",
+      "match": "SCRATCH=\"/scratch/\\$USER/\\$SLURM_JOB_ID\"",
+      "kind": "intended",
+      "why": "The CLI's job scratch. The CLI stages into scratch and runs there.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "scratch",
+      "side": "cli",
+      "match": "RUN_ID=plan-1790000000-aabbccddeeff",
+      "kind": "intended",
+      "why": "The run id the CLI's staged paths use. The CLI stages into scratch and runs there.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "scratch",
+      "side": "cli",
+      "match": "mkdir -p \"\\$SCRATCH\"",
+      "kind": "intended",
+      "why": "The CLI makes its scratch. The CLI stages into scratch and runs there.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "scratch",
+      "side": "cli",
+      "match": "trap 'rm -rf \"\\$SCRATCH\"' EXIT",
+      "kind": "intended",
+      "why": "The CLI removes its scratch on exit. The CLI stages into scratch and runs there.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "scratch",
+      "side": "cli",
+      "match": "export TMPDIR=\"\\$SCRATCH/tmp\"",
+      "kind": "intended",
+      "why": "The CLI's TMPDIR in scratch. The CLI stages into scratch and runs there.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "scratch",
+      "side": "cli",
+      "match": "mkdir -p \"\\$TMPDIR\" \"\\$SCRATCH/scenes\" \"\\$SCRATCH/out\" \"\\$SCRATCH/work\"",
+      "kind": "intended",
+      "why": "The CLI's staging, output and work folders in scratch. The CLI stages into scratch and runs there.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "scratch",
+      "side": "cli",
+      "match": "mkdir -p \"\\$SCRATCH/out/\\$RUN_ID\"",
+      "kind": "intended",
+      "why": "The CLI makes the staged run directory for environment.json after the run. The CLI stages into scratch and runs there.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "SCRATCH_DIR=\"/scratch/\\$USER/\\$SLURM_JOB_ID\"",
+      "kind": "intended",
+      "why": "The app's job-owned scratch (the CLI's SCRATCH, another variable name).",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "mkdir -p -m 0700 -- \"\\$SCRATCH_DIR\"",
+      "kind": "intended",
+      "why": "The app makes its scratch, private.",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "trap 'rm -rf -- \"\\$SCRATCH_DIR\"' EXIT",
+      "kind": "intended",
+      "why": "The app removes its scratch on exit, as the CLI does.",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "export TMPDIR=\"\\$SCRATCH_DIR/tmp\"",
+      "kind": "intended",
+      "why": "The model's temporary files go to scratch, as the CLI's.",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "mkdir -p -m 0700 -- \"\\$TMPDIR\"",
+      "kind": "intended",
+      "why": "The app makes TMPDIR.",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "mkdir -p -m 0700 -- \"\\$SCRATCH_DIR/work\"",
+      "kind": "intended",
+      "why": "model run's --work in scratch, as the CLI's \"$SCRATCH/work\".",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "OUT_DIR=\"/home/tester/results/runs/plan-1790000000-aabbccddeeff\"",
+      "kind": "intended",
+      "why": "The app's --out is on results_root (<results_root>/runs/<plan id>), not staged in scratch.",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+    },
+    {
+      "id": "scratch",
+      "side": "app",
+      "match": "mkdir -p -m 0700 -- \"\\$OUT_DIR\"",
+      "kind": "intended",
+      "why": "The app makes its --out.",
+      "cite": "src-tauri/src/job_submit.rs render_run_script, job_scratch_dir; docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a"
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "STAGE_START=\\$SECONDS",
+      "kind": "intended",
+      "why": "Starts the staging timer. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "rsync -a --files-from=/data/griffin/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.scenes\\.txt /data/griffin/scenes/ \"\\$SCRATCH/scenes/\"",
+      "kind": "intended",
+      "why": "Stages the scenes. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "mkdir -p \"\\$SCRATCH/raw\"",
+      "kind": "intended",
+      "why": "Makes the staged raw folder. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "rsync -a --files-from=/data/griffin/predictions/\\.slurm/plan-1790000000-aabbccddeeff\\.raw\\.txt /data/griffin/raw/ \"\\$SCRATCH/raw/\"",
+      "kind": "intended",
+      "why": "Stages the raw files. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+    },
+    {
+      "id": "staging",
+      "side": "cli",
+      "match": "STAGING=\\$\\(\\(SECONDS - STAGE_START\\)\\)",
+      "kind": "intended",
+      "why": "The staging time, for --staging-seconds. The app runs against data already on the cluster and stages nothing.",
+      "cite": "docs/release/v0.1.1-eval-pipeline-test.md, 'App-plan parity'"
+    },
+    {
+      "id": "exit_status",
+      "side": "cli",
+      "match": "exit \"\\$RC\"",
+      "kind": "intended",
+      "why": "The CLI exits with the run's status at the end, after copying the run home. The test checks its place after the run block and the work copy.",
+      "cite": "coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "exit_status",
+      "side": "app",
+      "match": "if \\[ \"\\$RC\" -ne 0 \\]; then exit \"\\$RC\"; fi",
+      "kind": "intended",
+      "why": "The app exits with the run's status after copying the work logs home and before its own post-run checks of run.json and boxes.parquet. The test checks its place after the run block and the work copy.",
+      "cite": "src-tauri/src/job_submit.rs render_run_script"
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "mkdir -p /home/tester/results/\"\\$SLURM_JOB_ID\"",
+      "kind": "intended",
+      "why": "Makes the per-job results folder. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "rsync -a \"\\$SCRATCH/out/\" /home/tester/results/\"\\$SLURM_JOB_ID\"/",
+      "kind": "intended",
+      "why": "Copies the staged --out to the per-job results folder. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "mkdir -p /data/griffin/predictions/plan-1790000000-aabbccddeeff",
+      "kind": "intended",
+      "why": "Makes the run's folder under --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "rsync -a \"\\$SCRATCH/out/\\$RUN_ID/\" /data/griffin/predictions/plan-1790000000-aabbccddeeff/",
+      "kind": "intended",
+      "why": "Copies the run home to --out. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+    },
+    {
+      "id": "copy_home",
+      "side": "cli",
+      "match": "echo \"done:\" /data/griffin/predictions/plan-1790000000-aabbccddeeff \"\\(exit \\$RC\\)\"",
+      "kind": "intended",
+      "why": "The CLI's last progress line. The CLI runs --out in scratch and copies the run home; the app's --out is already its run directory on results_root, so only the work directory's logs and artefacts are copied (work_copy).",
+      "cite": "docs/adr/0015-cluster-profiles-scheduler-adapter.md §3a (:152-158)"
+    },
+    {
+      "id": "work_copy",
+      "side": "cli",
+      "match": "rsync -a --include='\\*/' --include='\\*\\.log' --include='artifacts/\\*\\*\\*' --exclude='\\*' --prune-empty-dirs \"\\$SCRATCH/work/\" /home/tester/results/\"\\$SLURM_JOB_ID\"/work/",
+      "kind": "intended",
+      "why": "The work directory's logs and artefacts come home from scratch. Same rsync filter as the app's line (the test compares the filter words); the CLI copies into its per-job results folder.",
+      "cite": "coperceive/models/slurm.py work_copy_filter"
+    },
+    {
+      "id": "work_copy",
+      "side": "app",
+      "match": "rsync -a --include='\\*/' --include='\\*\\.log' --include='artifacts/\\*\\*\\*' --exclude='\\*' --prune-empty-dirs \"\\$SCRATCH_DIR/work/\" \"\\$OUT_DIR/work/\"",
+      "kind": "intended",
+      "why": "As the CLI's, into the run's own output directory (<results_root>/runs/<plan id>/work).",
+      "cite": "src-tauri/src/job_submit.rs work_copy_filter"
+    },
+    {
+      "id": "model_run",
+      "side": "cli",
+      "match": "\\S+ -m coperceive model run .*",
+      "kind": "intended",
+      "why": "The one line both sides run, as `<python> -m coperceive` or the profile's `<venv>/bin/coperceive` script. It differs only by the staged paths (--scenes, --raw-root, --out, --staging-seconds) and --work's scratch variable; the test parses both with build_parser() and compares every parsed field except argv_fields, and checks the run block around it.",
+      "cite": "tests/test_plan_parity.py"
+    },
+    {
+      "id": "model_run",
+      "side": "app",
+      "match": "\\S+ -m coperceive model run .*",
+      "kind": "intended",
+      "why": "As the CLI's.",
+      "cite": "tests/test_plan_parity.py",
+      "cases": [
+        "base",
+        "mixed_partition",
+        "modules_no_gpu_discovery",
+        "modules_profile_other_python",
+        "venv_profile"
+      ]
+    },
+    {
+      "id": "model_run",
+      "side": "app",
+      "match": "/opt/venv/bin/coperceive model run .*",
+      "kind": "intended",
+      "why": "As the CLI's, through the profile's console script <venv>/bin/coperceive.",
+      "cite": "tests/test_plan_parity.py",
+      "cases": [
+        "venv_script_command"
+      ]
+    },
+    {
+      "id": "environment_capture",
+      "side": "cli",
+      "match": "\\S+ - \"\\$SCRATCH/out/\\$RUN_ID/environment\\.json\" <<'PY' \\|\\| true",
+      "kind": "intended",
+      "why": "Same program and interpreter (the test checks the interpreter and its place after the run); the file goes into the staged run directory, which the CLI then copies home.",
+      "cite": "coperceive/repro/environment.py environment_capture_lines; coperceive/models/slurm.py plan_sbatch"
+    },
+    {
+      "id": "environment_capture",
+      "side": "app",
+      "match": "mkdir -p -m 0700 -- \"\\$OUT_DIR/plan-1790000000-aabbccddeeff\"",
+      "kind": "intended",
+      "why": "The run directory model run writes (<out>/<run id>), made for environment.json as the CLI makes \"$SCRATCH/out/$RUN_ID\".",
+      "cite": "src-tauri/src/job_submit.rs render_run_script"
+    },
+    {
+      "id": "environment_capture",
+      "side": "app",
+      "match": "\\S+ - \"\\$OUT_DIR/plan-1790000000-aabbccddeeff/environment\\.json\" <<'PY' \\|\\| true",
+      "kind": "intended",
+      "why": "Same program and interpreter, written after model run beside run.json in <out>/<run id>/, where the CLI's lands once copied home (the test checks the interpreter and its place after the run).",
+      "cite": "src-tauri/src/job_submit.rs render_run_script"
+    },
+    {
+      "id": "venv_path",
+      "side": "app",
+      "match": "export COPERCEIVE_PYTHON=/opt/venv/bin/python",
+      "kind": "intended",
+      "why": "A venv profile's interpreter is put on the job's environment by the app; the CLI runs the absolute interpreter and needs neither.",
+      "cite": "src-tauri/src/run_plan.rs environment_lines",
+      "cases": [
+        "venv_profile",
+        "venv_script_command"
+      ]
+    },
+    {
+      "id": "venv_path",
+      "side": "app",
+      "match": "export PATH=/opt/venv/bin:\\$PATH",
+      "kind": "intended",
+      "why": "A venv profile's bin directory goes first on PATH (so a bare `coperceive` resolves there); the CLI runs the absolute interpreter and needs neither.",
+      "cite": "src-tauri/src/run_plan.rs environment_lines",
+      "cases": [
+        "venv_profile",
+        "venv_script_command"
+      ]
+    },
+    {
+      "id": "app_echo",
+      "side": "app",
+      "match": "echo \"Starting run for plan plan-1790000000-aabbccddeeff on \\$\\(hostname\\)\"",
+      "kind": "intended",
+      "why": "Progress line for the app's job log.",
+      "cite": "cosmetic"
+    },
+    {
+      "id": "app_echo",
+      "side": "app",
+      "match": "echo \"Run finished for plan plan-1790000000-aabbccddeeff: \\$OUT_DIR\"",
+      "kind": "intended",
+      "why": "Progress line for the app's job log.",
+      "cite": "cosmetic"
+    },
+    {
+      "id": "post_run_checks",
+      "side": "app",
+      "match": "test -s \"\\$OUT_DIR/plan-1790000000-aabbccddeeff/run\\.json\" \\|\\| \\{ echo .* >&2; exit 1; \\}",
+      "kind": "intended",
+      "why": "The app's job fails unless model run wrote run.json (success is exit 0 and run.json). The CLI copies the run home and exits with model run's own status.",
+      "cite": "coperceive/evaluation/predictions.py:349-354; coperceive/models/batch.py:477, :518, :546"
+    },
+    {
+      "id": "post_run_checks",
+      "side": "app",
+      "match": "if grep -Eq '\"boxes_written\": \\*\\[1-9\\]' \"\\$OUT_DIR/plan-1790000000-aabbccddeeff/run\\.json\"; then compgen -G \"\\$OUT_DIR/plan-1790000000-aabbccddeeff/\\*/boxes\\.parquet\" >/dev/null \\|\\| \\{ echo .* >&2; exit 1; \\}; fi",
+      "kind": "intended",
+      "why": "The app's job fails when run.json says rows were written (provenance.boxes_written above zero) but no scene has boxes.parquet; a run without boxes passes, as the CLI's job does with model run's exit 0.",
+      "cite": "coperceive/models/batch.py provenance_json boxes_written; coperceive/evaluation/predictions.py write_run"
+    }
+  ],
+  "argv_fields": {
+    "out": "The app writes under results_root/runs/<plan id>; the CLI under scratch, then copies home (ADR 0015 §3a).",
+    "staging_seconds": "Only the CLI stages, so only it times the staging (provenance timing only)."
+  }
+}
