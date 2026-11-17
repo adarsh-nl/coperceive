@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import stat
 import tempfile
 import zipfile
 from collections.abc import Sequence
@@ -128,7 +130,12 @@ def open_bundle(
         digest = _bundle_sha(path)
         target = data_root / "bundles" / digest
         if target.is_dir():
-            manifest = read_manifest(target / MANIFEST)
+            # Reopening re-checks everything: the archive passes every check again
+            # (with today's limits), and the extracted copy must still be exactly it.
+            with tempfile.TemporaryDirectory(prefix="coperceive-reopen-", dir=target.parent) as raw:
+                fresh = _extract(path, Path(raw) / "fresh", digest, limits)
+                _require_same_tree(fresh.root, target)
+            manifest = fresh.manifest
             report = _resolve_sensor_data(target, manifest, digest, library_roots, limits)
             _write_report(target, report)
             return OpenedBundle(target, manifest, digest, report)
@@ -215,6 +222,36 @@ def _extract(path: Path, target: Path, digest: str, limits: OpenLimits) -> Opene
         _validate_json(work)
         work.rename(target)
     return OpenedBundle(target, manifest, digest, {})
+
+
+def _tree_files(root: Path, *, skip: frozenset[str] = frozenset()) -> dict[str, str]:
+    """Every file under ``root`` with its SHA-256; a link or special file is a change."""
+    files: dict[str, str] = {}
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for name in dirnames + filenames:
+            entry = Path(dirpath) / name
+            relative = entry.relative_to(root).as_posix()
+            mode = os.lstat(entry).st_mode
+            if stat.S_ISDIR(mode):
+                continue
+            if not stat.S_ISREG(mode):
+                raise BundleError(f"{relative} in the opened copy is not a regular file")
+            if relative not in skip:
+                files[relative] = hashlib.sha256(entry.read_bytes()).hexdigest()
+    return files
+
+
+def _require_same_tree(fresh: Path, opened: Path) -> None:
+    """The earlier extraction at ``opened`` still matches a fresh, checked one."""
+    try:
+        same = _tree_files(opened, skip=frozenset({OPEN_REPORT})) == _tree_files(fresh)
+    except BundleError:
+        same = False
+    if not same:
+        raise BundleError(
+            f"the opened copy at {opened} has changed since it was opened; "
+            "remove that folder and open the bundle again"
+        )
 
 
 def _validate_json(root: Path) -> None:

@@ -566,3 +566,23 @@ def test_open_cap_counts_every_scene_media_member_before_extracting(
     with pytest.raises(BundleError, match="sensor-data cap"):
         open_bundle(bundle, data_root=data, limits=OpenLimits(max_sensor_bytes=sensor_bytes - 1))
     assert _files(data) == []
+
+
+# reopening re-checks the extracted copy ---------------------------------------
+
+
+@pytest.mark.parametrize("change", ["edited", "added", "removed"])
+def test_reopening_a_changed_extracted_bundle_is_refused(
+    plain_bundle: Path, tmp_path: Path, change: str
+) -> None:
+    data = tmp_path / "data"
+    opened = open_bundle(plain_bundle, data_root=data)
+    frame = opened.root / "frames" / "frame-01.json"
+    if change == "edited":
+        frame.write_text(frame.read_text(encoding="utf-8") + " ", encoding="utf-8")
+    elif change == "added":
+        (opened.root / "frames" / "extra.json").write_text("{}", encoding="utf-8")
+    else:
+        frame.unlink()
+    with pytest.raises(BundleError, match="changed since it was opened"):
+        open_bundle(plain_bundle, data_root=data)
