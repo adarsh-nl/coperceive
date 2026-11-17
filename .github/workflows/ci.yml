@@ -36,6 +36,10 @@ jobs:
               - 'web/**'
               - 'coperceive/app/**'
               - 'scripts/desktop/**'
+              # The app/CLI Slurm parity test (src-tauri/tests/plan_parity.rs)
+              # re-renders the app scripts against these files.
+              - 'coperceive/models/**'
+              - 'tests/fixtures/plan_parity/**'
               - 'pyproject.toml'
               - '**/*lock*'
               - '.github/workflows/**'
@@ -52,7 +56,7 @@ jobs:
             echo "::error title=FilterGuard::BASE_SHA ${BASE_SHA} not found in git history"
             exit 1
           fi
-          CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/app/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
+          CHANGED_CRITICAL=$(git diff --name-only "${BASE_SHA}"...HEAD | grep -E '^(src-tauri/|web/|coperceive/app/|coperceive/models/|tests/fixtures/plan_parity/|scripts/desktop/|pyproject\.toml|\.github/workflows/|.*lock.*)' || true)
           if [ -n "${CHANGED_CRITICAL}" ] && [ "${DESKTOP_FILTER}" != "true" ]; then
             echo "::error title=FilterGuard::Critical desktop paths changed but filter reported skip!"
             echo "Changed critical files:"

@@ -33,6 +33,26 @@ export interface PipelineSpec {
   description: string;
 }
 
+/** One model of an installed plugin, as `coperceive model list --json` reports it. */
+export interface BuiltinModel {
+  gpu: boolean;
+  /** The `--option` keys the model's manifest declares. */
+  options: string[];
+  cpus?: number | null;
+  memory_gb?: number | null;
+  transient_artifacts?: string[];
+  depends_on?: string[];
+}
+
+/** An installed plugin from the cluster's `coperceive model list --json`. */
+export interface BuiltinPlugin {
+  name: string;
+  manifest: string | null;
+  error: string | null;
+  modules: string[];
+  models: Record<string, BuiltinModel>;
+}
+
 export interface PipelineEntry {
   id: string;
   name: string;
@@ -41,6 +61,9 @@ export interface PipelineEntry {
   spec: PipelineSpec;
   registration_path: string | null;
   plugin_manifest: string | null;
+  /** The cluster's listing of a built-in plugin; absent for a custom pipeline or a
+   * cluster whose coperceive is too old to list its models. */
+  builtin?: BuiltinPlugin | null;
 }
 
 export interface RunPlanRequest {
@@ -63,6 +86,10 @@ export interface PlanArtifact {
   sha256: string | null;
   kind: string;
   real_path: string | null;
+  /** A folder's fingerprint: the sha256 of its file listing (path and size of every file). */
+  listing_sha256?: string | null;
+  /** How many files that listing holds. */
+  file_count?: number | null;
 }
 
 export interface PlanCheck {
@@ -103,6 +130,10 @@ export interface RunPlan {
   scratch_dir: string;
   /** Model-evaluation GPU default, e.g. gpu:lovelace:1; null for CPU-only. */
   gres?: string | null;
+  /** A built-in run's --time as `coperceive model run --slurm` estimates it. */
+  time_estimate?: string | null;
+  /** The profile partition's discovered time limit; null when none was found. */
+  partition_max_time?: string | null;
   checks: PlanCheck[];
   contract_check_script: string;
   nothing_submitted: boolean;
@@ -195,11 +226,56 @@ export function validateArgumentForm(spec: PipelineSpec, form: ArgumentForm): st
   return errors;
 }
 
-/** Every check passed, so the plan can be saved. */
+/**
+ * Whether the plan needs a checkpoint path. A built-in model takes one only when its
+ * manifest declares a `checkpoint` option (Griffin's models pin their own weights, and
+ * the cluster refuses a checkpoint for them). A model the listing does not know, or a
+ * cluster too old to list its models, gets no field: checking the plan names the reason.
+ * A custom pipeline takes one when its registration has a checkpoint-role argument.
+ */
+export function pipelineNeedsCheckpoint(entry: PipelineEntry | null, model: string): boolean {
+  if (!entry) return false;
+  if (entry.source === "builtin") {
+    return entry.builtin?.models[model.trim()]?.options.includes("checkpoint") ?? false;
+  }
+  return entry.spec.arguments.some((argument) => argument.role === "checkpoint");
+}
+
+/** A built-in model always runs over its scenes; a custom pipeline when it declares one. */
+export function pipelineNeedsSplit(entry: PipelineEntry | null): boolean {
+  if (!entry) return false;
+  if (entry.source === "builtin") return true;
+  return entry.spec.arguments.some((argument) => argument.role === "test_data");
+}
+
+/** A file with its sha256, or a non-empty folder with its listing fingerprint (as Rust's
+ * `PlanArtifact::is_fingerprinted`). */
+export function artifactIsFingerprinted(artifact: PlanArtifact): boolean {
+  if (artifact.sha256) return true;
+  return (
+    artifact.kind === "folder" &&
+    Boolean(artifact.listing_sha256) &&
+    (artifact.file_count ?? 0) > 0
+  );
+}
+
+/** What identifies the recorded checkpoint or split, in words for the plan view. */
+export function artifactFingerprintText(artifact: PlanArtifact): string {
+  if (artifact.sha256) return `sha256 ${artifact.sha256}`;
+  if (artifact.kind === "folder" && artifact.listing_sha256) {
+    const files = artifact.file_count ?? 0;
+    return `listing sha256 ${artifact.listing_sha256} (${files} ${files === 1 ? "file" : "files"})`;
+  }
+  return "not recorded";
+}
+
+/** Every check passed and every given path is fingerprinted, so the plan can be saved
+ * (the same rule as Rust's `RunPlan::is_saveable`). */
 export function planIsSaveable(plan: RunPlan | null): boolean {
   if (!plan) return false;
   if (!plan.checks.every((check) => check.ok)) return false;
-  if (!plan.checkpoint.sha256 || !plan.split.sha256) return false;
+  if (plan.checkpoint.path && !plan.checkpoint.sha256) return false;
+  if (plan.split.path && !artifactIsFingerprinted(plan.split)) return false;
   return plan.nothing_submitted === true;
 }
 
@@ -451,6 +527,30 @@ export function slurmSeconds(value: string | null): number | null {
   if (!match) return null;
   const [, days, hours, minutes, seconds] = match;
   return Number(days ?? 0) * 86400 + Number(hours ?? 0) * 3600 + Number(minutes) * 60 + Number(seconds);
+}
+
+/** The form's walltime for a plan: the CLI's own estimate, never a fixed default. */
+export function defaultWalltime(plan: Pick<RunPlan, "time_estimate"> | null): string {
+  return plan?.time_estimate ?? "";
+}
+
+/** Why the walltime cannot be submitted (checked before the preview), or null. With no
+ * discovered partition limit nothing is refused; the server checks it again. */
+export function walltimeProblem(
+  walltime: string,
+  plan: Pick<RunPlan, "time_estimate" | "partition_max_time"> | null,
+): string | null {
+  const text = walltime.trim();
+  if (!text) {
+    return "Enter the walltime for this run: the plan has no time estimate.";
+  }
+  const limit = plan?.partition_max_time ?? null;
+  const wanted = slurmSeconds(text);
+  const max = slurmSeconds(limit);
+  if (limit && wanted !== null && max !== null && wanted > max) {
+    return `The walltime ${text} is longer than the partition's time limit ${limit}; enter ${limit} or less.`;
+  }
+  return null;
 }
 
 /** Plain-language state for a history row. */

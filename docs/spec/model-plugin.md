@@ -269,6 +269,7 @@ The parent creates `{work_dir}` and gives it to the child in `configure.work_dir
 | `reason` | str or null | For `partial`: `timeout`, `cancelled`, `plugin_error`, with the message. |
 | `options` | map | The effective options after defaults. |
 | `cache_hits`, `frames_run` | int | Scenes served from the cache, frames the child answered, in this invocation. |
+| `boxes_written` | int | Rows written to `boxes.parquet` by this invocation, cached scenes included. A scene with no rows gets no `boxes.parquet`, so a job checks for one only when this is above zero (the app's Slurm job does, ADR 0021). |
 | `timings` | map | Measured by this invocation: `staging_s`, the rsync wall time the Slurm job measured and passed as `--staging-seconds` (the parent owns staging; 0 outside a Slurm job); `conversion_s` and `inference_s`, as the child reported them in `configured` (absent when it reported none); `per_sample_s`, **inference only**: `inference_s` over the frames the child answered (a child that reports nothing gets the whole wall time over its frames, and the emitter ignores such a run); `wall_s`. The Slurm emitter of the next run of the same plugin and model reads `staging_s + conversion_s + per_sample_s × samples` from the newest run that has `inference_s`, in place of the manifest's estimates, and never the whole worker time over the samples (Adarsh, 2026-10-19). |
 | `dependencies` | map | `{<model>: {<artifact>: <path>}}` for every `depends_on` entry that was used; `{}` otherwise. |
 | `slurm_job_id` | str or null | `$SLURM_JOB_ID` when set. |
