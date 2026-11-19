@@ -2,14 +2,22 @@
 
 Griffin is a simulated aerial-ground dataset: the catalog describes it as cooperative vehicle and drone perception in CARLA and AirSim, with agents "vehicle + drone". Coperceive can download a preset, convert a release to schema 1 scenes, view them, and score predictions.
 
+## Licence, citation and download
+
+**Licence.** Data licence: MIT, as declared in the [authors dataset card](https://huggingface.co/datasets/wjh-svm/Griffin/blob/main/README.md). Code is separately MIT under [LICENSE.txt](https://github.com/wang-jh18-SVM/Griffin/blob/main/LICENSE.txt).
+
+**Citation.** Use the canonical source and single BibTeX block in [Citation](#citation) below.
+
+**Download.** [Hugging Face](https://huggingface.co/datasets/wjh-svm/Griffin) or the Baidu link in the [authors preparation guide](https://github.com/wang-jh18-SVM/Griffin/blob/main/docs/Dataset_Preparation.md).
+
+The current arXiv record in Citation is canonical here; the README citation is older. Upstream asset terms have not been checked.
+
 ## Overview
 
 | | |
 | --- | --- |
 | Paper | [arXiv:2503.06983](https://arxiv.org/abs/2503.06983) (catalog `paper_url`) |
-| Download | [Hugging Face `wjh-svm/Griffin`](https://huggingface.co/datasets/wjh-svm/Griffin) (catalog `source_url`) |
 | Official code | [wang-jh18-SVM/Griffin](https://github.com/wang-jh18-SVM/Griffin), the repository of catalog `licence_url` (`LICENSE.txt`) |
-| Licence | MIT (catalog `licence`) |
 | Splits | No train/validate/test list. Subsets `25m`, `40m`, `55m`, `random` (`griffin.yaml` `params.subset.allowed`). Catalog presets: `dev`, `one-scene`, `full` |
 | Adapter | `griffin` |
 

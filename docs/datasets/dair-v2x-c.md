@@ -2,14 +2,22 @@
 
 DAIR-V2X-C is the real-world cooperative subset of DAIR-V2X: the catalog calls the agents "vehicle + infrastructure", and the adapter builds one `vehicle` agent and one `infrastructure` agent. Coperceive reads an extracted copy, writes schema 1 scenes, and can score predictions. It does not download the sensor files.
 
+## Licence, citation and download
+
+**Licence.** Data licence: not stated by the authors in the linked README. Repository software licensing is not an explicit data grant. The repository LICENSE is Apache-2.0.
+
+**Citation.** Use the canonical source and single BibTeX block in [Citation](#citation) below.
+
+**Download.** [Project page](https://thudair.baai.ac.cn/index) or the authors [Google Drive folder](https://drive.google.com/drive/folders/1gnrw5llXAIxuB9sEKKCm6xTaJ5HQAw2e?usp=sharing).
+
+Data access requires an application according to the catalog comment. Project-page access and terms have not been verified; consult that page before use.
+
 ## Overview
 
 | | |
 | --- | --- |
 | Paper | [arXiv:2204.05575](https://arxiv.org/abs/2204.05575), linked from the [AIR-THU/DAIR-V2X README](https://github.com/AIR-THU/DAIR-V2X/blob/main/README.md). The catalog `paper_url` is [arXiv:2205.08540](https://arxiv.org/abs/2205.08540), which is a different paper |
-| Download | README dataset section: [project page](https://thudair.baai.ac.cn/index) and the [public drive folder](https://drive.google.com/drive/folders/1gnrw5llXAIxuB9sEKKCm6xTaJ5HQAw2e?usp=sharing). Catalog `source_url`: [yujmo/DAIR-V2X](https://github.com/yujmo/DAIR-V2X) |
 | Official code | [AIR-THU/DAIR-V2X](https://github.com/AIR-THU/DAIR-V2X) (README title and code link) |
-| Licence | not recorded (catalog `licence: unknown`) |
 | Splits | `train`, `val` (`DairV2XCAdapter` `SPLITS`) |
 | Adapter | `dair-v2x-c` |
 

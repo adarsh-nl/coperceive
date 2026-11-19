@@ -2,14 +2,20 @@
 
 V2V4Real is a real-world vehicle-to-vehicle recording: the catalog calls the agents "vehicle + vehicle", and the adapter types each discovered directory as `vehicle`. Coperceive reads an extracted OpenCOOD-style tree, writes schema 1 scenes, and can score predictions. It does not download the recordings.
 
+## Licence, citation and download
+
+**Licence.** Data licence: not stated by the authors in the linked README. Repository software licensing is not an explicit data grant. The repository LICENSE is an Academic Software License.
+
+**Citation.** Use the canonical source and single BibTeX block in [Citation](#citation) below.
+
+**Download.** [UCLA Box](https://ucla.app.box.com/v/UCLA-MobilityLab-V2V4REAL), linked from the [authors dataset page](https://mobility-lab.seas.ucla.edu/v2v4real/).
+
 ## Overview
 
 | | |
 | --- | --- |
 | Paper | [arXiv:2303.07601](https://arxiv.org/abs/2303.07601) (catalog `paper_url`) |
-| Download | [ucla-mobility/V2V4Real](https://github.com/ucla-mobility/V2V4Real) (catalog `source_url`) |
 | Official code | [ucla-mobility/V2V4Real](https://github.com/ucla-mobility/V2V4Real) (same repository) |
-| Licence | not recorded (catalog `licence: unknown`). The manifest says the repository LICENSE is an academic software licence for the code, not a data grant |
 | Splits | `train`, `test` (`v2v4real.yaml` `params.split.allowed`) |
 | Adapter | `v2v4real` |
 
