@@ -288,9 +288,12 @@ def _row_config(rows: Sequence[Row]) -> Mapping[str, object]:
 
 
 def is_legacy(rows: Sequence[Row]) -> bool:
-    """True when the run's metrics.json predates the protocol keys (spec A.2)."""
-    config = _row_config(rows)
-    return "ranking_scope" not in config or "gt_scope" not in config
+    """True when the run was scored under the v0.1.1 rules (spec A.2, A.12).
+
+    That is a metrics.json that predates the protocol keys, or one that records pooled
+    ranking with ego-only ground truth (``protocol: legacy``): the label says the same.
+    """
+    return protocol_label(rows) == LEGACY_LABEL
 
 
 def protocol_of(rows: Sequence[Row]) -> tuple[str, str]:
