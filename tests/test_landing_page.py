@@ -390,6 +390,16 @@ def test_landing_motion_story_sections_and_axe(site_server: str, tmp_path: Path)
         page.wait_for_selector("canvas[data-bev=hero]", timeout=15000)
         page.wait_for_timeout(800)
         _shot(page, tmp_path, "landing-375-hero")
+        page.locator("#evaluate").scroll_into_view_if_needed()
+        page.evaluate("() => window.scrollBy(0, window.innerHeight * 0.8)")
+        page.wait_for_selector("canvas[data-eval]", timeout=15000)
+        _wait_canvas_drawn(page, "canvas[data-eval]")
+        page.wait_for_timeout(800)
+        overflow_eval = page.evaluate(
+            "() => document.documentElement.scrollWidth - window.innerWidth"
+        )
+        assert isinstance(overflow_eval, (int, float)) and overflow_eval <= 0
+        _shot(page, tmp_path, "landing-375-evaluate")
         assert errors == [], errors
         browser.close()
 
