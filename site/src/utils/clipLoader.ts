@@ -1,4 +1,4 @@
-import type { ClipManifest, FrameData, ParsedClip, BoxRecord } from "../types/clip";
+import type { AgentFrame, ClipAgent, ClipManifest, FrameData, ParsedClip, BoxRecord } from "../types/clip";
 import { tokens } from "../tokens";
 
 export async function loadClip(
@@ -32,12 +32,18 @@ export async function loadClip(
   }
 
   let offset = 8;
-  offset += 2; // version
+  const version = view.getUint16(offset, true); offset += 2;
   const ox = view.getFloat32(offset, true); offset += 4;
   const oy = view.getFloat32(offset, true); offset += 4;
   const oz = view.getFloat32(offset, true); offset += 4;
   const numPolylines = view.getUint32(offset, true); offset += 4;
   const numFrames = view.getUint32(offset, true); offset += 4;
+  const declaredAgents = version >= 2 ? view.getUint16(offset, true) : 0;
+  if (version >= 2) offset += 2;
+  const collaborators = clipAgents(manifest);
+  if (version >= 2 && declaredAgents !== collaborators.length) {
+    throw new Error(`Clip has ${declaredAgents} agents and the manifest has ${collaborators.length}`);
+  }
 
   // Unpack map polylines
   const mapPosList: number[] = [];
@@ -90,34 +96,64 @@ export async function loadClip(
     const timeUs = high * 4294967296 + low;
     offset += 8;
 
-    // Vehicle pose (tx, ty, tz, qx, qy, qz, qw)
-    const vtx = view.getFloat32(offset, true); offset += 4;
-    const vty = view.getFloat32(offset, true); offset += 4;
-    const vtz = view.getFloat32(offset, true); offset += 4;
-    const vqx = view.getFloat32(offset, true); offset += 4;
-    const vqy = view.getFloat32(offset, true); offset += 4;
-    const vqz = view.getFloat32(offset, true); offset += 4;
-    const vqw = view.getFloat32(offset, true); offset += 4;
+    const readPose = () => {
+      const tx = view.getFloat32(offset, true); offset += 4;
+      const ty = view.getFloat32(offset, true); offset += 4;
+      const tz = view.getFloat32(offset, true); offset += 4;
+      const qx = view.getFloat32(offset, true); offset += 4;
+      const qy = view.getFloat32(offset, true); offset += 4;
+      const qz = view.getFloat32(offset, true); offset += 4;
+      const qw = view.getFloat32(offset, true); offset += 4;
+      return { position: [tx, ty, tz] as [number, number, number], quaternion: [qx, qy, qz, qw] as [number, number, number, number] };
+    };
+    const readPoints = () => {
+      const nPts = view.getUint16(offset, true); offset += 2;
+      const pts = new Float32Array(nPts * 3);
+      for (let p = 0; p < nPts; p++) {
+        const dx = view.getInt16(offset, true); offset += 2;
+        const dy = view.getInt16(offset, true); offset += 2;
+        const dz = view.getInt16(offset, true); offset += 2;
+        pts[p * 3] = ox + dx * 0.01;
+        pts[p * 3 + 1] = oy + dy * 0.01;
+        pts[p * 3 + 2] = oz + dz * 0.01;
+      }
+      return pts;
+    };
 
-    // Drone pose (tx, ty, tz, qx, qy, qz, qw)
-    const dtx = view.getFloat32(offset, true); offset += 4;
-    const dty = view.getFloat32(offset, true); offset += 4;
-    const dtz = view.getFloat32(offset, true); offset += 4;
-    const dqx = view.getFloat32(offset, true); offset += 4;
-    const dqy = view.getFloat32(offset, true); offset += 4;
-    const dqz = view.getFloat32(offset, true); offset += 4;
-    const dqw = view.getFloat32(offset, true); offset += 4;
-
-    // LiDAR points
-    const nPts = view.getUint16(offset, true); offset += 2;
-    const pts = new Float32Array(nPts * 3);
-    for (let p = 0; p < nPts; p++) {
-      const dx = view.getInt16(offset, true); offset += 2;
-      const dy = view.getInt16(offset, true); offset += 2;
-      const dz = view.getInt16(offset, true); offset += 2;
-      pts[p * 3] = ox + dx * 0.01;
-      pts[p * 3 + 1] = oy + dy * 0.01;
-      pts[p * 3 + 2] = oz + dz * 0.01;
+    const agents: AgentFrame[] = [];
+    if (version >= 2) {
+      for (const collaborator of collaborators) {
+        const pose = readPose();
+        agents.push({
+          id: collaborator.id,
+          color: collaborator.color,
+          type: collaborator.type,
+          position: pose.position,
+          quaternion: pose.quaternion,
+          points: readPoints(),
+        });
+      }
+    } else {
+      const vehicle = readPose();
+      const drone = readPose();
+      const points = readPoints();
+      const [ground, air] = collaborators;
+      agents.push({
+        id: ground?.id ?? "vehicle",
+        color: ground?.color ?? "#F58A1F",
+        type: ground?.type ?? "vehicle",
+        position: vehicle.position,
+        quaternion: vehicle.quaternion,
+        points,
+      });
+      agents.push({
+        id: air?.id ?? "drone",
+        color: air?.color ?? "#3C8DFF",
+        type: air?.type ?? "uav",
+        position: drone.position,
+        quaternion: drone.quaternion,
+        points: new Float32Array(),
+      });
     }
 
     // Boxes
@@ -148,19 +184,7 @@ export async function loadClip(
       });
     }
 
-    frames.push({
-      timeUs,
-      vehiclePose: {
-        position: [vtx, vty, vtz],
-        quaternion: [vqx, vqy, vqz, vqw],
-      },
-      dronePose: {
-        position: [dtx, dty, dtz],
-        quaternion: [dqx, dqy, dqz, dqw],
-      },
-      lidarPoints: pts,
-      boxes,
-    });
+    frames.push({ timeUs, agents, boxes });
   }
 
   return {
@@ -170,4 +194,10 @@ export async function loadClip(
     mapColors,
     frames,
   };
+}
+
+function clipAgents(manifest: ClipManifest): ClipAgent[] {
+  const agents = manifest.agents;
+  if (Array.isArray(agents)) return agents;
+  return [agents.vehicle, agents.drone];
 }

@@ -7,9 +7,8 @@ import { loadClip } from "../utils/clipLoader";
 /**
  * Point look from the desktop viewer (`web/src/viewer/Viewer.tsx` draws one
  * `Points` object; `bloom.ts` blooms it). A bloom pass is too heavy for this
- * page, so the same additive glow is a soft point sprite. Colour falls off
- * with distance from the recorded vehicle: white near it, vehicle orange far.
- * The clip's points are the vehicle sweep only.
+ * page, so the same additive glow is a soft point sprite. Each collaborator
+ * has its own colour: white near that sensor, the collaborator's colour farther out.
  */
 const POINT_VERTEX = `
   uniform vec3 uOrigin;
@@ -17,12 +16,13 @@ const POINT_VERTEX = `
   void main() {
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
     vDist = distance(position, uOrigin);
-    gl_PointSize = clamp(820.0 / max(1.0, -mvPosition.z), 2.0, 22.0);
+    gl_PointSize = clamp(1400.0 / max(1.0, -mvPosition.z), 2.0, 22.0);
     gl_Position = projectionMatrix * mvPosition;
   }
 `;
 
 const POINT_FRAGMENT = `
+  uniform vec3 uColor;
   varying float vDist;
   void main() {
     vec2 p = gl_PointCoord - vec2(0.5);
@@ -31,17 +31,21 @@ const POINT_FRAGMENT = `
     float glow = exp(-dot(p, p) * 16.0);
     float t = smoothstep(2.0, 12.0, vDist);
     vec3 nearColor = vec3(1.0, 0.98, 0.94);
-    vec3 farColor = vec3(0.961, 0.541, 0.122);
-    vec3 color = mix(nearColor, farColor, t);
+    vec3 color = mix(nearColor, uColor, t);
     gl_FragColor = vec4(color * glow * 1.15, glow);
   }
 `;
 
-const ORBIT_RADIUS = 48;
-const ORBIT_HEIGHT = 54;
-const ORBIT_LOOK_Z = 6;
+const ORBIT_RADIUS = 72;
+const ORBIT_HEIGHT = 110;
+const ORBIT_LOOK_Z = 2;
 const ORBIT_SPEED = 0.11;
 const ORBIT_START = -0.8;
+
+function hexRgb(hex: string): [number, number, number] {
+  const n = Number.parseInt(hex.replace("#", ""), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
 
 function glowTexture(r: number, g: number, b: number): THREE.CanvasTexture {
   const size = 128;
@@ -64,7 +68,7 @@ function glowTexture(r: number, g: number, b: number): THREE.CanvasTexture {
   return texture;
 }
 
-/** Recorded vehicle sweep and drone pose. Nothing else is added. */
+/** Recorded collaborator sweeps. Nothing else is added. */
 export function RealClip({ active, onReady }: { active: boolean; onReady: () => void }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const activeRef = useRef(active);
@@ -147,7 +151,7 @@ function mount(host: HTMLDivElement, clip: ParsedClip) {
   host.replaceChildren(renderer.domElement);
   renderer.domElement.dataset.bev = "hero";
   renderer.domElement.setAttribute("role", "img");
-  renderer.domElement.setAttribute("aria-label", "Recorded scene. A vehicle and a drone.");
+  renderer.domElement.setAttribute("aria-label", "Recorded scene.");
   renderer.domElement.className = "block h-full w-full";
 
   const scene = new THREE.Scene();
@@ -163,65 +167,59 @@ function mount(host: HTMLDivElement, clip: ParsedClip) {
     ),
   );
 
-  const origin = new THREE.Vector3();
-  const points = new THREE.Points(
-    new THREE.BufferGeometry(),
-    new THREE.ShaderMaterial({
-      uniforms: { uOrigin: { value: origin } },
-      vertexShader: POINT_VERTEX,
-      fragmentShader: POINT_FRAGMENT,
-      blending: THREE.AdditiveBlending,
-      depthWrite: false,
-      transparent: true,
-    }),
-  );
-  points.frustumCulled = false;
-  points.renderOrder = 1;
-  scene.add(points);
-
-  const drone = new THREE.Sprite(
-    new THREE.SpriteMaterial({
-      map: glowTexture(60, 141, 255),
-      blending: THREE.AdditiveBlending,
-      transparent: true,
-      depthWrite: false,
-      depthTest: false,
-    }),
-  );
-  drone.scale.set(3.6, 3.6, 1);
-  drone.renderOrder = 3;
-  scene.add(drone);
-
-  const tetherGeom = new THREE.BufferGeometry();
-  tetherGeom.setAttribute("position", new THREE.Float32BufferAttribute(new Float32Array(6), 3));
-  const tether = new THREE.Line(
-    tetherGeom,
-    new THREE.LineBasicMaterial({
-      color: tokens.drone,
-      transparent: true,
-      opacity: 0.22,
-      depthWrite: false,
-    }),
-  );
-  tether.frustumCulled = false;
-  tether.renderOrder = 2;
-  scene.add(tether);
+  const first = clip.frames[0];
+  const sweeps = (first?.agents ?? []).map((agent) => {
+    const origin = new THREE.Vector3();
+    const [r, g, b] = hexRgb(agent.color);
+    const cloud = new THREE.Points(
+      new THREE.BufferGeometry(),
+      new THREE.ShaderMaterial({
+        uniforms: {
+          uOrigin: { value: origin },
+          uColor: { value: new THREE.Color(agent.color) },
+        },
+        vertexShader: POINT_VERTEX,
+        fragmentShader: POINT_FRAGMENT,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        transparent: true,
+      }),
+    );
+    cloud.frustumCulled = false;
+    cloud.renderOrder = 1;
+    scene.add(cloud);
+    const marker = new THREE.Sprite(
+      new THREE.SpriteMaterial({
+        map: glowTexture(r, g, b),
+        blending: THREE.AdditiveBlending,
+        transparent: true,
+        depthWrite: false,
+        depthTest: false,
+      }),
+    );
+    marker.scale.set(agent.type === "uav" ? 3.6 : 2.4, agent.type === "uav" ? 3.6 : 2.4, 1);
+    marker.renderOrder = 3;
+    scene.add(marker);
+    return { type: agent.type, origin, cloud, marker };
+  });
 
   const anchor = new THREE.Vector3();
 
   const apply = (index: number) => {
     const frame = clip.frames[index];
-    points.geometry.setAttribute("position", new THREE.BufferAttribute(frame.lidarPoints, 3));
-    const vp = frame.vehiclePose.position;
-    origin.set(vp[0], vp[1], vp[2]);
-    anchor.set(vp[0], vp[1], vp[2]);
-
-    const dp = frame.dronePose.position;
-    drone.position.set(dp[0], dp[1], dp[2]);
-    const tetherPos = tether.geometry.attributes.position as THREE.BufferAttribute;
-    tetherPos.setXYZ(0, dp[0], dp[1], dp[2]);
-    tetherPos.setXYZ(1, vp[0], vp[1], vp[2] + 1.2);
-    tetherPos.needsUpdate = true;
+    const ground: THREE.Vector3[] = [];
+    frame.agents.forEach((agent, i) => {
+      const sweep = sweeps[i];
+      if (!sweep) return;
+      sweep.cloud.geometry.setAttribute("position", new THREE.BufferAttribute(agent.points, 3));
+      sweep.origin.set(agent.position[0], agent.position[1], agent.position[2]);
+      sweep.marker.position.set(agent.position[0], agent.position[1], agent.position[2]);
+      if (agent.type !== "uav") ground.push(sweep.marker.position);
+    });
+    anchor.set(0, 0, 0);
+    const basis = ground.length > 0 ? ground : sweeps.map((sweep) => sweep.marker.position);
+    basis.forEach((position) => anchor.add(position));
+    if (basis.length > 0) anchor.multiplyScalar(1 / basis.length);
   };
 
   const place = (seconds: number) => {

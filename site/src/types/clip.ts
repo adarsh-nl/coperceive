@@ -1,3 +1,10 @@
+export interface ClipAgent {
+  id: string;
+  label: string;
+  type: string;
+  color: string;
+}
+
 export interface ClipManifest {
   scene_id: string;
   dataset_name: string;
@@ -11,23 +18,14 @@ export interface ClipManifest {
   num_frames: number;
   duration_s: number;
   fps: number;
-  agents: {
-    vehicle: {
-      id: string;
-      label: string;
-      type: string;
-      color: string;
-      sensors: Record<string, string>;
-    };
-    drone: {
-      id: string;
-      label: string;
-      type: string;
-      color: string;
-      sensors: Record<string, string>;
-    };
-  };
-  occlusion_event: {
+  format_version?: number;
+  agents:
+    | ClipAgent[]
+    | {
+        vehicle: ClipAgent & { sensors?: Record<string, string> };
+        drone: ClipAgent & { sensors?: Record<string, string> };
+      };
+  occlusion_event?: {
     time_us: number;
     frame_index: number;
     track_id: string;
@@ -58,17 +56,18 @@ export interface BoxRecord {
   rotation: [number, number, number, number]; // qx, qy, qz, qw
 }
 
+export interface AgentFrame {
+  id: string;
+  color: string;
+  type: string;
+  position: [number, number, number];
+  quaternion: [number, number, number, number];
+  points: Float32Array;
+}
+
 export interface FrameData {
   timeUs: number;
-  vehiclePose: {
-    position: [number, number, number];
-    quaternion: [number, number, number, number];
-  };
-  dronePose: {
-    position: [number, number, number];
-    quaternion: [number, number, number, number];
-  };
-  lidarPoints: Float32Array; // xyz floats
+  agents: AgentFrame[];
   boxes: BoxRecord[];
 }
 
