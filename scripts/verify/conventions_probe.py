@@ -24,10 +24,16 @@ Only numpy, PyYAML and the repository's safe numpy-tag YAML loader are used.
 
 from __future__ import annotations
 
+import os
 import sys
 
 # Read-only: no ``__pycache__`` anywhere, whichever way this file is started.
 sys.dont_write_bytecode = True
+
+# One core: a shared login node is where this runs. numpy's BLAS reads these when it is
+# first imported, so they are set before that import; a value the caller set is kept.
+for _var in ("OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"):
+    os.environ.setdefault(_var, "1")
 
 import argparse  # noqa: E402
 import json  # noqa: E402
