@@ -60,6 +60,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Push CI trigger support on `release/**` branches for integration testing.
 
 ### Changed
+- Public-launch cleanup: `LICENSE` is now the unmodified Apache-2.0 text, so GitHub detects the licence; the copyright line moved to a new `NOTICE` file. `CONTRIBUTING.md` is rewritten as a contributor guide (setup, checks, adding a dataset or a model plugin, PR checklist). Internal working files are no longer in the repository (`HANDOVER.md`, `TASKS.md`, `spikes/`, `docs/superpowers/`, `docs/log/`, three personal Slurm scripts), and cluster-specific usernames, hostnames and paths in the docs and test inputs are replaced with placeholders. `scripts/site/export_hero_clip.py` now takes its paths as arguments.
 - Python 3.10 is no longer supported; the minimum version is 3.11 because Pillow 13 dropped 3.10 (PR #130). Note that the released v0.1.0 app already bundled Pillow 13.0.0.
 - Tauri desktop dependencies and build configuration are no longer macOS-only.
 - System log directories, application data directories, and clipboard interactions abstracted into platform-specific implementations.

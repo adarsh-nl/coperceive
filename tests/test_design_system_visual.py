@@ -271,7 +271,7 @@ SEED_FIXTURES_EVAL = """
         ssh_alias: "daic-gpu",
         host: "hpc.example.org",
         user: "alice",
-        data_roots: ["/datasets/eemcs/ps/cv/opencood/v2xset", "/datasets/eemcs/ps/cv/opv2v"],
+        data_roots: ["/data/opencood/v2xset", "/data/opv2v"],
         scratch_template: "/scratch/$USER/coperceive",
         results_root: "/home/alice/results",
         code_roots: ["/home/alice/code/opencood"],

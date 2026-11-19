@@ -316,6 +316,22 @@ pub fn fake_dry_run_result(dataset_id: &str, preset_id: &str) -> serde_json::Val
     })
 }
 
+/// Atomically writes the smoke-test readiness marker file via a temporary
+/// sibling file and rename so readers never see a partially truncated file.
+pub fn write_test_marker_atomic(
+    marker_path: &std::path::Path,
+    origin: &str,
+    token: &str,
+    log_path: &str,
+    ctrl_port: u16,
+    ctrl_secret: &str,
+) -> std::io::Result<()> {
+    let content = format!("{origin}\n{token}\n{log_path}\n{ctrl_port}\n{ctrl_secret}\n");
+    let tmp_path = marker_path.with_extension(format!("tmp.{}", std::process::id()));
+    std::fs::write(&tmp_path, content)?;
+    std::fs::rename(&tmp_path, marker_path)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -418,5 +434,33 @@ mod tests {
     #[test]
     fn dataset_flow_probe_request_is_inert_outside_test_mode() {
         assert!(dataset_flow_probe_request().is_none());
+    }
+
+    #[test]
+    fn write_test_marker_atomic_creates_complete_marker_without_temp_leftovers() {
+        let dir = temp_dir("marker-atomic");
+        let marker = dir.join("marker.txt");
+        write_test_marker_atomic(
+            &marker,
+            "http://127.0.0.1:49178",
+            "tok123",
+            "/tmp/serve.log",
+            49177,
+            "ctrl-sec",
+        )
+        .expect("write marker");
+
+        let body = std::fs::read_to_string(&marker).expect("read marker");
+        assert_eq!(
+            body,
+            "http://127.0.0.1:49178\ntok123\n/tmp/serve.log\n49177\nctrl-sec\n"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .expect("read_dir")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_name().to_string_lossy().contains(".tmp."))
+            .collect();
+        assert!(leftovers.is_empty(), "temp marker file left behind: {leftovers:?}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

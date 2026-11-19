@@ -6,7 +6,7 @@ Status: accepted for schema 1. The byte layout is specified in `docs/spec/format
 
 One Griffin-25m scene, `Town03-000`: 149 frames, 298 poses, 7,213 boxes, 1,341 image path refs, 437,760 points. ASCII PLY parse of that scene took 0.346 s in the format script. The question is how to store it so that “everyone at time t” and “one lidar across the scene” are both cheap, workers can read it, images stay as paths, and a new column does not break an old reader.
 
-Scripts and numbers: `spikes/bench_formats.py`, `docs/design/measurements/format_results.json` (write time and size; some read timings in that file are not used), `docs/design/measurements/format_latency_v2.json` (the read timings below). The v1 read path could return without touching bytes for Arrow and the hybrid blob, and an MCAP query with `end_time == start_time` returned no messages because the end is exclusive. v2 forces a checksum of the values actually read, and sets MCAP `end_time = t + 1`. Checksums agree within float32.
+Numbers (the benchmark script was a one-off spike and is no longer in the repository): `docs/design/measurements/format_results.json` (write time and size; some read timings in that file are not used), `docs/design/measurements/format_latency_v2.json` (the read timings below). The v1 read path could return without touching bytes for Arrow and the hybrid blob, and an MCAP query with `end_time == start_time` returned no messages because the end is exclusive. v2 forces a checksum of the values actually read, and sets MCAP `end_time = t + 1`. Checksums agree within float32.
 
 Versions in that spike environment: PyArrow 26.0.0, zarr 3.4.1, h5py 3.16.0, mcap 1.5.0, NumPy 2.5.4. The library’s install range is older on Python 3.10. These timings are from 3.12.
 

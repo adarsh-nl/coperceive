@@ -189,7 +189,7 @@ On the cluster, in an `srun` session (2 CPUs and 8 GB are enough; nothing runs o
 
 ```bash
 srun --partition=main --cpus-per-task=2 --mem=8G --time=2:00:00 --pty bash
-hostname                                  # the node for the tunnel (HANDOVER.md, "Viewing from a laptop")
+hostname                                  # the node for the tunnel: ssh -L <port>:<node>:<port> <login-host>
 module load python/3.13.14
 export PYTHONPATH=$HOME/coperceive-adr0010
 $HOME/coperceive-adr0010/.venv/bin/python $HOME/coperceive-adr0010/scripts/griffin/stage_viewer.py \

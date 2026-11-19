@@ -64,7 +64,7 @@ Process arguments (`argv`) are visible to all users via `ps aux` on shared multi
   - *Partitions*: `ps,main-cpu` verified via `sinfo -p ps,main-cpu` (yielding `hpc-node[11-12]` on `ps` and `spark-head[1-4],caserta,ctit087` on `main-cpu`).
 - **Remote Bind Architecture & Evidence**:
   - *Cluster Evidence*: Probing direct SSH from the login node to compute nodes (`ssh -o BatchMode=yes hpc-node11`) returns `Permission denied (publickey,password,keyboard-interactive)`. Inspection of `/etc/pam.d/slurm` shows only `pam_localuser.so, pam_unix.so, pam_limits.so`; `pam_slurm_adopt` is not installed. Thus, direct user SSH to compute nodes (and SSH `ProxyJump`) is blocked on this cluster.
-  - *Decision*: Launch `coperceive serve --host 0.0.0.0 --port <port> --token-file <path>` inside the Slurm compute job on its private internal IP (`10.20.240.x`), protected by mode 0600 token authentication. An SSH local port forward tunnels from macOS loopback through the login node (`cluster-login`) to the allocated compute node:
+  - *Decision*: Launch `coperceive serve --host 0.0.0.0 --port <port> --token-file <path>` inside the Slurm compute job on its private internal IP, protected by mode 0600 token authentication. An SSH local port forward tunnels from macOS loopback through the login node (`cluster-login`) to the allocated compute node:
     `ssh -L 127.0.0.1:<local_port>:<compute_node_ip>:<serve_port> <hpc_alias> -N`
 - **Slurm Job Lifecycle Management**:
   - Submits an sbatch script with job name `coperceive-desktop-<uuid>` on `ps,main-cpu`, with a default walltime of 2 hours (configurable in connection profiles).
